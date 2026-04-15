@@ -1,0 +1,1042 @@
+﻿**AQUEDUCT**  —  System Design & Implementation Reference
+
+**AQUEDUCT**
+
+Intelligent Spark Pipeline Engine
+
+*System Design & Implementation Reference*
+
+|<p>*Self-healing LLM-integrated pipelines for Apache Spark*</p><p>**Declarative  ·  Observable  ·  Autonomous  ·  Self-healing**</p><p>Version 1.0 — Implementation Reference</p>|
+| :-: |
+
+*Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Probe · Regulator · Spillway · Arcade · Surveyor*
+
+
+# **1. Introduction**
+## **1.1 Purpose of This Document**
+This document is the complete system design and implementation reference for Aqueduct — an intelligent, declarative Spark pipeline engine with integrated LLM-driven self-healing. It covers every component, design decision, data contract, configuration schema, and runtime behaviour required to implement the system from scratch. Anyone reading this document should have no ambiguous points remaining regarding what Aqueduct does, how it works internally, or how to build it.
+
+## **1.2 What Aqueduct Is**
+Aqueduct is a control plane for Apache Spark. It does not replace Spark — it wraps it. Engineers and LLM agents author pipelines as YAML Blueprint files. Aqueduct parses, validates, compiles, plans, and executes those Blueprints as Spark jobs, monitoring them continuously and autonomously patching failures when they occur.
+
+The name is deliberate: a Roman aqueduct is precision-engineered infrastructure for carrying flow reliably across vast distances, planned on actual blueprints (forma), and built to strict tolerances. Aqueduct the software carries data flow with the same philosophy — structured, observable, and resilient.
+
+## **1.3 Primary Users**
+- Data engineers (code-first) — author and maintain Blueprints, review patches, configure retry policies.
+- LLM agents — primary runtime operators; diagnose failures, propose and apply Patches autonomously.
+- Platform operators — deploy and configure the engine, manage deployment targets and credentials.
+
+## **1.4 Design Principles**
+These principles govern every design decision in the system. When two requirements conflict, the higher principle wins.
+
+|**Principle**|**Description**|
+| :- | :- |
+|**P1 — LLM-first observability**|Every failure must carry enough structured context for an agent to diagnose and patch without additional queries. Observability is not optional.|
+|**P2 — Blueprint as truth**|The Blueprint is the single source of truth. Nothing about a pipeline exists outside the Blueprint and its derived Manifest. No hidden state.|
+|**P3 — Performance non-regression**|Aqueduct must not add Spark actions that were not in the original pipeline. Every observability feature has a defined cost model; zero-cost options are preferred.|
+|**P4 — Static resolution first**|Any value that can be resolved at parse time must be. Runtime resolution is explicit, opt-in, and visually distinct in Blueprint syntax.|
+|**P5 — Patch grammar over codegen**|The LLM agent operates within a structured Patch grammar, not free-form code generation. Every patch is schema-valid, auditable, and reversible.|
+|**P6 — Passive-by-default gates**|Flow control constructs (Regulators, Spillways) do not exist in the execution path unless explicitly wired. Unwired gates compile away entirely.|
+|**P7 — Pure Spark type system**|Aqueduct owns no type system. All types are Spark DDL strings. Semantic constraints are annotations, not types.|
+
+
+# **2. Naming Glossary**
+These names are canonical and used consistently throughout the codebase, documentation, logs, and LLM prompts. They must not be substituted for synonyms.
+
+|**Term**|**Definition**|
+| :- | :- |
+|**Aqueduct**|The engine itself. The full system described in this document.|
+|**Module**|The smallest indivisible unit of a pipeline. Every step in a Blueprint is a Module. Typed: Ingress, Channel, Egress, Junction, Funnel, Probe, Regulator, Arcade.|
+|**Blueprint**|The YAML file authored by an engineer or agent. Defines a complete pipeline: its Modules, edges, Context Registry, retry policy, and agent config. Human-editable, version-controllable.|
+|**Manifest**|The compiled, fully-resolved JSON form of a Blueprint after all Context Registry substitution and Arcade expansion. What Aqueduct actually executes. Machine-readable, not hand-edited.|
+|**Context Registry**|The variable system for Blueprints. Namespaced key-value store. Tier 0 (static) values are resolved at parse time. Tier 1 (@aq.\*) values are resolved at execution time before Spark jobs start.|
+|**Depot**|Aqueduct's persistent key-value state store. Pipelines read and write named keys across runs. Values can be flagged read-only or writable per-key.|
+|**Ingress**|Module type: reads data from an external source into the pipeline. Produces a named DataFrame. Equivalent concept to "Source" in other tools.|
+|**Channel**|Module type: applies a transformation to one or more upstream DataFrames. Produces one output DataFrame. No Spark actions. Pure lazy transformation.|
+|**Egress**|Module type: writes data to an external target or triggers a collection action. The only Module type that materialises results and costs a Spark action.|
+|**Junction**|Module type: splits one incoming DataFrame into multiple downstream branches. Fan-out. Supports partition, broadcast, and conditional routing modes.|
+|**Funnel**|Module type: merges multiple upstream DataFrames into one. Fan-in. Supports union\_all, union, coalesce, and zip merge modes.|
+|**Probe**|Module type: non-blocking observability tap attached to a Module's output edge. Emits signals (schema, null rates, row estimates) without adding Spark actions to the critical path.|
+|**Regulator**|Module type: trigger gate. Passive by default — if nothing is wired to it, it does not exist in the execution path. Blocks downstream when it receives False or an error signal.|
+|**Spillway**|The error output port present on every Module. When a Module produces row-level errors, they are routed via the Spillway to a designated downstream Module. Named by analogy to a hydraulic spillway — a designed relief path for overflow.|
+|**Arcade**|Module type: an encapsulated, reusable sub-pipeline embedded as a single Module in a parent Blueprint. Parameterised via Context override. Expanded at Manifest compile time — Spark sees a flat plan.|
+|**Surveyor**|The runtime supervisor process. Monitors live pipeline execution, evaluates health signals, manages the retry policy, and triggers the LLM self-healing loop on failure.|
+|**Patch**|A structured diff to a Blueprint proposed by the LLM agent or a human. Expressed as a PatchSpec JSON. Applied atomically. Version-controlled in patches/.|
+|**Flow Report**|The post-run column-level quality report. Shows per-column status (OK / Degraded / Error) across each Module, sourced from Probe signals.|
+|**Flow Graph**|The directed acyclic graph (DAG) of Modules extracted from a Blueprint and used for execution planning.|
+
+
+# **3. System Architecture**
+## **3.1 High-Level Overview**
+Aqueduct has five processing layers and three persistent stores. Each layer has a defined input/output contract and can be developed and tested independently.
+
+|**Layer**|**Input**|**Output**|**Responsibility**|
+| :- | :- | :- | :- |
+|1 — Parser|Blueprint YAML|Validated AST|Schema validation, Context Tier 0 resolution, cycle detection, Arcade loading|
+|2 — Compiler|AST + Context map|Manifest (JSON)|Interpolate all ${ctx.\*} refs, resolve @aq.\* functions, expand Arcades, wire Probes and Spillways|
+|3 — Planner|Manifest|Execution Plan|Partition into Spark JobSpecs, assign stage order, identify parallel branches|
+|4 — Executor|Execution Plan|RunRecord + raw metrics|Submit Spark jobs, attach SparkListener, stream events to Observability Store|
+|5 — Surveyor|Live run signals|HealthEvents + Patches|Monitor health, apply retry policy, invoke LLM loop, apply approved Patches|
+
+## **3.2 Persistent Stores**
+
+|**Store**|**Description**|
+| :- | :- |
+|**Observability Store**|Append-only log of all runtime signals: Probe readings, stage metrics, errors. Queryable by run\_id and module\_id. Backend: raw Parquet/JSON files written to disk, queried on-demand via DuckDB.|
+|**Lineage Store**|Stores structural column lineage graphs (computed at parse time) and runtime ColumnQualityReport entries per run. Backend: Parquet/JSON files on disk, queried via DuckDB.|
+|**Depot (KV Store)**|Persistent key-value store for pipeline state across runs: watermarks, last-run metadata, cross-pipeline coordination values. Keyed by pipeline\_id + key name. Per-key read/write access flags. Backend: DuckDB embedded database.|
+
+## **3.3 Component Interaction Flow**
+The following sequence describes a complete pipeline run from Blueprint file to completion:
+
+1. Engineer or agent writes Blueprint.yml and commits it to version control.
+1. aqueduct run Blueprint.yml [--profile prod] [--ctx key=value] is invoked.
+1. Parser reads and validates Blueprint.yml against the versioned JSON Schema. Fails fast on any unknown field or schema violation.
+1. Context Registry is built: static values resolved, @aq.\* functions queued for Tier 1 resolution.
+1. Compiler resolves all @aq.\* runtime functions (date functions, secret fetches, Depot reads). All ${ctx.\*} tokens are substituted. Arcades are expanded. Manifest JSON is written to runs/<run\_id>/manifest.json.
+1. Planner partitions the flat Module list into ordered JobSpecs. Parallel branches are identified. Probe attachment points are annotated.
+1. Executor acquires or creates a SparkSession for the target deployment. RunRecord is opened in the Observability Store.
+1. Executor submits each JobSpec. SparkListener is attached, streaming task metrics to the Observability Store in real time.
+1. Surveyor runs concurrently, consuming the Observability Store event stream. It evaluates health signals and Regulator states continuously.
+1. On job completion, Executor finalises the RunRecord. Surveyor generates the Flow Report from Probe signals.
+1. On any failure: Surveyor applies the retry policy. On exhaustion (or non-transient error), it packages the FailureContext and invokes the LLM agent loop.
+1. Approved Patch is applied to the Blueprint. Manifest is recompiled. Execution resumes from the failed Module forward.
+
+
+# **4. Blueprint Format**
+## **4.1 File Format & Versioning**
+Blueprints are YAML files. The format is versioned — the flux field at the top selects the JSON Schema version used for validation. Unknown fields at any level are hard errors, not warnings. This strictness is intentional: it guarantees Blueprints are always valid input for LLM patch generation.
+
+Internally, Aqueduct maintains two representations: the YAML Blueprint (human-authored, version-controlled) and the JSON Manifest (machine-compiled, never hand-edited). Engineers write YAML. The LLM agent reads JSON. The Parser bridges them.
+
+|**Dual-format contract:**  The Manifest is always complete and self-contained. The LLM agent must never need to fetch external state to understand what ran. Every resolved value, every expanded Arcade, every wired Spillway appears explicitly in the Manifest.|
+| :- |
+
+## **4.2 Top-Level Structure**
+```yaml
+aqueduct: "1.0"                        # schema version — required
+id: pipeline.orders.daily_aggregate    # globally unique pipeline ID
+name: "Daily Orders Aggregation"       # human display name
+
+description: |
+  Reads raw orders, deduplicates by order_id,
+  aggregates by region, writes to Delta.
+
+context:                               # Context Registry (see Section 5)
+  env: ${AQUEDUCT_ENV:-dev}
+  tables:
+    orders_raw: "s3://data/${ctx.env}/orders/raw"
+    orders_out: "s3://data/${ctx.env}/orders/daily"
+  params:
+    dedup_key: "order_id"
+    agg_col: "region"
+
+context_profiles:                      # environment promotion (see Section 5.3)
+  dev:
+    tables.orders_raw: "s3://dev/orders/raw"
+  prod:
+    tables.orders_raw: "s3://prod/orders/raw"
+
+modules:                               # ordered or graph-connected Module list
+  - id: read_orders
+    type: Ingress
+  # ... more modules
+
+edges:                                 # explicit edge definitions
+  - from: read_orders
+    to:   dedup_orders
+    port: main                         # main (default) or spillway
+
+spark_config:                          # merged with Aqueduct defaults
+  spark.sql.shuffle.partitions: 200
+  spark.sql.adaptive.enabled: true
+
+retry_policy:                          # see Section 8.2
+  max_attempts: 3
+  # ... other fields
+
+agent:                                 # LLM self-healing config (see Section 8)
+  approval_mode: auto                  # auto | human
+  model: claude-sonnet-4-20250514
+  max_patches_per_run: 5
+```
+
+## **4.3 Module Schema — Common Fields**
+Every Module regardless of type shares these fields:
+
+|**Field**|**Description**|
+| :- | :- |
+|**id**|Required. Unique string within the Blueprint. Auto-generated as slug + short hash if omitted. Used in edges, logs, patches, and file paths. Must be filesystem-safe (auto-slugified from label if not set).|
+|**label**|Required. Human-readable display name. Completely unconstrained — spaces, unicode, punctuation all permitted. Shown in UI, logs, Flow Report, and LLM FailureContext. The id is derived from this if not explicitly set.|
+|**type**|Required. One of: Ingress | Channel | Egress | Junction | Funnel | Probe | Regulator | Arcade.|
+|**description**|Optional. Free-text explanation of what this Module does. Used in LLM context and UI tooltips.|
+|**tags**|Optional list of strings. Used for filtering, grouping, and agent scoped search.|
+|**config**|Type-specific configuration block. Defined per Module type in Section 4.4.|
+|**on\_failure**|Optional. Overrides the pipeline-level retry\_policy for this specific Module.|
+|**spillway**|Optional. Specifies the downstream Module ID to receive error-port output. If omitted and errors occur, they propagate to the Surveyor as a pipeline failure.|
+|**depends\_on**|Optional explicit upstream dependency list. Normally inferred from edges but can be stated for clarity or to force ordering between non-connected Modules.|
+
+## **4.4 Module Types — Full Specification**
+
+|**INGRESS**|**Source of data — reads from an external system into the pipeline**|
+| :-: | :- |
+
+```yaml
+- id: read_orders
+  type: Ingress
+  label: "Read raw orders from S3 Parquet"
+  config:
+    format: parquet              # parquet | delta | csv | json | jdbc | kafka | custom
+    path: ${ctx.tables.orders_raw}
+    schema_hint:                 # optional — enforced at read time
+      order_id: STRING
+      amount: DECIMAL(18,2)
+      event_ts: TIMESTAMP
+    options:
+      mergeSchema: true
+      basePath: ${ctx.tables.orders_raw}
+```
+
+|**Config field**|**Description**|
+| :- | :- |
+|**format**|Spark data source format string. Standard formats: parquet, delta, csv, json, orc, avro, jdbc, kafka. Custom formats use the fully qualified DataSource class name.|
+|**path**|Source path or URL. Context Registry references allowed. For JDBC: the full connection URL.|
+|**schema\_hint**|Optional. Map of column\_name: SparkDDLType. Aqueduct enforces this at read time by calling .schema() and comparing. Mismatch raises SchemaIncompatibleException and triggers the Surveyor.|
+|**options**|Passed directly to Spark DataFrameReader.option(k,v). Aqueduct does not validate these — Spark handles unknown options.|
+|**credentials**|Optional. Reference to a Depot key or @aq.secret() call resolving to a credentials map. Injected as Spark config before session creation.|
+
+|**CHANNEL**|**Transformation — shapes, filters, enriches, or restructures data**|
+| :-: | :- |
+
+```yaml
+- id: dedup_orders
+  type: Channel
+  label: "Deduplicate by order_id, keep latest event"
+  config:
+    op: deduplicate
+    key: ${ctx.params.dedup_key}
+    order_by: "event_ts DESC"
+```
+
+For SQL-based transformations:
+
+```yaml
+- id: cast_and_clean
+  type: Channel
+  label: "Cast types and strip whitespace"
+  config:
+    op: sql
+    udfs: [clean_phone, parse_currency]   # registered UDF IDs
+    query: |
+      SELECT
+        order_id,
+        CAST(amount AS DECIMAL(18,2))          AS amount,
+        clean_phone(phone_raw)                 AS phone,
+        TRIM(region)                           AS region
+      FROM dedup_orders
+```
+
+|**SQL reference convention:**  Upstream Modules are referenced by their id directly in SQL FROM clauses. Aqueduct registers each upstream DataFrame as a temp view using its Module id before executing the query. No special tokens required. For single-input Channels with no explicit FROM, the upstream DataFrame is auto-registered as \_\_input\_\_.|
+| :- |
+
+|**Config field**|**Description**|
+| :- | :- |
+|**op**|Operation type. Built-in ops: sql | deduplicate | filter | select | rename | cast | join | union | sort | repartition | cache. Custom ops reference a registered Python function by ID.|
+|**query**|SQL string (op: sql only). Upstream Module IDs are available as temp views. ${ctx.\*} references are substituted before the query reaches Spark.|
+|**udfs**|List of UDF IDs to register before executing this Channel. UDFs are defined in the udf\_registry block (see Section 5.4).|
+|**key**|Column name or list. Used by deduplicate, join, and other key-based ops.|
+|**order\_by**|Sort expression string. Used by deduplicate (to pick which row to keep) and sort ops.|
+|**condition**|Filter expression string (op: filter). Standard Spark SQL boolean expression.|
+
+|**EGRESS**|**Sink — writes data to an external target or triggers a Spark action**|
+| :-: | :- |
+
+```yaml
+- id: write_daily_orders
+  type: Egress
+  label: "Write aggregated orders to Delta Lake"
+  config:
+    format: delta
+    path: ${ctx.tables.orders_out}
+    mode: overwrite              # overwrite | append | merge | error | ignore
+    partition_by: [region, date]
+    merge_key: [order_id]          # for mode: merge (Delta MERGE INTO)
+    options:
+      overwriteSchema: true
+```
+
+|**Config field**|**Description**|
+| :- | :- |
+|**format**|Target format. Same values as Ingress format.|
+|**path**|Target path or URL.|
+|**mode**|Write mode. overwrite replaces. append adds. merge uses Delta MERGE INTO semantics with merge\_key. error fails if data exists. ignore skips if data exists.|
+|**partition\_by**|List of column names to partition output by.|
+|**merge\_key**|List of columns forming the merge condition for mode: merge.|
+|**collect**|Boolean. If true, collects result to driver (small datasets only). Outputs to RunRecord as collected\_result. Not for production large datasets.|
+
+|**JUNCTION**|**Fan-out — splits one flow into multiple downstream branches**|
+| :-: | :- |
+
+```yaml
+- id: split_by_region
+  type: Junction
+  label: "Route orders to regional processing branches"
+  config:
+    mode: conditional              # conditional | partition | broadcast
+    branches:
+      - id: branch_eu
+        label: "EU orders"
+        condition: "region IN ('DE','FR','NL','IT')"
+      - id: branch_us
+        label: "US orders"
+        condition: "region = 'US'"
+      - id: branch_other
+        label: "All other regions"
+        condition: "_else_"        # catches unmatched rows
+```
+
+|**Mode**|**Behaviour**|
+| :- | :- |
+|**mode: conditional**|Each branch receives a filtered subset of rows matching its condition. Rows matching no branch go to the \_else\_ branch if defined, otherwise dropped. Implemented as DataFrame.filter() per branch — one lazy plan per branch, no shuffle.|
+|**mode: partition**|Splits by a key column into N branches. Each branch receives rows where key = branch value. High-cardinality keys should use mode: conditional instead.|
+|**mode: broadcast**|Sends the same full DataFrame to all branches unchanged. Zero shuffle — all branches reference the same lazy plan. Used for parallel independent processing of the same data.|
+
+|**Performance note:**  All Junction modes produce lazy DataFrame references — no Spark action is triggered by a Junction itself. Branches are evaluated lazily when their downstream Egress modules trigger actions. Aqueduct submits parallel branches as concurrent Spark jobs when the Planner determines they have no shared dependencies.|
+| :- |
+
+|**FUNNEL**|**Fan-in — merges multiple upstream flows into one**|
+| :-: | :- |
+
+```yaml
+- id: merge_regional_results
+  type: Funnel
+  label: "Reunite processed regional streams"
+  config:
+    mode: union_all                # union_all | union | coalesce | zip
+    inputs: [branch_eu, branch_us, branch_other]
+    schema_check: strict           # strict | permissive
+```
+
+|**Mode**|**Behaviour**|
+| :- | :- |
+|**mode: union\_all**|Concatenates all inputs preserving duplicates. Equivalent to UNION ALL in SQL. Zero shuffle. Requires all inputs to have the same schema (unless schema\_check: permissive).|
+|**mode: union**|Concatenates and deduplicates. Equivalent to UNION DISTINCT. Triggers a shuffle for deduplication.|
+|**mode: coalesce**|Returns the first non-null value per row across inputs. Inputs must be aligned (same row count and order). Used for filling nulls from fallback sources.|
+|**mode: zip**|Row-by-row lateral join of all inputs. Inputs must be aligned. Implemented as DataFrame.join() on a monotonically\_increasing\_id column.|
+
+|**PROBE**|**Observability tap — emits signals without adding Spark actions**|
+| :-: | :- |
+
+```yaml
+- id: probe_after_dedup
+  type: Probe
+  label: "Capture schema and null rates after deduplication"
+  attach_to: dedup_orders          # emits signals after this Module completes
+  config:
+    signals:
+      - schema_snapshot            # always free — metadata only
+      - row_count_estimate:        # zero cost — from SparkListener task metrics
+          method: spark_listener
+      - null_rates:
+          sample_fraction: 0.01   # 1% sample — low cost
+          columns: [order_id, region, amount]
+          alert_threshold:
+            order_id: 0.0          # zero nulls tolerated
+            region: 0.05           # 5% max
+```
+
+|**Signal type**|**Implementation & cost**|
+| :- | :- |
+|**schema\_snapshot**|Calls DataFrame.schema — metadata only, no scan. Records column names, types, nullability. Free.|
+|**row\_count\_estimate**|method: spark\_listener reads recordsWritten from SparkListener task metrics after the stage completes. Exact for completed stages, zero additional cost. method: sample triggers a count() on a sample fraction — low cost, approximate.|
+|**null\_rates**|Applies DataFrame.sample(fraction).select([count(when(col.isNull,1)) for each col]). One Spark action on the sample only. Cost proportional to sample\_fraction and partition count.|
+|**value\_distribution**|Uses approx\_count\_distinct() and percentile\_approx() on sampled data. Approximate results, low cost.|
+|**sample\_rows**|Calls DataFrame.take(N). Short-circuit scan — reads only enough data to return N rows. N is capped at max\_sample\_rows in engine config (default 100).|
+
+|**Hard rule:**  count(), collect(), and show() are blocked on Probe DataFrames in production mode. This is enforced by the Probe API wrapper — it is not a convention. Engineers who need exact counts must use an Egress module with collect: true on a debug branch, making the cost explicit in the Blueprint.|
+| :- |
+
+|**REGULATOR**|**Trigger gate — passive by default, blocks downstream on False or error signal**|
+| :-: | :- |
+
+```yaml
+- id: quality_gate
+  type: Regulator
+  label: "Block downstream if dedup removed too many rows"
+  config:
+    on_block: skip                 # skip | abort | trigger_agent
+    timeout_seconds: 0             # 0 = no timeout (default)
+    on_timeout: proceed            # proceed | skip | abort
+```
+
+Wiring a Regulator — the gate is passive until something is connected to its input port:
+
+edges:
+
+```yaml
+# Wire a boolean signal to the Regulator
+- from: probe_after_dedup
+  to: quality_gate
+  port: signal                  # signal port — carries boolean or error
+
+# Downstream only executes if quality_gate passes
+- from: quality_gate
+  to: write_daily_orders
+```
+
+|**State**|**Behaviour**|
+| :- | :- |
+|**Passive (nothing wired to signal port)**|Regulator does not exist in the compiled Manifest. It is compiled away entirely by the Compiler. Zero runtime overhead.|
+|**Signal = True**|Gate opens. Downstream executes normally.|
+|**Signal = False**|Gate closes. Downstream is blocked. on\_block determines behaviour: skip (mark downstream as skipped in RunRecord), abort (fail the pipeline), trigger\_agent (invoke LLM loop with gate context).|
+|**Signal = error type / exception**|Treated identically to False. Gate closes. on\_block applies.|
+|**Signal = None / null**|Treated as True. Gate opens. This preserves passive-by-default behaviour for Probes that do not emit a signal on a given run.|
+
+|**Implementation note:**  The Regulator is evaluated by the Surveyor, not by Spark. Signal values are read from the Observability Store after the upstream Probe completes. The Surveyor holds the downstream JobSpec in a pending state until the Regulator resolves. No Spark resources are held during this wait.|
+| :- |
+
+|**SPILLWAY**|**Error output port — present on every Module, routes row-level failures**|
+| :-: | :- |
+
+Every Module implicitly has a main output port and a spillway port. By default, row-level errors propagate to the Surveyor as pipeline failures. When a spillway is wired, error rows are diverted to a designated downstream Module instead of failing the pipeline.
+
+edges:
+
+```yaml
+- from: cast_and_clean
+  to: write_clean_orders
+  port: main
+
+- from: cast_and_clean
+  to: write_quarantine
+  port: spillway
+  error_types:                   # optional filter — only route these error types
+    - CastException
+    - NullValueException
+```
+
+The spillway DataFrame received by write\_quarantine contains all original columns plus two appended system columns:
+
+|**System column**|**Description**|
+| :- | :- |
+|**\_aq\_error\_module**|The id of the Module that produced the error.|
+|**\_aq\_error\_msg**|The exception message or error description string.|
+|**\_aq\_error\_type**|The exception class name (e.g. CastException).|
+|**\_aq\_error\_ts**|Timestamp when the error was recorded.|
+
+|**Implementation:**  Spillway routing for SQL Channels uses Spark's built-in try\_cast(), try\_divide(), and try() functions to capture row-level failures without aborting the job. For custom transform functions, Aqueduct wraps the UDF in a try/except that populates the \_aq\_error\_\* columns on failure rows and routes them to the spillway DataFrame. This is a single-pass operation — no separate Spark job or action is triggered.|
+| :- |
+
+|**ARCADE**|**Encapsulated sub-pipeline — reusable Blueprint embedded as a single Module**|
+| :-: | :- |
+
+```yaml
+- id: enrich_with_customer
+  type: Arcade
+  label: "Standard customer data enrichment"
+  ref: arcades/customer_enrichment.yml   # path to sub-Blueprint
+  context_override:                       # local context passed to Arcade
+    input_table: dedup_orders
+    lookup_table: ${ctx.tables.customers}
+  spillway: quarantine_enrichment_errors  # Arcade-level spillway target
+```
+
+Arcade sub-Blueprints declare their required context keys:
+
+\# arcades/customer\_enrichment.yml
+
+```yaml
+aqueduct: "1.0"
+
+id: arcade.customer_enrichment
+
+required_context:                  # validated at parse time — error if missing
+  - input_table
+  - lookup_table
+
+modules:
+  - id: read_input
+    type: Ingress
+    config:
+      format: dataframe             # special format: reads from parent pipeline
+      ref: ${ctx.input_table}       # resolves to the parent Module id
+```
+
+|**Expansion contract:**  Arcades are fully expanded at Manifest compile time. The Manifest always contains a flat Module list. Spark sees a single flat execution plan with no nesting. Module IDs within Arcades are namespaced (parent\_module\_id.child\_module\_id) to prevent collision.|
+| :- |
+
+
+# **5. Context Registry**
+## **5.1 Overview & Design Contract**
+The Context Registry is the variable system for Blueprints. It has one inviolable contract: any value that can be resolved at parse time must be resolved at parse time, before the Manifest is written and before any Spark job starts. This guarantees the Manifest is always fully concrete — no deferred resolution, no hidden state.
+
+## **5.2 Three-Tier Resolution Model**
+
+|**Tier**|**Syntax**|**Resolved at**|**Performance cost**|
+| :- | :- | :- | :- |
+|Tier 0 — Static|${ctx.namespace.key}|Parse time (Parser layer)|Zero — substituted before Manifest is written. Spark never sees the token.|
+|Tier 1 — Runtime function|@aq.fn(args)|Pre-job (Compiler layer)|Driver-only, milliseconds. Resolved after Tier 0 but before any Spark job starts.|
+|Tier 2 — UDF|udf\_id in udfs: list|Spark execution (Channel op)|Executor cost — distributed. Operates on DataFrame columns, not scalar config values.|
+
+The syntax difference is the hard visual boundary. ${ctx.\*} is Tier 0. @aq.\* is Tier 1. A UDF name in a udfs: list is Tier 2. Engineers and LLM agents can determine resolution tier at a glance without domain knowledge.
+
+## **5.3 Tier 0 — Static Context**
+Defined in the context: block. Supports namespacing with dot notation. Supports shell variable passthrough with default values.
+
+```yaml
+context:
+  env:    ${AQUEDUCT_ENV:-dev}       # reads shell env var, defaults to "dev"
+  tables:
+    orders: "s3://data/${ctx.env}/orders"
+  params:
+    dedup_key:  "order_id"
+    batch_size: 10000
+```
+
+Resolution order (highest priority wins):
+
+1. CLI flags: aqueduct run --ctx env=prod --ctx tables.orders=s3://override/path
+1. Environment variables matching AQUEDUCT\_CTX\_\* prefix (e.g. AQUEDUCT\_CTX\_ENV=prod)
+1. context\_profiles block for the active profile (--profile flag)
+1. context: block static defaults
+
+Profile overrides for environment promotion:
+
+```yaml
+context_profiles:
+  dev:
+    params.batch_size: 100          # small batches in dev
+    tables.orders: "s3://dev/orders"
+  prod:
+    params.batch_size: 50000
+    tables.orders: "s3://prod/orders"
+```
+
+## **5.4 Tier 1 — Runtime Functions (@aq.\*)**
+A curated, versioned set of built-in functions resolved on the driver before any Spark job starts. All return scalar values that substitute into the Blueprint exactly as Tier 0 values do.
+
+|**Function**|**Description**|
+| :- | :- |
+|**@aq.date.today()**|Current date as string. Optional format arg: @aq.date.today(format="yyyy/MM/dd"). Default: yyyy-MM-dd.|
+|**@aq.date.yesterday()**|Yesterday's date. Same format arg as today().|
+|**@aq.date.offset(base, days)**|Date offset. base is a date string or another @aq.date.\*. days is integer (negative for past). E.g. @aq.date.offset(base=@aq.date.today(), days=-7).|
+|**@aq.date.month\_start()**|First day of the current month.|
+|**@aq.date.format(date, pattern)**|Reformats a date string using Java SimpleDateFormat pattern.|
+|**@aq.runtime.timestamp()**|Current UTC timestamp as ISO-8601 string.|
+|**@aq.runtime.run\_id()**|The current run UUID. Useful for writing run-partitioned output.|
+|**@aq.runtime.prev\_run\_id()**|The run UUID of the last successful run of this pipeline. Null if no previous run exists.|
+|**@aq.secret(key)**|Fetches a secret by key. Provider configured in engine config: AWS Secrets Manager | GCP Secret Manager | Azure Key Vault | HashiCorp Vault | env variable fallback.|
+|**@aq.env(var)**|Reads an environment variable. Fails fast at compile time if the variable is not set (unlike ${AQUEDUCT\_ENV:-default} which has a fallback).|
+|**@aq.depot.get(key)**|Reads a value from the Depot KV store. Returns null if key does not exist. Useful for watermarks and last-run state.|
+|**@aq.depot.get(key, default)**|Reads a value from the Depot with a fallback default if the key does not exist.|
+
+## **5.5 UDF Registry (Tier 2)**
+UDFs are not Context values — they operate on DataFrame columns during Spark execution, not on scalar config values. They are registered in a udf\_registry block at the top level of the Blueprint or in a shared udf\_registry.yml file referenced by multiple Blueprints.
+
+```yaml
+udf_registry:
+  - id: clean_phone
+    label: "Normalise phone to E.164 format"
+    lang: python
+    path: udfs/clean_phone.py
+    entry: clean_phone_fn          # function name within the module
+    return_type: STRING            # Spark DDL type string
+    deterministic: true
+  - id: haversine_distance
+    label: "Great-circle distance between two lat/lon pairs"
+    lang: scala
+    jar:  udfs/geo-udfs.jar
+    class: com.myco.udfs.Haversine
+    return_type: DOUBLE
+    deterministic: true
+```
+
+UDFs are registered with the SparkSession before any Channel that references them executes. Spillway routing is automatically applied to UDF calls — if a UDF raises an exception on a row, the row is routed to the Channel's spillway port with the exception captured in \_aq\_error\_msg.
+
+## **5.6 Depot — Persistent KV Store**
+The Depot is Aqueduct's built-in state store for cross-run persistence. It supports watermarking, incremental load patterns, and cross-pipeline coordination.
+
+\# Reading from Depot in Context (Tier 1)
+
+context:
+
+```yaml
+context:
+  watermarks:
+    last_orders_ts: "@aq.depot.get('watermarks.orders', '1970-01-01')"
+
+# Writing to Depot via Egress Module
+
+- id: update_watermark
+  type: Egress
+  label: "Update orders watermark after successful run"
+  config:
+    format: depot
+    key:    watermarks.orders
+    value:  "@aq.runtime.timestamp()"
+    access: readwrite              # readwrite | readonly (default: readwrite for Egress)
+```
+
+|**Flag**|**Behaviour**|
+| :- | :- |
+|**access: readonly**|The key can be read via @aq.depot.get() but cannot be written by any Egress in this pipeline. Default for all keys unless explicitly overridden.|
+|**access: readwrite**|The key can be read and written. Must be explicitly declared on the Egress Module config. Any attempt to write a readonly key raises a compile-time error.|
+|**access: writeonly**|The key can be written but not read within this pipeline. Useful for keys consumed by other pipelines.|
+
+
+# **6. Observability, Probes & Flow Report**
+## **6.1 Design Constraint**
+All observability in Aqueduct is governed by one constraint: no Spark actions may be added to the critical execution path. Every signal source has an explicit cost model documented in Section 6.2. Engineers selecting Probe signals must understand the cost they are accepting.
+
+## **6.2 Signal Cost Model**
+
+|**Signal**|**Mechanism**|**Performance cost**|**Accuracy**|
+| :- | :- | :- | :- |
+|schema\_snapshot|DataFrame.schema property|Zero — metadata read, no scan|Exact|
+|row\_count\_estimate|SparkListener task metrics (recordsWritten)|Zero — taps internal event bus|Exact for completed stages|
+|stage\_duration|SparkListener onStageCompleted event|Zero — taps internal event bus|Exact|
+|shuffle\_size|SparkListener task metrics (shuffleWriteBytes)|Zero — taps internal event bus|Exact|
+|null\_rates|sample(frac).agg(count(when(isNull)))|Low — one action on sample partition|Approximate (±sampling error)|
+|value\_distribution|sample(frac) + approx\_count\_distinct()|Low — approximate Spark functions|Approximate|
+|sample\_rows|DataFrame.take(N), N ≤ max\_sample\_rows|Low — short-circuit scan|Exact for N rows|
+|column\_type\_drift|Schema comparison at parse time (static)|Zero — compile time only|Exact|
+
+## **6.3 Observability Store Schema**
+All signals are written to the Observability Store as structured records. Signals are appended as newline-delimited JSON (or Parquet) files partitioned by run\_id. DuckDB queries these files directly — no import step required. The logical schema below describes the shape of each record; there is no DDL to manage.
+
+**Why DuckDB over SQLite:** SQLite serialises all writes through a single writer lock. The Surveyor reads while the Executor writes concurrently, which reliably produces `database is locked` errors under load. DuckDB handles concurrent reads with MVCC and can query Parquet files on disk with zero ETL overhead, making it the correct embedded backend for this access pattern.
+
+```text
+Table: signals
+  run_id        TEXT        -- UUID for this pipeline invocation
+  module_id     TEXT        -- ID of the Module that emitted the signal
+  signal_type   TEXT        -- schema_snapshot | row_count | null_rates | ...
+  spark_stage   INTEGER     -- Spark stage ID from SparkListener (null if N/A)
+  emitted_at    TIMESTAMP   -- UTC timestamp of emission
+  payload       JSON        -- signal-type-specific structured data
+  run_phase     TEXT        -- executing | retrying | patching | completed
+```
+
+```text
+Table: run_records
+  run_id        TEXT PRIMARY KEY
+  pipeline_id   TEXT
+  blueprint_sha TEXT        -- git SHA of Blueprint at run time
+  manifest_path TEXT        -- path to compiled Manifest JSON
+  started_at    TIMESTAMP
+  completed_at  TIMESTAMP
+  status        TEXT        -- running | success | failed | patched | skipped
+  patch_count   INTEGER     -- number of patches applied in this run
+```
+
+## **6.4 SparkListener Integration**
+Aqueduct registers a custom SparkListener with the SparkSession before any job is submitted. The listener runs on the driver in a separate thread and writes events directly to the Observability Store without touching the Spark execution thread.
+
+Events captured:
+
+- onStageCompleted — records stage ID, duration, input/output row count, shuffle read/write bytes, spill bytes. This is the primary source for zero-cost row count estimates.
+- onTaskEnd — records per-task metrics for identifying skew (tasks with outlier durations).
+- onJobEnd — records job-level success/failure and total duration.
+- onApplicationEnd — final flush of any buffered events before session close.
+
+## **6.5 Flow Report**
+The Flow Report is generated by the Surveyor after each run. It is a per-column, per-Module quality summary sourced from Probe signals. It is stored in the Lineage Store and accessible via aqueduct report <run\_id>.
+
+Each row in the Flow Report represents one column at one Module's output:
+
+|**Field**|**Description**|
+| :- | :- |
+|**module\_id**|The Module whose output was measured.|
+|**column\_name**|Column name as it appears in the output schema.|
+|**spark\_type**|Spark DDL type string at this Module's output. Compared to the previous run to detect drift.|
+|**status**|OK | Degraded | Error. OK: all thresholds passed. Degraded: one or more soft thresholds breached. Error: hard error (type cast failure, exception, missing column).|
+|**null\_rate**|Null rate from Probe sample. Null if no null\_rates Probe is attached.|
+|**row\_estimate**|Row count estimate from SparkListener. Always present for completed stages.|
+|**detail**|Human-readable description of any issue. Used in LLM FailureContext and UI display.|
+|**type\_drift**|Boolean. True if the Spark type changed compared to the previous successful run.|
+
+
+# **7. Lineage**
+## **7.1 Two Lineage Layers**
+Aqueduct maintains two distinct lineage layers with different costs, consumers, and update frequencies. They must not be conflated.
+
+|**Layer**|**Description**|
+| :- | :- |
+|**Structural Lineage (static)**|Derived from the Blueprint at parse time. For every output column in every Module, traces which upstream columns contributed to it by walking the AST. Zero runtime cost. Available before the pipeline runs. Stored as a ColumnLineageGraph JSON in the Lineage Store. Updated whenever the Blueprint changes.|
+|**Runtime Quality Lineage**|Populated after each run from Probe signals and Flow Report data. Records per-column quality status, type drift, null rate trends, and error locations at each Module. Appended to the Lineage Store per run\_id. Enables historical quality trend analysis.|
+
+## **7.2 Structural Lineage — ColumnLineageGraph**
+The Parser builds a ColumnLineageGraph as a by-product of AST construction. The graph is a directed acyclic graph where:
+
+- Nodes are (module\_id, column\_name) pairs.
+- Edges represent data flow: an edge from (module\_A, col\_x) to (module\_B, col\_y) means col\_y in module\_B was derived from col\_x in module\_A.
+- Transformation edges carry a transform\_op annotation (the Channel operation that produced the derivation).
+
+For SQL Channels, column lineage is derived using **sqlglot** — an open-source SQL parser and transpiler with native Apache Spark dialect support. sqlglot's `lineage.lineage()` function walks the AST of a SELECT expression and returns a lineage graph of source-column → output-column relationships in approximately 10 lines of Python. Complex expressions (CASE, UDF calls) are annotated as derived\_from: [list of input columns] with transform\_op: expression. This replaces any requirement to build or maintain a custom SQL parser.
+
+The ColumnLineageGraph supports two query patterns used in practice:
+
+- Impact analysis: "if I change column X in Module A, which downstream columns and Modules are affected?" — traverses forward edges.
+- Root cause tracing: "where did this null value in column Y at Module B come from?" — traverses backward edges to find the earliest Module where nulls were introduced.
+
+## **7.3 Lineage Store Schema**
+
+```text
+Table: column_lineage
+  blueprint_sha   TEXT        -- graph is keyed to a specific Blueprint version
+  pipeline_id     TEXT
+  from_module     TEXT
+  from_column     TEXT
+  to_module       TEXT
+  to_column       TEXT
+  transform_op    TEXT        -- e.g. "sql:CAST", "deduplicate", "join:left"
+```
+
+```text
+Table: quality_lineage
+  run_id          TEXT
+  pipeline_id     TEXT
+  module_id       TEXT
+  column_name     TEXT
+  spark_type      TEXT
+  status          TEXT        -- OK | Degraded | Error
+  null_rate       REAL
+  row_estimate    INTEGER
+  type_drift      BOOLEAN
+  detail          TEXT
+  recorded_at     TIMESTAMP
+```
+
+
+# **8. Self-Healing & LLM Agent Loop**
+## **8.1 Design Philosophy**
+The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint is not a limitation: it makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer. The agent cannot produce an invalid Blueprint.
+
+**On LLM cost and context window size:** The default FailureContext is intentionally generous. Even a full, unpruned context package of approximately 40,000 tokens costs less than $0.50 per patch attempt with current frontier models. Over a month of pipeline operations, this is orders of magnitude cheaper than maintaining on-call engineering coverage. The ContextPruner (Section 8.4) exists to improve model accuracy and reduce latency — not primarily to reduce cost. Engineers should size `max_patches_per_run` based on risk tolerance for auto-applied patches, not on token cost.
+
+## **8.2 Retry Policy**
+The retry\_policy block defines behaviour before the LLM agent is invoked. The Surveyor applies this policy on failure before escalating to the agent loop.
+
+```text
+retry_policy:
+  max_attempts: 3
+  backoff:
+    strategy: exponential      # linear | exponential | fixed
+    base_seconds: 30
+    max_seconds: 600
+    jitter: true               # adds random ±20% to backoff interval
+  transient_errors:            # retried without agent involvement
+    - SparkException: ".*Connection reset.*"
+    - SparkException: ".*Task not serializable.*"
+    - Py4JNetworkError
+  non_transient_errors:        # go directly to agent loop, no retry
+    - AnalysisException
+    - SchemaIncompatibleException
+    - ParseException
+  on_exhaustion: trigger_agent # trigger_agent | abort | alert_only
+```
+
+## **8.3 Trigger Conditions**
+The Surveyor triggers the agent loop on any of the following:
+
+|**Trigger**|**Description**|
+| :- | :- |
+|**Pipeline exception**|An unhandled exception at any Module after retry policy is exhausted.|
+|**Non-transient error**|Any error matching the non\_transient\_errors list triggers the agent immediately, bypassing retry.|
+|**Regulator block with trigger**|A Regulator with on\_block: trigger\_agent fires when its gate closes.|
+|**Probe threshold breach**|A Probe alert\_threshold is breached, generating a HealthEvent with severity: error.|
+|**Manual invocation**|Engineer runs: aqueduct heal <run\_id> [--module <module\_id>]|
+
+## **8.4 FailureContext Package**
+Before invoking the LLM, the Surveyor assembles a FailureContext — a complete, self-contained JSON document. The agent must never need to make additional queries to understand what happened.
+
+### ContextPruner
+
+Before the FailureContext is sent to the model, it passes through a **ContextPruner** component. The pruner trims irrelevant sections to improve model accuracy and response latency. Pruning rules:
+
+| **Error class** | **Manifest scope included** | **spark\_config included** |
+| :- | :- | :- |
+| `ColumnNotFound`, `TypeMismatch`, `AnalysisException` | Failed module + 2 upstream modules (via lineage graph) + 2 immediate downstream modules | No |
+| `SparkException` containing "OutOfMemory" or "shuffle" | Full manifest | Yes |
+| All other errors | Failed module + direct upstream modules | No |
+
+The unpruned full manifest is always written to disk at `runs/<run_id>/failure_context_full.json` for post-mortem inspection. The LLM receives only the pruned version.
+
+> **Cost note:** Context pruning is applied to improve model accuracy and response latency. From a cost perspective, even unpruned FailureContext packages (approx. 40k tokens) result in a per-incident cost of < $0.50. Over a month of pipeline operations, this is orders of magnitude less expensive than maintaining on-call engineering coverage. The pruning logic exists to improve accuracy and reduce latency, not primarily to reduce cost.
+
+```JSON
+{
+  "run_id":             "run_20240412_143022_a3f9",
+  "pipeline_id":        "pipeline.orders.daily_aggregate",
+  "failed_module":      "cast_and_clean",
+  "failed_module_label":"Cast types and strip whitespace",
+  "failure_type":       "AnalysisException",
+  "error_message":      "Cannot resolve column 'event_ts' ...",
+  "stack_trace":        "...",
+  "manifest_snapshot":  { /* pruned: failed module + 2 upstream + 2 downstream */ },
+  "structural_lineage": { /* ColumnLineageGraph for failed Module and pruned scope */ },
+  "probe_signals": [
+    { "module": "read_orders",  "signal": "schema_snapshot", "payload": {...} },
+    { "module": "dedup_orders", "signal": "null_rates",      "payload": {...} }
+  ],
+  "flow_report_partial": [ /* Flow Report rows up to point of failure */ ],
+  "retry_history": [
+    { "attempt": 1, "error": "...", "duration_seconds": 34 }
+  ],
+  "previous_patches": [  /* all patches applied to this pipeline historically */ ],
+  "depot_state": {       /* relevant Depot keys read/written by this pipeline */ }
+}
+```
+
+## **8.5 Patch Grammar — PatchSpec Operations**
+The agent responds exclusively with a PatchSpec JSON object. Any response that is not a valid PatchSpec is rejected, and the agent is re-prompted with the validation error. The agent may include multiple operations in one PatchSpec — there is no limit on the number of operations per patch, enabling full pipeline restructuring.
+
+|**Operation**|**Description**|
+| :- | :- |
+|**replace\_module\_config**|Replace the config block of a named Module. The most common operation. Used to fix wrong paths, bad SQL, incorrect params, wrong format strings.|
+|**replace\_module\_label**|Update the label of a Module. Used when the agent renames a Module for clarity after restructuring.|
+|**insert\_module**|Insert a new Module at a specified position in the graph. Requires specifying upstream and downstream edges. Used to add a cast step, filter, Probe, or Regulator.|
+|**remove\_module**|Remove a Module and rewire its edges. The agent must specify how to reconnect the graph. Used to eliminate a broken step.|
+|**replace\_context\_value**|Update a Tier 0 or Tier 1 value in the Context Registry. Used when a path, key, threshold, or parameter is wrong.|
+|**add\_probe**|Attach a new Probe to a Module's output. Commonly added by the agent before a retry to gather more signal.|
+|**replace\_edge**|Rewire an existing edge. Used when the agent determines data should flow through a different path.|
+|**set\_module\_on\_failure**|Change the retry or spillway policy for a specific Module.|
+|**replace\_retry\_policy**|Replace the pipeline-level retry policy. Used when the agent determines the current policy is causing repeated failures.|
+|**add\_arcade\_ref**|Reference a new or existing Arcade sub-Blueprint. Used when the agent restructures repeated logic into a reusable Arcade.|
+
+Example PatchSpec (single operation):
+
+```JSON
+{
+  "patch_id":   "patch_20240412_143155",
+  "run_id":     "run_20240412_143022_a3f9",
+  "rationale":  "Column event_ts is STRING but cast to TIMESTAMP without explicit
+                 format. Replacing with explicit format string cast.",
+  "operations": [
+    {
+      "op":        "replace_module_config",
+      "module_id": "cast_and_clean",
+      "config": {
+        "op": "sql",
+        "query": "SELECT *, TO_TIMESTAMP(event_ts, 'yyyy-MM-dd HH:mm:ss')
+                  AS event_ts FROM dedup_orders"
+      }
+    }
+  ]
+}
+```
+
+## **8.6 Patch Lifecycle**
+1. Surveyor detects failure, exhausts retry policy if applicable, assembles FailureContext.
+1. FailureContext is posted to the configured LLM endpoint (model specified in agent: block).
+1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error and its response. Maximum 3 re-prompt attempts before escalating to human approval regardless of approval\_mode.
+1. Valid PatchSpec is written to patches/pending/<patch\_id>.json.
+1. If approval\_mode: auto — PatchSpec is applied immediately. Blueprint is updated atomically. Manifest is recompiled. Execution resumes from the failed Module forward (not from the beginning of the pipeline).
+1. If approval\_mode: human — Patch is held in patches/pending/. An alert is emitted (configured webhook/email). Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
+1. Applied patch is moved to patches/applied/<patch\_id>.json with applied\_at timestamp, run\_id, and agent rationale preserved.
+1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted and a human escalation alert is emitted.
+
+## **8.7 Resume-From Semantics** *(Deferred — Advanced Feature)*
+
+> **V1 behaviour:** When a patch is applied, Aqueduct re-runs the entire pipeline from the beginning. This is less efficient than partial resume but is 100% reliable and trivial to implement. Partial resume is deferred to a post-MVP release.
+
+**Why deferred:** Partial resume requires the Executor to cache intermediate DataFrames across a JVM session boundary, maintain a mapping of which Modules completed, and handle invalidation when a patch modifies an upstream Module. The correctness surface area is large. The V1 trade-off is to accept the re-run cost in exchange for implementation simplicity.
+
+**Middle-ground path (optional, not required for MVP):** If the Blueprint explicitly uses `df.checkpoint()` or sets `spark.sql.streaming.checkpointLocation` at a Module boundary, the Planner may restart from that checkpoint location after a patch. This is opt-in and driven entirely by the Blueprint author — Aqueduct does not insert checkpoints automatically.
+
+**Future full implementation (post-MVP):**
+
+- Any Module whose output was consumed by a completed Egress is not re-executed. Its output is considered finalised.
+- Any Module whose output was not yet consumed is re-executed from the first un-cached ancestor.
+- The Surveyor records which Modules completed successfully in the RunRecord before failure, enabling precise resume targeting.
+- If the patch modifies a Module that ran successfully before the failure, Aqueduct forces re-execution of that Module and all its descendants.
+
+
+# **9. Type System**
+## **9.1 Principle: Aqueduct Owns No Types**
+All column types throughout Aqueduct — in schema\_hint declarations, UDF return\_type fields, column assertions, and the Flow Report — use Spark DDL type strings verbatim. Aqueduct does not define its own type system and does not wrap or alias Spark types. This guarantees complete compatibility and eliminates any translation layer between Aqueduct's type references and what Spark executes.
+
+## **9.2 Supported Spark DDL Types**
+Any valid Spark DDL type string is accepted wherever Aqueduct expects a type. Examples:
+
+```text
+# Scalar types
+STRING, BOOLEAN, BYTE, SHORT, INT, INTEGER, LONG, BIGINT
+FLOAT, DOUBLE, DECIMAL(precision, scale)
+DATE, TIMESTAMP, TIMESTAMP_NTZ, BINARY
+
+# Complex types
+ARRAY<STRING>
+MAP<STRING, DECIMAL(18,2)>
+STRUCT<name: STRING, age: INT, address: STRUCT<city: STRING, zip: STRING>>
+
+# Used in schema_hint and UDF return_type
+schema_hint:
+  order_id:   STRING
+  amount:     DECIMAL(18,2)
+  tags:       ARRAY<STRING>
+  metadata:   MAP<STRING, STRING>
+  location:   STRUCT<lat: DOUBLE, lon: DOUBLE>
+```
+
+## **9.3 Semantic Constraints (Not Types)**
+For domain-specific validation (email format, URL format, phone number format, enumerated values), Aqueduct uses constraint annotations on columns within Probe modules. The underlying Spark type remains STRING or the appropriate primitive. The constraint is a validation rule, not a type.
+
+```text
+-- id: validate_contacts
+type: Probe
+attach_to: clean_contacts
+config:
+  column_constraints:
+    email:
+      - format: email             # built-in regex rule
+      - not_null
+    phone:
+      - format: e164_phone        # built-in E.164 format rule
+      - udf: clean_phone          # auto-applies UDF and checks result
+    status:
+      - enum: [active, inactive, pending]
+    website:
+      - format: url
+    age:
+      - range: { min: 0, max: 150 }
+```
+
+Constraint violations are recorded in the Flow Report as Degraded or Error status depending on violation rate vs alert thresholds. They do not cause pipeline failure unless a Regulator is wired to the Probe's output signal.
+
+
+# **10. Deployment & Spark Integration**
+## **10.1 Engine Configuration File**
+Aqueduct reads a project-level aqueduct.yml configuration file from the working directory (or path specified by --config flag). This file sets deployment target, store backends, agent config, and engine defaults. It is separate from Blueprints.
+
+```yaml
+aqueduct_config: "1.0"
+deployment:
+  target: local                    # local | standalone | yarn | kubernetes | databricks
+  master_url: "local[*]"]           # overridden per target type
+stores:
+  observability:
+    backend: duckdb                # duckdb (default) | s3 | gcs | adls
+    path: ".aqueduct/signals"      # directory; signals written as Parquet files
+  lineage:
+    backend: duckdb
+    path: ".aqueduct/lineage"      # directory; lineage records written as Parquet files
+  depot:
+    backend: duckdb
+    path: ".aqueduct/depot.duckdb" # single DuckDB file for KV state
+agent:
+  default_model: claude-sonnet-4-20250514
+  api_endpoint: https://api.anthropic.com/v1/messages
+  max_tokens: 4096
+  max_patches_per_run: 5
+  default_approval_mode: auto
+probes:
+  max_sample_rows: 100
+  default_sample_fraction: 0.01
+  block_full_actions_in_prod: true
+secrets:
+  provider: env                    # env | aws | gcp | azure | vault
+```
+
+## **10.2 Deployment Targets**
+
+|**Target**|**Description**|
+| :- | :- |
+|**local**|spark://local[\*]. For development and CI. No cluster required. SparkSession created with local master. Default when AQUEDUCT\_ENV=dev or no config is present.|
+|**standalone**|Connects to a running Spark standalone cluster. Requires master\_url: "spark://host:7077". SparkSession uses spark.master = master\_url.|
+|**yarn**|Submits via spark-submit to a YARN resource manager. Requires hadoop\_conf\_dir set in deployment config. Supports client and cluster deploy modes.|
+|**kubernetes**|Submits driver pod via spark-submit --master k8s://. Requires k8s\_master\_url and spark.kubernetes.container.image in spark\_config. Supports executor pod template overrides.|
+|**databricks**|Uses Databricks Connect (interactive cluster reuse) or Databricks Jobs API (job cluster provisioning). Requires databricks\_host and databricks\_token in deployment config or via @aq.secret().|
+|**emr**|AWS EMR via YARN target with EMR-specific credential handling. Requires emr\_cluster\_id or uses YARN submission to EMR master.|
+|**dataproc**|GCP Dataproc via YARN target with GCP credential handling. Requires dataproc\_cluster and gcp\_project.|
+
+## **10.3 SparkSession Lifecycle**
+- The Executor creates or acquires one SparkSession per pipeline run.
+- Multiple JobSpecs within a run share the session — this preserves cached DataFrames and avoids session startup overhead between jobs.
+- Session configuration from the Blueprint spark\_config block is merged with engine defaults. Blueprint config takes precedence.
+- On self-healing patch and resume: the SparkSession is preserved if the failure was application-level (bad SQL, schema error, wrong path). It is recycled if the failure was JVM/network-level (OutOfMemoryError, Py4JNetworkError).
+- On run completion or abort, the Executor calls session.stop() and records the session duration in the RunRecord.
+
+## **10.4 Performance Commitments**
+These are explicit guarantees that Aqueduct makes regarding its performance overhead:
+
+- No additional Spark actions beyond those defined by Egress modules in the Blueprint, unless a Probe explicitly uses sample-based signals (documented in Section 6.2).
+- Probe signals sourced from SparkListener are zero-cost and run on the driver thread without touching the Spark execution thread.
+- Context Registry Tier 0 resolution is fully static. Spark receives concrete values, never interpolation tokens.
+- Arcade expansion is compile-time. Spark sees a flat execution plan with no nesting overhead.
+- Regulator modules with no wired signal input are compiled away entirely — they add zero overhead.
+- The Parser → Compiler → Planner pipeline is designed to complete in under 500ms for Blueprints containing up to 500 Modules on standard driver hardware (4 cores, 8GB RAM).
+
+
+# **11. CLI Reference**
+## **11.1 Core Commands**
+
+|**Command**|**Description**|
+| :- | :- |
+|**aqueduct new \<name\>**|Scaffold a minimal valid Blueprint file named \<name\>.yml in the current directory. Generates a hello-world Ingress → Channel → Egress pipeline with default context variables and local Spark config. Designed so the user can run it immediately to verify their Spark connection.|
+|**aqueduct run <blueprint.yml>**|Parse, compile, plan, and execute a Blueprint. Accepts --profile, --ctx key=val, --target, --dry-run (compile only, no execution).|
+|**aqueduct validate <blueprint.yml>**|Parse and validate a Blueprint without compiling or running. Reports all schema errors. Exit code 0 = valid.|
+|**aqueduct compile <blueprint.yml>**|Parse, compile, and write the Manifest to stdout or --output path. Useful for inspecting the resolved Manifest before running.|
+|**aqueduct heal <run\_id>**|Manually trigger the LLM agent loop for a failed run. Optionally scoped with --module <module\_id> to focus the agent on a specific Module.|
+|**aqueduct patch apply <patch\_id>**|Apply a pending Patch. Recompiles the Manifest and resumes execution from the patched Module.|
+|**aqueduct patch reject <patch\_id>**|Reject a pending Patch. Records rejection reason (--reason flag). Pipeline remains in failed state.|
+|**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table|json|csv.|
+|**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <module\_id> --column <col> for targeted queries.|
+|**aqueduct signal <run\_id> <signal\_id>**|Send a signal to a Regulator gate. Signal value defaults to True. Pass --value false to close the gate. Pass --error "message" to send an error signal.|
+|**aqueduct depot get <key>**|Read a value from the Depot KV store.|
+|**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
+|**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|
+
+
+# **12. Deferred Topics & Open Items**
+The following areas are intentionally deferred from this version of the specification. They are not out of scope permanently — they are staged for future revision to avoid premature design decisions.
+
+### **Streaming (Spark Structured Streaming)**
+Architecturally compatible with Aqueduct's Module model — a streaming Ingress and streaming Egress bookend the same Channel chain. The Probe model requires adaptation since SparkListener signals differ for continuous streams (microbatch vs. continuous processing). Regulator gates require a re-evaluation model for streaming contexts. Deferred to specification version 1.1.
+
+### **MLOps Integration**
+A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI endpoint) is architecturally straightforward. Feature store reads as Ingress modules are natural. The open question is whether Aqueduct should own training pipeline orchestration or defer to MLflow Pipelines / Vertex AI Pipelines. Recommendation: ML inference as a built-in Channel op type in v1.1. Training orchestration out of scope for v1.
+
+### **Visual Graph Editor (UI)**
+The Blueprint YAML is always the source of truth. The UI is a visualisation and editing layer that reads and writes valid Blueprint YAML — never a separate representation. Module labels are shown in the UI; Module IDs are managed internally. The UI must enforce the same JSON Schema validation as the Parser. Full UI specification is a separate document.
+
+### **Multi-pipeline Orchestration**
+Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies (pipeline A must complete before pipeline B starts) are handled externally via Depot watermarks and standard orchestrators (Airflow, Prefect, etc.) triggering aqueduct run commands. A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential v1.2 feature.
+
+### **LLM Model Benchmarking**
+Patch quality varies by LLM model. A benchmark suite of representative FailureContext scenarios with known correct PatchSpec responses is needed to evaluate and compare models. This is a product/eval concern and does not affect the architecture. Aqueduct's pluggable model configuration means model selection can be changed without code changes.
+
+### **MCP (Model Context Protocol) Readiness**
+Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools — moving from prompt engineering to structured tool use for greater reliability and composability.
+
+Candidate MCP tools:
+
+| **Tool name** | **Description** |
+| :- | :- |
+| `patch_blueprint` | Accepts a run\_id and optional module scope. Assembles the FailureContext, invokes the LLM loop, and returns the applied PatchSpec. |
+| `get_lineage` | Accepts a pipeline\_id, module\_id, and column name. Returns the upstream and downstream ColumnLineageGraph for that column. |
+| `get_flow_report` | Returns the Flow Report for a given run\_id in structured JSON. |
+| `run_pipeline` | Submits a Blueprint for execution and streams RunRecord status events. |
+
+When Aqueduct operates as an MCP server, the `approval_mode` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
+
+
+# **13. Implementation Phases** *(Implementer Reference)*
+
+> This section is a guide for phased implementation. It is not part of the public specification.
+
+The recommended build order prioritises fast feedback loops and defers complex subsystems until the core is proven.
+
+| **Phase** | **Deliverable** | **Done when** |
+| :- | :- | :- |
+| **Phase 1 — Parser & Manifest** | YAML → AST → Manifest JSON. Tier 0 context substitution only. No Spark. | `aqueduct compile hello.yml` produces valid Manifest JSON with all `${ctx.*}` tokens substituted. |
+| **Phase 2 — Ingress / Egress** | Executor reads a Parquet file (Ingress) and writes it back out (Egress). Minimal SparkSession management. | `aqueduct run hello.yml` reads a CSV and writes a Parquet file on local Spark. |
+| **Phase 3 — Channel: sql** | Single `op: sql` Channel executing a Spark SQL query. Upstream Module ID registered as temp view. | A Blueprint with `Ingress → Channel (op: sql) → Egress` runs end-to-end. |
+| **Phase 4 — Mock Surveyor** | Surveyor detects job failure and emits a webhook payload. No LLM yet. | A broken SQL query triggers a webhook with the error details. |
+| **Phase 5 — Patch Grammar (manual)** | PatchSpec JSON schema defined. `aqueduct patch apply` reads a hand-written PatchSpec and updates the Blueprint. | A human-authored PatchSpec fixes the broken SQL from Phase 4 when applied via CLI. |
+| **Phase 6 — LLM Integration** | Surveyor packages FailureContext, calls the LLM, validates the PatchSpec response, applies it. | An end-to-end self-healing run: pipeline breaks, LLM proposes a patch, patch is applied, pipeline retries successfully. |
+
+
+
+*AQUEDUCT — System Design & Implementation Reference — v1.0*
+v1.0  —  Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Probe · Regulator · Spillway · Arcade · Surveyor
