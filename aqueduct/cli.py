@@ -1,6 +1,6 @@
 """Aqueduct CLI.
 
-Active commands: validate, compile, run.
+Active commands: validate, compile, run, patch apply, patch reject.
 """
 
 from __future__ import annotations
@@ -185,6 +185,88 @@ def run(
         sys.exit(1)
 
     click.echo(f"\n✓ pipeline complete  run_id={result.run_id}")
+
+
+# ── patch command group ───────────────────────────────────────────────────────
+
+@cli.group()
+def patch() -> None:
+    """Manage Blueprint patches."""
+
+
+@patch.command("apply")
+@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file to patch",
+)
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle subdirs (backups/, applied/)",
+)
+def patch_apply(patch_file: str, blueprint: str, patches_dir: str) -> None:
+    """Validate and apply a PatchSpec JSON file to a Blueprint YAML.
+
+    Backs up the original Blueprint, applies all operations atomically,
+    verifies the result parses cleanly, then archives the patch.
+    """
+    from pathlib import Path
+
+    from aqueduct.patch.apply import PatchError, apply_patch_file
+
+    try:
+        result = apply_patch_file(
+            blueprint_path=Path(blueprint),
+            patch_path=Path(patch_file),
+            patches_dir=Path(patches_dir),
+        )
+    except PatchError as exc:
+        click.echo(f"✗ patch failed: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✓ patch applied  id={result.patch_id}")
+    click.echo(f"  blueprint  → {result.blueprint_path}")
+    click.echo(f"  backup     → {result.backup_path}")
+    click.echo(f"  archived   → {result.archive_path}")
+    click.echo(f"  operations   {result.operations_applied} applied")
+
+
+@patch.command("reject")
+@click.argument("patch_id")
+@click.option("--reason", required=True, help="Rejection reason (recorded in patch file)")
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle subdirs (pending/, rejected/)",
+)
+def patch_reject(patch_id: str, reason: str, patches_dir: str) -> None:
+    """Reject a pending patch and record the reason.
+
+    Moves patches/pending/<patch_id>.json → patches/rejected/<patch_id>.json
+    with a rejection_reason annotation.
+    """
+    from pathlib import Path
+
+    from aqueduct.patch.apply import PatchError, reject_patch
+
+    try:
+        rejected_path = reject_patch(
+            patch_id=patch_id,
+            reason=reason,
+            patches_dir=Path(patches_dir),
+        )
+    except PatchError as exc:
+        click.echo(f"✗ reject failed: {exc}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✓ patch rejected  id={patch_id}")
+    click.echo(f"  archived → {rejected_path}")
+    click.echo(f"  reason: {reason}")
 
 
 if __name__ == "__main__":

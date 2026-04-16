@@ -1,0 +1,272 @@
+============================= test session starts ==============================
+platform linux -- Python 3.14.3, pytest-9.0.3, pluggy-1.6.0
+rootdir: /home/sakhund/Personal/Projects/Aqueduct
+configfile: pyproject.toml
+plugins: cov-7.1.0, anyio-4.12.1
+collected 1 item
+
+tests/test_patch_apply.py F
+ERROR: Coverage failure: total of 24 is less than fail-under=80
+                                                                         [100%]
+
+=================================== FAILURES ===================================
+_______________________ test_apply_patch_file_lifecycle ________________________
+
+path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/blueprint.patch_verify.tmp.yml')
+profile = None, cli_overrides = None
+
+    def parse(
+        path: str | Path,
+        profile: str | None = None,
+        cli_overrides: dict[str, str] | None = None,
+    ) -> Blueprint:
+        """Parse a Blueprint YAML file and return a validated, resolved AST.
+    
+        Args:
+            path:          Path to the Blueprint YAML file.
+            profile:       Active context profile name (--profile flag).
+            cli_overrides: Key=value overrides from --ctx CLI flags.
+    
+        Returns:
+            A frozen Blueprint dataclass with all Tier 0 context resolved.
+    
+        Raises:
+            ParseError: On any YAML, schema, context, or graph validation failure.
+        """
+        path = Path(path)
+    
+        # ── 1. Load YAML ──────────────────────────────────────────────────────────
+        try:
+            raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ParseError(f"Blueprint file not found: {path}")
+        except yaml.YAMLError as exc:
+            raise ParseError(f"Invalid YAML in {path.name}: {exc}") from exc
+    
+        if not isinstance(raw, dict):
+            raise ParseError(f"Blueprint must be a YAML mapping, got {type(raw).__name__}")
+    
+        # ── 2. Pydantic schema validation ─────────────────────────────────────────
+        try:
+>           validated = BlueprintSchema.model_validate(raw)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E           pydantic_core._pydantic_core.ValidationError: 1 validation error for BlueprintSchema
+E           name
+E             Field required [type=missing, input_value={'aqueduct': '1.0', 'edge...l', 'type': 'Ingress'}]}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.12/v/missing
+
+aqueduct/parser/parser.py:67: ValidationError
+
+The above exception was the direct cause of the following exception:
+
+blueprint_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/blueprint.yml')
+patch_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/patch.json')
+patches_dir = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/patches_root')
+
+    def apply_patch_file(
+        blueprint_path: Path,
+        patch_path: Path,
+        patches_dir: Path = Path("patches"),
+    ) -> ApplyResult:
+        """Full apply lifecycle: validate → apply → verify → backup → write → archive.
+    
+        Args:
+            blueprint_path: Path to the Blueprint YAML file to patch.
+            patch_path:     Path to the PatchSpec JSON file.
+            patches_dir:    Root directory for patch lifecycle dirs (backups/, applied/).
+    
+        Returns:
+            ApplyResult with paths and metadata.
+    
+        Raises:
+            PatchError: On validation failure, operation failure, or post-patch
+                        Blueprint parse failure.
+        """
+        if not blueprint_path.exists():
+            raise PatchError(f"Blueprint not found: {blueprint_path}")
+    
+        # ── 1. Load and validate PatchSpec ────────────────────────────────────────
+        patch_spec = load_patch_spec(patch_path)
+    
+        # ── 2. Load Blueprint YAML ────────────────────────────────────────────────
+        try:
+            bp_raw = yaml.safe_load(blueprint_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
+    
+        # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
+        patched = apply_patch_to_dict(bp_raw, patch_spec)
+    
+        # ── 5. Re-parse to verify Blueprint validity ──────────────────────────────
+        tmp_verify = blueprint_path.with_suffix(".patch_verify.tmp.yml")
+        try:
+            tmp_verify.write_text(yaml.dump(patched, allow_unicode=True), encoding="utf-8")
+>           parse(str(tmp_verify))
+
+aqueduct/patch/apply.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/blueprint.patch_verify.tmp.yml')
+profile = None, cli_overrides = None
+
+    def parse(
+        path: str | Path,
+        profile: str | None = None,
+        cli_overrides: dict[str, str] | None = None,
+    ) -> Blueprint:
+        """Parse a Blueprint YAML file and return a validated, resolved AST.
+    
+        Args:
+            path:          Path to the Blueprint YAML file.
+            profile:       Active context profile name (--profile flag).
+            cli_overrides: Key=value overrides from --ctx CLI flags.
+    
+        Returns:
+            A frozen Blueprint dataclass with all Tier 0 context resolved.
+    
+        Raises:
+            ParseError: On any YAML, schema, context, or graph validation failure.
+        """
+        path = Path(path)
+    
+        # ── 1. Load YAML ──────────────────────────────────────────────────────────
+        try:
+            raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ParseError(f"Blueprint file not found: {path}")
+        except yaml.YAMLError as exc:
+            raise ParseError(f"Invalid YAML in {path.name}: {exc}") from exc
+    
+        if not isinstance(raw, dict):
+            raise ParseError(f"Blueprint must be a YAML mapping, got {type(raw).__name__}")
+    
+        # ── 2. Pydantic schema validation ─────────────────────────────────────────
+        try:
+            validated = BlueprintSchema.model_validate(raw)
+        except ValidationError as exc:
+>           raise ParseError(f"Blueprint schema validation failed:\n{exc}") from exc
+E           aqueduct.parser.parser.ParseError: Blueprint schema validation failed:
+E           1 validation error for BlueprintSchema
+E           name
+E             Field required [type=missing, input_value={'aqueduct': '1.0', 'edge...l', 'type': 'Ingress'}]}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.12/v/missing
+
+aqueduct/parser/parser.py:69: ParseError
+
+The above exception was the direct cause of the following exception:
+
+minimal_bp_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/blueprint.yml')
+tmp_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0')
+
+    def test_apply_patch_file_lifecycle(minimal_bp_path, tmp_path):
+        patch_path = tmp_path / "patch.json"
+        patch_data = {
+            "patch_id": "p123",
+            "rationale": "Updating label",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}]
+        }
+        patch_path.write_text(json.dumps(patch_data), encoding="utf-8")
+    
+        patches_dir = tmp_path / "patches_root"
+>       result = apply_patch_file(minimal_bp_path, patch_path, patches_dir=patches_dir)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_patch_apply.py:98: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+blueprint_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/blueprint.yml')
+patch_path = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/patch.json')
+patches_dir = PosixPath('/tmp/pytest-of-sakhund/pytest-40/test_apply_patch_file_lifecycl0/patches_root')
+
+    def apply_patch_file(
+        blueprint_path: Path,
+        patch_path: Path,
+        patches_dir: Path = Path("patches"),
+    ) -> ApplyResult:
+        """Full apply lifecycle: validate → apply → verify → backup → write → archive.
+    
+        Args:
+            blueprint_path: Path to the Blueprint YAML file to patch.
+            patch_path:     Path to the PatchSpec JSON file.
+            patches_dir:    Root directory for patch lifecycle dirs (backups/, applied/).
+    
+        Returns:
+            ApplyResult with paths and metadata.
+    
+        Raises:
+            PatchError: On validation failure, operation failure, or post-patch
+                        Blueprint parse failure.
+        """
+        if not blueprint_path.exists():
+            raise PatchError(f"Blueprint not found: {blueprint_path}")
+    
+        # ── 1. Load and validate PatchSpec ────────────────────────────────────────
+        patch_spec = load_patch_spec(patch_path)
+    
+        # ── 2. Load Blueprint YAML ────────────────────────────────────────────────
+        try:
+            bp_raw = yaml.safe_load(blueprint_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
+    
+        # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
+        patched = apply_patch_to_dict(bp_raw, patch_spec)
+    
+        # ── 5. Re-parse to verify Blueprint validity ──────────────────────────────
+        tmp_verify = blueprint_path.with_suffix(".patch_verify.tmp.yml")
+        try:
+            tmp_verify.write_text(yaml.dump(patched, allow_unicode=True), encoding="utf-8")
+            parse(str(tmp_verify))
+        except ParseError as exc:
+>           raise PatchError(
+                f"Patched Blueprint is invalid (PatchSpec operations produced a "
+                f"Blueprint that does not pass the Parser):\n{exc}"
+            ) from exc
+E           aqueduct.patch.apply.PatchError: Patched Blueprint is invalid (PatchSpec operations produced a Blueprint that does not pass the Parser):
+E           Blueprint schema validation failed:
+E           1 validation error for BlueprintSchema
+E           name
+E             Field required [type=missing, input_value={'aqueduct': '1.0', 'edge...l', 'type': 'Ingress'}]}, input_type=dict]
+E               For further information visit https://errors.pydantic.dev/2.12/v/missing
+
+aqueduct/patch/apply.py:139: PatchError
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.14.3-final-0 ________________
+
+Name                            Stmts   Miss  Cover   Missing
+-------------------------------------------------------------
+aqueduct/__init__.py                2      0   100%
+aqueduct/cli.py                   145    145     0%   6-273
+aqueduct/compiler/__init__.py       3      3     0%   3-6
+aqueduct/compiler/compiler.py      47     47     0%   17-121
+aqueduct/compiler/expander.py      61     61     0%   16-180
+aqueduct/compiler/models.py        18     18     0%   13-38
+aqueduct/compiler/runtime.py       86     86     0%   13-176
+aqueduct/compiler/wirer.py         39     39     0%   17-111
+aqueduct/executor/__init__.py       0      0   100%
+aqueduct/executor/channel.py       33     33     0%   21-107
+aqueduct/executor/egress.py        24     24     0%   9-65
+aqueduct/executor/executor.py      95     95     0%   18-220
+aqueduct/executor/ingress.py       41     41     0%   9-108
+aqueduct/executor/models.py        15     15     0%   3-27
+aqueduct/executor/session.py        8      8     0%   7-33
+aqueduct/parser/__init__.py         3      0   100%
+aqueduct/parser/graph.py           54     47    13%   25-44, 49-64, 72-90, 95-98
+aqueduct/parser/models.py          53      0   100%
+aqueduct/parser/parser.py          44     25    43%   57-60, 63, 72-145
+aqueduct/parser/resolver.py        82     70    15%   35-42, 48-60, 65-80, 94-140, 149-158
+aqueduct/parser/schema.py         109     13    88%   69, 76, 93-95, 136, 143, 148-153
+aqueduct/patch/__init__.py          0      0   100%
+aqueduct/patch/apply.py           105     55    48%   62, 66-67, 71-76, 91-92, 119, 127-128, 143-144, 150-182, 210-231
+aqueduct/patch/grammar.py          53      0   100%
+aqueduct/patch/operations.py      120     90    25%   52, 62-65, 75-84, 92-101, 109-115, 122-124, 136-150, 155-164, 169-173, 178-196, 201-215, 220-222, 227-228, 233-254, 277
+aqueduct/surveyor/__init__.py       0      0   100%
+aqueduct/surveyor/models.py        28     28     0%   7-67
+aqueduct/surveyor/surveyor.py      64     64     0%   19-220
+aqueduct/surveyor/webhook.py       23     23     0%   9-64
+-------------------------------------------------------------
+TOTAL                            1355   1030    24%
+FAIL Required test coverage of 80% not reached. Total coverage: 23.99%
+=========================== short test summary info ============================
+FAILED tests/test_patch_apply.py::test_apply_patch_file_lifecycle - aqueduct....
+============================== 1 failed in 0.90s ===============================
