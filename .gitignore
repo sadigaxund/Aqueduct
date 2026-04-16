@@ -2,6 +2,8 @@
 .claude/
 .prompts/
 .dev/JOURNAL.md
+*.log
+
 
 # --- Python ---
 __pycache__/
