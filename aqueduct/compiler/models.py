@@ -1,0 +1,77 @@
+"""Manifest — the fully-compiled, execution-ready form of a Blueprint.
+
+Differences from Blueprint:
+  - All Tier 1 (@aq.*) tokens resolved to concrete values.
+  - Arcade modules expanded; all module IDs are flat and namespaced.
+  - Passive Regulators (no wired signal port) compiled away.
+  - Probes validated against their attach_to targets.
+
+The Manifest is the single document given to the Executor and embedded
+verbatim in FailureContext packages sent to the LLM agent.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from aqueduct.parser.models import AgentConfig, Edge, Module, RetryPolicy
+
+
+@dataclass(frozen=True)
+class Manifest:
+    pipeline_id: str
+    name: str
+    description: str
+    aqueduct_version: str
+    context: dict[str, str]
+    modules: tuple[Module, ...]
+    edges: tuple[Edge, ...]
+    spark_config: dict[str, Any]
+    retry_policy: RetryPolicy
+    agent: AgentConfig
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict for writing to disk."""
+        return {
+            "pipeline_id": self.pipeline_id,
+            "name": self.name,
+            "description": self.description,
+            "aqueduct_version": self.aqueduct_version,
+            "context": self.context,
+            "modules": [
+                {
+                    "id": m.id,
+                    "type": m.type,
+                    "label": m.label,
+                    "description": m.description,
+                    "tags": list(m.tags),
+                    "config": m.config,
+                    "attach_to": m.attach_to,
+                    "spillway": m.spillway,
+                    "depends_on": list(m.depends_on),
+                }
+                for m in self.modules
+            ],
+            "edges": [
+                {
+                    "from": e.from_id,
+                    "to": e.to_id,
+                    "port": e.port,
+                    "error_types": list(e.error_types),
+                }
+                for e in self.edges
+            ],
+            "spark_config": self.spark_config,
+            "retry_policy": {
+                "max_attempts": self.retry_policy.max_attempts,
+                "backoff_strategy": self.retry_policy.backoff_strategy,
+                "backoff_base_seconds": self.retry_policy.backoff_base_seconds,
+                "on_exhaustion": self.retry_policy.on_exhaustion,
+            },
+            "agent": {
+                "approval_mode": self.agent.approval_mode,
+                "model": self.agent.model,
+                "max_patches_per_run": self.agent.max_patches_per_run,
+            },
+        }

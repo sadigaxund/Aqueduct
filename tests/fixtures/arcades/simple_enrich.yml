@@ -1,0 +1,27 @@
+aqueduct: "1.0"
+id: arcade.simple_enrich
+name: "Simple Enrichment Arcade"
+description: "Two-step Channel arcade for testing expansion."
+
+required_context: []
+
+context: {}
+
+modules:
+  - id: step_one
+    type: Channel
+    label: "Step One"
+    config:
+      op: sql
+      query: "SELECT *, TRUE AS enriched FROM __input__"
+
+  - id: step_two
+    type: Channel
+    label: "Step Two"
+    config:
+      op: sql
+      query: "SELECT * FROM step_one WHERE enriched = TRUE"
+
+edges:
+  - from: step_one
+    to: step_two

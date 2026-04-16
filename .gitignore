@@ -1,4 +1,70 @@
-.claude/*
+# --- Aqueduct Project ---
 .claude/
-CLAUDE.md
-GEMINI.md
+.prompts/
+.dev/JOURNAL.md
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Testing / Coverage ---
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nosepy
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# --- Spark / Hadoop / Data ---
+.spark-staging/
+metastore_db/
+spark-warehouse/
+derby.log
+*.parquet
+*.avro
+*.csv
+# DuckDB local data
+*.duckdb
+*.duckdb.wal
+
+# --- Environments & Secrets ---
+.env
+.venv
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- IDEs & OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

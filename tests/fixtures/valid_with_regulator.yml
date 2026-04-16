@@ -1,0 +1,59 @@
+aqueduct: "1.0"
+id: pipeline.regulator.test
+name: "Regulator Test Pipeline"
+description: |
+  Two Regulators:
+    - quality_gate: has a signal edge → active, stays in Manifest.
+    - passive_gate: no signal edge → passive, compiled away.
+
+context: {}
+
+modules:
+  - id: source
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: data/input.parquet
+
+  - id: probe_check
+    type: Probe
+    label: "Quality probe"
+    attach_to: source
+    config:
+      signals:
+        - schema_snapshot
+
+  - id: quality_gate
+    type: Regulator
+    label: "Active gate — has signal wired"
+    config:
+      on_block: abort
+
+  - id: passive_gate
+    type: Regulator
+    label: "Passive gate — no signal wired, compiled away"
+    config:
+      on_block: skip
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: data/output.parquet
+      mode: overwrite
+
+edges:
+  - from: source
+    to: quality_gate
+    port: main
+  - from: probe_check
+    to: quality_gate
+    port: signal
+  - from: quality_gate
+    to: passive_gate
+    port: main
+  - from: passive_gate
+    to: sink
+    port: main

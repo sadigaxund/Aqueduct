@@ -1,0 +1,36 @@
+aqueduct: "1.0"
+id: pipeline.cycle.test
+name: "Cycle Test"
+description: "A → B → C → A forms a cycle. Parser must reject this."
+
+context: {}
+
+modules:
+  - id: module_a
+    type: Channel
+    label: "Module A"
+    config:
+      op: sql
+      query: "SELECT * FROM module_c"
+
+  - id: module_b
+    type: Channel
+    label: "Module B"
+    config:
+      op: sql
+      query: "SELECT * FROM module_a"
+
+  - id: module_c
+    type: Channel
+    label: "Module C"
+    config:
+      op: sql
+      query: "SELECT * FROM module_b"
+
+edges:
+  - from: module_a
+    to: module_b
+  - from: module_b
+    to: module_c
+  - from: module_c
+    to: module_a

@@ -1,0 +1,34 @@
+aqueduct: "1.0"
+id: pipeline.probe.test
+name: "Probe Test Pipeline"
+description: "Tests Probe attach_to wiring."
+
+context: {}
+
+modules:
+  - id: read_input
+    type: Ingress
+    label: "Read input"
+    config:
+      format: parquet
+      path: data/input.parquet
+
+  - id: probe_schema
+    type: Probe
+    label: "Schema probe"
+    attach_to: read_input
+    config:
+      signals:
+        - schema_snapshot
+
+  - id: write_output
+    type: Egress
+    label: "Write output"
+    config:
+      format: parquet
+      path: data/output.parquet
+      mode: overwrite
+
+edges:
+  - from: read_input
+    to: write_output

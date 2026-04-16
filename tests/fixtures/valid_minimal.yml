@@ -1,0 +1,39 @@
+aqueduct: "1.0"
+id: pipeline.hello.world
+name: "Hello World Pipeline"
+description: "Minimal three-module pipeline for parser testing."
+
+context:
+  env: ${AQUEDUCT_ENV:-dev}
+  paths:
+    input: "data/${ctx.env}/input.parquet"
+    output: "data/${ctx.env}/output.parquet"
+
+modules:
+  - id: read_input
+    type: Ingress
+    label: "Read input Parquet"
+    config:
+      format: parquet
+      path: ${ctx.paths.input}
+
+  - id: passthrough
+    type: Channel
+    label: "Passthrough transform"
+    config:
+      op: sql
+      query: "SELECT * FROM read_input"
+
+  - id: write_output
+    type: Egress
+    label: "Write output Parquet"
+    config:
+      format: parquet
+      path: ${ctx.paths.output}
+      mode: overwrite
+
+edges:
+  - from: read_input
+    to: passthrough
+  - from: passthrough
+    to: write_output

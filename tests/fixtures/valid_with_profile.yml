@@ -1,0 +1,34 @@
+aqueduct: "1.0"
+id: pipeline.profile.test
+name: "Profile Test Pipeline"
+description: "Tests context_profiles promotion."
+
+context:
+  env: dev
+  paths:
+    input: "data/${ctx.env}/input.parquet"
+    output: "data/${ctx.env}/output.parquet"
+
+context_profiles:
+  prod:
+    env: prod
+
+modules:
+  - id: read_input
+    type: Ingress
+    label: "Read input"
+    config:
+      format: parquet
+      path: ${ctx.paths.input}
+
+  - id: write_output
+    type: Egress
+    label: "Write output"
+    config:
+      format: parquet
+      path: ${ctx.paths.output}
+      mode: overwrite
+
+edges:
+  - from: read_input
+    to: write_output

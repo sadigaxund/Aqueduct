@@ -1,0 +1,58 @@
+aqueduct: "1.0"
+id: pipeline.episode_scraper
+
+context:
+  last_episode: "@aq.depot.get('episode_tracker.last', '0')"
+
+modules:
+  - id: scrape_source
+    type: Ingress
+    label: "Scrape episode number from website"
+    config:
+      format: custom
+      class: my_scraper.ScraperIngress
+    # Returns DataFrame with column 'episode'
+
+  - id: compare_episode
+    type: Channel
+    label: "Add boolean flag if new episode"
+    config:
+      op: sql
+      query: |
+        SELECT
+          episode,
+          episode > ${ctx.last_episode} AS is_new
+        FROM scrape_source
+
+  - id: gate_new_episode
+    type: Regulator
+    label: "Block if no new episode"
+    config:
+      on_block: skip          # Pipeline succeeds but marks downstream skipped
+
+  - id: update_depot
+    type: Egress
+    label: "Update last episode watermark"
+    config:
+      format: depot
+      key: episode_tracker.last
+      value: "@aq.runtime.timestamp()"  # Or use the scraped episode value
+
+  - id: continue_processing
+    type: Channel
+    label: "Process new episode data"
+    # ... your main logic
+
+edges:
+  - from: scrape_source
+    to: compare_episode
+
+  - from: compare_episode
+    to: gate_new_episode
+    port: signal              # The boolean 'is_new' column becomes the gate signal
+
+  - from: gate_new_episode
+    to: update_depot
+
+  - from: update_depot
+    to: continue_processing
