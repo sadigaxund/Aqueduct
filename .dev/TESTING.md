@@ -144,6 +144,106 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Patch Grammar (`aqueduct/patch/`)
+
+## Patch Grammar (`aqueduct/patch/`)
+
+### `grammar.py` — PatchSpec validation
+- ✅ valid PatchSpec JSON parses without error
+- ✅ `operations` list empty → `ValidationError`
+- ✅ unknown top-level field → `ValidationError` (extra="forbid")
+- ✅ unknown `op` value → `ValidationError` (discriminator mismatch)
+- ✅ `replace_module_config` missing `config` → `ValidationError`
+- ✅ `replace_edge` extra field → `ValidationError` (extra="forbid")
+- ✅ `PatchSpec.model_json_schema()` returns valid JSON Schema dict
+
+### `operations.py` — individual operations
+
+#### `replace_module_config`
+- ✅ existing module config replaced with new dict
+- ✅ unknown module_id raises `PatchOperationError`
+
+#### `replace_module_label`
+- ✅ module label updated
+- ✅ unknown module_id raises `PatchOperationError`
+
+#### `insert_module`
+- ✅ module appended to modules list
+- ✅ specified edges_to_remove removed; edges_to_add added
+- ✅ duplicate module_id raises `PatchOperationError`
+- ✅ edges_to_remove referencing non-existent edge raises `PatchOperationError`
+- ✅ module missing `id` raises `PatchOperationError`
+
+#### `remove_module`
+- ✅ module removed from modules list
+- ✅ all edges referencing the module removed
+- ✅ edges_to_add wired in after removal
+- ✅ unknown module_id raises `PatchOperationError`
+
+#### `replace_context_value`
+- ✅ top-level context key replaced
+- ✅ nested dot-notation key (`paths.input`) replaced
+- ✅ Blueprint with no context block raises `PatchOperationError`
+- ✅ invalid dot path (intermediate key not a dict) raises `PatchOperationError`
+
+#### `add_probe`
+- ✅ Probe module added to modules list
+- ✅ edges_to_add appended
+- ✅ missing `attach_to` raises `PatchOperationError`
+- ✅ type != 'Probe' raises `PatchOperationError`
+- ✅ attach_to targeting unknown module raises `PatchOperationError`
+
+#### `replace_edge`
+- ✅ edge endpoint updated (new_from_id)
+- ✅ edge endpoint updated (new_to_id)
+- ✅ edge port updated (new_port)
+- ✅ non-existent edge raises `PatchOperationError`
+- ✅ no new field provided raises `PatchOperationError`
+
+#### `set_module_on_failure`
+- ✅ on_failure block set on module
+- ✅ unknown module_id raises `PatchOperationError`
+
+#### `replace_retry_policy`
+- ✅ top-level retry_policy replaced
+
+#### `add_arcade_ref`
+- ✅ Arcade module added to modules list
+- ✅ edges_to_remove / edges_to_add applied
+- ✅ type != 'Arcade' raises `PatchOperationError`
+- ✅ missing `ref` raises `PatchOperationError`
+- ✅ duplicate id raises `PatchOperationError`
+
+### `apply.py`
+
+#### `load_patch_spec()`
+- ✅ valid JSON file → returns `PatchSpec`
+- ✅ file not found → `PatchError`
+- ✅ invalid JSON → `PatchError`
+- ✅ schema violation → `PatchError` with Pydantic details
+
+#### `apply_patch_to_dict()`
+- ✅ returns modified dict; input bp unchanged (deep copy)
+- ✅ first-operation failure raises `PatchError` with op index in message
+- ✅ operations applied left-to-right (second op sees first op's changes)
+
+#### `apply_patch_file()`
+- ✅ patched Blueprint written to blueprint_path
+- ✅ original backed up to patches/backups/<patch_id>_<ts>_<name>
+- ✅ PatchSpec archived to patches/applied/ with `applied_at` field added
+- ✅ `ApplyResult.operations_applied` matches len(operations)
+- ✅ Blueprint not found → `PatchError`
+- ✅ post-patch Blueprint that fails Parser → `PatchError`; original Blueprint unchanged
+- ✅ atomic write: failure mid-write leaves original Blueprint intact
+- ✅ re-parsing the patched Blueprint succeeds (integration test with valid_minimal.yml)
+
+#### `reject_patch()`
+- ✅ pending patch moved to patches/rejected/
+- ✅ rejected file contains `rejected_at` and `rejection_reason` fields
+- ✅ patch_id not in patches/pending/ → `PatchError`
+
+---
+
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
 - **Status**: All 140 tests passing. Coverage at 88.21%. Surveyor module at 99%.
