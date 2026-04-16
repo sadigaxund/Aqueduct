@@ -1,0 +1,35 @@
+aqueduct: "1.0"
+id: pipeline.arcade.test
+name: "Arcade Test Pipeline"
+description: "Tests Arcade expansion with namespaced IDs."
+
+context:
+  env: dev
+
+modules:
+  - id: source
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: data/input.parquet
+
+  - id: enricher
+    type: Arcade
+    label: "Enrichment Arcade"
+    ref: arcades/simple_enrich.yml
+    context_override: {}
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: data/output.parquet
+      mode: overwrite
+
+edges:
+  - from: source
+    to: enricher
+  - from: enricher
+    to: sink

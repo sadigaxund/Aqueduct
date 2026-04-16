@@ -1,0 +1,14 @@
+aqueduct: "1.0"
+id: pipeline.invalid.schema
+name: "Invalid Schema"
+description: "Module uses an unknown type. Pydantic must reject this."
+
+context: {}
+
+modules:
+  - id: bad_module
+    type: UnknownModuleType
+    label: "This type does not exist"
+    config: {}
+
+edges: []
