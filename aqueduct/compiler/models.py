@@ -18,18 +18,20 @@ from typing import Any
 from aqueduct.parser.models import AgentConfig, Edge, Module, RetryPolicy
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class Manifest:
+    # Required — no defaults
     pipeline_id: str
-    name: str
-    description: str
-    aqueduct_version: str
     context: dict[str, str]
     modules: tuple[Module, ...]
     edges: tuple[Edge, ...]
     spark_config: dict[str, Any]
-    retry_policy: RetryPolicy
-    agent: AgentConfig
+    # Optional — defaulted so tests can construct minimal Manifests
+    name: str = ""
+    description: str = ""
+    aqueduct_version: str = "1.0"
+    retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
+    agent: AgentConfig = field(default_factory=AgentConfig)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
