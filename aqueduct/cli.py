@@ -89,15 +89,27 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     help="Context override. Repeatable.",
 )
 @click.option("--run-id", default=None, help="Run identifier (auto-generated UUID if omitted)")
-def run(blueprint: str, profile: str | None, ctx: tuple[str, ...], run_id: str | None) -> None:
+@click.option("--store-dir", default=".aqueduct", show_default=True, help="Observability store directory")
+@click.option("--webhook", default=None, help="Webhook URL for failure notifications")
+def run(
+    blueprint: str,
+    profile: str | None,
+    ctx: tuple[str, ...],
+    run_id: str | None,
+    store_dir: str,
+    webhook: str | None,
+) -> None:
     """Compile and execute a Blueprint on a local SparkSession."""
+    import uuid
     from pathlib import Path
 
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.executor.executor import ExecuteError, execute
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.executor.session import make_spark_session
     from aqueduct.parser.parser import ParseError, parse
+    from aqueduct.surveyor.surveyor import Surveyor
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -121,20 +133,35 @@ def run(blueprint: str, profile: str | None, ctx: tuple[str, ...], run_id: str |
         click.echo(f"✗ compile error: {exc}", err=True)
         sys.exit(1)
 
-    click.echo(f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)")
+    run_id = run_id or str(uuid.uuid4())
+    click.echo(f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)  run={run_id}")
+
+    # ── Surveyor — start ───────────────────────────────────────────────────────
+    surveyor = Surveyor(manifest, store_dir=Path(store_dir), webhook_url=webhook)
+    surveyor.start(run_id)
 
     # ── Spark ──────────────────────────────────────────────────────────────────
     spark = make_spark_session(manifest.pipeline_id, manifest.spark_config)
 
     # ── Execute ────────────────────────────────────────────────────────────────
+    execute_exc: ExecuteError | None = None
     try:
         result = execute(manifest, spark, run_id=run_id)
     except ExecuteError as exc:
-        click.echo(f"✗ executor error: {exc}", err=True)
-        spark.stop()
-        sys.exit(1)
-    finally:
-        pass  # spark.stop() called below after result inspection
+        execute_exc = exc
+        # Wrap into a synthetic ExecutionResult so Surveyor can persist it
+        result = ExecutionResult(
+            pipeline_id=manifest.pipeline_id,
+            run_id=run_id,
+            status="error",
+            module_results=(
+                ModuleResult(module_id="_executor", status="error", error=str(exc)),
+            ),
+        )
+
+    # ── Surveyor — record ──────────────────────────────────────────────────────
+    failure_ctx = surveyor.record(result, exc=execute_exc)
+    surveyor.stop()
 
     # ── Report ─────────────────────────────────────────────────────────────────
     for mr in result.module_results:
@@ -147,7 +174,14 @@ def run(blueprint: str, profile: str | None, ctx: tuple[str, ...], run_id: str |
     spark.stop()
 
     if result.status != "success":
-        click.echo(f"\n✗ pipeline failed  run_id={result.run_id}", err=True)
+        if failure_ctx:
+            click.echo(
+                f"\n✗ pipeline failed  run_id={result.run_id}"
+                f"  failed_module={failure_ctx.failed_module}",
+                err=True,
+            )
+        else:
+            click.echo(f"\n✗ pipeline failed  run_id={result.run_id}", err=True)
         sys.exit(1)
 
     click.echo(f"\n✓ pipeline complete  run_id={result.run_id}")

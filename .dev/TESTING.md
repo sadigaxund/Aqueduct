@@ -106,6 +106,44 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Surveyor (`aqueduct/surveyor/`)
+
+### `models.py`
+- ✅ `RunRecord` is frozen; mutation raises `FrozenInstanceError`
+- ✅ `RunRecord.to_dict()` contains all required keys
+- ✅ `FailureContext` is frozen; mutation raises `FrozenInstanceError`
+- ✅ `FailureContext.to_dict()` contains `run_id`, `pipeline_id`, `failed_module`, `error_message`, `stack_trace`
+- ✅ `FailureContext.to_json()` is valid JSON deserializable back to original fields
+
+### `webhook.py` — `fire_webhook()`
+- ✅ returns a `threading.Thread` that is already started
+- ✅ returned thread is a daemon thread
+- ✅ POST sends JSON body with `Content-Type: application/json`
+- ✅ network error (unreachable host) does not raise — failure logged to stderr
+- ✅ HTTP 4xx response does not raise — warning logged to stderr
+
+### `surveyor.py` — `Surveyor`
+- ✅ `start()` creates `.aqueduct/runs.db` and tables if not existing
+- ✅ `start()` inserts a `run_records` row with `status='running'`
+- ✅ `record()` raises `RuntimeError` if called before `start()`
+- ✅ `record()` updates `run_records` row to `status='success'` on success
+- ✅ `record()` updates `run_records` row to `status='error'` on failure
+- ✅ `record()` inserts `failure_contexts` row on failure
+- ✅ `record()` returns `None` on success
+- ✅ `record()` returns `FailureContext` on failure
+- ✅ `FailureContext.failed_module` is the first failing module_id from result
+- ✅ `FailureContext.failed_module` is `_executor` when no module results (bare ExecuteError)
+- ✅ `FailureContext.stack_trace` populated when `exc=` argument supplied
+- ✅ `FailureContext.stack_trace` is `None` when `exc=None`
+- ✅ `FailureContext.manifest_json` is valid JSON
+- ✅ `stop()` closes DB connection; second `stop()` is a no-op
+- ✅ two successive runs to same store: both rows persisted in `run_records`
+- ✅ webhook NOT fired on success even if `webhook_url` configured
+- ✅ webhook fired on failure when `webhook_url` configured (mock server)
+- ✅ webhook NOT fired when `webhook_url=None`
+
+---
+
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: All 123 tests passing. Coverage at 87.79%.
+- **Status**: All 140 tests passing. Coverage at 88.21%. Surveyor module at 99%.
