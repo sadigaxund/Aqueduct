@@ -106,6 +106,108 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Probe (`aqueduct/executor/probe.py`)
+
+### `execute_probe()`
+- ✅ no `signals` in config → returns immediately without writing anything
+- ✅ unknown signal type → warning logged; other signals still captured
+- ✅ `schema_snapshot`: JSON file written to `store_dir/signals/<run_id>/<probe_id>_schema.json`
+- ✅ `schema_snapshot`: DuckDB row inserted into `probe_signals` with correct payload shape
+- ✅ `schema_snapshot`: zero Spark actions triggered (no count/collect)
+- ✅ `row_count_estimate` method=sample: DuckDB row inserted with `estimate` > 0
+- ✅ `row_count_estimate` method=spark_listener: DuckDB row inserted with `estimate=None`
+- ✅ `null_rates`: payload contains `null_rates` dict keyed by requested columns
+- ✅ `null_rates` with no `columns` key uses all DataFrame columns
+- ✅ `sample_rows`: payload contains `rows` list of at most `n` dicts
+- ✅ exception inside one signal does not prevent other signals from being captured
+- ✅ exception inside `execute_probe` does not propagate to caller
+
+### Executor integration (`executor.py`)
+- ✅ Probe appended after non-Probe modules in execution order (runs last)
+- ✅ Probe with `attach_to` pointing to completed Ingress: signals written to DB
+- ✅ Probe with missing `attach_to` source (source failed): logged warning, result `status="success"`
+- ✅ Probe failure does not change pipeline `ExecutionResult(status="success")`
+- ✅ `execute()` with `store_dir=None`: Probe result is `status="success"` but no DB written
+- ✅ Ingress → Probe (schema_snapshot) → Egress pipeline returns `ExecutionResult(status="success")`
+
+### Surveyor `get_probe_signal()`
+- ✅ returns empty list when `signals.db` does not exist
+- ✅ returns rows matching `probe_id` after `execute_probe` writes them
+- ✅ `signal_type` filter returns only rows of that type
+- ✅ `payload` field is a deserialized dict (not a raw JSON string)
+- ✅ rows ordered by `captured_at DESC`
+
+---
+
+## Junction (`aqueduct/executor/junction.py`)
+
+### `execute_junction()`
+- ✅ unsupported mode raises `JunctionError`
+- ✅ missing `mode` (None) raises `JunctionError`
+- ✅ empty `branches` raises `JunctionError`
+- ✅ branch missing `id` raises `JunctionError`
+- ✅ branch missing `condition` in conditional mode raises `JunctionError`
+- ✅ missing `partition_key` in partition mode raises `JunctionError`
+
+#### conditional mode
+- ✅ branch with explicit condition returns `df.filter(condition)` (lazy, no Spark action)
+- ✅ `_else_` branch returns rows not matched by any explicit condition
+- ✅ `_else_` with no other explicit conditions returns unfiltered df
+- ✅ multiple explicit conditions: `_else_` excludes all of them
+
+#### broadcast mode
+- ✅ all branches reference the same unmodified DataFrame object
+
+#### partition mode
+- ✅ branch without `value` falls back to branch `id` as partition value
+- ✅ branch with explicit `value` uses that value in filter expression
+
+### Executor integration (`executor.py`)
+- ✅ Junction with no main-port incoming edge recorded as error in `ExecutionResult`
+- ✅ JunctionError recorded in `ExecutionResult(status="error")`
+- ✅ Junction branches stored as `frame_store["junction_id.branch_id"]`
+- ✅ Ingress → Junction (broadcast) → two Egress modules executes successfully
+- ✅ Ingress → Junction (conditional) → Egress receives filtered DataFrame
+
+---
+
+## Funnel (`aqueduct/executor/funnel.py`)
+
+### `execute_funnel()`
+- ✅ unsupported mode raises `FunnelError`
+- ✅ missing `mode` (None) raises `FunnelError`
+- ✅ missing `inputs` raises `FunnelError`
+- ✅ fewer than 2 `inputs` raises `FunnelError`
+- ✅ unknown input module ID in `inputs` raises `FunnelError`
+
+#### union_all mode
+- ✅ stacks two DataFrames with same schema (schema_check: strict, default)
+- ✅ `schema_check: permissive` allows mismatched schemas (missing cols filled null)
+- ✅ `schema_check: strict` with mismatched schemas raises `FunnelError`
+- ✅ result is lazy (no Spark action triggered)
+
+#### union mode
+- ✅ result is union_all + deduplicated (`.distinct()`)
+- ✅ result is lazy
+
+#### coalesce mode
+- ✅ two DataFrames with overlapping columns: first non-null value wins per row
+- ✅ non-overlapping columns from all inputs present in result
+- ✅ result is lazy (no Spark action triggered)
+
+#### zip mode
+- ✅ two DataFrames with distinct columns: all columns present in result
+- ✅ duplicate column name across inputs raises `FunnelError`
+- ✅ result is lazy
+
+### Executor integration (`executor.py`)
+- ✅ Funnel with no incoming data edges recorded as error in `ExecutionResult`
+- ✅ FunnelError recorded in `ExecutionResult(status="error")`
+- ✅ two Ingress → Funnel (union_all) → Egress executes successfully
+- ✅ Junction (broadcast) → two paths → Funnel (union) round-trip executes successfully
+
+---
+
 ## Surveyor (`aqueduct/surveyor/`)
 
 ### `models.py`
@@ -143,8 +245,6 @@ When adding a new feature, add a task under the relevant module with the exact f
 - ✅ webhook NOT fired when `webhook_url=None`
 
 ---
-
-## Patch Grammar (`aqueduct/patch/`)
 
 ## Patch Grammar (`aqueduct/patch/`)
 
@@ -244,6 +344,47 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Configuration (`aqueduct/config.py`)
+
+### `load_config()`
+- ✅ no file present (implicit lookup) → returns `AqueductConfig` with all defaults
+- ✅ explicit path that does not exist → `ConfigError`
+- ✅ empty YAML file → returns `AqueductConfig` with all defaults
+- ✅ valid aqueduct.yml → returns correctly populated `AqueductConfig`
+- ✅ invalid YAML syntax → `ConfigError`
+- ✅ unknown top-level key → `ConfigError` (extra="forbid")
+- ✅ unknown nested key in `deployment` → `ConfigError`
+
+### `AqueductConfig` defaults
+- ✅ `deployment.target` defaults to `"local"`
+- ✅ `deployment.master_url` defaults to `"local[*]"`
+- ✅ `stores.observability.path` defaults to `".aqueduct/signals"`
+- ✅ `stores.lineage.path` defaults to `".aqueduct/lineage"`
+- ✅ `stores.depot.path` defaults to `".aqueduct/depot.duckdb"`
+- ✅ `agent.default_model` defaults to `"claude-sonnet-4-20250514"`
+- ✅ `probes.max_sample_rows` defaults to `100`
+- ✅ `secrets.provider` defaults to `"env"`
+- ✅ `webhooks.on_failure` defaults to `None`
+- ✅ `AqueductConfig` is frozen; mutation raises `ValidationError`
+
+### Config file overrides
+- ✅ custom `master_url` in config read back correctly
+- ✅ partial config (only `deployment` section) → other sections use defaults
+- ✅ `spark_config` dict entries preserved in returned config
+
+## Remote Spark (`aqueduct/executor/session.py`)
+
+### `make_spark_session()` — master_url parameter
+- ✅ default `master_url="local[*]"` used when arg omitted
+- ✅ custom master_url passed to `builder.master()`
+- ✅ `"yarn"` master_url does not raise at construction time
+- ✅ `"spark://host:7077"` master_url does not raise at construction time
+- ✅ Blueprint `spark_config` merged; Blueprint values take precedence over engine config
+
+---
+
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: All 140 tests passing. Coverage at 88.21%. Surveyor module at 99%.
+- **Status**: 204 tests passing, 1 failing. Coverage: 87.73%.
+Issues reported in:
+- .dev/ISSUES/test_execute_probe_global_exception.md
