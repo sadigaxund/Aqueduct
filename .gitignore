@@ -3,6 +3,17 @@
 .prompts/
 .dev/JOURNAL.md
 *.log
+pytest_*.log
+pytest_*.txt
+pytest_*.json
+pytest_*.html
+pytest_*.xml
+pytest_*.csv
+pytest_*.parquet
+pytest_*.avro
+pytest_*.duckdb
+pytest_*.duckdb.wal
+pytest_*.sqlite
 
 
 # --- Python ---

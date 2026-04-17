@@ -166,3 +166,53 @@ def test_surveyor_multi_run_persistence(manifest, tmp_path):
     count = conn.execute("SELECT COUNT(*) FROM run_records").fetchone()[0]
     assert count == 2
     conn.close()
+
+
+def test_surveyor_get_probe_signal_no_db(manifest, tmp_path):
+    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    res = surveyor.get_probe_signal("p1")
+    assert res == []
+
+
+def test_surveyor_get_probe_signal_with_db(manifest, tmp_path):
+    store_dir = tmp_path / "store"
+    import duckdb
+    store_dir.mkdir(parents=True)
+    conn = duckdb.connect(str(store_dir / "signals.db"))
+    conn.execute("""
+        CREATE TABLE probe_signals (
+            run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload JSON, captured_at TIMESTAMPTZ
+        )
+    """)
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p1', 's1', json.dumps({"a":1}), '2025-01-01T00:00:00Z'])
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p1', 's2', json.dumps({"a":2}), '2025-01-02T00:00:00Z'])
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p2', 's1', json.dumps({"a":3}), '2025-01-03T00:00:00Z'])
+    conn.close()
+    
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    res = surveyor.get_probe_signal("p1")
+    assert len(res) == 2
+    assert res[0]["signal_type"] == "s2"
+    assert res[1]["signal_type"] == "s1"
+    assert res[0]["payload"] == {"a": 2}
+
+
+def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
+    store_dir = tmp_path / "store"
+    import duckdb
+    store_dir.mkdir(parents=True)
+    conn = duckdb.connect(str(store_dir / "signals.db"))
+    conn.execute("""
+        CREATE TABLE probe_signals (
+            run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload JSON, captured_at TIMESTAMPTZ
+        )
+    """)
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p1', 's1', json.dumps({"a":1}), '2025-01-01T00:00:00Z'])
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p1', 's2', json.dumps({"a":2}), '2025-01-02T00:00:00Z'])
+    conn.close()
+    
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    res = surveyor.get_probe_signal("p1", signal_type="s1")
+    assert len(res) == 1
+    assert res[0]["signal_type"] == "s1"
+

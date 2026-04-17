@@ -89,27 +89,52 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     help="Context override. Repeatable.",
 )
 @click.option("--run-id", default=None, help="Run identifier (auto-generated UUID if omitted)")
-@click.option("--store-dir", default=".aqueduct", show_default=True, help="Observability store directory")
-@click.option("--webhook", default=None, help="Webhook URL for failure notifications")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
+)
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store directory (overrides aqueduct.yml; default: .aqueduct/signals)",
+)
+@click.option("--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)")
 def run(
     blueprint: str,
     profile: str | None,
     ctx: tuple[str, ...],
     run_id: str | None,
-    store_dir: str,
+    config_path: str | None,
+    store_dir: str | None,
     webhook: str | None,
 ) -> None:
-    """Compile and execute a Blueprint on a local SparkSession."""
+    """Compile and execute a Blueprint on a SparkSession."""
     import uuid
     from pathlib import Path
 
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.executor.executor import ExecuteError, execute
     from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.executor.session import make_spark_session
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
+
+    # ── Load engine config ─────────────────────────────────────────────────────
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    # CLI flags override config file; config file overrides built-in defaults
+    resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    resolved_webhook = webhook or cfg.webhooks.on_failure
+    master_url = cfg.deployment.master_url
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -134,19 +159,23 @@ def run(
         sys.exit(1)
 
     run_id = run_id or str(uuid.uuid4())
-    click.echo(f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)  run={run_id}")
+    click.echo(
+        f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)"
+        f"  run={run_id}  master={master_url}"
+    )
 
     # ── Surveyor — start ───────────────────────────────────────────────────────
-    surveyor = Surveyor(manifest, store_dir=Path(store_dir), webhook_url=webhook)
+    surveyor = Surveyor(manifest, store_dir=resolved_store_dir, webhook_url=resolved_webhook)
     surveyor.start(run_id)
 
-    # ── Spark ──────────────────────────────────────────────────────────────────
-    spark = make_spark_session(manifest.pipeline_id, manifest.spark_config)
+    # ── Spark — merge engine spark_config under Blueprint (Blueprint wins) ─────
+    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+    spark = make_spark_session(manifest.pipeline_id, merged_spark_config, master_url=master_url)
 
     # ── Execute ────────────────────────────────────────────────────────────────
     execute_exc: ExecuteError | None = None
     try:
-        result = execute(manifest, spark, run_id=run_id)
+        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir)
     except ExecuteError as exc:
         execute_exc = exc
         # Wrap into a synthetic ExecutionResult so Surveyor can persist it

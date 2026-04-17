@@ -213,6 +213,136 @@ class Surveyor:
 
         return ctx
 
+    def evaluate_regulator(self, regulator_id: str) -> bool:
+        """Evaluate whether a Regulator's gate is open (True) or closed (False).
+
+        Finds the Probe wired to the Regulator via a signal-port edge, queries
+        the latest ``passed`` field from its signals in the current run, and
+        applies boolean coercion per spec:
+
+          - ``passed=True`` or key absent or no signals → open (True)
+          - ``passed=False``                            → closed (False)
+          - any exception                               → open (True)
+
+        Args:
+            regulator_id: Module ID of the active Regulator to evaluate.
+
+        Returns:
+            True if the gate is open (downstream should execute).
+            False if the gate is closed (on_block applies).
+        """
+        if self._run_id is None:
+            return True  # start() not called
+
+        # Find the probe wired to this regulator's signal port
+        probe_ids = [
+            e.from_id
+            for e in self._manifest.edges
+            if e.to_id == regulator_id and e.port == "signal"
+        ]
+        if not probe_ids:
+            return True  # no signal source → open
+
+        probe_id = probe_ids[0]
+
+        signals_db = self._store_dir / "signals.db"
+        if not signals_db.exists():
+            return True  # no signals written → open
+
+        try:
+            conn = duckdb.connect(str(signals_db))
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT payload
+                    FROM probe_signals
+                    WHERE probe_id = ? AND run_id = ?
+                    ORDER BY captured_at DESC
+                    """,
+                    [probe_id, self._run_id],
+                ).fetchall()
+            finally:
+                conn.close()
+
+            # Walk rows newest-first, look for first payload containing 'passed'
+            for (payload_raw,) in rows:
+                payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+                if isinstance(payload, dict) and "passed" in payload:
+                    passed = payload["passed"]
+                    if passed is None:
+                        return True
+                    return bool(passed)
+
+            return True  # no signal with 'passed' key → open
+
+        except Exception:
+            return True  # error → open per spec
+
+    def get_probe_signal(
+        self,
+        probe_id: str,
+        signal_type: str | None = None,
+    ) -> list[dict]:
+        """Return probe signal payloads for a given probe.
+
+        Opens a fresh read connection to ``store_dir/signals.db``.  Returns
+        an empty list if the signals DB does not exist yet.
+
+        Args:
+            probe_id:    The Probe module ID to query.
+            signal_type: Optional filter — if given, only rows of that type
+                         are returned.
+
+        Returns:
+            List of dicts: ``{"run_id", "probe_id", "signal_type", "payload",
+            "captured_at"}``.  ``payload`` is already deserialised (dict).
+        """
+        import json as _json
+
+        import duckdb as _duckdb
+
+        signals_db = self._store_dir / "signals.db"
+        if not signals_db.exists():
+            return []
+
+        conn = _duckdb.connect(str(signals_db))
+        try:
+            if signal_type is not None:
+                rows = conn.execute(
+                    """
+                    SELECT run_id, probe_id, signal_type, payload,
+                           CAST(captured_at AS VARCHAR) AS captured_at
+                    FROM probe_signals
+                    WHERE probe_id = ? AND signal_type = ?
+                    ORDER BY captured_at DESC
+                    """,
+                    [probe_id, signal_type],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT run_id, probe_id, signal_type, payload,
+                           CAST(captured_at AS VARCHAR) AS captured_at
+                    FROM probe_signals
+                    WHERE probe_id = ?
+                    ORDER BY captured_at DESC
+                    """,
+                    [probe_id],
+                ).fetchall()
+        finally:
+            conn.close()
+
+        return [
+            {
+                "run_id": r[0],
+                "probe_id": r[1],
+                "signal_type": r[2],
+                "payload": _json.loads(r[3]) if isinstance(r[3], str) else r[3],
+                "captured_at": str(r[4]),
+            }
+            for r in rows
+        ]
+
     def stop(self) -> None:
         """Close the DuckDB connection."""
         if self._conn is not None:
