@@ -55,3 +55,7 @@ These files live in the `.dev/` directory and are **shared via Git** (except `JO
 - Use `pytest.raises` with `match=` for validation errors.
 - Immutability: test `FrozenInstanceError` on dataclass mutation attempts.
 - Performance: compare `df.explain()` baselines; use local SparkSession with `spark.sql.adaptive.enabled=false`.
+
+
+### Spark behavior reference
+- Read `.dev/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.
