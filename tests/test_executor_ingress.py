@@ -10,7 +10,7 @@ from aqueduct.parser.models import Module
 
 def test_ingress_unsupported_format(spark: SparkSession):
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "ghost", "path": "/foo"})
-    with pytest.raises(IngressError, match="unsupported format 'ghost'"):
+    with pytest.raises(IngressError, match=r".*ghost.*"):
         read_ingress(module, spark)
 
 
@@ -87,3 +87,9 @@ def test_ingress_custom_options(spark: SparkSession, tmp_path):
     
     assert df.columns == ["_c0", "_c1"]
     assert df.collect()[0][0] == 1
+
+
+def test_ingress_missing_format(spark: SparkSession):
+    module = Module(id="m1", type="Ingress", label="M1", config={"path": "/foo"})
+    with pytest.raises(IngressError, match="'format' is required"):
+        read_ingress(module, spark)

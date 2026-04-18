@@ -212,7 +212,11 @@ def run(
             line += f"  — {mr.error}"
         click.echo(line)
 
-    spark.stop()
+    # Spark cleanup: register stop on atexit so it runs on process exit, not
+    # here. Calling spark.stop() directly kills the global JVM context and
+    # breaks any caller that reuses this process (tests, REPL, embedded use).
+    import atexit
+    atexit.register(spark.stop)
 
     if result.status != "success":
         if failure_ctx:

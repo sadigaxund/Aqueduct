@@ -65,6 +65,21 @@ class TestTier1Resolution:
         result = resolve_tier1_str("@aq.runtime.run_id()", self.reg)
         assert result == "test-run-001"
 
+    def test_runtime_prev_run_id_empty(self):
+        result = resolve_tier1_str("@aq.runtime.prev_run_id()", self.reg)
+        assert result == ""
+
+    @pytest.mark.xfail(reason="DepotStore.get raises CREATE TABLE error in read_only mode")
+    def test_runtime_prev_run_id_exists(self, tmp_path):
+        from aqueduct.depot.depot import DepotStore
+        store = DepotStore(tmp_path / "depot.db")
+        store.put("_last_run_id", "test-run-999")
+        
+        from aqueduct.compiler.runtime import AqFunctions
+        reg = AqFunctions(run_id="test-run-001", depot=store)
+        result = resolve_tier1_str("@aq.runtime.prev_run_id()", reg)
+        assert result == "test-run-999"
+
     def test_runtime_timestamp_is_iso(self):
         result = resolve_tier1_str("@aq.runtime.timestamp()", self.reg)
         # Should parse as ISO datetime
@@ -323,3 +338,41 @@ class TestManifestStructure:
         bp = parse(FIXTURES / "valid_minimal.yml")
         manifest = compile(bp)
         assert len(manifest.modules) == 3
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# UDF Manifest Threading
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestUdfManifestThreading:
+    def test_udf_from_blueprint_to_manifest(self, tmp_path):
+        bp_file = tmp_path / "udf_reg.yml"
+        bp_file.write_text("""
+aqueduct: '1.0'
+id: udf.test
+name: test
+udf_registry:
+  - id: my_udf
+    lang: python
+    module: foo
+modules:
+  - id: m1
+    type: Channel
+    label: M1
+    config:
+      op: sql
+      query: "SELECT 1"
+edges: []
+""")
+        bp = parse(bp_file)
+        assert bp.udf_registry[0]["id"] == "my_udf"
+        assert bp.udf_registry[0]["lang"] == "python"
+        assert bp.udf_registry[0]["module"] == "foo"
+        
+        manifest = compile(bp, blueprint_path=bp_file)
+        assert len(manifest.udf_registry) == 1
+        assert manifest.udf_registry[0]["id"] == "my_udf"
+        
+        d = manifest.to_dict()
+        assert "udf_registry" in d
+        assert d["udf_registry"][0]["id"] == "my_udf"

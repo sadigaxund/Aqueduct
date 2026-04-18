@@ -9,17 +9,13 @@ from aqueduct.executor.funnel import FunnelError, execute_funnel
 from aqueduct.parser.models import Module
 
 
-@pytest.fixture(scope="module")
-def spark():
-    return SparkSession.builder.master("local[*]").appName("test-funnel").getOrCreate()
-
 
 @pytest.fixture
 def dfs(spark):
-    df1 = spark.createDataFrame([("r1", 10)], ["id", "val"])
-    df2 = spark.createDataFrame([("r2", 20), ("r1", 10)], ["id", "val"])
-    df3_diff_schema = spark.createDataFrame([("r3", 30, "cat")], ["id", "val", "extra"])
-    df4_diff_cols = spark.createDataFrame([("a1", "red")], ["other_id", "color"])
+    df1 = spark.sql("SELECT 'r1' as id, 10 as val")
+    df2 = spark.sql("SELECT 'r2' as id, 20 as val UNION ALL SELECT 'r1', 10")
+    df3_diff_schema = spark.sql("SELECT 'r3' as id, 30 as val, 'cat' as extra")
+    df4_diff_cols = spark.sql("SELECT 'a1' as other_id, 'red' as color")
     
     return {
         "m1": df1,
@@ -92,8 +88,8 @@ def test_union(dfs):
 # ── coalesce ─────────────────────────────────────────────────────────────────
 
 def test_coalesce_row_aligned(spark):
-    dfa = spark.createDataFrame([(1, None, "a"), (2, "b", None)], ["id", "c1", "c2"])
-    dfb = spark.createDataFrame([(1, "x", "y"), (3, None, "z")], ["id", "c1", "c2"])
+    dfa = spark.sql("SELECT 1 as id, CAST(NULL as STRING) as c1, 'a' as c2 UNION ALL SELECT 2, 'b', NULL")
+    dfb = spark.sql("SELECT 1 as id, 'x' as c1, 'y' as c2 UNION ALL SELECT 3, NULL, 'z'")
     
     cfg = {"mode": "coalesce", "inputs": ["a", "b"]}
     module = Module(label="M", id="f1", type="Funnel", config=cfg)
@@ -117,8 +113,8 @@ def test_coalesce_row_aligned(spark):
 # ── zip ──────────────────────────────────────────────────────────────────────
 
 def test_zip_row_aligned(spark):
-    dfa = spark.createDataFrame([(1, "a")], ["id1", "col_a"])
-    dfb = spark.createDataFrame([(2, "b")], ["id2", "col_b"])
+    dfa = spark.sql("SELECT 1 as id1, 'a' as col_a")
+    dfb = spark.sql("SELECT 2 as id2, 'b' as col_b")
     
     cfg = {"mode": "zip", "inputs": ["a", "b"]}
     module = Module(label="M", id="f1", type="Funnel", config=cfg)
@@ -132,8 +128,8 @@ def test_zip_row_aligned(spark):
 
 
 def test_zip_conflicting_columns(spark):
-    dfa = spark.createDataFrame([(1, "a")], ["id", "col_a"])
-    dfb = spark.createDataFrame([(2, "b")], ["id", "col_b"])
+    dfa = spark.sql("SELECT 1 as id, 'a' as col_a")
+    dfb = spark.sql("SELECT 2 as id, 'b' as col_b")
     
     cfg = {"mode": "zip", "inputs": ["a", "b"]}
     module = Module(label="M", id="f1", type="Funnel", config=cfg)

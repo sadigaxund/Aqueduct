@@ -1,0 +1,37 @@
+aqueduct: "1.0"
+id: test.channel.filter
+name: "Channel SQL Filter Test"
+description: "Ingress → Channel (filter nulls) → Egress. Row count must decrease."
+
+context:
+  input_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: clean
+    type: Channel
+    label: "Drop nulls"
+    config:
+      op: sql
+      query: "SELECT * FROM src WHERE amount IS NOT NULL"
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: clean
+  - from: clean
+    to: sink

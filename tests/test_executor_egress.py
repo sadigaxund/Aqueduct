@@ -11,7 +11,7 @@ from aqueduct.parser.models import Module
 def test_egress_unsupported_format(spark: SparkSession):
     df = spark.range(1)
     module = Module(id="m1", type="Egress", label="M1", config={"format": "ghost", "path": "/foo"})
-    with pytest.raises(EgressError, match="unsupported format 'ghost'"):
+    with pytest.raises(EgressError, match=r"\[m1\] write failed to '/foo'[\s\S]*ghost"):
         write_egress(df, module)
 
 
@@ -82,3 +82,41 @@ def test_egress_mode_overwrite(spark: SparkSession, tmp_path):
     write_egress(df, module)
     
     assert spark.read.parquet(path).count() == 10
+
+class MockDepot:
+    def __init__(self):
+        self.puts = {}
+    def put(self, key, value):
+        self.puts[key] = value
+
+def test_egress_missing_format(spark: SparkSession):
+    df = spark.range(1)
+    module = Module(id="m1", type="Egress", label="M1", config={"path": "/foo"})
+    with pytest.raises(EgressError, match="'format' is required"):
+        write_egress(df, module)
+
+def test_egress_format_depot_no_depot(spark: SparkSession):
+    df = spark.range(1)
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"})
+    with pytest.raises(EgressError, match="no DepotStore is wired"):
+        write_egress(df, module, depot=None)
+
+def test_egress_format_depot_missing_key(spark: SparkSession):
+    df = spark.range(1)
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "value": "v1"})
+    with pytest.raises(EgressError, match="requires 'key'"):
+        write_egress(df, module, depot=MockDepot())
+
+def test_egress_format_depot_value(spark: SparkSession):
+    df = spark.range(1)
+    depot = MockDepot()
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value": "v1"})
+    write_egress(df, module, depot=depot)
+    assert depot.puts["k1"] == "v1"
+
+def test_egress_format_depot_value_expr(spark: SparkSession):
+    df = spark.range(5)
+    depot = MockDepot()
+    module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value_expr": "max(id)"})
+    write_egress(df, module, depot=depot)
+    assert depot.puts["k1"] == "4"

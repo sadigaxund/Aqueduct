@@ -1,0 +1,38 @@
+aqueduct: "1.0"
+id: test.probe
+name: "Probe Signals Test"
+description: "Ingress → Probe (schema_snapshot + sample_rows) → Egress. Pipeline succeeds; signals written to store."
+
+context:
+  input_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: probe_src
+    type: Probe
+    label: "Probe on source"
+    attach_to: src
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: sample_rows
+          n: 3
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: sink
