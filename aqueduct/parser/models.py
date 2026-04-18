@@ -75,3 +75,4 @@ class Blueprint:
     spark_config: dict[str, Any] = field(default_factory=dict)
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    udf_registry: tuple[dict[str, Any], ...] = ()

@@ -1,21 +1,26 @@
 """Egress writer — persists a Spark DataFrame to a target store.
 
-Supported formats: parquet, csv, delta.
+Any format string supported by the active SparkSession works (parquet, csv,
+delta, jdbc, kafka, avro, orc, …).  The special pseudo-format ``depot``
+writes a key-value pair to the Depot DuckDB store instead of a Spark path.
 
 The .save() call is the sanctioned Spark action in this layer.  Per the
-zero-cost observability rule, no count()/show()/collect() is invoked.
+zero-cost observability rule, no count()/show()/collect() is invoked (except
+for ``depot`` Egress with ``value_expr``, which opts-in to a single agg).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
 
-SUPPORTED_FORMATS: frozenset[str] = frozenset({"parquet", "csv", "delta"})
+logger = logging.getLogger(__name__)
+
 SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore"})
 
 
@@ -23,12 +28,13 @@ class EgressError(Exception):
     """Raised when an Egress module fails to write."""
 
 
-def write_egress(df: DataFrame, module: Module) -> None:
+def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     """Write df to the target described by module.config.
 
     Args:
         df:     DataFrame produced by upstream module(s).
         module: An Egress Module from the compiled Manifest.
+        depot:  Optional DepotStore instance for ``format: depot`` writes.
 
     Raises:
         EgressError: Config invalid or write fails.
@@ -36,12 +42,15 @@ def write_egress(df: DataFrame, module: Module) -> None:
     cfg = module.config
 
     fmt: str | None = cfg.get("format")
-    if fmt not in SUPPORTED_FORMATS:
-        raise EgressError(
-            f"[{module.id}] unsupported format {fmt!r}. "
-            f"Supported: {sorted(SUPPORTED_FORMATS)}"
-        )
+    if not fmt:
+        raise EgressError(f"[{module.id}] 'format' is required in Egress config")
 
+    # ── Depot pseudo-format ────────────────────────────────────────────────────
+    if fmt == "depot":
+        _write_depot(df, module, depot)
+        return
+
+    # ── Spark writer ──────────────────────────────────────────────────────────
     path: str | None = cfg.get("path")
     if not path:
         raise EgressError(f"[{module.id}] 'path' is required in Egress config")
@@ -62,4 +71,53 @@ def write_egress(df: DataFrame, module: Module) -> None:
     for key, value in cfg.get("options", {}).items():
         writer = writer.option(str(key), str(value))
 
-    writer.save(path)
+    try:
+        writer.save(path)
+    except EgressError:
+        raise
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] write failed to {path!r}: {exc}"
+        ) from exc
+
+
+def _write_depot(df: DataFrame, module: Module, depot: Any) -> None:
+    """Write a KV entry to the Depot store. ``depot`` must not be None."""
+    from pyspark.sql import functions as F
+
+    cfg = module.config
+    key: str | None = cfg.get("key")
+    if not key:
+        raise EgressError(f"[{module.id}] depot Egress requires 'key'")
+
+    if depot is None:
+        raise EgressError(
+            f"[{module.id}] depot Egress configured but no DepotStore is wired. "
+            "Pass --config with a valid depot store path."
+        )
+
+    value_expr: str | None = cfg.get("value_expr")
+    if value_expr:
+        # Opt-in Spark action: single aggregate over the DataFrame
+        try:
+            agg_result = df.agg(F.expr(value_expr)).collect()[0][0]
+            value = "" if agg_result is None else str(agg_result)
+        except Exception as exc:
+            raise EgressError(
+                f"[{module.id}] depot value_expr {value_expr!r} failed: {exc}"
+            ) from exc
+    else:
+        raw_value: str | None = cfg.get("value")
+        if raw_value is None:
+            raise EgressError(
+                f"[{module.id}] depot Egress requires 'value' or 'value_expr'"
+            )
+        value = str(raw_value)
+
+    try:
+        depot.put(key, value)
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] depot.put({key!r}) failed: {exc}"
+        ) from exc
+    logger.info("Depot write: %s = %r", key, value)

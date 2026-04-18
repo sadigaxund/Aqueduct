@@ -129,4 +129,5 @@ def compile(  # noqa: A001
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
+        udf_registry=blueprint.udf_registry,
     )

@@ -16,6 +16,9 @@ VALID_MODULE_TYPES = frozenset(
 
 VALID_PORTS = frozenset({"main", "spillway", "signal"})
 
+# Ports that carry DataFrames (vs control-only ports)
+CONTROL_PORTS = frozenset({"signal", "spillway"})
+
 
 class BackoffSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -90,8 +93,8 @@ class EdgeSchema(BaseModel):
     @field_validator("port")
     @classmethod
     def validate_port(cls, v: str) -> str:
-        if v not in VALID_PORTS:
-            raise ValueError(f"Invalid port: {v!r}. Must be one of {sorted(VALID_PORTS)}")
+        if not v.strip():
+            raise ValueError("Port name must not be empty")
         return v
 
 

@@ -383,8 +383,108 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Regulator (`aqueduct/executor/executor.py` + `aqueduct/surveyor/surveyor.py`)
+
+### `Surveyor.evaluate_regulator()`
+- ✅ returns `True` when `start()` not called (no run_id)
+- ✅ returns `True` when no signal-port edge wired to regulator
+- ✅ returns `True` when `signals.db` does not exist
+- ✅ returns `True` when no rows found for probe_id / run_id
+- ✅ returns `True` when latest signal payload has no `passed` key
+- ✅ returns `True` when latest signal `passed=None`
+- ✅ returns `False` when latest signal `passed=False`
+- ✅ returns `True` when latest signal `passed=True`
+- ✅ uses newest row (ORDER BY captured_at DESC); older `passed=False` ignored if newest `passed=True`
+- ✅ returns `True` on any DuckDB exception (open-gate-on-error policy)
+
+### Executor integration (`executor.py`)
+- ✅ Regulator with open gate (no surveyor): transparent pass-through, `status="success"`
+- ✅ Regulator with open gate (surveyor returns True): downstream receives DataFrame
+- ✅ Regulator with closed gate + `on_block=skip`: `frame_store[regulator_id] = _GATE_CLOSED`, `status="skipped"`
+- ✅ Regulator with closed gate + `on_block=abort`: pipeline returns `ExecutionResult(status="error")`
+- ✅ Regulator with closed gate + `on_block=trigger_agent`: treated as skip (stub)
+- ✅ downstream of skipped Regulator also records `status="skipped"` (sentinel propagation)
+- ✅ Regulator with no main-port incoming edge records `status="error"`
+
+---
+
+---
+
+## Phase 7 — Engine Hardening
+
+### Open Format Passthrough (`ingress.py`, `egress.py`)
+
+#### `read_ingress()` — passthrough
+- ⏳ unknown format (e.g. `"jdbc"`) no longer raises `IngressError` — passes directly to Spark
+- ⏳ missing `format` (None/empty) raises `IngressError`
+- ⏳ CSV format-specific defaults still applied for `fmt == "csv"`
+- ⏳ non-CSV unknown format: no format-specific defaults applied, options forwarded verbatim
+- ⏳ Spark `AnalysisException` on bad path wrapped in `IngressError`
+
+#### `write_egress()` — passthrough
+- ⏳ unknown format (e.g. `"avro"`) no longer raises `EgressError` — passes to Spark
+- ⏳ missing `format` (None/empty) raises `EgressError`
+- ⏳ `format: depot` does NOT call `df.write` — calls `depot.put()` instead
+- ⏳ `format: depot` with `depot=None` raises `EgressError`
+- ⏳ `format: depot` missing `key` raises `EgressError`
+- ⏳ `format: depot` with `value`: depot.put called with resolved string value
+- ⏳ `format: depot` with `value_expr`: single Spark agg action executed; depot.put called with result
+- ⏳ SUPPORTED_MODES still enforced; unknown mode raises `EgressError`
+- ⏳ Spark write failure wrapped in `EgressError`
+
+### Spillway (`executor.py` — Channel dispatch)
+
+- ⏳ `spillway_condition` set + spillway edge present: `frame_store[id]` = good rows, `frame_store["id.spillway"]` = error rows
+- ⏳ error rows have `_aq_error_module`, `_aq_error_msg`, `_aq_error_ts` columns
+- ⏳ good rows do NOT have `_aq_error_*` columns
+- ⏳ `spillway_condition` set + NO spillway edge: warning logged; all rows in main stream
+- ⏳ spillway edge + NO `spillway_condition`: warning logged; `frame_store["id.spillway"]` = empty DataFrame
+- ⏳ spillway Egress resolves `frame_store["channel_id.spillway"]` via `_frame_key`
+- ⏳ `_SIGNAL_PORTS` no longer contains `"spillway"` — spillway edge participates in topo-sort
+- ⏳ end-to-end: Channel with spillway_condition → two Egress (main + spillway) both succeed
+
+### Depot KV Store (`aqueduct/depot/depot.py`)
+
+#### `DepotStore`
+- ⏳ `get(key)` returns default when DB file does not exist
+- ⏳ `get(key)` returns default when key absent in existing DB
+- ⏳ `put(key, value)` creates DB file on first call
+- ⏳ `put(key, value)` then `get(key)` returns that value
+- ⏳ `put(key, value)` twice: second value overwrites first (upsert)
+- ⏳ `put` sets `updated_at` to a recent UTC timestamp
+- ⏳ `get` with DB access error returns default (no exception raised)
+- ⏳ `close()` is a no-op (does not raise)
+
+#### Runtime integration (`runtime.py`)
+- ⏳ `@aq.runtime.prev_run_id()` returns `""` when depot has no `_last_run_id`
+- ⏳ `@aq.runtime.prev_run_id()` returns last written run_id after CLI run
+
+#### CLI integration (`cli.py`)
+- ⏳ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
+- ⏳ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
+
+### UDF Registration (`aqueduct/executor/udf.py`)
+
+#### `register_udfs()`
+- ⏳ empty registry is a no-op (no error)
+- ⏳ python UDF: imports module, finds function, calls `spark.udf.register`
+- ⏳ `entry` defaults to UDF `id` when not specified
+- ⏳ missing `module` raises `UDFError`
+- ⏳ non-existent `module` path raises `UDFError`
+- ⏳ function name not found in module raises `UDFError`
+- ⏳ unsupported `lang` (scala/java/sql) raises `UDFError`
+- ⏳ `register_udfs()` error propagates as `ExecuteError` in executor
+- ⏳ end-to-end: Channel SQL calls registered UDF by name; result correct
+
+#### Manifest threading
+- ⏳ `blueprint.udf_registry` parsed from YAML and present in Blueprint AST
+- ⏳ `manifest.udf_registry` populated from blueprint after compile
+- ⏳ `manifest.to_dict()` includes `udf_registry` list
+
+---
+
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 204 tests passing, 1 failing. Coverage: 87.73%.
+- **Status**: 242 tests passing, 0 failing. Coverage: 87.32%.
 Issues reported in:
-- .dev/ISSUES/test_execute_probe_global_exception.md
+- None

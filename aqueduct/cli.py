@@ -118,6 +118,7 @@ def run(
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.config import ConfigError, load_config
+    from aqueduct.depot.depot import DepotStore
     from aqueduct.executor.executor import ExecuteError, execute
     from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.executor.session import make_spark_session
@@ -144,6 +145,10 @@ def run(
         k, _, v = item.partition("=")
         cli_overrides[k.strip()] = v
 
+    # ── Depot — open before compile so @aq.depot.get() resolves ──────────────
+    depot_path = Path(cfg.stores.depot.path)
+    depot = DepotStore(depot_path)
+
     # ── Parse ──────────────────────────────────────────────────────────────────
     try:
         bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
@@ -153,7 +158,7 @@ def run(
 
     # ── Compile ────────────────────────────────────────────────────────────────
     try:
-        manifest = compiler_compile(bp, blueprint_path=Path(blueprint))
+        manifest = compiler_compile(bp, blueprint_path=Path(blueprint), depot=depot)
     except CompileError as exc:
         click.echo(f"✗ compile error: {exc}", err=True)
         sys.exit(1)
@@ -175,7 +180,7 @@ def run(
     # ── Execute ────────────────────────────────────────────────────────────────
     execute_exc: ExecuteError | None = None
     try:
-        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir)
+        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir, surveyor=surveyor, depot=depot)
     except ExecuteError as exc:
         execute_exc = exc
         # Wrap into a synthetic ExecutionResult so Surveyor can persist it
@@ -191,6 +196,13 @@ def run(
     # ── Surveyor — record ──────────────────────────────────────────────────────
     failure_ctx = surveyor.record(result, exc=execute_exc)
     surveyor.stop()
+
+    # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
+    try:
+        depot.put("_last_run_id", result.run_id)
+    except Exception:
+        pass  # non-fatal
+    depot.close()
 
     # ── Report ─────────────────────────────────────────────────────────────────
     for mr in result.module_results:

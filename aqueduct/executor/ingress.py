@@ -1,6 +1,8 @@
 """Ingress reader — loads source data as a lazy Spark DataFrame.
 
-Supported formats: parquet, csv, json.
+Any format string supported by the active SparkSession works (parquet, csv,
+json, jdbc, kafka, avro, orc, delta, …).  Format-specific defaults are applied
+for known formats; all others are passed verbatim to Spark's DataFrameReader.
 
 No Spark actions are triggered here.  The returned DataFrame is lazy;
 the execution plan is only materialised when downstream Egress calls .save().
@@ -16,8 +18,6 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
-
-SUPPORTED_FORMATS: frozenset[str] = frozenset({"parquet", "csv", "json"})
 
 
 class IngressError(Exception):
@@ -40,11 +40,8 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     cfg = module.config
 
     fmt: str | None = cfg.get("format")
-    if fmt not in SUPPORTED_FORMATS:
-        raise IngressError(
-            f"[{module.id}] unsupported format {fmt!r}. "
-            f"Supported: {sorted(SUPPORTED_FORMATS)}"
-        )
+    if not fmt:
+        raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
     path: str | None = cfg.get("path")
     if not path:

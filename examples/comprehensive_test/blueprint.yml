@@ -1,0 +1,238 @@
+aqueduct: "1.0"
+id: comprehensive.order.pipeline
+name: "Comprehensive Order Processing Pipeline"
+description: |
+  End-to-end pipeline exercising all Phase 6 Aqueduct features against real services:
+    Ingress (MinIO parquet) → Channel (SQL clean + enrich) → Probe (data quality signals)
+    → Regulator (quality gate) → Junction (conditional regional split)
+    → Funnel (union_all merge) → Channel (tag with currency + processed_at)
+    → Egress (MinIO parquet, date-partitioned)
+
+  Known Phase 6 limitations (see README.md):
+    - JDBC ingress not implemented; data sourced from MinIO parquet instead.
+    - No signal type emits "passed"; Regulator gate is always open (pass-through).
+    - UDF registration not supported in YAML; email validation uses RLIKE inline.
+    - Spillway / Depot not yet supported.
+
+context:
+  env: dev
+  raw_orders_path:    "s3a://raw-data/orders/orders.parquet"
+  raw_customers_path: "s3a://raw-data/customers/customers.parquet"
+  processed_path:     "s3a://processed-data/orders"
+
+modules:
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # INGRESS — read raw data from MinIO
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: raw_orders
+    type: Ingress
+    label: "Raw Orders (MinIO)"
+    config:
+      format: parquet
+      path: "${ctx.raw_orders_path}"
+
+  - id: raw_customers
+    type: Ingress
+    label: "Raw Customers (MinIO)"
+    config:
+      format: parquet
+      path: "${ctx.raw_customers_path}"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # CHANNEL — clean, validate, and enrich orders with customer data
+  #
+  # Data quality rules applied:
+  #   1. Drop rows where amount IS NULL  (~5 % of raw_orders)
+  #   2. Drop rows where order_date is in the future  (~3 %)
+  #   3. Add email_valid flag using RLIKE (replaces UDF — Phase 7 will add UDF support)
+  #   4. LEFT JOIN customers by customer_id (unmatched → NULLs in customer columns)
+  #   5. Derive order_year / order_month for downstream aggregations
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: clean_and_enrich
+    type: Channel
+    label: "Clean Orders + Enrich with Customer Data"
+    config:
+      op: sql
+      query: |
+        SELECT
+          o.order_id,
+          o.customer_id,
+          CAST(o.amount    AS DOUBLE)    AS amount,
+          CAST(o.order_date AS TIMESTAMP) AS order_date,
+          o.region,
+          o.status,
+          c.name   AS customer_name,
+          c.email  AS customer_email,
+          RLIKE(
+            COALESCE(c.email, ''),
+            '^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$'
+          )        AS email_valid,
+          YEAR (CAST(o.order_date AS TIMESTAMP)) AS order_year,
+          MONTH(CAST(o.order_date AS TIMESTAMP)) AS order_month
+        FROM raw_orders    o
+        LEFT JOIN raw_customers c ON o.customer_id = c.customer_id
+        WHERE o.amount IS NOT NULL
+          AND CAST(o.order_date AS TIMESTAMP) <= CURRENT_TIMESTAMP()
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # PROBE — capture data quality signals on the enriched dataset
+  #
+  # Signals written to .aqueduct/signals/signals.db:
+  #   schema_snapshot    — column names + types (zero Spark action)
+  #   row_count_estimate — stub (SparkListener not wired; will show estimate=null)
+  #   null_rates         — per-column null % sampled at 20 %
+  #   sample_rows        — 5 representative rows
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: probe_enriched
+    type: Probe
+    label: "Enriched Data Quality Probe"
+    attach_to: clean_and_enrich
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+          method: spark_listener
+        - type: null_rates
+          columns: [amount, customer_email, region]
+          fraction: 0.2
+        - type: sample_rows
+          n: 5
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # REGULATOR — quality gate wired to probe_enriched signal
+  #
+  # Phase 6 note: No signal type emits a "passed" key yet, so the gate is always
+  # open (evaluate_regulator returns True → transparent pass-through).
+  # Phase 7 will add a "quality_check" signal type that evaluates expressions like
+  # null_rate(amount) < 0.05 and writes passed=True/False to the signal payload.
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: quality_gate
+    type: Regulator
+    label: "Quality Gate (null_rate < 5% — open in Phase 6)"
+    config:
+      on_block: skip
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # JUNCTION — split enriched orders by region (conditional mode)
+  #
+  # Branches:
+  #   us    — region = 'US'
+  #   eu    — region = 'EU'
+  #   other — all remaining regions (_else_)
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: split_by_region
+    type: Junction
+    label: "Split Orders by Region"
+    config:
+      mode: conditional
+      branches:
+        - id: us
+          condition: "region = 'US'"
+        - id: eu
+          condition: "region = 'EU'"
+        - id: other
+          condition: "_else_"
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # FUNNEL — merge all regional branches back into a single DataFrame
+  #
+  # union_all chosen because schemas are identical (same source, filtered only).
+  # inputs reference frame_store keys produced by the Junction's branch edges:
+  #   split_by_region.us / .eu / .other
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: merge_all
+    type: Funnel
+    label: "Merge All Regions"
+    config:
+      mode: union_all
+      inputs:
+        - split_by_region.us
+        - split_by_region.eu
+        - split_by_region.other
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # CHANNEL — add processing metadata (currency + processed_at timestamp)
+  #
+  # Currency is derived from the region column so a single SQL covers all branches.
+  # CURRENT_TIMESTAMP() is a lazy Spark SQL function — no Spark action triggered.
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: tag_metadata
+    type: Channel
+    label: "Add Processing Metadata"
+    config:
+      op: sql
+      query: |
+        SELECT
+          *,
+          CURRENT_TIMESTAMP() AS processed_at,
+          CASE
+            WHEN region = 'EU' THEN 'EUR'
+            ELSE 'USD'
+          END AS currency
+        FROM merge_all
+
+  # ──────────────────────────────────────────────────────────────────────────────
+  # EGRESS — write processed orders to MinIO, partitioned by today's date
+  #
+  # @aq.date.today() is resolved at compile time to "YYYY-MM-DD".
+  # Overwrite mode ensures idempotent re-runs within the same day.
+  # ──────────────────────────────────────────────────────────────────────────────
+
+  - id: final_output
+    type: Egress
+    label: "Write Processed Orders to MinIO"
+    config:
+      format: parquet
+      path: "${ctx.processed_path}/date=@aq.date.today(format='%Y-%m-%d')/orders.parquet"
+      mode: overwrite
+
+edges:
+  # Ingress → Channel (multi-input: both registered as temp views)
+  - from: raw_orders
+    to: clean_and_enrich
+    port: main
+  - from: raw_customers
+    to: clean_and_enrich
+    port: main
+
+  # Channel → Regulator (main-port data flow)
+  - from: clean_and_enrich
+    to: quality_gate
+    port: main
+
+  # Probe → Regulator (signal wire — carries no DataFrame)
+  - from: probe_enriched
+    to: quality_gate
+    port: signal
+
+  # Regulator → Junction
+  - from: quality_gate
+    to: split_by_region
+    port: main
+
+  # Junction → Funnel (branch port edges; Funnel uses _incoming_data)
+  - from: split_by_region
+    to: merge_all
+    port: us
+  - from: split_by_region
+    to: merge_all
+    port: eu
+  - from: split_by_region
+    to: merge_all
+    port: other
+
+  # Funnel → Channel → Egress (standard main-port chain)
+  - from: merge_all
+    to: tag_metadata
+    port: main
+  - from: tag_metadata
+    to: final_output
+    port: main

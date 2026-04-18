@@ -4,26 +4,31 @@ Supported module types: Ingress, Egress, Channel, Junction, Funnel, Probe, Regul
 Raises ExecuteError immediately on any other unsupported module type.
 
 Execution model:
-  1. Topological sort of non-Probe modules by data-flow edges.
+  1. Register all UDFs from manifest.udf_registry before any module executes.
+  2. Topological sort of non-Probe modules by data-flow edges.
      Probes are inserted immediately after their attach_to module so that
      Regulator evaluation sees fresh signals.
-  2. Walk sorted order:
+  3. Walk sorted order:
      - Ingress    → read_ingress()                    → frame_store[module.id]
      - Channel    → execute_sql_channel(…)            → frame_store[module.id]
+                    If spillway_condition set and a spillway edge exists:
+                      frame_store[module.id]              = good rows
+                      frame_store["module.id.spillway"]   = error rows (+_aq_error_*)
      - Junction   → execute_junction(…)               → frame_store["id.branch"]
      - Funnel     → execute_funnel(…)                 → frame_store[module.id]
      - Regulator  → evaluate gate; open → pass-through; closed → on_block action
      - Egress     → write_egress(frame_store[key], …)
      - Probe      → execute_probe(…) side-effect only; never halts pipeline
      - Other      → ExecuteError (unsupported)
-  3. Return ExecutionResult (frozen).
+  4. Return ExecutionResult (frozen).
 
 Frame store key convention:
-  "main" port edge  → key = from_id
-  branch port edge  → key = f"{from_id}.{port}"
+  "main" port edge     → key = from_id
+  branch port edge     → key = f"{from_id}.{port}"
+  spillway port edge   → key = f"{from_id}.spillway"
 
-Signal ports ("signal", "spillway") carry no DataFrames and are excluded
-from the topo-sort and frame-store lookups.
+Signal ports ("signal") carry control-only signals and are excluded from
+the topo-sort and frame-store lookups. Spillway IS a data edge.
 
 Regulator skip propagation:
   When a Regulator's gate is closed with on_block=skip, _GATE_CLOSED is
@@ -62,8 +67,9 @@ _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator"}
 )
 
-# Ports that carry control signals, not DataFrames
-_SIGNAL_PORTS: frozenset[str] = frozenset({"signal", "spillway"})
+# Ports that carry control signals only, not DataFrames.
+# Spillway IS a data edge (routes error rows); only "signal" is control-only.
+_SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
 
 # Sentinel placed in frame_store when a Regulator closes its gate with on_block=skip.
 # Downstream modules that encounter it skip themselves and propagate the sentinel.
@@ -167,6 +173,7 @@ def execute(
     run_id: str | None = None,
     store_dir: Path | None = None,
     surveyor: Any | None = None,
+    depot: Any | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -177,18 +184,28 @@ def execute(
         store_dir: Optional path for observability signals (Probe I/O).
         surveyor:  Optional Surveyor instance used to evaluate Regulator gates.
                    When None, all active Regulators default to open (pass-through).
+        depot:     Optional DepotStore for ``format: depot`` Egress writes and
+                   ``@aq.depot.get()`` resolution.
 
     Returns:
         Frozen ExecutionResult.
 
     Raises:
-        ExecuteError: Unsupported module type, cycle detected.  Most module
-                      errors are caught and recorded as status="error" (fail-fast).
-                      Probe errors are always swallowed.
+        ExecuteError: Unsupported module type, cycle detected, UDF registration
+                      failure.  Most module errors are caught and recorded as
+                      status="error" (fail-fast).  Probe errors are always swallowed.
     """
     from aqueduct.executor.probe import execute_probe
+    from aqueduct.executor.udf import UDFError, register_udfs
 
     run_id = run_id or str(uuid.uuid4())
+
+    # Register UDFs before any module executes so Channel SQL can reference them.
+    try:
+        register_udfs(manifest.udf_registry, spark)
+    except UDFError as exc:
+        raise ExecuteError(str(exc)) from exc
+
     order = _build_execution_order(manifest)
 
     frame_store: dict[str, Any] = {}
@@ -249,7 +266,40 @@ def execute(
                         ModuleResult(module_id=module.id, status="error", error=str(exc))
                     )
                     return _fail(manifest.pipeline_id, run_id, module_results)
-                frame_store[module.id] = df
+
+                # ── Spillway split ─────────────────────────────────────────────
+                spillway_condition: str | None = module.config.get("spillway_condition")
+                has_spillway_edge = any(
+                    e.from_id == module.id and e.port == "spillway"
+                    for e in manifest.edges
+                )
+                if spillway_condition and has_spillway_edge:
+                    from pyspark.sql import functions as F
+                    good_df = df.filter(f"NOT ({spillway_condition})")
+                    error_df = (
+                        df.filter(spillway_condition)
+                          .withColumn("_aq_error_module", F.lit(module.id))
+                          .withColumn("_aq_error_msg", F.lit("spillway_condition matched"))
+                          .withColumn("_aq_error_ts", F.current_timestamp())
+                    )
+                    frame_store[module.id] = good_df
+                    frame_store[f"{module.id}.spillway"] = error_df
+                elif spillway_condition and not has_spillway_edge:
+                    logger.warning(
+                        "Channel %r has spillway_condition but no spillway edge; "
+                        "all rows routed to main stream.", module.id
+                    )
+                    frame_store[module.id] = df
+                elif has_spillway_edge and not spillway_condition:
+                    logger.warning(
+                        "Channel %r has a spillway edge but no spillway_condition; "
+                        "spillway DataFrame will be empty.", module.id
+                    )
+                    frame_store[module.id] = df
+                    frame_store[f"{module.id}.spillway"] = df.filter("1=0")
+                else:
+                    frame_store[module.id] = df
+
                 module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Junction ──────────────────────────────────────────────────────────
@@ -409,7 +459,7 @@ def execute(
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
             try:
-                write_egress(val, module)
+                write_egress(val, module, depot=depot)
             except EgressError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))

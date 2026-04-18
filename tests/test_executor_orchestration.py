@@ -76,12 +76,12 @@ def test_execute_success(spark: SparkSession, minimal_manifest):
 def test_execute_unsupported_module_type(spark: SparkSession):
     manifest = Manifest(
         pipeline_id="test.unsupported",
-        modules=(Module(id="m1", type="Regulator", label="R1", config={}),),
+        modules=(Module(id="m1", type="Spillway", label="S1", config={}),),
         edges=(),
         context={},
         spark_config={}
     )
-    with pytest.raises(ExecuteError, match="Module type 'Regulator' .* is not supported"):
+    with pytest.raises(ExecuteError, match="Module type 'Spillway' .* is not supported"):
         execute(manifest, spark)
 
 
@@ -566,4 +566,161 @@ def test_execute_probe_failure_ignores(spark: SparkSession, tmp_path):
     # store_dir is None => probe will fail to create DB, but pipeline should stay success
     result = execute(manifest, spark, store_dir=None)
     assert result.status == "success"
+
+
+# ── Regulator Integration ─────────────────────────────────────────────────────
+
+def test_execute_regulator_open_gate_no_surveyor(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_open_no_surveyor",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+            Edge(from_id="reg", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    assert spark.read.parquet(out_path).count() == 5
+
+def test_execute_regulator_open_gate_surveyor_true(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return True
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_open_surveyor",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+            Edge(from_id="reg", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "success"
+    assert [mr.status for mr in result.module_results] == ["success", "success", "success"]
+    assert spark.read.parquet(out_path).count() == 5
+
+def test_execute_regulator_closed_gate_skip(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return False
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_closed_skip",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "success"
+    assert result.module_results[1].status == "skipped"
+
+def test_execute_regulator_closed_gate_abort(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return False
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_closed_abort",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={"on_block": "abort"}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "error"
+    assert result.module_results[1].status == "error"
+    assert "on_block=abort" in result.module_results[1].error
+
+def test_execute_regulator_closed_gate_trigger_agent(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return False
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_closed_trigger",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={"on_block": "trigger_agent"}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "success"
+    assert result.module_results[1].status == "skipped"
+
+def test_execute_regulator_downstream_skipped(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return False
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.regulator_downstream_skip",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": "/foo"}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+            Edge(from_id="reg", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "success"
+    assert result.module_results[1].status == "skipped"
+    assert result.module_results[2].status == "skipped"
+
+def test_execute_regulator_no_main_edge(spark: SparkSession):
+    manifest = Manifest(
+        pipeline_id="test.regulator_no_edge",
+        modules=(
+            Module(id="reg", type="Regulator", label="Reg", config={}),
+        ),
+        edges=(),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "error"
+    assert result.module_results[0].status == "error"
+    assert "no main-port incoming edges" in result.module_results[0].error
 
