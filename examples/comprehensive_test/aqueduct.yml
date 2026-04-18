@@ -1,0 +1,45 @@
+aqueduct_config: "1.0"
+
+deployment:
+  target: standalone
+  # Spark 3.5.7 → port 7077  |  Spark 4.1.0 → port 7078
+  master_url: "local[*]"
+  # master_url: "spark://10.0.0.39:7077"
+
+# Spark configuration — merged with Blueprint spark_config (Blueprint wins on conflict).
+# Includes hadoop-aws JARs for S3A (MinIO) access and tuning for a small remote cluster.
+spark_config:
+  # ── S3A / MinIO ───────────────────────────────────────────────────────────────
+  spark.hadoop.fs.s3a.endpoint:           "http://10.0.0.39:9000"
+  spark.hadoop.fs.s3a.access.key:         "admin"
+  spark.hadoop.fs.s3a.secret.key:         "admin12345"
+  spark.hadoop.fs.s3a.path.style.access:  "true"
+  spark.hadoop.fs.s3a.impl:              "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  spark.hadoop.fs.s3a.connection.ssl.enabled: "false"
+
+  # ── JARs (downloaded by Spark on first run via Maven) ────────────────────────
+  # Only specify the root dep; Ivy resolves aws-java-sdk-bundle transitively.
+  # hadoop-aws 3.3.4 → Spark 3.5.x  |  hadoop-aws 3.4.0 → Spark 4.x
+  spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
+
+  # ── Resource sizing (adjust for your cluster) ────────────────────────────────
+  spark.driver.host: "10.0.0.30"   # e.g. 10.0.0.X — must be reachable from 10.0.0.39                            
+  spark.driver.bindAddress: "0.0.0.0"
+  spark.driver.memory:   "2g"
+  spark.executor.memory: "2g"
+  spark.executor.cores:  "2"
+
+  # ── Serialisation ─────────────────────────────────────────────────────────────
+  spark.serializer: "org.apache.spark.serializer.KryoSerializer"
+
+  # ── Log verbosity ─────────────────────────────────────────────────────────────
+  spark.sql.adaptive.enabled: "true"
+
+# Observability store — DuckDB files written to .aqueduct/ relative to CWD.
+# (S3-backed observability store is a Phase 7+ feature.)
+stores:
+  observability:
+    path: ".aqueduct/signals"
+
+webhooks:
+  on_failure: null   # set to an HTTPS URL to receive failure payloads

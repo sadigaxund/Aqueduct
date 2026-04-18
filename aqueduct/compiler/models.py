@@ -32,6 +32,7 @@ class Manifest:
     aqueduct_version: str = "1.0"
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    udf_registry: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -76,4 +77,5 @@ class Manifest:
                 "model": self.agent.model,
                 "max_patches_per_run": self.agent.max_patches_per_run,
             },
+            "udf_registry": list(self.udf_registry),
         }

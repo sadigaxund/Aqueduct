@@ -42,7 +42,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -70,6 +71,19 @@ CREATE INDEX IF NOT EXISTS idx_probe_signals_probe
 
 def _utcnow_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
+
+
+def _json_dumps(obj: Any) -> str:
+    """json.dumps that coerces Spark-native types (datetime, Decimal, bytes)."""
+    def _default(o: Any) -> Any:
+        if isinstance(o, (datetime, date)):
+            return o.isoformat()
+        if isinstance(o, Decimal):
+            return float(o)
+        if isinstance(o, bytes):
+            return o.hex()
+        return str(o)
+    return json.dumps(obj, default=_default)
 
 
 # ── Signal implementations ────────────────────────────────────────────────────
@@ -212,7 +226,7 @@ def execute_probe(
                             (run_id, probe_id, signal_type, payload, captured_at)
                         VALUES (?, ?, ?, ?, ?)
                         """,
-                        [run_id, module.id, sig_type, json.dumps(payload), _utcnow_iso()],
+                        [run_id, module.id, sig_type, _json_dumps(payload), _utcnow_iso()],
                     )
                 except Exception as exc:
                     logger.warning(

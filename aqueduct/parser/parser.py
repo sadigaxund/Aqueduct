@@ -153,4 +153,5 @@ def parse(
         spark_config=dict(validated.spark_config),
         retry_policy=retry_policy,
         agent=agent,
+        udf_registry=tuple(validated.udf_registry),
     )

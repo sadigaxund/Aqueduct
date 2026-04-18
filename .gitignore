@@ -1,4 +1,10 @@
 # --- Aqueduct Project ---
+
+# pipeline run data
+examples/*/*.parquet
+examples/*/*.db
+examples/*/*.json
+
 .claude/
 .prompts/
 .dev/JOURNAL.md

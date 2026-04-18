@@ -74,8 +74,7 @@ class AqFunctions:
         return self._run_id
 
     def runtime_prev_run_id(self) -> str:
-        # Phase 4: connect to Depot for real prev-run lookup
-        return ""
+        return self.depot_get("_last_run_id", "")
 
     # ── secret / env ──────────────────────────────────────────────────────────
 
