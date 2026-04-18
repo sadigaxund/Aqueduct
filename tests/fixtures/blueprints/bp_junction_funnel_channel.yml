@@ -1,0 +1,67 @@
+aqueduct: "1.0"
+id: test.junction.funnel.channel
+name: "Junction → Funnel → Channel Pattern Test"
+description: >
+  Regression: Junction branch edges (port: us/eu) must reach Funnel, NOT Channel directly.
+  Channel reads from __input__ (the merged Funnel output).
+  Ingress → Junction (conditional) → Funnel (union_all) → Channel (add tag) → Egress.
+  All input rows must appear in output regardless of region.
+
+context:
+  input_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: split
+    type: Junction
+    label: "Split by region"
+    config:
+      mode: conditional
+      branches:
+        - id: us
+          condition: "region = 'US'"
+        - id: eu
+          condition: "region = 'EU'"
+
+  - id: merged
+    type: Funnel
+    label: "Re-merge branches"
+    config:
+      mode: union_all
+      inputs: ["split.us", "split.eu"]
+
+  - id: tagged
+    type: Channel
+    label: "Add pipeline tag"
+    config:
+      op: sql
+      query: "SELECT *, 'processed' AS pipeline_tag FROM __input__"
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: split
+  - from: split
+    to: merged
+    port: us
+  - from: split
+    to: merged
+    port: eu
+  - from: merged
+    to: tagged
+  - from: tagged
+    to: sink

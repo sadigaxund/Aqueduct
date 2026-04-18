@@ -9,23 +9,16 @@ from aqueduct.executor.junction import JunctionError, execute_junction
 from aqueduct.parser.models import Module
 
 
-@pytest.fixture(scope="module")
-def spark():
-    return SparkSession.builder.master("local[*]").appName("test-junction").getOrCreate()
-
 
 @pytest.fixture
 def df(spark):
-    return spark.createDataFrame(
-        [
-            ("r1", "DE", 10),
-            ("r2", "US", 20),
-            ("r3", "FR", 30),
-            ("r4", "JP", 40),
-            ("r5", "US", 50),
-        ],
-        ["id", "region", "val"],
-    )
+    return spark.sql("""
+        SELECT 'r1' as id, 'DE' as region, 10 as val UNION ALL
+        SELECT 'r2', 'US', 20 UNION ALL
+        SELECT 'r3', 'FR', 30 UNION ALL
+        SELECT 'r4', 'JP', 40 UNION ALL
+        SELECT 'r5', 'US', 50
+    """)
 
 
 def test_execute_junction_unsupported_mode(df):

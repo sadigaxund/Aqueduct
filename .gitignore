@@ -5,6 +5,7 @@ examples/*/*.parquet
 examples/*/*.db
 examples/*/*.json
 
+*.db
 .claude/
 .prompts/
 .dev/JOURNAL.md

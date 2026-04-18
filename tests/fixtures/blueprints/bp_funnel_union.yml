@@ -1,0 +1,47 @@
+aqueduct: "1.0"
+id: test.funnel.union
+name: "Funnel union_all Test"
+description: "2× Ingress (same schema) → Funnel (union_all) → Egress. Output = sum of both inputs."
+
+context:
+  input_a_path: "OVERRIDE_ME"
+  input_b_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src_a
+    type: Ingress
+    label: "Source A"
+    config:
+      format: parquet
+      path: ${ctx.input_a_path}
+
+  - id: src_b
+    type: Ingress
+    label: "Source B"
+    config:
+      format: parquet
+      path: ${ctx.input_b_path}
+
+  - id: merged
+    type: Funnel
+    label: "Union all"
+    config:
+      mode: union_all
+      inputs: [src_a, src_b]
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src_a
+    to: merged
+  - from: src_b
+    to: merged
+  - from: merged
+    to: sink

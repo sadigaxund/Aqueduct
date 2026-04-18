@@ -1,0 +1,28 @@
+aqueduct: "1.0"
+id: test.linear
+name: "Linear Integration Test"
+description: "Baseline: Ingress → Egress. No transforms."
+
+context:
+  input_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: sink

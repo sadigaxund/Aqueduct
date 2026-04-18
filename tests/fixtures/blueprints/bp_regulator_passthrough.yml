@@ -1,0 +1,50 @@
+aqueduct: "1.0"
+id: test.regulator.passthrough
+name: "Regulator Pass-Through Test"
+description: >
+  Ingress → Probe (signals schema_snapshot) → Regulator (on_block: skip) → Egress.
+  Probe wires a signal-port edge so Regulator is NOT compiled away.
+  Gate defaults open when no surveyor; all rows reach Egress.
+
+context:
+  input_path: "OVERRIDE_ME"
+  output_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: quality_probe
+    type: Probe
+    label: "Quality signals"
+    attach_to: src
+    config:
+      signals:
+        - type: schema_snapshot
+
+  - id: gate
+    type: Regulator
+    label: "Quality gate"
+    config:
+      on_block: skip
+
+  - id: sink
+    type: Egress
+    label: "Sink"
+    config:
+      format: parquet
+      path: ${ctx.output_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: gate
+  - from: gate
+    to: sink
+  - from: quality_probe
+    to: gate
+    port: signal

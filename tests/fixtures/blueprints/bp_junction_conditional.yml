@@ -1,0 +1,54 @@
+aqueduct: "1.0"
+id: test.junction.conditional
+name: "Junction Conditional Split Test"
+description: "Ingress → Junction (region=US / EU) → 2× Egress. Each output has only its region."
+
+context:
+  input_path: "OVERRIDE_ME"
+  us_path: "OVERRIDE_ME"
+  eu_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: split
+    type: Junction
+    label: "Split by region"
+    config:
+      mode: conditional
+      branches:
+        - id: us
+          condition: "region = 'US'"
+        - id: eu
+          condition: "region = 'EU'"
+
+  - id: us_sink
+    type: Egress
+    label: "US output"
+    config:
+      format: parquet
+      path: ${ctx.us_path}
+      mode: overwrite
+
+  - id: eu_sink
+    type: Egress
+    label: "EU output"
+    config:
+      format: parquet
+      path: ${ctx.eu_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: split
+  - from: split
+    to: us_sink
+    port: us
+  - from: split
+    to: eu_sink
+    port: eu

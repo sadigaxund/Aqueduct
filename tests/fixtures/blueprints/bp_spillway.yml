@@ -1,0 +1,53 @@
+aqueduct: "1.0"
+id: test.spillway
+name: "Spillway Error Routing Test"
+description: >
+  Ingress → Channel (spillway_condition: amount IS NULL) → Egress (main good rows)
+                                                         → Egress (spillway error rows).
+  Good output excludes nulls. Spillway output has _aq_error_* columns.
+
+context:
+  input_path: "OVERRIDE_ME"
+  good_path: "OVERRIDE_ME"
+  bad_path: "OVERRIDE_ME"
+
+modules:
+  - id: src
+    type: Ingress
+    label: "Source"
+    config:
+      format: parquet
+      path: ${ctx.input_path}
+
+  - id: clean
+    type: Channel
+    label: "Route nulls to spillway"
+    config:
+      op: sql
+      query: "SELECT * FROM src"
+      spillway_condition: "amount IS NULL"
+
+  - id: good_sink
+    type: Egress
+    label: "Good rows"
+    config:
+      format: parquet
+      path: ${ctx.good_path}
+      mode: overwrite
+
+  - id: bad_sink
+    type: Egress
+    label: "Error rows (spillway)"
+    config:
+      format: parquet
+      path: ${ctx.bad_path}
+      mode: overwrite
+
+edges:
+  - from: src
+    to: clean
+  - from: clean
+    to: good_sink
+  - from: clean
+    to: bad_sink
+    port: spillway

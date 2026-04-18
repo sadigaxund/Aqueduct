@@ -724,3 +724,161 @@ def test_execute_regulator_no_main_edge(spark: SparkSession):
     assert result.module_results[0].status == "error"
     assert "no main-port incoming edges" in result.module_results[0].error
 
+
+# ── UDF Integration ──────────────────────────────────────────────────────────
+
+@pytest.mark.skip(reason="cloudpickle + coverage causes infinite recursion during PySpark UDF serialization")
+def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
+    import sys
+    monkeypatch.syspath_prepend(str(tmp_path))
+    udf_file = tmp_path / "my_udfs.py"
+    udf_file.write_text("def my_concat(a, b):\n    return str(a) + str(b)\n")
+    
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.udf",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="chan", type="Channel", label="Chan", config={"op": "sql", "query": "SELECT id, my_concat(id, 'x') as val FROM in"}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="chan", port="main"),
+            Edge(from_id="chan", to_id="out", port="main"),
+        ),
+        context={}, spark_config={},
+        udf_registry=({"id": "my_concat", "lang": "python", "module": "my_udfs", "return_type": "string"},)
+    )
+    import sys
+    old_trace = sys.gettrace()
+    sys.settrace(None)
+    try:
+        result = execute(manifest, spark)
+    finally:
+        sys.settrace(old_trace)
+    assert result.status == "success"
+    
+    df_out = spark.read.parquet(out_path)
+    assert df_out.count() == 5
+    assert df_out.filter("id = 1").collect()[0]["val"] == "1x"
+
+def test_execute_udf_registry_error(spark: SparkSession, tmp_path):
+    manifest = Manifest(
+        pipeline_id="test.udf_err",
+        modules=(), edges=(), context={}, spark_config={},
+        udf_registry=({"lang": "python", "module": "my_udfs"},)
+    )
+    with pytest.raises(ExecuteError, match="missing required 'id'"):
+        execute(manifest, spark)
+
+
+
+# ── Spillway Integration ──────────────────────────────────────────────────────
+
+def test_execute_spillway_edge_and_condition(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    main_out = str(tmp_path / "main.parquet")
+    spill_out = str(tmp_path / "spill.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.spillway",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="chan", type="Channel", label="Chan", config={
+                "op": "sql", 
+                "query": "SELECT * FROM in",
+                "spillway_condition": "id > 2"
+            }),
+            Module(id="out_main", type="Egress", label="Main", config={"format": "parquet", "path": main_out}),
+            Module(id="out_spill", type="Egress", label="Spill", config={"format": "parquet", "path": spill_out}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="chan", port="main"),
+            Edge(from_id="chan", to_id="out_main", port="main"),
+            Edge(from_id="chan", to_id="out_spill", port="spillway"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    
+    df_main = spark.read.parquet(main_out)
+    df_spill = spark.read.parquet(spill_out)
+    
+    assert df_main.count() == 3
+    assert df_spill.count() == 2
+    
+    # Error columns
+    assert "_aq_error_module" in df_spill.columns
+    assert "_aq_error_msg" in df_spill.columns
+    assert "_aq_error_ts" in df_spill.columns
+    
+    assert "_aq_error_module" not in df_main.columns
+
+def test_execute_spillway_condition_no_edge(spark: SparkSession, tmp_path, caplog):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.spillway_no_edge",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="chan", type="Channel", label="Chan", config={
+                "op": "sql", 
+                "query": "SELECT * FROM in",
+                "spillway_condition": "id > 2"
+            }),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="chan", port="main"),
+            Edge(from_id="chan", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    
+    # All rows in main stream because no spillway edge
+    df_out = spark.read.parquet(out_path)
+    assert df_out.count() == 5
+    
+    # check log
+    assert "was discarded because no downstream" in caplog.text or "has spillway_condition but no spillway edge;" in caplog.text
+
+def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplog):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    main_out = str(tmp_path / "main.parquet")
+    spill_out = str(tmp_path / "spill.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.spillway_edge_no_cond",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="chan", type="Channel", label="Chan", config={
+                "op": "sql", 
+                "query": "SELECT * FROM in"
+            }),
+            Module(id="out_main", type="Egress", label="Main", config={"format": "parquet", "path": main_out}),
+            Module(id="out_spill", type="Egress", label="Spill", config={"format": "parquet", "path": spill_out}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="chan", port="main"),
+            Edge(from_id="chan", to_id="out_main", port="main"),
+            Edge(from_id="chan", to_id="out_spill", port="spillway"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    
+    assert spark.read.parquet(main_out).count() == 5
+    assert spark.read.parquet(spill_out).count() == 0
+    assert "spillway edge found but no spillway_condition" in caplog.text.lower() or "missing spillway_condition" in caplog.text.lower() or "has a spillway edge but no spillway_condition" in caplog.text
+

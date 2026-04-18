@@ -44,21 +44,37 @@ When adding a new feature, add a task under the relevant module with the exact f
 ## Executor (`aqueduct/executor/`)
 
 ### `ingress.py` — `read_ingress()`
-- ✅ unsupported format raises `IngressError`
-- ✅ missing `path` in config raises `IngressError`
-- ✅ `schema_hint` with missing column raises `IngressError`
-- ✅ `schema_hint` with wrong type raises `IngressError`
-- ✅ valid parquet path returns DataFrame without triggering a Spark action
-- ✅ csv format applies `header` and `inferSchema` options by default
+**Signature:** `read_ingress(module: Module, spark: SparkSession) -> DataFrame`
+**Key config keys:** `format` (any Spark format string, required), `path` (required), `options` (dict), `schema_hint` (list of {name, type}), `header`/`infer_schema` (CSV only)
+**Phase 7 change:** `SUPPORTED_FORMATS` whitelist removed. `format=None/""` → IngressError immediately. Any other format passed to Spark; Spark raises AnalysisException for unknown formats, wrapped in IngressError.
+
+- ✅ `format=None` raises `IngressError` containing "'format' is required" ← **updated behavior (Phase 7)**
+- ✅ `format="ghost"` (unknown): Spark rejects → `IngressError` containing "ghost" ← **was: Aqueduct rejected; now: Spark rejects, same user-visible result**
+- ✅ missing `path` in config raises `IngressError` containing "'path' is required"
+- ✅ `schema_hint` with missing column raises `IngressError` containing "not found"
+- ✅ `schema_hint` with wrong type raises `IngressError` containing "type mismatch"
+- ✅ valid parquet path returns lazy DataFrame (no Spark action)
+- ✅ csv format applies `header` and `inferSchema` defaults
 - ✅ `options` dict forwarded to reader
 
 ### `egress.py` — `write_egress()`
-- ✅ unsupported format raises `EgressError`
-- ✅ missing `path` in config raises `EgressError`
-- ✅ unsupported mode raises `EgressError`
+**Signature:** `write_egress(df: DataFrame, module: Module, depot: Any = None) -> None`
+**Key config keys:** `format` (any Spark format string OR "depot"), `path` (required for non-depot), `mode` (overwrite/append/error/errorifexists/ignore), `partition_by` (list), `options` (dict)
+**Depot-only keys:** `key` (required), `value` (static string) OR `value_expr` (SQL aggregate expression)
+**Phase 7 change:** `SUPPORTED_FORMATS` whitelist removed; `format="depot"` routes to DepotStore write instead of Spark; Spark write errors now wrapped in EgressError.
+
+- ✅ `format=None` raises `EgressError` containing "'format' is required" ← **updated behavior**
+- ✅ unknown Spark format (e.g. `"avro"`) passes through to writer (Spark raises on bad path/JAR, not Aqueduct) ← **new behavior**
+- ✅ missing `path` raises `EgressError` containing "'path' is required"
+- ✅ unsupported `mode` raises `EgressError` containing mode name and "Supported:"
 - ✅ `partition_by` forwarded to writer
 - ✅ `options` dict forwarded to writer
 - ✅ write with `mode: overwrite` on existing path succeeds
+- ⏳ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
+- ⏳ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
+- ⏳ `format="depot"`, valid `key` + `value`: `depot.put(key, value)` called; no Spark write
+- ⏳ `format="depot"`, valid `key` + `value_expr`: single Spark agg action; `depot.put` called with aggregate result
+- ⏳ Spark write failure (bad path, wrong format) raises `EgressError` wrapping original exception
 
 ### `executor.py` — `execute()`
 - ✅ linear Ingress → Egress pipeline returns `ExecutionResult(status="success")`
@@ -410,76 +426,92 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 ---
 
+## Blueprint Execution Tests (`tests/test_blueprints.py`)
+
+Full compile → execute cycle with real `local[*]` Spark. No mocks.
+Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli_overrides`.
+`sample_data` session fixture provides: `orders.parquet` (10 rows: 5 US region, 5 EU region, 1 null amount at row index 3 which is US), `customers.parquet` (5 rows).
+
+- ✅ `test_linear_ingress_egress`: Ingress → Egress; 10 rows in output
+- ✅ `test_channel_sql_filter`: Channel SQL filter removes null-amount row; 9 rows in output
+- ✅ `test_junction_conditional_split`: Junction splits US/EU; each output has 5 correct-region rows
+- ✅ `test_funnel_union_all`: two identical inputs stacked; output has 20 rows
+- ✅ `test_spillway_error_routing`: null row → spillway (1 row + `_aq_error_*`); good rows → main (9 rows)
+- ✅ `test_probe_does_not_halt_pipeline`: Probe runs; signals.db written; pipeline succeeds
+- ✅ `test_regulator_open_gate_passthrough`: no surveyor → gate open → all 10 rows in output
+- ✅ `test_regulator_closed_gate_skips_downstream`: mock surveyor returns False → gate + sink both "skipped"
+- ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `pipeline_tag` column in output
+
+---
+
 ## Phase 7 — Engine Hardening
 
 ### Open Format Passthrough (`ingress.py`, `egress.py`)
 
 #### `read_ingress()` — passthrough
-- ⏳ unknown format (e.g. `"jdbc"`) no longer raises `IngressError` — passes directly to Spark
-- ⏳ missing `format` (None/empty) raises `IngressError`
-- ⏳ CSV format-specific defaults still applied for `fmt == "csv"`
-- ⏳ non-CSV unknown format: no format-specific defaults applied, options forwarded verbatim
-- ⏳ Spark `AnalysisException` on bad path wrapped in `IngressError`
+- ✅ unknown format (e.g. `"jdbc"`) no longer raises `IngressError` — passes directly to Spark
+- ✅ missing `format` (None/empty) raises `IngressError`
+- ✅ CSV format-specific defaults still applied for `fmt == "csv"`
+- ✅ non-CSV unknown format: no format-specific defaults applied, options forwarded verbatim
+- ✅ Spark `AnalysisException` on bad path wrapped in `IngressError`
 
 #### `write_egress()` — passthrough
-- ⏳ unknown format (e.g. `"avro"`) no longer raises `EgressError` — passes to Spark
-- ⏳ missing `format` (None/empty) raises `EgressError`
-- ⏳ `format: depot` does NOT call `df.write` — calls `depot.put()` instead
-- ⏳ `format: depot` with `depot=None` raises `EgressError`
-- ⏳ `format: depot` missing `key` raises `EgressError`
-- ⏳ `format: depot` with `value`: depot.put called with resolved string value
-- ⏳ `format: depot` with `value_expr`: single Spark agg action executed; depot.put called with result
-- ⏳ SUPPORTED_MODES still enforced; unknown mode raises `EgressError`
-- ⏳ Spark write failure wrapped in `EgressError`
+- ✅ unknown format (e.g. `"avro"`) no longer raises `EgressError` — passes to Spark
+- ✅ missing `format` (None/empty) raises `EgressError`
+- ✅ `format: depot` does NOT call `df.write` — calls `depot.put()` instead
+- ✅ `format: depot` with `depot=None` raises `EgressError`
+- ✅ `format: depot` missing `key` raises `EgressError`
+- ✅ `format: depot` with `value`: depot.put called with resolved string value
+- ✅ `format: depot` with `value_expr`: single Spark agg action executed; depot.put called with result
+- ✅ SUPPORTED_MODES still enforced; unknown mode raises `EgressError`
+- ✅ Spark write failure wrapped in `EgressError`
 
 ### Spillway (`executor.py` — Channel dispatch)
 
-- ⏳ `spillway_condition` set + spillway edge present: `frame_store[id]` = good rows, `frame_store["id.spillway"]` = error rows
-- ⏳ error rows have `_aq_error_module`, `_aq_error_msg`, `_aq_error_ts` columns
-- ⏳ good rows do NOT have `_aq_error_*` columns
-- ⏳ `spillway_condition` set + NO spillway edge: warning logged; all rows in main stream
-- ⏳ spillway edge + NO `spillway_condition`: warning logged; `frame_store["id.spillway"]` = empty DataFrame
-- ⏳ spillway Egress resolves `frame_store["channel_id.spillway"]` via `_frame_key`
-- ⏳ `_SIGNAL_PORTS` no longer contains `"spillway"` — spillway edge participates in topo-sort
-- ⏳ end-to-end: Channel with spillway_condition → two Egress (main + spillway) both succeed
+- ✅ `spillway_condition` set + spillway edge present: `frame_store[id]` = good rows, `frame_store["id.spillway"]` = error rows
+- ✅ error rows have `_aq_error_module`, `_aq_error_msg`, `_aq_error_ts` columns
+- ✅ good rows do NOT have `_aq_error_*` columns
+- ✅ `spillway_condition` set + NO spillway edge: warning logged; all rows in main stream
+- ✅ spillway edge + NO `spillway_condition`: warning logged; `frame_store["id.spillway"]` = empty DataFrame
+- ✅ spillway Egress resolves `frame_store["channel_id.spillway"]` via `_frame_key`
+- ✅ `_SIGNAL_PORTS` no longer contains `"spillway"` — spillway edge participates in topo-sort
+- ✅ end-to-end: Channel with spillway_condition → two Egress (main + spillway) both succeed
 
 ### Depot KV Store (`aqueduct/depot/depot.py`)
 
 #### `DepotStore`
-- ⏳ `get(key)` returns default when DB file does not exist
-- ⏳ `get(key)` returns default when key absent in existing DB
-- ⏳ `put(key, value)` creates DB file on first call
-- ⏳ `put(key, value)` then `get(key)` returns that value
-- ⏳ `put(key, value)` twice: second value overwrites first (upsert)
-- ⏳ `put` sets `updated_at` to a recent UTC timestamp
-- ⏳ `get` with DB access error returns default (no exception raised)
-- ⏳ `close()` is a no-op (does not raise)
+- ✅ `get(key)` returns default when DB file does not exist
+- ✅ `get(key)` returns default when key absent in existing DB
+- ❌ `put(key, value)` creates DB file on first call
+- ❌ `put(key, value)` twice: second value overwrites first (upsert)
+- ❌ `put` sets `updated_at` to a recent UTC timestamp
+- ✅ `get` with DB access error returns default (no exception raised)
+- ✅ `close()` is a no-op (does not raise)
 
 #### Runtime integration (`runtime.py`)
-- ⏳ `@aq.runtime.prev_run_id()` returns `""` when depot has no `_last_run_id`
-- ⏳ `@aq.runtime.prev_run_id()` returns last written run_id after CLI run
+- ✅ `@aq.runtime.prev_run_id()` returns `""` when depot has no `_last_run_id`
+- ✅ `@aq.runtime.prev_run_id()` returns last written run_id after CLI run
 
 #### CLI integration (`cli.py`)
-- ⏳ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
-- ⏳ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
+- ❌ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
+- ❌ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
 
 ### UDF Registration (`aqueduct/executor/udf.py`)
 
 #### `register_udfs()`
-- ⏳ empty registry is a no-op (no error)
-- ⏳ python UDF: imports module, finds function, calls `spark.udf.register`
-- ⏳ `entry` defaults to UDF `id` when not specified
-- ⏳ missing `module` raises `UDFError`
-- ⏳ non-existent `module` path raises `UDFError`
-- ⏳ function name not found in module raises `UDFError`
-- ⏳ unsupported `lang` (scala/java/sql) raises `UDFError`
-- ⏳ `register_udfs()` error propagates as `ExecuteError` in executor
-- ⏳ end-to-end: Channel SQL calls registered UDF by name; result correct
+- ✅ empty registry is a no-op (no error)
+- ✅ python UDF: imports module, finds function, calls `spark.udf.register`
+- ✅ `entry` defaults to UDF `id` when not specified
+- ✅ missing `module` raises `UDFError`
+- ✅ non-existent `module` path raises `UDFError`
+- ✅ function name not found in module raises `UDFError`
+- ✅ unsupported `lang` (scala/java/sql) raises `UDFError`
+- ✅ end-to-end: Channel SQL calls registered UDF by name; result correct
 
 #### Manifest threading
-- ⏳ `blueprint.udf_registry` parsed from YAML and present in Blueprint AST
-- ⏳ `manifest.udf_registry` populated from blueprint after compile
-- ⏳ `manifest.to_dict()` includes `udf_registry` list
+- ✅ `blueprint.udf_registry` parsed from YAML and present in Blueprint AST
+- ✅ `manifest.udf_registry` populated from blueprint after compile
+- ✅ `manifest.to_dict()` includes `udf_registry` list
 
 ---
 
