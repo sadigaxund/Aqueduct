@@ -219,3 +219,51 @@ def test_junction_funnel_channel_pattern(spark: SparkSession, sample_data, tmp_p
     assert df.count() == 10, "All rows (US + EU) must be present after Funnel merge"
     assert "pipeline_tag" in df.columns
     assert all(r["pipeline_tag"] == "processed" for r in df.select("pipeline_tag").collect())
+
+
+# ── Chained channels ──────────────────────────────────────────────────────────
+
+
+def test_chained_channels(spark: SparkSession, sample_data, tmp_path):
+    """Ingress → Channel → Channel → Egress: filter then add column.
+
+    9 non-null rows → clean channel removes null-amount row → tagged channel
+    adds 'tag' column → Egress writes 9 rows each having tag='processed'.
+    """
+    out = tmp_path / "out"
+    result = _run("bp_chained_channels.yml", {
+        "input_path": str(sample_data / "orders.parquet"),
+        "output_path": str(out),
+    }, spark)
+
+    assert result.status == "success", result.module_results
+    statuses = {r.module_id: r.status for r in result.module_results}
+    assert statuses["clean"] == "success"
+    assert statuses["tagged"] == "success"
+
+    df = spark.read.parquet(str(out))
+    assert df.count() == 9
+    assert "tag" in df.columns
+    assert all(r["tag"] == "processed" for r in df.select("tag").collect())
+
+
+# ── Lineage written after channel pipeline ────────────────────────────────────
+
+
+def test_lineage_written_after_channel_run(spark: SparkSession, sample_data, tmp_path):
+    """lineage.db created in store_dir after a pipeline with Channel modules."""
+    out = tmp_path / "out"
+    store = tmp_path / "store"
+    result = _run("bp_channel_filter.yml", {
+        "input_path": str(sample_data / "orders.parquet"),
+        "output_path": str(out),
+    }, spark, store_dir=store)
+
+    assert result.status == "success", result.module_results
+    assert (store / "lineage.db").exists(), "lineage.db must be written after channel run"
+
+    import duckdb
+    conn = duckdb.connect(str(store / "lineage.db"))
+    count = conn.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
+    conn.close()
+    assert count > 0, "At least one lineage row must be recorded"

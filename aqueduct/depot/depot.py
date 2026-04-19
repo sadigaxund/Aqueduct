@@ -54,7 +54,6 @@ class DepotStore:
         try:
             conn = duckdb.connect(str(self._path), read_only=True)
             try:
-                conn.execute(_DDL)
                 row = conn.execute(
                     "SELECT value FROM depot_kv WHERE key = ?", [key]
                 ).fetchone()

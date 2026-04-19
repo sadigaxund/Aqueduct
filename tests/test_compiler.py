@@ -69,7 +69,6 @@ class TestTier1Resolution:
         result = resolve_tier1_str("@aq.runtime.prev_run_id()", self.reg)
         assert result == ""
 
-    @pytest.mark.xfail(reason="DepotStore.get raises CREATE TABLE error in read_only mode")
     def test_runtime_prev_run_id_exists(self, tmp_path):
         from aqueduct.depot.depot import DepotStore
         store = DepotStore(tmp_path / "depot.db")
@@ -234,6 +233,80 @@ class TestArcadeExpansion:
         from aqueduct.compiler.compiler import CompileError
         with pytest.raises((CompileError, ValueError, RuntimeError)):
             compile(bp, blueprint_path=parent_file)
+
+    def test_arcade_with_required_context_provided_succeeds(self, tmp_path):
+        arcade_file = tmp_path / "req_arcade.yml"
+        arcade_file.write_text(
+            "aqueduct: '1.0'\nid: arcade.req\nname: Req Arcade\n"
+            "required_context:\n  - my_param\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: test\nname: Test\ncontext: {{}}\n"
+            f"modules:\n"
+            f"  - id: arc\n    type: Arcade\n    label: A\n"
+            f"    ref: '{arcade_file.name}'\n"
+            f"    context_override:\n      my_param: hello\n"
+            f"edges: []\n"
+        )
+        bp = parse(parent_file)
+        manifest = compile(bp, blueprint_path=parent_file)
+        assert any(m.id == "arc.m" for m in manifest.modules)
+
+    def test_arcade_partial_required_context_raises(self, tmp_path):
+        arcade_file = tmp_path / "req_arcade.yml"
+        arcade_file.write_text(
+            "aqueduct: '1.0'\nid: arcade.req\nname: Req Arcade\n"
+            "required_context:\n  - foo\n  - bar\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: test\nname: Test\ncontext: {{}}\n"
+            f"modules:\n"
+            f"  - id: arc\n    type: Arcade\n    label: A\n"
+            f"    ref: '{arcade_file.name}'\n"
+            f"    context_override:\n      foo: x\n"
+            f"edges: []\n"
+        )
+        bp = parse(parent_file)
+        with pytest.raises((CompileError, ValueError, RuntimeError)):
+            compile(bp, blueprint_path=parent_file)
+
+    def test_arcade_empty_required_context_always_expands(self, tmp_path):
+        arcade_file = tmp_path / "no_req_arcade.yml"
+        arcade_file.write_text(
+            "aqueduct: '1.0'\nid: arcade.no_req\nname: No Req Arcade\n"
+            "required_context: []\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: test\nname: Test\ncontext: {{}}\n"
+            f"modules:\n"
+            f"  - id: arc\n    type: Arcade\n    label: A\n"
+            f"    ref: '{arcade_file.name}'\n"
+            f"edges: []\n"
+        )
+        bp = parse(parent_file)
+        manifest = compile(bp, blueprint_path=parent_file)
+        assert any(m.id == "arc.m" for m in manifest.modules)
+
+    def test_blueprint_required_context_field_in_ast(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: sub\nname: Sub\n"
+            "required_context:\n  - env\n  - date\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert "env" in bp.required_context
+        assert "date" in bp.required_context
 
 
 # ──────────────────────────────────────────────────────────────────────────────

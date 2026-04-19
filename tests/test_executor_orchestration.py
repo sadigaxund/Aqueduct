@@ -682,8 +682,9 @@ def test_execute_regulator_closed_gate_trigger_agent(spark: SparkSession, tmp_pa
         context={}, spark_config={}
     )
     result = execute(manifest, spark, surveyor=MockSurveyor())
-    assert result.status == "success"
-    assert result.module_results[1].status == "skipped"
+    assert result.status == "error"
+    assert result.module_results[1].status == "error"
+    assert "trigger_agent" in result.module_results[1].error
 
 def test_execute_regulator_downstream_skipped(spark: SparkSession, tmp_path):
     class MockSurveyor:

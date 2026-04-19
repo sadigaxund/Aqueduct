@@ -57,7 +57,7 @@ Generating mock data …
   orders    :  1000  (null amounts: 50, future dates: 30)
 
 Local copies → examples/comprehensive_test/data/
-Connecting to MinIO at http://10.0.0.39:9000 …
+Connecting to MinIO at http://<IP ADDRESS>:9000 …
   created bucket 'raw-data'   (or: already exists)
 Uploading …
   ✓  s3://raw-data/orders/orders.parquet
@@ -73,7 +73,7 @@ aqueduct run blueprint.yml --config aqueduct.yml
 
 Expected output (abbreviated):
 ```
-▶ comprehensive.order.pipeline  (9 modules)  run=<uuid>  master=spark://10.0.0.39:7077
+▶ comprehensive.order.pipeline  (9 modules)  run=<uuid>  master=spark://<IP ADDRESS>:7077
   ✓ raw_orders
   ✓ raw_customers
   ✓ clean_and_enrich
@@ -95,7 +95,7 @@ Note the run_id — needed for verification queries below.
 
 Using the MinIO CLI (`mc`):
 ```bash
-mc alias set myminio http://10.0.0.39:9000 admin admin12345
+mc alias set myminio http://<IP ADDRESS>:9000 admin admin12345
 mc ls myminio/processed-data/orders/
 # expect: date=YYYY-MM-DD/orders.parquet
 mc stat "myminio/processed-data/orders/date=$(date +%Y-%m-%d)/orders.parquet"
@@ -106,7 +106,7 @@ Using `boto3` (Python):
 import boto3, pandas as pd
 from io import BytesIO
 
-s3 = boto3.client("s3", endpoint_url="http://10.0.0.39:9000",
+s3 = boto3.client("s3", endpoint_url="http://<IP ADDRESS>:9000",
                   aws_access_key_id="admin", aws_secret_access_key="admin12345")
 from datetime import date
 key = f"orders/date={date.today()}/orders.parquet"
@@ -198,7 +198,7 @@ Verify that:
 ## Troubleshooting
 
 **S3A connection refused / access denied**
-- Verify MinIO is reachable: `curl http://10.0.0.39:9000/minio/health/live`
+- Verify MinIO is reachable: `curl http://<IP ADDRESS>:9000/minio/health/live`
 - Check `spark.hadoop.fs.s3a.*` keys in `aqueduct.yml`
 
 **`hadoop-aws` JAR not found / ClassNotFoundException**

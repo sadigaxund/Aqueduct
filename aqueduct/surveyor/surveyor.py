@@ -24,12 +24,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import logging
+
 import duckdb
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult
 from aqueduct.surveyor.models import FailureContext, RunRecord
 from aqueduct.surveyor.webhook import fire_webhook
+
+logger = logging.getLogger(__name__)
 
 # ── DDL ───────────────────────────────────────────────────────────────────────
 
@@ -97,10 +101,14 @@ class Surveyor:
         manifest: Manifest,
         store_dir: Path,
         webhook_url: str | None = None,
+        blueprint_path: Path | None = None,
+        patches_dir: Path | None = None,
     ) -> None:
         self._manifest = manifest
         self._store_dir = store_dir
         self._webhook_url = webhook_url
+        self._blueprint_path = blueprint_path
+        self._patches_dir = patches_dir or Path("patches")
         self._run_id: str | None = None
         self._started_at: datetime | None = None
         self._conn: duckdb.DuckDBPyConnection | None = None
@@ -210,6 +218,33 @@ class Surveyor:
 
         if self._webhook_url:
             fire_webhook(self._webhook_url, ctx.to_dict())
+
+        # ── LLM patch loop ────────────────────────────────────────────────────
+        agent = self._manifest.agent
+        if agent.approval_mode in ("auto", "human"):
+            pending = list((self._patches_dir / "pending").glob("*.json")) \
+                if (self._patches_dir / "pending").exists() else []
+            if pending and agent.on_pending_patches != "ignore":
+                logger.warning(
+                    "LLM suppressed — %d pending patch(es) unreviewed: %s",
+                    len(pending), ", ".join(p.stem for p in pending),
+                )
+            else:
+                try:
+                    from aqueduct.surveyor.llm import trigger_llm_patch
+                    trigger_llm_patch(
+                        failure_ctx=ctx,
+                        model=agent.model,
+                        api_endpoint="https://api.anthropic.com/v1/messages",
+                        max_tokens=4096,
+                        approval_mode=agent.approval_mode,
+                        blueprint_path=self._blueprint_path,
+                        patches_dir=self._patches_dir,
+                        provider=agent.provider,
+                        base_url=agent.base_url,
+                    )
+                except Exception as llm_exc:
+                    logger.warning("LLM patch loop error (non-fatal): %s", llm_exc)
 
         return ctx
 

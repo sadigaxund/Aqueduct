@@ -14,6 +14,7 @@ dependencies = [
     "sqlglot>=23.0.0",
     "click>=8.1.0",
     "anthropic>=0.30.0",
+    "ruamel.yaml>=0.18.0",
 ]
 
 [project.scripts]

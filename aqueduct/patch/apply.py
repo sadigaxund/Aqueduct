@@ -26,12 +26,35 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import yaml
+from io import StringIO
+
 from pydantic import ValidationError
+from ruamel.yaml import YAML
 
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.parser.parser import ParseError, parse
+
+_ryaml = YAML()
+_ryaml.preserve_quotes = True
+_ryaml.default_flow_style = False
+_ryaml.width = 4096  # prevent unwanted line wrapping
+
+
+def _yaml_load(path: Path) -> Any:
+    with path.open(encoding="utf-8") as f:
+        return _ryaml.load(f)
+
+
+def _yaml_dump(data: Any, path: Path) -> None:
+    with path.open("w", encoding="utf-8") as f:
+        _ryaml.dump(data, f)
+
+
+def _yaml_dumps(data: Any) -> str:
+    buf = StringIO()
+    _ryaml.dump(data, buf)
+    return buf.getvalue()
 
 
 class PatchError(Exception):
@@ -67,13 +90,19 @@ def load_patch_spec(patch_path: Path) -> PatchSpec:
         raise PatchError(f"Cannot read patch file {patch_path}: {exc}") from exc
 
     try:
-        return PatchSpec.model_validate_json(raw)
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PatchError(f"Invalid JSON in {patch_path}: {exc}") from exc
+
+    # Strip metadata injected by _stage_for_human / _auto_apply before schema validation.
+    data.pop("_aq_meta", None)
+
+    try:
+        return PatchSpec.model_validate(data)
     except ValidationError as exc:
         raise PatchError(
             f"PatchSpec validation failed for {patch_path}:\n{exc}"
         ) from exc
-    except json.JSONDecodeError as exc:
-        raise PatchError(f"Invalid JSON in {patch_path}: {exc}") from exc
 
 
 def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
@@ -121,9 +150,9 @@ def apply_patch_file(
     # ── 1. Load and validate PatchSpec ────────────────────────────────────────
     patch_spec = load_patch_spec(patch_path)
 
-    # ── 2. Load Blueprint YAML ────────────────────────────────────────────────
+    # ── 2. Load Blueprint YAML (ruamel preserves comments + key order) ───────
     try:
-        bp_raw = yaml.safe_load(blueprint_path.read_text(encoding="utf-8"))
+        bp_raw = _yaml_load(blueprint_path)
     except Exception as exc:
         raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
 
@@ -133,7 +162,7 @@ def apply_patch_file(
     # ── 5. Re-parse to verify Blueprint validity ──────────────────────────────
     tmp_verify = blueprint_path.with_suffix(".patch_verify.tmp.yml")
     try:
-        tmp_verify.write_text(yaml.dump(patched, allow_unicode=True), encoding="utf-8")
+        _yaml_dump(patched, tmp_verify)
         parse(str(tmp_verify))
     except ParseError as exc:
         raise PatchError(
@@ -156,7 +185,7 @@ def apply_patch_file(
     # ── 7. Write patched Blueprint atomically ─────────────────────────────────
     tmp_out = blueprint_path.with_suffix(".patch_out.tmp.yml")
     try:
-        tmp_out.write_text(yaml.dump(patched, allow_unicode=True), encoding="utf-8")
+        _yaml_dump(patched, tmp_out)
         os.replace(tmp_out, blueprint_path)
     except Exception as exc:
         if tmp_out.exists():

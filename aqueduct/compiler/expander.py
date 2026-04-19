@@ -164,8 +164,17 @@ def _expand_recursive(
                 f"Arcade {m.id!r}: failed to parse sub-Blueprint {sub_path}: {exc}"
             ) from exc
 
-        # Validate required_context (stored in Blueprint but we need raw YAML for this)
-        # Phase 2: skip required_context validation — context_override already passed to parse()
+        # Validate required_context — ensure parent provides all keys the sub-Blueprint needs
+        missing = [
+            key for key in (sub_bp.required_context or [])
+            if key not in (m.context_override or {})
+        ]
+        if missing:
+            raise ExpandError(
+                f"Arcade {m.id!r}: sub-Blueprint requires context keys {missing} "
+                f"that are not provided in context_override. "
+                f"Add them under the Arcade module's context_override field."
+            )
 
         expanded_mods, new_edges = _expand_single(m, sub_bp, edges)
         result_modules.extend(expanded_mods)
