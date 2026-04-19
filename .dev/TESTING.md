@@ -418,7 +418,7 @@ When adding a new feature, add a task under the relevant module with the exact f
 - ✅ Regulator with open gate (surveyor returns True): downstream receives DataFrame
 - ✅ Regulator with closed gate + `on_block=skip`: `frame_store[regulator_id] = _GATE_CLOSED`, `status="skipped"`
 - ✅ Regulator with closed gate + `on_block=abort`: pipeline returns `ExecutionResult(status="error")`
-- ✅ Regulator with closed gate + `on_block=trigger_agent`: treated as skip (stub)
+- ✅ Regulator with closed gate + `on_block=trigger_agent`: pipeline returns `ExecutionResult(status="error")` (triggers LLM loop via Surveyor on return)
 - ✅ downstream of skipped Regulator also records `status="skipped"` (sentinel propagation)
 - ✅ Regulator with no main-port incoming edge records `status="error"`
 
@@ -441,6 +441,8 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `test_regulator_open_gate_passthrough`: no surveyor → gate open → all 10 rows in output
 - ✅ `test_regulator_closed_gate_skips_downstream`: mock surveyor returns False → gate + sink both "skipped"
 - ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `pipeline_tag` column in output
+- ✅ `test_chained_channels`: Ingress → Channel (filter) → Channel (add tag) → Egress; 9 rows + `tag` column in output
+- ✅ `test_lineage_written_after_channel_run`: Channel pipeline with store_dir set; `lineage.db` written with rows
 
 ---
 
@@ -482,9 +484,9 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 #### `DepotStore`
 - ✅ `get(key)` returns default when DB file does not exist
 - ✅ `get(key)` returns default when key absent in existing DB
-- ❌ `put(key, value)` creates DB file on first call
-- ❌ `put(key, value)` twice: second value overwrites first (upsert)
-- ❌ `put` sets `updated_at` to a recent UTC timestamp
+- ✅ `put(key, value)` creates DB file on first call
+- ✅ `put(key, value)` twice: second value overwrites first (upsert)
+- ✅ `put` sets `updated_at` to a recent UTC timestamp
 - ✅ `get` with DB access error returns default (no exception raised)
 - ✅ `close()` is a no-op (does not raise)
 
@@ -493,8 +495,8 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `@aq.runtime.prev_run_id()` returns last written run_id after CLI run
 
 #### CLI integration (`cli.py`)
-- ❌ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
-- ❌ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
+- ✅ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
+- ✅ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
 
 ### UDF Registration (`aqueduct/executor/udf.py`)
 
@@ -512,6 +514,80 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `blueprint.udf_registry` parsed from YAML and present in Blueprint AST
 - ✅ `manifest.udf_registry` populated from blueprint after compile
 - ✅ `manifest.to_dict()` includes `udf_registry` list
+
+---
+
+---
+
+## Phase 8 — Resilience, Lineage, LLM Self-Healing
+
+### RetryPolicy + deadline_seconds (`aqueduct/parser/models.py`, `aqueduct/executor/executor.py`)
+
+**`RetryPolicy` fields:** `max_attempts` (int), `backoff_strategy` (exponential/linear/fixed), `backoff_base_seconds` (int), `backoff_max_seconds` (int), `jitter` (bool), `on_exhaustion` (trigger_agent/abort/alert_only), `transient_errors` (tuple[str]), `non_transient_errors` (tuple[str]), `deadline_seconds` (int|None)
+
+**`_with_retry(fn, policy, module_id)`:** calls fn(), retries on retriable exceptions with backoff, checks deadline.
+**`_is_retriable(exc, policy)`:** returns False if exc message matches any `non_transient_errors` pattern; if `transient_errors` non-empty, only those patterns are retriable; otherwise all errors are retriable.
+**`_backoff_seconds(attempt, policy)`:** exponential = `base * 2^attempt`, linear = `base * (attempt+1)`, fixed = `base`; capped at `max_seconds`; jitter multiplies by random [0.5, 1.0].
+
+- ✅ `RetryPolicy` with `deadline_seconds=3600` round-trips through schema validation (YAML → Schema → Model)
+- ✅ `_is_retriable`: non_transient_errors pattern blocks retry even if transient match present
+- ✅ `_is_retriable`: transient_errors list non-empty, error NOT matching → False
+- ✅ `_is_retriable`: transient_errors list non-empty, error matching → True
+- ✅ `_is_retriable`: both lists empty → True (all errors retriable by default)
+- ✅ `_backoff_seconds` exponential: attempt 0=base, attempt 1=2×base, attempt 2=4×base
+- ✅ `_backoff_seconds` linear: attempt 0=base, attempt 1=2×base, attempt 2=3×base
+- ✅ `_backoff_seconds` fixed: all attempts return base
+- ✅ `_backoff_seconds` cap: result never exceeds `backoff_max_seconds`
+- ✅ `_backoff_seconds` jitter=False: result equals formula exactly; jitter=True: result in [0.5×formula, formula]
+- ✅ `_with_retry`: fn succeeds first attempt → returns result, no sleep
+- ✅ `_with_retry`: fn fails then succeeds → returns result after one retry
+- ✅ `_with_retry`: fn always fails, max_attempts=3 → raises last exception after 3 attempts
+- ✅ `_with_retry`: non-retriable exception → raises immediately without retry (max_attempts=3 but only 1 call)
+- ✅ `_with_retry`: deadline_seconds elapsed after first failure → stops retrying, raises last exception
+- ⏳ executor Ingress wrapped in retry: Ingress that fails twice then succeeds → `ExecutionResult(status="success")`
+
+### Lineage Writer (`aqueduct/compiler/lineage.py`)
+
+**`_extract_sql_lineage(channel_id, sql, upstream_ids)`:** returns list of `{channel_id, output_column, source_table, source_column}` dicts. Uses sqlglot to parse SparkSQL.
+**`write_lineage(pipeline_id, run_id, modules, edges, store_dir)`:** writes to `store_dir/lineage.db`, table `column_lineage`. Non-fatal — swallows all exceptions.
+
+- ✅ `_extract_sql_lineage`: `SELECT a, b FROM tbl` → two rows with `source_column=a/b`, `source_table=tbl`
+- ✅ `_extract_sql_lineage`: `SELECT a * 2 AS doubled FROM tbl` → output_column=`doubled`, source_column=`a`
+- ✅ `_extract_sql_lineage`: `SELECT * FROM tbl` → row with `output_column="*"`, `source_column="*"`
+- ✅ `_extract_sql_lineage`: invalid SQL → returns `[]` (no exception raised)
+- ✅ `_extract_sql_lineage`: single upstream → source_table inferred when column has no table qualifier
+- ✅ `write_lineage`: creates `lineage.db` and `column_lineage` table when not present
+- ✅ `write_lineage`: inserts one row per output_column/source_column pair for each Channel
+- ✅ `write_lineage`: non-Channel modules (Ingress, Egress) do not produce lineage rows
+- ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
+- ✅ `write_lineage`: called after successful pipeline execution with `store_dir` set; `lineage.db` written
+
+### LLM Self-Healing (`aqueduct/surveyor/llm.py`)
+
+**`trigger_llm_patch(failure_ctx, model, api_endpoint, max_tokens, approval_mode, blueprint_path, patches_dir)`:** calls Anthropic API, validates PatchSpec, dispatches to `_auto_apply` or `_stage_for_human`.
+**`_stage_for_human(patch_spec, patches_dir, failure_ctx)`:** writes to `patches/pending/<patch_id>.json` with `_aq_meta` annotation.
+**`_auto_apply(patch_spec, blueprint_path, patches_dir, failure_ctx)`:** applies patch to Blueprint YAML on disk atomically; archives to `patches/applied/`; returns None on parse failure.
+
+- ✅ `_stage_for_human`: creates `patches/pending/<patch_id>.json` with correct fields
+- ✅ `_stage_for_human`: written JSON contains `_aq_meta.run_id` and `_aq_meta.pipeline_id`
+- ✅ `_auto_apply`: applies valid patch → Blueprint file on disk is modified
+- ✅ `_auto_apply`: patch produces invalid Blueprint → Blueprint unchanged, returns None
+- ✅ `_auto_apply`: archives PatchSpec to `patches/applied/` with `applied_at` and `auto_applied=True`
+- ✅ `trigger_llm_patch`: `ANTHROPIC_API_KEY` not set → returns None (RuntimeError caught internally)
+- ✅ `trigger_llm_patch`: LLM returns markdown-fenced JSON → fences stripped, parsed correctly
+- ✅ `trigger_llm_patch`: LLM returns invalid PatchSpec → reprompt up to MAX_REPROMPTS times; returns None after exhaustion
+- ✅ Surveyor `record()`: on failure with `approval_mode=auto`, `trigger_llm_patch` is called (mock LLM)
+- ✅ Surveyor `record()`: on success, LLM loop NOT triggered
+
+### Arcade `required_context` validation (`aqueduct/compiler/expander.py`)
+
+**Behavior:** After loading sub-Blueprint, checks that every key in `sub_bp.required_context` is present in `arcade_module.context_override`. Missing keys → `ExpandError`.
+
+- ✅ Arcade with `required_context: [foo]` and `context_override: {foo: bar}` → expands successfully
+- ✅ Arcade with `required_context: [foo]` and no `context_override` → `ExpandError` containing `foo`
+- ✅ Arcade with `required_context: [foo, bar]`, `context_override: {foo: x}` (missing bar) → `ExpandError` containing `bar`
+- ✅ Arcade with empty `required_context` → always expands regardless of `context_override`
+- ✅ Blueprint with `required_context: [env]` correctly round-trips through Parser (field preserved in AST)
 
 ---
 

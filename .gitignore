@@ -4,6 +4,7 @@
 examples/*/*.parquet
 examples/*/*.db
 examples/*/*.json
+patches/*
 
 *.db
 .claude/

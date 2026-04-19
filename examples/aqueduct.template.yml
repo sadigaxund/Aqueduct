@@ -116,25 +116,31 @@ stores:
 
 # ── LLM Agent (self-healing) ──────────────────────────────────────────────────
 #
-# Controls the autonomous patch loop. Requires ANTHROPIC_API_KEY in environment.
-
-agent:
-  # Model to use for patch generation.
-  default_model: "claude-sonnet-4-20250514"
-  # default_model: "claude-opus-4-20250514"     # stronger; slower; costs more
-  # default_model: "claude-haiku-4-5-20251001"  # fastest; lightest tasks only
-
-  api_endpoint: "https://api.anthropic.com/v1/messages"
-
-  # Max tokens per LLM response (PatchSpec JSON; 4096 is generous).
-  max_tokens: 4096
-
-  # Maximum patches the agent may apply in one pipeline run.
-  max_patches_per_run: 5
-
-  # Approval mode: auto applies patches immediately; human requires CLI confirm.
-  default_approval_mode: "auto"
-  # default_approval_mode: "human"
+# The agent block lives in the Blueprint YAML (not here) so each pipeline can
+# configure its own healing policy. The snippet below is a reference only.
+#
+# Blueprint-level agent config:
+#
+#   agent:
+#     # Whether to call the LLM at all.
+#     # "disabled" → no LLM (default when agent: block is omitted)
+#     # "human"    → patch written to patches/pending/ for manual review
+#     # "auto"     → patch applied immediately to the Blueprint file
+#     approval_mode: "human"
+#
+#     # What to do when patches/pending/ is non-empty at run time.
+#     # "warn"   → print warning, run anyway, suppress LLM (default)
+#     # "block"  → exit non-zero before execution starts
+#     # "ignore" → run and call LLM regardless of pending patches
+#     on_pending_patches: "warn"
+#
+#     # LLM provider and model.
+#     provider: "anthropic"               # "anthropic" | "openai_compat" | "ollama"
+#     model: "claude-sonnet-4-20250514"
+#     # base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
+#
+#     # Max LLM response tokens (PatchSpec JSON; 4096 is generous).
+#     max_patches_per_run: 5
 
 
 # ── Probes ────────────────────────────────────────────────────────────────────

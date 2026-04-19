@@ -20,7 +20,7 @@ class ContextRegistry:
 
 @dataclass(frozen=True)
 class RetryPolicy:
-    max_attempts: int = 3
+    max_attempts: int = 1
     backoff_strategy: str = "exponential"
     backoff_base_seconds: int = 30
     backoff_max_seconds: int = 600
@@ -28,13 +28,17 @@ class RetryPolicy:
     on_exhaustion: str = "trigger_agent"
     transient_errors: tuple[Any, ...] = ()
     non_transient_errors: tuple[str, ...] = ()
+    deadline_seconds: int | None = None  # give up after N seconds from first failure
 
 
 @dataclass(frozen=True)
 class AgentConfig:
-    approval_mode: str = "auto"
+    approval_mode: str = "disabled"       # "disabled" | "auto" | "human"
+    on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
     model: str = "claude-sonnet-4-20250514"
     max_patches_per_run: int = 5
+    provider: str = "anthropic"           # "anthropic" | "openai_compat" | "ollama"
+    base_url: str | None = None           # for openai_compat/ollama: e.g. "http://10.0.0.39:11434"
 
 
 @dataclass(frozen=True)
@@ -76,3 +80,4 @@ class Blueprint:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    required_context: tuple[str, ...] = ()  # Arcade sub-Blueprint: keys the caller must provide

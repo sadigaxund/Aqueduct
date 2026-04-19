@@ -2,6 +2,82 @@
 
 ---
 
+## 2026-04-19 — Session 2: Patch Lifecycle Fixes + LLM Demo
+
+### Accomplished
+
+**Patch apply `_aq_meta` bug** — `load_patch_spec` in `aqueduct/patch/apply.py` was passing the full staged JSON (including `_aq_meta` metadata) to `PatchSpec.model_validate_json`. PatchSpec has `extra="forbid"` → validation error. Fixed: parse to dict first, `pop("_aq_meta", None)`, then validate.
+
+**ruamel.yaml round-trip** — `apply.py` and `surveyor/llm.py` `_auto_apply` both used `yaml.dump()` which sorts keys alphabetically and strips comments. Replaced with `ruamel.yaml` (added to `pyproject.toml` dependencies). Blueprint comments and key order now preserved after patch apply. Only the patched config block loses inline comments (replaced by plain dict from LLM).
+
+**`approval_mode` default** — was `"auto"` (LLM fires on every failure by default). Changed to `"disabled"`. Pipelines without explicit `agent:` block no longer call LLM. Schema and models updated. `tests/test_parser.py` assertion updated.
+
+**`on_pending_patches`** — new field on `AgentConfig`. Values: `"ignore"` | `"warn"` (default) | `"block"`. `cli.py run` checks `patches/pending/` before execution; `surveyor.py` suppresses LLM when pending patches exist and policy != `"ignore"`.
+
+**`patches_dir` relative to blueprint** — was hardcoded `Path("patches")` (CWD-relative). Changed to `Path(blueprint).parent / "patches"` so patches always land next to the blueprint regardless of CWD.
+
+**Executor exhaustion log** — `_with_retry()` now logs `attempt N/N failed; giving up` on the last attempt (previously silent).
+
+**Ollama native provider** — `aqueduct/surveyor/llm.py` added `_call_ollama_native()` using `/api/chat` endpoint with streaming (`stream: True`). Prints `[aqueduct llm] model thinking....` dots to stderr as tokens arrive. Fixes `ReadTimeout` from non-streaming 120s wait. Model default in integration test changed from `gemma3` → `gemma3:12b`.
+
+**`conftest.py` Ollama default** — `AQ_OLLAMA_URL` now defaults to `http://localhost:11434` when unset; tests skip if that host unreachable. No longer requires env var to be set explicitly to skip gracefully.
+
+**Schema drift demo** — `examples/llm_healing_demo/` rewritten: JSON source with `ReviewDate` field, pipeline SQL references old `review_date`. Spark error suggests correct name. Blueprint cleaned of all hint comments. Channel config corrected to use `op: sql` + `query:` (channel.py expects those keys, not `sql:`).
+
+### Design Decisions
+- `on_pending_patches: block` is the recommended production setting; `warn` for dev
+- Patches dir co-located with blueprint avoids confusion when running from project root
+- LLM only fires when `approval_mode in ("auto", "human")` AND no pending patches (unless `ignore`)
+
+### Open
+- Retry default `max_attempts: 3` → `1` (planned, not yet done)
+- Compile warning: Egress `mode: append` + `max_attempts > 1` → potential duplicates
+- `aqueduct patch apply` `--patches-dir` must be specified manually (no auto-derive from blueprint path)
+
+---
+
+## 2026-04-19 — Phase 8: Resilience, Lineage, LLM Self-Healing
+
+### Accomplished
+
+**Phase A — RetryPolicy + deadline_seconds**
+- `aqueduct/parser/models.py`: Added `deadline_seconds: int | None = None` to `RetryPolicy`
+- `aqueduct/parser/schema.py`: Added `deadline_seconds: int | None = None` to `RetryPolicySchema`
+- `aqueduct/parser/parser.py`: Threads `deadline_seconds` through RetryPolicy construction
+- `aqueduct/compiler/models.py`: `to_dict()` now includes all RetryPolicy fields (`backoff_max_seconds`, `jitter`, `transient_errors`, `non_transient_errors`, `deadline_seconds`)
+- `aqueduct/executor/executor.py`: Added `_is_retriable()`, `_backoff_seconds()`, `_with_retry()` helpers. All module dispatches (Ingress, Channel, Junction, Funnel, Egress) now wrapped in `_with_retry()`. Backoff strategies: exponential/linear/fixed with optional jitter and deadline check.
+
+**Phase B — Lineage Writer**
+- NEW `aqueduct/compiler/lineage.py`: `_extract_sql_lineage()` uses sqlglot to parse SparkSQL SELECT statements and extract per-output-column source table+column mappings. `write_lineage()` writes to `store_dir/lineage.db` (DuckDB, table `column_lineage`). Called automatically after successful execution when `store_dir` is set. Non-fatal — swallows all exceptions.
+
+**Phase C — LLM Self-Healing**
+- NEW `aqueduct/surveyor/llm.py`: `trigger_llm_patch()` — full loop: FailureContext → Anthropic SDK → PatchSpec validation (up to MAX_REPROMPTS=3 re-prompts on schema failure) → `_auto_apply()` (write Blueprint atomically + archive) or `_stage_for_human()` (write to patches/pending/). Strips markdown fences from LLM response. Returns PatchSpec or None.
+- `aqueduct/surveyor/surveyor.py`: `Surveyor.__init__` now accepts `blueprint_path` and `patches_dir`. `record()` calls `trigger_llm_patch()` on failure when `agent.approval_mode in ("auto", "human")`. LLM errors are non-fatal (logged, not re-raised).
+- `aqueduct/executor/executor.py`: Regulator `on_block=trigger_agent` now returns `_fail()` (status=error) instead of silent skip, so Surveyor sees a failure and fires the LLM loop.
+- `aqueduct/cli.py`: `Surveyor()` construction now passes `blueprint_path=Path(blueprint)` and `patches_dir=Path("patches")`.
+
+**Phase D — Arcade required_context validation**
+- `aqueduct/parser/models.py`: Added `required_context: tuple[str, ...] = ()` to `Blueprint` dataclass
+- `aqueduct/parser/parser.py`: Threads `required_context=tuple(validated.required_context)` through AST construction
+- `aqueduct/compiler/expander.py`: After loading sub-Blueprint, checks that all `sub_bp.required_context` keys exist in `arcade_module.context_override`. Missing keys → `ExpandError` with clear message listing missing keys.
+
+### Testing
+Added ~40 new ⏳ items to `.dev/TESTING.md` across 4 sections (RetryPolicy, Lineage, LLM, Arcade validation).
+Updated Regulator trigger_agent test item to reflect new behavior (fail → LLM loop).
+
+### Design Notes
+- `_with_retry` uses closure capture of `module` and `spark` — lambdas in executor capture correct loop variables because they execute immediately (not deferred)
+- Lineage written after successful execution (not on failure) — so lineage only exists for clean runs
+- LLM loop is non-blocking and non-fatal: if Anthropic API is down or key is missing, pipeline still records its failure and webhook fires normally
+- Regulator `trigger_agent` → `_fail()` means the pipeline reports error, which triggers the Surveyor's LLM loop on return; cleaner than trying to invoke LLM mid-execution
+
+### Remaining Stubs
+1. Secrets providers (aws/gcp/azure/vault) — only `env` works
+2. `SparkListener` row count estimate — returns `estimate: null`
+3. Absolute deadline (`valid_until: "09:00"`) — needs scheduler integration
+
+---
+
 ## 2026-04-19 — Design Discussion: Resilience Layer + Pending Stubs
 
 ### Pending Stubs (implement in order)
@@ -151,7 +227,7 @@ Added full Phase 7 test checklist to `.dev/TESTING.md` (passthrough, spillway, d
 **Files created (all under `examples/comprehensive_test/`):**
 - `generate_data.py` — boto3 + pandas + pyarrow script; uploads ~1000 orders + ~200 customers (parquet) to MinIO `raw-data` bucket; intentional data quality issues (~5% null amounts, ~3% future dates, ~10% malformed emails)
 - `blueprint.yml` — 9-module pipeline exercising all Phase 6 module types: Ingress × 2, Channel × 2, Probe, Regulator, Junction, Funnel, Egress; date-partitioned output path via `@aq.date.today()`
-- `aqueduct.yml` — remote Spark master (`spark://10.0.0.39:7077`), full S3A/MinIO config (`hadoop-aws:3.3.4`), resource sizing
+- `aqueduct.yml` — remote Spark master (`spark://<IP ADDRESS>:7077`), full S3A/MinIO config (`hadoop-aws:3.3.4`), resource sizing
 - `README.md` — prerequisites, step-by-step run instructions, DuckDB verification queries, known-limitations table
 
 **Key topology decision:** Junction → Channel (via branch port) is NOT supported — Channel dispatch uses `_incoming_main` (port == "main" only, line 218 executor.py). Design changed to Junction → Funnel → Channel, which correctly uses `_incoming_data` for Funnel and `_incoming_main` for the post-merge Channel.

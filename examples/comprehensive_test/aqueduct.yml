@@ -4,7 +4,7 @@ deployment:
   target: standalone
   # Spark 3.5.7 → port 7077  |  Spark 4.1.0 → port 7078
   master_url: "local[*]"
-  # master_url: "spark://10.0.0.39:7077"
+  # master_url: "spark://<IP ADDRESS>:7077"
 
 # Spark configuration — merged with Blueprint spark_config (Blueprint wins on conflict).
 # Includes hadoop-aws JARs for S3A (MinIO) access and tuning for a small remote cluster.

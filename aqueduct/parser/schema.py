@@ -32,19 +32,23 @@ class BackoffSchema(BaseModel):
 class RetryPolicySchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_attempts: int = 3
+    max_attempts: int = 1
     backoff: BackoffSchema = Field(default_factory=BackoffSchema)
     transient_errors: list[Any] = Field(default_factory=list)
     non_transient_errors: list[str] = Field(default_factory=list)
     on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] = "trigger_agent"
+    deadline_seconds: int | None = None
 
 
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    approval_mode: Literal["auto", "human"] = "auto"
+    approval_mode: Literal["disabled", "auto", "human"] = "disabled"
+    on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
     model: str = "claude-sonnet-4-20250514"
     max_patches_per_run: int = 5
+    provider: Literal["anthropic", "openai_compat", "ollama"] = "anthropic"
+    base_url: str | None = None
 
 
 class ModuleSchema(BaseModel):

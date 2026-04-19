@@ -134,12 +134,16 @@ def parse(
         on_exhaustion=rp.on_exhaustion,
         transient_errors=tuple(rp.transient_errors),
         non_transient_errors=tuple(rp.non_transient_errors),
+        deadline_seconds=rp.deadline_seconds,
     )
 
     agent = AgentConfig(
         approval_mode=validated.agent.approval_mode,
+        on_pending_patches=validated.agent.on_pending_patches,
         model=validated.agent.model,
         max_patches_per_run=validated.agent.max_patches_per_run,
+        provider=validated.agent.provider,
+        base_url=validated.agent.base_url,
     )
 
     return Blueprint(
@@ -154,4 +158,5 @@ def parse(
         retry_policy=retry_policy,
         agent=agent,
         udf_registry=tuple(validated.udf_registry),
+        required_context=tuple(validated.required_context),
     )

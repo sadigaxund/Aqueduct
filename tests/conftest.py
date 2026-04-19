@@ -1,5 +1,42 @@
+import os
+
 import pytest
 from pyspark.sql import SparkSession
+
+
+# ── Ollama (local LLM) ────────────────────────────────────────────────────────
+# Set AQ_OLLAMA_URL in your local environment (NOT committed to git).
+# Example: export AQ_OLLAMA_URL=http://10.0.0.39:11434
+# Defaults to http://localhost:11434 when unset.
+# Tests skip automatically when the resolved host is not reachable.
+
+def _ollama_url() -> str:
+    return os.environ.get("AQ_OLLAMA_URL", "http://localhost:11434")
+
+
+def _ollama_is_reachable() -> bool:
+    url = _ollama_url()
+    try:
+        import httpx
+        resp = httpx.get(url.rstrip("/") + "/api/tags", timeout=3.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+@pytest.fixture(scope="session")
+def ollama_url() -> str:
+    """Session-scoped fixture: returns Ollama base URL or skips the test."""
+    url = _ollama_url()
+    if not _ollama_is_reachable():
+        pytest.skip(f"Ollama at {url} is not reachable — set AQ_OLLAMA_URL or start Ollama locally")
+    return url
+
+
+requires_ollama = pytest.mark.skipif(
+    not _ollama_is_reachable(),
+    reason="Ollama not reachable (set AQ_OLLAMA_URL and ensure host is up)",
+)
 
 
 def _spark_is_healthy():

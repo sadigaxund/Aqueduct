@@ -118,6 +118,19 @@ def compile(  # noqa: A001
     # ── 6. Compile away passive Regulators ────────────────────────────────────
     modules, edges = compile_away_regulators(modules, edges)
 
+    # ── 7. Delivery semantics warning ─────────────────────────────────────────
+    if blueprint.retry_policy.max_attempts > 1:
+        import warnings
+        for m in modules:
+            if m.type == "Egress" and m.config.get("mode") == "append":
+                warnings.warn(
+                    f"Egress '{m.id}' uses mode=append with "
+                    f"max_attempts={blueprint.retry_policy.max_attempts} — "
+                    "retries may produce duplicate rows. "
+                    "Use mode=overwrite for idempotent writes, or set max_attempts=1.",
+                    stacklevel=2,
+                )
+
     return Manifest(
         pipeline_id=blueprint.id,
         name=blueprint.name,

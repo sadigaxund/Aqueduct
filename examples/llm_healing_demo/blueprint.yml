@@ -1,0 +1,38 @@
+aqueduct: "1.0"
+id: demo.llm.healing
+name: Product Reviews Pipeline
+
+modules:
+- id: src
+  type: Ingress
+  label: Reviews Source
+  config:
+    format: json
+    path: /tmp/aq_demo/reviews.json
+
+- id: good_reviews
+  type: Channel
+  label: Filter Good Reviews
+  config:
+    op: sql
+    query: "SELECT\n  product_id,\n  rating,\n  ReviewDate,\n  comment\nFROM __input__\nWHERE rating >= 3\n"
+- id: sink
+  type: Egress
+  label: Good Reviews Output
+  config:
+    format: json
+    path: /tmp/aq_demo/good_reviews
+    mode: overwrite
+
+edges:
+- from: src
+  to: good_reviews
+- from: good_reviews
+  to: sink
+
+agent:
+  approval_mode: human
+  on_pending_patches: block
+  model: gemma3:12b
+  provider: ollama
+  base_url: http://10.0.0.39:11434

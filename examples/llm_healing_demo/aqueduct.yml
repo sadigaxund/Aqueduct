@@ -1,0 +1,12 @@
+aqueduct_config: "1.0"
+
+deployment:
+  target: standalone
+  master_url: "local[*]"
+
+stores:
+  observability:
+    path: ".aqueduct/signals"
+
+webhooks:
+  on_failure: null

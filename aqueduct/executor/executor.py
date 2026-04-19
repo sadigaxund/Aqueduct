@@ -42,10 +42,13 @@ No Spark actions beyond the Egress .save() and Probe sampling calls.
 from __future__ import annotations
 
 import logging
+import math
+import random
+import time
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
 from pyspark.sql import SparkSession
 
@@ -59,9 +62,113 @@ from aqueduct.executor.funnel import FunnelError, execute_funnel
 from aqueduct.executor.ingress import IngressError, read_ingress
 from aqueduct.executor.junction import JunctionError, execute_junction
 from aqueduct.executor.models import ExecutionResult, ModuleResult
-from aqueduct.parser.models import Edge, Module
+from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+# ── Retry helper ──────────────────────────────────────────────────────────────
+
+def _is_retriable(exc: Exception, policy: RetryPolicy) -> bool:
+    """Return True if this exception should be retried per policy."""
+    msg = str(exc)
+    # Non-transient patterns always block retry
+    for pattern in policy.non_transient_errors:
+        if pattern in msg:
+            return False
+    # If transient list is specified, only those patterns are retriable
+    if policy.transient_errors:
+        return any(p in msg for p in policy.transient_errors)
+    # Default: all errors are potentially transient
+    return True
+
+
+def _backoff_seconds(attempt: int, policy: RetryPolicy) -> float:
+    """Compute sleep duration for the given attempt number (0-indexed)."""
+    strategy = policy.backoff_strategy
+    base = float(policy.backoff_base_seconds)
+    cap = float(policy.backoff_max_seconds)
+
+    if strategy == "fixed":
+        delay = base
+    elif strategy == "linear":
+        delay = base * (attempt + 1)
+    else:  # exponential (default)
+        delay = base * (2 ** attempt)
+
+    delay = min(delay, cap)
+    if policy.jitter:
+        delay *= 0.5 + random.random() * 0.5  # uniform [0.5, 1.0] × delay
+    return delay
+
+
+def _with_retry(
+    fn: Callable[[], _T],
+    policy: RetryPolicy,
+    module_id: str,
+) -> _T:
+    """Execute fn(), retrying per policy on retriable exceptions.
+
+    Args:
+        fn:        Zero-arg callable that executes one module attempt.
+        policy:    RetryPolicy from the Manifest (pipeline-level).
+        module_id: Used in log messages only.
+
+    Returns:
+        Result of fn() on success.
+
+    Raises:
+        The last exception if all attempts exhausted or deadline exceeded.
+        ExecuteError if on_exhaustion=abort (wraps original exc).
+    """
+    first_failure_at: float | None = None
+    last_exc: Exception = RuntimeError("no attempts made")
+
+    for attempt in range(max(1, policy.max_attempts)):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            now = time.monotonic()
+
+            if first_failure_at is None:
+                first_failure_at = now
+
+            # Deadline check
+            if policy.deadline_seconds is not None:
+                elapsed = now - first_failure_at
+                if elapsed >= policy.deadline_seconds:
+                    logger.warning(
+                        "Module %r: deadline exceeded (%.0fs elapsed, limit=%ds); "
+                        "not retrying.",
+                        module_id, elapsed, policy.deadline_seconds,
+                    )
+                    break
+
+            is_last = attempt == policy.max_attempts - 1
+            if is_last or not _is_retriable(exc, policy):
+                if is_last:
+                    logger.warning(
+                        "Module %r: attempt %d/%d failed (%s); giving up",
+                        module_id, attempt + 1, policy.max_attempts, exc,
+                    )
+                else:
+                    logger.warning(
+                        "Module %r: non-retriable error on attempt %d/%d: %s",
+                        module_id, attempt + 1, policy.max_attempts, exc,
+                    )
+                break
+
+            sleep = _backoff_seconds(attempt, policy)
+            logger.warning(
+                "Module %r: attempt %d/%d failed (%s); retrying in %.1fs",
+                module_id, attempt + 1, policy.max_attempts, exc, sleep,
+            )
+            time.sleep(sleep)
+
+    raise last_exc
 
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator"}
@@ -221,7 +328,11 @@ def execute(
         # ── Ingress ───────────────────────────────────────────────────────────
         if module.type == "Ingress":
             try:
-                df = read_ingress(module, spark)
+                df = _with_retry(
+                    lambda: read_ingress(module, spark),
+                    manifest.retry_policy,
+                    module.id,
+                )
             except IngressError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
@@ -260,7 +371,11 @@ def execute(
                 upstream_dfs[edge.from_id] = val
             else:
                 try:
-                    df = execute_sql_channel(module, upstream_dfs, spark)
+                    df = _with_retry(
+                        lambda: execute_sql_channel(module, upstream_dfs, spark),
+                        manifest.retry_policy,
+                        module.id,
+                    )
                 except ChannelError as exc:
                     module_results.append(
                         ModuleResult(module_id=module.id, status="error", error=str(exc))
@@ -330,7 +445,11 @@ def execute(
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
             try:
-                branch_dfs = execute_junction(module, val)
+                branch_dfs = _with_retry(
+                    lambda: execute_junction(module, val),
+                    manifest.retry_policy,
+                    module.id,
+                )
             except JunctionError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
@@ -375,7 +494,11 @@ def execute(
                 continue
 
             try:
-                df = execute_funnel(module, funnel_upstream)
+                df = _with_retry(
+                    lambda: execute_funnel(module, funnel_upstream),
+                    manifest.retry_policy,
+                    module.id,
+                )
             except FunnelError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
@@ -424,12 +547,21 @@ def execute(
                     )
                     return _fail(manifest.pipeline_id, run_id, module_results)
                 elif on_block == "trigger_agent":
-                    # Stub for Phase 7 — fall through to skip for now
+                    # Record failure and let Surveyor fire the LLM loop on return
                     logger.info(
-                        "Regulator %r: gate closed, on_block=trigger_agent (stub — skipping downstream)",
+                        "Regulator %r: gate closed, on_block=trigger_agent; "
+                        "downstream skipped — Surveyor will trigger LLM patch loop.",
                         module.id,
                     )
-                # skip (default) and trigger_agent stub: propagate sentinel
+                    module_results.append(
+                        ModuleResult(
+                            module_id=module.id,
+                            status="error",
+                            error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
+                        )
+                    )
+                    return _fail(manifest.pipeline_id, run_id, module_results)
+                # skip (default): propagate sentinel
                 frame_store[module.id] = _GATE_CLOSED
                 module_results.append(ModuleResult(module_id=module.id, status="skipped"))
 
@@ -459,7 +591,11 @@ def execute(
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
             try:
-                write_egress(val, module, depot=depot)
+                _with_retry(
+                    lambda: write_egress(val, module, depot=depot),
+                    manifest.retry_policy,
+                    module.id,
+                )
             except EgressError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
@@ -484,6 +620,14 @@ def execute(
                     logger.warning("Probe %r failed: %s", module.id, exc)
 
             module_results.append(ModuleResult(module_id=module.id, status="success"))
+
+    # ── Lineage — write after successful execution ─────────────────────────────
+    if store_dir is not None:
+        try:
+            from aqueduct.compiler.lineage import write_lineage
+            write_lineage(manifest.pipeline_id, run_id, manifest.modules, manifest.edges, store_dir)
+        except Exception as exc:
+            logger.debug("Lineage write skipped: %s", exc)
 
     return ExecutionResult(
         pipeline_id=manifest.pipeline_id,

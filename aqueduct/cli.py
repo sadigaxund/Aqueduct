@@ -163,6 +163,24 @@ def run(
         click.echo(f"✗ compile error: {exc}", err=True)
         sys.exit(1)
 
+    # ── Pending patch check ────────────────────────────────────────────────────
+    patches_dir = Path(blueprint).parent / "patches"
+    pending_dir = patches_dir / "pending"
+    pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
+    if pending_patches:
+        policy = manifest.agent.on_pending_patches
+        names = ", ".join(p.stem for p in pending_patches)
+        msg = (
+            f"⚠ {len(pending_patches)} pending patch(es) unreviewed: {names}\n"
+            f"  Review with: aqueduct patch apply <file> --blueprint {blueprint}\n"
+            f"  Reject with: aqueduct patch reject <patch_id> --reason '...'"
+        )
+        if policy == "block":
+            click.echo(f"✗ blocked — {msg}", err=True)
+            sys.exit(1)
+        elif policy == "warn":
+            click.echo(msg, err=True)
+
     run_id = run_id or str(uuid.uuid4())
     click.echo(
         f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)"
@@ -170,7 +188,13 @@ def run(
     )
 
     # ── Surveyor — start ───────────────────────────────────────────────────────
-    surveyor = Surveyor(manifest, store_dir=resolved_store_dir, webhook_url=resolved_webhook)
+    surveyor = Surveyor(
+        manifest,
+        store_dir=resolved_store_dir,
+        webhook_url=resolved_webhook,
+        blueprint_path=Path(blueprint),
+        patches_dir=patches_dir,
+    )
     surveyor.start(run_id)
 
     # ── Spark — merge engine spark_config under Blueprint (Blueprint wins) ─────
