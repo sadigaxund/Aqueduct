@@ -8,7 +8,6 @@ examples/*/*.json
 *.db
 .claude/
 .prompts/
-.dev/JOURNAL.md
 *.log
 pytest_*.log
 pytest_*.txt
