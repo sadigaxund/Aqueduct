@@ -21,6 +21,7 @@ pytest_*.avro
 pytest_*.duckdb
 pytest_*.duckdb.wal
 pytest_*.sqlite
+.pytest_cache/
 
 
 # --- Python ---
