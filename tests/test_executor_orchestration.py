@@ -13,7 +13,7 @@ from pyspark.sql import SparkSession
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.executor import ExecuteError, execute
 from aqueduct.executor.models import ExecutionResult, ModuleResult
-from aqueduct.parser.models import Edge, Module
+from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 
 @pytest.fixture
@@ -883,3 +883,487 @@ def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplo
     assert spark.read.parquet(spill_out).count() == 0
     assert "spillway edge found but no spillway_condition" in caplog.text.lower() or "missing spillway_condition" in caplog.text.lower() or "has a spillway edge but no spillway_condition" in caplog.text
 
+
+# ── Retry Integration ─────────────────────────────────────────────────────────
+
+def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatch):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.retry",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="out", port="main"),
+        ),
+        context={}, spark_config={},
+        retry_policy=RetryPolicy(max_attempts=3, backoff_strategy="fixed", backoff_base_seconds=0),
+    )
+    
+    import aqueduct.executor.executor
+    original_read = aqueduct.executor.executor.read_ingress
+    calls = []
+    
+    def mock_read(module, spark_session):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("transient read error")
+        return original_read(module, spark_session)
+        
+    monkeypatch.setattr(aqueduct.executor.executor, "read_ingress", mock_read)
+    monkeypatch.setattr(aqueduct.executor.executor.time, "sleep", lambda x: None)
+    
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    assert len(calls) == 3
+    assert spark.read.parquet(out_path).count() == 5
+
+
+
+
+# ── Per-module on_failure integration ─────────────────────────────────────────
+
+
+def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tmp_path, monkeypatch):
+    """Ingress with on_failure.max_attempts=3 retries 3×; other modules use manifest max_attempts=1."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(3).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+
+    manifest = Manifest(
+        pipeline_id="test.per_module_retry",
+        modules=(
+            Module(
+                id="in",
+                type="Ingress",
+                label="In",
+                config={"format": "parquet", "path": in_path},
+                on_failure={"max_attempts": 3, "backoff_strategy": "fixed", "backoff_base_seconds": 0},
+            ),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="in", to_id="out", port="main"),),
+        context={},
+        spark_config={},
+        retry_policy=RetryPolicy(max_attempts=1),  # pipeline default = no retry
+    )
+
+    import aqueduct.executor.executor as _exe
+    original_read = _exe.read_ingress
+    calls = []
+
+    def mock_read(module, spark_session):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("transient")
+        return original_read(module, spark_session)
+
+    monkeypatch.setattr(_exe, "read_ingress", mock_read)
+    monkeypatch.setattr(_exe.time, "sleep", lambda x: None)
+
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    assert len(calls) == 3
+
+
+# ── Checkpoint / Resume ────────────────────────────────────────────────────────
+
+
+def _minimal_manifest_with_checkpoint(in_path, out_path, checkpoint=False):
+    return Manifest(
+        pipeline_id="test.ckpt",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}, checkpoint=checkpoint),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}, checkpoint=checkpoint),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=False,  # per-module controlled by `checkpoint` param
+    )
+
+
+def test_checkpoint_disabled_by_default(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(4).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.no_ckpt",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+    )
+    result = execute(manifest, spark, store_dir=store_dir)
+    assert result.status == "success"
+    assert not (store_dir / "checkpoints").exists()
+
+
+def test_checkpoint_blueprint_level_writes_parquet_and_marker(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_bp",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    result = execute(manifest, spark, run_id="run-001", store_dir=store_dir)
+    assert result.status == "success"
+
+    ckpt_base = store_dir / "checkpoints" / "run-001"
+    # Ingress checkpoint: Parquet data + done marker
+    assert (ckpt_base / "src" / "_aq_done").exists()
+    assert (ckpt_base / "src" / "data").exists()
+    # Egress checkpoint: done marker only (no DataFrame output)
+    assert (ckpt_base / "sink" / "_aq_done").exists()
+
+
+def test_checkpoint_per_module_only_checkpoints_flagged_module(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(3).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_mod",
+        modules=(
+            Module(
+                id="src",
+                type="Ingress",
+                label="Src",
+                config={"format": "parquet", "path": in_path},
+                checkpoint=True,  # only this module
+            ),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=False,
+    )
+    result = execute(manifest, spark, run_id="run-002", store_dir=store_dir)
+    assert result.status == "success"
+
+    ckpt_base = store_dir / "checkpoints" / "run-002"
+    assert (ckpt_base / "src" / "_aq_done").exists()
+    # sink NOT checkpointed (checkpoint=False on module, manifest.checkpoint=False)
+    assert not (ckpt_base / "sink" / "_aq_done").exists()
+
+
+def test_resume_skips_completed_module_and_reloads_dataframe(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(7).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    # Manually build a "prev-run" checkpoint for src only (simulates run where src succeeded,
+    # sink failed before writing). This proves resume loads src from checkpoint instead of
+    # re-reading the source file (which we'll delete to confirm).
+    prev_ckpt = store_dir / "checkpoints" / "prev-run"
+    src_ckpt = prev_ckpt / "src"
+    src_ckpt.mkdir(parents=True, exist_ok=True)
+    src_df = spark.range(7)
+    src_df.write.mode("overwrite").parquet(str(src_ckpt / "data"))
+    (src_ckpt / "_aq_done").write_text("", encoding="utf-8")
+    (prev_ckpt / "_manifest_hash").write_text("aabbccdd1234", encoding="utf-8")
+
+    # Delete source so any attempt to re-read it would fail
+    import shutil
+    shutil.rmtree(in_path)
+
+    manifest = Manifest(
+        pipeline_id="test.resume",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+    )
+    # Resume: src loaded from checkpoint; sink executes normally
+    r2 = execute(manifest, spark, run_id="run-r2", store_dir=store_dir, resume_run_id="prev-run")
+    assert r2.status == "success"
+    src_result = next(mr for mr in r2.module_results if mr.module_id == "src")
+    assert src_result.status == "success"
+    assert spark.read.parquet(out_path).count() == 7
+
+
+def test_resume_missing_run_id_raises_execute_error(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(2).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.resume_missing",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+    )
+    with pytest.raises(ExecuteError, match="no checkpoints"):
+        execute(manifest, spark, store_dir=store_dir, resume_run_id="nonexistent-run")
+
+
+def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp_path, caplog):
+    import logging
+
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(4).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.hash_mismatch",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    r1 = execute(manifest, spark, run_id="run-hash1", store_dir=store_dir)
+    assert r1.status == "success"
+
+    # Tamper with the stored hash to force mismatch
+    hash_file = store_dir / "checkpoints" / "run-hash1" / "_manifest_hash"
+    hash_file.write_text("000000000000", encoding="utf-8")
+
+    out_path2 = str(tmp_path / "out2.parquet")
+    manifest2 = Manifest(
+        pipeline_id="test.hash_mismatch",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path2}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.executor"):
+        r2 = execute(manifest2, spark, run_id="run-hash2", store_dir=store_dir, resume_run_id="run-hash1")
+
+    assert r2.status == "success"
+    assert any("changed" in rec.message for rec in caplog.records)
+
+
+def test_per_module_on_failure_abort_stops_pipeline(spark: SparkSession, tmp_path, monkeypatch):
+    """on_failure.on_exhaustion=abort: after exhausting retries pipeline returns error."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(2).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+
+    manifest = Manifest(
+        pipeline_id="test.abort",
+        modules=(
+            Module(
+                id="src",
+                type="Ingress",
+                label="Src",
+                config={"format": "parquet", "path": in_path},
+                on_failure={"max_attempts": 2, "backoff_strategy": "fixed", "backoff_base_seconds": 0},
+            ),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
+
+    import aqueduct.executor.executor as _exe
+    from aqueduct.executor.ingress import IngressError
+
+    def always_fails(module, spark_session):
+        raise IngressError("always broken")
+
+    monkeypatch.setattr(_exe, "read_ingress", always_fails)
+    monkeypatch.setattr(_exe.time, "sleep", lambda x: None)
+
+    result = execute(manifest, spark)
+    assert result.status == "error"
+    src_result = next(mr for mr in result.module_results if mr.module_id == "src")
+    assert src_result.status == "error"
+    assert "always broken" in src_result.error
+
+
+def test_checkpoint_channel_writes_data_and_marker(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(2).selectExpr("id", "cast(id as string) as val").write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_channel",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(
+                id="ch",
+                type="Channel",
+                label="Ch",
+                config={"op": "sql", "query": "SELECT * FROM src"},
+                checkpoint=True,
+            ),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="src", to_id="ch", port="main"),
+            Edge(from_id="ch", to_id="sink", port="main"),
+        ),
+        context={},
+        spark_config={},
+    )
+    result = execute(manifest, spark, run_id="run-ch", store_dir=store_dir)
+    assert result.status == "success"
+
+    ckpt = store_dir / "checkpoints" / "run-ch" / "ch"
+    assert (ckpt / "_aq_done").exists()
+    assert (ckpt / "data").exists()
+    assert spark.read.parquet(str(ckpt / "data")).count() == 2
+
+
+def test_checkpoint_funnel_writes_data_and_marker(spark: SparkSession, tmp_path):
+    in1 = str(tmp_path / "in1.parquet")
+    in2 = str(tmp_path / "in2.parquet")
+    spark.range(3).write.parquet(in1)
+    spark.range(3).write.parquet(in2)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_funnel",
+        modules=(
+            Module(id="a", type="Ingress", label="A", config={"format": "parquet", "path": in1}),
+            Module(id="b", type="Ingress", label="B", config={"format": "parquet", "path": in2}),
+            Module(
+                id="fn",
+                type="Funnel",
+                label="Fn",
+                config={"mode": "union_all", "inputs": ["a", "b"]},
+                checkpoint=True,
+            ),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="a", to_id="fn", port="main"),
+            Edge(from_id="b", to_id="fn", port="main"),
+            Edge(from_id="fn", to_id="sink", port="main"),
+        ),
+        context={},
+        spark_config={},
+    )
+    result = execute(manifest, spark, run_id="run-fn", store_dir=store_dir)
+    assert result.status == "success"
+
+    ckpt = store_dir / "checkpoints" / "run-fn" / "fn"
+    assert (ckpt / "_aq_done").exists()
+    assert (ckpt / "data").exists()
+
+
+def test_checkpoint_junction_writes_branches(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(3).selectExpr("id", "case when id % 2 = 0 then 'EU' else 'US' end as region").write.parquet(in_path)
+    out_us = str(tmp_path / "out_us.parquet")
+    out_eu = str(tmp_path / "out_eu.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_junction",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(
+                id="jn",
+                type="Junction",
+                label="Jn",
+                config={
+                    "mode": "conditional",
+                    "branches": [
+                        {"id": "us", "condition": "region = 'US'"},
+                        {"id": "eu", "condition": "region = 'EU'"},
+                    ],
+                },
+                checkpoint=True,
+            ),
+            Module(id="egr_us", type="Egress", label="US", config={"format": "parquet", "path": out_us}),
+            Module(id="egr_eu", type="Egress", label="EU", config={"format": "parquet", "path": out_eu}),
+        ),
+        edges=(
+            Edge(from_id="src", to_id="jn", port="main"),
+            Edge(from_id="jn", to_id="egr_us", port="us"),
+            Edge(from_id="jn", to_id="egr_eu", port="eu"),
+        ),
+        context={},
+        spark_config={},
+    )
+    result = execute(manifest, spark, run_id="run-jn", store_dir=store_dir)
+    assert result.status == "success"
+
+    ckpt = store_dir / "checkpoints" / "run-jn" / "jn"
+    assert (ckpt / "_aq_done").exists()
+    assert (ckpt / "us").exists()
+    assert (ckpt / "eu").exists()
+
+
+def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monkeypatch, caplog):
+    """Checkpoint Parquet write failure → warning logged; pipeline still succeeds."""
+    import logging
+
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(3).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        pipeline_id="test.ckpt_fail",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}, checkpoint=True),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+    )
+
+    # Patch DataFrame.write.parquet to raise on the checkpoint write but not the egress write
+    from pyspark.sql import DataFrameWriter
+    original_parquet = DataFrameWriter.parquet
+    call_count = [0]
+
+    def patched_parquet(self, path, *args, **kwargs):
+        call_count[0] += 1
+        if "checkpoints" in path:
+            raise OSError("disk full")
+        return original_parquet(self, path, *args, **kwargs)
+
+    monkeypatch.setattr(DataFrameWriter, "parquet", patched_parquet)
+
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.executor"):
+        result = execute(manifest, spark, run_id="run-ckpt-fail", store_dir=store_dir)
+
+    assert result.status == "success"
+    assert any("Checkpoint write failed" in rec.message for rec in caplog.records)

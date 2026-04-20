@@ -102,6 +102,7 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     help="Observability store directory (overrides aqueduct.yml; default: .aqueduct/signals)",
 )
 @click.option("--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)")
+@click.option("--resume", "resume_run_id", default=None, help="Resume from checkpoints of a previous run_id")
 def run(
     blueprint: str,
     profile: str | None,
@@ -110,6 +111,7 @@ def run(
     config_path: str | None,
     store_dir: str | None,
     webhook: str | None,
+    resume_run_id: str | None,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import uuid
@@ -204,7 +206,7 @@ def run(
     # ── Execute ────────────────────────────────────────────────────────────────
     execute_exc: ExecuteError | None = None
     try:
-        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir, surveyor=surveyor, depot=depot)
+        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir, surveyor=surveyor, depot=depot, resume_run_id=resume_run_id)
     except ExecuteError as exc:
         execute_exc = exc
         # Wrap into a synthetic ExecutionResult so Surveyor can persist it

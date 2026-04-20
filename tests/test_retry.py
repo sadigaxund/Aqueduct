@@ -202,3 +202,41 @@ class TestWithRetry:
             with patch("aqueduct.executor.executor.time.sleep"):
                 with pytest.raises(RuntimeError, match="deadline test"):
                     _with_retry(always_fails, p, "mod")
+
+
+# ── _module_retry_policy ──────────────────────────────────────────────────────
+
+
+class TestModuleRetryPolicy:
+    def test_no_on_failure_returns_manifest_policy(self):
+        from aqueduct.executor.executor import _module_retry_policy
+
+        manifest_policy = _policy(max_attempts=5)
+        module = _make_module("m", on_failure=None)
+        result = _module_retry_policy(module, manifest_policy)
+        assert result is manifest_policy
+
+    def test_valid_on_failure_overrides_policy(self):
+        from aqueduct.executor.executor import _module_retry_policy
+
+        manifest_policy = _policy(max_attempts=1)
+        module = _make_module(
+            "m",
+            on_failure={"max_attempts": 4, "backoff_strategy": "fixed"},
+        )
+        result = _module_retry_policy(module, manifest_policy)
+        assert result.max_attempts == 4
+        assert result.backoff_strategy == "fixed"
+
+    def test_invalid_on_failure_key_raises_execute_error(self):
+        from aqueduct.executor.executor import ExecuteError, _module_retry_policy
+
+        module = _make_module("m", on_failure={"not_a_real_field": 99})
+        with pytest.raises(ExecuteError, match="invalid keys"):
+            _module_retry_policy(module, _policy())
+
+
+def _make_module(mid: str, **kwargs):
+    from aqueduct.parser.models import Module
+
+    return Module(id=mid, type="Ingress", label=mid, config={}, **kwargs)

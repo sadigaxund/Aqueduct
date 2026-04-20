@@ -4,8 +4,5 @@
 
     Moreover, should we really let LLM patches let loose on production environments like that, is there a way to introduce a safe mode where it can reliably run and verify the patch, and only if it is safe and correct, it should be applied to the production environment? Some kind of preview run
 
-4. ok so, I have
 
-❯ okay, so as you said implement both, and keep option B as optional and for immutable sources. I dont understand what you mean by "Add
-    watermark strategy later when you have Delta or Kafka connectors", Will we implement connectors? but did not we make so that it is possible  
-  to directly use Spark's implementation of sources?                                                                                             
+4. is depot the same as kv store, but then what is context registry/store. im getting confused. I know that we have a static expressions that we can define at the header to avoid magic values, then there is persistent values like last executed date or whatever, and then UDFs (I know we  can use them in a SQL query, but can we inject a spark UDF into expression?), then there is aq.secret, and aq.depot?  More questions, can we have like a deeper schema for these like: ctx.schema1.schema2.some_key and is it applied for all the stores? Moreover, explain where can each of them be resolved, or they are all can be resolved anywhere like within blueprint, sql, expressions, etc.
