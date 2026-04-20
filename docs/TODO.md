@@ -1,5 +1,14 @@
 ## Planned Future Work
 
+### UI / Frontend (Planned — do not implement yet)
+- Pipeline graph view: nodes = modules, edges = data flow; colour by status
+- Edge labels: row count + bytes from SparkListener metrics in `signals.db`
+- Node tooltip: duration, schema snapshot, null rates, sample rows
+- Lineage panel: click column → trace source across modules (from `lineage.db`)
+- Data source: poll `runs.db` + `signals.db` + `lineage.db` (all DuckDB); or extend webhook for per-module push events
+- Backend needed: thin read-only API over the three DuckDB files (FastAPI or similar)
+- Prerequisite: SparkListener implementation (exact counts) + per-module webhook events
+
 ### Flink Engine (Planned — do not implement yet)
 - Add `aqueduct/executor/flink/` subpackage from scratch (no code reuse from Spark executor — different execution model, different module semantics).
 - Extend `pyproject.toml`: `flink = ["apache-flink>=1.18"]` extra.

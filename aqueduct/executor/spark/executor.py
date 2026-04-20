@@ -216,6 +216,64 @@ def _manifest_hash(manifest: Manifest) -> str:
     ).hexdigest()[:12]
 
 
+_MODULE_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS module_metrics (
+    run_id        VARCHAR     NOT NULL,
+    module_id     VARCHAR     NOT NULL,
+    records_read  BIGINT,
+    bytes_read    BIGINT,
+    records_written BIGINT,
+    bytes_written BIGINT,
+    duration_ms   BIGINT,
+    captured_at   TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_module_metrics_module
+    ON module_metrics (module_id);
+"""
+
+
+def _write_stage_metrics(
+    module_id: str,
+    run_id: str,
+    metrics: "dict[str, Any]",
+    store_dir: "Path | None",
+) -> None:
+    """Persist SparkListener stage metrics to signals.db (non-fatal)."""
+    if store_dir is None:
+        return
+    try:
+        import duckdb
+        from datetime import datetime, timezone
+
+        db_path = store_dir / "signals.db"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(_MODULE_METRICS_DDL)
+            conn.execute(
+                """
+                INSERT INTO module_metrics
+                    (run_id, module_id, records_read, bytes_read,
+                     records_written, bytes_written, duration_ms, captured_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    run_id,
+                    module_id,
+                    metrics.get("records_read"),
+                    metrics.get("bytes_read"),
+                    metrics.get("records_written"),
+                    metrics.get("bytes_written"),
+                    metrics.get("duration_ms"),
+                    datetime.now(tz=timezone.utc).isoformat(),
+                ],
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Stage metrics write failed for %r: %s", module_id, exc)
+
+
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator"}
 )
@@ -356,6 +414,9 @@ def execute(
 
     run_id = run_id or str(uuid.uuid4())
 
+    # Grab listener attached by make_spark_session (None if session created externally)
+    _listener = getattr(spark, "_aq_metrics_listener", None)
+
     # Checkpoint / resume paths (None when feature disabled)
     checkpoint_dir: Path | None = None
     any_checkpoint = manifest.checkpoint or any(m.checkpoint for m in manifest.modules)
@@ -428,6 +489,8 @@ def execute(
 
         # ── Ingress ───────────────────────────────────────────────────────────
         if module.type == "Ingress":
+            if _listener:
+                _listener.set_active_module(module.id)
             try:
                 df = _with_retry(
                     lambda: read_ingress(module, spark),
@@ -435,10 +498,14 @@ def execute(
                     module.id,
                 )
             except IngressError as exc:
+                if _listener:
+                    _listener.collect_metrics()  # reset state
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
+            if _listener:
+                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             frame_store[module.id] = df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -472,6 +539,8 @@ def execute(
                     return _fail(manifest.pipeline_id, run_id, module_results)
                 upstream_dfs[edge.from_id] = val
             else:
+                if _listener:
+                    _listener.set_active_module(module.id)
                 try:
                     df = _with_retry(
                         lambda: execute_sql_channel(module, upstream_dfs, spark),
@@ -479,6 +548,8 @@ def execute(
                         module.id,
                     )
                 except ChannelError as exc:
+                    if _listener:
+                        _listener.collect_metrics()
                     module_results.append(
                         ModuleResult(module_id=module.id, status="error", error=str(exc))
                     )
@@ -517,6 +588,8 @@ def execute(
                 else:
                     frame_store[module.id] = df
 
+                if _listener:
+                    _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
                 module_results.append(ModuleResult(module_id=module.id, status="success"))
 
@@ -547,6 +620,8 @@ def execute(
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
+            if _listener:
+                _listener.set_active_module(module.id)
             try:
                 branch_dfs = _with_retry(
                     lambda: execute_junction(module, val),
@@ -554,11 +629,15 @@ def execute(
                     module.id,
                 )
             except JunctionError as exc:
+                if _listener:
+                    _listener.collect_metrics()
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
+            if _listener:
+                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             for branch_id, branch_df in branch_dfs.items():
                 frame_store[f"{module.id}.{branch_id}"] = branch_df
             _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
@@ -597,6 +676,8 @@ def execute(
                 module_results.append(ModuleResult(module_id=module.id, status="skipped"))
                 continue
 
+            if _listener:
+                _listener.set_active_module(module.id)
             try:
                 df = _with_retry(
                     lambda: execute_funnel(module, funnel_upstream),
@@ -604,10 +685,14 @@ def execute(
                     module.id,
                 )
             except FunnelError as exc:
+                if _listener:
+                    _listener.collect_metrics()
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
+            if _listener:
+                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             frame_store[module.id] = df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -695,6 +780,8 @@ def execute(
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
 
+            if _listener:
+                _listener.set_active_module(module.id)
             try:
                 _with_retry(
                     lambda: write_egress(val, module, depot=depot),
@@ -702,10 +789,14 @@ def execute(
                     module.id,
                 )
             except EgressError as exc:
+                if _listener:
+                    _listener.collect_metrics()
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
+            if _listener:
+                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             _write_checkpoint(module, checkpoint_dir, manifest)  # done-sentinel only
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 

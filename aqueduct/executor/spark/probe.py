@@ -11,8 +11,9 @@ schema_snapshot      Captures ``df.schema`` (zero Spark action — schema is
                      always available on a lazy DataFrame).
 
 row_count_estimate   Two methods:
-  method: spark_listener   No action; stub only (logs intent).  Real counts
-                           arrive via SparkListener after stage completion.
+  method: spark_listener   No action; queries ``module_metrics`` table in
+                           ``signals.db`` for the upstream module's stage count.
+                           Returns ``estimate: null`` if no row exists yet.
   method: sample           ``df.sample(fraction).count()`` — allowed since
                            it operates on a fraction, not the full dataset.
 
@@ -114,13 +115,40 @@ def _schema_snapshot(
 def _row_count_estimate(
     df: DataFrame,
     signal_cfg: dict[str, Any],
+    probe_id: str = "",
+    run_id: str = "",
+    store_dir: "Path | None" = None,
 ) -> dict[str, Any]:
     """Estimate row count. sample method only triggers on a fraction."""
     method = signal_cfg.get("method", "sample")
 
     if method == "spark_listener":
-        # Stub: real count arrives via SparkListener post-stage; not wired yet.
-        logger.info("row_count_estimate[spark_listener]: will be populated by SparkListener (stub)")
+        # Query the module_metrics row written by the executor for this module's upstream.
+        # The attach_to module_id is the same as probe_id's attach_to — passed via store_dir.
+        attach_to = signal_cfg.get("attach_to") or probe_id
+        if store_dir:
+            try:
+                import duckdb
+                db_path = store_dir / "signals.db"
+                if db_path.exists():
+                    conn = duckdb.connect(str(db_path))
+                    try:
+                        row = conn.execute(
+                            """
+                            SELECT records_written, records_read
+                            FROM module_metrics
+                            WHERE run_id = ? AND module_id = ?
+                            ORDER BY captured_at DESC LIMIT 1
+                            """,
+                            [run_id, attach_to],
+                        ).fetchone()
+                    finally:
+                        conn.close()
+                    if row:
+                        count = row[0] or row[1]
+                        return {"method": "spark_listener", "estimate": count}
+            except Exception as exc:
+                logger.debug("spark_listener row_count_estimate query failed: %s", exc)
         return {"method": "spark_listener", "estimate": None}
 
     # method: sample
@@ -211,7 +239,12 @@ def execute_probe(
                     if sig_type == "schema_snapshot":
                         payload = _schema_snapshot(module.id, run_id, df, store_dir)
                     elif sig_type == "row_count_estimate":
-                        payload = _row_count_estimate(df, sig_cfg)
+                        payload = _row_count_estimate(
+                            df, sig_cfg,
+                            probe_id=module.attach_to or module.id,
+                            run_id=run_id,
+                            store_dir=store_dir,
+                        )
                     elif sig_type == "null_rates":
                         payload = _null_rates(df, sig_cfg)
                     elif sig_type == "sample_rows":

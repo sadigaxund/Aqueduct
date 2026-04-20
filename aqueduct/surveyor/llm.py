@@ -8,10 +8,8 @@ All providers use httpx — no optional SDK dependency required.
 
 Supported providers:
   - "anthropic"     → Anthropic Messages API (ANTHROPIC_API_KEY env var)
-  - "openai_compat" → any OpenAI-compatible endpoint (vLLM, LM Studio, newer Ollama …)
+  - "openai_compat" → any OpenAI-compatible endpoint (vLLM, LM Studio, Ollama, …)
                       Set agent.base_url in aqueduct.yml, e.g. http://localhost:11434/v1
-  - "ollama"        → Ollama native API at /api/chat (always works regardless of Ollama version)
-                      Set agent.base_url in aqueduct.yml, e.g. http://<IP ADDRESS>:11434
 
 Re-prompt strategy on schema failure:
   - Up to MAX_REPROMPTS attempts.
@@ -232,8 +230,6 @@ def _call_llm(
 
     if provider == "openai_compat":
         return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt)
-    elif provider == "ollama":
-        return _call_ollama_native(messages, model, max_tokens, base_url, system_prompt)
     else:
         return _call_anthropic(messages, model, max_tokens, system_prompt)
 
@@ -307,54 +303,6 @@ def _call_openai_compat(
     return data["choices"][0]["message"]["content"]
 
 
-def _call_ollama_native(
-    messages: list[dict[str, Any]],
-    model: str,
-    max_tokens: int,
-    base_url: str | None,
-    system_prompt: str,
-) -> str:
-    """Call Ollama native /api/chat with streaming — prints dots to stderr as tokens arrive."""
-    import sys
-
-    import httpx
-
-    if not base_url:
-        raise RuntimeError(
-            "agent.base_url must be set for provider=ollama "
-            "(e.g. http://10.0.0.39:11434)"
-        )
-
-    url = base_url.rstrip("/") + "/api/chat"
-    payload = {
-        "model": model,
-        "stream": True,
-        "options": {"num_predict": max_tokens},
-        "messages": [{"role": "system", "content": system_prompt}] + messages,
-    }
-
-    print(f"\n[aqueduct llm] {model} thinking", end="", flush=True, file=sys.stderr)
-    chunks: list[str] = []
-    timeout = httpx.Timeout(connect=10.0, read=300.0, write=10.0, pool=10.0)
-    with httpx.stream("POST", url, json=payload, timeout=timeout) as response:
-        response.raise_for_status()
-        for line in response.iter_lines():
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            content = data.get("message", {}).get("content", "")
-            if content:
-                chunks.append(content)
-                print(".", end="", flush=True, file=sys.stderr)
-            if data.get("done"):
-                break
-    print(" done", flush=True, file=sys.stderr)
-    return "".join(chunks)
-
-
 # ── Response parsing ──────────────────────────────────────────────────────────
 
 def _parse_patch_spec(text: str) -> PatchSpec:
@@ -389,8 +337,8 @@ def trigger_llm_patch(
         approval_mode:  "auto" | "human".
         blueprint_path: Path to Blueprint YAML (required for auto mode).
         patches_dir:    Root directory for patch lifecycle subdirs.
-        provider:       "anthropic" | "openai_compat" | "ollama".
-        base_url:       Base URL for openai_compat/ollama (e.g. http://<IP ADDRESS>:11434).
+        provider:       "anthropic" | "openai_compat".
+        base_url:       Base URL for openai_compat (e.g. http://host:11434/v1 for Ollama).
 
     Returns:
         Applied or staged PatchSpec, or None if LLM failed to produce a valid patch.
