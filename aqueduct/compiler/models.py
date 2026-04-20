@@ -33,6 +33,7 @@ class Manifest:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    checkpoint: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -85,4 +86,5 @@ class Manifest:
                 "base_url": self.agent.base_url,
             },
             "udf_registry": list(self.udf_registry),
+            "checkpoint": self.checkpoint,
         }

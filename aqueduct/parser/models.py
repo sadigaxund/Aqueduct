@@ -52,6 +52,7 @@ class Module:
     spillway: str | None = None
     depends_on: tuple[str, ...] = ()
     on_failure: dict[str, Any] | None = None
+    checkpoint: bool = False
     # Probe-specific: module this Probe taps
     attach_to: str | None = None
     # Arcade-specific: sub-Blueprint path and context overrides
@@ -81,3 +82,4 @@ class Blueprint:
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
     required_context: tuple[str, ...] = ()  # Arcade sub-Blueprint: keys the caller must provide
+    checkpoint: bool = False

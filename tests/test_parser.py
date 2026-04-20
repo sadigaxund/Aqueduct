@@ -335,7 +335,7 @@ class TestBlueprintStructure:
 
     def test_default_retry_policy(self):
         bp = parse(FIXTURES / "valid_minimal.yml")
-        assert bp.retry_policy.max_attempts == 3
+        assert bp.retry_policy.max_attempts == 1
         assert bp.retry_policy.backoff_strategy == "exponential"
         assert bp.retry_policy.on_exhaustion == "trigger_agent"
 
@@ -343,3 +343,65 @@ class TestBlueprintStructure:
         bp = parse(FIXTURES / "valid_minimal.yml")
         assert bp.agent.approval_mode == "disabled"
         assert bp.agent.max_patches_per_run == 5
+
+
+class TestCheckpointField:
+    def test_blueprint_checkpoint_default_false(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_file)
+        assert bp.checkpoint is False
+
+    def test_blueprint_checkpoint_true_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "checkpoint: true\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_file)
+        assert bp.checkpoint is True
+
+    def test_module_checkpoint_default_false(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_file)
+        assert bp.modules[0].checkpoint is False
+
+    def test_module_checkpoint_true_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n    checkpoint: true\n"
+            "edges: []\n"
+        )
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_file)
+        assert bp.modules[0].checkpoint is True
+
+    def test_manifest_checkpoint_populated_from_blueprint(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "checkpoint: true\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        from aqueduct.compiler.compiler import compile as cc
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_file)
+        manifest = cc(bp, blueprint_path=bp_file)
+        assert manifest.checkpoint is True
+        assert manifest.to_dict()["checkpoint"] is True

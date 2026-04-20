@@ -90,6 +90,7 @@ def parse(
                 tags=tuple(m.tags),
                 config=resolve_value(m.config, ctx_map),
                 on_failure=m.on_failure,
+                checkpoint=m.checkpoint,
                 spillway=m.spillway,
                 depends_on=tuple(m.depends_on),
                 attach_to=m.attach_to,
@@ -159,4 +160,5 @@ def parse(
         agent=agent,
         udf_registry=tuple(validated.udf_registry),
         required_context=tuple(validated.required_context),
+        checkpoint=validated.checkpoint,
     )

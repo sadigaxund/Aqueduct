@@ -5,7 +5,7 @@ examples/*/*.parquet
 examples/*/*.db
 examples/*/*.json
 patches/*
-
+examples/*/*/signals/
 *.db
 .claude/
 .prompts/

@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-04-20 — Session 3: Per-Module on_failure + Checkpoint/Resume
+
+### Accomplished
+
+**Per-module `on_failure`** — `on_failure: dict` was parsed on every `Module` but executor ignored it; all modules used same pipeline-level `retry_policy`. Added `_module_retry_policy(module, manifest_policy) -> RetryPolicy`: returns `RetryPolicy(**module.on_failure)` when set, else falls back to manifest policy. Applied at all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress).
+
+**Opt-in checkpoint/resume** — New `checkpoint: bool = False` on `Blueprint`, `Module`, and `Manifest` (schema + models + parser + compiler).
+- `_write_checkpoint()` helper: writes DataFrame as Parquet + `_aq_done` marker. Called after each successful Ingress/Channel/Funnel/Junction (with data). Egress: done-sentinel only (data already written to target).
+- On resume (`--resume <run_id>`): for each module, if `_aq_done` exists in checkpoint dir, skip execution and reload Parquet into frame_store.
+- Manifest hash guard: writes `_manifest_hash` file on first run; warns (non-fatal) on mismatch when resuming.
+- CLI: `aqueduct run blueprint.yml --resume <run_id>`.
+- Zero overhead when `checkpoint=false` (default).
+
+### Design Notes
+- Source staleness ignored — designed for immutable batch sources (Parquet/JSON files).
+- Delta rollback deferred — would need storing target table path per-run + `RESTORE TABLE` SQL.
+- `on_failure` YAML keys map directly to `RetryPolicy` field names — no renaming layer needed.
+- Checkpoint write failure → logged warning, pipeline continues (non-fatal).
+
+---
+
 ## 2026-04-19 — Session 2: Patch Lifecycle Fixes + LLM Demo
 
 ### Accomplished

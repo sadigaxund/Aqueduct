@@ -170,6 +170,52 @@ def _with_retry(
 
     raise last_exc
 
+def _write_checkpoint(
+    module: Module,
+    checkpoint_dir: "Path | None",
+    manifest: Manifest,
+    data: "dict[str, Any] | None" = None,
+) -> None:
+    """Write checkpoint Parquet + done marker when checkpoint is enabled."""
+    if checkpoint_dir is None or not (manifest.checkpoint or module.checkpoint):
+        return
+    module_ckpt = checkpoint_dir / module.id
+    module_ckpt.mkdir(parents=True, exist_ok=True)
+    if data:
+        for name, df in data.items():
+            try:
+                df.write.mode("overwrite").parquet(str(module_ckpt / name))
+            except Exception as exc:
+                logger.warning("Checkpoint write failed for %r/%s: %s", module.id, name, exc)
+                return
+    (module_ckpt / "_aq_done").write_text("", encoding="utf-8")
+    logger.debug("Checkpoint written: %s", module_ckpt)
+
+
+def _module_retry_policy(module: Module, manifest_policy: RetryPolicy) -> RetryPolicy:
+    """Return per-module RetryPolicy if on_failure is set, else manifest-level policy."""
+    if not module.on_failure:
+        return manifest_policy
+    try:
+        return RetryPolicy(**module.on_failure)
+    except TypeError as exc:
+        raise ExecuteError(
+            f"Module {module.id!r} on_failure has invalid keys: {exc}"
+        ) from exc
+
+
+def _module_checkpoint_enabled(module: Module, manifest: Manifest) -> bool:
+    return manifest.checkpoint or module.checkpoint
+
+
+def _manifest_hash(manifest: Manifest) -> str:
+    import hashlib
+    import json as _json
+    return hashlib.sha256(
+        _json.dumps(manifest.to_dict(), sort_keys=True).encode()
+    ).hexdigest()[:12]
+
+
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator"}
 )
@@ -281,6 +327,7 @@ def execute(
     store_dir: Path | None = None,
     surveyor: Any | None = None,
     depot: Any | None = None,
+    resume_run_id: str | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -291,8 +338,10 @@ def execute(
         store_dir: Optional path for observability signals (Probe I/O).
         surveyor:  Optional Surveyor instance used to evaluate Regulator gates.
                    When None, all active Regulators default to open (pass-through).
-        depot:     Optional DepotStore for ``format: depot`` Egress writes and
-                   ``@aq.depot.get()`` resolution.
+        depot:          Optional DepotStore for ``format: depot`` Egress writes and
+                        ``@aq.depot.get()`` resolution.
+        resume_run_id:  If set, reload module outputs from checkpoints written by
+                        that prior run. Modules with a valid checkpoint are skipped.
 
     Returns:
         Frozen ExecutionResult.
@@ -306,6 +355,34 @@ def execute(
     from aqueduct.executor.udf import UDFError, register_udfs
 
     run_id = run_id or str(uuid.uuid4())
+
+    # Checkpoint / resume paths (None when feature disabled)
+    checkpoint_dir: Path | None = None
+    any_checkpoint = manifest.checkpoint or any(m.checkpoint for m in manifest.modules)
+    if store_dir and any_checkpoint:
+        checkpoint_dir = store_dir / "checkpoints" / run_id
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        (checkpoint_dir / "_manifest_hash").write_text(
+            _manifest_hash(manifest), encoding="utf-8"
+        )
+
+    resume_dir: Path | None = None
+    if store_dir and resume_run_id:
+        resume_dir = store_dir / "checkpoints" / resume_run_id
+        if not resume_dir.exists():
+            raise ExecuteError(
+                f"Resume run_id={resume_run_id!r} has no checkpoints at {resume_dir}"
+            )
+        stored_hash_path = resume_dir / "_manifest_hash"
+        if stored_hash_path.exists():
+            stored_hash = stored_hash_path.read_text(encoding="utf-8").strip()
+            current_hash = _manifest_hash(manifest)
+            if stored_hash != current_hash:
+                logger.warning(
+                    "Resuming run %r: Manifest has changed since original run "
+                    "(hash %s → %s). Checkpoint data may be stale.",
+                    resume_run_id, stored_hash, current_hash,
+                )
 
     # Register UDFs before any module executes so Channel SQL can reference them.
     try:
@@ -325,12 +402,36 @@ def execute(
                 f"Supported: {sorted(_SUPPORTED_TYPES)}."
             )
 
+        # ── Resume: reload from checkpoint if available ───────────────────────
+        if resume_dir:
+            module_ckpt = resume_dir / module.id
+            done_marker = module_ckpt / "_aq_done"
+            if done_marker.exists():
+                # Reload DataFrame checkpoints back into frame_store
+                if module.type in ("Ingress", "Channel", "Funnel"):
+                    data_ckpt = module_ckpt / "data"
+                    if data_ckpt.exists():
+                        frame_store[module.id] = spark.read.parquet(str(data_ckpt))
+                elif module.type == "Junction":
+                    for branch in module.config.get("branches", []):
+                        bid = branch.get("id", "")
+                        branch_ckpt = module_ckpt / bid
+                        if branch_ckpt.exists():
+                            frame_store[f"{module.id}.{bid}"] = spark.read.parquet(
+                                str(branch_ckpt)
+                            )
+                module_results.append(
+                    ModuleResult(module_id=module.id, status="success")
+                )
+                logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
+                continue
+
         # ── Ingress ───────────────────────────────────────────────────────────
         if module.type == "Ingress":
             try:
                 df = _with_retry(
                     lambda: read_ingress(module, spark),
-                    manifest.retry_policy,
+                    _module_retry_policy(module, manifest.retry_policy),
                     module.id,
                 )
             except IngressError as exc:
@@ -339,6 +440,7 @@ def execute(
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
             frame_store[module.id] = df
+            _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Channel ───────────────────────────────────────────────────────────
@@ -373,7 +475,7 @@ def execute(
                 try:
                     df = _with_retry(
                         lambda: execute_sql_channel(module, upstream_dfs, spark),
-                        manifest.retry_policy,
+                        _module_retry_policy(module, manifest.retry_policy),
                         module.id,
                     )
                 except ChannelError as exc:
@@ -415,6 +517,7 @@ def execute(
                 else:
                     frame_store[module.id] = df
 
+                _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
                 module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Junction ──────────────────────────────────────────────────────────
@@ -447,7 +550,7 @@ def execute(
             try:
                 branch_dfs = _with_retry(
                     lambda: execute_junction(module, val),
-                    manifest.retry_policy,
+                    _module_retry_policy(module, manifest.retry_policy),
                     module.id,
                 )
             except JunctionError as exc:
@@ -458,6 +561,7 @@ def execute(
 
             for branch_id, branch_df in branch_dfs.items():
                 frame_store[f"{module.id}.{branch_id}"] = branch_df
+            _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Funnel ────────────────────────────────────────────────────────────
@@ -496,7 +600,7 @@ def execute(
             try:
                 df = _with_retry(
                     lambda: execute_funnel(module, funnel_upstream),
-                    manifest.retry_policy,
+                    _module_retry_policy(module, manifest.retry_policy),
                     module.id,
                 )
             except FunnelError as exc:
@@ -505,6 +609,7 @@ def execute(
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
             frame_store[module.id] = df
+            _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Regulator ─────────────────────────────────────────────────────────
@@ -593,7 +698,7 @@ def execute(
             try:
                 _with_retry(
                     lambda: write_egress(val, module, depot=depot),
-                    manifest.retry_policy,
+                    _module_retry_policy(module, manifest.retry_policy),
                     module.id,
                 )
             except EgressError as exc:
@@ -601,6 +706,7 @@ def execute(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(manifest.pipeline_id, run_id, module_results)
+            _write_checkpoint(module, checkpoint_dir, manifest)  # done-sentinel only
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Probe ─────────────────────────────────────────────────────────────

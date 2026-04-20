@@ -63,6 +63,7 @@ class ModuleSchema(BaseModel):
     on_failure: dict[str, Any] | None = None
     spillway: str | None = None
     depends_on: list[str] = Field(default_factory=list)
+    checkpoint: bool = False
     # Probe-specific
     attach_to: str | None = None
     # Arcade-specific
@@ -134,6 +135,7 @@ class BlueprintSchema(BaseModel):
     agent: AgentSchema = Field(default_factory=AgentSchema)
     udf_registry: list[dict[str, Any]] = Field(default_factory=list)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
+    checkpoint: bool = False
 
     @field_validator("aqueduct")
     @classmethod

@@ -70,11 +70,11 @@ When adding a new feature, add a task under the relevant module with the exact f
 - ✅ `partition_by` forwarded to writer
 - ✅ `options` dict forwarded to writer
 - ✅ write with `mode: overwrite` on existing path succeeds
-- ⏳ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
-- ⏳ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
-- ⏳ `format="depot"`, valid `key` + `value`: `depot.put(key, value)` called; no Spark write
-- ⏳ `format="depot"`, valid `key` + `value_expr`: single Spark agg action; `depot.put` called with aggregate result
-- ⏳ Spark write failure (bad path, wrong format) raises `EgressError` wrapping original exception
+- ✅ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
+- ✅ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
+- ✅ `format="depot"`, valid `key` + `value`: `depot.put(key, value)` called; no Spark write
+- ✅ `format="depot"`, valid `key` + `value_expr`: single Spark agg action; `depot.put` called with aggregate result
+- ✅ Spark write failure (bad path, wrong format) raises `EgressError` wrapping original exception
 
 ### `executor.py` — `execute()`
 - ✅ linear Ingress → Egress pipeline returns `ExecutionResult(status="success")`
@@ -544,7 +544,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `_with_retry`: fn always fails, max_attempts=3 → raises last exception after 3 attempts
 - ✅ `_with_retry`: non-retriable exception → raises immediately without retry (max_attempts=3 but only 1 call)
 - ✅ `_with_retry`: deadline_seconds elapsed after first failure → stops retrying, raises last exception
-- ⏳ executor Ingress wrapped in retry: Ingress that fails twice then succeeds → `ExecutionResult(status="success")`
+- ✅ executor Ingress wrapped in retry: Ingress that fails twice then succeeds → `ExecutionResult(status="success")`
 
 ### Lineage Writer (`aqueduct/compiler/lineage.py`)
 
@@ -593,6 +593,42 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 242 tests passing, 0 failing. Coverage: 87.32%.
+- **Status**: 347 passed, 4 skipped, 1 xpassed. Coverage: 85.87%.
 Issues reported in:
 - None
+---
+
+## Per-module `on_failure` (`aqueduct/executor/executor.py`)
+
+**Behavior:** `_module_retry_policy()` returns `RetryPolicy(**module.on_failure)` when set, else manifest-level policy. Applied at all 5 dispatch sites.
+
+- ✅ `_module_retry_policy`: `on_failure=None` → returns manifest policy unchanged
+- ✅ `_module_retry_policy`: valid `on_failure` dict → returns RetryPolicy with those fields
+- ✅ `_module_retry_policy`: `on_failure` with unknown key → raises `ExecuteError` with message containing "invalid keys"
+- ✅ Ingress module with `on_failure.max_attempts=3` retries 3×; other modules use manifest `max_attempts=1`
+- ✅ `on_failure.on_exhaustion=abort` → pipeline stops after exhaustion; `trigger_agent` still fires LLM
+
+## Checkpoint / Resume (`aqueduct/executor/executor.py`)
+
+**Behavior:** `checkpoint: true` (blueprint or module level) writes Parquet + `_aq_done` marker after each successful data-producing module. `--resume <run_id>` reloads checkpoints and skips completed modules.
+
+- ✅ `checkpoint=false` (default) → no files written to `.aqueduct/checkpoints/`
+- ✅ blueprint-level `checkpoint: true` → all modules checkpointed after success
+- ✅ per-module `checkpoint: true` only → only that module checkpointed; others not
+- ✅ Ingress checkpoint: `.aqueduct/checkpoints/<run_id>/<module_id>/data/` Parquet exists after success
+- ✅ Channel checkpoint: same path + `_aq_done` marker
+- ✅ Funnel checkpoint: same pattern
+- ✅ Egress checkpoint: only `_aq_done` written (no DataFrame)
+- ✅ Junction checkpoint: each branch saved as `<branch_id>/` subfolder
+- ✅ `--resume <run_id>` → module with `_aq_done` skipped, ModuleResult status="success"
+- ✅ `--resume <run_id>` → Parquet reloaded into frame_store; downstream can consume it
+- ✅ `--resume` with non-existent run_id → `ExecuteError` with clear path message
+- ✅ `--resume` with mismatched manifest hash → warning logged, execution continues
+- ✅ Checkpoint write failure (disk full) → warning logged, pipeline continues (non-fatal)
+
+## `checkpoint` field in Parser/Compiler
+
+- ✅ Blueprint with `checkpoint: true` round-trips through Parser → `Blueprint.checkpoint == True`
+- ✅ Module with `checkpoint: true` round-trips through Parser → `Module.checkpoint == True`
+- ✅ `Manifest.checkpoint` populated from Blueprint; `to_dict()` includes it
+- ✅ Omitting `checkpoint` → defaults to `False` at all levels

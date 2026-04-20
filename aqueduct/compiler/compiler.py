@@ -143,4 +143,5 @@ def compile(  # noqa: A001
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
         udf_registry=blueprint.udf_registry,
+        checkpoint=blueprint.checkpoint,
     )
