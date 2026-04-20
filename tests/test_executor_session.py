@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pyspark.sql import SparkSession
-from aqueduct.executor.session import make_spark_session
+from aqueduct.executor.spark.session import make_spark_session
 
 
 def test_make_spark_session_returns_active_session():

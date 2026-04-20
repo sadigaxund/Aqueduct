@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from aqueduct.executor.executor import _backoff_seconds, _is_retriable, _with_retry
+from aqueduct.executor.spark.executor import _backoff_seconds, _is_retriable, _with_retry
 from aqueduct.parser.models import RetryPolicy
 
 
@@ -144,7 +144,7 @@ class TestBackoffSeconds:
 class TestWithRetry:
     def test_success_first_attempt_no_sleep(self):
         p = _policy(max_attempts=3)
-        with patch("aqueduct.executor.executor.time.sleep") as mock_sleep:
+        with patch("aqueduct.executor.spark.executor.time.sleep") as mock_sleep:
             result = _with_retry(lambda: 42, p, "mod")
         assert result == 42
         mock_sleep.assert_not_called()
@@ -159,7 +159,7 @@ class TestWithRetry:
                 raise RuntimeError("transient")
             return "ok"
 
-        with patch("aqueduct.executor.executor.time.sleep"):
+        with patch("aqueduct.executor.spark.executor.time.sleep"):
             result = _with_retry(fn, p, "mod")
         assert result == "ok"
         assert len(calls) == 2
@@ -172,7 +172,7 @@ class TestWithRetry:
             calls.append(1)
             raise RuntimeError("always fails")
 
-        with patch("aqueduct.executor.executor.time.sleep"):
+        with patch("aqueduct.executor.spark.executor.time.sleep"):
             with pytest.raises(RuntimeError, match="always fails"):
                 _with_retry(fn, p, "mod")
         assert len(calls) == 3
@@ -185,7 +185,7 @@ class TestWithRetry:
             calls.append(1)
             raise RuntimeError("fatal error — no retry")
 
-        with patch("aqueduct.executor.executor.time.sleep"):
+        with patch("aqueduct.executor.spark.executor.time.sleep"):
             with pytest.raises(RuntimeError):
                 _with_retry(fn, p, "mod")
         assert len(calls) == 1
@@ -198,8 +198,8 @@ class TestWithRetry:
 
         # attempt 0: monotonic → 0.0 (first_failure_at=0.0, elapsed=0 < 5, sleep)
         # attempt 1: monotonic → 10.0 (elapsed=10 >= 5, break)
-        with patch("aqueduct.executor.executor.time.monotonic", side_effect=[0.0, 10.0]):
-            with patch("aqueduct.executor.executor.time.sleep"):
+        with patch("aqueduct.executor.spark.executor.time.monotonic", side_effect=[0.0, 10.0]):
+            with patch("aqueduct.executor.spark.executor.time.sleep"):
                 with pytest.raises(RuntimeError, match="deadline test"):
                     _with_retry(always_fails, p, "mod")
 
@@ -209,7 +209,7 @@ class TestWithRetry:
 
 class TestModuleRetryPolicy:
     def test_no_on_failure_returns_manifest_policy(self):
-        from aqueduct.executor.executor import _module_retry_policy
+        from aqueduct.executor.spark.executor import _module_retry_policy
 
         manifest_policy = _policy(max_attempts=5)
         module = _make_module("m", on_failure=None)
@@ -217,7 +217,7 @@ class TestModuleRetryPolicy:
         assert result is manifest_policy
 
     def test_valid_on_failure_overrides_policy(self):
-        from aqueduct.executor.executor import _module_retry_policy
+        from aqueduct.executor.spark.executor import _module_retry_policy
 
         manifest_policy = _policy(max_attempts=1)
         module = _make_module(
@@ -229,7 +229,7 @@ class TestModuleRetryPolicy:
         assert result.backoff_strategy == "fixed"
 
     def test_invalid_on_failure_key_raises_execute_error(self):
-        from aqueduct.executor.executor import ExecuteError, _module_retry_policy
+        from aqueduct.executor.spark.executor import ExecuteError, _module_retry_policy
 
         module = _make_module("m", on_failure={"not_a_real_field": 99})
         with pytest.raises(ExecuteError, match="invalid keys"):

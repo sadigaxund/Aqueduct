@@ -56,12 +56,12 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.channel import ChannelError, execute_sql_channel
-from aqueduct.executor.egress import EgressError, write_egress
-from aqueduct.executor.funnel import FunnelError, execute_funnel
-from aqueduct.executor.ingress import IngressError, read_ingress
-from aqueduct.executor.junction import JunctionError, execute_junction
 from aqueduct.executor.models import ExecutionResult, ModuleResult
+from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
+from aqueduct.executor.spark.egress import EgressError, write_egress
+from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
+from aqueduct.executor.spark.ingress import IngressError, read_ingress
+from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -351,8 +351,8 @@ def execute(
                       failure.  Most module errors are caught and recorded as
                       status="error" (fail-fast).  Probe errors are always swallowed.
     """
-    from aqueduct.executor.probe import execute_probe
-    from aqueduct.executor.udf import UDFError, register_udfs
+    from aqueduct.executor.spark.probe import execute_probe
+    from aqueduct.executor.spark.udf import UDFError, register_udfs
 
     run_id = run_id or str(uuid.uuid4())
 

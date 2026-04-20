@@ -45,8 +45,21 @@ The Core engine emits a documented webhook event stream so you can integrate it 
 ## Installation
 
 ```bash
-pip install aqueduct
+# Core CLI + parser + compiler (no Spark dependency)
+pip install aqueduct-core
+
+# With Spark execution (required for aqueduct run)
+pip install aqueduct-core[spark]
+
+# With LLM self-healing
+pip install aqueduct-core[llm]          # all LLM providers
+pip install aqueduct-core[anthropic]    # Anthropic Claude only
+
+# Everything
+pip install aqueduct-core[all]
 ```
+
+The base package installs the CLI, parser, and compiler only. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`). LLM self-healing supports Anthropic, OpenAI-compatible, and Ollama providers; install the relevant extra to activate it.
 
 Requires Python 3.11+ and Java 17 (for local Spark).
 
@@ -296,7 +309,7 @@ Blueprint (YAML)
 ```bash
 git clone https://github.com/your-org/aqueduct
 cd aqueduct
-pip install -e ".[dev]"
+pip install -e ".[spark,dev]"
 
 # Run tests (requires Java 17)
 source ~/.bashrc && use_java17

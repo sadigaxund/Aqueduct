@@ -1,5 +1,8 @@
 aqueduct_config: "1.0"
 
+deployment:
+  engine: spark
+
 spark_config:
   spark.hadoop.fs.s3a.endpoint: "http://10.0.0.39:9000"
   spark.hadoop.fs.s3a.path.style.access: "true"

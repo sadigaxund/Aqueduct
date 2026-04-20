@@ -39,9 +39,18 @@ requires_ollama = pytest.mark.skipif(
 )
 
 
+# ── Spark ─────────────────────────────────────────────────────────────────────
+# Set AQ_SPARK_MASTER in your environment to run tests against a remote cluster.
+# Example: export AQ_SPARK_MASTER=spark://10.0.0.39:7077
+# Defaults to local[1] when unset.
+
+def _spark_master() -> str:
+    return os.environ.get("AQ_SPARK_MASTER", "local[1]")
+
+
 def _spark_is_healthy():
     try:
-        spark = SparkSession.builder.master("local[1]").getOrCreate()
+        spark = SparkSession.builder.master(_spark_master()).getOrCreate()
         spark.range(1).count()
         spark.stop()
         return True
@@ -56,9 +65,12 @@ def spark() -> SparkSession:
         pytest.skip("Spark Java gateway is unstable in this environment")
 
     session = (
-        SparkSession.builder.master("local[1]")
+        SparkSession.builder.master(_spark_master())
         .appName("aqueduct-tests")
         .config("spark.ui.enabled", "false")
+        .config("spark.sql.warehouse.dir", "/tmp/aqueduct_test_spark_warehouse")
+        .config("javax.jdo.option.ConnectionURL", "jdbc:derby:memory:aqueduct_test_metastore;create=true")
+        .config("derby.stream.error.file", "/tmp/aqueduct_test_derby.log")
         .getOrCreate()
     )
     yield session

@@ -11,7 +11,7 @@ import pytest
 from pyspark.sql import SparkSession
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.executor import ExecuteError, execute
+from aqueduct.executor.spark.executor import ExecuteError, execute
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.parser.models import Edge, Module, RetryPolicy
 
@@ -904,8 +904,8 @@ def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatc
         retry_policy=RetryPolicy(max_attempts=3, backoff_strategy="fixed", backoff_base_seconds=0),
     )
     
-    import aqueduct.executor.executor
-    original_read = aqueduct.executor.executor.read_ingress
+    import aqueduct.executor.spark.executor
+    original_read = aqueduct.executor.spark.executor.read_ingress
     calls = []
     
     def mock_read(module, spark_session):
@@ -914,8 +914,8 @@ def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatc
             raise RuntimeError("transient read error")
         return original_read(module, spark_session)
         
-    monkeypatch.setattr(aqueduct.executor.executor, "read_ingress", mock_read)
-    monkeypatch.setattr(aqueduct.executor.executor.time, "sleep", lambda x: None)
+    monkeypatch.setattr(aqueduct.executor.spark.executor, "read_ingress", mock_read)
+    monkeypatch.setattr(aqueduct.executor.spark.executor.time, "sleep", lambda x: None)
     
     result = execute(manifest, spark)
     assert result.status == "success"
@@ -952,7 +952,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
         retry_policy=RetryPolicy(max_attempts=1),  # pipeline default = no retry
     )
 
-    import aqueduct.executor.executor as _exe
+    import aqueduct.executor.spark.executor as _exe
     original_read = _exe.read_ingress
     calls = []
 
@@ -1165,7 +1165,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
         spark_config={},
         checkpoint=True,
     )
-    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.executor"):
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.executor"):
         r2 = execute(manifest2, spark, run_id="run-hash2", store_dir=store_dir, resume_run_id="run-hash1")
 
     assert r2.status == "success"
@@ -1196,8 +1196,8 @@ def test_per_module_on_failure_abort_stops_pipeline(spark: SparkSession, tmp_pat
         retry_policy=RetryPolicy(max_attempts=1),
     )
 
-    import aqueduct.executor.executor as _exe
-    from aqueduct.executor.ingress import IngressError
+    import aqueduct.executor.spark.executor as _exe
+    from aqueduct.executor.spark.ingress import IngressError
 
     def always_fails(module, spark_session):
         raise IngressError("always broken")
@@ -1362,7 +1362,7 @@ def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monke
 
     monkeypatch.setattr(DataFrameWriter, "parquet", patched_parquet)
 
-    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.executor"):
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.executor"):
         result = execute(manifest, spark, run_id="run-ckpt-fail", store_dir=store_dir)
 
     assert result.status == "success"

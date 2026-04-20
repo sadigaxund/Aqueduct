@@ -17,15 +17,20 @@ aqueduct_config: "1.0"
 
 # ── Deployment ────────────────────────────────────────────────────────────────
 #
-# Controls where Spark runs. master_url is passed verbatim to
-# SparkSession.builder.master().
+# Controls which execution engine and cluster Aqueduct uses.
 
 deployment:
+  # engine: execution engine to use.
+  # Currently supported: spark
+  # Planned (not yet implemented): flink
+  engine: spark
+
   # target: label for display and future routing logic (informational)
   # Options: local | standalone | yarn | kubernetes | databricks | emr | dataproc
   target: local
 
-  # master_url: the Spark master to connect to.
+  # master_url: engine-specific cluster URL.
+  # For Spark: passed verbatim to SparkSession.builder.master().
   master_url: "local[*]"           # local — all cores (default)
   # master_url: "local[4]"         # local — 4 threads
   # master_url: "spark://host:7077" # Spark Standalone cluster

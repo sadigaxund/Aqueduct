@@ -7,7 +7,7 @@ import duckdb
 import pytest
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.probe import execute_probe
+from aqueduct.executor.spark.probe import execute_probe
 from aqueduct.parser.models import Module
 
 

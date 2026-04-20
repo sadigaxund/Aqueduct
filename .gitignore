@@ -21,7 +21,6 @@ pytest_*.avro
 pytest_*.duckdb
 pytest_*.duckdb.wal
 pytest_*.sqlite
-.pytest_cache/
 
 
 # --- Python ---
@@ -50,8 +49,6 @@ share/python-wheels/
 MANIFEST
 
 # --- Testing / Coverage ---
-.pytest_cache/
-.coverage
 .coverage.*
 htmlcov/
 .tox/
@@ -63,9 +60,6 @@ coverage.xml
 
 # --- Spark / Hadoop / Data ---
 .spark-staging/
-metastore_db/
-spark-warehouse/
-derby.log
 *.parquet
 *.avro
 *.csv

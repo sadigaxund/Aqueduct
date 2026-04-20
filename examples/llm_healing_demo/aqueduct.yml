@@ -1,6 +1,7 @@
 aqueduct_config: "1.0"
 
 deployment:
+  engine: spark
   target: standalone
   master_url: "local[*]"
 

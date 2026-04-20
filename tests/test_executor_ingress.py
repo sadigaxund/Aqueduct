@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from pyspark.sql import SparkSession
-from aqueduct.executor.ingress import IngressError, read_ingress
+from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.parser.models import Module
 
 
