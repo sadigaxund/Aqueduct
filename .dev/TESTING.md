@@ -83,6 +83,9 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `partition_by` forwarded to writer
 - ✅ `options` dict forwarded to writer
 - ✅ write with `mode: overwrite` on existing path succeeds
+- ⏳ `register_as_table` set → `CREATE EXTERNAL TABLE IF NOT EXISTS` called with correct name, format, location
+- ⏳ `register_as_table` DDL failure (no Hive metastore) → warning logged, pipeline continues (non-fatal)
+- ⏳ `register_as_table` absent → no DDL executed
 - ✅ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
 - ✅ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
 - ✅ `format="depot"`, valid `key` + `value`: `depot.put(key, value)` called; no Spark write

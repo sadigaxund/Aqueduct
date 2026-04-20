@@ -80,8 +80,40 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
             f"[{module.id}] write failed to {path!r}: {exc}"
         ) from exc
 
+    register_as: str | None = cfg.get("register_as_table")
+    if register_as:
+        _register_external_table(df, module.id, register_as, fmt, path)
 
-def _write_depot(df: DataFrame, module: Module, depot: Any) -> None:
+
+def _register_external_table(
+    df: "DataFrame",
+    module_id: str,
+    table_name: str,
+    fmt: str,
+    path: str,
+) -> None:
+    """Register an external table in the active Spark catalog (non-fatal)."""
+    try:
+        spark = df.sparkSession
+        # Derive schema DDL from DataFrame — no Spark action, schema is always available
+        schema_ddl = ", ".join(
+            f"`{field.name}` {field.dataType.simpleString()}"
+            for field in df.schema.fields
+        )
+        spark.sql(f"""
+            CREATE EXTERNAL TABLE IF NOT EXISTS {table_name} ({schema_ddl})
+            USING {fmt}
+            LOCATION '{path}'
+        """)
+        logger.info("Registered external table %r at %s", table_name, path)
+    except Exception as exc:
+        logger.warning(
+            "[%s] register_as_table %r failed (non-fatal): %s",
+            module_id, table_name, exc,
+        )
+
+
+def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:
     """Write a KV entry to the Depot store. ``depot`` must not be None."""
     from pyspark.sql import functions as F
 
