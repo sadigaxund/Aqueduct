@@ -121,9 +121,8 @@ def run(
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.config import ConfigError, load_config
     from aqueduct.depot.depot import DepotStore
-    from aqueduct.executor.executor import ExecuteError, execute
+    from aqueduct.executor import ExecuteError, get_executor
     from aqueduct.executor.models import ExecutionResult, ModuleResult
-    from aqueduct.executor.session import make_spark_session
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
 
@@ -137,7 +136,15 @@ def run(
     # CLI flags override config file; config file overrides built-in defaults
     resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
     resolved_webhook = webhook or cfg.webhooks.on_failure
+    engine = cfg.deployment.engine
     master_url = cfg.deployment.master_url
+
+    # Resolve executor early so an unsupported engine exits before any Spark work
+    try:
+        execute = get_executor(engine)
+    except (NotImplementedError, ValueError) as exc:
+        click.echo(f"✗ engine error: {exc}", err=True)
+        sys.exit(1)
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -186,7 +193,7 @@ def run(
     run_id = run_id or str(uuid.uuid4())
     click.echo(
         f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)"
-        f"  run={run_id}  master={master_url}"
+        f"  run={run_id}  engine={engine}  master={master_url}"
     )
 
     # ── Surveyor — start ───────────────────────────────────────────────────────
@@ -199,14 +206,19 @@ def run(
     )
     surveyor.start(run_id)
 
-    # ── Spark — merge engine spark_config under Blueprint (Blueprint wins) ─────
+    # ── Engine session ────────────────────────────────────────────────────────
     merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-    spark = make_spark_session(manifest.pipeline_id, merged_spark_config, master_url=master_url)
+    if engine == "spark":
+        from aqueduct.executor.spark.session import make_spark_session
+        session = make_spark_session(manifest.pipeline_id, merged_spark_config, master_url=master_url)
+    else:
+        # Future engines create their own sessions here
+        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
 
     # ── Execute ────────────────────────────────────────────────────────────────
     execute_exc: ExecuteError | None = None
     try:
-        result = execute(manifest, spark, run_id=run_id, store_dir=resolved_store_dir, surveyor=surveyor, depot=depot, resume_run_id=resume_run_id)
+        result = execute(manifest, session, run_id=run_id, store_dir=resolved_store_dir, surveyor=surveyor, depot=depot, resume_run_id=resume_run_id)
     except ExecuteError as exc:
         execute_exc = exc
         # Wrap into a synthetic ExecutionResult so Surveyor can persist it

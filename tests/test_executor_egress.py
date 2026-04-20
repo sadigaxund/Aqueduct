@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from pyspark.sql import SparkSession
-from aqueduct.executor.egress import EgressError, write_egress
+from aqueduct.executor.spark.egress import EgressError, write_egress
 from aqueduct.parser.models import Module
 
 

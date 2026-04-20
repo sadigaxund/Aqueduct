@@ -7,6 +7,19 @@
 
 When adding a new feature, add a task under the relevant module with the exact function/class to test and expected behavior.
 
+## Environment variables (tests/conftest.py)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AQ_SPARK_MASTER` | `local[1]` | Spark master URL used by the `spark` session fixture. Set to `spark://host:7077` or `yarn` to run tests against a remote cluster. |
+| `AQ_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL. LLM integration tests (`test_llm_integration.py`) skip automatically when unreachable. |
+| `AQ_OLLAMA_MODEL` | `gemma3:12b` | Model name sent to Ollama in integration tests. |
+
+Spark artifacts are isolated to `/tmp/`:
+- warehouse → `/tmp/aqueduct_test_spark_warehouse`
+- metastore → in-memory Derby (`jdbc:derby:memory:aqueduct_test_metastore`)
+- Derby log → `/tmp/aqueduct_test_derby.log`
+
 ---
 
 ## Parser (`aqueduct/parser/`)

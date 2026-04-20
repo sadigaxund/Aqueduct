@@ -1,6 +1,7 @@
 aqueduct_config: "1.0"
 
 deployment:
+  engine: spark
   target: standalone
   # Spark 3.5.7 → port 7077  |  Spark 4.1.0 → port 7078
   master_url: "local[*]"

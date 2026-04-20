@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-04-20 — Session 4: Executor Refactor + Docs + Test Robustness
+
+### Accomplished
+
+**Executor spark/ refactor** — Isolated all Spark code into `aqueduct/executor/spark/`. Used `git mv` (preserves history). `executor/__init__.py` re-exports `execute`/`ExecuteError` for backwards compat. `models.py` stays at top level (engine-agnostic). Updated all test imports and monkeypatch paths (`aqueduct.executor.spark.executor`). Updated `cli.py` to use new paths. Verified no stale `from aqueduct.executor.<moved_module>` imports remain anywhere.
+
+**Test robustness** — `AQ_SPARK_MASTER` env var wired into `conftest.py` (default `local[1]`). Both `_spark_is_healthy()` and `spark` fixture now use it. Derby log redirected to `/tmp/`. LLM tests (Ollama) already had `AQ_OLLAMA_URL` skip logic — no changes needed there.
+
+**Docs update** — README installation section updated to show `aqueduct-core[spark]` extras pattern. Base vs spark vs llm extras explained. CLAUDE.md key deps updated (`pyspark`/`anthropic` marked as optional extras). TESTING.md env var table already present. Global memory updated with PyPI distribution and executor architecture notes.
+
+### Design Notes
+- `get_executor()` factory deferred — re-export pattern is simpler and keeps backwards compat.
+- `AQ_LLM_URL` not introduced — Anthropic unit tests mock `_call_llm`; only Ollama integration tests need a real endpoint (covered by existing `AQ_OLLAMA_URL`).
+
+---
+
 ## 2026-04-20 — Session 3: Per-Module on_failure + Checkpoint/Resume
 
 ### Accomplished

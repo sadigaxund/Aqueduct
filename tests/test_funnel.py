@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.funnel import FunnelError, execute_funnel
+from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.parser.models import Module
 
 

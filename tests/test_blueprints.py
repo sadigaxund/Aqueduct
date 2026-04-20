@@ -20,7 +20,7 @@ import pytest
 from pyspark.sql import SparkSession
 
 from aqueduct.compiler.compiler import compile as compiler_compile
-from aqueduct.executor.executor import execute
+from aqueduct.executor.spark.executor import execute
 from aqueduct.parser.parser import parse
 
 BLUEPRINTS = Path(__file__).parent / "fixtures" / "blueprints"

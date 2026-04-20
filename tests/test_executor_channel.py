@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.channel import ChannelError, execute_sql_channel
+from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
 from aqueduct.parser.models import Module
 
 

@@ -9,22 +9,25 @@ Aqueduct is an intelligent, declarative Spark pipeline engine with LLM-driven se
 - **Language**: Python 3.11+ — you're strongest here, PySpark is first-class, and control-plane performance is irrelevant.
 - **Architecture**: Monolithic CLI. Runs on the Spark driver. No servers, no microservices.
 - **Key Dependencies**:
-  - `pyspark`
-  - `pydantic` + `pyyaml` (schema validation)
-  - `click` or `typer` (CLI)
+  - `pyspark` (optional — `aqueduct-core[spark]` extra; not imported outside `aqueduct/executor/spark/`)
+  - `pydantic` + `ruamel.yaml` + `pyyaml` (schema validation, YAML round-trips)
+  - `click` (CLI)
   - `duckdb` (embedded observability store — avoids SQLite locks)
   - `sqlglot` (SQL lineage — do NOT write a custom parser)
-  - `anthropic` (LLM loop)
+  - `httpx` (HTTP client for webhooks and LLM calls)
+  - `anthropic` (optional — `aqueduct-core[anthropic]` extra; LLM self-healing via Anthropic Claude)
 
 ## Development Priorities (Vibe Build Order)
-Build in this exact sequence to validate assumptions early:
-1. **Parser** → Validate Blueprint YAML, resolve static context, output AST.
-2. **Compiler** → Resolve Tier 1 runtime functions, expand Arcades, wire Probes/Spillways, output fully resolved Manifest.
-3. **Ingress/Egress Wrapper** → Prove Spark I/O works via YAML config.
-4. **Single SQL Channel** → Register upstream as temp view, run query.
-5. **Mock Surveyor** → On failure, just log/webhook; no LLM yet.
-6. **Patch Grammar (Manual)** → `aqueduct patch apply` works from CLI.
-7. **LLM Integration** → Final step.
+Build in this exact sequence to validate assumptions early. Phases 1–8 are complete as of v0.1.0.
+
+1. **Parser** → Validate Blueprint YAML, resolve static context, output AST. ✅
+2. **Compiler** → Resolve Tier 1 runtime functions, expand Arcades, wire Probes/Spillways, output fully resolved Manifest. ✅
+3. **Ingress/Egress Wrapper** → Prove Spark I/O works via YAML config. ✅
+4. **Single SQL Channel** → Register upstream as temp view, run query. ✅
+5. **Mock Surveyor** → On failure, just log/webhook; no LLM yet. ✅
+6. **Patch Grammar (Manual)** → `aqueduct patch apply` works from CLI. ✅
+7. **LLM Integration** → Final step. ✅
+8. **Resilience, Lineage, Self‑Healing** → RetryPolicy, deadline, column lineage (sqlglot), Arcade validation, LLM loop fully wired. ✅
 
 ## Code Organization & Safety
 - **Layered Architecture**: Respect the 5 core layer boundaries (`Parser` -> `Compiler` -> `Planner` -> `Executor` -> `Surveyor`). Put logic in the correct layer and module.
@@ -56,6 +59,28 @@ These files live in the `.dev/` directory and are **shared via Git** (except `JO
 - Immutability: test `FrozenInstanceError` on dataclass mutation attempts.
 - Performance: compare `df.explain()` baselines; use local SparkSession with `spark.sql.adaptive.enabled=false`.
 
-
 ### Spark behavior reference
 - Read `.dev/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.
+
+## Executor Architecture (Extras Pattern)
+
+Aqueduct uses the `aqueduct-core[spark]` extras pattern. The executor is engine‑agnostic at the top level, with Spark‑specific code isolated in a subpackage.
+
+**Structure:**
+- `aqueduct/executor/models.py` – engine‑agnostic (`ExecutionResult`, `ModuleResult`)
+- `aqueduct/executor/spark/` – all Spark‑specific modules (`ingress`, `egress`, `channel`, `executor`, `junction`, `funnel`, `probe`, `session`, `udf`)
+- `aqueduct/executor/__init__.py` – exports `get_executor(manifest, config)` factory
+
+**When adding a new Spark feature:**
+- Place the code in `aqueduct/executor/spark/`.
+- Update imports in `cli.py` and tests to use the factory or the `spark` subpackage.
+- Do **not** import `pyspark` in engine‑agnostic modules (`parser`, `compiler`, `surveyor`, `patch`, `depot`).
+
+**When adding a new LLM provider:**
+- Add the SDK to `[project.optional-dependencies]` under its own extra (e.g., `anthropic`, `openai`).
+- Update `surveyor/llm.py` to lazy‑import the SDK and raise a helpful error if missing.
+- The `llm` extra is a convenience that pulls in all providers.
+
+**Testing environment variables:**
+- `AQ_SPARK_MASTER` – Spark master URL for tests (default `local[1]`)
+- `AQ_LLM_URL` – LLM endpoint for tests (default `http://localhost:11434`); tests requiring LLM are skipped if unreachable.

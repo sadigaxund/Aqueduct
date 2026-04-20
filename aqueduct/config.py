@@ -35,13 +35,17 @@ class ConfigError(Exception):
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    engine: str = Field(
+        default="spark",
+        description="Execution engine.  Currently supported: spark.  Planned: flink.",
+    )
     target: str = Field(
         default="local",
         description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
     )
     master_url: str = Field(
         default="local[*]",
-        description="Spark master URL.  Passed verbatim to SparkSession.builder.master().",
+        description="Engine-specific cluster URL (Spark: SparkSession.builder.master()).",
     )
 
 

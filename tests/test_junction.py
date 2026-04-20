@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.junction import JunctionError, execute_junction
+from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.parser.models import Module
 
 
