@@ -18,7 +18,7 @@ Aqueduct is an intelligent, declarative Spark pipeline engine with LLM-driven se
   - LLM self-healing uses `httpx` (already a core dep) — no `anthropic` SDK, no extra install needed
 
 ## Development Priorities (Vibe Build Order)
-Build in this exact sequence to validate assumptions early. Phases 1–8 are complete as of v0.1.0.
+Build in this exact sequence to validate assumptions early. Phases 1–8 are complete as of v0.1.0. Follow this and never read the TODO.md file, thats for human reference only.
 
 1. **Parser** → Validate Blueprint YAML, resolve static context, output AST. ✅
 2. **Compiler** → Resolve Tier 1 runtime functions, expand Arcades, wire Probes/Spillways, output fully resolved Manifest. ✅

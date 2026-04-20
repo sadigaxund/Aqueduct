@@ -42,4 +42,11 @@ def make_spark_session(
     for key, value in spark_config.items():
         builder = builder.config(key, str(value))
 
-    return builder.getOrCreate()
+    session = builder.getOrCreate()
+
+    from aqueduct.executor.spark.listener import AqueductMetricsListener
+    listener = AqueductMetricsListener()
+    listener.register(session)
+    session._aq_metrics_listener = listener  # type: ignore[attr-defined]
+
+    return session

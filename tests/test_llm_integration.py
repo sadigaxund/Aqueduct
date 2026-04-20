@@ -83,8 +83,8 @@ def test_ollama_call_llm_returns_text(ollama_url):
         messages=messages,
         model=_MODEL,
         max_tokens=32,
-        provider="ollama",
-        base_url=ollama_url,
+        provider="openai_compat",
+        base_url=ollama_url.rstrip("/") + "/v1",
         patches_dir=Path("/tmp"),
     )
     assert isinstance(result, str)
@@ -107,8 +107,8 @@ def test_trigger_llm_patch_returns_patch_spec(ollama_url, tmp_path):
         approval_mode="human",
         blueprint_path=None,
         patches_dir=patches_dir,
-        provider="ollama",
-        base_url=ollama_url,
+        provider="openai_compat",
+        base_url=ollama_url.rstrip("/") + "/v1",
     )
 
     # May return None if model produces invalid PatchSpec after MAX_REPROMPTS
@@ -139,8 +139,8 @@ def test_trigger_llm_auto_apply(ollama_url, tmp_path):
         approval_mode="auto",
         blueprint_path=bp_file,
         patches_dir=patches_dir,
-        provider="ollama",
-        base_url=ollama_url,
+        provider="openai_compat",
+        base_url=ollama_url.rstrip("/") + "/v1",
     )
 
     if result is None:

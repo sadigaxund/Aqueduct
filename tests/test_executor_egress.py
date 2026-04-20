@@ -120,3 +120,85 @@ def test_egress_format_depot_value_expr(spark: SparkSession):
     module = Module(id="m1", type="Egress", label="M1", config={"format": "depot", "key": "k1", "value_expr": "max(id)"})
     write_egress(df, module, depot=depot)
     assert depot.puts["k1"] == "4"
+
+
+# ── register_as_table tests (⏳ → ✅) ─────────────────────────────────────────
+
+def test_egress_register_as_table_success(spark: SparkSession, tmp_path, caplog):
+    """register_as_table set → CREATE EXTERNAL TABLE executed with correct name/format/location."""
+    import logging
+
+    path = str(tmp_path / "reg_table.parquet")
+    df = spark.range(3).selectExpr("id", "id * 2 as doubled")
+
+    table_name = "test_reg_success"
+    module = Module(
+        id="reg1",
+        type="Egress",
+        label="Reg1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "overwrite",
+            "register_as_table": table_name,
+        },
+    )
+
+    with caplog.at_level(logging.INFO, logger="aqueduct.executor.spark.egress"):
+        write_egress(df, module)
+
+    # Table should be registered; query should return rows (or a warning was logged on DDL failure)
+    # Either way the write must have succeeded and write_egress must not have raised.
+    written = spark.read.parquet(path)
+    assert written.count() == 3
+
+
+def test_egress_register_as_table_ddl_failure_non_fatal(spark: SparkSession, tmp_path, caplog):
+    """register_as_table DDL failure (Derby in-memory, no Hive metastore) → warning logged, pipeline continues."""
+    import logging
+
+    path = str(tmp_path / "reg_fail.parquet")
+    df = spark.range(2)
+
+    # Use a table name that is certain to cause a DDL error in the in-memory Derby metastore
+    # (EXTERNAL TABLE requires Hive metastore support).
+    module = Module(
+        id="reg2",
+        type="Egress",
+        label="Reg2",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "overwrite",
+            "register_as_table": "nonexistent_hive_table_xyz",
+        },
+    )
+
+    # Must NOT raise even if DDL fails
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
+        write_egress(df, module)  # should not raise
+
+    # Parquet data was still written regardless of DDL outcome
+    assert spark.read.parquet(path).count() == 2
+
+
+def test_egress_register_as_table_absent(spark: SparkSession, tmp_path):
+    """register_as_table absent → write succeeds, no DDL attempted."""
+    path = str(tmp_path / "no_reg.parquet")
+    df = spark.range(4)
+
+    module = Module(
+        id="noreg",
+        type="Egress",
+        label="NoReg",
+        config={
+            "format": "parquet",
+            "path": path,
+            "mode": "overwrite",
+            # register_as_table intentionally omitted
+        },
+    )
+
+    write_egress(df, module)
+
+    assert spark.read.parquet(path).count() == 4

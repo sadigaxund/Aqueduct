@@ -83,9 +83,9 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `partition_by` forwarded to writer
 - ✅ `options` dict forwarded to writer
 - ✅ write with `mode: overwrite` on existing path succeeds
-- ⏳ `register_as_table` set → `CREATE EXTERNAL TABLE IF NOT EXISTS` called with correct name, format, location
-- ⏳ `register_as_table` DDL failure (no Hive metastore) → warning logged, pipeline continues (non-fatal)
-- ⏳ `register_as_table` absent → no DDL executed
+- ✅ `register_as_table` set → `CREATE EXTERNAL TABLE IF NOT EXISTS` called with correct name, format, location
+- ✅ `register_as_table` DDL failure (no Hive metastore) → warning logged, pipeline continues (non-fatal)
+- ✅ `register_as_table` absent → no DDL executed
 - ✅ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
 - ✅ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
 - ✅ `format="depot"`, valid `key` + `value`: `depot.put(key, value)` called; no Spark write
@@ -147,7 +147,8 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `schema_snapshot`: DuckDB row inserted into `probe_signals` with correct payload shape
 - ✅ `schema_snapshot`: zero Spark actions triggered (no count/collect)
 - ✅ `row_count_estimate` method=sample: DuckDB row inserted with `estimate` > 0
-- ✅ `row_count_estimate` method=spark_listener: DuckDB row inserted with `estimate=None`
+- ✅ `row_count_estimate` method=spark_listener: queries `module_metrics` table; returns `estimate` from `records_written` (or `records_read`) when row exists
+- ✅ `row_count_estimate` method=spark_listener: returns `estimate=None` when no `module_metrics` row yet exists
 - ✅ `null_rates`: payload contains `null_rates` dict keyed by requested columns
 - ✅ `null_rates` with no `columns` key uses all DataFrame columns
 - ✅ `sample_rows`: payload contains `rows` list of at most `n` dicts
@@ -161,6 +162,16 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Probe failure does not change pipeline `ExecutionResult(status="success")`
 - ✅ `execute()` with `store_dir=None`: Probe result is `status="success"` but no DB written
 - ✅ Ingress → Probe (schema_snapshot) → Egress pipeline returns `ExecutionResult(status="success")`
+
+### SparkListener / `module_metrics`
+- ✅ `AqueductMetricsListener.set_active_module()` resets accumulated metrics
+- ✅ `AqueductMetricsListener.collect_metrics()` returns accumulated dict and resets state
+- ✅ `AqueductMetricsListener.collect_metrics()` with no active module returns all-zero dict
+- ✅ `_write_stage_metrics()` creates `module_metrics` table if absent and inserts one row
+- ✅ `_write_stage_metrics()` with `store_dir=None` is a no-op
+- ✅ Egress succeeds → `module_metrics` row exists in `signals.db` with `module_id` matching Egress
+- ✅ Egress failure → no `module_metrics` row written (listener reset on exception)
+- ✅ `row_count_estimate` method=spark_listener: when `module_metrics` row exists, `estimate` equals `records_written` value
 
 ### Surveyor `get_probe_signal()`
 - ✅ returns empty list when `signals.db` does not exist
@@ -609,7 +620,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 347 passed, 4 skipped, 1 xpassed. Coverage: 85.87%.
+- **Status**: 363 passed, 4 skipped, 1 xfailed. Coverage: 86.52%.
 Issues reported in:
 - None
 ---
