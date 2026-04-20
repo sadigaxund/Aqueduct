@@ -4,8 +4,10 @@ On pipeline failure, packages a trimmed failure context as a prompt, calls the
 configured LLM provider, validates the response as a PatchSpec, and either
 applies it automatically or writes it to patches/pending/ for human review.
 
+All providers use httpx — no optional SDK dependency required.
+
 Supported providers:
-  - "anthropic"     → Anthropic SDK (ANTHROPIC_API_KEY)
+  - "anthropic"     → Anthropic Messages API (ANTHROPIC_API_KEY env var)
   - "openai_compat" → any OpenAI-compatible endpoint (vLLM, LM Studio, newer Ollama …)
                       Set agent.base_url in aqueduct.yml, e.g. http://localhost:11434/v1
   - "ollama"        → Ollama native API at /api/chat (always works regardless of Ollama version)
@@ -242,7 +244,7 @@ def _call_anthropic(
     max_tokens: int,
     system_prompt: str,
 ) -> str:
-    import anthropic
+    import httpx
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -250,14 +252,23 @@ def _call_anthropic(
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or configure agent.provider: openai_compat in aqueduct.yml."
         )
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=system_prompt,
-        messages=messages,
+    response = httpx.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        json={
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system_prompt,
+            "messages": messages,
+        },
+        timeout=120.0,
     )
-    return response.content[0].text
+    response.raise_for_status()
+    return response.json()["content"][0]["text"]
 
 
 def _call_openai_compat(

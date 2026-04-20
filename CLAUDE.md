@@ -15,7 +15,7 @@ Aqueduct is an intelligent, declarative Spark pipeline engine with LLM-driven se
   - `duckdb` (embedded observability store — avoids SQLite locks)
   - `sqlglot` (SQL lineage — do NOT write a custom parser)
   - `httpx` (HTTP client for webhooks and LLM calls)
-  - `anthropic` (optional — `aqueduct-core[anthropic]` extra; LLM self-healing via Anthropic Claude)
+  - LLM self-healing uses `httpx` (already a core dep) — no `anthropic` SDK, no extra install needed
 
 ## Development Priorities (Vibe Build Order)
 Build in this exact sequence to validate assumptions early. Phases 1–8 are complete as of v0.1.0.
@@ -77,9 +77,8 @@ Aqueduct uses the `aqueduct-core[spark]` extras pattern. The executor is engine�
 - Do **not** import `pyspark` in engine‑agnostic modules (`parser`, `compiler`, `surveyor`, `patch`, `depot`).
 
 **When adding a new LLM provider:**
-- Add the SDK to `[project.optional-dependencies]` under its own extra (e.g., `anthropic`, `openai`).
-- Update `surveyor/llm.py` to lazy‑import the SDK and raise a helpful error if missing.
-- The `llm` extra is a convenience that pulls in all providers.
+- Add a `_call_<provider>()` function in `surveyor/llm.py` using `httpx`. No new SDK dependency.
+- Wire it in `_call_llm()` dispatch. No extras change needed — `httpx` is already a core dep.
 
 **Testing environment variables:**
 - `AQ_SPARK_MASTER` – Spark master URL for tests (default `local[1]`)

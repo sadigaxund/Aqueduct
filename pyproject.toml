@@ -33,9 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 spark = ["pyspark>=3.5.0", "delta-spark>=3.0.0"]
-anthropic = ["anthropic>=0.30.0"]
-llm = ["aqueduct-core[anthropic]"]
-all = ["aqueduct-core[spark,llm]"]
+all = ["aqueduct-core[spark]"]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
