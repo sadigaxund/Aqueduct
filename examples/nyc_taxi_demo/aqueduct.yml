@@ -1,0 +1,15 @@
+aqueduct_config: "1.0"
+
+deployment:
+  engine: spark
+  target: standalone
+  master_url: "local[*]"
+
+spark_config:
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.shuffle.partitions: "50"   # small for local mode
+  spark.sql.session.timeZone: "UTC"
+
+stores:
+  store_dir: ".aqueduct"
+
