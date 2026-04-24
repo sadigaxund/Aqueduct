@@ -11,5 +11,12 @@ spark_config:
   spark.sql.session.timeZone: "UTC"
 
 stores:
-  store_dir: ".aqueduct"
-
+  observability:
+    backend: duckdb
+    path: ".aqueduct/signals"
+  lineage:
+    backend: duckdb
+    path: ".aqueduct/lineage"
+  depot:
+    backend: duckdb
+    path: ".aqueduct/depot.duckdb"

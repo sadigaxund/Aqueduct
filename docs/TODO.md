@@ -27,4 +27,10 @@
 
 
 6. prefabs, like currently in order to make anything we have to write blueprint and the pypspark/sql code of every module from zero, what if we have a set of predefined modules that we separate from main functionality, and use them like blocks to build a pipeline? How would it affect the current system and LLM's ability to detect and fix issues? Moreover, do we segregate them like we did with
-7. i dont know if this a lineage topic or an observability one, but is there a way to actually see the number rows or even size of the data (e.g. in MB or KB) that is currently being processed by a module. Because in the future, when I eventually create a UI, I'd love to see the pipeline interactively display the progress. However, only if it does not degrade the performance, maybe we could have something like a preview or whatever the sampling was doing. 
+
+7. do nyc demo
+
+8. also what exactly does "aqueduct check-config" do? does it just check
+  syntax? should we create a test-drive command, that checks
+  connectivity and tells us if those will be usable or not. So that we
+  dont have to discover through pipeline failure?                        

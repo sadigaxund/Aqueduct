@@ -101,12 +101,20 @@ class Surveyor:
         manifest: Manifest,
         store_dir: Path,
         webhook_url: str | None = None,
+        webhook_config: "WebhookEndpointConfig | None" = None,  # type: ignore[name-defined]  # noqa: F821
         blueprint_path: Path | None = None,
         patches_dir: Path | None = None,
     ) -> None:
+        from aqueduct.config import WebhookEndpointConfig
         self._manifest = manifest
         self._store_dir = store_dir
-        self._webhook_url = webhook_url
+        # Accept either a pre-built config or a plain URL string (backward compat)
+        if webhook_config is not None:
+            self._webhook_config: WebhookEndpointConfig | None = webhook_config
+        elif webhook_url is not None:
+            self._webhook_config = WebhookEndpointConfig(url=webhook_url)
+        else:
+            self._webhook_config = None
         self._blueprint_path = blueprint_path
         self._patches_dir = patches_dir or Path("patches")
         self._run_id: str | None = None
@@ -216,8 +224,19 @@ class Surveyor:
             ],
         )
 
-        if self._webhook_url:
-            fire_webhook(self._webhook_url, ctx.to_dict())
+        if self._webhook_config:
+            attempt = sum(1 for mr in result.module_results if mr.status == "error")
+            template_vars = {
+                "run_id": ctx.run_id,
+                "pipeline_id": ctx.pipeline_id,
+                "pipeline_name": self._manifest.name,
+                "failed_module": ctx.failed_module,
+                "error_message": ctx.error_message,
+                "error_type": (ctx.stack_trace or "").splitlines()[0] if ctx.stack_trace else "ExecuteError",
+                "started_at": ctx.started_at,
+                "attempt": str(attempt),
+            }
+            fire_webhook(self._webhook_config, ctx.to_dict(), template_vars)
 
         # ── LLM patch loop ────────────────────────────────────────────────────
         agent = self._manifest.agent

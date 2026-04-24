@@ -173,6 +173,36 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Egress failure → no `module_metrics` row written (listener reset on exception)
 - ✅ `row_count_estimate` method=spark_listener: when `module_metrics` row exists, `estimate` equals `records_written` value
 
+### Assert module
+- ✅ `schema_match` passes: zero Spark action triggered
+- ✅ `schema_match` fails (missing column) with `on_fail=abort`: `AssertError` raised
+- ✅ `schema_match` fails (wrong type) with `on_fail=abort`: `AssertError` raised
+- ✅ `min_rows` passes: single batched `df.agg()` used (at most 1 Spark action for all aggregate rules)
+- ✅ `min_rows` fails with `on_fail=abort`: `AssertError` raised
+- ✅ `max_rows` fails with `on_fail=warn`: warning logged, pipeline continues
+- ✅ `null_rate` passes: shared `df.sample().agg()` used
+- ✅ `null_rate` fails with `on_fail=abort`: `AssertError` raised
+- ✅ `null_rate` on aggregate rule with `on_fail=quarantine`: treated as warn (quarantine is row-level only)
+- ✅ `freshness` passes: `max(col)` batched into shared `df.agg()`
+- ✅ `freshness` fails with `on_fail=warn`: warning logged, pipeline continues
+- ✅ `freshness` column has all nulls: fail message includes "no non-null values"
+- ✅ `sql` rule passes: custom aggregate expr evaluated in batched `agg()`
+- ✅ `sql` rule fails with `on_fail=webhook`: `fire_webhook` called; pipeline continues
+- ✅ `sql_row` rule: passing rows on main port, failing rows in `quarantine_df`
+- ✅ `sql_row` rule with `on_fail=abort` (non-quarantine): `AssertError` raised if any failing rows
+- ✅ `custom` fn: callable loaded via `importlib`, result dict validated
+- ✅ `custom` fn with `quarantine_df` returned: quarantine rows get `_aq_error_*` columns
+- ✅ `custom` fn raises exception: warning logged, pass-through (non-fatal)
+- ✅ `custom` fn with bad `fn` path: `AssertError` raised with clear message
+- ✅ multiple aggregate rules → exactly 1 Spark action (min_rows + freshness + sql batched)
+- ✅ mixed aggregate + null_rate → at most 2 Spark actions
+- ✅ `on_fail=trigger_agent`: `AssertError.trigger_agent=True`
+- ✅ gate closed upstream → Assert `status="skipped"`, sentinel propagated downstream
+- ✅ no spillway edge + quarantine rows produced → warning logged, rows discarded
+- ✅ Assert with no rules configured → pass-through, `status="success"`
+- ✅ end-to-end: Ingress → Assert(`min_rows` abort rule fires) → `ExecutionResult(status="error")`
+- ✅ end-to-end: Ingress → Assert(`sql_row` quarantine) → Egress(good) + Egress(quarantine), both written
+
 ### Surveyor `get_probe_signal()`
 - ✅ returns empty list when `signals.db` does not exist
 - ✅ returns rows matching `probe_id` after `execute_probe` writes them
@@ -620,7 +650,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 363 passed, 4 skipped, 1 xfailed. Coverage: 86.52%.
+- **Status**: 391 passed, 4 skipped, 1 xfailed. Coverage: 86.63%.
 Issues reported in:
 - None
 ---

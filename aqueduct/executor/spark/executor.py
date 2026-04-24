@@ -57,6 +57,7 @@ if TYPE_CHECKING:
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult, ModuleResult
+from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
 from aqueduct.executor.spark.egress import EgressError, write_egress
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
@@ -275,7 +276,7 @@ def _write_stage_metrics(
 
 
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
-    {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator"}
+    {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator", "Assert"}
 )
 
 # Ports that carry control signals only, not DataFrames.
@@ -695,6 +696,53 @@ def execute(
                 _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             frame_store[module.id] = df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
+            module_results.append(ModuleResult(module_id=module.id, status="success"))
+
+        # ── Assert ────────────────────────────────────────────────────────────
+        elif module.type == "Assert":
+            main_edges = _incoming_main(module.id, manifest.edges)
+            if not main_edges:
+                err = f"[{module.id}] Assert has no main-port incoming edges"
+                module_results.append(
+                    ModuleResult(module_id=module.id, status="error", error=err)
+                )
+                return _fail(manifest.pipeline_id, run_id, module_results)
+
+            upstream_id = main_edges[0].from_id
+            val = frame_store.get(upstream_id)
+            if _is_gate_closed(val):
+                frame_store[module.id] = _GATE_CLOSED
+                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                continue
+            if val is None:
+                err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
+                module_results.append(
+                    ModuleResult(module_id=module.id, status="error", error=err)
+                )
+                return _fail(manifest.pipeline_id, run_id, module_results)
+
+            has_spillway_edge = any(
+                e.from_id == module.id and e.port == "spillway" for e in manifest.edges
+            )
+
+            try:
+                passing_df, quarantine_df = execute_assert(
+                    module, val, spark, run_id, manifest.pipeline_id,
+                )
+            except AssertError as exc:
+                module_results.append(
+                    ModuleResult(module_id=module.id, status="error", error=str(exc))
+                )
+                return _fail(manifest.pipeline_id, run_id, module_results)
+
+            frame_store[module.id] = passing_df
+            if quarantine_df is not None and has_spillway_edge:
+                frame_store[f"{module.id}.spillway"] = quarantine_df
+            elif quarantine_df is not None:
+                logger.warning(
+                    "[%s] Assert quarantine rows produced but no spillway edge; discarded.",
+                    module.id,
+                )
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
         # ── Regulator ─────────────────────────────────────────────────────────

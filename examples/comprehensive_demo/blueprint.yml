@@ -1,238 +1,749 @@
+# =============================================================================
+# AQUEDUCT — COMPREHENSIVE REFERENCE BLUEPRINT
+# =============================================================================
+# This file is documentation, not a runnable pipeline.
+# Every module type, every config key, every edge variant, every policy option
+# is shown here so you can copy-paste directly into real Blueprints.
+#
+# Sections:
+#   1.  Top-level fields
+#   2.  Context & context_profiles
+#   3.  UDF registry
+#   4.  Modules
+#       4a. Ingress         — all format variants
+#       4b. Channel         — sql, deduplicate, filter, join, cache
+#       4c. Assert          — all rule types, all on_fail actions
+#       4d. Junction        — conditional, broadcast, partition
+#       4e. Funnel          — union_all, union, coalesce
+#       4f. Probe           — all signal types
+#       4g. Regulator       — all on_block actions
+#       4h. Egress          — parquet, delta, depot, collect
+#       4i. Arcade          — sub-pipeline reference
+#   5.  Edges              — main, spillway, signal, branch ports
+#   6.  Spark config
+#   7.  Retry policy
+#   8.  Agent config (LLM self-healing)
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# 1. TOP-LEVEL FIELDS
+# ---------------------------------------------------------------------------
 aqueduct: "1.0"
-id: comprehensive.order.pipeline
-name: "Comprehensive Order Processing Pipeline"
+id: reference.comprehensive.pipeline
+name: "Aqueduct Comprehensive Reference"
 description: |
-  End-to-end pipeline exercising all Phase 6 Aqueduct features against real services:
-    Ingress (MinIO parquet) → Channel (SQL clean + enrich) → Probe (data quality signals)
-    → Regulator (quality gate) → Junction (conditional regional split)
-    → Funnel (union_all merge) → Channel (tag with currency + processed_at)
-    → Egress (MinIO parquet, date-partitioned)
+  Reference Blueprint — not intended to run.
+  Demonstrates every module type, config key, and edge variant.
 
-  Known Phase 6 limitations (see README.md):
-    - JDBC ingress not implemented; data sourced from MinIO parquet instead.
-    - No signal type emits "passed"; Regulator gate is always open (pass-through).
-    - UDF registration not supported in YAML; email validation uses RLIKE inline.
-    - Spillway / Depot not yet supported.
-
+# ---------------------------------------------------------------------------
+# 2. CONTEXT & CONTEXT_PROFILES
+# ---------------------------------------------------------------------------
+# Tier 0 (${ctx.*}) — resolved at parse time before Manifest is written.
+# Tier 1 (@aq.*)    — resolved on driver before any Spark job starts.
 context:
-  env: dev
-  raw_orders_path:    "s3a://raw-data/orders/orders.parquet"
-  raw_customers_path: "s3a://raw-data/customers/customers.parquet"
-  processed_path:     "s3a://processed-data/orders"
+  env: ${AQUEDUCT_ENV:-dev}           # reads shell env var, defaults to "dev"
 
+  # nested namespaces with dot notation
+  tables:
+    orders_raw:     "s3a://raw/${ctx.env}/orders/"
+    customers_raw:  "s3a://raw/${ctx.env}/customers/"
+    orders_clean:   "s3a://processed/${ctx.env}/orders/"
+    quarantine:     "s3a://quarantine/${ctx.env}/orders/"
+    depot_key:      "watermarks.orders"
+
+  params:
+    dedup_key:      "order_id"
+    min_rows:       10000
+    max_null_rate:  0.02
+    alert_webhook:  ${ALERT_WEBHOOK_URL:-http://localhost:9000/hooks/alert}
+
+  # Tier 1 runtime functions — resolved just before Spark jobs start
+  run_date:   "@aq.date.today()"                       # e.g. "2026-04-23"
+  yesterday:  "@aq.date.yesterday()"
+  week_start: "@aq.date.offset(base=@aq.date.today(), days=-7)"
+  run_ts:     "@aq.runtime.timestamp()"
+  run_id_val: "@aq.runtime.run_id()"
+  prev_run:   "@aq.runtime.prev_run_id()"
+
+  # Depot read (cross-run watermark)
+  last_orders_ts: "@aq.depot.get('watermarks.orders', '1970-01-01T00:00:00Z')"
+
+  # Secret fetch (AWS Secrets Manager / env fallback)
+  db_password: "@aq.secret('prod/orders/db_password')"
+
+# Profile overrides for environment promotion
+# Usage: aqueduct run blueprint.yml --profile prod
+context_profiles:
+  dev:
+    params.min_rows: 100
+    tables.orders_raw: "s3a://dev/orders/"
+  staging:
+    params.min_rows: 1000
+    tables.orders_raw: "s3a://staging/orders/"
+  prod:
+    params.min_rows: 50000
+    tables.orders_raw: "s3a://prod/orders/"
+
+# ---------------------------------------------------------------------------
+# 3. UDF REGISTRY
+# ---------------------------------------------------------------------------
+# UDFs are Tier 2 — execute during Spark Channel ops, not at parse/compile time.
+udf_registry:
+  - id: clean_phone
+    label: "Normalise phone to E.164 format"
+    lang: python
+    path: udfs/clean_phone.py
+    entry: clean_phone_fn             # function name within the module
+    return_type: STRING
+    deterministic: true
+
+  - id: haversine_km
+    label: "Great-circle distance in km"
+    lang: scala
+    jar: udfs/geo-udfs-1.0.jar
+    class: com.example.udfs.Haversine
+    return_type: DOUBLE
+    deterministic: true
+
+  - id: parse_currency
+    label: "Parse currency string to DECIMAL"
+    lang: python
+    path: udfs/finance.py
+    entry: parse_currency_fn
+    return_type: "DECIMAL(18,4)"
+    deterministic: true
+
+# ---------------------------------------------------------------------------
+# 4. MODULES
+# ---------------------------------------------------------------------------
 modules:
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # INGRESS — read raw data from MinIO
-  # ──────────────────────────────────────────────────────────────────────────────
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4a. INGRESS — read data from external sources
+  # ─────────────────────────────────────────────────────────────────────────
 
+  # Parquet from object storage
   - id: raw_orders
     type: Ingress
-    label: "Raw Orders (MinIO)"
+    label: "Raw Orders (S3 Parquet)"
+    description: "Landing zone parquet for daily order events."
+    tags: [ingress, orders, raw]
     config:
       format: parquet
-      path: "${ctx.raw_orders_path}"
+      path: "${ctx.tables.orders_raw}"
+      schema_hint:                    # optional — enforced at read time
+        order_id:   STRING
+        customer_id: STRING
+        amount:     "DECIMAL(18,2)"
+        order_ts:   TIMESTAMP
+        region:     STRING
+        status:     STRING
+      options:
+        mergeSchema: "true"           # all options passed verbatim to DataFrameReader
+        basePath: "${ctx.tables.orders_raw}"
 
+  # CSV with header and inferred schema
   - id: raw_customers
     type: Ingress
-    label: "Raw Customers (MinIO)"
+    label: "Raw Customers (CSV)"
     config:
-      format: parquet
-      path: "${ctx.raw_customers_path}"
+      format: csv
+      path: "${ctx.tables.customers_raw}"
+      options:
+        header: "true"
+        inferSchema: "true"
+        sep: ","
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # CHANNEL — clean, validate, and enrich orders with customer data
-  #
-  # Data quality rules applied:
-  #   1. Drop rows where amount IS NULL  (~5 % of raw_orders)
-  #   2. Drop rows where order_date is in the future  (~3 %)
-  #   3. Add email_valid flag using RLIKE (replaces UDF — Phase 7 will add UDF support)
-  #   4. LEFT JOIN customers by customer_id (unmatched → NULLs in customer columns)
-  #   5. Derive order_year / order_month for downstream aggregations
-  # ──────────────────────────────────────────────────────────────────────────────
+  # Delta Lake — incremental read via watermark
+  - id: orders_delta_incremental
+    type: Ingress
+    label: "Incremental Orders from Delta (watermark)"
+    config:
+      format: delta
+      path: "s3a://lake/orders/"
+      options:
+        versionAsOf: "10"             # or timestampAsOf for time-travel
 
-  - id: clean_and_enrich
+  # JDBC source
+  - id: dim_products
+    type: Ingress
+    label: "Product dimension (PostgreSQL JDBC)"
+    config:
+      format: jdbc
+      path: "jdbc:postgresql://db.example.com:5432/warehouse"
+      options:
+        dbtable: "public.products"
+        user: "etl_user"
+        password: "${ctx.db_password}"
+        numPartitions: "4"
+        partitionColumn: "product_id"
+        lowerBound: "1"
+        upperBound: "1000000"
+        fetchsize: "10000"
+
+  # JSON
+  - id: raw_events
+    type: Ingress
+    label: "Click events (JSON)"
+    config:
+      format: json
+      path: "s3a://events/${ctx.run_date}/"
+      options:
+        multiLine: "false"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4b. CHANNEL — transformations (all lazy — no Spark actions)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # op: sql — upstream IDs are auto-registered as temp views
+  - id: clean_orders
     type: Channel
-    label: "Clean Orders + Enrich with Customer Data"
+    label: "Clean & cast raw orders"
     config:
       op: sql
+      udfs: [clean_phone, parse_currency]   # registered before query runs
       query: |
         SELECT
           o.order_id,
           o.customer_id,
-          CAST(o.amount    AS DOUBLE)    AS amount,
-          CAST(o.order_date AS TIMESTAMP) AS order_date,
-          o.region,
+          CAST(o.amount    AS DECIMAL(18,4))  AS amount,
+          CAST(o.order_ts  AS TIMESTAMP)      AS order_ts,
+          TRIM(UPPER(o.region))               AS region,
           o.status,
-          c.name   AS customer_name,
-          c.email  AS customer_email,
-          RLIKE(
-            COALESCE(c.email, ''),
-            '^[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+\\.[A-Za-z]{2,}$'
-          )        AS email_valid,
-          YEAR (CAST(o.order_date AS TIMESTAMP)) AS order_year,
-          MONTH(CAST(o.order_date AS TIMESTAMP)) AS order_month
+          clean_phone(c.phone)                AS phone_e164,
+          c.email
         FROM raw_orders    o
         LEFT JOIN raw_customers c ON o.customer_id = c.customer_id
-        WHERE o.amount IS NOT NULL
-          AND CAST(o.order_date AS TIMESTAMP) <= CURRENT_TIMESTAMP()
+        WHERE o.amount    IS NOT NULL
+          AND o.order_ts  > CAST('${ctx.last_orders_ts}' AS TIMESTAMP)
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # PROBE — capture data quality signals on the enriched dataset
-  #
-  # Signals written to .aqueduct/signals/signals.db:
-  #   schema_snapshot    — column names + types (zero Spark action)
-  #   row_count_estimate — stub (SparkListener not wired; will show estimate=null)
-  #   null_rates         — per-column null % sampled at 20 %
-  #   sample_rows        — 5 representative rows
-  # ──────────────────────────────────────────────────────────────────────────────
-
-  - id: probe_enriched
-    type: Probe
-    label: "Enriched Data Quality Probe"
-    attach_to: clean_and_enrich
-    config:
-      signals:
-        - type: schema_snapshot
-        - type: row_count_estimate
-          method: spark_listener
-        - type: null_rates
-          columns: [amount, customer_email, region]
-          fraction: 0.2
-        - type: sample_rows
-          n: 5
-
-  # ──────────────────────────────────────────────────────────────────────────────
-  # REGULATOR — quality gate wired to probe_enriched signal
-  #
-  # Phase 6 note: No signal type emits a "passed" key yet, so the gate is always
-  # open (evaluate_regulator returns True → transparent pass-through).
-  # Phase 7 will add a "quality_check" signal type that evaluates expressions like
-  # null_rate(amount) < 0.05 and writes passed=True/False to the signal payload.
-  # ──────────────────────────────────────────────────────────────────────────────
-
-  - id: quality_gate
-    type: Regulator
-    label: "Quality Gate (null_rate < 5% — open in Phase 6)"
-    config:
-      on_block: skip
-
-  # ──────────────────────────────────────────────────────────────────────────────
-  # JUNCTION — split enriched orders by region (conditional mode)
-  #
-  # Branches:
-  #   us    — region = 'US'
-  #   eu    — region = 'EU'
-  #   other — all remaining regions (_else_)
-  # ──────────────────────────────────────────────────────────────────────────────
-
-  - id: split_by_region
-    type: Junction
-    label: "Split Orders by Region"
-    config:
-      mode: conditional
-      branches:
-        - id: us
-          condition: "region = 'US'"
-        - id: eu
-          condition: "region = 'EU'"
-        - id: other
-          condition: "_else_"
-
-  # ──────────────────────────────────────────────────────────────────────────────
-  # FUNNEL — merge all regional branches back into a single DataFrame
-  #
-  # union_all chosen because schemas are identical (same source, filtered only).
-  # inputs reference frame_store keys produced by the Junction's branch edges:
-  #   split_by_region.us / .eu / .other
-  # ──────────────────────────────────────────────────────────────────────────────
-
-  - id: merge_all
-    type: Funnel
-    label: "Merge All Regions"
-    config:
-      mode: union_all
-      inputs:
-        - split_by_region.us
-        - split_by_region.eu
-        - split_by_region.other
-
-  # ──────────────────────────────────────────────────────────────────────────────
-  # CHANNEL — add processing metadata (currency + processed_at timestamp)
-  #
-  # Currency is derived from the region column so a single SQL covers all branches.
-  # CURRENT_TIMESTAMP() is a lazy Spark SQL function — no Spark action triggered.
-  # ──────────────────────────────────────────────────────────────────────────────
-
-  - id: tag_metadata
+  # op: deduplicate — keep last event per key
+  - id: dedup_orders
     type: Channel
-    label: "Add Processing Metadata"
+    label: "Deduplicate orders by order_id, keep latest"
+    config:
+      op: deduplicate
+      key: "${ctx.params.dedup_key}"       # single key or list
+      order_by: "order_ts DESC"
+
+  # op: filter
+  - id: active_orders
+    type: Channel
+    label: "Keep only ACTIVE and PENDING orders"
+    config:
+      op: filter
+      condition: "status IN ('ACTIVE', 'PENDING')"
+
+  # op: cache — persists lazy plan to avoid recomputation in fan-out
+  - id: orders_cached
+    type: Channel
+    label: "Cache enriched orders before fan-out"
+    config:
+      op: cache
+      storage_level: MEMORY_AND_DISK     # MEMORY_ONLY | MEMORY_AND_DISK | DISK_ONLY
+
+  # op: sql with Tier 1 runtime value injected
+  - id: tag_run_metadata
+    type: Channel
+    label: "Add run metadata columns"
     config:
       op: sql
       query: |
         SELECT
           *,
-          CURRENT_TIMESTAMP() AS processed_at,
-          CASE
-            WHEN region = 'EU' THEN 'EUR'
-            ELSE 'USD'
-          END AS currency
-        FROM merge_all
+          '${ctx.run_date}'    AS aq_run_date,
+          '${ctx.run_id_val}'  AS aq_run_id,
+          CURRENT_TIMESTAMP()  AS processed_at
+        FROM orders_cached
 
-  # ──────────────────────────────────────────────────────────────────────────────
-  # EGRESS — write processed orders to MinIO, partitioned by today's date
-  #
-  # @aq.date.today() is resolved at compile time to "YYYY-MM-DD".
-  # Overwrite mode ensures idempotent re-runs within the same day.
-  # ──────────────────────────────────────────────────────────────────────────────
+  # op: sql with UDF and haversine distance
+  - id: enrich_geo
+    type: Channel
+    label: "Add geo distance from DC warehouse"
+    config:
+      op: sql
+      udfs: [haversine_km]
+      query: |
+        SELECT
+          *,
+          haversine_km(lat, lon, 38.8977, 77.0365) AS km_from_dc
+        FROM tag_run_metadata
 
-  - id: final_output
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4c. ASSERT — inline data quality gates
+  #     Sits on main-port edges. Passes good rows downstream.
+  #     Failing rows → spillway (quarantine) or abort/warn.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: orders_quality_gate
+    type: Assert
+    label: "Data quality gate before regional split"
+    config:
+      rules:
+
+        # schema_match — zero Spark action; raises AssertError on mismatch
+        - type: schema_match
+          expected:
+            order_id:   STRING
+            amount:     "DECIMAL(18,4)"
+            order_ts:   TIMESTAMP
+            region:     STRING
+          on_fail: abort
+
+        # min_rows — batched into shared df.agg(); abort if below threshold
+        - type: min_rows
+          min: "${ctx.params.min_rows}"
+          on_fail: abort
+
+        # null_rate — one shared df.sample().agg() for all null_rate rules
+        - type: null_rate
+          column: order_id
+          fraction: 0.1                 # sample 10% for null check
+          max: 0.0                      # zero nulls tolerated
+          on_fail: abort
+
+        - type: null_rate
+          column: amount
+          fraction: 0.1
+          max: "${ctx.params.max_null_rate}"
+          on_fail: warn                 # log warning, continue
+
+        # freshness — max(order_ts) in batched agg()
+        - type: freshness
+          column: order_ts
+          max_age_hours: 26             # fail if latest record is older than 26h
+          on_fail:
+            action: webhook
+            url: "${ctx.params.alert_webhook}"
+          # pipeline continues; webhook fires async
+
+        # sql — arbitrary aggregate expression in batched agg()
+        - type: sql
+          expr: "SUM(amount) > 0"       # total revenue must be positive
+          on_fail:
+            action: webhook
+            url: "${ctx.params.alert_webhook}"
+
+        # sql_row — lazy filter; failing rows routed to spillway
+        - type: sql_row
+          expr: "amount > 0 AND order_id IS NOT NULL AND region IS NOT NULL"
+          on_fail: quarantine           # rows failing expr go to spillway port
+
+        # custom — Python callable; fn(df) -> {passed, message, quarantine_df}
+        - type: custom
+          fn: "my_project.quality.validate_orders"
+          on_fail: quarantine
+
+        # trigger_agent — fire LLM self-healing loop on failure
+        - type: min_rows
+          min: 1
+          on_fail: trigger_agent       # AssertError(trigger_agent=True) → LLM loop
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4d. JUNCTION — fan-out (split one DataFrame into multiple branches)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # mode: conditional — each branch gets a filtered subset
+  - id: split_by_region
+    type: Junction
+    label: "Route orders by region"
+    config:
+      mode: conditional
+      branches:
+        - id: us
+          label: "North America"
+          condition: "region IN ('US', 'CA', 'MX')"
+        - id: eu
+          label: "Europe"
+          condition: "region IN ('DE', 'FR', 'GB', 'NL', 'IT', 'ES')"
+        - id: apac
+          label: "Asia-Pacific"
+          condition: "region IN ('JP', 'KR', 'AU', 'SG', 'IN')"
+        - id: other
+          label: "All other regions"
+          condition: "_else_"           # catches unmatched rows
+
+  # mode: broadcast — same DataFrame to all branches (parallel independent ops)
+  - id: broadcast_for_reports
+    type: Junction
+    label: "Send same data to multiple report paths"
+    config:
+      mode: broadcast
+      branches:
+        - id: for_finance
+        - id: for_ops
+        - id: for_ml
+
+  # mode: partition — split by key column value
+  - id: partition_by_status
+    type: Junction
+    label: "Partition by order status"
+    config:
+      mode: partition
+      key: status
+      branches:
+        - id: active
+          value: ACTIVE
+        - id: pending
+          value: PENDING
+        - id: cancelled
+          value: CANCELLED
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4e. FUNNEL — fan-in (merge multiple DataFrames into one)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # mode: union_all — UNION ALL (preserves duplicates, zero shuffle)
+  - id: merge_regional
+    type: Funnel
+    label: "Merge all regional branches"
+    config:
+      mode: union_all
+      inputs:
+        - split_by_region.us
+        - split_by_region.eu
+        - split_by_region.apac
+        - split_by_region.other
+      schema_check: strict             # strict | permissive
+
+  # mode: union — UNION DISTINCT (deduplicates, requires shuffle)
+  - id: merge_dedup
+    type: Funnel
+    label: "Merge and deduplicate"
+    config:
+      mode: union
+      inputs:
+        - partition_by_status.active
+        - partition_by_status.pending
+      schema_check: strict
+
+  # mode: coalesce — fill nulls from fallback source (inputs must be aligned)
+  - id: coalesce_with_fallback
+    type: Funnel
+    label: "Fill nulls from fallback dataset"
+    config:
+      mode: coalesce
+      inputs:
+        - raw_orders
+        - orders_delta_incremental    # fallback for missing rows
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4f. PROBE — observability tap (no Spark actions on critical path)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: probe_after_clean
+    type: Probe
+    label: "Quality probe after cleaning"
+    attach_to: clean_orders            # taps this module's output edge
+    config:
+      signals:
+        # schema_snapshot — free, metadata only
+        - type: schema_snapshot
+
+        # row_count_estimate from SparkListener — zero cost
+        - type: row_count_estimate
+          method: spark_listener
+
+        # row_count_estimate via sample (low cost, approximate)
+        - type: row_count_estimate
+          method: sample
+          fraction: 0.01
+
+        # null_rates — one Spark action on sampled data
+        - type: null_rates
+          columns: [order_id, amount, region, order_ts]
+          fraction: 0.05
+          alert_threshold:
+            order_id:  0.0             # alert if any null
+            amount:    0.02            # alert if > 2% null
+            region:    0.05
+
+        # sample_rows — DataFrame.take(N), short-circuit scan
+        - type: sample_rows
+          n: 10
+
+        # value_distribution — approx_count_distinct + percentile_approx
+        - type: value_distribution
+          columns: [region, status]
+          fraction: 0.05
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4g. REGULATOR — trigger gate (passive until signal port is wired)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # Signal = True  → gate opens, downstream executes normally
+  # Signal = False → on_block action fires
+  # Not wired      → compiled away entirely (zero overhead)
+
+  - id: quality_gate
+    type: Regulator
+    label: "Block downstream if data quality signal is False"
+    config:
+      on_block: abort                  # skip | abort | trigger_agent
+      timeout_seconds: 120             # 0 = no timeout
+      on_timeout: proceed              # proceed | skip | abort
+
+  - id: freshness_gate
+    type: Regulator
+    label: "Block if freshness check fails"
+    config:
+      on_block: trigger_agent         # fire LLM loop with gate context
+      timeout_seconds: 0
+      on_timeout: proceed
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4h. EGRESS — write data to sinks (only module type that triggers actions)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  # Parquet — overwrite, date-partitioned
+  - id: write_orders_parquet
     type: Egress
-    label: "Write Processed Orders to MinIO"
+    label: "Write clean orders to S3 Parquet"
+    checkpoint: true                   # write checkpoint after success
     config:
       format: parquet
-      path: "${ctx.processed_path}/date=@aq.date.today(format='%Y-%m-%d')/orders.parquet"
-      mode: overwrite
+      path: "${ctx.tables.orders_clean}date=${ctx.run_date}/"
+      mode: overwrite                  # overwrite | append | merge | error | ignore
+      partition_by: [region]
+      options:
+        compression: snappy
 
+  # Delta Lake — merge (upsert) with merge_key
+  - id: write_orders_delta
+    type: Egress
+    label: "Upsert to Delta Lake orders table"
+    config:
+      format: delta
+      path: "s3a://lake/orders_clean/"
+      mode: merge
+      merge_key: [order_id]            # MERGE INTO key columns
+      partition_by: [region, aq_run_date]
+      options:
+        mergeSchema: "true"
+
+  # Delta — register as external Hive/Glue table after write
+  - id: write_and_register
+    type: Egress
+    label: "Write Delta and register as external table"
+    config:
+      format: delta
+      path: "s3a://lake/orders_registered/"
+      mode: overwrite
+      register_as_table: orders_registered    # CREATE TABLE IF NOT EXISTS in catalog
+
+  # Depot KV write — update watermark after successful run
+  - id: update_watermark
+    type: Egress
+    label: "Update orders watermark"
+    config:
+      format: depot
+      key: "watermarks.orders"
+      value: "@aq.runtime.timestamp()"
+      access: readwrite                # readwrite | readonly | writeonly
+
+  # Quarantine sink — receives spillway rows from Assert
+  - id: write_quarantine
+    type: Egress
+    label: "Write quarantine rows to dead-letter store"
+    config:
+      format: parquet
+      path: "${ctx.tables.quarantine}date=${ctx.run_date}/"
+      mode: append                     # append for quarantine (accumulate)
+      partition_by: [region]
+
+  # collect — small aggregation result returned to driver
+  - id: collect_summary
+    type: Egress
+    label: "Collect daily summary stats to RunRecord"
+    config:
+      format: collect                  # not for large datasets
+      collect: true
+
+  # JDBC sink
+  - id: write_to_postgres
+    type: Egress
+    label: "Write aggregated results to PostgreSQL"
+    config:
+      format: jdbc
+      path: "jdbc:postgresql://db.example.com:5432/warehouse"
+      mode: append
+      options:
+        dbtable: "public.daily_orders_agg"
+        user: "etl_user"
+        password: "${ctx.db_password}"
+        batchsize: "5000"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # 4i. ARCADE — encapsulated sub-pipeline (expanded at compile time)
+  # ─────────────────────────────────────────────────────────────────────────
+
+  - id: enrich_with_customer_arcade
+    type: Arcade
+    label: "Standard customer enrichment (Arcade)"
+    ref: arcades/customer_enrichment.yml   # path to sub-Blueprint
+    context_override:                       # context passed into Arcade
+      input_table: dedup_orders
+      lookup_table: "${ctx.tables.customers_raw}"
+      join_key: customer_id
+    spillway: write_quarantine             # Arcade-level spillway target
+
+# ---------------------------------------------------------------------------
+# 5. EDGES
+# ---------------------------------------------------------------------------
+# Ports:
+#   main     — DataFrame data flow (default)
+#   signal   — boolean/error signal to Regulator
+#   spillway — error/quarantine rows from Assert or Channel
+#   <branch> — Junction branch IDs (us, eu, other, etc.)
 edges:
-  # Ingress → Channel (multi-input: both registered as temp views)
+
+  # Ingress → Channel (multi-input: both registered as temp views in SQL)
   - from: raw_orders
-    to: clean_and_enrich
+    to: clean_orders
     port: main
   - from: raw_customers
-    to: clean_and_enrich
+    to: clean_orders
     port: main
 
-  # Channel → Regulator (main-port data flow)
-  - from: clean_and_enrich
-    to: quality_gate
-    port: main
+  # Channel chain
+  - from: clean_orders
+    to: dedup_orders
+  - from: dedup_orders
+    to: active_orders
+  - from: active_orders
+    to: orders_cached
+  - from: orders_cached
+    to: tag_run_metadata
+  - from: tag_run_metadata
+    to: enrich_geo
 
-  # Probe → Regulator (signal wire — carries no DataFrame)
-  - from: probe_enriched
+  # Probe tap — observes clean_orders output (no DataFrame on this edge)
+  # attach_to in Probe config wires this implicitly; edge is informational
+
+  # Probe → Regulator (signal wire — carries boolean, not DataFrame)
+  - from: probe_after_clean
     to: quality_gate
     port: signal
 
-  # Regulator → Junction
+  # Regulator → Assert (data flows through gate)
   - from: quality_gate
+    to: orders_quality_gate
+    port: main
+
+  # Assert main port → Junction
+  - from: orders_quality_gate
     to: split_by_region
     port: main
 
-  # Junction → Funnel (branch port edges; Funnel uses _incoming_data)
+  # Assert spillway → quarantine Egress (row-level failures)
+  - from: orders_quality_gate
+    to: write_quarantine
+    port: spillway
+
+  # Junction → Funnel via branch ports
   - from: split_by_region
-    to: merge_all
+    to: merge_regional
     port: us
   - from: split_by_region
-    to: merge_all
+    to: merge_regional
     port: eu
   - from: split_by_region
-    to: merge_all
+    to: merge_regional
+    port: apac
+  - from: split_by_region
+    to: merge_regional
     port: other
 
-  # Funnel → Channel → Egress (standard main-port chain)
-  - from: merge_all
-    to: tag_metadata
+  # Funnel → Egress chain
+  - from: merge_regional
+    to: write_orders_parquet
     port: main
-  - from: tag_metadata
-    to: final_output
+  - from: merge_regional
+    to: write_orders_delta
     port: main
+
+  # Channel spillway → quarantine (row-level cast errors routed here)
+  - from: clean_orders
+    to: write_quarantine
+    port: spillway
+    error_types:                       # optional: only route these error types
+      - CastException
+      - NullValueException
+
+  # Arcade wired like a regular module
+  - from: dedup_orders
+    to: enrich_with_customer_arcade
+    port: main
+  - from: enrich_with_customer_arcade
+    to: write_and_register
+    port: main
+
+  # Watermark update wired after successful write
+  - from: write_orders_delta
+    to: update_watermark
+    port: main
+
+# ---------------------------------------------------------------------------
+# 6. SPARK CONFIG
+# ---------------------------------------------------------------------------
+# Merged with Aqueduct engine defaults. Blueprint values take precedence.
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.adaptive.coalescePartitions.enabled: "true"
+  spark.sql.adaptive.skewJoin.enabled: "true"
+  spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+  spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
+  # S3 access
+  spark.hadoop.fs.s3a.access.key: "@aq.secret('aws/access_key')"
+  spark.hadoop.fs.s3a.secret.key: "@aq.secret('aws/secret_key')"
+  spark.hadoop.fs.s3a.endpoint: "s3.amazonaws.com"
+
+# ---------------------------------------------------------------------------
+# 7. RETRY POLICY (pipeline-level default)
+# ---------------------------------------------------------------------------
+# Individual modules can override with on_failure: field.
+retry_policy:
+  max_attempts: 3
+  backoff:
+    strategy: exponential              # linear | exponential | fixed
+    base_seconds: 30
+    max_seconds: 600
+    jitter: true                       # ±20% random jitter
+  transient_errors:                    # retried without LLM involvement
+    - "SparkException: .*Connection reset.*"
+    - "SparkException: .*Task not serializable.*"
+    - "Py4JNetworkError"
+  non_transient_errors:                # skip retry, go straight to LLM loop
+    - "AnalysisException"
+    - "SchemaIncompatibleException"
+    - "ParseException"
+  on_exhaustion: trigger_agent        # trigger_agent | abort | alert_only
+  deadline_seconds: 3600              # total budget across all attempts
+
+# Per-module override example — shown inline on module:
+# - id: flaky_s3_read
+#   type: Ingress
+#   on_failure:
+#     max_attempts: 5
+#     backoff:
+#       strategy: exponential
+#       base_seconds: 60
+#     on_exhaustion: abort
+
+# ---------------------------------------------------------------------------
+# 8. AGENT CONFIG (LLM self-healing)
+# ---------------------------------------------------------------------------
+agent:
+  approval_mode: disabled             # disabled | auto | human
+  # disabled  — LLM never fires automatically
+  # auto      — LLM fires on failure, patch applied immediately
+  # human     — LLM fires, patch held in patches/pending/ for review
+  model: "claude-sonnet-4-6"
+  provider: anthropic                 # anthropic | openai_compat | ollama
+  base_url: ~                         # null = use provider default endpoint
+  max_patches_per_run: 5
+  on_pending_patches: warn            # ignore | warn | block
+  # warn  — log if unreviewed patches exist, continue anyway
+  # block — refuse to run while unreviewed patches are pending

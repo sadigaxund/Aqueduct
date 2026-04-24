@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-04-23 — Session 6: SparkListener Wiring + Assert Module + Docs
+
+### Accomplished
+
+**SparkListener wiring** — `AqueductMetricsListener.onStageCompleted` now captures `records_read`, `records_written`, `bytes_read`, `bytes_written`, `duration_ms` per module. `_write_stage_metrics()` helper persists to `module_metrics` table in `signals.db`. `set_active_module()` / `collect_metrics()` wired at all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress). `probe.py` `method: spark_listener` now queries `module_metrics` table — no longer a stub.
+
+**Assert module** — new `aqueduct/executor/spark/assert_.py`:
+- `execute_assert(module, df, spark, run_id, pipeline_id) -> (passing_df, quarantine_df | None)`
+- `AssertError(message, rule_id=None, trigger_agent=False)`
+- Three-phase eval: schema_match (zero action) → batch aggregate rules (≤2 Spark actions) → row-level rules (lazy)
+- All `min_rows` / `freshness` / `sql` rules batched into one `df.agg()`; all `null_rate` rules share one `df.sample().agg()`
+- `on_fail`: abort, warn, webhook, quarantine, trigger_agent
+- `executor.py`: Assert dispatch block after Funnel, before Regulator; `"Assert"` in `_SUPPORTED_TYPES`
+- `parser/schema.py`: `"Assert"` added to `VALID_MODULE_TYPES`
+- `executor/spark/__init__.py`: `AssertError` exported
+
+**Documentation**
+- `examples/comprehensive_demo/blueprint.yml`: full rewrite as copy-paste reference covering all module types, all config keys, all edge variants, context/profiles, UDF registry, retry policy, agent config, spark config
+- `examples/nyc_taxi_demo/README.md`: implementation tracking guide with architecture diagram, data download commands, schema inspection, 17-step checklist, Assert rule table, verification queries
+- `docs/specs.md`: Assert module section added (rule types, performance model, on_fail table); Section 13 added (Engine Scope & Boundaries — batch-only, no ML/streaming, Flink stub, scheduling strategy)
+
+### Design Notes
+- Assert is inline (main-port edges), not tap (attach_to) — row-level quarantine requires intercepting data flow.
+- Spillway wiring on Assert is optional; missing spillway with quarantine rows logs warning and discards.
+- `trigger_agent` on_fail raises `AssertError(trigger_agent=True)` — Surveyor's LLM loop integration is unchanged.
+
+---
+
 ## 2026-04-20 — Session 4: Executor Refactor + Docs + Test Robustness
 
 ### Accomplished

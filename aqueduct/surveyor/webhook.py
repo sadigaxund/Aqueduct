@@ -1,64 +1,118 @@
-"""Webhook dispatcher — fires HTTP POST with FailureContext payload.
+"""Webhook dispatcher — fires HTTP requests with configurable method, headers, and payload.
 
-Uses only stdlib (urllib.request) to avoid adding a requests dependency.
-All network calls run in a daemon thread so the CLI is never blocked.
-Failures are logged to stderr and silently swallowed — webhook delivery is
-best-effort; the pipeline result is authoritative.
+Delivery is best-effort: all network calls run in a daemon thread so the CLI
+is never blocked.  Failures are logged to stderr and silently swallowed —
+the pipeline result is authoritative.
+
+Payload templating
+------------------
+When WebhookEndpointConfig.payload is set, each string value in the dict is
+rendered by substituting ${VAR} tokens.  Resolution order:
+
+  1. Built-in failure vars passed by the caller (run_id, pipeline_id, etc.)
+  2. os.environ (useful for secrets in header values)
+  3. Leave token as-is if not found
+
+When payload is None, the full ``full_payload`` dict is sent unchanged
+(backward-compatible with the original behaviour).
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 import sys
 import threading
-import urllib.error
-import urllib.request
 from typing import Any
 
+import httpx
+
+
+# ── Template rendering ────────────────────────────────────────────────────────
+
+_TOKEN_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _render_value(value: Any, vars: dict[str, str]) -> Any:
+    """Substitute ${VAR} tokens in a string value.  Non-strings pass through."""
+    if not isinstance(value, str):
+        return value
+    def _replace(m: re.Match) -> str:
+        key = m.group(1)
+        if key in vars:
+            return str(vars[key])
+        return os.environ.get(key, m.group(0))
+    return _TOKEN_RE.sub(_replace, value)
+
+
+def _render_dict(template: dict[str, Any], vars: dict[str, str]) -> dict[str, Any]:
+    return {k: _render_value(v, vars) for k, v in template.items()}
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def fire_webhook(
-    url: str,
-    payload: dict[str, Any],
-    timeout: int = 10,
+    config: "WebhookEndpointConfig",  # type: ignore[name-defined]  # noqa: F821
+    full_payload: dict[str, Any],
+    template_vars: dict[str, str] | None = None,
 ) -> threading.Thread:
-    """POST JSON payload to url in a background daemon thread.
+    """POST/PUT/PATCH a payload to a configured endpoint in a background thread.
 
     Args:
-        url:     HTTP(S) endpoint to POST to.
-        payload: JSON-serialisable dict (typically FailureContext.to_dict()).
-        timeout: Socket timeout in seconds.
+        config:        WebhookEndpointConfig with url, method, headers, payload, timeout.
+        full_payload:  Fallback payload sent when config.payload is None (full FailureContext).
+        template_vars: Built-in variables available for ${VAR} substitution in
+                       config.payload values and config.headers values.
+                       Keys: run_id, pipeline_id, pipeline_name, failed_module,
+                       error_message, error_type, started_at, attempt.
 
     Returns:
         The daemon thread that was started (callers may join() if needed).
     """
+    vars: dict[str, str] = template_vars or {}
 
-    def _post() -> None:
+    # Render headers (e.g. Authorization: "Bearer ${SLACK_TOKEN}")
+    rendered_headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        **_render_dict(config.headers, vars),
+    }
+
+    # Build final payload
+    if config.payload is not None:
+        body = _render_dict(config.payload, vars)
+    else:
+        body = full_payload
+
+    url = config.url
+    method = config.method
+    timeout = config.timeout
+
+    def _send() -> None:
         try:
-            data = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
+            resp = httpx.request(
+                method,
                 url,
-                data=data,
-                headers={"Content-Type": "application/json"},
-                method="POST",
+                json=body,
+                headers=rendered_headers,
+                timeout=timeout,
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                status = resp.status
-            if status >= 400:
+            if resp.status_code >= 400:
                 print(
-                    f"[surveyor] webhook POST to {url!r} returned HTTP {status}",
+                    f"[surveyor] webhook {method} {url!r} returned HTTP {resp.status_code}",
                     file=sys.stderr,
                 )
-        except urllib.error.URLError as exc:
+        except httpx.RequestError as exc:
             print(
-                f"[surveyor] webhook POST to {url!r} failed: {exc.reason}",
+                f"[surveyor] webhook {method} {url!r} failed: {exc}",
                 file=sys.stderr,
             )
         except Exception as exc:  # noqa: BLE001
             print(
-                f"[surveyor] webhook POST to {url!r} raised unexpected error: {exc}",
+                f"[surveyor] webhook {method} {url!r} raised unexpected error: {exc}",
                 file=sys.stderr,
             )
 
-    thread = threading.Thread(target=_post, daemon=True, name="surveyor-webhook")
+    thread = threading.Thread(target=_send, daemon=True, name="surveyor-webhook")
     thread.start()
     return thread
