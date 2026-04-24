@@ -1367,3 +1367,118 @@ def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monke
 
     assert result.status == "success"
     assert any("Checkpoint write failed" in rec.message for rec in caplog.records)
+
+
+# ── Assert Integration ────────────────────────────────────────────────────────
+
+def test_execute_assert_gate_closed_upstream(spark: SparkSession, tmp_path):
+    class MockSurveyor:
+        def evaluate_regulator(self, reg_id): return False
+        
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.assert_gate_closed",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
+            Module(id="ast", type="Assert", label="Ast", config={"rules": [{"type": "min_rows", "min": 1}]}),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": "/foo"}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="reg", port="main"),
+            Edge(from_id="reg", to_id="ast", port="main"),
+            Edge(from_id="ast", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark, surveyor=MockSurveyor())
+    assert result.status == "success"
+    assert result.module_results[2].status == "skipped"
+    assert result.module_results[3].status == "skipped"
+
+
+def test_execute_assert_no_spillway_edge_discards(spark: SparkSession, tmp_path, caplog):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.assert_no_spillway",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="ast", type="Assert", label="Ast", config={
+                "rules": [{"type": "sql_row", "expr": "id % 2 == 0", "on_fail": "quarantine"}]
+            }),
+            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="ast", port="main"),
+            Edge(from_id="ast", to_id="out", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    
+    import logging
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.executor"):
+        result = execute(manifest, spark)
+        
+    assert result.status == "success"
+    assert spark.read.parquet(out_path).count() == 3
+    assert any("no spillway edge; discarded" in rec.message for rec in caplog.records)
+
+
+def test_execute_assert_end_to_end_abort(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    manifest = Manifest(
+        pipeline_id="test.assert_e2e_abort",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="ast", type="Assert", label="Ast", config={
+                "rules": [{"type": "min_rows", "min": 10, "on_fail": "abort"}]
+            }),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="ast", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "error"
+    assert result.module_results[1].status == "error"
+    assert "got 5, expected >= 10" in result.module_results[1].error
+
+
+def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    main_out = str(tmp_path / "main.parquet")
+    spill_out = str(tmp_path / "spill.parquet")
+    
+    manifest = Manifest(
+        pipeline_id="test.assert_e2e_quarantine",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="ast", type="Assert", label="Ast", config={
+                "rules": [{"type": "sql_row", "expr": "id % 2 == 0", "on_fail": "quarantine"}]
+            }),
+            Module(id="out_main", type="Egress", label="Main", config={"format": "parquet", "path": main_out}),
+            Module(id="out_spill", type="Egress", label="Spill", config={"format": "parquet", "path": spill_out}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="ast", port="main"),
+            Edge(from_id="ast", to_id="out_main", port="main"),
+            Edge(from_id="ast", to_id="out_spill", port="spillway"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+    
+    assert spark.read.parquet(main_out).count() == 3
+    quarantine_df = spark.read.parquet(spill_out)
+    assert quarantine_df.count() == 2
+    assert "_aq_error_module" in quarantine_df.columns

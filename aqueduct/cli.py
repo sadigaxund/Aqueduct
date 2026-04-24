@@ -1,6 +1,6 @@
 """Aqueduct CLI.
 
-Active commands: validate, compile, run, patch apply, patch reject.
+Active commands: validate, compile, run, check-config, doctor, patch apply, patch reject.
 """
 
 from __future__ import annotations
@@ -31,6 +31,99 @@ def validate(blueprint: str) -> None:
     except ParseError as exc:
         click.echo(f"✗ {exc}", err=True)
         sys.exit(1)
+
+
+@cli.command("check-config")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
+)
+def check_config(config_path: str | None) -> None:
+    """Validate aqueduct.yml without running a pipeline. Exit 0 = valid, 1 = invalid."""
+    import json
+    from pathlib import Path
+
+    from aqueduct.config import ConfigError, load_config
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ {exc}", err=True)
+        sys.exit(1)
+
+    source = config_path or "aqueduct.yml (CWD) or defaults"
+    click.echo(f"✓ config valid  [{source}]")
+    click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
+    click.echo(f"  stores:  observability={cfg.stores.observability.path}  depot={cfg.stores.depot.path}")
+    click.echo(f"  secrets: provider={cfg.secrets.provider}")
+    if cfg.webhooks.on_failure:
+        wh = cfg.webhooks.on_failure
+        click.echo(f"  webhook: {wh.method} {wh.url}  payload={'custom' if wh.payload else 'full FailureContext'}")
+    else:
+        click.echo("  webhook: (not configured)")
+    if cfg.spark_config:
+        click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
+
+
+@cli.command()
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
+)
+@click.option(
+    "--skip-spark",
+    is_flag=True,
+    default=False,
+    help="Skip Spark connectivity check (fast mode — avoids JVM startup).",
+)
+def doctor(config_path: str | None, skip_spark: bool) -> None:
+    """Probe all configured resources: config, stores, Spark, webhook, secrets, storage.
+
+    Each check is independent. Spark check requires pyspark and may take 10-15s
+    for JVM startup. Use --skip-spark to skip it in fast CI contexts.
+
+    Exit codes: 0 = all ok/warn/skip, 1 = any check failed.
+    """
+    from pathlib import Path
+    from aqueduct.doctor import run_doctor
+
+    _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
+    _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
+
+    if not skip_spark:
+        click.echo("Running connectivity checks (Spark may take 10–15s for JVM startup)...")
+    else:
+        click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
+
+    results = run_doctor(
+        config_path=Path(config_path) if config_path else None,
+        skip_spark=skip_spark,
+    )
+
+    col_w = max(len(r.name) for r in results) + 2
+    any_fail = False
+    for r in results:
+        icon = _STATUS_ICON[r.status]
+        color = _STATUS_COLOR[r.status]
+        label = r.name.ljust(col_w)
+        elapsed = f"  [{r.elapsed_ms}ms]" if r.elapsed_ms > 0 else ""
+        line = f"  {icon} {label}{r.detail}{elapsed}"
+        click.echo(click.style(line, fg=color) if color else line)
+        if r.status == "fail":
+            any_fail = True
+
+    click.echo()
+    if any_fail:
+        click.echo(click.style("✗ one or more checks failed", fg="red"), err=True)
+        sys.exit(1)
+    else:
+        click.echo(click.style("✓ all checks passed", fg="green"))
 
 
 @cli.command()
@@ -119,7 +212,7 @@ def run(
 
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
-    from aqueduct.config import ConfigError, load_config
+    from aqueduct.config import ConfigError, WebhookEndpointConfig, load_config
     from aqueduct.depot.depot import DepotStore
     from aqueduct.executor import ExecuteError, get_executor
     from aqueduct.executor.models import ExecutionResult, ModuleResult
@@ -135,7 +228,8 @@ def run(
 
     # CLI flags override config file; config file overrides built-in defaults
     resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
-    resolved_webhook = webhook or cfg.webhooks.on_failure
+    # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
+    resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
     master_url = cfg.deployment.master_url
 
@@ -200,7 +294,7 @@ def run(
     surveyor = Surveyor(
         manifest,
         store_dir=resolved_store_dir,
-        webhook_url=resolved_webhook,
+        webhook_config=resolved_webhook,
         blueprint_path=Path(blueprint),
         patches_dir=patches_dir,
     )

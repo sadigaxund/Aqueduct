@@ -1,8 +1,11 @@
 """Project-level engine configuration — aqueduct.yml loader.
 
 aqueduct.yml is separate from Blueprint YAML files.  It configures the engine
-itself: deployment target, store backends, agent settings, probe limits, and
-secrets provider.  It is NOT the pipeline definition.
+itself: deployment target, store backends, probe limits, secrets provider, and
+webhook endpoints.  It is NOT the pipeline definition.
+
+LLM agent config (model, approval_mode, provider) lives in the Blueprint agent:
+block — not here — so each pipeline can configure its own healing policy.
 
 Default behaviour (no file present):
   load_config() returns AqueductConfig with all defaults — equivalent to a
@@ -18,10 +21,10 @@ Schema reference: docs/specs.md §10.1
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 # ── Schema error ──────────────────────────────────────────────────────────────
@@ -73,19 +76,6 @@ class StoresConfig(BaseModel):
     )
 
 
-class AgentEngineConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    default_model: str = "claude-sonnet-4-20250514"
-    api_endpoint: str = "https://api.anthropic.com/v1/messages"
-    max_tokens: int = 4096
-    max_patches_per_run: int = 5
-    default_approval_mode: str = Field(
-        default="auto",
-        description="Patch approval mode: auto | human",
-    )
-
-
 class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -103,13 +93,57 @@ class SecretsConfig(BaseModel):
     )
 
 
+class WebhookEndpointConfig(BaseModel):
+    """Configuration for a single webhook endpoint.
+
+    Supports template variables in payload values and header values.
+    Variables use ${VAR} syntax.
+
+    Built-in variables (always available in payload templates):
+      ${run_id}          UUID of this pipeline run
+      ${pipeline_id}     Pipeline identifier
+      ${pipeline_name}   Pipeline display name
+      ${failed_module}   Module ID where failure occurred
+      ${error_message}   Error description string
+      ${error_type}      Exception class name
+      ${started_at}      ISO-8601 run start timestamp
+      ${attempt}         Attempt number (1-based)
+
+    In header values, ${VAR} resolves to os.environ[VAR] as a fallback.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    url: str = Field(..., description="HTTP(S) endpoint URL")
+    method: Literal["POST", "PUT", "PATCH"] = "POST"
+    headers: dict[str, str] = Field(
+        default_factory=dict,
+        description="Additional HTTP headers. Values may contain ${ENV_VAR} tokens.",
+    )
+    payload: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "Custom payload template. Values may contain ${VAR} tokens. "
+            "If null, the full FailureContext JSON is sent as-is."
+        ),
+    )
+    timeout: int = Field(default=10, description="HTTP socket timeout in seconds")
+
+
 class WebhooksConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    on_failure: str | None = Field(
+    on_failure: WebhookEndpointConfig | None = Field(
         default=None,
-        description="HTTP(S) URL to POST FailureContext JSON on pipeline failure",
+        description="Endpoint to POST when a pipeline run fails. Accepts a URL string or full config object.",
     )
+
+    @field_validator("on_failure", mode="before")
+    @classmethod
+    def coerce_string_url(cls, v: Any) -> Any:
+        """Allow on_failure: 'https://...' as shorthand for {url: 'https://...'}."""
+        if isinstance(v, str):
+            return {"url": v}
+        return v
 
 
 # ── Top-level config ──────────────────────────────────────────────────────────
@@ -119,13 +153,16 @@ class AqueductConfig(BaseModel):
 
     All fields have sensible defaults so that running without an aqueduct.yml
     (development / CI) works out of the box.
+
+    Note: LLM agent configuration (model, provider, approval_mode) belongs in
+    the Blueprint agent: block, not here.  Each pipeline manages its own
+    healing policy.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     aqueduct_config: str = Field(default="1.0", description="Config schema version")
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     stores: StoresConfig = Field(default_factory=StoresConfig)
-    agent: AgentEngineConfig = Field(default_factory=AgentEngineConfig)
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
@@ -161,7 +198,6 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not resolved.exists():
         if explicit:
             raise ConfigError(f"Config file not found: {resolved}")
-        # Implicit lookup — no file, use all defaults
         return AqueductConfig()
 
     try:
@@ -175,7 +211,6 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         raise ConfigError(f"Invalid YAML in {resolved}: {exc}") from exc
 
     if data is None:
-        # Empty file — treat as all defaults
         return AqueductConfig()
 
     if not isinstance(data, dict):

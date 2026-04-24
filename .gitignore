@@ -1,6 +1,6 @@
 # --- Aqueduct Project ---
 
-# pipeline run data
+# Personal files
 examples/*/*.parquet
 examples/*/*.db
 examples/*/*.json
@@ -10,17 +10,9 @@ examples/*/*/signals/
 .claude/
 .prompts/
 *.log
-pytest_*.log
-pytest_*.txt
-pytest_*.json
-pytest_*.html
-pytest_*.xml
-pytest_*.csv
-pytest_*.parquet
-pytest_*.avro
-pytest_*.duckdb
-pytest_*.duckdb.wal
-pytest_*.sqlite
+.aqueduct/
+pytest_*.*/
+
 
 
 # --- Python ---

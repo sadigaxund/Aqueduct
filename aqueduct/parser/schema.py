@@ -11,7 +11,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 VALID_MODULE_TYPES = frozenset(
-    {"Ingress", "Channel", "Egress", "Junction", "Funnel", "Probe", "Regulator", "Arcade"}
+    {"Ingress", "Channel", "Egress", "Junction", "Funnel", "Probe", "Regulator", "Arcade", "Assert"}
 )
 
 VALID_PORTS = frozenset({"main", "spillway", "signal"})

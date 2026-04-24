@@ -465,6 +465,93 @@ modules:
 |**Expansion contract:**  Arcades are fully expanded at Manifest compile time. The Manifest always contains a flat Module list. Spark sees a single flat execution plan with no nesting. Module IDs within Arcades are namespaced (parent\_module\_id.child\_module\_id) to prevent collision.|
 | :- |
 
+|**ASSERT**|**Inline data quality gate — evaluates rules on a flowing DataFrame, routes failures to spillway or aborts**|
+| :-: | :- |
+
+Assert is an inline module (wired via main-port edges, not `attach_to`). It intercepts the data flow, evaluates a set of rules, and either passes the DataFrame downstream or quarantines/aborts depending on the per-rule `on_fail` action. Unlike Probe+Regulator (passive tap + gate), Assert can quarantine individual failing rows via its spillway port.
+
+```yaml
+- id: orders_quality_gate
+  type: Assert
+  label: "Data quality gate"
+  config:
+    rules:
+      # schema_match — zero Spark action; raises AssertError if schema differs
+      - type: schema_match
+        expected: {order_id: STRING, amount: "DECIMAL(18,4)", order_ts: TIMESTAMP}
+        on_fail: abort
+
+      # min_rows — batched into shared df.agg()
+      - type: min_rows
+        min: 1000
+        on_fail: abort
+
+      # null_rate — one shared df.sample().agg() for all null_rate rules
+      - type: null_rate
+        column: order_id
+        fraction: 0.1       # sample fraction for the null check
+        max: 0.0
+        on_fail: abort
+
+      # freshness — max(column) in batched agg()
+      - type: freshness
+        column: order_ts
+        max_age_hours: 26
+        on_fail:
+          action: webhook
+          url: "${ctx.alert_webhook}"
+
+      # sql — arbitrary aggregate expression, TRUE = pass
+      - type: sql
+        expr: "SUM(amount) > 0"
+        on_fail: warn
+
+      # sql_row — lazy filter; failing rows routed to spillway port
+      - type: sql_row
+        expr: "amount > 0 AND order_id IS NOT NULL"
+        on_fail: quarantine
+
+      # custom — Python callable: fn(df) -> {passed, message, quarantine_df}
+      - type: custom
+        fn: "my_project.quality.validate_orders"
+        on_fail: quarantine
+
+edges:
+  - from: upstream_module
+    to: orders_quality_gate       # main-port data flow in
+  - from: orders_quality_gate
+    to: good_egress               # passing rows out
+  - from: orders_quality_gate
+    to: quarantine_egress
+    port: spillway                # quarantine rows out (sql_row / custom rules)
+```
+
+**Rule types:**
+
+| Rule | Spark cost | Description |
+| :- | :- | :- |
+| `schema_match` | Zero | Compares `df.schema` to expected dict. No scan. |
+| `min_rows` | Batched into one `df.agg()` | Asserts `COUNT(*) >= min`. |
+| `null_rate` | One shared `df.sample().agg()` for all null_rate rules | Asserts null fraction ≤ max on a sampled column. |
+| `freshness` | Batched into one `df.agg()` | Asserts `MAX(column) >= NOW() - max_age_hours`. |
+| `sql` | Batched into one `df.agg()` | Evaluates an aggregate SQL expression; result must be truthy. |
+| `sql_row` | Lazy filter (no action) | Rows failing `expr` go to spillway; passing rows continue. |
+| `custom` | Determined by callable | Python fn receives full DataFrame; returns `{passed, message, quarantine_df}`. |
+
+**Performance model:** All aggregate rules (`min_rows`, `freshness`, `sql`) are collected into a single `df.agg()` call. All `null_rate` rules share a single `df.sample(fraction).agg()` call. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters — no Spark action. Net: **at most 2 Spark actions** per Assert module, regardless of rule count.
+
+**`on_fail` actions (per rule):**
+
+| Action | Behaviour |
+| :- | :- |
+| `abort` | Raises `AssertError`; pipeline stops and enters Surveyor failure handling. |
+| `warn` | Logs a warning; pipeline continues. |
+| `webhook` | POSTs an alert to the configured URL; pipeline continues. Combined as `{action: webhook, url: ...}`. |
+| `quarantine` | Row-level rules only — failing rows are collected into `quarantine_df` and routed to the module's spillway port. |
+| `trigger_agent` | Raises `AssertError(trigger_agent=True)`; Surveyor invokes the LLM self-healing loop. |
+
+**Implementation note:** Assert is executed by `aqueduct.executor.spark.assert_.execute_assert()`. It returns `(passing_df, quarantine_df | None)`. The executor wires `quarantine_df` into `frame_store["{module_id}.spillway"]` if a spillway edge exists; otherwise logs a warning and discards quarantine rows.
+
 
 # **5. Context Registry**
 ## **5.1 Overview & Design Contract**
@@ -936,7 +1023,39 @@ probes:
   block_full_actions_in_prod: true
 secrets:
   provider: env                    # env | aws | gcp | azure | vault
+
+# Simple form — plain URL, sends full FailureContext JSON via POST
+webhooks:
+  on_failure: "https://hooks.slack.com/services/T.../B.../"
+
+# Full form — custom method, headers, templated payload
+webhooks:
+  on_failure:
+    url: "${SLACK_WEBHOOK_URL}"
+    method: POST                   # POST | PUT | PATCH
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"   # ${ENV_VAR} reads os.environ
+    payload:                       # null = send full FailureContext JSON
+      text: "Pipeline *${pipeline_id}* failed on `${failed_module}`"
+      run_id: "${run_id}"
+    timeout: 10
 ```
+
+**Webhook template variables** (available in `payload` values and `headers` values):
+
+| Variable | Value |
+| :- | :- |
+| `${run_id}` | UUID of the pipeline run |
+| `${pipeline_id}` | Pipeline identifier string |
+| `${pipeline_name}` | Pipeline display name |
+| `${failed_module}` | Module ID of first failure |
+| `${error_message}` | Human-readable error string |
+| `${error_type}` | Exception class name |
+| `${started_at}` | ISO-8601 run start timestamp |
+| `${attempt}` | Number of failed modules in this run |
+| `${ANY_ENV_VAR}` | Falls back to `os.environ` if not a built-in var — useful for auth tokens in headers |
+
+If `payload` is omitted, the complete `FailureContext` JSON document is sent (run metadata, failed module, stack trace, probe signals, manifest snapshot).
 
 ## **10.2 Deployment Targets**
 
@@ -986,6 +1105,8 @@ These are explicit guarantees that Aqueduct makes regarding its performance over
 |**aqueduct depot get <key>**|Read a value from the Depot KV store.|
 |**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
 |**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|
+|**aqueduct check-config**|Validate aqueduct.yml schema without running a pipeline. Prints resolved engine, stores, webhook, and secrets summary. Exit 0 = valid, 1 = invalid. Accepts --config to specify a non-default path.|
+|**aqueduct doctor**|Probe all configured resources end-to-end: config schema, DuckDB stores (depot + observability), secrets provider, webhook reachability, Spark connectivity, and object storage auth. Each check is independent. Accepts --config and --skip-spark (skips JVM startup for fast CI use). Exit 0 = all ok/warn/skip, 1 = any check failed.|
 
 
 # **12. Deferred Topics & Open Items**
@@ -1021,7 +1142,40 @@ Candidate MCP tools:
 When Aqueduct operates as an MCP server, the `approval_mode` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
 
 
-# **13. Implementation Phases** *(Implementer Reference)*
+# **13. Engine Scope & Boundaries**
+
+This section explicitly defines what Aqueduct is and is not, to prevent scope creep and set clear expectations for integrators.
+
+## **13.1 What Aqueduct Is**
+
+- A **batch processing engine** for Apache Spark. Every pipeline run is finite — it starts, processes a bounded dataset, and completes.
+- A **declarative control plane**. Engineers describe *what* the pipeline does (YAML Blueprint), not *how* Spark executes it.
+- A **data preparation layer**. Its output is clean, validated, enriched DataFrames written to storage or databases.
+- An **LLM-integrated operations tool**. Self-healing, patch lifecycle, and FailureContext are core, not optional add-ons.
+
+## **13.2 What Aqueduct Is Not**
+
+| **Out of scope** | **Rationale / Recommended alternative** |
+| :- | :- |
+| **Streaming (Spark Structured Streaming, Kafka)** | Streaming requires continuous process lifecycle management, microbatch Probe semantics, and Regulator re-evaluation models that are fundamentally different from batch. Deferred to spec v1.1. |
+| **Native ML training pipelines** | Training orchestration belongs to MLflow Pipelines, Vertex AI Pipelines, or Kubeflow. Aqueduct prepares the data that feeds these systems. |
+| **ML inference as a built-in Channel op** | Planned as a Channel op type (`op: infer`, wrapping MLflow/SageMaker endpoints) in v1.1. Not in v1. |
+| **Flink execution engine** | The `executor/__init__.py` factory has a `flink` stub that raises `NotImplementedError`. Flink support is planned but not started. |
+| **Multi-pipeline orchestration (native)** | Cross-pipeline deps use Depot watermarks + external orchestrators (Airflow, Prefect, Dagster). A native Aqueduct workflow layer is a v1.2 candidate. |
+| **Visual graph editor / UI** | The Blueprint YAML is always the source of truth. A UI is a separate product layer — it reads and writes valid Blueprint YAML. |
+| **Real-time alerting / monitoring daemon** | Aqueduct's Surveyor is a run-scoped supervisor, not a persistent monitoring service. Long-running monitoring integrates via webhook signals to PagerDuty, Slack, etc. |
+| **Data catalogue / discovery** | Lineage data in `lineage.db` is queryable but Aqueduct does not provide a data catalogue UI. Integrate with DataHub, OpenMetadata, or Amundsen via export. |
+
+## **13.2 Scheduling**
+
+Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command designed to be invoked by an orchestrator:
+
+- **Simple cron**: Any OS-level cron, systemd timer, or cloud scheduler (AWS EventBridge, GCP Cloud Scheduler) invoking `aqueduct run blueprint.yml`.
+- **Complex orchestration**: An Airflow `AqueductOperator` (wrapping `aqueduct run` as a `BashOperator` or SDK call) for dependency management, backfill, and SLA tracking.
+- **On-demand**: Manual invocation from CI/CD pipelines or by the LLM agent via `aqueduct run` after patch application.
+
+
+# **14. Implementation Phases** *(Implementer Reference)*
 
 > This section is a guide for phased implementation. It is not part of the public specification.
 
