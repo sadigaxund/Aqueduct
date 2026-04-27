@@ -4,9 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqueduct-core"
-version = "0.1.0"
+version = "1.0.0a0"
 description = "Declarative, self-healing Apache Spark pipelines."
 readme = "README.md"
+authors = [
+    {name = "Sadig Akhund", email = "sadigaxund@gmail.com"},
+]
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
 keywords = ["spark", "pipeline", "etl", "data-engineering", "llm", "self-healing"]
@@ -42,10 +45,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sadigaxund/aqueduct"
-Repository = "https://github.com/sadigaxund/aqueduct"
-Issues = "https://github.com/sadigaxund/aqueduct/issues"
-Changelog = "https://github.com/sadigaxund/aqueduct/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/sadigaxund/Aqueduct"
+Repository = "https://github.com/sadigaxund/Aqueduct"
+Issues = "https://github.com/sadigaxund/Aqueduct/issues"
+Changelog = "https://github.com/sadigaxund/Aqueduct/blob/main/CHANGELOG.md"
 
 [project.scripts]
 aqueduct = "aqueduct.cli:cli"
@@ -54,8 +57,13 @@ aqueduct = "aqueduct.cli:cli"
 packages = ["aqueduct"]
 
 [tool.hatch.build.targets.sdist]
-include = ["aqueduct/", "tests/", "README.md", "LICENSE", "pyproject.toml", "CHANGELOG.md"]
-exclude = ["docs/specs.docx", "examples/", ".dev/", ".prompts/", ".claude/"]
+include = [
+    "/aqueduct",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+    "/CHANGELOG.md",
+]
 
 [tool.black]
 line-length = 100
