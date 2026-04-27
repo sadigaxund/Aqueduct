@@ -61,5 +61,4 @@ agent:
   provider: "ollama"               # "anthropic" | "openai_compat" | "ollama"
   model: "qwen3:32b"
   base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
-#
 #     max_patches_per_run: 5

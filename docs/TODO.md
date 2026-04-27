@@ -30,3 +30,6 @@
 
 7. do nyc demo, test spark master connectivity, and maybe go fix ScrapeTL and train Gemma
 
+8. does doctor command also test LLM connectivity?
+
+9. JOURNAL.md is now moved into CHANGELOG.md
