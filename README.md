@@ -246,6 +246,13 @@ aqueduct run      pipeline.yml \
   --run-id my-run-001 \
   --ctx env=prod
 
+aqueduct check-config                       # Validate aqueduct.yml schema; print resolved summary
+aqueduct check-config --config path/to/aqueduct.yml
+
+aqueduct doctor                             # Probe all resources end-to-end (config, stores, secrets, webhook, Spark, storage)
+aqueduct doctor --skip-spark               # Skip JVM startup — fast CI health check
+aqueduct doctor --config path/to/aqueduct.yml
+
 aqueduct patch apply patch.json --blueprint pipeline.yml
 aqueduct patch reject <patch-id> --reason "Incorrect column name"
 ```

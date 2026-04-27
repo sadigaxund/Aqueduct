@@ -44,3 +44,22 @@ stores:
 
 webhooks:
   on_failure: null   # set to an HTTPS URL to receive failure payloads
+
+agent:
+#     # "disabled" → LLM never fires (default when agent: block is omitted)
+#     # "human"    → patch written to patches/pending/ for manual review
+#     # "auto"     → patch applied immediately to Blueprint, pipeline retried
+  approval_mode: "human"
+#
+#     # What to do when patches/pending/ is non-empty at run time.
+#     # "warn"   → print warning, run anyway, suppress LLM (default)
+#     # "block"  → exit non-zero before execution starts
+#     # "ignore" → run and call LLM regardless of pending patches
+  on_pending_patches: "warn"
+
+  # LLM provider.
+  provider: "ollama"               # "anthropic" | "openai_compat" | "ollama"
+  model: "qwen3:32b"
+  base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
+#
+#     max_patches_per_run: 5

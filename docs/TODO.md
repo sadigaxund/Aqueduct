@@ -28,9 +28,5 @@
 
 6. prefabs, like currently in order to make anything we have to write blueprint and the pypspark/sql code of every module from zero, what if we have a set of predefined modules that we separate from main functionality, and use them like blocks to build a pipeline? How would it affect the current system and LLM's ability to detect and fix issues? Moreover, do we segregate them like we did with
 
-7. do nyc demo
+7. do nyc demo, test spark master connectivity, and maybe go fix ScrapeTL and train Gemma
 
-8. also what exactly does "aqueduct check-config" do? does it just check
-  syntax? should we create a test-drive command, that checks
-  connectivity and tells us if those will be usable or not. So that we
-  dont have to discover through pipeline failure?                        

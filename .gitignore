@@ -8,6 +8,8 @@ patches/*
 examples/*/*/signals/
 *.db
 .claude/
+data/
+*.parquet
 .prompts/
 *.log
 .aqueduct/

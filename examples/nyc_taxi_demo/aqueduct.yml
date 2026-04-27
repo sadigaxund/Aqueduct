@@ -20,3 +20,12 @@ stores:
   depot:
     backend: duckdb
     path: ".aqueduct/depot.duckdb"
+
+webhooks:
+  on_failure:
+    url: "https://webhook.site/865a93e1-74d7-4f9c-9e19-ec774c64747e"
+    method: POST
+    headers:
+      Authorization: "Bearer ${OPS_API_TOKEN}"
+      X-Source: "aqueduct"
+    timeout: 15
