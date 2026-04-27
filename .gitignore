@@ -1,29 +1,47 @@
 # --- Aqueduct Project ---
-
-# Personal files
-examples/*/*.parquet
+# Local testing, examples, and patches
+.aqueduct/
+archive/
+tmp/
+data/
+patches/*
 examples/*/*.db
 examples/*/*.json
-patches/*
+examples/*/*.parquet
 examples/*/*/signals/
-*.db
-.claude/
-data/
+
+# --- Spark / Hadoop / Data ---
+.spark-staging/
 *.parquet
-.prompts/
-*.log
-.aqueduct/
-pytest_*.*/
+*.avro
+*.csv
+# DuckDB
+*.db
+*.duckdb
+*.duckdb.wal
 
-
+# --- Virtual Environments & Secrets ---
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.pdm-python
+.pdm-build/
+.pixi
 
 # --- Python ---
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
+*.py[codz]
 *$py.class
 *.so
+
+# --- Distribution / Packaging ---
 .Python
-env/
 build/
 develop-eggs/
 dist/
@@ -41,39 +59,101 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.manifest
+*.spec
 
 # --- Testing / Coverage ---
+.pytest_cache/
+pytest_*.*/
+.coverage
 .coverage.*
 htmlcov/
 .tox/
+.nox/
 .nosepy
 nosetests.xml
 coverage.xml
 *.cover
+*.py.cover
 .hypothesis/
+cover/
+.cache
 
-# --- Spark / Hadoop / Data ---
-.spark-staging/
-*.parquet
-*.avro
-*.csv
-# DuckDB local data
-*.duckdb
-*.duckdb.wal
-
-# --- Environments & Secrets ---
-.env
-.venv
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# --- IDEs & OS ---
+# --- IDEs, OS & AI Assistants ---
+# Visual Studio Code
 .vscode/
+# JetBrains
 .idea/
+# Spyder
+.spyderproject
+.spyproject
+# Rope
+.ropeproject
+# macOS
+.DS_Store
+# Windows
+Thumbs.db
+# Claude / Cursor
+.claude/
+CLAUDE.md
+.cursorignore
+.cursorindexingignore
+.prompts/
+# Vim
 *.swp
 *.swo
 *~
-.DS_Store
-Thumbs.db
+
+# --- Tools & Frameworks ---
+# PyPI config
+.pypirc
+# Ruff
+.ruff_cache/
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+# Pyre
+.pyre/
+# pytype
+.pytype/
+# Cython
+cython_debug/
+# Jupyter / IPython
+.ipynb_checkpoints
+profile_default/
+ipython_config.py
+# Django / Flask / Scrapy
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+instance/
+.webassets-cache
+.scrapy
+# Celery
+celerybeat-schedule
+celerybeat.pid
+# Sphinx / mkdocs
+docs/_build/
+/site
+# Translations
+*.mo
+*.pot
+# PyBuilder
+.pybuilder/
+target/
+# SageMath
+*.sage.py
+# Abstra
+.abstra/
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+
+# --- Logs & Misc ---
+*.log
+*.bak
+pip-log.txt
+pip-delete-this-directory.txt
+__pypackages__/

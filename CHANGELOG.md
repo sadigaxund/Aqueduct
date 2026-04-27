@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0a0 — 2026-04-27
+
+Alpha release preparation for PyPI.
+
+- Project Journal consolidated into root CHANGELOG.md
+- Build configuration optimized for PyPI (excluded tests and examples from distribution)
+- Metadata updated with author and contact information
+
 # Project Journal
 
 ---

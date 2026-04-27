@@ -7,8 +7,6 @@
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them—monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
-> **Vibe-Transform-Load (VTL) for Apache Spark.**
-
 ---
 
 ## What Makes Aqueduct Different?
