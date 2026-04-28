@@ -2,7 +2,8 @@ aqueduct_config: "1.0"
 
 deployment:
   engine: spark
-  target: standalone
+  target: remote
+  # master_url: "spark://10.0.0.39:7077"
   master_url: "local[*]"
 
 spark_config:
@@ -29,3 +30,12 @@ webhooks:
       Authorization: "Bearer ${OPS_API_TOKEN}"
       X-Source: "aqueduct"
     timeout: 15
+  
+  agent:
+    approval_mode: "human"         # disabled | human | auto
+    on_pending_patches: "warn"     # ignore | warn | block
+    max_patches_per_run: 5
+    # Override connection defaults for this pipeline only:
+    provider: "openai_compat"
+    base_url: "http://10.0.0.39:11434/v1"
+    model: "deepseek-r1:14b"
