@@ -1,0 +1,31 @@
+aqueduct: "1.0"
+
+id: nyc_taxi_demo
+name: "NYC Taxi Demo"
+
+description: |
+  Simple NYC taxi pipeline that:
+    - Ingests yellow and green taxi trip data (Parquet)
+    - Cleans data and standardizes schemas
+    - Enriches with taxi zone information
+    - Aggregates hourly trip volumes
+    - Outputs hourly totals to a Parquet summary table
+
+
+context:
+  paths:
+    yellow_path: "data/yellow/"
+    green_path: "data/green/"
+    lookup_table: "data/zones/taxi_zone_lookup.csv"
+
+modules:
+  - id: yellow_taxi_trips
+    type: Ingress
+    label: "Load Yellow Trips"
+    config:
+      format: parquet
+      path: "${ctx.paths.yellow_path}/*.parquet"
+      options:
+        mergeSchema: "true"
+
+
