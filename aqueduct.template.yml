@@ -192,29 +192,72 @@ webhooks:
   #   timeout: 15
 
 
-# ── LLM Agent (self-healing) — Reference ──────────────────────────────────────
+# ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
-# Agent config belongs in the Blueprint agent: block, not here.
-# Each pipeline configures its own LLM healing policy independently.
-# This section is a reference only — copy into your Blueprint as needed.
+# Sets the LLM provider, endpoint, and model used by all pipelines.
+# Per-pipeline policy (approval_mode, on_pending_patches) belongs in each
+# Blueprint's agent: block — not here.
 #
-# Blueprint-level agent block:
+# Blueprint agent: values override these defaults on conflict.
+# If a pipeline omits agent: entirely, LLM self-healing is disabled regardless.
+
+agent:
+  # ── Anthropic (default) ────────────────────────────────────────────────────
+  provider: "anthropic"              # "anthropic" | "openai_compat"
+  model: "claude-sonnet-4-6"
+  # ANTHROPIC_API_KEY env var required at runtime
+
+  # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
+  # provider: "openai_compat"
+  # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
+  # model: "deepseek-r1:14b"
+  # ollama_options:                          # forwarded as payload["options"]
+  #   num_thread: 16
+  #   num_gpu: 0                             # 0 = CPU only; 99 = all on GPU
+  #   mlock: true                            # lock weights in RAM (no swap)
+  #   num_batch: 1024                        # prompt eval batch size
+  #   num_predict: -1                        # -1 = no token limit
+
+# ── Blueprint agent: block (policy — copy into pipeline YAML) ─────────────────
 #
 #   agent:
-#     # "disabled" → LLM never fires (default when agent: block is omitted)
-#     # "human"    → patch written to patches/pending/ for manual review
-#     # "auto"     → patch applied immediately to Blueprint, pipeline retried
+#     # approval_mode controls what happens when the pipeline fails:
+#     #
+#     #   disabled   — LLM never fires (default when agent: block is omitted)
+#     #   human      — LLM generates patch → written to patches/pending/ → run ends
+#     #                You review, then: aqueduct patch apply patches/pending/<id>.json --blueprint ...
+#     #   auto       — LLM generates patch → applied in-memory → pipeline re-runs to validate
+#     #                If re-run succeeds: patch written to Blueprint permanently
+#     #                If re-run fails:    patch discarded, Blueprint unchanged
+#     #                Only one patch attempt per run.
+#     #   aggressive — LLM generates patch → written to Blueprint immediately → pipeline re-runs
+#     #                Loops up to max_patches_per_run times with no validation gate.
+#     #                ⚠ WARNING: Blueprint may be modified multiple times autonomously.
+#     #                   All changes are permanent. Review patches/applied/ after the run.
 #     approval_mode: "human"
 #
-#     # What to do when patches/pending/ is non-empty at run time.
-#     # "warn"   → print warning, run anyway, suppress LLM (default)
-#     # "block"  → exit non-zero before execution starts
-#     # "ignore" → run and call LLM regardless of pending patches
-#     on_pending_patches: "warn"
+#     on_pending_patches: "warn"     # ignore | warn | block
+#     max_patches_per_run: 3         # max LLM patch+rerun cycles (auto: always 1; aggressive: up to N)
 #
-#     # LLM provider.
-#     provider: "anthropic"               # "anthropic" | "openai_compat" | "ollama"
-#     model: "claude-sonnet-4-6"
-#     # base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
+#     # ── LLM Guardrails ─────────────────────────────────────────────────────
+#     # Constrain what the LLM agent is allowed to patch. Violations cause the
+#     # patch to be staged for human review instead of applied automatically.
+#     #
+#     # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
+#     #   Empty list (default) = unrestricted.
+#     #   Any path not matching at least one pattern → patch staged for review.
+#     # allowed_paths:
+#     #   - "s3a://my-bucket/prod/*"    # only prod bucket paths
+#     #   - "s3a://my-bucket/staging/*"
+#     #
+#     # forbidden_ops: PatchSpec operation names the LLM may never use.
+#     #   Empty list (default) = all ops permitted.
+#     #   Matching op → patch staged for review immediately.
+#     # forbidden_ops:
+#     #   - remove_module              # never delete modules autonomously
+#     #   - replace_retry_policy       # don't touch retry config
 #
-#     max_patches_per_run: 5
+#     # Override connection defaults for this pipeline only:
+#     # provider: "openai_compat"
+#     # base_url: "http://10.0.0.39:11434/v1"
+#     # model: "qwen2.5-coder:14b"

@@ -689,3 +689,88 @@ Issues reported in:
 - ✅ Module with `checkpoint: true` round-trips through Parser → `Module.checkpoint == True`
 - ✅ `Manifest.checkpoint` populated from Blueprint; `to_dict()` includes it
 - ✅ Omitting `checkpoint` → defaults to `False` at all levels
+
+---
+
+## Phase 9 — Sub-DAG Execution, Backfill, Guardrails, Patch Rollback
+
+### Sub-DAG selectors (`--from` / `--to`) — `aqueduct/executor/spark/executor.py`
+
+**`_reachable_forward(start_id, edges)`:** BFS on data edges from start_id.
+**`_reachable_backward(start_id, edges)`:** BFS on reverse data edges to start_id.
+**`_selector_included(modules, edges, from_module, to_module)`:** returns `None` (no filter) when both are None; otherwise intersects forward set and backward set.
+
+- ✅ `_reachable_forward`: linear A→B→C, start=A → {A, B, C}
+- ✅ `_reachable_forward`: start=B → {B, C} (A excluded)
+- ✅ `_reachable_forward`: fan-out A→B, A→C → {A, B, C}
+- ✅ `_reachable_backward`: linear A→B→C, target=C → {A, B, C}
+- ✅ `_reachable_backward`: target=B → {A, B} (C excluded)
+- ✅ `_selector_included`: both None → returns None (no selector active)
+- ✅ `_selector_included`: from_module only → returns forward-reachable set from that module
+- ✅ `_selector_included`: to_module only → returns backward-reachable set up to that module
+- ✅ `_selector_included`: both set → returns intersection (from forward ∩ to backward)
+- ✅ `_selector_included`: from_module not in manifest → raises `ExecuteError` with clear message
+- ✅ `_selector_included`: to_module not in manifest → raises `ExecuteError` with clear message
+- ✅ executor: module not in `included_ids` → `ModuleResult(status="skipped")`, frame_store not populated
+- ⏳ executor: skipped upstream + included downstream → frame_store miss produces natural `ExecutionResult(status="error")` with clear message
+- ✅ end-to-end: `--from clean_orders` skips Ingress module; ExecutionResult includes skipped Ingress entry
+- ✅ end-to-end: `--from A --to B` on 3-module chain A→B→C: C status="skipped", A+B execute
+
+### Logical execution date (`--execution-date`) — `aqueduct/compiler/runtime.py`
+
+**`AqFunctions._execution_date`:** `date | None`, set at construction. **`_base_date()`:** returns `_execution_date` when set, else `date.today()`.
+
+- ✅ `AqFunctions(execution_date=date(2026,1,15))._base_date()` returns `date(2026,1,15)`
+- ✅ `AqFunctions()._base_date()` returns today's date
+- ✅ `date_today()` with execution_date set → returns `"2026-01-15"` (not today)
+- ✅ `date_yesterday()` with execution_date=2026-01-15 → `"2026-01-14"`
+- ✅ `date_month_start()` with execution_date=2026-01-15 → `"2026-01-01"`
+- ✅ `runtime_timestamp()` with execution_date set → `"2026-01-15T00:00:00+00:00"` (midnight UTC)
+- ✅ `runtime_timestamp()` without execution_date → current UTC timestamp (not midnight)
+- ✅ `compile()` with `execution_date=date(2026,1,15)` passed through to `AqFunctions`; `@aq.date.today()` resolves to `"2026-01-15"` in Manifest context
+- ⏳ CLI `--execution-date 2026-01-15` parses to `date(2026,1,15)` and passed to compiler
+- ⏳ CLI `--execution-date` invalid format → click error with clear message
+
+### LLM Guardrails — `aqueduct/cli.py` + `aqueduct/parser/`
+
+**`_check_guardrails(patch, agent)`:** returns error string on violation, else None.
+**`AgentConfig.allowed_paths`:** tuple of fnmatch patterns; empty = unrestricted.
+**`AgentConfig.forbidden_ops`:** tuple of op names; empty = all permitted.
+
+- ✅ `allowed_paths=[]` → no path violations regardless of patch content
+- ✅ `forbidden_ops=[]` → no op violations regardless of patch content
+- ✅ patch op in `forbidden_ops` → returns error message containing op name
+- ✅ patch config.path matching an `allowed_paths` pattern → no violation
+- ✅ patch config.path NOT matching any `allowed_paths` pattern → returns error message containing path
+- ✅ patch with no `config.path` (e.g. `replace_module_label`) → no path violation even if `allowed_paths` set
+- ⏳ guardrail violation → patch staged in `patches/pending/`, not applied; pipeline ends with status="error"
+- ✅ `AgentConfig.allowed_paths` round-trips through schema → parser → model (empty default)
+- ✅ `AgentConfig.forbidden_ops` round-trips through schema → parser → model (empty default)
+- ✅ `allowed_paths` + `forbidden_ops` in Blueprint YAML parsed correctly to `AgentConfig`
+
+### Patch Rollback — `aqueduct patch rollback` — `aqueduct/cli.py`
+
+**Behavior:** locates backup in `patches/backups/<patch_id>_*`; restores Blueprint atomically via tmp+rename; moves applied record to `patches/rolled_back/` with `rolled_back_at`.
+
+- ✅ `patch rollback <id>`: backup exists → Blueprint restored to backup content
+- ✅ `patch rollback <id>`: restore is atomic (tmp file + os.replace, not direct overwrite)
+- ✅ `patch rollback <id>`: applied record moved from `patches/applied/` to `patches/rolled_back/`
+- ✅ `patch rollback <id>`: rolled-back file contains `rolled_back_at` ISO timestamp
+- ✅ `patch rollback <id>`: no backup found → error message; Blueprint unchanged
+- ⏳ `patch rollback <id>`: multiple backups for same patch_id → most recent used (sort by filename ts)
+- ✅ `patch rollback <id>`: no applied record (patch was staged-only) → rollback still restores Blueprint if backup exists
+
+### Channel `op: join` — `aqueduct/executor/spark/channel.py`
+
+**Config:** `left`, `right`, `join_type` (inner/left/right/full/cross/semi/anti), `condition`, `broadcast_side` (left/right/none).
+**Stub status:** spec and schema defined; executor not yet implemented.
+
+- ⏳ `op: join` with all required fields → `ChannelError("op 'join' not yet implemented")` (stub)
+- ⏳ `op: join` missing `left` → `ChannelError` before reaching stub
+- ⏳ `op: join` missing `right` → `ChannelError` before reaching stub
+- ⏳ `op: join` missing `condition` (for non-cross join_type) → `ChannelError`
+- ⏳ `op: join` `join_type: cross` without condition → no error (cross join needs no condition)
+- ⏳ *(future — after implementation)* `op: join` inner join: result contains only matching rows
+- ⏳ *(future)* `op: join` left join: all left rows present; unmatched right rows are null
+- ⏳ *(future)* `op: join` `broadcast_side: right` → `F.broadcast()` applied to right DataFrame
+- ⏳ *(future)* `op: join` registered upstreams available as temp views for condition SQL expressions

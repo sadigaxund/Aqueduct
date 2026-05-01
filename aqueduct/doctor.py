@@ -86,22 +86,27 @@ def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckRes
     """
     t = time.monotonic()
 
-    def _probe() -> tuple[str, CheckResult]:
+    def _probe() -> tuple[str, bool, CheckResult]:
+        import pyspark
         from aqueduct.executor.spark.session import make_spark_session
-        spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url)
+        spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
         n = spark.range(1).count()
-        v = spark.version
-        spark_detail = f"connected  master={master_url}  spark={v}  range(1).count()={n}"
+        cluster_ver = spark.version
+        client_ver = pyspark.__version__
+        ver_mismatch = cluster_ver.split(".")[0] != client_ver.split(".")[0]
+        ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
+        spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
         spark.stop()
-        return spark_detail, storage_result
+        return spark_detail, ver_mismatch, storage_result
 
     storage_skip = CheckResult("storage", "skip", "spark check did not complete")
     with ThreadPoolExecutor(max_workers=1) as ex:
         future = ex.submit(_probe)
         try:
-            spark_detail, storage_result = future.result(timeout=SPARK_PROBE_TIMEOUT)
-            return CheckResult("spark", "ok", spark_detail, _ms(t)), storage_result
+            spark_detail, ver_mismatch, storage_result = future.result(timeout=SPARK_PROBE_TIMEOUT)
+            spark_status = "warn" if ver_mismatch else "ok"
+            return CheckResult("spark", spark_status, spark_detail, _ms(t)), storage_result
         except FuturesTimeout:
             return (
                 CheckResult("spark", "fail", f"timed out after {SPARK_PROBE_TIMEOUT}s — master unreachable? ({master_url})", _ms(t)),
@@ -150,6 +155,63 @@ def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None
         return CheckResult("webhook", "fail", f"{url}: {exc}", _ms(t))
     except Exception as exc:
         return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
+
+
+def check_llm(
+    llm_provider: str,
+    base_url: str | None,
+    model: str,
+) -> CheckResult:
+    """Probe LLM connectivity.
+
+    anthropic:     verifies ANTHROPIC_API_KEY is set; does not make an API call
+                   (avoid token cost in a health check).
+    openai_compat: GET {base_url}/models — lists loaded models, free, no tokens.
+                   Skipped if base_url is not configured.
+    """
+    import httpx
+    t = time.monotonic()
+
+    if llm_provider == "anthropic":
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            return CheckResult(
+                "llm", "warn",
+                "provider=anthropic  ANTHROPIC_API_KEY not set — LLM self-healing will fail at runtime",
+                _ms(t),
+            )
+        return CheckResult(
+            "llm", "ok",
+            f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
+            _ms(t),
+        )
+
+    # openai_compat (Ollama, vLLM, LM Studio, …)
+    if not base_url:
+        return CheckResult(
+            "llm", "skip",
+            "provider=openai_compat  base_url not configured",
+            _ms(t),
+        )
+
+    models_url = base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
+    try:
+        resp = httpx.get(models_url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        available = [m.get("id", m.get("name", "?")) for m in data.get("data", data.get("models", []))]
+        model_note = f"  model={model}"
+        if available and model not in available:
+            model_note += f"  ⚠ not in loaded models: {', '.join(available[:5])}"
+        return CheckResult(
+            "llm", "ok",
+            f"provider=openai_compat  endpoint={models_url}{model_note}",
+            _ms(t),
+        )
+    except httpx.RequestError as exc:
+        return CheckResult("llm", "fail", f"{models_url}: {exc}", _ms(t))
+    except Exception as exc:
+        return CheckResult("llm", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
 
 
 def check_secrets(provider: str) -> CheckResult:
@@ -260,9 +322,10 @@ def run_doctor(
     if cfg_result.status == "fail":
         results.append(CheckResult("depot", "skip", "config failed"))
         results.append(CheckResult("observability", "skip", "config failed"))
-        results.append(CheckResult("spark", "skip", "config failed"))
-        results.append(CheckResult("webhook", "skip", "config failed"))
         results.append(CheckResult("secrets", "skip", "config failed"))
+        results.append(CheckResult("llm", "skip", "config failed"))
+        results.append(CheckResult("webhook", "skip", "config failed"))
+        results.append(CheckResult("spark", "skip", "config failed"))
         results.append(CheckResult("storage", "skip", "config failed"))
         return results
 
@@ -279,6 +342,9 @@ def run_doctor(
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider))
+
+    # LLM connectivity
+    results.append(check_llm(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure

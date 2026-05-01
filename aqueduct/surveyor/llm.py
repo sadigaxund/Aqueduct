@@ -224,12 +224,13 @@ def _call_llm(
     provider: str,
     base_url: str | None,
     patches_dir: Path,
+    ollama_options: dict[str, Any] | None = None,
 ) -> str:
     """Call the configured LLM provider and return raw text response."""
     system_prompt = _build_system_prompt(patches_dir)
 
     if provider == "openai_compat":
-        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt)
+        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, ollama_options)
     else:
         return _call_anthropic(messages, model, max_tokens, system_prompt)
 
@@ -273,6 +274,7 @@ def _call_openai_compat(
     max_tokens: int,
     base_url: str | None,
     system_prompt: str,
+    ollama_options: dict[str, Any] | None = None,
 ) -> str:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -286,11 +288,13 @@ def _call_openai_compat(
     api_key = os.environ.get("OPENAI_API_KEY", "ollama")  # Ollama ignores key
     url = base_url.rstrip("/") + "/chat/completions"
 
-    payload = {
+    payload: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": [{"role": "system", "content": system_prompt}] + messages,
     }
+    if ollama_options:
+        payload["options"] = ollama_options
 
     response = httpx.post(
         url,
@@ -316,32 +320,21 @@ def _parse_patch_spec(text: str) -> PatchSpec:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def trigger_llm_patch(
+def generate_llm_patch(
     failure_ctx: FailureContext,
     model: str,
-    api_endpoint: str,
-    max_tokens: int,
-    approval_mode: str,
-    blueprint_path: Path | None,
     patches_dir: Path,
     provider: str = "anthropic",
     base_url: str | None = None,
+    max_tokens: int = 4096,
+    ollama_options: dict[str, Any] | None = None,
 ) -> PatchSpec | None:
-    """Run the LLM patch loop for a failed pipeline run.
+    """Call the LLM and return a validated PatchSpec.
 
-    Args:
-        failure_ctx:    FailureContext built by Surveyor.
-        model:          Model ID (e.g. claude-sonnet-4-6 or gemma3).
-        api_endpoint:   Unused — kept for signature compat.
-        max_tokens:     Max tokens per LLM response.
-        approval_mode:  "auto" | "human".
-        blueprint_path: Path to Blueprint YAML (required for auto mode).
-        patches_dir:    Root directory for patch lifecycle subdirs.
-        provider:       "anthropic" | "openai_compat".
-        base_url:       Base URL for openai_compat (e.g. http://host:11434/v1 for Ollama).
+    Does not apply or stage the patch — caller decides what to do with it.
 
-    Returns:
-        Applied or staged PatchSpec, or None if LLM failed to produce a valid patch.
+    Returns None if the LLM failed to produce a valid PatchSpec after
+    MAX_REPROMPTS attempts.
     """
     messages: list[dict[str, Any]] = [
         {
@@ -354,7 +347,7 @@ def trigger_llm_patch(
 
     for attempt in range(MAX_REPROMPTS):
         try:
-            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir)
+            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options)
         except Exception as exc:
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s", attempt + 1, MAX_REPROMPTS, exc
@@ -381,28 +374,15 @@ def trigger_llm_patch(
             "for pipeline %r run %r",
             MAX_REPROMPTS, failure_ctx.pipeline_id, failure_ctx.run_id,
         )
-        return None
-
-    if approval_mode == "human":
-        return _stage_for_human(patch_spec, patches_dir, failure_ctx)
-
-    if blueprint_path is None or not blueprint_path.exists():
-        logger.error(
-            "approval_mode=auto but blueprint_path missing (%s); falling back to human staging.",
-            blueprint_path,
-        )
-        return _stage_for_human(patch_spec, patches_dir, failure_ctx)
-
-    return _auto_apply(patch_spec, blueprint_path, patches_dir, failure_ctx)
+    return patch_spec
 
 
-# ── Dispatch helpers ──────────────────────────────────────────────────────────
-
-def _stage_for_human(
+def stage_patch_for_human(
     patch_spec: PatchSpec,
     patches_dir: Path,
     failure_ctx: FailureContext,
-) -> PatchSpec:
+) -> None:
+    """Write patch to patches/pending/ for human review."""
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     out_path = pending_dir / f"{patch_spec.patch_id}.json"
@@ -419,62 +399,27 @@ def _stage_for_human(
         "(apply with: aqueduct patch apply %s --blueprint <path>)",
         out_path, out_path,
     )
-    return patch_spec
 
 
-def _auto_apply(
+def archive_patch(
     patch_spec: PatchSpec,
-    blueprint_path: Path,
     patches_dir: Path,
     failure_ctx: FailureContext,
-) -> PatchSpec | None:
-    try:
-        import os as _os
-        import tempfile
-
-        from aqueduct.parser.parser import ParseError, parse
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
-
-        bp_raw = _yaml_load(blueprint_path)
-        patched = apply_patch_to_dict(bp_raw, patch_spec)
-
-        with tempfile.NamedTemporaryFile(suffix=".yml", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        _yaml_dump(patched, tmp_path)
-
-        try:
-            parse(str(tmp_path))
-        except ParseError as exc:
-            logger.error("LLM patch produces invalid Blueprint: %s; not applying.", exc)
-            return None
-        finally:
-            tmp_path.unlink(missing_ok=True)
-
-        applied_dir = patches_dir / "applied"
-        applied_dir.mkdir(parents=True, exist_ok=True)
-        archive_path = applied_dir / f"{patch_spec.patch_id}.json"
-        payload = patch_spec.model_dump()
-        payload["_aq_meta"] = {
-            "run_id": failure_ctx.run_id,
-            "pipeline_id": failure_ctx.pipeline_id,
-            "applied_at": _utcnow(),
-            "auto_applied": True,
-        }
-        archive_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-        tmp_out = blueprint_path.with_suffix(".llm_patch.tmp.yml")
-        _yaml_dump(patched, tmp_out)
-        _os.replace(tmp_out, blueprint_path)
-
-        logger.info(
-            "LLM patch auto-applied: %s  (%d operations)  archived → %s",
-            patch_spec.patch_id, len(patch_spec.operations), archive_path,
-        )
-        return patch_spec
-
-    except Exception as exc:
-        logger.error("LLM auto-apply failed: %s", exc)
-        return None
+    mode: str,
+) -> None:
+    """Write patch to patches/applied/ with metadata."""
+    applied_dir = patches_dir / "applied"
+    applied_dir.mkdir(parents=True, exist_ok=True)
+    archive_path = applied_dir / f"{patch_spec.patch_id}.json"
+    payload = patch_spec.model_dump()
+    payload["_aq_meta"] = {
+        "run_id": failure_ctx.run_id,
+        "pipeline_id": failure_ctx.pipeline_id,
+        "failed_module": failure_ctx.failed_module,
+        "applied_at": _utcnow(),
+        "approval_mode": mode,
+    }
+    archive_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def _utcnow() -> str:

@@ -38,6 +38,15 @@ Build in this exact sequence to validate assumptions early. Phases 1–8 are com
 - Keep clear boundaries: AST generation → validation → compilation. Each step returns a new immutable object.
 - When making changes, only modify the layer relevant to the task. If the LLM edits unrelated files, stop and prompt it to explain why.
 
+## Stub Tracking Rule
+
+When a feature is designed but **not fully implemented** (stubbed, schema-forward, or deferred), you **must** update the project memory entry `project_known_stubs.md` (at `~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/project_known_stubs.md`) with:
+- The stub name and what it does in theory
+- Exact file + line where the stub lives
+- What "done" looks like (acceptance criteria)
+
+Update this entry when a stub is **completed** (mark done, note the commit). Never let a stub silently disappear into the codebase without being tracked.
+
 ## Development Process Files (`.dev/`)
 These files live in the `.dev/` directory and are **shared via Git** (except `JOURNAL.md`).
 

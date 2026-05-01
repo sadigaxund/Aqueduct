@@ -736,14 +736,45 @@ retry_policy:
 # 8. AGENT CONFIG (LLM self-healing)
 # ---------------------------------------------------------------------------
 agent:
-  approval_mode: disabled             # disabled | auto | human
-  # disabled  — LLM never fires automatically
-  # auto      — LLM fires on failure, patch applied immediately
-  # human     — LLM fires, patch held in patches/pending/ for review
-  model: "claude-sonnet-4-6"
-  provider: anthropic                 # anthropic | openai_compat | ollama
-  base_url: ~                         # null = use provider default endpoint
-  max_patches_per_run: 5
+  # disabled    — LLM never fires (safe default)
+  # human       — patch written to patches/pending/, you review and apply manually
+  # auto        — patch applied in-memory, pipeline re-run to validate;
+  #               written to Blueprint permanently only if re-run succeeds
+  # aggressive  — patch written to Blueprint immediately, pipeline re-runs;
+  #               loops up to max_patches_per_run; ⚠ permanent changes, no gate
+  approval_mode: disabled
+
   on_pending_patches: warn            # ignore | warn | block
-  # warn  — log if unreviewed patches exist, continue anyway
-  # block — refuse to run while unreviewed patches are pending
+  max_patches_per_run: 3
+
+  # ── Anthropic (default; connection from aqueduct.yml agent: block) ────────
+  provider: anthropic                 # anthropic | openai_compat
+  model: "claude-sonnet-4-6"
+  # ANTHROPIC_API_KEY env var required
+
+  # ── Ollama / vLLM / LM Studio (override aqueduct.yml defaults) ───────────
+  # provider: openai_compat
+  # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
+  # model: "deepseek-r1:14b"
+  # ollama_options:
+  #   num_thread: 16
+  #   num_gpu: 0                             # 0 = CPU only; 99 = all on GPU
+  #   mlock: true
+  #   num_batch: 1024
+  #   num_predict: -1
+
+  # ── LLM Guardrails ────────────────────────────────────────────────────────
+  # Patches violating these rules are staged for human review instead of applied.
+  #
+  # allowed_paths: fnmatch whitelist for config.path values the LLM may touch.
+  #   Empty (default) = unrestricted. Paths not matching → human review.
+  allowed_paths:
+    - "s3a://raw/${ctx.env}/*"
+    - "s3a://processed/${ctx.env}/*"
+    - "s3a://quarantine/${ctx.env}/*"
+  #
+  # forbidden_ops: PatchSpec operation names the LLM is never allowed to use.
+  #   Empty (default) = all ops permitted. Matching op → human review.
+  forbidden_ops:
+    - remove_module              # never delete modules autonomously
+    - replace_retry_policy       # retry policy is managed by humans only

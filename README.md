@@ -5,20 +5,20 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 
-Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them—monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
+Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
 ---
 
 ## What Makes Aqueduct Different?
 
-- **Declarative YAML Blueprints** — No DAG wiring in code. Version-control your entire pipeline.
-- **Any Spark Connector** — Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
-- **LLM-First Observability** — Every failure ships with a complete `FailureContext` JSON, ready for an agent (or you) to diagnose without digging through logs.
-- **Patch Grammar, Not Codegen** — The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
-- **Zero-Cost Observability** — Probes capture schema snapshots, null rates, and sample rows using lazy Spark operations and sampling. No full scans.
-- **Spillway Error Routing** — Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
-- **Depot KV Store** — Cross-run pipeline state (watermarks, counters) backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress.
-- **Passive-by-Default Gates** — Regulators (data quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
+- **Declarative YAML Blueprints** - No DAG wiring in code. Version-control your entire pipeline.
+- **Any Spark Connector** - Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
+- **LLM-First Observability** - Every failure ships with a complete `FailureContext` JSON, ready for an agent (or you) to diagnose without digging through logs.
+- **Patch Grammar, Not Codegen** - The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
+- **Zero-Cost Observability** - Probes capture schema snapshots, null rates, and sample rows using lazy Spark operations and sampling. No full scans.
+- **Spillway Error Routing** - Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
+- **Depot KV Store** - Cross-run pipeline state (watermarks, counters) backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress.
+- **Passive-by-Default Gates** - Regulators (data quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
 
 ---
 
@@ -26,7 +26,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 **Aqueduct Core is Apache 2.0 licensed and always will be.**
 
-You can run it locally, in CI, or on a production Spark cluster — free, forever.
+You can run it locally, in CI, or on a production Spark cluster - free, forever.
 
 A commercial frontend, **Aqueduct Platform**, adds:
 - Centralized dashboards for all your pipelines
@@ -34,7 +34,7 @@ A commercial frontend, **Aqueduct Platform**, adds:
 - Managed Depot (persistent KV store)
 - Audit logs of every LLM patch
 
-The Core engine emits a documented webhook event stream so you can integrate it with any frontend — ours, yours, or a third-party.
+The Core engine emits a documented webhook event stream so you can integrate it with any frontend: ours, yours, or a third-party.
 
 **This repository contains the full engine. No telemetry. No proprietary code.**
 
@@ -53,7 +53,7 @@ pip install aqueduct-core[spark]
 pip install aqueduct-core[all]
 ```
 
-The base package installs the CLI, parser, compiler, and LLM self-healing. All LLM providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency — no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
+The base package installs the CLI, parser, compiler, and LLM self-healing. All LLM providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency - no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
 
 Requires Python 3.11+ and Java 17 (for local Spark).
 
@@ -237,12 +237,22 @@ path: "s3a://data/from=@aq.depot.get('last_processed_date', '2020-01-01')/"
 ```bash
 aqueduct validate pipeline.yml              # Parse and validate only
 aqueduct compile  pipeline.yml              # Output resolved Manifest JSON
+aqueduct compile  pipeline.yml --execution-date 2026-01-15  # backfill: pin @aq.date.* to date
+
 aqueduct run      pipeline.yml              # Compile and execute
 aqueduct run      pipeline.yml \
   --config aqueduct.yml \
   --store-dir .aqueduct/signals \
   --run-id my-run-001 \
   --ctx env=prod
+
+# Sub-DAG execution — run only a slice of the pipeline
+aqueduct run pipeline.yml --from clean_orders              # from module onwards
+aqueduct run pipeline.yml --from clean_orders --to egress  # inclusive range
+aqueduct run pipeline.yml --to egress                      # up to and including module
+
+# Backfill / logical execution date — pins @aq.date.today() and @aq.runtime.timestamp()
+aqueduct run pipeline.yml --execution-date 2026-01-15
 
 aqueduct check-config                       # Validate aqueduct.yml schema; print resolved summary
 aqueduct check-config --config path/to/aqueduct.yml
@@ -253,7 +263,20 @@ aqueduct doctor --config path/to/aqueduct.yml
 
 aqueduct patch apply patch.json --blueprint pipeline.yml
 aqueduct patch reject <patch-id> --reason "Incorrect column name"
+aqueduct patch rollback <patch-id> --blueprint pipeline.yml  # restore Blueprint from backup
 ```
+
+### Key `aqueduct run` flags
+
+| Flag | Description |
+|---|---|
+| `--from <module_id>` | Start execution from this module (inclusive); skips all upstream modules |
+| `--to <module_id>` | Stop execution at this module (inclusive); skips all downstream modules |
+| `--execution-date YYYY-MM-DD` | Pin logical date for `@aq.date.*` and `@aq.runtime.timestamp()` — enables backfill idempotency |
+| `--resume <run_id>` | Resume from checkpoints written by a previous run with `checkpoint: true` |
+| `--run-id <uuid>` | Override auto-generated run UUID (useful for idempotent reruns) |
+| `--ctx key=value` | Override a Blueprint `context:` variable |
+| `--profile <name>` | Activate a `context_profiles:` entry |
 
 ---
 
@@ -308,7 +331,7 @@ Blueprint (YAML)
 ## Development
 
 ```bash
-git clone https://github.com/your-org/aqueduct
+git clone https://github.com/sadigaxund/aqueduct
 cd aqueduct
 pip install -e ".[spark,dev]"
 

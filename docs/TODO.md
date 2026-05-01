@@ -21,15 +21,25 @@
 
 ## Open Questions / Discussions
 
-3. What would be the best way of handling the iterations, that is if an llm couldn't fix the issue on first go, what should the system do? Should it try again with the same blueprint? Or should it try to fix it again with the already fixed blueprint? What kind of automation strategy should we use? having like a max attempts after which it would notify the user about the failure?
+3. [FOR FRONTEND] What would be the best way of handling the iterations, that is if an llm couldn't fix the issue on first go, what should the system do? Should it try again with the same blueprint? Or should it try to fix it again with the already fixed blueprint? What kind of automation strategy should we use? having like a max attempts after which it would notify the user about the failure?
 
-    Moreover, should we really let LLM patches let loose on production environments like that, is there a way to introduce a safe mode where it can reliably run and verify the patch, and only if it is safe and correct, it should be applied to the production environment? Some kind of preview run
+Moreover, should we really let LLM patches let loose on production environments like that, is there a way to introduce a safe mode where it can reliably run and verify the patch, and only if it is safe and correct, it should be applied to the production environment? Some kind of preview run
 
 
-6. prefabs, like currently in order to make anything we have to write blueprint and the pypspark/sql code of every module from zero, what if we have a set of predefined modules that we separate from main functionality, and use them like blocks to build a pipeline? How would it affect the current system and LLM's ability to detect and fix issues? Moreover, do we segregate them like we did with
+6. [FOR FRONTEND] prefabs, like currently in order to make anything we have to write blueprint and the pypspark/sql code of every module from zero, what if we have a set of predefined modules that we separate from main functionality, and use them like blocks to build a pipeline? How would it affect the current system and LLM's ability to detect and fix issues? Moreover, do we segregate them like we did with
 
 7. do nyc demo, test spark master connectivity, and maybe go fix ScrapeTL and train Gemma
 
-8. does doctor command also test LLM connectivity?
+8. When at Phase where we do LLM vector DB thing, also discuss possibility of editing custom prompts to the LLM. 
+9. Update SPARK_GUIDE.md with notes from book.
+10. with doctor command do we do this: "After you have defined the connection properties, you can test your connection to the database
+itself to ensure that it is functional. This is an excellent troubleshooting technique to confirm that
+your database is available to (at the very least) the Spark driver" Example:
 
-9. JOURNAL.md is now moved into CHANGELOG.md
+```java
+import java.sql.DriverManager
+val connection = DriverManager.getConnection(url)
+connection.isClosed()
+connection.close()
+```
+

@@ -377,6 +377,82 @@ def _incoming_main(module_id: str, edges: tuple[Edge, ...]) -> list[Edge]:
     return [e for e in edges if e.to_id == module_id and e.port == "main"]
 
 
+def _reachable_forward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
+    """BFS: all module IDs reachable forward (downstream) from start_id on data edges."""
+    graph: dict[str, list[str]] = defaultdict(list)
+    for e in edges:
+        if _is_data_edge(e):
+            graph[e.from_id].append(e.to_id)
+    visited: set[str] = set()
+    queue: deque[str] = deque([start_id])
+    while queue:
+        mid = queue.popleft()
+        if mid in visited:
+            continue
+        visited.add(mid)
+        for succ in graph[mid]:
+            queue.append(succ)
+    return visited
+
+
+def _reachable_backward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
+    """BFS: all module IDs reachable backward (ancestors) from start_id on data edges."""
+    rev_graph: dict[str, list[str]] = defaultdict(list)
+    for e in edges:
+        if _is_data_edge(e):
+            rev_graph[e.to_id].append(e.from_id)
+    visited: set[str] = set()
+    queue: deque[str] = deque([start_id])
+    while queue:
+        mid = queue.popleft()
+        if mid in visited:
+            continue
+        visited.add(mid)
+        for pred in rev_graph[mid]:
+            queue.append(pred)
+    return visited
+
+
+def _selector_included(
+    modules: tuple[Module, ...],
+    edges: tuple[Edge, ...],
+    from_module: str | None,
+    to_module: str | None,
+) -> set[str] | None:
+    """Return the set of module IDs to execute given --from/--to selectors.
+
+    Returns None when no selector is active (run everything).
+    Probes whose attach_to is in the included set are automatically included.
+    """
+    if not from_module and not to_module:
+        return None
+
+    all_ids = {m.id for m in modules}
+
+    if from_module:
+        if from_module not in all_ids:
+            raise ExecuteError(f"--from module {from_module!r} not found in Manifest")
+        forward = _reachable_forward(from_module, edges)
+    else:
+        forward = all_ids
+
+    if to_module:
+        if to_module not in all_ids:
+            raise ExecuteError(f"--to module {to_module!r} not found in Manifest")
+        backward = _reachable_backward(to_module, edges)
+    else:
+        backward = all_ids
+
+    included = forward & backward
+
+    # Probes: include when their tap target is included
+    for m in modules:
+        if m.type == "Probe" and m.attach_to in included:
+            included.add(m.id)
+
+    return included
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def execute(
@@ -387,6 +463,8 @@ def execute(
     surveyor: Any | None = None,
     depot: Any | None = None,
     resume_run_id: str | None = None,
+    from_module: str | None = None,
+    to_module: str | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -401,6 +479,11 @@ def execute(
                         ``@aq.depot.get()`` resolution.
         resume_run_id:  If set, reload module outputs from checkpoints written by
                         that prior run. Modules with a valid checkpoint are skipped.
+        from_module:    If set, skip all modules that are NOT reachable forward from
+                        this module ID. Modules before from_module in the DAG are
+                        skipped (status="skipped") — upstream data must already exist.
+        to_module:      If set, skip all modules that are NOT ancestors of this
+                        module ID. Stops execution after to_module completes.
 
     Returns:
         Frozen ExecutionResult.
@@ -454,10 +537,25 @@ def execute(
 
     order = _build_execution_order(manifest)
 
+    # Selector: compute included set when --from/--to flags are active
+    included_ids = _selector_included(manifest.modules, manifest.edges, from_module, to_module)
+    if included_ids is not None:
+        excluded = [m.id for m in order if m.id not in included_ids]
+        if excluded:
+            logger.info(
+                "Selector active (from=%s, to=%s): skipping %d module(s): %s",
+                from_module, to_module, len(excluded), excluded,
+            )
+
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
 
     for module in order:
+        # ── Selector skip ─────────────────────────────────────────────────────
+        if included_ids is not None and module.id not in included_ids:
+            module_results.append(ModuleResult(module_id=module.id, status="skipped"))
+            continue
+
         if module.type not in _SUPPORTED_TYPES:
             raise ExecuteError(
                 f"Module type {module.type!r} (id={module.id!r}) is not supported. "
