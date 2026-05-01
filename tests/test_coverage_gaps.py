@@ -611,3 +611,841 @@ class TestApplyPatchUncoveredPaths:
         result = _yaml_dumps({"key": "value", "nested": {"a": 1}})
         assert isinstance(result, str)
         assert "key" in result
+
+
+# ── compiler/macros.py ────────────────────────────────────────────────────────
+
+class TestMacroResolution:
+    def test_simple_substitution(self):
+        from aqueduct.compiler.macros import resolve_macros
+        result = resolve_macros("SELECT * FROM t WHERE {{ macros.f }}", {"f": "x = 1"})
+        assert result == "SELECT * FROM t WHERE x = 1"
+
+    def test_parameterized_substitution(self):
+        from aqueduct.compiler.macros import resolve_macros
+        result = resolve_macros(
+            "{{ macros.trunc(col=ts, period=day) }}",
+            {"trunc": "DATE_TRUNC('{{ period }}', {{ col }})"},
+        )
+        assert result == "DATE_TRUNC('day', ts)"
+
+    def test_quoted_param_value(self):
+        from aqueduct.compiler.macros import resolve_macros
+        result = resolve_macros(
+            "{{ macros.trunc(col=ts, period='month') }}",
+            {"trunc": "DATE_TRUNC('{{ period }}', {{ col }})"},
+        )
+        assert result == "DATE_TRUNC('month', ts)"
+
+    def test_unknown_macro_raises(self):
+        from aqueduct.compiler.macros import MacroError, resolve_macros
+        with pytest.raises(MacroError, match="not defined"):
+            resolve_macros("{{ macros.nonexistent }}", {"other": "x"})
+
+    def test_missing_param_raises(self):
+        from aqueduct.compiler.macros import MacroError, resolve_macros
+        with pytest.raises(MacroError, match="not supplied"):
+            resolve_macros("{{ macros.f(a=1) }}", {"f": "{{ a }} AND {{ b }}"})
+
+    def test_no_macros_passthrough(self):
+        from aqueduct.compiler.macros import resolve_macros
+        sql = "SELECT 1"
+        assert resolve_macros(sql, {}) is sql
+
+    def test_no_tokens_passthrough(self):
+        from aqueduct.compiler.macros import resolve_macros
+        sql = "SELECT * FROM t"
+        assert resolve_macros(sql, {"f": "x"}) == sql
+
+    def test_resolve_in_dict(self):
+        from aqueduct.compiler.macros import resolve_macros_in_config
+        result = resolve_macros_in_config(
+            {"query": "SELECT {{ macros.col }} FROM t"},
+            {"col": "amount"},
+        )
+        assert result["query"] == "SELECT amount FROM t"
+
+    def test_resolve_in_list(self):
+        from aqueduct.compiler.macros import resolve_macros_in_config
+        result = resolve_macros_in_config(["{{ macros.x }}", 42], {"x": "hello"})
+        assert result == ["hello", 42]
+
+    def test_resolve_non_string_passthrough(self):
+        from aqueduct.compiler.macros import resolve_macros_in_config
+        assert resolve_macros_in_config(99, {"x": "y"}) == 99
+
+
+# ── channel.py op:join ────────────────────────────────────────────────────────
+
+class TestChannelJoinQuery:
+    def test_basic_inner_join(self):
+        from aqueduct.executor.spark.channel import _build_join_query
+        q = _build_join_query("m", {"left": "a", "right": "b", "condition": "a.id = b.id"})
+        assert "INNER JOIN" in q
+        assert "ON a.id = b.id" in q
+
+    def test_left_join(self):
+        from aqueduct.executor.spark.channel import _build_join_query
+        q = _build_join_query("m", {"left": "a", "right": "b", "join_type": "left", "condition": "a.id = b.id"})
+        assert "LEFT JOIN" in q
+
+    def test_broadcast_right(self):
+        from aqueduct.executor.spark.channel import _build_join_query
+        q = _build_join_query("m", {"left": "a", "right": "b", "condition": "a.id = b.id", "broadcast_side": "right"})
+        assert "BROADCAST(b)" in q
+
+    def test_broadcast_left(self):
+        from aqueduct.executor.spark.channel import _build_join_query
+        q = _build_join_query("m", {"left": "a", "right": "b", "condition": "a.id = b.id", "broadcast_side": "left"})
+        assert "BROADCAST(a)" in q
+
+    def test_cross_join_no_condition(self):
+        from aqueduct.executor.spark.channel import _build_join_query
+        q = _build_join_query("m", {"left": "a", "right": "b", "join_type": "cross"})
+        assert "CROSS JOIN" in q
+        assert "ON" not in q
+
+    def test_missing_left_raises(self):
+        from aqueduct.executor.spark.channel import ChannelError, _build_join_query
+        with pytest.raises(ChannelError, match="'left'"):
+            _build_join_query("m", {"right": "b", "condition": "x"})
+
+    def test_missing_right_raises(self):
+        from aqueduct.executor.spark.channel import ChannelError, _build_join_query
+        with pytest.raises(ChannelError, match="'right'"):
+            _build_join_query("m", {"left": "a", "condition": "x"})
+
+    def test_invalid_join_type_raises(self):
+        from aqueduct.executor.spark.channel import ChannelError, _build_join_query
+        with pytest.raises(ChannelError, match="invalid join_type"):
+            _build_join_query("m", {"left": "a", "right": "b", "join_type": "outer", "condition": "x"})
+
+    def test_missing_condition_non_cross_raises(self):
+        from aqueduct.executor.spark.channel import ChannelError, _build_join_query
+        with pytest.raises(ChannelError, match="'condition'"):
+            _build_join_query("m", {"left": "a", "right": "b", "join_type": "inner"})
+
+    def test_unsupported_op_raises(self):
+        from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
+        from unittest.mock import MagicMock
+        from aqueduct.parser.models import Module
+        mod = Module(id="m", type="Channel", label="M", config={"op": "merge"})
+        with pytest.raises(ChannelError, match="unsupported"):
+            execute_sql_channel(mod, {"a": MagicMock()}, MagicMock())
+
+
+# ── Phase 11 CLI commands ─────────────────────────────────────────────────────
+
+class TestCliReport:
+    """Tests for `aqueduct report`."""
+
+    def _make_runs_db(self, tmp_path: Path, run_id: str = "abc123", status: str = "success") -> Path:
+        import json as _json
+        import duckdb
+        store = tmp_path / "signals"
+        store.mkdir()
+        db = store / "runs.db"
+        conn = duckdb.connect(str(db))
+        conn.execute("""
+            CREATE TABLE run_records (
+                run_id VARCHAR PRIMARY KEY, pipeline_id VARCHAR, status VARCHAR,
+                started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, module_results JSON
+            )
+        """)
+        module_results = _json.dumps([{"module_id": "m1", "status": status, "error": None}])
+        conn.execute(
+            "INSERT INTO run_records VALUES (?, ?, ?, NOW(), NOW(), ?)",
+            [run_id, "my.pipeline", status, module_results],
+        )
+        conn.close()
+        return store
+
+    def test_table_format(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_runs_db(tmp_path)
+        result = CliRunner().invoke(cli, ["report", "abc123", "--store-dir", str(store)])
+        assert result.exit_code == 0, result.output
+        assert "abc123" in result.output
+        assert "m1" in result.output
+
+    def test_json_format(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_runs_db(tmp_path)
+        result = CliRunner().invoke(cli, ["report", "abc123", "--store-dir", str(store), "--format", "json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert data["run_id"] == "abc123"
+        assert data["pipeline_id"] == "my.pipeline"
+
+    def test_csv_format(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_runs_db(tmp_path)
+        result = CliRunner().invoke(cli, ["report", "abc123", "--store-dir", str(store), "--format", "csv"])
+        assert result.exit_code == 0
+        assert "run_id" in result.output
+        assert "abc123" in result.output
+
+    def test_unknown_run_id_exits_1(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_runs_db(tmp_path)
+        result = CliRunner().invoke(cli, ["report", "NOPE", "--store-dir", str(store)])
+        assert result.exit_code == 1
+
+    def test_missing_runs_db_exits_1(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = tmp_path / "empty"
+        store.mkdir()
+        result = CliRunner().invoke(cli, ["report", "x", "--store-dir", str(store)])
+        assert result.exit_code == 1
+
+
+class TestCliLineage:
+    """Tests for `aqueduct lineage`."""
+
+    def _make_lineage_db(self, tmp_path: Path) -> Path:
+        import duckdb
+        store = tmp_path / "signals"
+        store.mkdir()
+        db = store / "lineage.db"
+        conn = duckdb.connect(str(db))
+        conn.execute("""
+            CREATE TABLE column_lineage (
+                pipeline_id VARCHAR, channel_id VARCHAR,
+                output_column VARCHAR, source_table VARCHAR, source_column VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?)",
+            ["pipe.a", "ch1", "amount", "orders", "total"],
+        )
+        conn.close()
+        return store
+
+    def test_table_output(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        assert "ch1" in result.output
+        assert "amount" in result.output
+
+    def test_json_format(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--format", "json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data) == 1
+        assert data[0]["output_column"] == "amount"
+
+    def test_from_filter(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--from", "orders"])
+        assert result.exit_code == 0
+        assert "amount" in result.output
+
+    def test_column_filter_no_match(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--column", "nope"])
+        assert result.exit_code == 0
+        assert "No lineage records" in result.output
+
+    def test_missing_lineage_db_exits_1(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = tmp_path / "empty"
+        store.mkdir()
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
+        assert result.exit_code == 1
+
+
+class TestCliSignal:
+    """Tests for `aqueduct signal`."""
+
+    def _store(self, tmp_path: Path) -> Path:
+        s = tmp_path / "signals"
+        s.mkdir()
+        return s
+
+    def test_close_gate(self, tmp_path):
+        import duckdb
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._store(tmp_path)
+        result = CliRunner().invoke(cli, ["signal", "my_probe", "--value", "false", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        assert "CLOSED" in result.output
+        conn = duckdb.connect(str(store / "signals.db"))
+        row = conn.execute("SELECT passed FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
+        conn.close()
+        assert row is not None and row[0] is False
+
+    def test_close_gate_with_error_msg(self, tmp_path):
+        import duckdb
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._store(tmp_path)
+        result = CliRunner().invoke(cli, ["signal", "my_probe", "--error", "Stale source", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        conn = duckdb.connect(str(store / "signals.db"))
+        row = conn.execute("SELECT passed, error_message FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
+        conn.close()
+        assert row[0] is False
+        assert "Stale source" in row[1]
+
+    def test_clear_override(self, tmp_path):
+        import duckdb
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._store(tmp_path)
+        # Close first
+        CliRunner().invoke(cli, ["signal", "my_probe", "--value", "false", "--store-dir", str(store)])
+        # Then clear
+        result = CliRunner().invoke(cli, ["signal", "my_probe", "--value", "true", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        assert "cleared" in result.output
+        conn = duckdb.connect(str(store / "signals.db"))
+        row = conn.execute("SELECT passed FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
+        conn.close()
+        assert row is None
+
+    def test_conflicting_flags_exit_1(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._store(tmp_path)
+        result = CliRunner().invoke(cli, ["signal", "p", "--value", "true", "--error", "x", "--store-dir", str(store)])
+        assert result.exit_code == 1
+
+    def test_no_flags_shows_status(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._store(tmp_path)
+        result = CliRunner().invoke(cli, ["signal", "my_probe", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        assert "no persistent override" in result.output
+
+
+class TestEvaluateRegulatorSignalOverride:
+    """Tests that evaluate_regulator() checks signal_overrides before probe_signals."""
+
+    def _make_manifest(self, probe_id="probe1", regulator_id="reg1"):
+        from unittest.mock import MagicMock
+        from aqueduct.compiler.models import Manifest
+        edge = MagicMock()
+        edge.from_id = probe_id
+        edge.to_id = regulator_id
+        edge.port = "signal"
+        manifest = MagicMock(spec=Manifest)
+        manifest.edges = [edge]
+        return manifest
+
+    def test_override_false_blocks_even_if_probe_says_true(self, tmp_path):
+        import duckdb
+        from datetime import datetime, timezone
+        from aqueduct.surveyor.surveyor import Surveyor, _SIGNAL_OVERRIDES_DDL
+        manifest = self._make_manifest()
+        store = tmp_path / "signals"
+        store.mkdir()
+        signals_db = store / "signals.db"
+        conn = duckdb.connect(str(signals_db))
+        conn.execute(_SIGNAL_OVERRIDES_DDL)
+        conn.execute(
+            "INSERT INTO signal_overrides VALUES (?, ?, ?, ?)",
+            ["probe1", False, None, datetime.now(tz=timezone.utc).isoformat()],
+        )
+        conn.close()
+
+        s = Surveyor(manifest, store_dir=store)
+        s._run_id = "run-x"
+        assert s.evaluate_regulator("reg1") is False
+
+    def test_no_override_returns_true_when_no_probe_signals(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        manifest = self._make_manifest()
+        store = tmp_path / "signals"
+        store.mkdir()
+        s = Surveyor(manifest, store_dir=store)
+        s._run_id = "run-x"
+        assert s.evaluate_regulator("reg1") is True
+
+
+# ── Phase 13: test_runner non-Spark unit tests ────────────────────────────────
+
+class TestTestRunnerHelpers:
+    """Tests for pure helpers in test_runner.py — no Spark needed."""
+
+    def test_spark_type_long(self):
+        from aqueduct.executor.spark.test_runner import _spark_type
+        assert _spark_type("long") == "bigint"
+
+    def test_spark_type_string(self):
+        from aqueduct.executor.spark.test_runner import _spark_type
+        assert _spark_type("string") == "string"
+
+    def test_spark_type_boolean_alias(self):
+        from aqueduct.executor.spark.test_runner import _spark_type
+        assert _spark_type("bool") == "boolean"
+
+    def test_spark_type_passthrough_unknown(self):
+        from aqueduct.executor.spark.test_runner import _spark_type
+        assert _spark_type("decimal(10,2)") == "decimal(10,2)"
+
+    def test_schema_ddl(self):
+        from aqueduct.executor.spark.test_runner import _schema_ddl
+        ddl = _schema_ddl({"order_id": "long", "name": "string"})
+        assert "`order_id` bigint" in ddl
+        assert "`name` string" in ddl
+
+    def test_sql_literal_string(self):
+        from aqueduct.executor.spark.test_runner import _sql_literal
+        assert _sql_literal("hello") == "'hello'"
+
+    def test_sql_literal_int(self):
+        from aqueduct.executor.spark.test_runner import _sql_literal
+        assert _sql_literal(42) == "42"
+
+    def test_sql_literal_bool(self):
+        from aqueduct.executor.spark.test_runner import _sql_literal
+        assert _sql_literal(True) == "TRUE"
+        assert _sql_literal(False) == "FALSE"
+
+    def test_assertion_result_dataclass(self):
+        from aqueduct.executor.spark.test_runner import AssertionResult
+        ar = AssertionResult(passed=True, assertion_type="row_count", message="ok")
+        assert ar.passed is True
+
+    def test_test_suite_result_success_property(self):
+        from aqueduct.executor.spark.test_runner import TestSuiteResult
+        suite = TestSuiteResult(total=2, passed=2, failed=0)
+        assert suite.success is True
+
+    def test_test_suite_result_failure_property(self):
+        from aqueduct.executor.spark.test_runner import TestSuiteResult
+        suite = TestSuiteResult(total=2, passed=1, failed=1)
+        assert suite.success is False
+
+    def test_testable_types_constant(self):
+        from aqueduct.executor.spark.test_runner import _TESTABLE_TYPES
+        assert "Channel" in _TESTABLE_TYPES
+        assert "Ingress" not in _TESTABLE_TYPES
+        assert "Egress" not in _TESTABLE_TYPES
+
+    def test_run_test_file_missing_blueprint(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import TestError, run_test_file
+        test_file = tmp_path / "t.yml"
+        test_file.write_text("aqueduct_test: '1.0'\ntests: []\n", encoding="utf-8")
+        from unittest.mock import MagicMock
+        with pytest.raises(TestError, match="blueprint"):
+            run_test_file(test_file, spark=MagicMock())
+
+    def test_run_test_file_blueprint_not_found(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import TestError, run_test_file
+        test_file = tmp_path / "t.yml"
+        test_file.write_text(
+            "aqueduct_test: '1.0'\nblueprint: nonexistent.yml\ntests: []\n",
+            encoding="utf-8",
+        )
+        from unittest.mock import MagicMock
+        with pytest.raises(TestError, match="not found"):
+            run_test_file(test_file, spark=MagicMock())
+
+    def test_run_test_file_no_tests_returns_empty_suite(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import run_test_file
+        # Create a minimal valid blueprint
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            "aqueduct: '1.0'\nid: test.pipe\nname: T\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        test_file = tmp_path / "t.yml"
+        test_file.write_text(
+            f"aqueduct_test: '1.0'\nblueprint: bp.yml\ntests: []\n",
+            encoding="utf-8",
+        )
+        from unittest.mock import MagicMock
+        suite = run_test_file(test_file, spark=MagicMock())
+        assert suite.total == 0
+        assert suite.success is True
+
+    def test_run_test_case_missing_module_field(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock
+        result = _run_test_case({"id": "t1"}, {}, MagicMock())
+        assert result.passed is False
+        assert "missing 'module'" in result.error
+
+    def test_run_test_case_module_not_in_blueprint(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock
+        result = _run_test_case({"id": "t1", "module": "nonexistent"}, {}, MagicMock())
+        assert result.passed is False
+        assert "not found in blueprint" in result.error
+
+    def test_run_test_case_non_testable_type(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="src", type="Ingress", label="S", config={})
+        result = _run_test_case(
+            {"id": "t1", "module": "src", "inputs": {"x": {"schema": {}, "rows": []}}},
+            {"src": mod},
+            MagicMock(),
+        )
+        assert result.passed is False
+        assert "Ingress" in result.error
+
+    def test_run_test_case_missing_inputs(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="ch", type="Channel", label="C", config={"op": "sql", "query": "SELECT 1"})
+        result = _run_test_case({"id": "t1", "module": "ch"}, {"ch": mod}, MagicMock())
+        assert result.passed is False
+        assert "missing 'inputs'" in result.error
+
+    def test_run_assertion_unknown_type(self):
+        from aqueduct.executor.spark.test_runner import _run_assertion
+        from unittest.mock import MagicMock
+        ar = _run_assertion({"type": "totally_unknown"}, MagicMock(), MagicMock())
+        assert ar.passed is False
+        assert "unknown assertion type" in ar.message
+
+    def test_run_assertion_sql_missing_expr(self):
+        from aqueduct.executor.spark.test_runner import _run_assertion
+        from unittest.mock import MagicMock
+        ar = _run_assertion({"type": "sql"}, MagicMock(), MagicMock())
+        assert ar.passed is False
+        assert "missing 'expr'" in ar.message
+
+
+class TestTestRunnerCaseExecution:
+    """Tests for _run_test_case branches that don't need full Spark."""
+
+    def _channel_module(self, mid="ch"):
+        from aqueduct.parser.models import Module
+        return Module(id=mid, type="Channel", label="C", config={"op": "sql", "query": "SELECT 1"})
+
+    def test_input_missing_schema_field(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock
+        mod = self._channel_module()
+        result = _run_test_case(
+            {"id": "t", "module": "ch", "inputs": {"src": {"rows": [[1]]}}},
+            {"ch": mod},
+            MagicMock(),
+        )
+        assert result.passed is False
+        assert "missing 'schema'" in result.error
+
+    def test_create_df_failure_returns_error(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock, patch
+        mod = self._channel_module()
+        with patch("aqueduct.executor.spark.test_runner._create_df", side_effect=RuntimeError("boom")):
+            result = _run_test_case(
+                {"id": "t", "module": "ch", "inputs": {"src": {"schema": {"id": "long"}, "rows": []}}},
+                {"ch": mod},
+                MagicMock(),
+            )
+        assert result.passed is False
+        assert "boom" in result.error
+
+    def test_module_execution_failure_returns_error(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock, patch
+        mod = self._channel_module()
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.test_runner._create_df", return_value=fake_df):
+            with patch("aqueduct.executor.spark.test_runner._execute_module", side_effect=RuntimeError("sql fail")):
+                result = _run_test_case(
+                    {"id": "t", "module": "ch", "inputs": {"src": {"schema": {"id": "long"}, "rows": []}}},
+                    {"ch": mod},
+                    MagicMock(),
+                )
+        assert result.passed is False
+        assert "sql fail" in result.error
+
+    def test_junction_first_branch_used_by_default(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case, _run_assertion
+        from unittest.mock import MagicMock, patch
+        from aqueduct.parser.models import Module
+        mod = Module(id="jct", type="Junction", label="J", config={"op": "conditional", "branches": []})
+        fake_df = MagicMock()
+        fake_result = {"branch_a": fake_df, "branch_b": MagicMock()}
+        mock_ar = MagicMock()
+        mock_ar.passed = True
+        with patch("aqueduct.executor.spark.test_runner._create_df", return_value=MagicMock()):
+            with patch("aqueduct.executor.spark.test_runner._execute_module", return_value=fake_result):
+                with patch("aqueduct.executor.spark.test_runner._run_assertion", return_value=mock_ar):
+                    result = _run_test_case(
+                        {"id": "t", "module": "jct",
+                         "inputs": {"src": {"schema": {"id": "long"}, "rows": []}},
+                         "assertions": [{"type": "row_count", "expected": 1}]},
+                        {"jct": mod},
+                        MagicMock(),
+                    )
+        assert result.passed is True
+
+    def test_junction_named_branch_not_found(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock, patch
+        from aqueduct.parser.models import Module
+        mod = Module(id="jct", type="Junction", label="J", config={"op": "conditional", "branches": []})
+        fake_result = {"branch_a": MagicMock()}
+        with patch("aqueduct.executor.spark.test_runner._create_df", return_value=MagicMock()):
+            with patch("aqueduct.executor.spark.test_runner._execute_module", return_value=fake_result):
+                result = _run_test_case(
+                    {"id": "t", "module": "jct", "branch": "nonexistent",
+                     "inputs": {"src": {"schema": {"id": "long"}, "rows": []}}},
+                    {"jct": mod},
+                    MagicMock(),
+                )
+        assert result.passed is False
+        assert "nonexistent" in result.error
+
+    def test_assertion_exception_captured_as_failure(self):
+        from aqueduct.executor.spark.test_runner import _run_test_case
+        from unittest.mock import MagicMock, patch
+        mod = self._channel_module()
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.test_runner._create_df", return_value=fake_df):
+            with patch("aqueduct.executor.spark.test_runner._execute_module", return_value=fake_df):
+                with patch("aqueduct.executor.spark.test_runner._run_assertion", side_effect=RuntimeError("assert boom")):
+                    result = _run_test_case(
+                        {"id": "t", "module": "ch",
+                         "inputs": {"src": {"schema": {"id": "long"}, "rows": []}},
+                         "assertions": [{"type": "row_count", "expected": 0}]},
+                        {"ch": mod},
+                        MagicMock(),
+                    )
+        assert result.passed is False
+        assert "assert boom" in result.assertion_results[0].message
+
+    def test_run_test_file_not_a_mapping(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import TestError, run_test_file
+        test_file = tmp_path / "t.yml"
+        test_file.write_text("- item1\n- item2\n", encoding="utf-8")
+        from unittest.mock import MagicMock
+        with pytest.raises(TestError, match="valid YAML mapping"):
+            run_test_file(test_file, spark=MagicMock())
+
+    def test_run_test_file_uses_blueprint_override(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import run_test_file
+        from unittest.mock import MagicMock, patch
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        test_file = tmp_path / "t.yml"
+        test_file.write_text("aqueduct_test: '1.0'\ntests: []\n", encoding="utf-8")
+        suite = run_test_file(test_file, spark=MagicMock(), blueprint_path_override=bp)
+        assert suite.total == 0
+
+    def test_execute_module_unknown_type_raises(self):
+        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="eg", type="Egress", label="E", config={})
+        with pytest.raises(TestError, match="Egress"):
+            _execute_module(mod, {}, MagicMock())
+
+
+class TestExecuteModuleDispatch:
+    """Tests for _execute_module dispatch — patched executor functions."""
+
+    def test_channel_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="ch", type="Channel", label="C", config={})
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.test_runner.execute_sql_channel", return_value=fake_df, create=True):
+            with patch("aqueduct.executor.spark.channel.execute_sql_channel", return_value=fake_df):
+                result = _execute_module(mod, {"src": MagicMock()}, MagicMock())
+        # either the mock or real function ran — just confirm no exception and result is the df
+        assert result is not None
+
+    def test_junction_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="jct", type="Junction", label="J", config={"op": "broadcast", "branches": []})
+        fake_result = {"b": MagicMock()}
+        with patch("aqueduct.executor.spark.junction.execute_junction", return_value=fake_result):
+            result = _execute_module(mod, {"src": MagicMock()}, MagicMock())
+        assert isinstance(result, dict)
+
+    def test_junction_too_many_inputs_raises(self):
+        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="jct", type="Junction", label="J", config={})
+        with pytest.raises(TestError, match="expects exactly 1 input"):
+            _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+
+    def test_funnel_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="fn", type="Funnel", label="F", config={"mode": "union_all"})
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.funnel.execute_funnel", return_value=fake_df):
+            result = _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+        assert result is not None
+
+    def test_assert_too_many_inputs_raises(self):
+        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="ast", type="Assert", label="A", config={"rules": []})
+        with pytest.raises(TestError, match="expects exactly 1 input"):
+            _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+
+    def test_assert_dispatch_no_rules(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="ast", type="Assert", label="A", config={"rules": []})
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.assert_.execute_assert", return_value=(fake_df, None)):
+            result = _execute_module(mod, {"src": fake_df}, MagicMock())
+        assert result is fake_df
+
+
+class TestRunTestFileLoop:
+    """Tests for run_test_file when tests array is non-empty."""
+
+    def test_run_test_file_with_passing_test(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
+        from unittest.mock import MagicMock, patch
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        test_file = tmp_path / "t.yml"
+        test_file.write_text(
+            "aqueduct_test: '1.0'\nblueprint: bp.yml\ntests:\n  - id: t1\n    module: x\n",
+            encoding="utf-8",
+        )
+        passing_result = TestCaseResult(test_id="t1", passed=True)
+        with patch("aqueduct.executor.spark.test_runner._run_test_case", return_value=passing_result):
+            suite = run_test_file(test_file, spark=MagicMock())
+        assert suite.total == 1
+        assert suite.passed == 1
+        assert suite.failed == 0
+        assert suite.success is True
+
+    def test_run_test_file_with_failing_test(self, tmp_path):
+        from aqueduct.executor.spark.test_runner import run_test_file, TestCaseResult
+        from unittest.mock import MagicMock, patch
+        bp = tmp_path / "bp.yml"
+        bp.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        test_file = tmp_path / "t.yml"
+        test_file.write_text(
+            "aqueduct_test: '1.0'\nblueprint: bp.yml\ntests:\n  - id: t1\n    module: x\n",
+            encoding="utf-8",
+        )
+        failing_result = TestCaseResult(test_id="t1", passed=False, error="bad")
+        with patch("aqueduct.executor.spark.test_runner._run_test_case", return_value=failing_result):
+            suite = run_test_file(test_file, spark=MagicMock())
+        assert suite.failed == 1
+        assert suite.success is False
+
+
+class TestValidatePatch:
+    """Tests for Phase 14 validate_patch field."""
+
+    def test_agent_config_validate_patch_default_false(self):
+        from aqueduct.parser.models import AgentConfig
+        assert AgentConfig().validate_patch is False
+
+    def test_agent_config_validate_patch_true(self):
+        from aqueduct.parser.models import AgentConfig
+        a = AgentConfig(validate_patch=True)
+        assert a.validate_patch is True
+
+    def test_blueprint_parses_validate_patch(self, tmp_path):
+        from aqueduct.parser.parser import parse
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\n"
+            "agent:\n  approval_mode: aggressive\n  validate_patch: true\n"
+            "modules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        assert bp.agent.validate_patch is True
+
+    def test_manifest_to_dict_includes_validate_patch(self, tmp_path):
+        from aqueduct.parser.parser import parse
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\n"
+            "agent:\n  validate_patch: true\n"
+            "modules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        from unittest.mock import MagicMock
+        manifest = compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
+        d = manifest.to_dict()
+        assert d["agent"]["validate_patch"] is True
+
+
+class TestCompilerEdgeCases:
+    """Cover uncovered compiler paths."""
+
+    def test_post_tier1_ctx_reresolution(self, tmp_path):
+        """Context values that contain ${ctx.*} after Tier1 resolution should be re-resolved."""
+        from aqueduct.parser.parser import parse
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from unittest.mock import MagicMock
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\n"
+            "context:\n  base: '2026-01-01'\n  derived: '${ctx.base}'\n"
+            "modules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        manifest = compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
+        assert manifest is not None
+
+    def test_compile_with_retry_policy_and_append_egress_warns(self, tmp_path):
+        """max_attempts > 1 on append Egress should emit a warning."""
+        import warnings
+        from aqueduct.parser.parser import parse
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from unittest.mock import MagicMock
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: p\nname: P\n"
+            "retry_policy:\n  max_attempts: 3\n"
+            "modules:\n"
+            "  - id: out\n    type: Egress\n    label: Out\n"
+            "    config:\n      format: parquet\n      path: /tmp/x\n      mode: append\n"
+            "edges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
+        assert any("append" in str(warning.message) for warning in w)

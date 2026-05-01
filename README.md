@@ -179,6 +179,7 @@ The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens res
 | `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
 | `Probe` | Capture observability signals (schema, null rates, sample rows) — never halts pipeline |
 | `Regulator` | Data quality gate; evaluates Probe signals; blocks or skips downstream on failure |
+| `Assert` | Inline data quality rules (schema, row counts, null rates, freshness, SQL, custom); failing rows route to spillway |
 | `Arcade` | Reusable sub-Blueprint; namespaced and inlined at compile time |
 
 ### Runtime Functions (`@aq.*`)
@@ -192,6 +193,46 @@ run_id: "@aq.runtime.run_id()"
 prev_run: "@aq.runtime.prev_run_id()"
 key: "@aq.secret('MY_SECRET')"
 ```
+
+### Channel `op: join`
+
+Higher-level join syntax — no raw SQL needed for common join patterns:
+
+```yaml
+- id: enrich_orders
+  type: Channel
+  config:
+    op: join
+    left: orders_ingress       # upstream module ID (registered as temp view)
+    right: customers_ingress   # upstream module ID
+    join_type: left            # inner | left | right | full | semi | anti | cross
+    condition: "orders_ingress.customer_id = customers_ingress.id"
+    broadcast_side: right      # optional: BROADCAST hint for smaller side
+```
+
+For complex multi-table joins or window functions, use `op: sql` directly.
+
+### SQL Macros
+
+Define reusable SQL fragments at compile time — resolved before Spark runs, no runtime overhead:
+
+```yaml
+macros:
+  active: "status = 'active' AND deleted_at IS NULL"
+  trunc:  "DATE_TRUNC('{{ period }}', {{ col }})"
+
+modules:
+  - id: clean
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT * FROM src
+        WHERE {{ macros.active }}
+          AND {{ macros.trunc(period='day', col=event_ts) }} >= '2026-01-01'
+```
+
+Macros are static — no loops, no conditionals. The Manifest always contains plain SQL.
 
 ### Spillway
 
@@ -213,6 +254,59 @@ edges:
     port: spillway          # null-amount rows with _aq_error_* columns
 ```
 
+### Assert — Inline Data Quality Gates
+
+Enforce explicit business rules against the flowing DataFrame. Unlike Probe + Regulator (which evaluate signals from a prior run), Assert evaluates rules inline and can quarantine bad rows to a spillway:
+
+```yaml
+- id: orders_quality
+  type: Assert
+  label: "Quality gate"
+  config:
+    rules:
+      - type: schema_match
+        expected: {order_id: long, amount: double}
+        on_fail: abort
+
+      - type: min_rows
+        min: 1000
+        on_fail: abort
+
+      - type: null_rate
+        column: order_id
+        fraction: 0.1      # sample 10% for speed
+        max: 0.001
+        on_fail: abort
+
+      - type: freshness
+        column: event_time
+        max_age_hours: 4
+        on_fail: warn
+
+      - type: sql
+        expr: "SUM(amount) > 0"
+        on_fail:
+          action: webhook
+          url: "${ALERT_WEBHOOK}"
+
+      - type: sql_row
+        expr: "amount > 0 AND order_id IS NOT NULL"
+        on_fail: quarantine    # bad rows → spillway port
+
+edges:
+  - from: clean_orders
+    to: orders_quality
+  - from: orders_quality
+    to: good_egress
+  - from: orders_quality
+    port: spillway
+    to: quarantine_egress
+```
+
+**Performance:** All aggregate rules (`min_rows`, `freshness`, `sql`) batch into one `df.agg()`. All `null_rate` rules share one `df.sample().agg()`. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters. **At most 2 Spark actions** per Assert module.
+
+**vs Spillway:** Spillway catches UDF runtime exceptions (bad rows discovered during execution). Assert enforces explicit business rules you declare up front. They solve different problems and compose naturally.
+
 ### Depot KV Store
 
 Persist state across pipeline runs:
@@ -229,6 +323,59 @@ path: "s3a://data/from=@aq.depot.get('last_processed_date', '2020-01-01')/"
     key: last_processed_date
     value_expr: "MAX(order_date)"   # single Spark aggregate
 ```
+
+### `aqueduct test` — Isolated Module Testing
+
+Test Channel, Junction, Funnel, and Assert modules against inline data — no real sources, no external I/O:
+
+```yaml
+# pipeline.aqtest.yml
+aqueduct_test: "1.0"
+blueprint: pipeline.yml
+
+tests:
+  - id: test_filter_nulls
+    description: "Null amounts must be removed"
+    module: clean_orders
+
+    inputs:
+      raw_orders:
+        schema:
+          order_id: long
+          amount: double
+        rows:
+          - [1, 10.0]
+          - [2, null]
+
+    assertions:
+      - type: row_count
+        expected: 1
+      - type: contains
+        rows:
+          - {order_id: 1, amount: 10.0}
+      - type: sql
+        expr: "SELECT count(*) = 1 FROM __output__"
+```
+
+```bash
+aqueduct test pipeline.aqtest.yml
+aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
+```
+
+**Assertion types:** `row_count` (exact count), `contains` (rows must appear in output), `sql` (SQL expression over `__output__` view returns truthy).
+
+### Patch Dry-Run (`validate_patch`)
+
+Enable pre-validation before the LLM agent applies patches in `aggressive` mode. If the patched Blueprint doesn't compile, the patch is staged for human review instead of applied:
+
+```yaml
+agent:
+  approval_mode: aggressive
+  validate_patch: true     # compile-check patch before writing to disk
+  max_patches_per_run: 5
+```
+
+With `validate_patch: true`: the patched Blueprint is compiled in memory first. Only if compilation succeeds does Aqueduct write it to disk and continue the self-healing loop. Invalid patches are staged in `patches/pending/` for human review.
 
 ---
 
@@ -260,6 +407,21 @@ aqueduct check-config --config path/to/aqueduct.yml
 aqueduct doctor                             # Probe all resources end-to-end (config, stores, secrets, webhook, Spark, storage)
 aqueduct doctor --skip-spark               # Skip JVM startup — fast CI health check
 aqueduct doctor --config path/to/aqueduct.yml
+
+aqueduct test     pipeline.aqtest.yml       # Run isolated module tests (no Spark I/O)
+aqueduct test     pipeline.aqtest.yml --quiet
+
+aqueduct report   <run_id>                  # Flow Report for a completed run (--format table|json|csv)
+aqueduct lineage  <pipeline_id>             # Column lineage graph (--from <table>, --column <col>)
+
+# Persistent gate override — affects ALL future runs until cleared
+aqueduct signal   <signal_id> --value false           # close gate (block downstream)
+aqueduct signal   <signal_id> --error "Stale source"  # close with reason
+aqueduct signal   <signal_id> --value true            # clear override (resume normal evaluation)
+aqueduct signal   <signal_id>                         # show current override status
+
+aqueduct heal     <run_id>                  # manually trigger LLM self-healing for a failed run
+aqueduct heal     <run_id> --module <id>   # scope healing to a specific module
 
 aqueduct patch apply patch.json --blueprint pipeline.yml
 aqueduct patch reject <patch-id> --reason "Incorrect column name"

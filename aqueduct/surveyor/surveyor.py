@@ -59,6 +59,15 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
 );
 """
 
+_SIGNAL_OVERRIDES_DDL = """
+CREATE TABLE IF NOT EXISTS signal_overrides (
+    signal_id     VARCHAR PRIMARY KEY,
+    passed        BOOLEAN NOT NULL,
+    error_message VARCHAR,
+    set_at        TIMESTAMPTZ NOT NULL
+);
+"""
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _utcnow() -> datetime:
@@ -272,21 +281,32 @@ class Surveyor:
         probe_id = probe_ids[0]
 
         signals_db = self._store_dir / "signals.db"
-        if not signals_db.exists():
-            return True  # no signals written → open
 
         try:
             conn = duckdb.connect(str(signals_db))
             try:
-                rows = conn.execute(
-                    """
-                    SELECT payload
-                    FROM probe_signals
-                    WHERE probe_id = ? AND run_id = ?
-                    ORDER BY captured_at DESC
-                    """,
-                    [probe_id, self._run_id],
-                ).fetchall()
+                conn.execute(_SIGNAL_OVERRIDES_DDL)
+                # Persistent override takes priority over run-scoped probe data
+                override_row = conn.execute(
+                    "SELECT passed FROM signal_overrides WHERE signal_id = ?",
+                    [probe_id],
+                ).fetchone()
+                if override_row is not None:
+                    return bool(override_row[0])
+
+                # Fall back to run-scoped probe signals
+                try:
+                    rows = conn.execute(
+                        """
+                        SELECT payload
+                        FROM probe_signals
+                        WHERE probe_id = ? AND run_id = ?
+                        ORDER BY captured_at DESC
+                        """,
+                        [probe_id, self._run_id],
+                    ).fetchall()
+                except Exception:
+                    return True  # probe_signals table not yet created → open
             finally:
                 conn.close()
 

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from aqueduct.compiler.expander import ExpandError, expand_arcades
+from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.wirer import (
@@ -96,6 +97,16 @@ def compile(  # noqa: A001
     except (ValueError, RuntimeError) as exc:
         raise CompileError(f"Tier 1 module config resolution failed: {exc}") from exc
 
+    # ── 3.5. Resolve SQL macros in module configs ─────────────────────────────
+    if blueprint.macros:
+        try:
+            modules = [
+                dataclasses.replace(m, config=resolve_macros_in_config(m.config, blueprint.macros))
+                for m in modules
+            ]
+        except MacroError as exc:
+            raise CompileError(f"SQL macro resolution failed: {exc}") from exc
+
     # ── 4. Expand Arcades ─────────────────────────────────────────────────────
     edges = list(blueprint.edges)
     if any(m.type == "Arcade" for m in modules):
@@ -144,5 +155,6 @@ def compile(  # noqa: A001
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
         udf_registry=blueprint.udf_registry,
+        macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
     )

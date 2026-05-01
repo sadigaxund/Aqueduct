@@ -261,3 +261,88 @@ agent:
 #     # provider: "openai_compat"
 #     # base_url: "http://10.0.0.39:11434/v1"
 #     # model: "qwen2.5-coder:14b"
+
+# ── Assert module (inline data quality gates) ─────────────────────────────────
+#
+# Enforce business rules inline. Failing rows route to spillway port.
+# At most 2 Spark actions per Assert module (aggregate batching).
+#
+# modules:
+#   - id: orders_quality
+#     type: Assert
+#     config:
+#       rules:
+#         - type: schema_match
+#           expected: {order_id: long, amount: double}
+#           on_fail: abort              # abort | warn | webhook | trigger_agent
+#
+#         - type: min_rows
+#           min: 1000
+#           on_fail: abort
+#
+#         - type: null_rate
+#           column: order_id
+#           fraction: 0.1              # sample fraction for speed
+#           max: 0.001
+#           on_fail: abort
+#
+#         - type: freshness
+#           column: event_time
+#           max_age_hours: 4
+#           on_fail: warn
+#
+#         - type: sql
+#           expr: "SUM(amount) > 0"   # aggregate boolean expression
+#           on_fail:
+#             action: webhook
+#             url: "${ALERT_WEBHOOK}"
+#
+#         - type: sql_row
+#           expr: "amount > 0 AND order_id IS NOT NULL"
+#           on_fail: quarantine        # row-level rules support quarantine
+#
+#         - type: custom
+#           fn: "my_pkg.quality.validate_orders"   # fn(df) -> {passed, message, quarantine_df}
+#           on_fail: quarantine
+#
+# edges:
+#   - from: orders_quality
+#     to: good_egress
+#   - from: orders_quality
+#     port: spillway
+#     to: quarantine_egress
+
+# ── SQL Macros (Blueprint-level, resolved at compile time) ─────────────────────
+#
+# Define reusable SQL fragments. Macros are expanded at compile time — the
+# Manifest always contains plain SQL. No loops, no conditionals, no Jinja.
+#
+# macros:
+#   active_filter: "status = 'active' AND deleted_at IS NULL"
+#   date_trunc: "DATE_TRUNC('{{ period }}', {{ column }})"
+#
+# Reference in Channel query:
+#   query: |
+#     SELECT * FROM orders
+#     WHERE {{ macros.active_filter }}
+#       AND {{ macros.date_trunc(period='day', column=event_ts) }} >= '2026-01-01'
+#
+# Parameterized macros use {{ param_name }} placeholders in their body.
+# All placeholders must be supplied at the call site or compile fails.
+
+# ── Observability CLI Commands ─────────────────────────────────────────────────
+#
+# After runs complete, query the observability store:
+#
+# aqueduct report   <run_id>               # Flow Report (--format table|json|csv)
+# aqueduct lineage  <pipeline_id>          # Column lineage (--from <table>, --column <col>)
+#
+# Persistent gate override (blocks all future runs until cleared):
+# aqueduct signal   <probe_id> --value false           # close gate
+# aqueduct signal   <probe_id> --error "Stale source"  # close with reason
+# aqueduct signal   <probe_id> --value true            # clear override
+# aqueduct signal   <probe_id>                         # show current status
+#
+# Manual self-healing (stages LLM patch for human review):
+# aqueduct heal     <run_id>
+# aqueduct heal     <run_id> --module <module_id>

@@ -760,17 +760,117 @@ Issues reported in:
 - ⏳ `patch rollback <id>`: multiple backups for same patch_id → most recent used (sort by filename ts)
 - ✅ `patch rollback <id>`: no applied record (patch was staged-only) → rollback still restores Blueprint if backup exists
 
-### Channel `op: join` — `aqueduct/executor/spark/channel.py`
+### Phase 10 — Channel `op: join` + SQL Macros ✅
 
-**Config:** `left`, `right`, `join_type` (inner/left/right/full/cross/semi/anti), `condition`, `broadcast_side` (left/right/none).
-**Stub status:** spec and schema defined; executor not yet implemented.
+#### Channel `op: join` — `aqueduct/executor/spark/channel.py`
 
-- ⏳ `op: join` with all required fields → `ChannelError("op 'join' not yet implemented")` (stub)
-- ⏳ `op: join` missing `left` → `ChannelError` before reaching stub
-- ⏳ `op: join` missing `right` → `ChannelError` before reaching stub
-- ⏳ `op: join` missing `condition` (for non-cross join_type) → `ChannelError`
-- ⏳ `op: join` `join_type: cross` without condition → no error (cross join needs no condition)
-- ⏳ *(future — after implementation)* `op: join` inner join: result contains only matching rows
-- ⏳ *(future)* `op: join` left join: all left rows present; unmatched right rows are null
-- ⏳ *(future)* `op: join` `broadcast_side: right` → `F.broadcast()` applied to right DataFrame
-- ⏳ *(future)* `op: join` registered upstreams available as temp views for condition SQL expressions
+- ✅ `op: join` missing `left` → `ChannelError`
+- ✅ `op: join` missing `right` → `ChannelError`
+- ✅ `op: join` missing `condition` for non-cross join → `ChannelError`
+- ✅ `op: join` `join_type: cross` without condition → valid, no ON clause
+- ✅ `op: join` invalid `join_type` → `ChannelError`
+- ✅ `op: join` `broadcast_side: right` → `/*+ BROADCAST(right) */` hint in SQL
+- ✅ `op: join` `broadcast_side: left` → `/*+ BROADCAST(left) */` hint in SQL
+- ✅ `op: join` generates correct `LEFT JOIN` / `INNER JOIN` SQL
+- ✅ unsupported `op` value → `ChannelError`
+- ⏳ end-to-end: Ingress × 2 → Channel(op: join) → Egress — joined rows correct (Spark test)
+
+#### SQL Macros — `aqueduct/compiler/macros.py`
+
+- ✅ `{{ macros.name }}` simple substitution → resolved in query
+- ✅ `{{ macros.name(key=val) }}` parameterized → `{{ key }}` placeholders substituted
+- ✅ quoted param value (`period='day'`) → quotes stripped, value inserted
+- ✅ unknown macro name → `MacroError`
+- ✅ missing param in body → `MacroError`
+- ✅ empty macros dict → text returned as-is
+- ✅ no `{{` in text → early return
+- ✅ `resolve_macros_in_config` recurses into dict values
+- ✅ `resolve_macros_in_config` recurses into list items
+- ✅ `resolve_macros_in_config` passes through non-string values unchanged
+- ⏳ full compile: macros in Blueprint → expanded in Manifest query string (no `{{` in Manifest)
+- ⏳ end-to-end: Ingress → Channel(macro in query) → Egress runs correctly
+
+### Phase 11 — Missing CLI Commands
+
+#### `aqueduct report` — `aqueduct/cli.py`
+
+- ⏳ valid run_id → table output with module rows and status icons
+- ⏳ valid run_id + `--format json` → JSON with run_id, pipeline_id, status, module_results
+- ⏳ valid run_id + `--format csv` → CSV with header row
+- ⏳ unknown run_id → exit code 1 with error message
+- ⏳ missing runs.db → exit code 1 with error message
+
+#### `aqueduct lineage` — `aqueduct/cli.py`
+
+- ⏳ valid pipeline_id → table of channel_id, output_column, source_table, source_column
+- ⏳ `--from <table>` filters to only that source_table
+- ⏳ `--column <col>` filters to only that output_column
+- ⏳ `--format json` → JSON array
+- ⏳ no rows → "No lineage records found" message, exit 0
+- ⏳ missing lineage.db → exit code 1 with error message
+
+#### `aqueduct signal` — `aqueduct/cli.py` + `surveyor.py`
+
+- ⏳ `--value false` → row inserted in `signal_overrides` with `passed=False`
+- ⏳ `--value true` → row deleted from `signal_overrides`
+- ⏳ `--error "msg"` alone → row inserted with `passed=False` and `error_message` set
+- ⏳ `--error "msg" --value true` → exit code 1 (conflicting flags)
+- ⏳ no flags → prints current override status
+- ⏳ no override set → "no persistent override" message
+- ⏳ `evaluate_regulator()` checks `signal_overrides` BEFORE `probe_signals`
+- ⏳ override with `passed=False` → `evaluate_regulator()` returns False even if probe_signals says True
+- ⏳ `--value true` clears override → `evaluate_regulator()` resumes reading probe_signals
+
+#### `aqueduct heal` — `aqueduct/cli.py`
+
+- ⏳ run_id with failure_context → FailureContext reconstructed, generate_llm_patch called
+- ⏳ `--module` overrides `failed_module` field in FailureContext passed to LLM
+- ⏳ run_id with no failure_context → exit code 1 with clear message
+- ⏳ missing runs.db → exit code 1
+- ⏳ no agent model configured in aqueduct.yml → exit code 1 with clear message
+- ⏳ LLM returns valid patch → patch staged in patches/pending/
+
+### Phase 13 — `aqueduct test` Command
+
+#### Test runner core — `aqueduct/executor/spark/test_runner.py`
+
+- ⏳ inline rows + schema → `createDataFrame` succeeds for all supported types (long, string, double, boolean, timestamp)
+- ⏳ unknown schema type → passes through to Spark DDL (Spark raises if truly invalid)
+- ⏳ `row_count` assertion passes: exact count match
+- ⏳ `row_count` assertion fails: non-zero exit, message shows expected vs actual
+- ⏳ `contains` assertion passes: all expected rows found in output
+- ⏳ `contains` assertion fails: missing rows listed in message
+- ⏳ `sql` assertion passes: expr over `__output__` returns truthy
+- ⏳ `sql` assertion fails: expr returns falsy
+- ⏳ `sql` assertion error: bad SQL → `passed=False` with error message
+- ⏳ Channel module executed against inline inputs → correct output rows
+- ⏳ Assert module: passing rows returned, quarantine rows discarded (no spillway edge in test)
+- ⏳ Ingress/Egress module → `TestError` with clear message
+- ⏳ missing `module` field → `TestCaseResult` with error
+- ⏳ module not found in blueprint → `TestCaseResult` with error
+- ⏳ missing `inputs` → `TestCaseResult` with error
+- ⏳ missing blueprint → `TestError`
+- ⏳ Junction module: first branch used when no `branch:` specified
+- ⏳ Junction module: `branch: <name>` targets specific branch
+
+#### `aqueduct test` CLI command — `aqueduct/cli.py`
+
+- ⏳ all tests pass → exit code 0, "all N test(s) passed"
+- ⏳ any test fails → exit code 1, failure listed in output
+- ⏳ test file error (bad blueprint path) → exit code 1
+- ⏳ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
+- ⏳ `--blueprint` overrides blueprint path from test file
+
+### Phase 14 — Patch Dry-Run (`validate_patch`)
+
+#### Schema + Model — `aqueduct/parser/schema.py`, `parser/models.py`, `parser/parser.py`, `compiler/models.py`
+
+- ✅ `validate_patch` defaults to `False` in `AgentConfig`
+- ✅ `validate_patch: true` in Blueprint YAML → `AgentConfig.validate_patch = True` after parse
+- ✅ `manifest.to_dict()["agent"]["validate_patch"]` reflects the value
+
+#### CLI dispatch — `aqueduct/cli.py` (aggressive mode)
+
+- ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch produces invalid Blueprint → patch staged in `patches/pending/`, Blueprint unchanged
+- ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch valid → patch written to disk, loop continues
+- ⏳ `approval_mode: aggressive` + `validate_patch: false` (default) → patch written immediately (existing behavior unchanged)
