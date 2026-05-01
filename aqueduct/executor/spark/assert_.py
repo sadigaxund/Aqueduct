@@ -1,9 +1,9 @@
 """Assert executor — declarative data quality gates.
 
 Rules are evaluated against the incoming DataFrame and produce one of:
-  abort          → raise AssertError, pipeline stops immediately
-  warn           → log warning, pipeline continues
-  webhook        → fire async POST, pipeline continues
+  abort          → raise AssertError, blueprint stops immediately
+  warn           → log warning, blueprint continues
+  webhook        → fire async POST, blueprint continues
   quarantine     → row-level rules only; failing rows routed to spillway port
   trigger_agent  → raise AssertError(trigger_agent=True); LLM loop fires on return
 
@@ -67,16 +67,16 @@ def execute_assert(
     df: "DataFrame",
     spark: "SparkSession",
     run_id: str,
-    pipeline_id: str,
+    blueprint_id: str,
 ) -> "tuple[DataFrame, DataFrame | None]":
     """Evaluate Assert rules against df.
 
     Args:
-        module:      Assert Module from the compiled Manifest.
-        df:          Incoming DataFrame (lazy).
-        spark:       Active SparkSession.
-        run_id:      Current run identifier.
-        pipeline_id: Pipeline identifier (used in webhook payloads).
+        module:       Assert Module from the compiled Manifest.
+        df:           Incoming DataFrame (lazy).
+        spark:        Active SparkSession.
+        run_id:       Current run identifier.
+        blueprint_id: Blueprint identifier (used in webhook payloads).
 
     Returns:
         (passing_df, quarantine_df)
@@ -99,7 +99,7 @@ def execute_assert(
             _check_schema_match(module.id, df, rule)
 
     # ── Phase 2: aggregate rules (one batched action + one sample action) ────
-    _batch_aggregate_rules(module.id, df, rules, pipeline_id, run_id)
+    _batch_aggregate_rules(module.id, df, rules, blueprint_id, run_id)
 
     # ── Phase 3: row-level rules (lazy, no new action) ───────────────────────
     passing_df = df
@@ -127,7 +127,7 @@ def _handle_fail(
     module_id: str,
     rule_type: str,
     message: str,
-    pipeline_id: str = "",
+    blueprint_id: str = "",
     run_id: str = "",
 ) -> None:
     """Dispatch on_fail action.  Raises AssertError for abort/trigger_agent."""
@@ -147,7 +147,7 @@ def _handle_fail(
     elif action == "webhook":
         if webhook_url:
             _fire_rule_webhook(
-                webhook_url, module_id, rule_type, message, pipeline_id, run_id
+                webhook_url, module_id, rule_type, message, blueprint_id, run_id
             )
         else:
             logger.warning(
@@ -198,7 +198,7 @@ def _batch_aggregate_rules(
     module_id: str,
     df: "DataFrame",
     rules: list[dict[str, Any]],
-    pipeline_id: str,
+    blueprint_id: str,
     run_id: str,
 ) -> None:
     """Evaluate all aggregate rules in at most 2 Spark actions."""
@@ -244,7 +244,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "min_rows",
                         f"min_rows: got {count}, expected >= {min_val}",
-                        pipeline_id, run_id,
+                        blueprint_id, run_id,
                     )
 
             elif rtype == "max_rows" and f"_cnt_{i}" in agg_cols:
@@ -254,7 +254,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "max_rows",
                         f"max_rows: got {count}, expected <= {max_val}",
-                        pipeline_id, run_id,
+                        blueprint_id, run_id,
                     )
 
             elif rtype == "freshness" and f"_max_{i}" in agg_cols:
@@ -264,7 +264,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "freshness",
                         "freshness: column has no non-null values",
-                        pipeline_id, run_id,
+                        blueprint_id, run_id,
                     )
                 else:
                     if hasattr(max_ts, "timestamp"):
@@ -276,7 +276,7 @@ def _batch_aggregate_rules(
                         _handle_fail(
                             on_fail, module_id, "freshness",
                             f"freshness: data is {age_hours:.1f}h old, max allowed {max_age_hours}h",
-                            pipeline_id, run_id,
+                            blueprint_id, run_id,
                         )
 
             elif rtype == "sql" and f"_sql_{i}" in agg_cols:
@@ -286,7 +286,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "sql",
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
-                        pipeline_id, run_id,
+                        blueprint_id, run_id,
                     )
 
     # ── Null rate rules — one shared sample.agg() ─────────────────────────────
@@ -319,7 +319,7 @@ def _batch_aggregate_rules(
                     on_fail, module_id, "null_rate",
                     f"null_rate[{col}]: {rate:.4%} > allowed {max_rate:.4%} "
                     f"(sample_size={total}, fraction={fraction})",
-                    pipeline_id, run_id,
+                    blueprint_id, run_id,
                 )
 
 
@@ -459,7 +459,7 @@ def _fire_rule_webhook(
     module_id: str,
     rule_type: str,
     message: str,
-    pipeline_id: str = "",
+    blueprint_id: str = "",
     run_id: str = "",
 ) -> None:
     """Fire assertion failure webhook asynchronously (best-effort)."""
@@ -472,7 +472,7 @@ def _fire_rule_webhook(
             "module_id": module_id,
             "rule_type": rule_type,
             "message": message,
-            "pipeline_id": pipeline_id,
+            "blueprint_id": blueprint_id,
             "run_id": run_id,
             "fired_at": datetime.now(tz=timezone.utc).isoformat(),
         }

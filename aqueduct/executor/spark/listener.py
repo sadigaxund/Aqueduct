@@ -95,7 +95,7 @@ class AqueductMetricsListener:
                 acc["bytes_written"] += output_m.bytesWritten()
                 acc["duration_ms"] += max(0, stage_duration)
         except Exception:
-            pass  # never let listener crash the pipeline
+            pass  # never let listener crash the blueprint
 
     # Required no-ops for the SparkListener interface
     def onJobStart(self, job_start: Any) -> None: pass  # noqa: N802, E704

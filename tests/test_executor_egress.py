@@ -154,7 +154,7 @@ def test_egress_register_as_table_success(spark: SparkSession, tmp_path, caplog)
 
 
 def test_egress_register_as_table_ddl_failure_non_fatal(spark: SparkSession, tmp_path, caplog):
-    """register_as_table DDL failure (Derby in-memory, no Hive metastore) → warning logged, pipeline continues."""
+    """register_as_table DDL failure (Derby in-memory, no Hive metastore) → warning logged, blueprint continues."""
     import logging
 
     path = str(tmp_path / "reg_fail.parquet")

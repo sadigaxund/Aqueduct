@@ -1,6 +1,6 @@
 aqueduct: "1.0"
 id: demo.llm.healing
-name: Product Reviews Pipeline
+name: Product Reviews Blueprint
 
 modules:
 - id: src

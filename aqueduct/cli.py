@@ -104,7 +104,7 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
 @click.group()
 @click.version_option(package_name="aqueduct")
 def cli() -> None:
-    """Aqueduct — Intelligent Spark Pipeline Engine."""
+    """Aqueduct — Intelligent Spark Blueprint Engine."""
 
 
 @cli.command()
@@ -132,7 +132,7 @@ def validate(blueprint: str) -> None:
     help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
 )
 def check_config(config_path: str | None) -> None:
-    """Validate aqueduct.yml without running a pipeline. Exit 0 = valid, 1 = invalid."""
+    """Validate aqueduct.yml without running a blueprint. Exit 0 = valid, 1 = invalid."""
     import json
     from pathlib import Path
 
@@ -431,7 +431,7 @@ def run(
         selector_note = "  [" + ", ".join(parts) + "]"
     exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
     click.echo(
-        f"▶ {manifest.pipeline_id}  ({len(manifest.modules)} modules)"
+        f"▶ {manifest.blueprint_id}  ({len(manifest.modules)} modules)"
         f"  run={run_id}  engine={engine}  master={master_url}"
         f"{selector_note}{exec_date_note}"
     )
@@ -469,7 +469,7 @@ def run(
     merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
     if engine == "spark":
         from aqueduct.executor.spark.session import make_spark_session
-        session = make_spark_session(manifest.pipeline_id, merged_spark_config, master_url=master_url)
+        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
     else:
         raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
 
@@ -499,7 +499,7 @@ def run(
         except ExecuteError as exc:
             execute_exc = exc
             result = ExecutionResult(
-                pipeline_id=manifest.pipeline_id,
+                blueprint_id=manifest.blueprint_id,
                 run_id=current_run_id,
                 status="error",
                 module_results=(
@@ -589,7 +589,7 @@ def run(
                 )
             except ExecuteError as exc:
                 result2 = ExecutionResult(
-                    pipeline_id=manifest.pipeline_id,
+                    blueprint_id=manifest.blueprint_id,
                     run_id=str(uuid.uuid4()),
                     status="error",
                     module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
@@ -663,12 +663,12 @@ def run(
     if result.status != "success":
         if failure_ctx:
             click.echo(
-                f"\n✗ pipeline failed  run_id={result.run_id}"
+                f"\n✗ blueprint failed  run_id={result.run_id}"
                 f"  failed_module={failure_ctx.failed_module}",
                 err=True,
             )
         else:
-            click.echo(f"\n✗ pipeline failed  run_id={result.run_id}", err=True)
+            click.echo(f"\n✗ blueprint failed  run_id={result.run_id}", err=True)
         sys.exit(1)
 
     # ── on_success webhook ────────────────────────────────────────────────────
@@ -676,8 +676,8 @@ def run(
         from aqueduct.surveyor.webhook import fire_webhook
         success_payload = {
             "run_id": result.run_id,
-            "pipeline_id": manifest.pipeline_id,
-            "pipeline_name": manifest.pipeline_name,
+            "blueprint_id": manifest.blueprint_id,
+            "blueprint_name": manifest.name,
             "module_count": str(len(result.module_results)),
         }
         fire_webhook(
@@ -686,7 +686,7 @@ def run(
             template_vars=success_payload,
         )
 
-    click.echo(f"\n✓ pipeline complete  run_id={result.run_id}")
+    click.echo(f"\n✓ blueprint complete  run_id={result.run_id}")
 
 
 # ── patch command group ───────────────────────────────────────────────────────
@@ -881,10 +881,10 @@ def test_cmd(
     inline data — no Ingress or Egress, no external sources.
 
     \b
-    Example test file (pipeline.aqtest.yml):
+    Example test file (blueprint.aqtest.yml):
 
       aqueduct_test: "1.0"
-      blueprint: pipeline.yml
+      blueprint: blueprint.yml
 
       tests:
         - id: test_filter_nulls
@@ -1003,7 +1003,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     try:
         row = conn.execute(
             """
-            SELECT run_id, pipeline_id, status,
+            SELECT run_id, blueprint_id, status,
                    CAST(started_at AS VARCHAR),
                    CAST(finished_at AS VARCHAR),
                    module_results
@@ -1018,13 +1018,13 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         click.echo(f"✗ run {run_id!r} not found in {runs_db}", err=True)
         sys.exit(1)
 
-    run_id_val, pipeline_id, status, started_at, finished_at, module_results_raw = row
+    run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
     module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
 
     if fmt == "json":
         out = {
             "run_id": run_id_val,
-            "pipeline_id": pipeline_id,
+            "blueprint_id": blueprint_id,
             "status": status,
             "started_at": started_at,
             "finished_at": finished_at,
@@ -1036,8 +1036,8 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     if fmt == "csv":
         buf = io.StringIO()
         writer = _csv.writer(buf)
-        writer.writerow(["run_id", "pipeline_id", "status", "started_at", "finished_at"])
-        writer.writerow([run_id_val, pipeline_id, status, started_at, finished_at])
+        writer.writerow(["run_id", "blueprint_id", "status", "started_at", "finished_at"])
+        writer.writerow([run_id_val, blueprint_id, status, started_at, finished_at])
         click.echo(buf.getvalue(), nl=False)
         buf2 = io.StringIO()
         writer2 = _csv.writer(buf2)
@@ -1049,7 +1049,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
 
     # table format
     status_icon = "✓" if status == "success" else "✗"
-    click.echo(f"{status_icon} run_id={run_id_val}  pipeline={pipeline_id}  status={status}")
+    click.echo(f"{status_icon} run_id={run_id_val}  blueprint={blueprint_id}  status={status}")
     click.echo(f"  started:  {started_at}")
     click.echo(f"  finished: {finished_at or '(running)'}")
     click.echo("")
@@ -1066,7 +1066,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
 # ── aqueduct lineage ──────────────────────────────────────────────────────────
 
 @cli.command()
-@click.argument("pipeline_id_or_blueprint")
+@click.argument("blueprint_id_or_blueprint")
 @click.option(
     "--store-dir",
     default=None,
@@ -1098,16 +1098,16 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     show_default=True,
 )
 def lineage(
-    pipeline_id_or_blueprint: str,
+    blueprint_id_or_blueprint: str,
     store_dir: str | None,
     config_path: str | None,
     from_table: str | None,
     column_filter: str | None,
     fmt: str,
 ) -> None:
-    """Print column-level lineage graph for a pipeline.
+    """Print column-level lineage graph for a blueprint.
 
-    PIPELINE_ID_OR_BLUEPRINT: pipeline id (e.g. nyc_taxi_demo) or path to
+    PIPELINE_ID_OR_BLUEPRINT: blueprint id (e.g. nyc_taxi_demo) or path to
     the blueprint YAML file (e.g. blueprint.yml — id is extracted automatically).
     """
     import duckdb as _duckdb
@@ -1120,18 +1120,18 @@ def lineage(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    # Accept blueprint file path — extract pipeline id from it
-    arg_path = Path(pipeline_id_or_blueprint)
+    # Accept blueprint file path — extract blueprint id from it
+    arg_path = Path(blueprint_id_or_blueprint)
     if arg_path.suffix in (".yml", ".yaml") and arg_path.exists():
         try:
             from aqueduct.parser.parser import parse
             bp = parse(str(arg_path))
-            pipeline_id = bp.id
+            blueprint_id = bp.id
         except Exception as exc:
-            click.echo(f"✗ could not read pipeline id from {pipeline_id_or_blueprint!r}: {exc}", err=True)
+            click.echo(f"✗ could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}", err=True)
             sys.exit(1)
     else:
-        pipeline_id = pipeline_id_or_blueprint
+        blueprint_id = blueprint_id_or_blueprint
 
     resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
     lineage_db = resolved / "lineage.db"
@@ -1139,8 +1139,8 @@ def lineage(
         click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
         sys.exit(1)
 
-    params: list[Any] = [pipeline_id]
-    where_parts = ["pipeline_id = ?"]
+    params: list[Any] = [blueprint_id]
+    where_parts = ["blueprint_id = ?"]
     if from_table:
         where_parts.append("source_table = ?")
         params.append(from_table)
@@ -1163,7 +1163,7 @@ def lineage(
         conn.close()
 
     if not rows:
-        click.echo(f"No lineage records found for pipeline {pipeline_id!r}.")
+        click.echo(f"No lineage records found for blueprint {blueprint_id!r}.")
         return
 
     if fmt == "json":
@@ -1179,7 +1179,7 @@ def lineage(
         click.echo(json.dumps(out, indent=2))
         return
 
-    click.echo(f"Column lineage — pipeline: {pipeline_id}")
+    click.echo(f"Column lineage — blueprint: {blueprint_id}")
     click.echo(f"  {'Channel':<25} {'Output Column':<25} {'Source Table':<25} Source Column")
     click.echo(f"  {'-'*25} {'-'*25} {'-'*25} {'-'*25}")
     for channel_id, output_column, source_table, source_column in rows:
@@ -1374,7 +1374,7 @@ def heal(
     try:
         fc_row = conn.execute(
             """
-            SELECT run_id, pipeline_id, failed_module, error_message,
+            SELECT run_id, blueprint_id, failed_module, error_message,
                    stack_trace, manifest_json,
                    CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
             FROM failure_contexts WHERE run_id = ?
@@ -1393,7 +1393,7 @@ def heal(
         sys.exit(1)
 
     (
-        fc_run_id, pipeline_id, failed_module, error_message,
+        fc_run_id, blueprint_id, failed_module, error_message,
         stack_trace, manifest_json_raw, started_at, finished_at,
     ) = fc_row
 
@@ -1402,7 +1402,7 @@ def heal(
 
     failure_ctx = FailureContext(
         run_id=fc_run_id,
-        pipeline_id=pipeline_id,
+        blueprint_id=blueprint_id,
         failed_module=target_module,
         error_message=error_message,
         stack_trace=stack_trace,

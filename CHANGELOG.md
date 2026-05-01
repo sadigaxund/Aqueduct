@@ -80,9 +80,9 @@ Alpha release preparation for PyPI.
 **Stubs 1-4 — Wiring previously inert schema fields**
 
 *Stub 1 — `on_exhaustion: alert_only | trigger_agent`*
-- `_on_retry_exhausted(exc, policy, module, pipeline_id, run_id, module_results)` helper added to `executor.py`
+- `_on_retry_exhausted(exc, policy, module, blueprint_id, run_id, module_results)` helper added to `executor.py`
 - All 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress) replaced bare `return _fail(...)` with `_on_retry_exhausted()` call
-- `alert_only`: logs warning, sets `_GATE_CLOSED` in frame_store (or `continue` for Egress), pipeline does not stop
+- `alert_only`: logs warning, sets `_GATE_CLOSED` in frame_store (or `continue` for Egress), blueprint does not stop
 - `trigger_agent`: returns `_fail(..., trigger_agent=True)` — LLM loop fires even if `approval_mode=disabled`
 
 *Stub 2 — `AssertError.trigger_agent` propagation*
@@ -118,7 +118,7 @@ Alpha release preparation for PyPI.
 **SparkListener wiring** — `AqueductMetricsListener.onStageCompleted` now captures `records_read`, `records_written`, `bytes_read`, `bytes_written`, `duration_ms` per module. `_write_stage_metrics()` helper persists to `module_metrics` table in `signals.db`. `set_active_module()` / `collect_metrics()` wired at all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress). `probe.py` `method: spark_listener` now queries `module_metrics` table — no longer a stub.
 
 **Assert module** — new `aqueduct/executor/spark/assert_.py`:
-- `execute_assert(module, df, spark, run_id, pipeline_id) -> (passing_df, quarantine_df | None)`
+- `execute_assert(module, df, spark, run_id, blueprint_id) -> (passing_df, quarantine_df | None)`
 - `AssertError(message, rule_id=None, trigger_agent=False)`
 - Three-phase eval: schema_match (zero action) → batch aggregate rules (≤2 Spark actions) → row-level rules (lazy)
 - All `min_rows` / `freshness` / `sql` rules batched into one `df.agg()`; all `null_rate` rules share one `df.sample().agg()`
@@ -159,7 +159,7 @@ Alpha release preparation for PyPI.
 
 ### Accomplished
 
-**Per-module `on_failure`** — `on_failure: dict` was parsed on every `Module` but executor ignored it; all modules used same pipeline-level `retry_policy`. Added `_module_retry_policy(module, manifest_policy) -> RetryPolicy`: returns `RetryPolicy(**module.on_failure)` when set, else falls back to manifest policy. Applied at all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress).
+**Per-module `on_failure`** — `on_failure: dict` was parsed on every `Module` but executor ignored it; all modules used same blueprint-level `retry_policy`. Added `_module_retry_policy(module, manifest_policy) -> RetryPolicy`: returns `RetryPolicy(**module.on_failure)` when set, else falls back to manifest policy. Applied at all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress).
 
 **Opt-in checkpoint/resume** — New `checkpoint: bool = False` on `Blueprint`, `Module`, and `Manifest` (schema + models + parser + compiler).
 - `_write_checkpoint()` helper: writes DataFrame as Parquet + `_aq_done` marker. Called after each successful Ingress/Channel/Funnel/Junction (with data). Egress: done-sentinel only (data already written to target).
@@ -172,7 +172,7 @@ Alpha release preparation for PyPI.
 - Source staleness ignored — designed for immutable batch sources (Parquet/JSON files).
 - Delta rollback deferred — would need storing target table path per-run + `RESTORE TABLE` SQL.
 - `on_failure` YAML keys map directly to `RetryPolicy` field names — no renaming layer needed.
-- Checkpoint write failure → logged warning, pipeline continues (non-fatal).
+- Checkpoint write failure → logged warning, blueprint continues (non-fatal).
 
 ---
 
@@ -184,7 +184,7 @@ Alpha release preparation for PyPI.
 
 **ruamel.yaml round-trip** — `apply.py` and `surveyor/llm.py` `_auto_apply` both used `yaml.dump()` which sorts keys alphabetically and strips comments. Replaced with `ruamel.yaml` (added to `pyproject.toml` dependencies). Blueprint comments and key order now preserved after patch apply. Only the patched config block loses inline comments (replaced by plain dict from LLM).
 
-**`approval_mode` default** — was `"auto"` (LLM fires on every failure by default). Changed to `"disabled"`. Pipelines without explicit `agent:` block no longer call LLM. Schema and models updated. `tests/test_parser.py` assertion updated.
+**`approval_mode` default** — was `"auto"` (LLM fires on every failure by default). Changed to `"disabled"`. Blueprints without explicit `agent:` block no longer call LLM. Schema and models updated. `tests/test_parser.py` assertion updated.
 
 **`on_pending_patches`** — new field on `AgentConfig`. Values: `"ignore"` | `"warn"` (default) | `"block"`. `cli.py run` checks `patches/pending/` before execution; `surveyor.py` suppresses LLM when pending patches exist and policy != `"ignore"`.
 
@@ -196,7 +196,7 @@ Alpha release preparation for PyPI.
 
 **`conftest.py` Ollama default** — `AQ_OLLAMA_URL` now defaults to `http://localhost:11434` when unset; tests skip if that host unreachable. No longer requires env var to be set explicitly to skip gracefully.
 
-**Schema drift demo** — `examples/llm_healing_demo/` rewritten: JSON source with `ReviewDate` field, pipeline SQL references old `review_date`. Spark error suggests correct name. Blueprint cleaned of all hint comments. Channel config corrected to use `op: sql` + `query:` (channel.py expects those keys, not `sql:`).
+**Schema drift demo** — `examples/llm_healing_demo/` rewritten: JSON source with `ReviewDate` field, blueprint SQL references old `review_date`. Spark error suggests correct name. Blueprint cleaned of all hint comments. Channel config corrected to use `op: sql` + `query:` (channel.py expects those keys, not `sql:`).
 
 ### Design Decisions
 - `on_pending_patches: block` is the recommended production setting; `warn` for dev
@@ -242,8 +242,8 @@ Updated Regulator trigger_agent test item to reflect new behavior (fail → LLM 
 ### Design Notes
 - `_with_retry` uses closure capture of `module` and `spark` — lambdas in executor capture correct loop variables because they execute immediately (not deferred)
 - Lineage written after successful execution (not on failure) — so lineage only exists for clean runs
-- LLM loop is non-blocking and non-fatal: if Anthropic API is down or key is missing, pipeline still records its failure and webhook fires normally
-- Regulator `trigger_agent` → `_fail()` means the pipeline reports error, which triggers the Surveyor's LLM loop on return; cleaner than trying to invoke LLM mid-execution
+- LLM loop is non-blocking and non-fatal: if Anthropic API is down or key is missing, blueprint still records its failure and webhook fires normally
+- Regulator `trigger_agent` → `_fail()` means the blueprint reports error, which triggers the Surveyor's LLM loop on return; cleaner than trying to invoke LLM mid-execution
 
 ### Remaining Stubs
 1. Secrets providers (aws/gcp/azure/vault) — only `env` works
@@ -319,21 +319,21 @@ Each module can have a `retry_policy` in its config. Executor catches module-lev
 ```
 Implementation: wrap each module dispatch in executor with a retry loop. Backoff computed in pure Python (no Spark). Module function re-called from scratch each attempt. `transient_errors` matched as substring of exception string.
 
-**2. Pipeline-level checkpointing (cross-run resume)**
+**2. Blueprint-level checkpointing (cross-run resume)**
 After each module succeeds, write its `frame_store` key (the lazy plan) to a materialized Parquet file in `.aqueduct/checkpoints/<run_id>/<module_id>/`. On re-run with `--resume <run_id>`, executor reads checkpoint for already-completed modules instead of re-executing them.
 
 Design questions to resolve:
-- Checkpoint = materialized Parquet, so schema is preserved. But it's a Spark action (`.write.parquet()`), which adds latency to every module. Opt-in via `checkpoint: true` on module or pipeline level?
+- Checkpoint = materialized Parquet, so schema is preserved. But it's a Spark action (`.write.parquet()`), which adds latency to every module. Opt-in via `checkpoint: true` on module or blueprint level?
 - Resume must use same run_id or a new one? New run_id means depot watermarks don't conflict.
 - Checkpoint invalidation: if Blueprint changes between runs, checkpoint is stale. Hash Manifest JSON as checkpoint key?
 
 **3. Dynamic/reactive retry via LLM (trigger_agent)**
-Current design: `on_exhaustion: trigger_agent` → send `FailureContext` to LLM → LLM proposes PatchSpec → patch applied → pipeline re-runs from scratch. This is already the Phase 8 plan.
+Current design: `on_exhaustion: trigger_agent` → send `FailureContext` to LLM → LLM proposes PatchSpec → patch applied → blueprint re-runs from scratch. This is already the Phase 8 plan.
 
 Enhancement: make `trigger_agent` available as `on_block` in Regulator too (data quality failure → LLM proposes SQL fix in the Channel feeding that Probe).
 
 **4. Deadline / validity window**
-Not a runtime timeout — user-defined constraint: "if still failing after N seconds from first attempt, give up." Primary use case: daily/hourly batch pipelines where a stale retry hours later produces wrong output (daily report that must land before 09:00 is useless if it lands at 22:00).
+Not a runtime timeout — user-defined constraint: "if still failing after N seconds from first attempt, give up." Primary use case: daily/hourly batch blueprints where a stale retry hours later produces wrong output (daily report that must land before 09:00 is useless if it lands at 22:00).
 
 Add `deadline_seconds` to `RetryPolicy`:
 ```yaml
@@ -400,7 +400,7 @@ Added full Phase 7 test checklist to `.dev/TESTING.md` (passthrough, spillway, d
 
 **Files created (all under `examples/comprehensive_test/`):**
 - `generate_data.py` — boto3 + pandas + pyarrow script; uploads ~1000 orders + ~200 customers (parquet) to MinIO `raw-data` bucket; intentional data quality issues (~5% null amounts, ~3% future dates, ~10% malformed emails)
-- `blueprint.yml` — 9-module pipeline exercising all Phase 6 module types: Ingress × 2, Channel × 2, Probe, Regulator, Junction, Funnel, Egress; date-partitioned output path via `@aq.date.today()`
+- `blueprint.yml` — 9-module blueprint exercising all Phase 6 module types: Ingress × 2, Channel × 2, Probe, Regulator, Junction, Funnel, Egress; date-partitioned output path via `@aq.date.today()`
 - `aqueduct.yml` — remote Spark master (`spark://<IP ADDRESS>:7077`), full S3A/MinIO config (`hadoop-aws:3.3.4`), resource sizing
 - `README.md` — prerequisites, step-by-step run instructions, DuckDB verification queries, known-limitations table
 
@@ -428,7 +428,7 @@ LLM Integration — `aqueduct/surveyor/llm.py`:
 1. Package `FailureContext` → call Anthropic SDK with `PatchSpec.model_json_schema()` in system prompt
 2. Validate response as PatchSpec (up to 3 re-prompts on schema failure)
 3. `approval_mode: auto` → apply immediately; `human` → write to patches/pending/
-4. On success: apply patch, persist to patches/applied/, re-run pipeline
+4. On success: apply patch, persist to patches/applied/, re-run blueprint
 5. Wire `evaluate_regulator` to a new `quality_check` signal type that emits `passed: bool`
 
 ---
@@ -486,7 +486,7 @@ LLM Integration — `aqueduct/surveyor/llm.py`:
 1. Package `FailureContext` → call Anthropic SDK with `PatchSpec.model_json_schema()` in system prompt
 2. Validate response as PatchSpec (up to 3 re-prompts on schema failure)
 3. `approval_mode: auto` → apply immediately; `human` → write to patches/pending/
-4. On success: apply patch, persist to patches/applied/, re-run pipeline
+4. On success: apply patch, persist to patches/applied/, re-run blueprint
 
 ---
 
@@ -520,7 +520,7 @@ LLM Integration — `aqueduct/surveyor/llm.py`:
 1. Package `FailureContext` → call Anthropic SDK with `PatchSpec.model_json_schema()` in system prompt
 2. Validate response as PatchSpec (up to 3 re-prompts on schema failure)
 3. `approval_mode: auto` → apply immediately; `human` → write to patches/pending/
-4. On success: apply patch, persist to patches/applied/, re-run pipeline
+4. On success: apply patch, persist to patches/applied/, re-run blueprint
 
 ---
 
@@ -557,7 +557,7 @@ LLM Integration:
 1. `aqueduct/surveyor/llm.py` — package `FailureContext` → call Anthropic SDK → validate PatchSpec response → `apply_patch_to_dict`
 2. Wire into `Surveyor.record()`: on failure with `approval_mode: auto`, call LLM loop
 3. Max 3 re-prompt attempts on schema validation failure
-4. On success: write PatchSpec to `patches/applied/`, re-run pipeline
+4. On success: write PatchSpec to `patches/applied/`, re-run blueprint
 
 ---
 
@@ -565,7 +565,7 @@ LLM Integration:
 
 ### Accomplished
 
-Built the observability layer. Pipeline failures are now persisted and alertable.
+Built the observability layer. Blueprint failures are now persisted and alertable.
 
 **Files created:**
 - `aqueduct/surveyor/__init__.py`
@@ -622,7 +622,7 @@ Added `op: sql` Channel support. `aqueduct run tests/fixtures/valid_minimal.yml`
 
 | Decision | Rationale |
 |---|---|
-| Drop temp views in `finally` | Clean catalog prevents name collisions across Channel executions in the same pipeline |
+| Drop temp views in `finally` | Clean catalog prevents name collisions across Channel executions in the same blueprint |
 | `__input__` alias for single-input only | Multi-input Channels must reference by module ID to avoid ambiguity |
 | `udf_registry` stub now, not later | Defines the call signature so tests can verify the param exists; avoids breaking change when UDF support lands |
 
@@ -644,7 +644,7 @@ Built the minimal Executor layer (Ingress + Egress only). No Channels, no LLM.
 **Files created:**
 - `aqueduct/executor/__init__.py`
 - `aqueduct/executor/models.py` — frozen `ModuleResult`, `ExecutionResult` with `to_dict()`
-- `aqueduct/executor/session.py` — `make_spark_session(pipeline_id, spark_config)` factory; calls `builder.getOrCreate()`
+- `aqueduct/executor/session.py` — `make_spark_session(blueprint_id, spark_config)` factory; calls `builder.getOrCreate()`
 - `aqueduct/executor/ingress.py` — `read_ingress(module, spark)` → lazy DataFrame; formats: parquet/csv/json; `schema_hint` validated via `df.schema` (no Spark actions)
 - `aqueduct/executor/egress.py` — `write_egress(df, module)` → `.save()`; formats: parquet/csv/delta; modes: overwrite/append/error/ignore
 - `aqueduct/executor/executor.py` — `execute(manifest, spark, run_id)`: Kahn's topo-sort → Ingress reads → Egress writes; fail-fast on error; raises `ExecuteError` for unsupported module types
@@ -686,7 +686,7 @@ Completed Phase 2 (Compiler) and wired `aqueduct/cli.py` to the full Compiler.
 - `tests/test_compiler.py` — full compiler test suite
 
 **Files updated:**
-- `aqueduct/cli.py` — `compile` command now calls `compiler.compile()` and outputs `manifest.to_dict()` JSON; uses `pipeline_id` key
+- `aqueduct/cli.py` — `compile` command now calls `compiler.compile()` and outputs `manifest.to_dict()` JSON; uses `blueprint_id` key
 - `aqueduct/parser/models.py` — added `attach_to`, `ref`, `context_override` fields to `Module`
 - `aqueduct/parser/schema.py` — added matching fields to `ModuleSchema`
 
@@ -758,7 +758,7 @@ No Channels, no Surveyor, no LLM in Phase 2.
 
 Initial release.
 
-- Declarative YAML Blueprint pipelines for Apache Spark
+- Declarative YAML Blueprint blueprints for Apache Spark
 - Modules: Ingress, Egress, Channel, Junction, Funnel, Probe, Regulator, Arcade
 - LLM self-healing loop (Anthropic, Ollama, OpenAI-compatible)
 - PatchSpec grammar: structured, auditable LLM patches

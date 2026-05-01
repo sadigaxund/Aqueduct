@@ -113,13 +113,13 @@ class TestLlmHelpers:
 
         assert _truncate_stack(None) == "(no stack trace)"
 
-    def test_build_pipeline_summary_no_modules(self):
-        from aqueduct.surveyor.llm import _build_pipeline_summary
+    def test_build_blueprint_summary_no_modules(self):
+        from aqueduct.surveyor.llm import _build_blueprint_summary
 
-        assert _build_pipeline_summary({}) == "(no modules)"
+        assert _build_blueprint_summary({}) == "(no modules)"
 
-    def test_build_pipeline_summary_linear_chain(self):
-        from aqueduct.surveyor.llm import _build_pipeline_summary
+    def test_build_blueprint_summary_linear_chain(self):
+        from aqueduct.surveyor.llm import _build_blueprint_summary
 
         manifest = {
             "modules": [
@@ -132,16 +132,16 @@ class TestLlmHelpers:
                 {"from": "ch", "to": "eg", "port": "main"},
             ],
         }
-        summary = _build_pipeline_summary(manifest)
+        summary = _build_blueprint_summary(manifest)
         assert "Ingress" in summary
         assert "Channel" in summary
         assert "Egress" in summary
 
-    def test_build_pipeline_summary_single_module(self):
-        from aqueduct.surveyor.llm import _build_pipeline_summary
+    def test_build_blueprint_summary_single_module(self):
+        from aqueduct.surveyor.llm import _build_blueprint_summary
 
         manifest = {"modules": [{"id": "m1", "type": "Ingress"}], "edges": []}
-        summary = _build_pipeline_summary(manifest)
+        summary = _build_blueprint_summary(manifest)
         assert "Ingress(m1)" in summary
 
     def test_load_previous_patches_empty_when_no_dir(self, tmp_path):
@@ -310,10 +310,10 @@ class TestWebhookPayloadTemplate:
 
         cfg = WebhookEndpointConfig(
             url="http://example.com/hook",
-            payload={"text": "Pipeline ${pipeline_id} failed on ${failed_module}"},
+            payload={"text": "Blueprint ${blueprint_id} failed on ${failed_module}"},
         )
         full_payload = {"run_id": "r1", "status": "error"}
-        template_vars = {"pipeline_id": "my.pipe", "failed_module": "ing"}
+        template_vars = {"blueprint_id": "my.pipe", "failed_module": "ing"}
 
         with patch("httpx.request") as mock_req:
             mock_req.return_value = MagicMock(status_code=200)
@@ -322,7 +322,7 @@ class TestWebhookPayloadTemplate:
 
         _, kwargs = mock_req.call_args
         sent = kwargs["json"]
-        assert sent["text"] == "Pipeline my.pipe failed on ing"
+        assert sent["text"] == "Blueprint my.pipe failed on ing"
 
     def test_render_value_substitutes_token(self):
         from aqueduct.surveyor.webhook import _render_value
@@ -380,11 +380,11 @@ class TestParserGraph:
 
 class TestBuildUserPrompt:
     def _make_ctx(self, manifest_json: str = "", failed_module: str = "ing",
-                  error_message: str = "Boom", stack_trace=None, pipeline_id: str = "p1"):
+                  error_message: str = "Boom", stack_trace=None, blueprint_id: str = "p1"):
         from aqueduct.surveyor.models import FailureContext
         return FailureContext(
             run_id="r1",
-            pipeline_id=pipeline_id,
+            blueprint_id=blueprint_id,
             failed_module=failed_module,
             error_message=error_message,
             stack_trace=stack_trace,
@@ -406,8 +406,8 @@ class TestBuildUserPrompt:
         import json
 
         manifest = {
-            "name": "My Pipeline",
-            "description": "Test pipeline",
+            "name": "My Blueprint",
+            "description": "Test blueprint",
             "modules": [
                 {"id": "ing", "type": "Ingress", "label": "Ingest"},
                 {"id": "ch", "type": "Channel", "label": "Transform", "config": {"sql": "SELECT 1"}},
@@ -416,7 +416,7 @@ class TestBuildUserPrompt:
         }
         ctx = self._make_ctx(manifest_json=json.dumps(manifest), failed_module="ch")
         result = _build_user_prompt(ctx, tmp_path)
-        assert "My Pipeline" in result
+        assert "My Blueprint" in result
         assert "ch" in result
         assert "Transform" in result
 
@@ -425,7 +425,7 @@ class TestBuildUserPrompt:
         import json
 
         manifest = {"modules": [{"id": "ing", "type": "Ingress", "label": ""}], "edges": []}
-        ctx = self._make_ctx(manifest_json=json.dumps(manifest), pipeline_id="fallback.pipe")
+        ctx = self._make_ctx(manifest_json=json.dumps(manifest), blueprint_id="fallback.pipe")
         result = _build_user_prompt(ctx, tmp_path)
         assert "fallback.pipe" in result
 
@@ -748,14 +748,14 @@ class TestCliReport:
         conn = duckdb.connect(str(db))
         conn.execute("""
             CREATE TABLE run_records (
-                run_id VARCHAR PRIMARY KEY, pipeline_id VARCHAR, status VARCHAR,
+                run_id VARCHAR PRIMARY KEY, blueprint_id VARCHAR, status VARCHAR,
                 started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, module_results JSON
             )
         """)
         module_results = _json.dumps([{"module_id": "m1", "status": status, "error": None}])
         conn.execute(
             "INSERT INTO run_records VALUES (?, ?, ?, NOW(), NOW(), ?)",
-            [run_id, "my.pipeline", status, module_results],
+            [run_id, "my.blueprint", status, module_results],
         )
         conn.close()
         return store
@@ -777,7 +777,7 @@ class TestCliReport:
         assert result.exit_code == 0
         data = json.loads(result.output)
         assert data["run_id"] == "abc123"
-        assert data["pipeline_id"] == "my.pipeline"
+        assert data["blueprint_id"] == "my.blueprint"
 
     def test_csv_format(self, tmp_path):
         from click.testing import CliRunner
@@ -815,7 +815,7 @@ class TestCliLineage:
         conn = duckdb.connect(str(db))
         conn.execute("""
             CREATE TABLE column_lineage (
-                pipeline_id VARCHAR, channel_id VARCHAR,
+                blueprint_id VARCHAR, channel_id VARCHAR,
                 output_column VARCHAR, source_table VARCHAR, source_column VARCHAR
             )
         """)
@@ -1416,27 +1416,27 @@ class TestExecutionResultTriggerAgent:
 
     def test_trigger_agent_defaults_to_false(self):
         from aqueduct.executor.models import ExecutionResult
-        result = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=())
+        result = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
         assert result.trigger_agent is False
 
     def test_trigger_agent_true_stored_and_returned(self):
         from aqueduct.executor.models import ExecutionResult
         result = ExecutionResult(
-            pipeline_id="p", run_id="r", status="error",
+            blueprint_id="p", run_id="r", status="error",
             module_results=(), trigger_agent=True,
         )
         assert result.trigger_agent is True
 
     def test_to_dict_includes_trigger_agent_false(self):
         from aqueduct.executor.models import ExecutionResult
-        d = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=()).to_dict()
+        d = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=()).to_dict()
         assert "trigger_agent" in d
         assert d["trigger_agent"] is False
 
     def test_to_dict_includes_trigger_agent_true(self):
         from aqueduct.executor.models import ExecutionResult
         d = ExecutionResult(
-            pipeline_id="p", run_id="r", status="error",
+            blueprint_id="p", run_id="r", status="error",
             module_results=(), trigger_agent=True,
         ).to_dict()
         assert d["trigger_agent"] is True
@@ -1632,7 +1632,7 @@ class TestAssertTriggerAgentPropagation:
         spark.range(5).write.parquet(in_path)
 
         manifest = Manifest(
-            pipeline_id="test.assert_trigger_agent",
+            blueprint_id="test.assert_trigger_agent",
             modules=(
                 Module(
                     id="src", type="Ingress", label="Src",
@@ -1676,7 +1676,7 @@ class TestRegulatorTriggerAgentPropagation:
                 return False
 
         manifest = Manifest(
-            pipeline_id="test.reg_trigger_agent",
+            blueprint_id="test.reg_trigger_agent",
             modules=(
                 Module(
                     id="src", type="Ingress", label="Src",
@@ -1704,12 +1704,12 @@ class TestRegulatorTriggerAgentPropagation:
         assert result.trigger_agent is True
 
 
-# ── on_exhaustion=alert_only integration (pipeline continues) ─────────────────
+# ── on_exhaustion=alert_only integration (blueprint continues) ─────────────────
 
 class TestOnExhaustionAlertOnlyIntegration:
-    """alert_only: module fails but pipeline reports success (gate_closed path)."""
+    """alert_only: module fails but blueprint reports success (gate_closed path)."""
 
-    def test_alert_only_pipeline_continues(self, spark, tmp_path):
+    def test_alert_only_blueprint_continues(self, spark, tmp_path):
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.spark.executor import execute
         from aqueduct.parser.models import Edge, Module, RetryPolicy
@@ -1723,7 +1723,7 @@ class TestOnExhaustionAlertOnlyIntegration:
         policy = RetryPolicy(max_attempts=1, on_exhaustion="alert_only")
 
         manifest = Manifest(
-            pipeline_id="test.alert_only",
+            blueprint_id="test.alert_only",
             retry_policy=policy,
             modules=(
                 Module(
@@ -1747,10 +1747,10 @@ class TestOnExhaustionAlertOnlyIntegration:
         )
 
         result = execute(manifest, spark)
-        # bad_src fails but alert_only propagates GATE_CLOSED — pipeline finishes
+        # bad_src fails but alert_only propagates GATE_CLOSED — blueprint finishes
         statuses = {r.module_id: r.status for r in result.module_results}
         assert statuses.get("bad_src") == "error"
-        # The overall pipeline should not abort with status="error" due to alert_only
+        # The overall blueprint should not abort with status="error" due to alert_only
         # bad_src has no downstream, so sink is still reachable and succeeds
         assert statuses.get("sink") == "success"
 

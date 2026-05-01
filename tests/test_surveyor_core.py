@@ -16,7 +16,7 @@ from aqueduct.surveyor.surveyor import Surveyor
 @pytest.fixture
 def manifest():
     return Manifest(
-        pipeline_id="test.pipeline",
+        blueprint_id="test.blueprint",
         modules=(),
         edges=(),
         context={},
@@ -38,8 +38,8 @@ def test_surveyor_lifecycle_start(manifest, tmp_path):
     # Verify 'running' record insertion
     import duckdb
     conn = duckdb.connect(str(db_path))
-    res = conn.execute("SELECT status, pipeline_id FROM run_records WHERE run_id = 'run-123'").fetchone()
-    assert res == ("running", "test.pipeline")
+    res = conn.execute("SELECT status, blueprint_id FROM run_records WHERE run_id = 'run-123'").fetchone()
+    assert res == ("running", "test.blueprint")
     
     surveyor.stop()
     conn.close()
@@ -47,7 +47,7 @@ def test_surveyor_lifecycle_start(manifest, tmp_path):
 
 def test_surveyor_record_before_start_raises(manifest, tmp_path):
     surveyor = Surveyor(manifest, store_dir=tmp_path)
-    result = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=())
+    result = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
     
     with pytest.raises(RuntimeError, match="Surveyor.start\(\) must be called before record\(\)"):
         surveyor.record(result)
@@ -59,7 +59,7 @@ def test_surveyor_record_success(manifest, tmp_path):
     surveyor.start(run_id)
     
     result = ExecutionResult(
-        pipeline_id="p1", 
+        blueprint_id="p1", 
         run_id=run_id, 
         status="success", 
         module_results=(ModuleResult(module_id="m1", status="success"),)
@@ -83,7 +83,7 @@ def test_surveyor_record_failure(manifest, tmp_path):
     surveyor.start(run_id)
     
     result = ExecutionResult(
-        pipeline_id="p1", 
+        blueprint_id="p1", 
         run_id=run_id, 
         status="error", 
         module_results=(
@@ -124,13 +124,13 @@ def test_surveyor_orchestration_webhook_firing(manifest, tmp_path):
     surveyor.start(run_id)
     
     # 1. Success -> No Webhook
-    res_success = ExecutionResult(pipeline_id="p", run_id=run_id, status="success", module_results=())
+    res_success = ExecutionResult(blueprint_id="p", run_id=run_id, status="success", module_results=())
     with patch("aqueduct.surveyor.surveyor.fire_webhook") as mock_hook:
         surveyor.record(res_success)
         mock_hook.assert_not_called()
     
     # 2. Failure -> Webhook fired
-    res_fail = ExecutionResult(pipeline_id="p", run_id=run_id, status="error", module_results=())
+    res_fail = ExecutionResult(blueprint_id="p", run_id=run_id, status="error", module_results=())
     with patch("aqueduct.surveyor.surveyor.fire_webhook") as mock_hook:
         surveyor.record(res_fail)
         mock_hook.assert_called_once()
@@ -153,12 +153,12 @@ def test_surveyor_multi_run_persistence(manifest, tmp_path):
     
     # Run 1
     surveyor.start("run-1")
-    surveyor.record(ExecutionResult(pipeline_id="p", run_id="run-1", status="success", module_results=()))
+    surveyor.record(ExecutionResult(blueprint_id="p", run_id="run-1", status="success", module_results=()))
     surveyor.stop()
     
     # Run 2
     surveyor.start("run-2")
-    surveyor.record(ExecutionResult(pipeline_id="p", run_id="run-2", status="success", module_results=()))
+    surveyor.record(ExecutionResult(blueprint_id="p", run_id="run-2", status="success", module_results=()))
     surveyor.stop()
     
     import duckdb
@@ -221,13 +221,13 @@ def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
 
 def test_surveyor_regulator_no_start(tmp_path):
     from aqueduct.compiler.models import Manifest
-    manifest = Manifest(pipeline_id="p", modules=(), edges=(), context={}, spark_config={})
+    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
     surveyor = Surveyor(manifest, store_dir=tmp_path)
     assert surveyor.evaluate_regulator("reg1") is True
 
 def test_surveyor_regulator_no_signal_port_edge(tmp_path):
     from aqueduct.compiler.models import Manifest
-    manifest = Manifest(pipeline_id="p", modules=(), edges=(), context={}, spark_config={})
+    manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
     surveyor = Surveyor(manifest, store_dir=tmp_path)
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
@@ -236,7 +236,7 @@ def test_surveyor_regulator_no_signals_db(tmp_path):
     from aqueduct.parser.models import Edge, Module
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1",
+        blueprint_id="p1",
         modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
@@ -256,7 +256,7 @@ def test_surveyor_regulator_no_rows(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -276,7 +276,7 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -296,7 +296,7 @@ def test_surveyor_regulator_passed_none(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -316,7 +316,7 @@ def test_surveyor_regulator_passed_false(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -336,7 +336,7 @@ def test_surveyor_regulator_passed_true(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -357,7 +357,7 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
@@ -373,7 +373,7 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(
-        pipeline_id="p1", modules=(),
+        blueprint_id="p1", modules=(),
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )

@@ -25,8 +25,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class TestSchemaValidation:
     def test_valid_minimal_parses(self):
         bp = parse(FIXTURES / "valid_minimal.yml")
-        assert bp.id == "pipeline.hello.world"
-        assert bp.name == "Hello World Pipeline"
+        assert bp.id == "blueprint.hello.world"
+        assert bp.name == "Hello World Blueprint"
         assert len(bp.modules) == 3
         assert len(bp.edges) == 2
 

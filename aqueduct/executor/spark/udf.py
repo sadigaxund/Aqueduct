@@ -1,6 +1,6 @@
 """UDF registration — registers all UDFs from Manifest with SparkSession.
 
-Called once at pipeline start before any module executes.  Registration
+Called once at blueprint start before any module executes.  Registration
 failure raises ExecuteError immediately (a UDF that cannot be loaded makes
 any Channel that calls it incorrect).
 

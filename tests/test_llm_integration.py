@@ -47,17 +47,17 @@ edges:
 """
 
 
-def _make_failure_ctx(pipeline_id: str = "test.live.llm"):
+def _make_failure_ctx(blueprint_id: str = "test.live.llm"):
     from aqueduct.surveyor.models import FailureContext
 
     return FailureContext(
         run_id="run-live-001",
-        pipeline_id=pipeline_id,
+        blueprint_id=blueprint_id,
         failed_module="src",
         error_message="IngressError: path '/tmp/data' does not exist",
         stack_trace="IngressError: path '/tmp/data' does not exist\n  at read_ingress()",
         manifest_json=json.dumps({
-            "pipeline_id": pipeline_id,
+            "blueprint_id": blueprint_id,
             "name": "Live LLM Test",
             "description": "Reads parquet and writes parquet",
             "modules": [

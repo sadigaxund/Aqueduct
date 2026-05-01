@@ -156,9 +156,9 @@ class BlueprintSchema(BaseModel):
 
     @field_validator("id")
     @classmethod
-    def validate_pipeline_id(cls, v: str) -> str:
+    def validate_blueprint_id(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError("Pipeline id must not be empty")
+            raise ValueError("Blueprint id must not be empty")
         return v
 
     @model_validator(mode="after")

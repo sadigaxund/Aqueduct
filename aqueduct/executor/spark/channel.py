@@ -2,7 +2,7 @@
 
 Execution model:
   1. Register each upstream DataFrame as a temp view named after the upstream
-     module ID.  This lets the query reference sources by their pipeline ID
+     module ID.  This lets the query reference sources by their blueprint ID
      (e.g. ``SELECT * FROM read_input``).
   2. For single-input Channels, also register the upstream DataFrame as the
      reserved alias ``__input__``, allowing queries that omit the FROM clause

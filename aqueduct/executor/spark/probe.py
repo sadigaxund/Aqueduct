@@ -387,7 +387,7 @@ def execute_probe(
 
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
-        never halt the pipeline.
+        never halt the blueprint.
     """
     try:
         import duckdb

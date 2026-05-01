@@ -134,7 +134,7 @@ def test_egress_writes_module_metrics_on_success(spark: SparkSession, tmp_path: 
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.metrics_egress",
+        blueprint_id="test.metrics_egress",
         modules=(
             Module(id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}),
             Module(id="egr", type="Egress",  label="Egr", config={"format": "parquet", "path": out_path}),
@@ -178,7 +178,7 @@ def test_egress_failure_no_module_metrics_row(spark: SparkSession, tmp_path: Pat
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.metrics_egress_fail",
+        blueprint_id="test.metrics_egress_fail",
         modules=(
             Module(id="ing",  type="Ingress", label="Ing",  config={"format": "parquet", "path": in_path}),
             Module(id="egr",  type="Egress",  label="Egr",  config={"format": "parquet", "path": "/bad/path", "mode": "broken_mode"}),

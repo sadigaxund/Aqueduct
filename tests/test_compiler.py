@@ -383,7 +383,7 @@ class TestManifestStructure:
         from dataclasses import FrozenInstanceError
         manifest = _parse_and_compile("valid_minimal.yml")
         with pytest.raises(FrozenInstanceError):
-            manifest.pipeline_id = "hacked"  # type: ignore[misc]
+            manifest.blueprint_id = "hacked"  # type: ignore[misc]
 
     def test_to_dict_is_json_serializable(self):
         import json
@@ -395,12 +395,12 @@ class TestManifestStructure:
     def test_to_dict_contains_required_keys(self):
         manifest = _parse_and_compile("valid_minimal.yml")
         d = manifest.to_dict()
-        for key in ("pipeline_id", "modules", "edges", "context", "spark_config"):
+        for key in ("blueprint_id", "modules", "edges", "context", "spark_config"):
             assert key in d
 
-    def test_manifest_pipeline_id(self):
+    def test_manifest_blueprint_id(self):
         manifest = _parse_and_compile("valid_minimal.yml")
-        assert manifest.pipeline_id == "pipeline.hello.world"
+        assert manifest.blueprint_id == "blueprint.hello.world"
 
     def test_manifest_modules_are_tuple(self):
         manifest = _parse_and_compile("valid_minimal.yml")

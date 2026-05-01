@@ -39,10 +39,10 @@ modules:
 
   - id: tagged
     type: Channel
-    label: "Add pipeline tag"
+    label: "Add blueprint tag"
     config:
       op: sql
-      query: "SELECT *, 'processed' AS pipeline_tag FROM __input__"
+      query: "SELECT *, 'processed' AS blueprint_tag FROM __input__"
 
   - id: sink
     type: Egress

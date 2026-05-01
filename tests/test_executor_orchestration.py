@@ -27,7 +27,7 @@ def minimal_manifest(tmp_path):
     spark.range(5).write.parquet(in_path)
 
     return Manifest(
-        pipeline_id="test.pipeline",
+        blueprint_id="test.blueprint",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
@@ -43,20 +43,20 @@ def minimal_manifest(tmp_path):
 # ── Model Tests ───────────────────────────────────────────────────────────────
 
 def test_execution_result_is_frozen():
-    res = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=())
+    res = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
     with pytest.raises(FrozenInstanceError):
         res.status = "error"  # type: ignore[misc]
 
 
 def test_execution_result_to_dict():
     res = ExecutionResult(
-        pipeline_id="p",
+        blueprint_id="p",
         run_id="r",
         status="success",
         module_results=(ModuleResult(module_id="m1", status="success"),)
     )
     d = res.to_dict()
-    assert d["pipeline_id"] == "p"
+    assert d["blueprint_id"] == "p"
     assert d["module_results"][0]["module_id"] == "m1"
 
 
@@ -75,7 +75,7 @@ def test_execute_success(spark: SparkSession, minimal_manifest):
 
 def test_execute_unsupported_module_type(spark: SparkSession):
     manifest = Manifest(
-        pipeline_id="test.unsupported",
+        blueprint_id="test.unsupported",
         modules=(Module(id="m1", type="Spillway", label="S1", config={}),),
         edges=(),
         context={},
@@ -91,7 +91,7 @@ def test_execute_channel_linear(spark: SparkSession, tmp_path):
     out_path = str(tmp_path / "out.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.channel_linear",
+        blueprint_id="test.channel_linear",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={"op": "sql", "query": "SELECT * FROM in WHERE id > 2"}),
@@ -121,7 +121,7 @@ def test_execute_channel_multi_input(spark: SparkSession, tmp_path):
     out_path = str(tmp_path / "out_multi.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.channel_multi",
+        blueprint_id="test.channel_multi",
         modules=(
             Module(id="in1", type="Ingress", label="In1", config={"format": "parquet", "path": in1_path}),
             Module(id="in2", type="Ingress", label="In2", config={"format": "parquet", "path": in2_path}),
@@ -152,7 +152,7 @@ def test_execute_channel_error(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.channel_err",
+        blueprint_id="test.channel_err",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={"op": "sql", "query": "SELECT * FROM non_existent"}),
@@ -170,7 +170,7 @@ def test_execute_channel_error(spark: SparkSession, tmp_path):
 
 def test_execute_channel_missing_upstream_edge(spark: SparkSession):
     manifest = Manifest(
-        pipeline_id="test.channel_no_edge",
+        blueprint_id="test.channel_no_edge",
         modules=(
             Module(id="chan", type="Channel", label="Chan", config={"op": "sql", "query": "SELECT 1"}),
         ),
@@ -186,7 +186,7 @@ def test_execute_channel_missing_upstream_edge(spark: SparkSession):
 
 def test_execute_ingress_error(spark: SparkSession):
     manifest = Manifest(
-        pipeline_id="test.ingress_err",
+        blueprint_id="test.ingress_err",
         modules=(Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": "/ghost"}),),
         edges=(),
         context={},
@@ -204,7 +204,7 @@ def test_execute_egress_error(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.egress_err",
+        blueprint_id="test.egress_err",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": "/foo", "mode": "hacked"}),
@@ -222,7 +222,7 @@ def test_execute_egress_error(spark: SparkSession, tmp_path):
 
 def test_execute_missing_upstream_edge(spark: SparkSession, tmp_path):
     manifest = Manifest(
-        pipeline_id="test.no_edge",
+        blueprint_id="test.no_edge",
         modules=(Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": "/foo"}),),
         edges=(),
         context={},
@@ -247,7 +247,7 @@ def test_execute_run_id_supplied(spark: SparkSession, minimal_manifest):
 
 def test_execute_cycle_in_manifest(spark: SparkSession):
     manifest = Manifest(
-        pipeline_id="test.cycle",
+        blueprint_id="test.cycle",
         modules=(
             Module(id="m1", type="Ingress", label="M1", config={"format": "p", "path": "p"}),
             Module(id="m2", type="Egress", label="M2", config={"format": "p", "path": "p"}),
@@ -268,7 +268,7 @@ def test_execute_cycle_in_manifest(spark: SparkSession):
 def test_execute_junction_error_no_main_edge(spark: SparkSession):
     """Junction with no incoming edge → error result."""
     manifest = Manifest(
-        pipeline_id="test.junc_no_edge",
+        blueprint_id="test.junc_no_edge",
         modules=(
             Module(id="j1", type="Junction", label="J1", config={
                 "mode": "broadcast", "branches": [{"id": "b1"}]
@@ -289,7 +289,7 @@ def test_execute_junction_exec_error(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.junc_exec_err",
+        blueprint_id="test.junc_exec_err",
         modules=(
             Module(id="m1", type="Ingress", label="M1", config={"format": "parquet", "path": in_path}),
             Module(id="j1", type="Junction", label="J1", config={"mode": "bad"}),
@@ -315,7 +315,7 @@ def test_execute_junction_conditional(spark: SparkSession, tmp_path):
     out_odd = str(tmp_path / "odd.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.junc_cond",
+        blueprint_id="test.junc_cond",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="jn", type="Junction", label="Jn", config={
@@ -354,7 +354,7 @@ def test_execute_junction_broadcast(spark: SparkSession, tmp_path):
     out_b = str(tmp_path / "b.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.junc_broad",
+        blueprint_id="test.junc_broad",
         modules=(
             Module(id="in",    type="Ingress",  label="In",   config={"format": "parquet", "path": in_path}),
             Module(id="jn",    type="Junction", label="Jn",   config={
@@ -385,7 +385,7 @@ def test_execute_junction_broadcast(spark: SparkSession, tmp_path):
 def test_execute_funnel_error_no_data_edge(spark: SparkSession):
     """Funnel with no incoming edges → error result."""
     manifest = Manifest(
-        pipeline_id="test.funn_no_edge",
+        blueprint_id="test.funn_no_edge",
         modules=(
             Module(id="f1", type="Funnel", label="F1", config={
                 "mode": "union_all", "inputs": ["a", "b"]
@@ -406,7 +406,7 @@ def test_execute_funnel_exec_error(spark: SparkSession, tmp_path):
     spark.range(3).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.funn_exec_err",
+        blueprint_id="test.funn_exec_err",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="f1", type="Funnel", label="F1", config={
@@ -434,7 +434,7 @@ def test_execute_funnel_union_all(spark: SparkSession, tmp_path):
     out_path = str(tmp_path / "out.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.funn_union_all",
+        blueprint_id="test.funn_union_all",
         modules=(
             Module(id="in1", type="Ingress", label="In1", config={"format": "parquet", "path": in1_path}),
             Module(id="in2", type="Ingress", label="In2", config={"format": "parquet", "path": in2_path}),
@@ -466,7 +466,7 @@ def test_execute_junction_to_funnel_roundtrip(spark: SparkSession, tmp_path):
     out_path = str(tmp_path / "out_roundtrip.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.roundtrip",
+        blueprint_id="test.roundtrip",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="j1", type="Junction", label="J1", config={
@@ -504,7 +504,7 @@ def test_execute_probe_appended_last(spark: SparkSession, tmp_path):
     
     out_path = str(tmp_path / "out.parquet")
     manifest = Manifest(
-        pipeline_id="test.probe_last",
+        blueprint_id="test.probe_last",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
@@ -528,7 +528,7 @@ def test_execute_probe_missing_attach_to(spark: SparkSession, tmp_path):
     
     out_path = str(tmp_path / "out.parquet")
     manifest = Manifest(
-        pipeline_id="test.probe_err",
+        blueprint_id="test.probe_err",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
@@ -551,7 +551,7 @@ def test_execute_probe_failure_ignores(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.probe_no_store",
+        blueprint_id="test.probe_no_store",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="p1", type="Probe", label="P1", config={
@@ -563,7 +563,7 @@ def test_execute_probe_failure_ignores(spark: SparkSession, tmp_path):
         context={},
         spark_config={}
     )
-    # store_dir is None => probe will fail to create DB, but pipeline should stay success
+    # store_dir is None => probe will fail to create DB, but blueprint should stay success
     result = execute(manifest, spark, store_dir=None)
     assert result.status == "success"
 
@@ -576,7 +576,7 @@ def test_execute_regulator_open_gate_no_surveyor(spark: SparkSession, tmp_path):
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.regulator_open_no_surveyor",
+        blueprint_id="test.regulator_open_no_surveyor",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={}),
@@ -601,7 +601,7 @@ def test_execute_regulator_open_gate_surveyor_true(spark: SparkSession, tmp_path
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.regulator_open_surveyor",
+        blueprint_id="test.regulator_open_surveyor",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={}),
@@ -626,7 +626,7 @@ def test_execute_regulator_closed_gate_skip(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.regulator_closed_skip",
+        blueprint_id="test.regulator_closed_skip",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
@@ -648,7 +648,7 @@ def test_execute_regulator_closed_gate_abort(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.regulator_closed_abort",
+        blueprint_id="test.regulator_closed_abort",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={"on_block": "abort"}),
@@ -671,7 +671,7 @@ def test_execute_regulator_closed_gate_trigger_agent(spark: SparkSession, tmp_pa
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.regulator_closed_trigger",
+        blueprint_id="test.regulator_closed_trigger",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={"on_block": "trigger_agent"}),
@@ -694,7 +694,7 @@ def test_execute_regulator_downstream_skipped(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.regulator_downstream_skip",
+        blueprint_id="test.regulator_downstream_skip",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
@@ -713,7 +713,7 @@ def test_execute_regulator_downstream_skipped(spark: SparkSession, tmp_path):
 
 def test_execute_regulator_no_main_edge(spark: SparkSession):
     manifest = Manifest(
-        pipeline_id="test.regulator_no_edge",
+        blueprint_id="test.regulator_no_edge",
         modules=(
             Module(id="reg", type="Regulator", label="Reg", config={}),
         ),
@@ -740,7 +740,7 @@ def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.udf",
+        blueprint_id="test.udf",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={"op": "sql", "query": "SELECT id, my_concat(id, 'x') as val FROM in"}),
@@ -768,7 +768,7 @@ def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
 
 def test_execute_udf_registry_error(spark: SparkSession, tmp_path):
     manifest = Manifest(
-        pipeline_id="test.udf_err",
+        blueprint_id="test.udf_err",
         modules=(), edges=(), context={}, spark_config={},
         udf_registry=({"lang": "python", "module": "my_udfs"},)
     )
@@ -786,7 +786,7 @@ def test_execute_spillway_edge_and_condition(spark: SparkSession, tmp_path):
     spill_out = str(tmp_path / "spill.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.spillway",
+        blueprint_id="test.spillway",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={
@@ -826,7 +826,7 @@ def test_execute_spillway_condition_no_edge(spark: SparkSession, tmp_path, caplo
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.spillway_no_edge",
+        blueprint_id="test.spillway_no_edge",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={
@@ -859,7 +859,7 @@ def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplo
     spill_out = str(tmp_path / "spill.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.spillway_edge_no_cond",
+        blueprint_id="test.spillway_edge_no_cond",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="chan", type="Channel", label="Chan", config={
@@ -892,7 +892,7 @@ def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatc
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.retry",
+        blueprint_id="test.retry",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
@@ -935,7 +935,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
     out_path = str(tmp_path / "out.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.per_module_retry",
+        blueprint_id="test.per_module_retry",
         modules=(
             Module(
                 id="in",
@@ -949,7 +949,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
         edges=(Edge(from_id="in", to_id="out", port="main"),),
         context={},
         spark_config={},
-        retry_policy=RetryPolicy(max_attempts=1),  # pipeline default = no retry
+        retry_policy=RetryPolicy(max_attempts=1),  # blueprint default = no retry
     )
 
     import aqueduct.executor.spark.executor as _exe
@@ -975,7 +975,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
 
 def _minimal_manifest_with_checkpoint(in_path, out_path, checkpoint=False):
     return Manifest(
-        pipeline_id="test.ckpt",
+        blueprint_id="test.ckpt",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}, checkpoint=checkpoint),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}, checkpoint=checkpoint),
@@ -994,7 +994,7 @@ def test_checkpoint_disabled_by_default(spark: SparkSession, tmp_path):
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.no_ckpt",
+        blueprint_id="test.no_ckpt",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1015,7 +1015,7 @@ def test_checkpoint_blueprint_level_writes_parquet_and_marker(spark: SparkSessio
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_bp",
+        blueprint_id="test.ckpt_bp",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1043,7 +1043,7 @@ def test_checkpoint_per_module_only_checkpoints_flagged_module(spark: SparkSessi
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_mod",
+        blueprint_id="test.ckpt_mod",
         modules=(
             Module(
                 id="src",
@@ -1090,7 +1090,7 @@ def test_resume_skips_completed_module_and_reloads_dataframe(spark: SparkSession
     shutil.rmtree(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.resume",
+        blueprint_id="test.resume",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1114,7 +1114,7 @@ def test_resume_missing_run_id_raises_execute_error(spark: SparkSession, tmp_pat
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.resume_missing",
+        blueprint_id="test.resume_missing",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1136,7 +1136,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.hash_mismatch",
+        blueprint_id="test.hash_mismatch",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1155,7 +1155,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
 
     out_path2 = str(tmp_path / "out2.parquet")
     manifest2 = Manifest(
-        pipeline_id="test.hash_mismatch",
+        blueprint_id="test.hash_mismatch",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path2}),
@@ -1172,14 +1172,14 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
     assert any("changed" in rec.message for rec in caplog.records)
 
 
-def test_per_module_on_failure_abort_stops_pipeline(spark: SparkSession, tmp_path, monkeypatch):
-    """on_failure.on_exhaustion=abort: after exhausting retries pipeline returns error."""
+def test_per_module_on_failure_abort_stops_blueprint(spark: SparkSession, tmp_path, monkeypatch):
+    """on_failure.on_exhaustion=abort: after exhausting retries blueprint returns error."""
     in_path = str(tmp_path / "in.parquet")
     spark.range(2).write.parquet(in_path)
     out_path = str(tmp_path / "out.parquet")
 
     manifest = Manifest(
-        pipeline_id="test.abort",
+        blueprint_id="test.abort",
         modules=(
             Module(
                 id="src",
@@ -1219,7 +1219,7 @@ def test_checkpoint_channel_writes_data_and_marker(spark: SparkSession, tmp_path
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_channel",
+        blueprint_id="test.ckpt_channel",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(
@@ -1256,7 +1256,7 @@ def test_checkpoint_funnel_writes_data_and_marker(spark: SparkSession, tmp_path)
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_funnel",
+        blueprint_id="test.ckpt_funnel",
         modules=(
             Module(id="a", type="Ingress", label="A", config={"format": "parquet", "path": in1}),
             Module(id="b", type="Ingress", label="B", config={"format": "parquet", "path": in2}),
@@ -1293,7 +1293,7 @@ def test_checkpoint_junction_writes_branches(spark: SparkSession, tmp_path):
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_junction",
+        blueprint_id="test.ckpt_junction",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
             Module(
@@ -1330,7 +1330,7 @@ def test_checkpoint_junction_writes_branches(spark: SparkSession, tmp_path):
 
 
 def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monkeypatch, caplog):
-    """Checkpoint Parquet write failure → warning logged; pipeline still succeeds."""
+    """Checkpoint Parquet write failure → warning logged; blueprint still succeeds."""
     import logging
 
     in_path = str(tmp_path / "in.parquet")
@@ -1339,7 +1339,7 @@ def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monke
     store_dir = tmp_path / "store"
 
     manifest = Manifest(
-        pipeline_id="test.ckpt_fail",
+        blueprint_id="test.ckpt_fail",
         modules=(
             Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}, checkpoint=True),
             Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
@@ -1379,7 +1379,7 @@ def test_execute_assert_gate_closed_upstream(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.assert_gate_closed",
+        blueprint_id="test.assert_gate_closed",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="reg", type="Regulator", label="Reg", config={"on_block": "skip"}),
@@ -1405,7 +1405,7 @@ def test_execute_assert_no_spillway_edge_discards(spark: SparkSession, tmp_path,
     out_path = str(tmp_path / "out.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.assert_no_spillway",
+        blueprint_id="test.assert_no_spillway",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="ast", type="Assert", label="Ast", config={
@@ -1434,7 +1434,7 @@ def test_execute_assert_end_to_end_abort(spark: SparkSession, tmp_path):
     spark.range(5).write.parquet(in_path)
     
     manifest = Manifest(
-        pipeline_id="test.assert_e2e_abort",
+        blueprint_id="test.assert_e2e_abort",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="ast", type="Assert", label="Ast", config={
@@ -1459,7 +1459,7 @@ def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
     spill_out = str(tmp_path / "spill.parquet")
     
     manifest = Manifest(
-        pipeline_id="test.assert_e2e_quarantine",
+        blueprint_id="test.assert_e2e_quarantine",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="ast", type="Assert", label="Ast", config={

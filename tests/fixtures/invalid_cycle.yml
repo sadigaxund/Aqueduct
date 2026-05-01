@@ -1,5 +1,5 @@
 aqueduct: "1.0"
-id: pipeline.cycle.test
+id: blueprint.cycle.test
 name: "Cycle Test"
 description: "A → B → C → A forms a cycle. Parser must reject this."
 

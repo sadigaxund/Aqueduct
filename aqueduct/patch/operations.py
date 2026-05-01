@@ -223,7 +223,7 @@ def apply_set_module_on_failure(bp: dict, op: SetModuleOnFailureOp) -> dict:
 
 
 def apply_replace_retry_policy(bp: dict, op: ReplaceRetryPolicyOp) -> dict:
-    """Replace the pipeline-level retry_policy block."""
+    """Replace the blueprint-level retry_policy block."""
     bp["retry_policy"] = op.retry_policy
     return bp
 

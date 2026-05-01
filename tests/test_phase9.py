@@ -175,7 +175,7 @@ def test_executor_skips_module_not_in_included_set(spark, tmp_path):
     spark.range(5).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.subdag",
+        blueprint_id="test.subdag",
         modules=(
             Module(id="ing", type="Ingress", label="Ingress", config={"format": "parquet", "path": in_path}),
             Module(id="ch", type="Channel", label="Ch", config={"op": "sql", "query": "SELECT * FROM ing"}),
@@ -209,7 +209,7 @@ def test_executor_from_to_skips_downstream(spark, tmp_path):
     spark.range(3).write.parquet(in_path)
 
     manifest = Manifest(
-        pipeline_id="test.subdag.to",
+        blueprint_id="test.subdag.to",
         modules=(
             Module(id="ing", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="eg", type="Egress", label="Eg", config={"format": "parquet", "path": out_path}),
@@ -440,7 +440,7 @@ edges: []
 
 def _setup_patch_env(tmp_path: Path, patch_id: str = "abc123") -> dict:
     """Create minimal patch lifecycle dirs + files for rollback tests."""
-    bp_path = tmp_path / "pipeline.yml"
+    bp_path = tmp_path / "blueprint.yml"
     bp_path.write_text(_MINIMAL_BP)
 
     patches_root = tmp_path / "patches"
@@ -449,12 +449,12 @@ def _setup_patch_env(tmp_path: Path, patch_id: str = "abc123") -> dict:
     backup_dir.mkdir(parents=True)
     applied_dir.mkdir(parents=True)
 
-    backup_file = backup_dir / f"{patch_id}_20260101T000000_pipeline.yml"
+    backup_file = backup_dir / f"{patch_id}_20260101T000000_blueprint.yml"
     backup_file.write_text(_ORIGINAL_BP)
 
     applied_record = applied_dir / f"{patch_id}.json"
     applied_record.write_text(json.dumps({
-        "_aq_meta": {"run_id": "run-001", "pipeline_id": "test.rollback"},
+        "_aq_meta": {"run_id": "run-001", "blueprint_id": "test.rollback"},
         "operations": [],
     }, indent=2))
 
@@ -531,7 +531,7 @@ def test_patch_rollback_record_contains_rolled_back_at(tmp_path):
 
 
 def test_patch_rollback_no_backup_exits_nonzero(tmp_path):
-    bp_path = tmp_path / "pipeline.yml"
+    bp_path = tmp_path / "blueprint.yml"
     bp_path.write_text(_MINIMAL_BP)
     patches_root = tmp_path / "patches"
     patches_root.mkdir()

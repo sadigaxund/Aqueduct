@@ -37,7 +37,7 @@ class ReplaceModuleLabelOp(BaseModel, extra="forbid"):
 
 
 class InsertModuleOp(BaseModel, extra="forbid"):
-    """Insert a new Module into the pipeline graph.
+    """Insert a new Module into the blueprint graph.
 
     The caller is responsible for providing edges that correctly wire the new
     module into the existing graph.  edges_to_remove lists existing edges that
@@ -118,7 +118,7 @@ class SetModuleOnFailureOp(BaseModel, extra="forbid"):
 
 
 class ReplaceRetryPolicyOp(BaseModel, extra="forbid"):
-    """Replace the pipeline-level retry_policy block entirely."""
+    """Replace the blueprint-level retry_policy block entirely."""
     op: Literal["replace_retry_policy"]
     retry_policy: dict[str, Any]
 

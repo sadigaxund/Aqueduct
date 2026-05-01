@@ -1,6 +1,6 @@
 """LLM-driven patch loop — Phase 8.
 
-On pipeline failure, packages a trimmed failure context as a prompt, calls the
+On blueprint failure, packages a trimmed failure context as a prompt, calls the
 configured LLM provider, validates the response as a PatchSpec, and either
 applies it automatically or writes it to patches/pending/ for human review.
 
@@ -14,7 +14,7 @@ Supported providers:
 Re-prompt strategy on schema failure:
   - Up to MAX_REPROMPTS attempts.
   - Each failed parse sends the validation error back to the model.
-  - If all reprompts fail, logs warning and returns None (pipeline stays failed).
+  - If all reprompts fail, logs warning and returns None (blueprint stays failed).
 
 Approval modes:
   - "auto"  → apply patch immediately via apply_patch_to_dict + write Blueprint
@@ -44,10 +44,10 @@ _PATCH_HISTORY_MAX = 3
 # ── Prompt construction ───────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are an expert Apache Spark pipeline repair agent for the Aqueduct pipeline engine.
+You are an expert Apache Spark blueprint repair agent for the Aqueduct blueprint engine.
 
-A pipeline has failed. You will receive a structured failure report describing:
-- What the pipeline does (human-readable summary)
+A blueprint has failed. You will receive a structured failure report describing:
+- What the blueprint does (human-readable summary)
 - The failing module and its configuration
 - The error message and relevant stack trace lines
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
@@ -68,11 +68,11 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 {previous_patches_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
-## Pipeline: {pipeline_name}
-{pipeline_description}
+## Blueprint: {blueprint_name}
+{blueprint_description}
 
 ## Execution flow
-{pipeline_summary}
+{blueprint_summary}
 
 ## Failure
 - **Failed module**: `{failed_module}`
@@ -114,7 +114,7 @@ def _truncate_stack(trace: str | None, max_lines: int = _STACK_TRACE_MAX_LINES) 
     return "\n".join(kept)
 
 
-def _build_pipeline_summary(manifest_dict: dict) -> str:
+def _build_blueprint_summary(manifest_dict: dict) -> str:
     """One-line human description of the execution flow."""
     modules = manifest_dict.get("modules", [])
     edges = manifest_dict.get("edges", [])
@@ -175,8 +175,8 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         manifest = {}
 
     modules = manifest.get("modules", [])
-    pipeline_name = manifest.get("name") or failure_ctx.pipeline_id
-    pipeline_desc = manifest.get("description", "")
+    blueprint_name = manifest.get("name") or failure_ctx.blueprint_id
+    blueprint_desc = manifest.get("description", "")
 
     # Failed module config
     failed_mod = next((m for m in modules if m["id"] == failure_ctx.failed_module), None)
@@ -188,9 +188,9 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     ) or "  (none)"
 
     return _USER_PROMPT_TEMPLATE.format(
-        pipeline_name=pipeline_name,
-        pipeline_description=f"> {pipeline_desc}" if pipeline_desc else "",
-        pipeline_summary=_build_pipeline_summary(manifest),
+        blueprint_name=blueprint_name,
+        blueprint_description=f"> {blueprint_desc}" if blueprint_desc else "",
+        blueprint_summary=_build_blueprint_summary(manifest),
         failed_module=failure_ctx.failed_module,
         error_message=failure_ctx.error_message,
         failed_module_config=failed_config,
@@ -371,8 +371,8 @@ def generate_llm_patch(
     if patch_spec is None:
         logger.error(
             "LLM agent failed to produce a valid PatchSpec after %d attempts "
-            "for pipeline %r run %r",
-            MAX_REPROMPTS, failure_ctx.pipeline_id, failure_ctx.run_id,
+            "for blueprint %r run %r",
+            MAX_REPROMPTS, failure_ctx.blueprint_id, failure_ctx.run_id,
         )
     return patch_spec
 
@@ -389,7 +389,7 @@ def stage_patch_for_human(
     payload = patch_spec.model_dump()
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
-        "pipeline_id": failure_ctx.pipeline_id,
+        "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
         "staged_at": _utcnow(),
     }
@@ -414,7 +414,7 @@ def archive_patch(
     payload = patch_spec.model_dump()
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
-        "pipeline_id": failure_ctx.pipeline_id,
+        "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
         "applied_at": _utcnow(),
         "approval_mode": mode,

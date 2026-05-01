@@ -136,8 +136,8 @@ def test_spillway_error_routing(spark: SparkSession, sample_data, tmp_path):
 
 # ── Probe ─────────────────────────────────────────────────────────────────────
 
-def test_probe_does_not_halt_pipeline(spark: SparkSession, sample_data, tmp_path):
-    """Probe signals captured; pipeline completes successfully regardless."""
+def test_probe_does_not_halt_blueprint(spark: SparkSession, sample_data, tmp_path):
+    """Probe signals captured; blueprint completes successfully regardless."""
     out = tmp_path / "out"
     store = tmp_path / "signals"
     result = _run("bp_probe.yml", {
@@ -190,7 +190,7 @@ def test_regulator_closed_gate_skips_downstream(spark: SparkSession, sample_data
     manifest = compiler_compile(bp, blueprint_path=bp_path)
     result = execute(manifest, spark, surveyor=_ClosedSurveyor())
 
-    assert result.status == "success"  # pipeline itself didn't error
+    assert result.status == "success"  # blueprint itself didn't error
     statuses = {r.module_id: r.status for r in result.module_results}
     assert statuses["gate"] == "skipped"
     assert statuses["sink"] == "skipped"
@@ -205,7 +205,7 @@ def test_junction_funnel_channel_pattern(spark: SparkSession, sample_data, tmp_p
     """Regression: Junction branch edges must connect to Funnel, not Channel directly.
 
     Channel reads from Funnel output via __input__ alias.
-    All rows (US + EU = 10) must appear in output with pipeline_tag column added.
+    All rows (US + EU = 10) must appear in output with blueprint_tag column added.
     """
     out = tmp_path / "out"
     result = _run("bp_junction_funnel_channel.yml", {
@@ -217,8 +217,8 @@ def test_junction_funnel_channel_pattern(spark: SparkSession, sample_data, tmp_p
 
     df = spark.read.parquet(str(out))
     assert df.count() == 10, "All rows (US + EU) must be present after Funnel merge"
-    assert "pipeline_tag" in df.columns
-    assert all(r["pipeline_tag"] == "processed" for r in df.select("pipeline_tag").collect())
+    assert "blueprint_tag" in df.columns
+    assert all(r["blueprint_tag"] == "processed" for r in df.select("blueprint_tag").collect())
 
 
 # ── Chained channels ──────────────────────────────────────────────────────────
@@ -247,11 +247,11 @@ def test_chained_channels(spark: SparkSession, sample_data, tmp_path):
     assert all(r["tag"] == "processed" for r in df.select("tag").collect())
 
 
-# ── Lineage written after channel pipeline ────────────────────────────────────
+# ── Lineage written after channel blueprint ────────────────────────────────────
 
 
 def test_lineage_written_after_channel_run(spark: SparkSession, sample_data, tmp_path):
-    """lineage.db created in store_dir after a pipeline with Channel modules."""
+    """lineage.db created in store_dir after a blueprint with Channel modules."""
     out = tmp_path / "out"
     store = tmp_path / "store"
     result = _run("bp_channel_filter.yml", {

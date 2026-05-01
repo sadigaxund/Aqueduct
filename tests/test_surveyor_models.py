@@ -13,7 +13,7 @@ from aqueduct.surveyor.models import FailureContext, RunRecord
 def test_run_record_frozen():
     record = RunRecord(
         run_id="r1",
-        pipeline_id="p1",
+        blueprint_id="p1",
         status="running",
         started_at="2024-01-01T00:00:00Z",
         finished_at=None,
@@ -26,7 +26,7 @@ def test_run_record_frozen():
 def test_run_record_to_dict():
     record = RunRecord(
         run_id="r1",
-        pipeline_id="p1",
+        blueprint_id="p1",
         status="success",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
@@ -41,7 +41,7 @@ def test_run_record_to_dict():
 def test_failure_context_frozen():
     ctx = FailureContext(
         run_id="r1",
-        pipeline_id="p1",
+        blueprint_id="p1",
         failed_module="m1",
         error_message="oops",
         stack_trace=None,
@@ -56,7 +56,7 @@ def test_failure_context_frozen():
 def test_failure_context_to_dict():
     ctx = FailureContext(
         run_id="r1",
-        pipeline_id="p1",
+        blueprint_id="p1",
         failed_module="m1",
         error_message="oops",
         stack_trace="trace",
@@ -74,7 +74,7 @@ def test_failure_context_to_dict():
 def test_failure_context_to_json():
     ctx = FailureContext(
         run_id="r1",
-        pipeline_id="p1",
+        blueprint_id="p1",
         failed_module="m1",
         error_message="oops",
         stack_trace=None,

@@ -1,6 +1,6 @@
 aqueduct: "1.0"
-id: pipeline.profile.test
-name: "Profile Test Pipeline"
+id: blueprint.profile.test
+name: "Profile Test Blueprint"
 description: "Tests context_profiles promotion."
 
 context:

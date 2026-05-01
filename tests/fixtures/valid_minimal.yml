@@ -1,7 +1,7 @@
 aqueduct: "1.0"
-id: pipeline.hello.world
-name: "Hello World Pipeline"
-description: "Minimal three-module pipeline for parser testing."
+id: blueprint.hello.world
+name: "Hello World Blueprint"
+description: "Minimal three-module blueprint for parser testing."
 
 context:
   env: ${AQUEDUCT_ENV:-dev}
