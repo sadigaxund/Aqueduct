@@ -1,0 +1,81 @@
+aqueduct_test: "1.0"
+blueprint: blueprint.yml
+
+tests:
+  # ── Channel: active_orders filter ─────────────────────────────────────────
+  - id: test_active_orders_filters_inactive
+    description: "active_orders should only pass rows with status='active'"
+    module: active_orders
+    inputs:
+      dedup_orders:
+        schema:
+          order_id: string
+          customer_id: string
+          amount: double
+          order_ts: timestamp
+          region: string
+          status: string
+          phone_e164: string
+          email: string
+        rows:
+          - ["O1", "C1", 100.0, "2026-01-01 00:00:00", "US", "active",   "+15550001111", "a@x.com"]
+          - ["O2", "C2", 200.0, "2026-01-01 00:00:00", "US", "inactive", "+15550002222", "b@x.com"]
+          - ["O3", "C3", 50.0,  "2026-01-01 00:00:00", "EU", "active",   "+44123456789", "c@x.com"]
+    assertions:
+      - type: row_count
+        expected: 2
+      - type: contains
+        rows:
+          - {order_id: "O1", status: "active"}
+          - {order_id: "O3", status: "active"}
+      - type: sql
+        expr: "SELECT count(*) = 0 FROM __output__ WHERE status != 'active'"
+
+  # ── Channel: dedup_orders ─────────────────────────────────────────────────
+  - id: test_dedup_orders_keeps_latest
+    description: "dedup_orders keeps newest order_ts per order_id"
+    module: dedup_orders
+    inputs:
+      clean_orders:
+        schema:
+          order_id: string
+          customer_id: string
+          amount: double
+          order_ts: timestamp
+          region: string
+          status: string
+          phone_e164: string
+          email: string
+        rows:
+          - ["O1", "C1", 10.0, "2026-01-01 10:00:00", "US", "active", "+15550001111", "a@x.com"]
+          - ["O1", "C1", 15.0, "2026-01-01 12:00:00", "US", "active", "+15550001111", "a@x.com"]
+    assertions:
+      - type: row_count
+        expected: 1
+      - type: contains
+        rows:
+          - {order_id: "O1", amount: 15.0}
+
+  # ── Assert: orders_quality_gate — passes clean data ───────────────────────
+  - id: test_quality_gate_pass_through
+    description: "All-valid data passes quality gate unchanged"
+    module: orders_quality_gate
+    inputs:
+      quality_gate:
+        schema:
+          order_id: string
+          amount: double
+          order_ts: timestamp
+          region: string
+          status: string
+          phone_e164: string
+          email: string
+          customer_id: string
+        rows:
+          - ["O1", 100.0, "2026-01-01 00:00:00", "US", "active", "+15550001111", "a@x.com", "C1"]
+          - ["O2", 200.0, "2026-01-01 01:00:00", "EU", "active", "+44123456789", "b@x.com", "C2"]
+    assertions:
+      - type: row_count
+        expected: 2
+      - type: sql
+        expr: "SELECT count(*) >= 2 FROM __output__"

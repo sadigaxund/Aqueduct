@@ -276,6 +276,34 @@ For SQL-based transformations:
 
 > **Note:** `op: join` is sugar over `op: sql`. It is translated to `SELECT * FROM left JOIN right ON condition` before reaching Spark. For complex multi-table joins, multi-way expressions, or window functions, use `op: sql` directly.
 
+**SQL Macros — static compile-time fragments:**
+
+Define reusable SQL snippets in the top-level `macros:` block. Macros are resolved at compile time; the Manifest always contains plain SQL. No loops, no conditionals, no runtime evaluation.
+
+```yaml
+macros:
+  active_filter: "status = 'active' AND deleted_at IS NULL"
+  date_trunc: "DATE_TRUNC('{{ period }}', {{ column }})"
+
+modules:
+  - id: clean_orders
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT *
+        FROM orders
+        WHERE {{ macros.active_filter }}
+          AND {{ macros.date_trunc(period='day', column=event_ts) }} >= '2026-01-01'
+```
+
+| Macro syntax | Description |
+| :- | :- |
+| `{{ macros.name }}` | Simple substitution — inserts the macro body verbatim |
+| `{{ macros.name(key=value) }}` | Parameterized — substitutes `{{ key }}` placeholders in the macro body |
+
+Macro bodies may not reference other macros. All `{{ param }}` placeholders in a parameterized macro body must be supplied at the call site or a `CompileError` is raised.
+
 |**EGRESS**|**Sink — writes data to an external target or triggers a Spark action**|
 | :-: | :- |
 
@@ -966,6 +994,19 @@ agent:
 
 If a patch violates either guardrail, it is moved to `patches/pending/` for human review regardless of `approval_mode`. A clear error message is emitted.
 
+**`validate_patch: true` — Patch Dry-Run (aggressive mode)**
+
+When enabled, the patched Blueprint is compiled in memory before being written to disk in `aggressive` mode. If compilation fails (parse error, compile error), the patch is staged for human review and the self-healing loop stops — the on-disk Blueprint is never touched:
+
+```yaml
+agent:
+  approval_mode: aggressive
+  validate_patch: true
+  max_patches_per_run: 5
+```
+
+Provides a safety net for aggressive mode: schema errors, invalid references, and compile-time violations are caught before the Blueprint is mutated. Has no effect on `auto` or `human` modes (which already validate before writing or never write autonomously).
+
 **Recommended guardrail policy for production:**
 
 ```yaml
@@ -983,7 +1024,7 @@ agent:
 1. If approval\_mode: disabled — LLM never fires.
 1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
 1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
-1. If approval\_mode: aggressive — Patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
+1. If approval\_mode: aggressive — If `validate_patch: true`: patch is compiled in memory first; if invalid, staged for human review and loop stops. Otherwise: patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
 1. Applied patch is moved to patches/applied/<patch\_id>.json with applied\_at timestamp, run\_id, and agent rationale preserved.
 1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
 1. To undo an applied patch: aqueduct patch rollback <patch\_id>. This atomically restores the Blueprint from the backup in patches/backups/ and moves the patch record to patches/rolled\_back/.
@@ -1165,6 +1206,67 @@ The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports
 **Scheduler integration pattern:** When using Airflow, Prefect, or similar tools, pass `--execution-date {{ ds }}` to make `@aq.date.*` functions idempotent. Use the depot watermark pattern to track last-processed state. Query `run_records` in the DuckDB observability store to detect and backfill missed runs.
 
 
+# **10.5 `aqueduct test` — Isolated Module Testing**
+
+`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The same SparkSession configuration from `aqueduct.yml` is used (`make_spark_session()`), defaulting `quiet=True`.
+
+## **Test file format**
+
+```yaml
+aqueduct_test: "1.0"
+blueprint: pipeline.yml         # relative to test file
+
+tests:
+  - id: test_filter_nulls
+    description: "Null amounts removed"
+    module: clean_orders         # module ID in blueprint (Channel/Junction/Funnel/Assert)
+
+    inputs:
+      raw_orders:                # upstream module ID
+        schema:
+          order_id: long
+          amount: double
+          order_date: string
+        rows:
+          - [1, 10.0, "2026-01-01"]
+          - [2, null, "2026-01-01"]
+
+    assertions:
+      - type: row_count
+        expected: 1
+      - type: contains
+        rows:
+          - {order_id: 1, amount: 10.0}
+      - type: sql
+        expr: "SELECT count(*) = 1 FROM __output__"
+```
+
+## **Assertion types**
+
+| Type | Description |
+|---|---|
+| `row_count` | `expected: N` — exact row count match. Triggers one `count()` action. |
+| `contains` | `rows: [...]` — each dict must appear as a row in the output. One `filter().count()` per expected row. |
+| `sql` | `expr: "SELECT ..."` — arbitrary SQL over `__output__` view; must return a single truthy value. |
+
+## **Constraints**
+
+- Only Channel, Junction, Funnel, Assert can be tested. Ingress/Egress → error with clear message.
+- If a Channel SQL references an undeclared table, Spark raises "table not found" — correct behavior that surfaces bad dependencies.
+- Junction output: first branch used by default. Specify `branch: <name>` to target a specific branch.
+- Uses inline schema type mapping: `long`, `int`, `double`, `float`, `string`, `boolean`, `timestamp`, `date`.
+
+## **CLI**
+
+```bash
+aqueduct test pipeline.aqtest.yml
+aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml  # override blueprint path
+aqueduct test pipeline.aqtest.yml --quiet                   # suppress Spark progress
+aqueduct test pipeline.aqtest.yml --config aqueduct.yml
+```
+
+Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error.
+
 # **11. CLI Reference**
 ## **11.1 Core Commands**
 
@@ -1174,13 +1276,14 @@ The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports
 |**aqueduct run <blueprint.yml>**|Parse, compile, plan, and execute a Blueprint. Accepts --profile, --ctx key=val, --config, --run-id, --store-dir, --webhook, --resume, --from, --to, --execution-date.|
 |**aqueduct validate <blueprint.yml>**|Parse and validate a Blueprint without compiling or running. Reports all schema errors. Exit code 0 = valid.|
 |**aqueduct compile <blueprint.yml>**|Parse, compile, and write the Manifest to stdout or --output path. Accepts --profile, --ctx, --execution-date. Useful for inspecting the resolved Manifest before running.|
+|**aqueduct test <test\_file.yml>**|Run isolated module tests from a YAML test file. Executes Channel/Junction/Funnel/Assert against inline data. No Ingress/Egress. Uses same SparkSession config as `aqueduct run`. Accepts --blueprint, --config, --quiet.|
 |**aqueduct heal <run\_id>**|Manually trigger the LLM agent loop for a failed run. Optionally scoped with --module <module\_id> to focus the agent on a specific Module.|
 |**aqueduct patch apply <patch\_id>**|Apply a pending Patch. Recompiles the Manifest and resumes execution from the patched Module.|
 |**aqueduct patch reject <patch\_id>**|Reject a pending Patch. Records rejection reason (--reason flag). Pipeline remains in failed state.|
 |**aqueduct patch rollback <patch\_id>**|Roll back an applied patch. Atomically restores the Blueprint from patches/backups/ and moves the patch record to patches/rolled\_back/. Only works for patches applied via Aqueduct (which create automatic backups).|
-|**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table|json|csv.|
-|**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <module\_id> --column <col> for targeted queries.|
-|**aqueduct signal <run\_id> <signal\_id>**|Send a signal to a Regulator gate. Signal value defaults to True. Pass --value false to close the gate. Pass --error "message" to send an error signal.|
+|**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table\|json\|csv.|
+|**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <source\_table> --column <col> for targeted queries.|
+|**aqueduct signal <signal\_id>**|Set or clear a persistent gate override for a Probe signal (identified by Probe module ID). `--value false` closes the gate for all future runs. `--error "msg"` closes with a reason. `--value true` clears the override, resuming normal Probe evaluation. Omitting all flags prints the current override status. Override stored in `signal_overrides` table in signals.db; Regulator checks it before any run-scoped Probe data.|
 |**aqueduct depot get <key>**|Read a value from the Depot KV store.|
 |**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
 |**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|

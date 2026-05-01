@@ -33,6 +33,7 @@ class Manifest:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
 
     def to_dict(self) -> dict[str, Any]:
@@ -84,7 +85,9 @@ class Manifest:
                 "max_patches_per_run": self.agent.max_patches_per_run,
                 "provider": self.agent.provider,
                 "base_url": self.agent.base_url,
+                "validate_patch": self.agent.validate_patch,
             },
             "udf_registry": list(self.udf_registry),
+            "macros": self.macros,
             "checkpoint": self.checkpoint,
         }

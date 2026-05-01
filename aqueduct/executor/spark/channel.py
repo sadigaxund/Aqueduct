@@ -32,9 +32,45 @@ from aqueduct.parser.models import Module
 # Reserved alias for the single upstream in a single-input Channel.
 _SINGLE_INPUT_ALIAS = "__input__"
 
+_VALID_JOIN_TYPES = frozenset(
+    {"inner", "left", "right", "full", "semi", "anti", "cross"}
+)
+
 
 class ChannelError(Exception):
     """Raised when a Channel module fails to execute."""
+
+
+def _build_join_query(module_id: str, cfg: dict) -> str:
+    """Translate op=join config into a Spark SQL string."""
+    left: str | None = cfg.get("left")
+    right: str | None = cfg.get("right")
+    join_type: str = str(cfg.get("join_type", "inner")).lower()
+    condition: str | None = cfg.get("condition")
+    broadcast_side: str | None = cfg.get("broadcast_side")
+
+    if not left:
+        raise ChannelError(f"[{module_id}] op=join requires 'left'")
+    if not right:
+        raise ChannelError(f"[{module_id}] op=join requires 'right'")
+    if join_type not in _VALID_JOIN_TYPES:
+        raise ChannelError(
+            f"[{module_id}] op=join invalid join_type {join_type!r}. "
+            f"Valid: {sorted(_VALID_JOIN_TYPES)}"
+        )
+    if join_type != "cross" and not condition:
+        raise ChannelError(
+            f"[{module_id}] op=join requires 'condition' for join_type={join_type!r}"
+        )
+
+    hint = ""
+    if broadcast_side == "left":
+        hint = f"/*+ BROADCAST({left}) */ "
+    elif broadcast_side == "right":
+        hint = f"/*+ BROADCAST({right}) */ "
+
+    on_clause = f" ON {condition}" if condition else ""
+    return f"SELECT {hint}* FROM {left} {join_type.upper()} JOIN {right}{on_clause}"
 
 
 def execute_sql_channel(
@@ -62,12 +98,16 @@ def execute_sql_channel(
     cfg = module.config
 
     op: str | None = cfg.get("op")
-    if op != "sql":
+    if op not in ("sql", "join"):
         raise ChannelError(
-            f"[{module.id}] unsupported Channel op {op!r}. Only 'sql' is implemented."
+            f"[{module.id}] unsupported Channel op {op!r}. Supported: 'sql', 'join'."
         )
 
-    query: str | None = cfg.get("query")
+    if op == "join":
+        query = _build_join_query(module.id, cfg)
+    else:
+        query = cfg.get("query")
+
     if not query or not query.strip():
         raise ChannelError(f"[{module.id}] 'query' is required and must not be empty")
 

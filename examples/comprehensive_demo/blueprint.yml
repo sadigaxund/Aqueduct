@@ -85,7 +85,18 @@ context_profiles:
     tables.orders_raw: "s3a://prod/orders/"
 
 # ---------------------------------------------------------------------------
-# 3. UDF REGISTRY
+# 3. SQL MACROS (compile-time, resolved before Spark runs)
+# ---------------------------------------------------------------------------
+# Reusable SQL fragments. Expanded at compile time — Manifest always has plain SQL.
+# No loops, no conditionals. Two forms: simple ({{ macros.name }}) and
+# parameterized ({{ macros.name(key=value) }}).
+macros:
+  active_filter: "status = 'active' AND deleted_at IS NULL"
+  date_trunc: "DATE_TRUNC('{{ period }}', {{ column }})"
+  null_safe_join: "{{ left }} IS NOT DISTINCT FROM {{ right }}"
+
+# ---------------------------------------------------------------------------
+# 4. UDF REGISTRY
 # ---------------------------------------------------------------------------
 # UDFs are Tier 2 — execute during Spark Channel ops, not at parse/compile time.
 udf_registry:
@@ -268,6 +279,31 @@ modules:
           *,
           haversine_km(lat, lon, 38.8977, 77.0365) AS km_from_dc
         FROM tag_run_metadata
+
+  # op: join — higher-level join sugar (translates to SQL at compile time)
+  - id: enrich_with_customers
+    type: Channel
+    label: "Join orders with customer dimension"
+    config:
+      op: join
+      left: dedup_orders         # upstream module ID (registered as temp view)
+      right: raw_customers       # upstream module ID
+      join_type: left            # inner | left | right | full | semi | anti | cross
+      condition: "dedup_orders.customer_id = raw_customers.customer_id"
+      broadcast_side: right      # optional BROADCAST hint — use for the smaller side
+
+  # op: join with macro — use a macro for the condition expression
+  - id: filtered_join
+    type: Channel
+    label: "Join with macro-based filter applied"
+    config:
+      op: sql
+      query: |
+        SELECT o.*, c.email
+        FROM dedup_orders o
+        LEFT JOIN raw_customers c ON o.customer_id = c.customer_id
+        WHERE {{ macros.active_filter }}
+          AND {{ macros.date_trunc(period='day', column=o.order_ts) }} >= '${ctx.start_date}'
 
   # ─────────────────────────────────────────────────────────────────────────
   # 4c. ASSERT — inline data quality gates

@@ -54,6 +54,8 @@ class AgentSchema(BaseModel):
     # Guardrail policy — limits what the LLM can autonomously modify
     allowed_paths: list[str] = Field(default_factory=list)
     forbidden_ops: list[str] = Field(default_factory=list)
+    # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
+    validate_patch: bool = False
 
 
 class ModuleSchema(BaseModel):
@@ -139,6 +141,7 @@ class BlueprintSchema(BaseModel):
     retry_policy: RetryPolicySchema = Field(default_factory=RetryPolicySchema)
     agent: AgentSchema = Field(default_factory=AgentSchema)
     udf_registry: list[dict[str, Any]] = Field(default_factory=list)
+    macros: dict[str, str] = Field(default_factory=dict)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False
 

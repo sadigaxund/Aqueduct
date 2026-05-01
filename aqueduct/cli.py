@@ -1,6 +1,8 @@
 """Aqueduct CLI.
 
-Active commands: validate, compile, run, check-config, doctor, patch apply, patch reject.
+Active commands: validate, compile, run, check-config, doctor,
+                 report, lineage, signal, heal,
+                 patch apply, patch reject, patch rollback.
 """
 
 from __future__ import annotations
@@ -595,7 +597,25 @@ def run(
             break  # auto: one patch attempt only
 
         elif approval_mode == "aggressive":
-            # Write to Blueprint immediately, re-compile, continue loop
+            # Dry-run: pre-validate patched Blueprint before writing to disk
+            if manifest.agent.validate_patch:
+                pre_manifest = _apply_patch_in_memory(
+                    patch, Path(blueprint), depot, profile, cli_overrides or {}
+                )
+                if pre_manifest is None:
+                    click.echo(
+                        f"  ✗ LLM patch produces invalid Blueprint (validate_patch=true); "
+                        f"staging for human review.",
+                        err=True,
+                    )
+                    stage_patch_for_human(patch, patches_dir, failure_ctx)
+                    click.echo(
+                        f"  ✎ Patch staged → patches/pending/{patch.patch_id}.json",
+                        err=True,
+                    )
+                    break
+
+            # Write to Blueprint permanently, re-compile, continue loop
             new_manifest = _write_patch_to_blueprint(
                 patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive"
             )
@@ -796,6 +816,592 @@ def patch_rollback(patch_id: str, blueprint: str, patches_dir: str) -> None:
     click.echo(f"  blueprint  ← {backup_path}")
     if rolled_back_path.exists():
         click.echo(f"  archived   → {rolled_back_path}")
+
+
+# ── aqueduct test ────────────────────────────────────────────────────────────
+
+@cli.command("test")
+@click.argument("test_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--blueprint",
+    "blueprint_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Override the blueprint path declared in the test file",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--quiet",
+    is_flag=True,
+    default=False,
+    help="Suppress Spark progress output",
+)
+def test_cmd(
+    test_file: str,
+    blueprint_path: str | None,
+    config_path: str | None,
+    quiet: bool,
+) -> None:
+    """Run isolated module tests from a test YAML file.
+
+    Tests execute Channel, Junction, Funnel, and Assert modules against
+    inline data — no Ingress or Egress, no external sources.
+
+    \b
+    Example test file (pipeline.aqtest.yml):
+
+      aqueduct_test: "1.0"
+      blueprint: pipeline.yml
+
+      tests:
+        - id: test_filter_nulls
+          module: clean_orders
+          inputs:
+            raw_orders:
+              schema: {order_id: long, amount: double}
+              rows:
+                - [1, 10.0]
+                - [2, null]
+          assertions:
+            - type: row_count
+              expected: 1
+            - type: sql
+              expr: "SELECT count(*) = 1 FROM __output__"
+    """
+    from pathlib import Path
+
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.executor.spark.session import make_spark_session
+    from aqueduct.executor.spark.test_runner import TestError, run_test_file
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    merged_spark_config = dict(cfg.spark_config)
+    master_url = cfg.deployment.master_url
+
+    spark = make_spark_session(
+        "aqueduct_test",
+        merged_spark_config,
+        master_url=master_url,
+        quiet=quiet,
+    )
+
+    try:
+        suite = run_test_file(
+            test_file=Path(test_file),
+            spark=spark,
+            blueprint_path_override=Path(blueprint_path) if blueprint_path else None,
+        )
+    except TestError as exc:
+        click.echo(f"✗ test file error: {exc}", err=True)
+        sys.exit(1)
+    finally:
+        spark.stop()
+
+    # ── Print results ─────────────────────────────────────────────────────────
+    click.echo(f"\nTest suite: {test_file}")
+    click.echo(f"  {suite.total} tests  |  {suite.passed} passed  |  {suite.failed} failed\n")
+
+    for result in suite.results:
+        icon = "✓" if result.passed else "✗"
+        click.echo(f"  {icon} {result.test_id}")
+        if result.error:
+            click.echo(f"      error: {result.error}")
+        for ar in result.assertion_results:
+            a_icon = "  ✓" if ar.passed else "  ✗"
+            click.echo(f"      {a_icon} [{ar.assertion_type}] {ar.message}")
+
+    click.echo()
+    if suite.failed > 0:
+        click.echo(f"✗ {suite.failed} test(s) failed", err=True)
+        sys.exit(1)
+    else:
+        click.echo(f"✓ all {suite.passed} test(s) passed")
+
+
+# ── aqueduct report ───────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("run_id")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store directory (default: aqueduct.yml or .aqueduct/signals)",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json", "csv"]),
+    default="table",
+    show_default=True,
+)
+def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str) -> None:
+    """Print the Flow Report for a completed run."""
+    import csv as _csv
+    import io
+
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    runs_db = resolved / "runs.db"
+    if not runs_db.exists():
+        click.echo(f"✗ runs.db not found at {runs_db}", err=True)
+        sys.exit(1)
+
+    conn = _duckdb.connect(str(runs_db), read_only=True)
+    try:
+        row = conn.execute(
+            """
+            SELECT run_id, pipeline_id, status,
+                   CAST(started_at AS VARCHAR),
+                   CAST(finished_at AS VARCHAR),
+                   module_results
+            FROM run_records WHERE run_id = ?
+            """,
+            [run_id],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        click.echo(f"✗ run {run_id!r} not found in {runs_db}", err=True)
+        sys.exit(1)
+
+    run_id_val, pipeline_id, status, started_at, finished_at, module_results_raw = row
+    module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
+
+    if fmt == "json":
+        out = {
+            "run_id": run_id_val,
+            "pipeline_id": pipeline_id,
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "module_results": module_results,
+        }
+        click.echo(json.dumps(out, indent=2))
+        return
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = _csv.writer(buf)
+        writer.writerow(["run_id", "pipeline_id", "status", "started_at", "finished_at"])
+        writer.writerow([run_id_val, pipeline_id, status, started_at, finished_at])
+        click.echo(buf.getvalue(), nl=False)
+        buf2 = io.StringIO()
+        writer2 = _csv.writer(buf2)
+        writer2.writerow(["module_id", "status", "error"])
+        for mr in module_results:
+            writer2.writerow([mr.get("module_id", ""), mr.get("status", ""), mr.get("error", "")])
+        click.echo(buf2.getvalue(), nl=False)
+        return
+
+    # table format
+    status_icon = "✓" if status == "success" else "✗"
+    click.echo(f"{status_icon} run_id={run_id_val}  pipeline={pipeline_id}  status={status}")
+    click.echo(f"  started:  {started_at}")
+    click.echo(f"  finished: {finished_at or '(running)'}")
+    click.echo("")
+    click.echo(f"  {'Module':<30} {'Status':<10} Error")
+    click.echo(f"  {'-'*30} {'-'*10} {'-'*40}")
+    for mr in module_results:
+        icon = "✓" if mr.get("status") == "success" else ("⏭" if mr.get("status") == "skipped" else "✗")
+        err = mr.get("error") or ""
+        if len(err) > 60:
+            err = err[:57] + "..."
+        click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
+
+
+# ── aqueduct lineage ──────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("pipeline_id")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store directory",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--from",
+    "from_table",
+    default=None,
+    help="Filter: only show lineage originating from this source table",
+)
+@click.option(
+    "--column",
+    "column_filter",
+    default=None,
+    help="Filter: only show lineage for this output column name",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+def lineage(
+    pipeline_id: str,
+    store_dir: str | None,
+    config_path: str | None,
+    from_table: str | None,
+    column_filter: str | None,
+    fmt: str,
+) -> None:
+    """Print column-level lineage graph for a pipeline."""
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    lineage_db = resolved / "lineage.db"
+    if not lineage_db.exists():
+        click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
+        sys.exit(1)
+
+    params: list[Any] = [pipeline_id]
+    where_parts = ["pipeline_id = ?"]
+    if from_table:
+        where_parts.append("source_table = ?")
+        params.append(from_table)
+    if column_filter:
+        where_parts.append("output_column = ?")
+        params.append(column_filter)
+
+    where = " AND ".join(where_parts)
+    query = f"""
+        SELECT channel_id, output_column, source_table, source_column
+        FROM column_lineage
+        WHERE {where}
+        ORDER BY channel_id, output_column
+    """
+
+    conn = _duckdb.connect(str(lineage_db), read_only=True)
+    try:
+        rows = conn.execute(query, params).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        click.echo(f"No lineage records found for pipeline {pipeline_id!r}.")
+        return
+
+    if fmt == "json":
+        out = [
+            {
+                "channel_id": r[0],
+                "output_column": r[1],
+                "source_table": r[2],
+                "source_column": r[3],
+            }
+            for r in rows
+        ]
+        click.echo(json.dumps(out, indent=2))
+        return
+
+    click.echo(f"Column lineage — pipeline: {pipeline_id}")
+    click.echo(f"  {'Channel':<25} {'Output Column':<25} {'Source Table':<25} Source Column")
+    click.echo(f"  {'-'*25} {'-'*25} {'-'*25} {'-'*25}")
+    for channel_id, output_column, source_table, source_column in rows:
+        click.echo(f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}")
+
+
+# ── aqueduct signal ───────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("signal_id")
+@click.option(
+    "--value",
+    "value_str",
+    type=click.Choice(["true", "false"]),
+    default=None,
+    help="Set override: 'false' closes gate (blocks all future runs), 'true' clears override",
+)
+@click.option(
+    "--error",
+    "error_msg",
+    default=None,
+    help="Attach a reason message (implies --value false)",
+)
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store directory",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+def signal(
+    signal_id: str,
+    value_str: str | None,
+    error_msg: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+) -> None:
+    """Set or clear a persistent gate override for a Probe signal.
+
+    \b
+    Close gate (block all future runs):
+      aqueduct signal my_probe --value false
+      aqueduct signal my_probe --error "Source data is stale"
+
+    Clear override (resume normal evaluation):
+      aqueduct signal my_probe --value true
+    """
+    from datetime import datetime, timezone
+
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL
+
+    if value_str is None and error_msg is None:
+        # Show current override status
+        try:
+            cfg = load_config(Path(config_path) if config_path else None)
+        except ConfigError as exc:
+            click.echo(f"✗ config error: {exc}", err=True)
+            sys.exit(1)
+        resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+        signals_db = resolved / "signals.db"
+        conn = _duckdb.connect(str(signals_db))
+        try:
+            conn.execute(_SIGNAL_OVERRIDES_DDL)
+            row = conn.execute(
+                "SELECT passed, error_message, CAST(set_at AS VARCHAR) FROM signal_overrides WHERE signal_id = ?",
+                [signal_id],
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            click.echo(f"  {signal_id}: no persistent override (evaluates from Probe data)")
+        else:
+            state = "open" if row[0] else "closed (blocked)"
+            click.echo(f"  {signal_id}: gate={state}  set_at={row[2]}")
+            if row[1]:
+                click.echo(f"  reason: {row[1]}")
+        return
+
+    if error_msg is not None and value_str == "true":
+        click.echo("✗ --error implies gate closed; cannot combine with --value true", err=True)
+        sys.exit(1)
+
+    # Resolve passed value
+    if value_str == "true":
+        passed = True
+    else:
+        passed = False  # explicit false OR error_msg provided
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    resolved.mkdir(parents=True, exist_ok=True)
+    signals_db = resolved / "signals.db"
+
+    now = datetime.now(tz=timezone.utc).isoformat()
+    conn = _duckdb.connect(str(signals_db))
+    try:
+        conn.execute(_SIGNAL_OVERRIDES_DDL)
+        if passed:
+            # Clear override — delete row entirely
+            conn.execute("DELETE FROM signal_overrides WHERE signal_id = ?", [signal_id])
+            click.echo(f"✓ signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation")
+        else:
+            conn.execute(
+                """
+                INSERT INTO signal_overrides (signal_id, passed, error_message, set_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (signal_id) DO UPDATE SET
+                    passed = excluded.passed,
+                    error_message = excluded.error_message,
+                    set_at = excluded.set_at
+                """,
+                [signal_id, False, error_msg, now],
+            )
+            msg_note = f"  reason: {error_msg}" if error_msg else ""
+            click.echo(f"✓ signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator")
+            if msg_note:
+                click.echo(msg_note)
+    finally:
+        conn.close()
+
+
+# ── aqueduct heal ─────────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument("run_id")
+@click.option(
+    "--module",
+    "module_id",
+    default=None,
+    help="Scope healing to a specific module (default: use failed_module from run record)",
+)
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store directory",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle subdirs",
+)
+def heal(
+    run_id: str,
+    module_id: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+    patches_dir: str,
+) -> None:
+    """Manually trigger LLM self-healing for a failed run.
+
+    Reads the FailureContext from the observability store, calls the LLM
+    agent, and stages the resulting patch for human review.
+    """
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.llm import generate_llm_patch, stage_patch_for_human
+    from aqueduct.surveyor.models import FailureContext
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    runs_db = resolved / "runs.db"
+    if not runs_db.exists():
+        click.echo(f"✗ runs.db not found at {runs_db}", err=True)
+        sys.exit(1)
+
+    conn = _duckdb.connect(str(runs_db), read_only=True)
+    try:
+        fc_row = conn.execute(
+            """
+            SELECT run_id, pipeline_id, failed_module, error_message,
+                   stack_trace, manifest_json,
+                   CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
+            FROM failure_contexts WHERE run_id = ?
+            """,
+            [run_id],
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if fc_row is None:
+        click.echo(
+            f"✗ no failure record for run {run_id!r}\n"
+            "  (Only failed runs have a FailureContext stored.)",
+            err=True,
+        )
+        sys.exit(1)
+
+    (
+        fc_run_id, pipeline_id, failed_module, error_message,
+        stack_trace, manifest_json_raw, started_at, finished_at,
+    ) = fc_row
+
+    # Allow --module to override the recorded failed_module for scoped healing
+    target_module = module_id or failed_module
+
+    failure_ctx = FailureContext(
+        run_id=fc_run_id,
+        pipeline_id=pipeline_id,
+        failed_module=target_module,
+        error_message=error_message,
+        stack_trace=stack_trace,
+        manifest_json=manifest_json_raw if isinstance(manifest_json_raw, str) else json.dumps(manifest_json_raw),
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+    # Resolve agent config (same priority as `aqueduct run`)
+    eng = cfg.agent
+    resolved_provider = eng.provider
+    resolved_base_url = eng.base_url
+    resolved_model = eng.model
+    resolved_ollama_options = eng.ollama_options
+
+    if resolved_model is None:
+        click.echo(
+            "✗ no LLM agent configured — set agent.model in aqueduct.yml",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo(
+        f"↻ heal  run={run_id}  module={target_module}  "
+        f"provider={resolved_provider}  model={resolved_model}"
+    )
+
+    patches_path = Path(patches_dir)
+    patch = generate_llm_patch(
+        failure_ctx,
+        model=resolved_model,
+        patches_dir=patches_path,
+        provider=resolved_provider or "anthropic",
+        base_url=resolved_base_url,
+        ollama_options=resolved_ollama_options,
+    )
+
+    if patch is None:
+        click.echo("✗ LLM failed to produce a valid patch", err=True)
+        sys.exit(1)
+
+    stage_patch_for_human(patch, patches_path, failure_ctx)
+    click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
+    click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
 
 
 if __name__ == "__main__":

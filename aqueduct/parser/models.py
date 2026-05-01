@@ -44,6 +44,8 @@ class AgentConfig:
     # Guardrail policy — limits what LLM can autonomously patch
     allowed_paths: tuple[str, ...] = ()   # fnmatch patterns; empty = unrestricted
     forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
+    # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
+    validate_patch: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,5 +88,6 @@ class Blueprint:
     retry_policy: RetryPolicy = field(default_factory=RetryPolicy)
     agent: AgentConfig = field(default_factory=AgentConfig)
     udf_registry: tuple[dict[str, Any], ...] = ()
+    macros: dict[str, str] = field(default_factory=dict)
     required_context: tuple[str, ...] = ()  # Arcade sub-Blueprint: keys the caller must provide
     checkpoint: bool = False

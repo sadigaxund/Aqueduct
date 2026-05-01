@@ -148,6 +148,7 @@ def parse(
         ollama_options=validated.agent.ollama_options,
         allowed_paths=tuple(validated.agent.allowed_paths),
         forbidden_ops=tuple(validated.agent.forbidden_ops),
+        validate_patch=validated.agent.validate_patch,
     )
 
     return Blueprint(
@@ -162,6 +163,7 @@ def parse(
         retry_policy=retry_policy,
         agent=agent,
         udf_registry=tuple(validated.udf_registry),
+        macros=dict(validated.macros),
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
     )
