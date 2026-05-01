@@ -118,6 +118,7 @@ def _row_count_estimate(
     probe_id: str = "",
     run_id: str = "",
     store_dir: "Path | None" = None,
+    block_full_actions: bool = False,
 ) -> dict[str, Any]:
     """Estimate row count. sample method only triggers on a fraction."""
     method = signal_cfg.get("method", "sample")
@@ -152,6 +153,9 @@ def _row_count_estimate(
         return {"method": "spark_listener", "estimate": None}
 
     # method: sample
+    if block_full_actions:
+        logger.warning("Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
+        return {"method": "sample", "blocked": True, "estimate": None}
     fraction = float(signal_cfg.get("fraction", 0.1))
     sample_count = df.sample(fraction=fraction).count()
     estimate = int(round(sample_count / fraction)) if fraction > 0 else 0
@@ -161,12 +165,17 @@ def _row_count_estimate(
 def _null_rates(
     df: DataFrame,
     signal_cfg: dict[str, Any],
+    block_full_actions: bool = False,
 ) -> dict[str, Any]:
     """Compute per-column null rates on a random sample."""
     from pyspark.sql import functions as F
 
     columns: list[str] = signal_cfg.get("columns") or df.columns
     fraction = float(signal_cfg.get("fraction", 0.1))
+
+    if block_full_actions:
+        logger.warning("Probe: block_full_actions=True; skipping null_rates sample.")
+        return {"fraction": fraction, "blocked": True, "null_rates": {c: None for c in columns}}
 
     sample_df = df.sample(fraction=fraction).select(columns)
     total = sample_df.count()
@@ -201,6 +210,7 @@ def execute_probe(
     spark: SparkSession,  # noqa: ARG001 — reserved for SparkListener wiring
     run_id: str,
     store_dir: Path,
+    block_full_actions: bool = False,
 ) -> None:
     """Capture observability signals for a single Probe module.
 
@@ -244,9 +254,10 @@ def execute_probe(
                             probe_id=module.attach_to or module.id,
                             run_id=run_id,
                             store_dir=store_dir,
+                            block_full_actions=block_full_actions,
                         )
                     elif sig_type == "null_rates":
-                        payload = _null_rates(df, sig_cfg)
+                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)
                     elif sig_type == "sample_rows":
                         payload = _sample_rows(df, sig_cfg)
                     else:
