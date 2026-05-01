@@ -7,20 +7,40 @@ for human inspection.
 
 Supported signal types
 ──────────────────────
-schema_snapshot      Captures ``df.schema`` (zero Spark action — schema is
-                     always available on a lazy DataFrame).
+schema_snapshot      Captures ``df.schema`` — zero Spark action.
 
 row_count_estimate   Two methods:
   method: spark_listener   No action; queries ``module_metrics`` table in
                            ``signals.db`` for the upstream module's stage count.
                            Returns ``estimate: null`` if no row exists yet.
-  method: sample           ``df.sample(fraction).count()`` — allowed since
-                           it operates on a fraction, not the full dataset.
+  method: sample           ``df.sample(fraction).count()`` on a fraction only.
+                           Blocked when ``block_full_actions=True``.
 
-null_rates           ``df.sample(fraction)`` → collect per-column null counts
-                     → compute percentages.  Never touches the full DataFrame.
+null_rates           ``df.sample(fraction)`` → per-column null rates.
+                     Blocked when ``block_full_actions=True``.
 
-sample_rows          ``df.take(n)`` — fetches at most ``n`` rows.
+sample_rows          ``df.take(n)`` — fetches at most ``n`` rows. Not blocked
+                     (take() fetches a bounded set, never a full scan).
+
+value_distribution   Min / max / mean / stddev / configurable percentiles per
+                     column, computed on a sample (default fraction=0.1).
+                     Only numeric-typed columns are included automatically when
+                     ``columns`` is omitted.
+                     Blocked when ``block_full_actions=True``.
+
+distinct_count       Approximate distinct-value count per column via
+                     ``approx_count_distinct``, computed on a sample
+                     (default fraction=0.1).
+                     Blocked when ``block_full_actions=True``.
+
+data_freshness       ``max(column)`` — latest timestamp / date value in a
+                     column. Computed on a sample (default fraction=0.0 = full
+                     scan) because max from a sample can be inaccurate.
+                     Blocked when ``block_full_actions=True`` unless
+                     ``allow_sample=true`` is set (trades accuracy for safety).
+
+partition_stats      Number of Spark partitions via ``df.rdd.getNumPartitions()``
+                     — zero Spark action. Never blocked.
 
 Config shape (YAML / dict)
 ──────────────────────────
@@ -29,14 +49,34 @@ attach_to: my_ingress
 config:
   signals:
     - type: schema_snapshot
+
     - type: row_count_estimate
-      method: sample
+      method: sample       # sample | spark_listener (default: sample)
       fraction: 0.1
+
     - type: null_rates
-      columns: [region, amount]
+      columns: [region, amount]   # omit → all columns
       fraction: 0.1
+
     - type: sample_rows
       n: 20
+
+    - type: value_distribution
+      columns: [amount, fare]     # omit → all numeric columns
+      fraction: 0.1               # 0.0 = full scan
+      percentiles: [0.25, 0.5, 0.75]   # default
+
+    - type: distinct_count
+      columns: [region, status]   # omit → all columns
+      fraction: 0.1               # 0.0 = full scan
+
+    - type: data_freshness
+      column: event_time          # required; timestamp or date column
+      allow_sample: false         # true = use fraction below (less accurate)
+      fraction: 0.1               # only used when allow_sample: true
+
+    - type: partition_stats
+      # no config keys — always zero Spark action
 """
 
 from __future__ import annotations
@@ -202,6 +242,127 @@ def _sample_rows(
     return {"n": n, "rows": serialised}
 
 
+def _value_distribution(
+    df: DataFrame,
+    signal_cfg: dict[str, Any],
+    block_full_actions: bool = False,
+) -> dict[str, Any]:
+    """Min/max/mean/stddev + percentiles per column on a sample."""
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import NumericType
+
+    fraction = float(signal_cfg.get("fraction", 0.1))
+    percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
+
+    if block_full_actions:
+        logger.warning("Probe: block_full_actions=True; skipping value_distribution.")
+        return {"blocked": True, "fraction": fraction, "stats": {}}
+
+    # Default to numeric columns only when caller didn't specify
+    requested: list[str] | None = signal_cfg.get("columns")
+    if requested:
+        columns = requested
+    else:
+        columns = [f.name for f in df.schema.fields if isinstance(f.dataType, NumericType)]
+    if not columns:
+        return {"fraction": fraction, "stats": {}}
+
+    source = df.sample(fraction=fraction).select(columns) if fraction > 0 else df.select(columns)
+
+    # Batch: one agg() for min/max/mean/stddev + one approxQuantile call
+    agg_exprs = []
+    for c in columns:
+        agg_exprs += [
+            F.min(c).alias(f"_min_{c}"),
+            F.max(c).alias(f"_max_{c}"),
+            F.mean(c).alias(f"_mean_{c}"),
+            F.stddev_samp(c).alias(f"_std_{c}"),
+            F.count(c).alias(f"_cnt_{c}"),
+        ]
+    agg_row = source.agg(*agg_exprs).collect()[0].asDict()
+
+    # approxQuantile is a separate driver call (no Spark action, uses quantile summary)
+    quantiles: dict[str, list[float]] = {}
+    if percentiles:
+        for c in columns:
+            try:
+                quantiles[c] = source.approxQuantile(c, percentiles, 0.01)
+            except Exception:
+                quantiles[c] = []
+
+    stats: dict[str, Any] = {}
+    for c in columns:
+        stats[c] = {
+            "min": agg_row.get(f"_min_{c}"),
+            "max": agg_row.get(f"_max_{c}"),
+            "mean": agg_row.get(f"_mean_{c}"),
+            "stddev": agg_row.get(f"_std_{c}"),
+            "count_non_null": agg_row.get(f"_cnt_{c}"),
+            "percentiles": dict(zip([str(p) for p in percentiles], quantiles.get(c, []))),
+        }
+
+    return {"fraction": fraction, "stats": stats}
+
+
+def _distinct_count(
+    df: DataFrame,
+    signal_cfg: dict[str, Any],
+    block_full_actions: bool = False,
+) -> dict[str, Any]:
+    """Approximate distinct-value count per column via approx_count_distinct."""
+    from pyspark.sql import functions as F
+
+    fraction = float(signal_cfg.get("fraction", 0.1))
+    columns: list[str] = signal_cfg.get("columns") or df.columns
+
+    if block_full_actions:
+        logger.warning("Probe: block_full_actions=True; skipping distinct_count.")
+        return {"blocked": True, "fraction": fraction, "distinct_counts": {c: None for c in columns}}
+
+    source = df.sample(fraction=fraction).select(columns) if fraction > 0 else df.select(columns)
+    agg_exprs = [F.approx_count_distinct(c).alias(c) for c in columns]
+    row = source.agg(*agg_exprs).collect()[0].asDict()
+    return {"fraction": fraction, "distinct_counts": {c: row[c] for c in columns}}
+
+
+def _data_freshness(
+    df: DataFrame,
+    signal_cfg: dict[str, Any],
+    block_full_actions: bool = False,
+) -> dict[str, Any]:
+    """Capture the max value of a timestamp/date column."""
+    from pyspark.sql import functions as F
+
+    column: str | None = signal_cfg.get("column")
+    if not column:
+        raise ValueError("data_freshness signal requires 'column'")
+
+    allow_sample = bool(signal_cfg.get("allow_sample", False))
+    fraction = float(signal_cfg.get("fraction", 0.1))
+
+    if block_full_actions and not allow_sample:
+        logger.warning(
+            "Probe: block_full_actions=True; skipping data_freshness for column=%r. "
+            "Set allow_sample: true to use a sample instead.",
+            column,
+        )
+        return {"blocked": True, "column": column}
+
+    source = df.sample(fraction=fraction) if (allow_sample and fraction > 0) else df
+    max_val = source.select(F.max(F.col(column)).alias("max_val")).collect()[0]["max_val"]
+    return {
+        "column": column,
+        "max_value": max_val,
+        "sampled": allow_sample and fraction > 0,
+        "fraction": fraction if (allow_sample and fraction > 0) else None,
+    }
+
+
+def _partition_stats(df: DataFrame) -> dict[str, Any]:
+    """Capture Spark partition count — zero Spark action."""
+    return {"num_partitions": df.rdd.getNumPartitions()}
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def execute_probe(
@@ -260,6 +421,14 @@ def execute_probe(
                         payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)
                     elif sig_type == "sample_rows":
                         payload = _sample_rows(df, sig_cfg)
+                    elif sig_type == "value_distribution":
+                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions)
+                    elif sig_type == "distinct_count":
+                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions)
+                    elif sig_type == "data_freshness":
+                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions)
+                    elif sig_type == "partition_stats":
+                        payload = _partition_stats(df)
                     else:
                         logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
                         continue

@@ -155,6 +155,20 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ exception inside one signal does not prevent other signals from being captured
 - ✅ exception inside `execute_probe` does not propagate to caller
 
+#### New signal types (Phase 15)
+- ⏳ `value_distribution`: payload has `stats` dict; each column has `min`, `max`, `mean`, `stddev`, `count_non_null`, `percentiles` keys
+- ⏳ `value_distribution` with no `columns` → only numeric columns included automatically
+- ⏳ `value_distribution` `block_full_actions=True` → `{"blocked": True, "stats": {}}`; warning logged
+- ⏳ `distinct_count`: payload has `distinct_counts` dict keyed by columns with integer values
+- ⏳ `distinct_count` with no `columns` → all DataFrame columns
+- ⏳ `distinct_count` `block_full_actions=True` → `{"blocked": True, "distinct_counts": {col: None}}`
+- ⏳ `data_freshness`: payload has `column`, `max_value` keys
+- ⏳ `data_freshness` missing `column` → signal fails, other signals captured normally
+- ⏳ `data_freshness` `block_full_actions=True` + `allow_sample=false` (default) → `{"blocked": True, "column": ...}`
+- ⏳ `data_freshness` `block_full_actions=True` + `allow_sample=true` → executes on sample; `sampled=True` in payload
+- ⏳ `partition_stats`: payload has `num_partitions` key; integer ≥ 1; zero Spark action
+- ⏳ `partition_stats` `block_full_actions=True` → still executes (not a Spark action)
+
 ### Executor integration (`executor.py`)
 - ✅ Probe appended after non-Probe modules in execution order (runs last)
 - ✅ Probe with `attach_to` pointing to completed Ingress: signals written to DB
@@ -475,7 +489,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Regulator with open gate (surveyor returns True): downstream receives DataFrame
 - ✅ Regulator with closed gate + `on_block=skip`: `frame_store[regulator_id] = _GATE_CLOSED`, `status="skipped"`
 - ✅ Regulator with closed gate + `on_block=abort`: pipeline returns `ExecutionResult(status="error")`
-- ✅ Regulator with closed gate + `on_block=trigger_agent`: pipeline returns `ExecutionResult(status="error")` (triggers LLM loop via Surveyor on return)
+- ✅ Regulator with closed gate + `on_block=trigger_agent`: `ExecutionResult(status="error", trigger_agent=True)` — LLM loop fires even with `approval_mode=disabled`
 - ✅ downstream of skipped Regulator also records `status="skipped"` (sentinel propagation)
 - ✅ Regulator with no main-port incoming edge records `status="error"`
 
@@ -874,3 +888,49 @@ Issues reported in:
 - ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch produces invalid Blueprint → patch staged in `patches/pending/`, Blueprint unchanged
 - ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch valid → patch written to disk, loop continues
 - ⏳ `approval_mode: aggressive` + `validate_patch: false` (default) → patch written immediately (existing behavior unchanged)
+
+---
+
+## Stubs 1-4 — on_exhaustion / trigger_agent / block_full_actions
+
+### `ExecutionResult.trigger_agent` — `aqueduct/executor/models.py`
+
+- ⏳ `ExecutionResult` has `trigger_agent: bool = False` field
+- ⏳ `ExecutionResult.to_dict()` includes `trigger_agent` key
+- ⏳ `trigger_agent=True` frozen dataclass — mutation raises `FrozenInstanceError`
+
+### `_on_retry_exhausted()` + `_fail()` — `aqueduct/executor/spark/executor.py`
+
+**Behavior:** `_fail()` accepts `trigger_agent` kwarg; `_on_retry_exhausted()` maps `on_exhaustion` → (gate_closed, fail_result).
+
+- ⏳ `on_exhaustion: abort` → `_on_retry_exhausted` returns `(False, fail_result)` with `trigger_agent=False`
+- ⏳ `on_exhaustion: alert_only` → returns `(True, None)` — warning logged, gate_closed sentinel set
+- ⏳ `on_exhaustion: trigger_agent` → returns `(False, fail_result)` with `trigger_agent=True`
+- ⏳ Ingress `on_exhaustion: alert_only` exhausted → `frame_store[module.id] = _GATE_CLOSED`, downstream skipped, pipeline continues
+- ⏳ Channel `on_exhaustion: alert_only` exhausted → same sentinel behavior
+- ⏳ Egress `on_exhaustion: alert_only` exhausted → `continue` (no sentinel needed — Egress is terminal)
+- ⏳ Ingress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
+- ⏳ Egress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
+
+### Assert `trigger_agent` propagation — `executor.py` Assert dispatch
+
+- ⏳ Assert rule with `on_fail: trigger_agent` → `AssertError.trigger_agent=True` → `ExecutionResult.trigger_agent=True`
+- ⏳ Assert rule with `on_fail: abort` → `ExecutionResult.trigger_agent=False`
+
+### `probes.block_full_actions_in_prod` — `executor/spark/probe.py`
+
+**`execute_probe(…, block_full_actions=False)`**, **`_row_count_estimate(…, block_full_actions=False)`**, **`_null_rates(…, block_full_actions=False)`**.
+
+- ⏳ `block_full_actions=False` (default) → `row_count_estimate` sample `.count()` executes normally
+- ⏳ `block_full_actions=True` → `row_count_estimate` method=sample → skips `.count()`, returns `{"blocked": True, "estimate": None}` + warning logged
+- ⏳ `block_full_actions=True` → `row_count_estimate` method=spark_listener → DuckDB query still runs (no Spark action, not affected)
+- ⏳ `block_full_actions=True` → `null_rates` → skips `.count()` + `.collect()`, returns `{"blocked": True, "null_rates": {col: None, ...}}` + warning logged
+- ⏳ `block_full_actions=False` → `null_rates` executes normally
+- ⏳ `execute()` accepts `block_full_actions: bool = False`; threaded to `execute_probe()`
+
+### CLI trigger_agent override — `aqueduct/cli.py`
+
+- ⏳ `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
+- ⏳ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
+- ⏳ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
+- ⏳ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`

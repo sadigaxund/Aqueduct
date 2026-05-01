@@ -498,10 +498,25 @@ modules:
         - type: sample_rows
           n: 10
 
-        # value_distribution — approx_count_distinct + percentile_approx
+        # value_distribution — min/max/mean/stddev + percentiles on sample
         - type: value_distribution
-          columns: [region, status]
-          fraction: 0.05
+          columns: [amount]              # omit → all numeric columns
+          fraction: 0.1
+          percentiles: [0.25, 0.5, 0.75]
+
+        # distinct_count — approx_count_distinct per column on sample
+        - type: distinct_count
+          columns: [region, status]      # omit → all columns
+          fraction: 0.1
+
+        # data_freshness — max(timestamp column)
+        - type: data_freshness
+          column: order_ts               # required; timestamp or date column
+          # allow_sample: true           # uncomment to use fraction below
+          # fraction: 0.1
+
+        # partition_stats — df.rdd.getNumPartitions() — zero Spark action
+        - type: partition_stats
 
   # ─────────────────────────────────────────────────────────────────────────
   # 4g. REGULATOR — trigger gate (passive until signal port is wired)

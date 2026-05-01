@@ -15,7 +15,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 - **Any Spark Connector** - Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
 - **LLM-First Observability** - Every failure ships with a complete `FailureContext` JSON, ready for an agent (or you) to diagnose without digging through logs.
 - **Patch Grammar, Not Codegen** - The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
-- **Zero-Cost Observability** - Probes capture schema snapshots, null rates, and sample rows using lazy Spark operations and sampling. No full scans.
+- **Zero-Cost Observability** - Probes capture schema snapshots, null rates, value distributions, distinct counts, freshness, and sample rows using lazy Spark operations and sampling. No full scans in production mode (`block_full_actions_in_prod`).
 - **Spillway Error Routing** - Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
 - **Depot KV Store** - Cross-run pipeline state (watermarks, counters) backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress.
 - **Passive-by-Default Gates** - Regulators (data quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
@@ -177,7 +177,7 @@ The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens res
 | `Channel` | SQL transform; optional `spillway_condition` routes bad rows |
 | `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
 | `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
-| `Probe` | Capture observability signals (schema, null rates, sample rows) — never halts pipeline |
+| `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) — never halts pipeline |
 | `Regulator` | Data quality gate; evaluates Probe signals; blocks or skips downstream on failure |
 | `Assert` | Inline data quality rules (schema, row counts, null rates, freshness, SQL, custom); failing rows route to spillway |
 | `Arcade` | Reusable sub-Blueprint; namespaced and inlined at compile time |

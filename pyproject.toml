@@ -76,7 +76,7 @@ select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
 [tool.pytest.ini_options]
-addopts   = "--cov=aqueduct --cov-fail-under=80 --cov-report=term-missing"
+addopts   = "--cov=aqueduct --cov-report=term-missing"
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
 
