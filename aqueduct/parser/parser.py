@@ -90,6 +90,7 @@ def parse(
                 tags=tuple(m.tags),
                 config=resolve_value(m.config, ctx_map),
                 on_failure=m.on_failure,
+                on_failure_webhook=m.on_failure_webhook,
                 checkpoint=m.checkpoint,
                 spillway=m.spillway,
                 depends_on=tuple(m.depends_on),

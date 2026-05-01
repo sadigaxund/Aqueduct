@@ -59,6 +59,7 @@ class Module:
     spillway: str | None = None
     depends_on: tuple[str, ...] = ()
     on_failure: dict[str, Any] | None = None
+    on_failure_webhook: str | dict[str, Any] | None = None
     checkpoint: bool = False
     # Probe-specific: module this Probe taps
     attach_to: str | None = None

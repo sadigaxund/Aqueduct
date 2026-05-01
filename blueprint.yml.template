@@ -1,0 +1,427 @@
+# blueprint.yml — Pipeline Blueprint Template
+#
+# A Blueprint defines a single data pipeline: modules (data sources, transforms,
+# sinks) and the edges connecting them. The engine compiles it into a Manifest
+# and executes it on Spark.
+#
+# This file is a reference template. For a working example with real data, see:
+#   examples/comprehensive_demo/blueprint.yml
+#
+# Key concepts:
+#   @aq.*        Runtime tokens resolved at compile time (dates, secrets, depot)
+#   ${ctx.*}     Blueprint context variables (resolved at parse time)
+#   module.id    Unique identifier within this pipeline; used in edges and attach_to
+#
+# Usage:
+#   aqueduct validate pipeline.yml
+#   aqueduct compile  pipeline.yml
+#   aqueduct run      pipeline.yml --config aqueduct.yml
+
+aqueduct: "1.0"
+id: my.pipeline.id          # dot-notation identifier; must be unique across your depot
+name: "My Pipeline"
+description: "Optional human-readable description"
+
+
+# ── Context variables ─────────────────────────────────────────────────────────
+#
+# Resolved at parse time. Reference with ${ctx.key} anywhere in the Blueprint.
+# Override at runtime: aqueduct run pipeline.yml --ctx env=prod --ctx date=2026-01-01
+
+context:
+  env: dev
+  today: "@aq.date.today()"
+  yesterday: "@aq.date.yesterday()"
+  run_id: "@aq.runtime.run_id()"
+  prev_run: "@aq.runtime.prev_run_id()"
+
+
+# ── Context profiles ─────────────────────────────────────────────────────────
+#
+# Named context overrides. Activate with: aqueduct run ... --profile prod
+
+context_profiles:
+  prod:
+    env: prod
+  staging:
+    env: staging
+
+
+# ── SQL Macros ────────────────────────────────────────────────────────────────
+#
+# Reusable SQL fragments resolved at compile time. The Manifest always contains
+# plain SQL — no macro syntax reaches the executor.
+# Parameterized macros use {{ param_name }} placeholders.
+
+macros:
+  active: "status = 'active' AND deleted_at IS NULL"
+  trunc:  "DATE_TRUNC('{{ period }}', {{ col }})"
+
+
+# ── Spark config (pipeline-level overrides) ───────────────────────────────────
+#
+# Merged with engine spark_config at runtime; Blueprint values win on conflict.
+
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+
+
+# ── Retry policy (pipeline-level default) ─────────────────────────────────────
+#
+# Applied to every module unless overridden by module-level on_failure.
+
+retry_policy:
+  max_attempts: 3
+  backoff_strategy: exponential   # exponential | linear | fixed
+  backoff_base_seconds: 5
+  backoff_max_seconds: 120
+  jitter: true
+  deadline_seconds: 600           # null = no deadline
+  on_exhaustion: abort            # abort | alert_only | trigger_agent
+  transient_errors:               # only these are retried (empty = all errors)
+    - ".*Connection reset.*"
+    - ".*Task not serializable.*"
+  non_transient_errors:           # these skip retry immediately
+    - "AnalysisException"
+
+
+# ── LLM self-healing policy ───────────────────────────────────────────────────
+#
+# Per-pipeline. Connection defaults (provider, model) come from aqueduct.yml.
+
+agent:
+  # approval_mode controls what happens when the pipeline fails:
+  #   disabled   — LLM never fires (default)
+  #   human      — LLM generates patch → staged in patches/pending/ → run ends
+  #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
+  #   auto       — LLM applies patch in-memory → re-runs → writes permanently only on success
+  #   aggressive — LLM writes patch to Blueprint immediately → loops up to max_patches_per_run
+  #                ⚠ Blueprint may be modified multiple times without validation gate.
+  approval_mode: "human"
+
+  on_pending_patches: "warn"      # ignore | warn | block
+  max_patches_per_run: 3
+  validate_patch: false           # true = compile-check patch before writing (aggressive only)
+
+  # LLM Guardrails — per-pipeline restrictions on what the LLM may patch.
+  # Violations → patch staged for human review instead of applied automatically.
+
+  # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
+  #   Empty (default) = unrestricted.
+  # allowed_paths:
+  #   - "s3a://my-bucket/prod/*"
+
+  # forbidden_ops: PatchSpec ops the LLM may never use.
+  #   Empty (default) = all ops permitted.
+  #   Complete op list:
+  #     replace_module_config     overwrite a module's entire config block
+  #     replace_module_label      rename a module's display label
+  #     insert_module             add a new module and rewire edges
+  #     remove_module             delete a module and all its edges
+  #     replace_context_value     change a context: variable
+  #     add_probe                 add a Probe tapping an existing module
+  #     replace_edge              change an edge's from / to / port
+  #     set_module_on_failure     set per-module retry policy
+  #     replace_retry_policy      replace the pipeline-level RetryPolicy
+  #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
+  # forbidden_ops:
+  #   - remove_module
+  #   - replace_retry_policy
+
+  # Override connection defaults for this pipeline only:
+  # provider: "openai_compat"
+  # base_url: "http://10.0.0.39:11434/v1"
+  # model: "qwen2.5-coder:14b"
+
+
+# ── Modules ───────────────────────────────────────────────────────────────────
+
+modules:
+
+  # ── INGRESS — load data from any Spark-supported source ──────────────────────
+
+  - id: raw_orders
+    type: Ingress
+    label: "Load raw orders"
+    config:
+      format: parquet               # any Spark format: parquet, delta, csv, json, jdbc, orc, avro...
+      path: "s3a://bucket/orders/date=${ctx.today}/"
+      # options: {}                 # forwarded verbatim to df.read.options()
+      # schema_hint:                # optional: cast columns after read
+      #   - name: order_id
+      #     type: long
+      #   - name: amount
+      #     type: double
+
+    # Per-module retry override (overrides pipeline-level retry_policy):
+    # on_failure:
+    #   max_attempts: 5
+    #   backoff_strategy: exponential
+    #   on_exhaustion: alert_only   # pipeline continues even if this module fails
+
+    # Per-module failure webhook — fires when retry is exhausted, regardless of
+    # on_exhaustion (alert_only, abort, or trigger_agent). Useful for alerting on
+    # a critical upstream module even when the pipeline continues.
+    # Simple form (full context JSON sent as POST body):
+    # on_failure_webhook: "https://hooks.slack.com/services/T.../B.../"
+    # Full form:
+    # on_failure_webhook:
+    #   url: "${SLACK_WEBHOOK_URL}"
+    #   method: POST
+    #   payload:
+    #     text: "Module `${module_id}` in *${pipeline_id}* failed — ${error_message}"
+    #   headers:
+    #     Authorization: "Bearer ${OPS_TOKEN}"
+    #   timeout: 10
+    # Template variables: ${run_id}, ${pipeline_id}, ${module_id}, ${error_message}, ${error_type}
+
+
+  # ── CHANNEL — SQL transform ───────────────────────────────────────────────────
+
+  - id: clean_orders
+    type: Channel
+    label: "Remove invalid rows"
+    config:
+      op: sql                       # sql | join
+      query: |
+        SELECT *
+        FROM raw_orders
+        WHERE amount IS NOT NULL
+          AND {{ macros.active }}
+          AND {{ macros.trunc(period='day', col=order_ts) }} >= '2026-01-01'
+      spillway_condition: "amount IS NULL OR order_ts IS NULL"  # bad rows → spillway port
+
+
+  # ── CHANNEL — join syntax (alternative to raw SQL JOIN) ───────────────────────
+
+  # - id: enrich_orders
+  #   type: Channel
+  #   config:
+  #     op: join
+  #     left: raw_orders
+  #     right: customers_ingress
+  #     join_type: left             # inner | left | right | full | semi | anti | cross
+  #     condition: "raw_orders.customer_id = customers_ingress.id"
+  #     broadcast_side: right       # optional: BROADCAST hint for smaller side
+
+
+  # ── JUNCTION — split one DataFrame into named branches ────────────────────────
+
+  - id: split_by_region
+    type: Junction
+    label: "Split by region"
+    config:
+      mode: conditional             # conditional | broadcast | partition
+      branches:
+        - id: us
+          condition: "region = 'US'"
+        - id: eu
+          condition: "region = 'EU'"
+        - id: other
+          condition: "_else_"       # everything not matched above
+
+
+  # ── FUNNEL — merge multiple DataFrames ───────────────────────────────────────
+
+  - id: merged_output
+    type: Funnel
+    label: "Merge EU and US"
+    config:
+      mode: union_all               # union_all | union | coalesce | zip
+      inputs:
+        - split_by_region.us
+        - split_by_region.eu
+      schema_check: strict          # strict | permissive
+
+
+  # ── PROBE — observability tap (never halts pipeline) ─────────────────────────
+  #
+  # Attaches to a module's output edge. Writes signals to signals.db.
+  # schema_snapshot also writes a JSON file to store_dir/signals/<run_id>/.
+
+  - id: probe_after_clean
+    type: Probe
+    label: "Capture quality signals after cleaning"
+    attach_to: clean_orders
+    config:
+      signals:
+        - type: schema_snapshot         # zero Spark action — metadata only
+
+        - type: row_count_estimate      # method: spark_listener = zero cost (from stage metrics)
+          method: spark_listener        # method: sample = count() on a fraction
+
+        - type: null_rates              # one action on sample
+          columns: [order_id, amount]
+          fraction: 0.05
+
+        - type: sample_rows             # df.take(n) — bounded, not a full scan
+          n: 20
+
+        - type: value_distribution      # min/max/mean/stddev + percentiles on sample
+          columns: [amount]             # omit → all numeric columns
+          fraction: 0.1
+          percentiles: [0.25, 0.5, 0.75]
+
+        - type: distinct_count          # approx_count_distinct per column on sample
+          columns: [region, status]     # omit → all columns
+          fraction: 0.1
+
+        - type: data_freshness          # max(column) — full scan by default
+          column: order_ts             # required; timestamp or date column
+          # allow_sample: true         # trades accuracy for speed in production
+          # fraction: 0.1
+
+        - type: partition_stats         # df.rdd.getNumPartitions() — zero Spark action
+
+
+  # ── REGULATOR — gate that blocks downstream on false signal ──────────────────
+  #
+  # Passive by default — compiled away entirely if no signal edge is wired.
+  # Wire a Probe's signal port to this module to activate it.
+
+  - id: quality_gate
+    type: Regulator
+    label: "Block downstream if quality signal is False"
+    config:
+      on_block: skip                # skip | abort | trigger_agent
+
+
+  # ── ASSERT — inline data quality rules ───────────────────────────────────────
+  #
+  # Evaluates rules against the flowing DataFrame inline.
+  # Aggregate rules batched into ≤2 Spark actions regardless of rule count.
+  # Row-level rules (sql_row, custom) are lazy filters — no additional actions.
+
+  - id: orders_quality
+    type: Assert
+    label: "Enforce business rules"
+    config:
+      rules:
+        - type: schema_match
+          expected: {order_id: long, amount: double}
+          on_fail: abort            # abort | warn | webhook | trigger_agent
+
+        - type: min_rows
+          min: 1000
+          on_fail: abort
+
+        - type: max_rows
+          max: 10000000
+          on_fail: warn
+
+        - type: null_rate
+          column: order_id
+          fraction: 0.1            # sample fraction for speed
+          max: 0.001               # max allowed null fraction
+          on_fail: abort
+
+        - type: freshness
+          column: event_ts
+          max_age_hours: 4
+          on_fail: warn
+
+        - type: sql
+          expr: "SUM(amount) > 0"  # aggregate boolean expression
+          on_fail:
+            action: webhook
+            url: "${ALERT_WEBHOOK}"
+
+        - type: sql_row
+          expr: "amount > 0 AND order_id IS NOT NULL"
+          on_fail: quarantine      # row-level rules support quarantine → spillway port
+
+        - type: custom
+          fn: "my_pkg.quality.validate_orders"  # fn(df) -> {passed, message, quarantine_df}
+          on_fail: quarantine
+
+
+  # ── EGRESS — write data ───────────────────────────────────────────────────────
+
+  - id: good_output
+    type: Egress
+    label: "Write clean orders"
+    config:
+      format: parquet
+      path: "s3a://bucket/clean/date=${ctx.today}/"
+      mode: overwrite               # overwrite | append | error | ignore
+      # partition_by: [region]
+      # options: {}
+
+  - id: error_output
+    type: Egress
+    label: "Write rejected rows (spillway)"
+    config:
+      format: parquet
+      path: "s3a://bucket/errors/date=${ctx.today}/"
+      mode: overwrite
+
+  - id: quarantine_output
+    type: Egress
+    label: "Write quarantined rows (Assert)"
+    config:
+      format: parquet
+      path: "s3a://bucket/quarantine/date=${ctx.today}/"
+      mode: overwrite
+
+  # ── EGRESS — Depot KV (persist watermark) ───────────────────────────────────
+
+  - id: save_watermark
+    type: Egress
+    label: "Save last processed date"
+    config:
+      format: depot
+      key: last_processed_date
+      value_expr: "MAX(order_ts)"  # single Spark agg; result saved to depot KV
+
+
+  # ── UDF registry ─────────────────────────────────────────────────────────────
+
+udf_registry:
+  - id: parse_phone
+    lang: python
+    module: my_pkg.udfs
+    fn: parse_phone_number
+    return_type: string
+    entry: parse_phone             # name registered in Spark; defaults to id
+
+
+# ── Edges ─────────────────────────────────────────────────────────────────────
+
+edges:
+  - from: raw_orders
+    to: clean_orders
+
+  - from: clean_orders
+    to: good_output
+
+  - from: clean_orders            # spillway port carries bad rows with _aq_error_* columns
+    to: error_output
+    port: spillway
+
+  - from: clean_orders
+    to: split_by_region
+
+  - from: split_by_region
+    to: merged_output
+    port: us                      # named branch port from Junction
+
+  - from: split_by_region
+    to: merged_output
+    port: eu
+
+  - from: merged_output
+    to: orders_quality
+
+  - from: orders_quality
+    to: good_output
+
+  - from: orders_quality          # quarantined rows from sql_row / custom rules
+    to: quarantine_output
+    port: spillway
+
+  - from: probe_after_clean       # wire Probe signal to Regulator gate
+    to: quality_gate
+    port: signal
+
+  - from: quality_gate
+    to: save_watermark

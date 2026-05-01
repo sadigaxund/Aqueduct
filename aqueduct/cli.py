@@ -149,11 +149,14 @@ def check_config(config_path: str | None) -> None:
     click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
     click.echo(f"  stores:  observability={cfg.stores.observability.path}  depot={cfg.stores.depot.path}")
     click.echo(f"  secrets: provider={cfg.secrets.provider}")
+    wh_lines = []
     if cfg.webhooks.on_failure:
         wh = cfg.webhooks.on_failure
-        click.echo(f"  webhook: {wh.method} {wh.url}  payload={'custom' if wh.payload else 'full FailureContext'}")
-    else:
-        click.echo("  webhook: (not configured)")
+        wh_lines.append(f"on_failure={wh.method} {wh.url}")
+    if cfg.webhooks.on_success:
+        wh = cfg.webhooks.on_success
+        wh_lines.append(f"on_success={wh.method} {wh.url}")
+    click.echo(f"  webhooks: {', '.join(wh_lines) if wh_lines else '(not configured)'}")
     if cfg.spark_config:
         click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
 
@@ -668,6 +671,21 @@ def run(
             click.echo(f"\n✗ pipeline failed  run_id={result.run_id}", err=True)
         sys.exit(1)
 
+    # ── on_success webhook ────────────────────────────────────────────────────
+    if cfg.webhooks.on_success:
+        from aqueduct.surveyor.webhook import fire_webhook
+        success_payload = {
+            "run_id": result.run_id,
+            "pipeline_id": manifest.pipeline_id,
+            "pipeline_name": manifest.pipeline_name,
+            "module_count": str(len(result.module_results)),
+        }
+        fire_webhook(
+            cfg.webhooks.on_success,
+            full_payload=success_payload,
+            template_vars=success_payload,
+        )
+
     click.echo(f"\n✓ pipeline complete  run_id={result.run_id}")
 
 
@@ -793,7 +811,7 @@ def patch_rollback(patch_id: str, blueprint: str, patches_dir: str) -> None:
         )
         sys.exit(1)
 
-    backup_path = sorted(matches)[0]  # earliest backup if multiple
+    backup_path = sorted(matches)[-1]  # most recent backup if multiple
 
     # Restore backup → blueprint (atomic via temp file)
     tmp = blueprint_path.with_suffix(".rollback.tmp.yml")
@@ -1048,7 +1066,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
 # ── aqueduct lineage ──────────────────────────────────────────────────────────
 
 @cli.command()
-@click.argument("pipeline_id")
+@click.argument("pipeline_id_or_blueprint")
 @click.option(
     "--store-dir",
     default=None,
@@ -1080,14 +1098,18 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     show_default=True,
 )
 def lineage(
-    pipeline_id: str,
+    pipeline_id_or_blueprint: str,
     store_dir: str | None,
     config_path: str | None,
     from_table: str | None,
     column_filter: str | None,
     fmt: str,
 ) -> None:
-    """Print column-level lineage graph for a pipeline."""
+    """Print column-level lineage graph for a pipeline.
+
+    PIPELINE_ID_OR_BLUEPRINT: pipeline id (e.g. nyc_taxi_demo) or path to
+    the blueprint YAML file (e.g. blueprint.yml — id is extracted automatically).
+    """
     import duckdb as _duckdb
 
     from aqueduct.config import ConfigError, load_config
@@ -1097,6 +1119,19 @@ def lineage(
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
+
+    # Accept blueprint file path — extract pipeline id from it
+    arg_path = Path(pipeline_id_or_blueprint)
+    if arg_path.suffix in (".yml", ".yaml") and arg_path.exists():
+        try:
+            from aqueduct.parser.parser import parse
+            bp = parse(str(arg_path))
+            pipeline_id = bp.id
+        except Exception as exc:
+            click.echo(f"✗ could not read pipeline id from {pipeline_id_or_blueprint!r}: {exc}", err=True)
+            sys.exit(1)
+    else:
+        pipeline_id = pipeline_id_or_blueprint
 
     resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
     lineage_db = resolved / "lineage.db"
@@ -1115,7 +1150,7 @@ def lineage(
 
     where = " AND ".join(where_parts)
     query = f"""
-        SELECT channel_id, output_column, source_table, source_column
+        SELECT DISTINCT channel_id, output_column, source_table, source_column
         FROM column_lineage
         WHERE {where}
         ORDER BY channel_id, output_column

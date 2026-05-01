@@ -1,20 +1,20 @@
 # aqueduct.yml — Engine Configuration Template
 #
-# This file configures the Aqueduct engine (deployment target, Spark, stores,
-# probes, secrets, webhooks). It is NOT a pipeline definition.
+# Configures the Aqueduct engine: deployment, Spark, stores, probes, secrets,
+# webhooks, and LLM agent connection. NOT a pipeline definition.
 #
 # Rename to aqueduct.yml and place in your project root (or pass with --config).
 # All sections are optional — omitting this file entirely uses local Spark with
 # DuckDB stores in .aqueduct/.
 #
-# CLI flags override values here; Blueprint spark_config overrides spark_config below.
-# LLM agent config (model, provider, approval_mode) belongs in the Blueprint agent:
-# block — each pipeline manages its own healing policy independently.
+# CLI flags override values here. Blueprint spark_config overrides spark_config
+# below (Blueprint wins on conflict). LLM policy (approval_mode, forbidden_ops)
+# belongs in each Blueprint's agent: block — not here.
 #
 # Usage:
-#   aqueduct run pipeline.yml                      # auto-discovers aqueduct.yml in CWD
+#   aqueduct run pipeline.yml                       # auto-discovers aqueduct.yml in CWD
 #   aqueduct run pipeline.yml --config aqueduct.yml
-#   aqueduct check-config                          # validate without running a pipeline
+#   aqueduct check-config                           # validate without running a pipeline
 
 aqueduct_config: "1.0"
 
@@ -22,12 +22,12 @@ aqueduct_config: "1.0"
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 deployment:
-  # engine: execution engine.
-  # Currently supported: spark
-  # Planned (not yet implemented): flink
+  # engine: execution engine. Currently supported: spark. Planned: flink.
   engine: spark
 
-  # target: informational label (local | standalone | yarn | kubernetes | databricks | emr | dataproc)
+  # target: informational label only — never changes execution behaviour.
+  # Use it to tag the environment for monitoring/logging.
+  # Values: local | standalone | yarn | kubernetes | databricks | emr | dataproc
   target: local
 
   # master_url: passed verbatim to SparkSession.builder.master()
@@ -41,8 +41,8 @@ deployment:
 
 # ── Spark Configuration ───────────────────────────────────────────────────────
 #
-# Any spark.* key accepted. Merged with Blueprint spark_config at runtime
-# (Blueprint values win on conflict).
+# Any spark.* key accepted. Merged with Blueprint spark_config at runtime;
+# Blueprint values win on conflict.
 
 spark_config: {}
 
@@ -110,10 +110,20 @@ stores:
 
 
 # ── Probes ────────────────────────────────────────────────────────────────────
+#
+# Controls Probe signal collection behaviour engine-wide.
+# Signal type config (which columns, fraction) belongs in each Blueprint's
+# Probe module config.
 
 probes:
   max_sample_rows: 100
   default_sample_fraction: 0.01
+
+  # block_full_actions_in_prod: when true, suppresses Probe signals that trigger
+  # a Spark action on a sample (row_count_estimate/sample, null_rates,
+  # value_distribution, distinct_count). Signals that are zero-cost
+  # (schema_snapshot, partition_stats) and bounded (sample_rows) still run.
+  # data_freshness is also suppressed unless allow_sample: true is set per-signal.
   block_full_actions_in_prod: true
 
 
@@ -133,15 +143,28 @@ secrets:
 
 # ── Webhooks ──────────────────────────────────────────────────────────────────
 #
-# Fires when a pipeline run ends with status="error".
+# Pipeline-level push notifications. Delivery is best-effort (daemon thread);
+# failures are logged and do not affect run outcome.
 #
-# Simple form — just a URL, sends full FailureContext JSON via POST:
+# Two hooks:
+#   on_failure — fires when a run ends with status="error"
+#   on_success — fires when a run ends with status="success"
+#
+# Per-module webhook: set on_failure_webhook on any module in the Blueprint.
+#   Fires when that module's retry policy is exhausted, regardless of whether
+#   the pipeline continues (alert_only) or stops.
+#
+# Per-Assert-rule webhook: use on_fail: {action: webhook, url: ...} in each
+#   Assert rule inside the Blueprint.
+#
+# Simple form — just a URL; sends the full context payload as JSON via POST:
 #   webhooks:
 #     on_failure: "https://hooks.slack.com/services/T.../B.../"
+#     on_success: "https://hooks.example.com/pipeline-complete"
 #
-# Full form — custom method, headers, and payload template:
+# Full form — custom method, headers, and payload template.
 #
-# Template variables available in payload values and header values:
+# on_failure template variables:
 #   ${run_id}          UUID of this pipeline run
 #   ${pipeline_id}     Pipeline identifier string
 #   ${pipeline_name}   Pipeline display name
@@ -150,20 +173,41 @@ secrets:
 #   ${error_type}      Exception class name (e.g. AnalysisException)
 #   ${started_at}      ISO-8601 run start timestamp
 #   ${attempt}         Number of failed modules in this run
-#   ${ENV_VAR}         Any env variable (useful in header values for secrets)
 #
-# If payload is omitted, the complete FailureContext JSON object is sent
-# (run metadata, failed module, stack trace, probe signals, manifest snapshot).
+# on_success template variables:
+#   ${run_id}          UUID of this pipeline run
+#   ${pipeline_id}     Pipeline identifier string
+#   ${pipeline_name}   Pipeline display name
+#   ${module_count}    Number of modules executed
+#
+# on_failure_webhook (per-module) template variables:
+#   ${run_id}          UUID of this pipeline run
+#   ${pipeline_id}     Pipeline identifier string
+#   ${module_id}       ID of the module that failed
+#   ${error_message}   Error description
+#   ${error_type}      Exception class name
+#
+# ${ENV_VAR} in any value resolves to os.environ[VAR] (useful for secrets in headers).
+#
+# If payload is omitted, the full context JSON object is sent unchanged.
 
 webhooks:
   on_failure: null
+  on_success: null
 
-  # ── Slack incoming webhook ───────────────────────────────────────────────────
+  # ── Slack — notify on failure ────────────────────────────────────────────────
   # on_failure:
   #   url: "${SLACK_WEBHOOK_URL}"
   #   method: POST
   #   payload:
   #     text: "Pipeline *${pipeline_id}* failed on `${failed_module}` — ${error_message}"
+
+  # ── Slack — notify on success ────────────────────────────────────────────────
+  # on_success:
+  #   url: "${SLACK_WEBHOOK_URL}"
+  #   method: POST
+  #   payload:
+  #     text: "Pipeline *${pipeline_id}* complete (${module_count} modules)  run_id=${run_id}"
 
   # ── PagerDuty Events API v2 ──────────────────────────────────────────────────
   # on_failure:
@@ -182,7 +226,7 @@ webhooks:
   #         run_id: "${run_id}"
   #         failed_module: "${failed_module}"
 
-  # ── Generic webhook — full FailureContext (no payload template) ──────────────
+  # ── Generic webhook — full context payload (no template) ─────────────────────
   # on_failure:
   #   url: "https://ops.example.com/api/v1/aqueduct-failure"
   #   method: POST
@@ -194,12 +238,13 @@ webhooks:
 
 # ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
-# Sets the LLM provider, endpoint, and model used by all pipelines.
-# Per-pipeline policy (approval_mode, on_pending_patches) belongs in each
-# Blueprint's agent: block — not here.
+# Sets the provider, endpoint, and model for all pipelines that enable LLM
+# self-healing. Per-pipeline policy (approval_mode, forbidden_ops,
+# on_pending_patches) belongs in each Blueprint's agent: block — see
+# blueprint.yml.template.
 #
 # Blueprint agent: values override these defaults on conflict.
-# If a pipeline omits agent: entirely, LLM self-healing is disabled regardless.
+# If a pipeline omits agent: entirely, LLM self-healing is disabled.
 
 agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────
@@ -217,132 +262,3 @@ agent:
   #   mlock: true                            # lock weights in RAM (no swap)
   #   num_batch: 1024                        # prompt eval batch size
   #   num_predict: -1                        # -1 = no token limit
-
-# ── Blueprint agent: block (policy — copy into pipeline YAML) ─────────────────
-#
-#   agent:
-#     # approval_mode controls what happens when the pipeline fails:
-#     #
-#     #   disabled   — LLM never fires (default when agent: block is omitted)
-#     #   human      — LLM generates patch → written to patches/pending/ → run ends
-#     #                You review, then: aqueduct patch apply patches/pending/<id>.json --blueprint ...
-#     #   auto       — LLM generates patch → applied in-memory → pipeline re-runs to validate
-#     #                If re-run succeeds: patch written to Blueprint permanently
-#     #                If re-run fails:    patch discarded, Blueprint unchanged
-#     #                Only one patch attempt per run.
-#     #   aggressive — LLM generates patch → written to Blueprint immediately → pipeline re-runs
-#     #                Loops up to max_patches_per_run times with no validation gate.
-#     #                ⚠ WARNING: Blueprint may be modified multiple times autonomously.
-#     #                   All changes are permanent. Review patches/applied/ after the run.
-#     approval_mode: "human"
-#
-#     on_pending_patches: "warn"     # ignore | warn | block
-#     max_patches_per_run: 3         # max LLM patch+rerun cycles (auto: always 1; aggressive: up to N)
-#
-#     # ── LLM Guardrails ─────────────────────────────────────────────────────
-#     # Constrain what the LLM agent is allowed to patch. Violations cause the
-#     # patch to be staged for human review instead of applied automatically.
-#     #
-#     # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
-#     #   Empty list (default) = unrestricted.
-#     #   Any path not matching at least one pattern → patch staged for review.
-#     # allowed_paths:
-#     #   - "s3a://my-bucket/prod/*"    # only prod bucket paths
-#     #   - "s3a://my-bucket/staging/*"
-#     #
-#     # forbidden_ops: PatchSpec operation names the LLM may never use.
-#     #   Empty list (default) = all ops permitted.
-#     #   Matching op → patch staged for review immediately.
-#     # forbidden_ops:
-#     #   - remove_module              # never delete modules autonomously
-#     #   - replace_retry_policy       # don't touch retry config
-#
-#     # Override connection defaults for this pipeline only:
-#     # provider: "openai_compat"
-#     # base_url: "http://10.0.0.39:11434/v1"
-#     # model: "qwen2.5-coder:14b"
-
-# ── Assert module (inline data quality gates) ─────────────────────────────────
-#
-# Enforce business rules inline. Failing rows route to spillway port.
-# At most 2 Spark actions per Assert module (aggregate batching).
-#
-# modules:
-#   - id: orders_quality
-#     type: Assert
-#     config:
-#       rules:
-#         - type: schema_match
-#           expected: {order_id: long, amount: double}
-#           on_fail: abort              # abort | warn | webhook | trigger_agent
-#
-#         - type: min_rows
-#           min: 1000
-#           on_fail: abort
-#
-#         - type: null_rate
-#           column: order_id
-#           fraction: 0.1              # sample fraction for speed
-#           max: 0.001
-#           on_fail: abort
-#
-#         - type: freshness
-#           column: event_time
-#           max_age_hours: 4
-#           on_fail: warn
-#
-#         - type: sql
-#           expr: "SUM(amount) > 0"   # aggregate boolean expression
-#           on_fail:
-#             action: webhook
-#             url: "${ALERT_WEBHOOK}"
-#
-#         - type: sql_row
-#           expr: "amount > 0 AND order_id IS NOT NULL"
-#           on_fail: quarantine        # row-level rules support quarantine
-#
-#         - type: custom
-#           fn: "my_pkg.quality.validate_orders"   # fn(df) -> {passed, message, quarantine_df}
-#           on_fail: quarantine
-#
-# edges:
-#   - from: orders_quality
-#     to: good_egress
-#   - from: orders_quality
-#     port: spillway
-#     to: quarantine_egress
-
-# ── SQL Macros (Blueprint-level, resolved at compile time) ─────────────────────
-#
-# Define reusable SQL fragments. Macros are expanded at compile time — the
-# Manifest always contains plain SQL. No loops, no conditionals, no Jinja.
-#
-# macros:
-#   active_filter: "status = 'active' AND deleted_at IS NULL"
-#   date_trunc: "DATE_TRUNC('{{ period }}', {{ column }})"
-#
-# Reference in Channel query:
-#   query: |
-#     SELECT * FROM orders
-#     WHERE {{ macros.active_filter }}
-#       AND {{ macros.date_trunc(period='day', column=event_ts) }} >= '2026-01-01'
-#
-# Parameterized macros use {{ param_name }} placeholders in their body.
-# All placeholders must be supplied at the call site or compile fails.
-
-# ── Observability CLI Commands ─────────────────────────────────────────────────
-#
-# After runs complete, query the observability store:
-#
-# aqueduct report   <run_id>               # Flow Report (--format table|json|csv)
-# aqueduct lineage  <pipeline_id>          # Column lineage (--from <table>, --column <col>)
-#
-# Persistent gate override (blocks all future runs until cleared):
-# aqueduct signal   <probe_id> --value false           # close gate
-# aqueduct signal   <probe_id> --error "Stale source"  # close with reason
-# aqueduct signal   <probe_id> --value true            # clear override
-# aqueduct signal   <probe_id>                         # show current status
-#
-# Manual self-healing (stages LLM patch for human review):
-# aqueduct heal     <run_id>
-# aqueduct heal     <run_id> --module <module_id>
