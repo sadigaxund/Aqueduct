@@ -2,10 +2,10 @@
 
 aqueduct.yml is separate from Blueprint YAML files.  It configures the engine
 itself: deployment target, store backends, probe limits, secrets provider, and
-webhook endpoints.  It is NOT the pipeline definition.
+webhook endpoints.  It is NOT the blueprint definition.
 
 LLM agent connection config (provider, base_url, model, ollama_options) lives
-here as engine-level defaults.  Per-pipeline policy (approval_mode,
+here as engine-level defaults.  Per-blueprint policy (approval_mode,
 on_pending_patches, max_patches_per_run) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
 
@@ -74,7 +74,7 @@ class StoresConfig(BaseModel):
     )
     depot: StoreBackendConfig = Field(
         default_factory=lambda: StoreBackendConfig(path=".aqueduct/depot.duckdb"),
-        description="Depot KV store (pipeline state, @aq.depot.*)",
+        description="Depot KV store (blueprint state, @aq.depot.*)",
     )
 
 
@@ -98,7 +98,7 @@ class SecretsConfig(BaseModel):
 class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
-    Sets provider, endpoint, and model used by all pipelines unless overridden
+    Sets provider, endpoint, and model used by all blueprints unless overridden
     in the Blueprint agent: block.  Policy fields (approval_mode,
     on_pending_patches, max_patches_per_run) belong in the Blueprint, not here.
     """
@@ -117,10 +117,10 @@ class WebhookEndpointConfig(BaseModel):
     Variables use ${VAR} syntax.
 
     Built-in variables (always available in payload templates):
-      ${run_id}          UUID of this pipeline run
-      ${pipeline_id}     Pipeline identifier
-      ${pipeline_name}   Pipeline display name
-      ${failed_module}   Module ID where failure occurred
+      ${run_id}           UUID of this blueprint run
+      ${blueprint_id}     Blueprint identifier
+      ${blueprint_name}   Blueprint display name
+      ${failed_module}    Module ID where failure occurred
       ${error_message}   Error description string
       ${error_type}      Exception class name
       ${started_at}      ISO-8601 run start timestamp
@@ -151,11 +151,11 @@ class WebhooksConfig(BaseModel):
 
     on_failure: WebhookEndpointConfig | None = Field(
         default=None,
-        description="Endpoint to POST when a pipeline run fails. Accepts a URL string or full config object.",
+        description="Endpoint to POST when a blueprint run fails. Accepts a URL string or full config object.",
     )
     on_success: WebhookEndpointConfig | None = Field(
         default=None,
-        description="Endpoint to POST when a pipeline run succeeds. Accepts a URL string or full config object.",
+        description="Endpoint to POST when a blueprint run succeeds. Accepts a URL string or full config object.",
     )
 
     @field_validator("on_failure", "on_success", mode="before")
@@ -176,7 +176,7 @@ class AqueductConfig(BaseModel):
     (development / CI) works out of the box.
 
     LLM connection defaults (provider, base_url, model) live here.
-    Per-pipeline policy (approval_mode) lives in the Blueprint agent: block.
+    Per-blueprint policy (approval_mode) lives in the Blueprint agent: block.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 

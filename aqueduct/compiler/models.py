@@ -21,7 +21,7 @@ from aqueduct.parser.models import AgentConfig, Edge, Module, RetryPolicy
 @dataclass(frozen=True, kw_only=True)
 class Manifest:
     # Required — no defaults
-    pipeline_id: str
+    blueprint_id: str
     context: dict[str, str]
     modules: tuple[Module, ...]
     edges: tuple[Edge, ...]
@@ -39,7 +39,7 @@ class Manifest:
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
         return {
-            "pipeline_id": self.pipeline_id,
+            "blueprint_id": self.blueprint_id,
             "name": self.name,
             "description": self.description,
             "aqueduct_version": self.aqueduct_version,

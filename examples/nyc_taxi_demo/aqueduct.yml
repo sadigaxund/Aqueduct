@@ -31,8 +31,8 @@ webhooks:
       X-Source: "aqueduct"
     timeout: 15
     payload:
-      pipeline_name: "${PIPELINE_NAME}"
-      pipeline_id: "${PIPELINE_ID}"
+      blueprint_name: "${BLUEPRINT_NAME}"
+      blueprint_id: "${BLUEPRINT_ID}"
       run_id: "${RUN_ID}"
       status: "${STATUS}"
 
@@ -46,7 +46,7 @@ agent:
 #   approval_mode: "human"         # disabled | human | auto
 #   on_pending_patches: "warn"     # ignore | warn | block
 #   max_patches_per_run: 5
-#   # Override connection defaults for this pipeline only:
+#   # Override connection defaults for this blueprint only:
 #   provider: "openai_compat"
 #   base_url: "http://10.0.0.39:11434/v1"
 #   model: "deepseek-r1:14b"

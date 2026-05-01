@@ -1,7 +1,7 @@
-"""Depot KV store — cross-run pipeline state backed by DuckDB.
+"""Depot KV store — cross-run blueprint state backed by DuckDB.
 
-Provides a simple key-value store for pipeline state (watermarks, counters,
-shared config) that persists across pipeline runs.  On first run every key
+Provides a simple key-value store for blueprint state (watermarks, counters,
+shared config) that persists across blueprint runs.  On first run every key
 returns its default; subsequent runs see the last written value.
 
 Usage in Blueprint YAML:
@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS depot_kv (
 
 
 class DepotStore:
-    """Thread-safe-ish DuckDB-backed KV store for pipeline state.
+    """Thread-safe-ish DuckDB-backed KV store for blueprint state.
 
     Designed for driver-side use only (workers cannot write here).
     """

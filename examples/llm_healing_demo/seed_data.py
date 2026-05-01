@@ -1,7 +1,7 @@
 """Write reviews.json with the NEW schema (ReviewDate, not review_date).
 
 This simulates an upstream schema drift — the data producer renamed the field
-without telling us. The pipeline still references the old name.
+without telling us. The blueprint still references the old name.
 """
 import json
 from pathlib import Path
@@ -20,4 +20,4 @@ out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
 print(f"Wrote {len(records)} records to {out}")
 print("Fields:", list(records[0].keys()))
-print("Note: field is 'ReviewDate' (capital R, capital D) — pipeline references 'review_date'")
+print("Note: field is 'ReviewDate' (capital R, capital D) — blueprint references 'review_date'")

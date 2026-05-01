@@ -21,7 +21,7 @@ def test_compile_outputs_json():
     result = runner.invoke(cli, ["compile", "tests/fixtures/valid_minimal.yml"])
     assert result.exit_code == 0
     manifest = json.loads(result.output)
-    assert manifest["pipeline_id"] == "pipeline.hello.world"
+    assert manifest["blueprint_id"] == "blueprint.hello.world"
     assert "modules" in manifest
     assert "edges" in manifest
 

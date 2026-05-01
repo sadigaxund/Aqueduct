@@ -18,7 +18,7 @@ Execution model:
      - Funnel     → execute_funnel(…)                 → frame_store[module.id]
      - Regulator  → evaluate gate; open → pass-through; closed → on_block action
      - Egress     → write_egress(frame_store[key], …)
-     - Probe      → execute_probe(…) side-effect only; never halts pipeline
+     - Probe      → execute_probe(…) side-effect only; never halts blueprint
      - Other      → ExecuteError (unsupported)
   4. Return ExecutionResult (frozen).
 
@@ -34,7 +34,7 @@ Regulator skip propagation:
   When a Regulator's gate is closed with on_block=skip, _GATE_CLOSED is
   placed in the frame_store.  Every downstream module that receives this
   sentinel skips itself (status="skipped") and propagates the sentinel,
-  so the entire skipped sub-graph is recorded without aborting the pipeline.
+  so the entire skipped sub-graph is recorded without aborting the blueprint.
 
 No Spark actions beyond the Egress .save() and Probe sampling calls.
 """
@@ -115,7 +115,7 @@ def _with_retry(
 
     Args:
         fn:        Zero-arg callable that executes one module attempt.
-        policy:    RetryPolicy from the Manifest (pipeline-level).
+        policy:    RetryPolicy from the Manifest (blueprint-level).
         module_id: Used in log messages only.
 
     Returns:
@@ -603,7 +603,7 @@ def execute(
                 if _listener:
                     _listener.collect_metrics()  # reset state
                 gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
+                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
                 if gate_closed:
                     frame_store[module.id] = _GATE_CLOSED
@@ -623,7 +623,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             upstream_dfs: dict[str, Any] = {}
             for edge in main_edges:
@@ -641,7 +641,7 @@ def execute(
                     module_results.append(
                         ModuleResult(module_id=module.id, status="error", error=err)
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results)
+                    return _fail(manifest.blueprint_id, run_id, module_results)
                 upstream_dfs[edge.from_id] = val
             else:
                 if _listener:
@@ -657,7 +657,7 @@ def execute(
                     if _listener:
                         _listener.collect_metrics()
                     gate_closed, fail_result = _on_retry_exhausted(
-                        exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                     )
                     if gate_closed:
                         frame_store[module.id] = _GATE_CLOSED
@@ -710,7 +710,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             upstream_id = main_edges[0].from_id
             val = frame_store.get(upstream_id)
@@ -727,7 +727,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             if _listener:
                 _listener.set_active_module(module.id)
@@ -742,7 +742,7 @@ def execute(
                 if _listener:
                     _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
+                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
                 if gate_closed:
                     branches = module.config.get("branches", [])
@@ -766,7 +766,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             funnel_upstream: dict[str, Any] = {}
             skipped = False
@@ -783,7 +783,7 @@ def execute(
                     module_results.append(
                         ModuleResult(module_id=module.id, status="error", error=err)
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results)
+                    return _fail(manifest.blueprint_id, run_id, module_results)
                 funnel_upstream[store_key] = val
 
             if skipped:
@@ -804,7 +804,7 @@ def execute(
                 if _listener:
                     _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
+                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
                 if gate_closed:
                     frame_store[module.id] = _GATE_CLOSED
@@ -824,7 +824,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             upstream_id = main_edges[0].from_id
             val = frame_store.get(upstream_id)
@@ -837,7 +837,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             has_spillway_edge = any(
                 e.from_id == module.id and e.port == "spillway" for e in manifest.edges
@@ -845,14 +845,14 @@ def execute(
 
             try:
                 passing_df, quarantine_df = execute_assert(
-                    module, val, spark, run_id, manifest.pipeline_id,
+                    module, val, spark, run_id, manifest.blueprint_id,
                 )
             except AssertError as exc:
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
                 return _fail(
-                    manifest.pipeline_id, run_id, module_results,
+                    manifest.blueprint_id, run_id, module_results,
                     trigger_agent=exc.trigger_agent,
                 )
 
@@ -874,7 +874,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             upstream_id = main_edges[0].from_id
             val = frame_store.get(upstream_id)
@@ -889,7 +889,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             # Evaluate gate — defaults to open when no surveyor
             gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
@@ -904,7 +904,7 @@ def execute(
                     module_results.append(
                         ModuleResult(module_id=module.id, status="error", error=err)
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results)
+                    return _fail(manifest.blueprint_id, run_id, module_results)
                 elif on_block == "trigger_agent":
                     logger.info(
                         "Regulator %r: gate closed, on_block=trigger_agent; "
@@ -918,7 +918,7 @@ def execute(
                             error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
                         )
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results, trigger_agent=True)
+                    return _fail(manifest.blueprint_id, run_id, module_results, trigger_agent=True)
                 # skip (default): propagate sentinel
                 frame_store[module.id] = _GATE_CLOSED
                 module_results.append(ModuleResult(module_id=module.id, status="skipped"))
@@ -931,7 +931,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             edge = data_edges[0]
             key = _frame_key(edge.from_id, edge.port)
@@ -946,7 +946,7 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=err)
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(manifest.blueprint_id, run_id, module_results)
 
             if _listener:
                 _listener.set_active_module(module.id)
@@ -961,7 +961,7 @@ def execute(
                 if _listener:
                     _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
+                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
                 if gate_closed:
                     continue  # Egress is terminal; no frame_store update needed
@@ -993,12 +993,12 @@ def execute(
     if store_dir is not None:
         try:
             from aqueduct.compiler.lineage import write_lineage
-            write_lineage(manifest.pipeline_id, run_id, manifest.modules, manifest.edges, store_dir)
+            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, store_dir)
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
 
     return ExecutionResult(
-        pipeline_id=manifest.pipeline_id,
+        blueprint_id=manifest.blueprint_id,
         run_id=run_id,
         status="success",
         module_results=tuple(module_results),
@@ -1006,14 +1006,14 @@ def execute(
 
 
 def _fail(
-    pipeline_id: str,
+    blueprint_id: str,
     run_id: str,
     module_results: list[ModuleResult],
     *,
     trigger_agent: bool = False,
 ) -> ExecutionResult:
     return ExecutionResult(
-        pipeline_id=pipeline_id,
+        blueprint_id=blueprint_id,
         run_id=run_id,
         status="error",
         module_results=tuple(module_results),
@@ -1025,7 +1025,7 @@ def _on_retry_exhausted(
     exc: Exception,
     policy: "RetryPolicy",
     module: "Module",
-    pipeline_id: str,
+    blueprint_id: str,
     run_id: str,
     module_results: "list[ModuleResult]",
 ) -> "tuple[bool, ExecutionResult | None]":
@@ -1045,7 +1045,7 @@ def _on_retry_exhausted(
         wh_cfg = WebhookEndpointConfig(**({"url": raw} if isinstance(raw, str) else raw))
         full_payload = {
             "run_id": run_id,
-            "pipeline_id": pipeline_id,
+            "blueprint_id": blueprint_id,
             "module_id": module.id,
             "error_message": str(exc),
             "error_type": type(exc).__name__,
@@ -1058,9 +1058,9 @@ def _on_retry_exhausted(
 
     on_exhaustion = policy.on_exhaustion
     if on_exhaustion == "alert_only":
-        logger.warning("[%s] Retry exhausted (alert_only): %s — pipeline continues.", module.id, exc)
+        logger.warning("[%s] Retry exhausted (alert_only): %s — blueprint continues.", module.id, exc)
         return True, None
     elif on_exhaustion == "trigger_agent":
-        return False, _fail(pipeline_id, run_id, module_results, trigger_agent=True)
+        return False, _fail(blueprint_id, run_id, module_results, trigger_agent=True)
     else:  # "abort" (default)
-        return False, _fail(pipeline_id, run_id, module_results)
+        return False, _fail(blueprint_id, run_id, module_results)

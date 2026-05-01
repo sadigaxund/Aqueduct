@@ -67,11 +67,11 @@ def _patch_spec(**kwargs) -> PatchSpec:
 def _failure_ctx(**kwargs) -> FailureContext:
     defaults = dict(
         run_id="run-123",
-        pipeline_id="test.pipe",
+        blueprint_id="test.pipe",
         failed_module="m1",
         error_message="Something went wrong",
         stack_trace=None,
-        manifest_json=json.dumps({"pipeline_id": "test.pipe"}),
+        manifest_json=json.dumps({"blueprint_id": "test.pipe"}),
         started_at="2024-01-01T00:00:00+00:00",
         finished_at="2024-01-01T00:01:00+00:00",
     )
@@ -134,12 +134,12 @@ class TestStageForHuman:
     def test_pending_file_contains_aq_meta(self, tmp_path):
         patches_dir = tmp_path / "patches"
         spec = _patch_spec()
-        ctx = _failure_ctx(run_id="run-456", pipeline_id="my.pipe")
+        ctx = _failure_ctx(run_id="run-456", blueprint_id="my.pipe")
         stage_patch_for_human(spec, patches_dir, ctx)
         data = json.loads((patches_dir / "pending" / "test-fix.json").read_text())
         assert "_aq_meta" in data
         assert data["_aq_meta"]["run_id"] == "run-456"
-        assert data["_aq_meta"]["pipeline_id"] == "my.pipe"
+        assert data["_aq_meta"]["blueprint_id"] == "my.pipe"
 
     def test_returns_none(self, tmp_path):
         spec = _patch_spec()
@@ -269,7 +269,7 @@ class TestSurveyorLlmIntegration:
         from aqueduct.parser.models import AgentConfig
 
         return Manifest(
-            pipeline_id="test.pipe",
+            blueprint_id="test.pipe",
             modules=(),
             edges=(),
             context={},
@@ -286,7 +286,7 @@ class TestSurveyorLlmIntegration:
         surveyor.start("run-001")
 
         result = ExecutionResult(
-            pipeline_id="test.pipe",
+            blueprint_id="test.pipe",
             run_id="run-001",
             status="error",
             module_results=(ModuleResult(module_id="m1", status="error", error="fail"),),
@@ -306,7 +306,7 @@ class TestSurveyorLlmIntegration:
         surveyor.start("run-002")
 
         result = ExecutionResult(
-            pipeline_id="test.pipe",
+            blueprint_id="test.pipe",
             run_id="run-002",
             status="success",
             module_results=(),

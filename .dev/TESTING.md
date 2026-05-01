@@ -84,7 +84,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `options` dict forwarded to writer
 - ✅ write with `mode: overwrite` on existing path succeeds
 - ✅ `register_as_table` set → `CREATE EXTERNAL TABLE IF NOT EXISTS` called with correct name, format, location
-- ✅ `register_as_table` DDL failure (no Hive metastore) → warning logged, pipeline continues (non-fatal)
+- ✅ `register_as_table` DDL failure (no Hive metastore) → warning logged, blueprint continues (non-fatal)
 - ✅ `register_as_table` absent → no DDL executed
 - ✅ `format="depot"`, `depot=None` → `EgressError` containing "no DepotStore is wired"
 - ✅ `format="depot"`, `key=None/""` → `EgressError` containing "requires 'key'"
@@ -93,7 +93,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Spark write failure (bad path, wrong format) raises `EgressError` wrapping original exception
 
 ### `executor.py` — `execute()`
-- ✅ linear Ingress → Egress pipeline returns `ExecutionResult(status="success")`
+- ✅ linear Ingress → Egress blueprint returns `ExecutionResult(status="success")`
 - ✅ `ExecutionResult.module_results` contains one entry per module, all `status="success"`
 - ✅ unsupported module type (`Channel`, `Probe`, etc.) raises `ExecuteError`
 - ✅ IngressError propagated → `ExecutionResult(status="error")` with module error recorded
@@ -130,7 +130,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ result is a lazy DataFrame (no Spark action triggered inside channel)
 
 ### Executor integration (`executor.py`)
-- ✅ Ingress → Channel → Egress pipeline returns `ExecutionResult(status="success")`
+- ✅ Ingress → Channel → Egress blueprint returns `ExecutionResult(status="success")`
 - ✅ Channel with no incoming edge recorded as error in `ExecutionResult`
 - ✅ ChannelError recorded in `ExecutionResult(status="error")`
 - ✅ multi-input Channel (two Ingress → one Channel) executes correctly
@@ -173,9 +173,9 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Probe appended after non-Probe modules in execution order (runs last)
 - ✅ Probe with `attach_to` pointing to completed Ingress: signals written to DB
 - ✅ Probe with missing `attach_to` source (source failed): logged warning, result `status="success"`
-- ✅ Probe failure does not change pipeline `ExecutionResult(status="success")`
+- ✅ Probe failure does not change blueprint `ExecutionResult(status="success")`
 - ✅ `execute()` with `store_dir=None`: Probe result is `status="success"` but no DB written
-- ✅ Ingress → Probe (schema_snapshot) → Egress pipeline returns `ExecutionResult(status="success")`
+- ✅ Ingress → Probe (schema_snapshot) → Egress blueprint returns `ExecutionResult(status="success")`
 
 ### SparkListener / `module_metrics`
 - ✅ `AqueductMetricsListener.set_active_module()` resets accumulated metrics
@@ -193,15 +193,15 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `schema_match` fails (wrong type) with `on_fail=abort`: `AssertError` raised
 - ✅ `min_rows` passes: single batched `df.agg()` used (at most 1 Spark action for all aggregate rules)
 - ✅ `min_rows` fails with `on_fail=abort`: `AssertError` raised
-- ✅ `max_rows` fails with `on_fail=warn`: warning logged, pipeline continues
+- ✅ `max_rows` fails with `on_fail=warn`: warning logged, blueprint continues
 - ✅ `null_rate` passes: shared `df.sample().agg()` used
 - ✅ `null_rate` fails with `on_fail=abort`: `AssertError` raised
 - ✅ `null_rate` on aggregate rule with `on_fail=quarantine`: treated as warn (quarantine is row-level only)
 - ✅ `freshness` passes: `max(col)` batched into shared `df.agg()`
-- ✅ `freshness` fails with `on_fail=warn`: warning logged, pipeline continues
+- ✅ `freshness` fails with `on_fail=warn`: warning logged, blueprint continues
 - ✅ `freshness` column has all nulls: fail message includes "no non-null values"
 - ✅ `sql` rule passes: custom aggregate expr evaluated in batched `agg()`
-- ✅ `sql` rule fails with `on_fail=webhook`: `fire_webhook` called; pipeline continues
+- ✅ `sql` rule fails with `on_fail=webhook`: `fire_webhook` called; blueprint continues
 - ✅ `sql_row` rule: passing rows on main port, failing rows in `quarantine_df`
 - ✅ `sql_row` rule with `on_fail=abort` (non-quarantine): `AssertError` raised if any failing rows
 - ✅ `custom` fn: callable loaded via `importlib`, result dict validated
@@ -301,7 +301,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `RunRecord` is frozen; mutation raises `FrozenInstanceError`
 - ✅ `RunRecord.to_dict()` contains all required keys
 - ✅ `FailureContext` is frozen; mutation raises `FrozenInstanceError`
-- ✅ `FailureContext.to_dict()` contains `run_id`, `pipeline_id`, `failed_module`, `error_message`, `stack_trace`
+- ✅ `FailureContext.to_dict()` contains `run_id`, `blueprint_id`, `failed_module`, `error_message`, `stack_trace`
 - ✅ `FailureContext.to_json()` is valid JSON deserializable back to original fields
 
 ### `webhook.py` — `fire_webhook()`
@@ -316,13 +316,13 @@ Spark artifacts are isolated to `/tmp/`:
 - ⏳ `on_success` webhook NOT fired when run fails
 - ⏳ `on_success: null` (default) — no webhook call made on success
 - ⏳ `on_success` simple string URL form accepted by `WebhooksConfig`
-- ⏳ `on_success` template vars: `${run_id}`, `${pipeline_id}`, `${pipeline_name}`, `${module_count}` resolved in payload
+- ⏳ `on_success` template vars: `${run_id}`, `${blueprint_id}`, `${blueprint_name}`, `${module_count}` resolved in payload
 - ⏳ `on_failure_webhook` on module fires when retry exhausts (mock HTTP server)
-- ⏳ `on_failure_webhook` fires even when `on_exhaustion=alert_only` (pipeline continues)
-- ⏳ `on_failure_webhook` fires even when `on_exhaustion=abort` (pipeline fails)
+- ⏳ `on_failure_webhook` fires even when `on_exhaustion=alert_only` (blueprint continues)
+- ⏳ `on_failure_webhook` fires even when `on_exhaustion=abort` (blueprint fails)
 - ⏳ `on_failure_webhook` simple string URL form accepted by schema
 - ⏳ `on_failure_webhook` full dict form (url, method, payload, headers) accepted by schema
-- ⏳ `on_failure_webhook` template vars: `${module_id}`, `${error_message}`, `${error_type}`, `${run_id}`, `${pipeline_id}` resolved
+- ⏳ `on_failure_webhook` template vars: `${module_id}`, `${error_message}`, `${error_type}`, `${run_id}`, `${blueprint_id}` resolved
 - ⏳ `on_failure_webhook=None` (default) — no per-module webhook call made
 
 ### `surveyor.py` — `Surveyor`
@@ -504,7 +504,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Regulator with open gate (no surveyor): transparent pass-through, `status="success"`
 - ✅ Regulator with open gate (surveyor returns True): downstream receives DataFrame
 - ✅ Regulator with closed gate + `on_block=skip`: `frame_store[regulator_id] = _GATE_CLOSED`, `status="skipped"`
-- ✅ Regulator with closed gate + `on_block=abort`: pipeline returns `ExecutionResult(status="error")`
+- ✅ Regulator with closed gate + `on_block=abort`: blueprint returns `ExecutionResult(status="error")`
 - ✅ Regulator with closed gate + `on_block=trigger_agent`: `ExecutionResult(status="error", trigger_agent=True)` — LLM loop fires even with `approval_mode=disabled`
 - ✅ downstream of skipped Regulator also records `status="skipped"` (sentinel propagation)
 - ✅ Regulator with no main-port incoming edge records `status="error"`
@@ -524,12 +524,12 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `test_junction_conditional_split`: Junction splits US/EU; each output has 5 correct-region rows
 - ✅ `test_funnel_union_all`: two identical inputs stacked; output has 20 rows
 - ✅ `test_spillway_error_routing`: null row → spillway (1 row + `_aq_error_*`); good rows → main (9 rows)
-- ✅ `test_probe_does_not_halt_pipeline`: Probe runs; signals.db written; pipeline succeeds
+- ✅ `test_probe_does_not_halt_blueprint`: Probe runs; signals.db written; blueprint succeeds
 - ✅ `test_regulator_open_gate_passthrough`: no surveyor → gate open → all 10 rows in output
 - ✅ `test_regulator_closed_gate_skips_downstream`: mock surveyor returns False → gate + sink both "skipped"
-- ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `pipeline_tag` column in output
+- ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `blueprint_tag` column in output
 - ✅ `test_chained_channels`: Ingress → Channel (filter) → Channel (add tag) → Egress; 9 rows + `tag` column in output
-- ✅ `test_lineage_written_after_channel_run`: Channel pipeline with store_dir set; `lineage.db` written with rows
+- ✅ `test_lineage_written_after_channel_run`: Channel blueprint with store_dir set; `lineage.db` written with rows
 
 ---
 
@@ -582,7 +582,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `@aq.runtime.prev_run_id()` returns last written run_id after CLI run
 
 #### CLI integration (`cli.py`)
-- ✅ `aqueduct run` writes `_last_run_id` to depot after pipeline completes
+- ✅ `aqueduct run` writes `_last_run_id` to depot after blueprint completes
 - ✅ second `aqueduct run` sees previous run_id via `@aq.runtime.prev_run_id()`
 
 ### UDF Registration (`aqueduct/executor/udf.py`)
@@ -636,7 +636,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 ### Lineage Writer (`aqueduct/compiler/lineage.py`)
 
 **`_extract_sql_lineage(channel_id, sql, upstream_ids)`:** returns list of `{channel_id, output_column, source_table, source_column}` dicts. Uses sqlglot to parse SparkSQL.
-**`write_lineage(pipeline_id, run_id, modules, edges, store_dir)`:** writes to `store_dir/lineage.db`, table `column_lineage`. Non-fatal — swallows all exceptions.
+**`write_lineage(blueprint_id, run_id, modules, edges, store_dir)`:** writes to `store_dir/lineage.db`, table `column_lineage`. Non-fatal — swallows all exceptions.
 
 - ✅ `_extract_sql_lineage`: `SELECT a, b FROM tbl` → two rows with `source_column=a/b`, `source_table=tbl`
 - ✅ `_extract_sql_lineage`: `SELECT a * 2 AS doubled FROM tbl` → output_column=`doubled`, source_column=`a`
@@ -647,7 +647,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `write_lineage`: inserts one row per output_column/source_column pair for each Channel
 - ✅ `write_lineage`: non-Channel modules (Ingress, Egress) do not produce lineage rows
 - ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
-- ✅ `write_lineage`: called after successful pipeline execution with `store_dir` set; `lineage.db` written
+- ✅ `write_lineage`: called after successful blueprint execution with `store_dir` set; `lineage.db` written
 
 ### LLM Self-Healing (`aqueduct/surveyor/llm.py`)
 
@@ -656,7 +656,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 **`_auto_apply(patch_spec, blueprint_path, patches_dir, failure_ctx)`:** applies patch to Blueprint YAML on disk atomically; archives to `patches/applied/`; returns None on parse failure.
 
 - ✅ `_stage_for_human`: creates `patches/pending/<patch_id>.json` with correct fields
-- ✅ `_stage_for_human`: written JSON contains `_aq_meta.run_id` and `_aq_meta.pipeline_id`
+- ✅ `_stage_for_human`: written JSON contains `_aq_meta.run_id` and `_aq_meta.blueprint_id`
 - ✅ `_auto_apply`: applies valid patch → Blueprint file on disk is modified
 - ✅ `_auto_apply`: patch produces invalid Blueprint → Blueprint unchanged, returns None
 - ✅ `_auto_apply`: archives PatchSpec to `patches/applied/` with `applied_at` and `auto_applied=True`
@@ -693,7 +693,7 @@ Issues reported in:
 - ✅ `_module_retry_policy`: valid `on_failure` dict → returns RetryPolicy with those fields
 - ✅ `_module_retry_policy`: `on_failure` with unknown key → raises `ExecuteError` with message containing "invalid keys"
 - ✅ Ingress module with `on_failure.max_attempts=3` retries 3×; other modules use manifest `max_attempts=1`
-- ✅ `on_failure.on_exhaustion=abort` → pipeline stops after exhaustion; `trigger_agent` still fires LLM
+- ✅ `on_failure.on_exhaustion=abort` → blueprint stops after exhaustion; `trigger_agent` still fires LLM
 
 ## Checkpoint / Resume (`aqueduct/executor/executor.py`)
 
@@ -711,7 +711,7 @@ Issues reported in:
 - ✅ `--resume <run_id>` → Parquet reloaded into frame_store; downstream can consume it
 - ✅ `--resume` with non-existent run_id → `ExecuteError` with clear path message
 - ✅ `--resume` with mismatched manifest hash → warning logged, execution continues
-- ✅ Checkpoint write failure (disk full) → warning logged, pipeline continues (non-fatal)
+- ✅ Checkpoint write failure (disk full) → warning logged, blueprint continues (non-fatal)
 
 ## `checkpoint` field in Parser/Compiler
 
@@ -773,7 +773,7 @@ Issues reported in:
 - ✅ patch config.path matching an `allowed_paths` pattern → no violation
 - ✅ patch config.path NOT matching any `allowed_paths` pattern → returns error message containing path
 - ✅ patch with no `config.path` (e.g. `replace_module_label`) → no path violation even if `allowed_paths` set
-- ⏳ guardrail violation → patch staged in `patches/pending/`, not applied; pipeline ends with status="error"
+- ⏳ guardrail violation → patch staged in `patches/pending/`, not applied; blueprint ends with status="error"
 - ✅ `AgentConfig.allowed_paths` round-trips through schema → parser → model (empty default)
 - ✅ `AgentConfig.forbidden_ops` round-trips through schema → parser → model (empty default)
 - ✅ `allowed_paths` + `forbidden_ops` in Blueprint YAML parsed correctly to `AgentConfig`
@@ -825,14 +825,14 @@ Issues reported in:
 #### `aqueduct report` — `aqueduct/cli.py`
 
 - ⏳ valid run_id → table output with module rows and status icons
-- ⏳ valid run_id + `--format json` → JSON with run_id, pipeline_id, status, module_results
+- ⏳ valid run_id + `--format json` → JSON with run_id, blueprint_id, status, module_results
 - ⏳ valid run_id + `--format csv` → CSV with header row
 - ⏳ unknown run_id → exit code 1 with error message
 - ⏳ missing runs.db → exit code 1 with error message
 
 #### `aqueduct lineage` — `aqueduct/cli.py`
 
-- ⏳ valid pipeline_id → table of channel_id, output_column, source_table, source_column
+- ⏳ valid blueprint_id → table of channel_id, output_column, source_table, source_column
 - ⏳ `--from <table>` filters to only that source_table
 - ⏳ `--column <col>` filters to only that output_column
 - ⏳ `--format json` → JSON array
@@ -922,7 +922,7 @@ Issues reported in:
 - ⏳ `on_exhaustion: abort` → `_on_retry_exhausted` returns `(False, fail_result)` with `trigger_agent=False`
 - ⏳ `on_exhaustion: alert_only` → returns `(True, None)` — warning logged, gate_closed sentinel set
 - ⏳ `on_exhaustion: trigger_agent` → returns `(False, fail_result)` with `trigger_agent=True`
-- ⏳ Ingress `on_exhaustion: alert_only` exhausted → `frame_store[module.id] = _GATE_CLOSED`, downstream skipped, pipeline continues
+- ⏳ Ingress `on_exhaustion: alert_only` exhausted → `frame_store[module.id] = _GATE_CLOSED`, downstream skipped, blueprint continues
 - ⏳ Channel `on_exhaustion: alert_only` exhausted → same sentinel behavior
 - ⏳ Egress `on_exhaustion: alert_only` exhausted → `continue` (no sentinel needed — Egress is terminal)
 - ⏳ Ingress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`

@@ -1,7 +1,7 @@
 # aqueduct.yml — Engine Configuration Template
 #
 # Configures the Aqueduct engine: deployment, Spark, stores, probes, secrets,
-# webhooks, and LLM agent connection. NOT a pipeline definition.
+# webhooks, and LLM agent connection. NOT a blueprint definition.
 #
 # Rename to aqueduct.yml and place in your project root (or pass with --config).
 # All sections are optional — omitting this file entirely uses local Spark with
@@ -12,9 +12,9 @@
 # belongs in each Blueprint's agent: block — not here.
 #
 # Usage:
-#   aqueduct run pipeline.yml                       # auto-discovers aqueduct.yml in CWD
-#   aqueduct run pipeline.yml --config aqueduct.yml
-#   aqueduct check-config                           # validate without running a pipeline
+#   aqueduct run blueprint.yml                       # auto-discovers aqueduct.yml in CWD
+#   aqueduct run blueprint.yml --config aqueduct.yml
+#   aqueduct check-config                           # validate without running a blueprint
 
 aqueduct_config: "1.0"
 
@@ -143,7 +143,7 @@ secrets:
 
 # ── Webhooks ──────────────────────────────────────────────────────────────────
 #
-# Pipeline-level push notifications. Delivery is best-effort (daemon thread);
+# Blueprint-level push notifications. Delivery is best-effort (daemon thread);
 # failures are logged and do not affect run outcome.
 #
 # Two hooks:
@@ -152,7 +152,7 @@ secrets:
 #
 # Per-module webhook: set on_failure_webhook on any module in the Blueprint.
 #   Fires when that module's retry policy is exhausted, regardless of whether
-#   the pipeline continues (alert_only) or stops.
+#   the blueprint continues (alert_only) or stops.
 #
 # Per-Assert-rule webhook: use on_fail: {action: webhook, url: ...} in each
 #   Assert rule inside the Blueprint.
@@ -160,14 +160,14 @@ secrets:
 # Simple form — just a URL; sends the full context payload as JSON via POST:
 #   webhooks:
 #     on_failure: "https://hooks.slack.com/services/T.../B.../"
-#     on_success: "https://hooks.example.com/pipeline-complete"
+#     on_success: "https://hooks.example.com/blueprint-complete"
 #
 # Full form — custom method, headers, and payload template.
 #
 # on_failure template variables:
-#   ${run_id}          UUID of this pipeline run
-#   ${pipeline_id}     Pipeline identifier string
-#   ${pipeline_name}   Pipeline display name
+#   ${run_id}          UUID of this blueprint run
+#   ${blueprint_id}     Blueprint identifier string
+#   ${blueprint_name}   Blueprint display name
 #   ${failed_module}   Module ID where the first failure occurred
 #   ${error_message}   Human-readable error description
 #   ${error_type}      Exception class name (e.g. AnalysisException)
@@ -175,14 +175,14 @@ secrets:
 #   ${attempt}         Number of failed modules in this run
 #
 # on_success template variables:
-#   ${run_id}          UUID of this pipeline run
-#   ${pipeline_id}     Pipeline identifier string
-#   ${pipeline_name}   Pipeline display name
+#   ${run_id}          UUID of this blueprint run
+#   ${blueprint_id}     Blueprint identifier string
+#   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
 # on_failure_webhook (per-module) template variables:
-#   ${run_id}          UUID of this pipeline run
-#   ${pipeline_id}     Pipeline identifier string
+#   ${run_id}          UUID of this blueprint run
+#   ${blueprint_id}     Blueprint identifier string
 #   ${module_id}       ID of the module that failed
 #   ${error_message}   Error description
 #   ${error_type}      Exception class name
@@ -200,14 +200,14 @@ webhooks:
   #   url: "${SLACK_WEBHOOK_URL}"
   #   method: POST
   #   payload:
-  #     text: "Pipeline *${pipeline_id}* failed on `${failed_module}` — ${error_message}"
+  #     text: "Blueprint *${blueprint_id}* failed on `${failed_module}` — ${error_message}"
 
   # ── Slack — notify on success ────────────────────────────────────────────────
   # on_success:
   #   url: "${SLACK_WEBHOOK_URL}"
   #   method: POST
   #   payload:
-  #     text: "Pipeline *${pipeline_id}* complete (${module_count} modules)  run_id=${run_id}"
+  #     text: "Blueprint *${blueprint_id}* complete (${module_count} modules)  run_id=${run_id}"
 
   # ── PagerDuty Events API v2 ──────────────────────────────────────────────────
   # on_failure:
@@ -219,9 +219,9 @@ webhooks:
   #     routing_key: "${PAGERDUTY_INTEGRATION_KEY}"
   #     event_action: trigger
   #     payload:
-  #       summary: "${pipeline_name} failed: ${error_message}"
+  #       summary: "${blueprint_name} failed: ${error_message}"
   #       severity: critical
-  #       source: "aqueduct/${pipeline_id}"
+  #       source: "aqueduct/${blueprint_id}"
   #       custom_details:
   #         run_id: "${run_id}"
   #         failed_module: "${failed_module}"
@@ -238,13 +238,13 @@ webhooks:
 
 # ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
-# Sets the provider, endpoint, and model for all pipelines that enable LLM
-# self-healing. Per-pipeline policy (approval_mode, forbidden_ops,
+# Sets the provider, endpoint, and model for all blueprints that enable LLM
+# self-healing. Per-blueprint policy (approval_mode, forbidden_ops,
 # on_pending_patches) belongs in each Blueprint's agent: block — see
 # blueprint.yml.template.
 #
 # Blueprint agent: values override these defaults on conflict.
-# If a pipeline omits agent: entirely, LLM self-healing is disabled.
+# If a blueprint omits agent: entirely, LLM self-healing is disabled.
 
 agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────

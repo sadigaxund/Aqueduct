@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "aqueduct-core"
 version = "1.0.0a0"
-description = "Declarative, self-healing Apache Spark pipelines."
+description = "Declarative, self-healing Apache Spark blueprints."
 readme = "README.md"
 authors = [
     {name = "Sadig Akhund", email = "sadigaxund@gmail.com"},
 ]
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
-keywords = ["spark", "pipeline", "etl", "data-engineering", "llm", "self-healing"]
+keywords = ["spark", "blueprint", "pipeline", "ETL", "data-engineering", "llm", "self-healing"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",

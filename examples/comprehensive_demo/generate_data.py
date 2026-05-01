@@ -171,7 +171,7 @@ def main() -> None:
     )
 
     _ensure_bucket(s3, RAW_BUCKET)
-    _ensure_bucket(s3, "processed-data")   # egress bucket must exist before pipeline writes
+    _ensure_bucket(s3, "processed-data")   # egress bucket must exist before blueprint writes
     print("Uploading …")
     _upload(s3, RAW_BUCKET, "orders/orders.parquet",       _to_parquet_bytes(orders))
     _upload(s3, RAW_BUCKET, "customers/customers.parquet", _to_parquet_bytes(customers))

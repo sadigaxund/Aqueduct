@@ -1,6 +1,6 @@
 """SparkSession factory.
 
-Creates (or reuses) a SparkSession and applies pipeline-level spark_config.
+Creates (or reuses) a SparkSession and applies blueprint-level spark_config.
 The factory is the only place in the codebase that calls SparkSession.builder.
 """
 
@@ -44,19 +44,19 @@ def _suppress_stderr():
 
 
 def make_spark_session(
-    pipeline_id: str,
+    blueprint_id: str,
     spark_config: dict[str, Any],
     master_url: str = _DEFAULT_MASTER,
     quiet: bool = False,
 ) -> SparkSession:
-    """Build or reuse a SparkSession for the given pipeline.
+    """Build or reuse a SparkSession for the given blueprint.
 
     Applies every key in spark_config as a Spark conf property.  If a
     SparkSession already exists (e.g. on a running Spark cluster) the existing
     session is returned and the supplied config is applied on top.
 
     Args:
-        pipeline_id:  Used as the Spark app name when building a fresh session.
+        blueprint_id: Used as the Spark app name when building a fresh session.
         spark_config: Flat dict of Spark conf key → value strings.
         master_url:   Spark master URL.  Examples:
                         ``"local[*]"``          — local mode (default)
@@ -66,12 +66,12 @@ def make_spark_session(
                       Passed verbatim to ``SparkSession.builder.master()``.
         quiet:        Suppress all Spark/JVM log output during and after session
                       startup. Use for health-check commands (doctor). Leave
-                      False for pipeline runs so Spark warnings remain visible.
+                      False for blueprint runs so Spark warnings remain visible.
 
     Returns:
         An active SparkSession.
     """
-    builder = SparkSession.builder.master(master_url).appName(pipeline_id)
+    builder = SparkSession.builder.master(master_url).appName(blueprint_id)
 
     if quiet:
         # Inject log4j suppress flags before JVM init so startup messages are

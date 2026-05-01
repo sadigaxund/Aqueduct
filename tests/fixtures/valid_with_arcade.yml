@@ -1,6 +1,6 @@
 aqueduct: "1.0"
-id: pipeline.arcade.test
-name: "Arcade Test Pipeline"
+id: blueprint.arcade.test
+name: "Arcade Test Blueprint"
 description: "Tests Arcade expansion with namespaced IDs."
 
 context:

@@ -412,7 +412,7 @@ aqueduct test     pipeline.aqtest.yml       # Run isolated module tests (no Spar
 aqueduct test     pipeline.aqtest.yml --quiet
 
 aqueduct report   <run_id>                  # Flow Report for a completed run (--format table|json|csv)
-aqueduct lineage  <pipeline_id>             # Column lineage graph (--from <table>, --column <col>)
+aqueduct lineage  <blueprint_id>             # Column lineage graph (--from <table>, --column <col>)
 
 # Persistent gate override — affects ALL future runs until cleared
 aqueduct signal   <signal_id> --value false           # close gate (block downstream)
@@ -449,7 +449,7 @@ Aqueduct writes all observability data to DuckDB files:
 ```bash
 # Run records
 duckdb .aqueduct/signals/runs.db
-SELECT run_id, pipeline_id, status, started_at, finished_at FROM run_records;
+SELECT run_id, blueprint_id, status, started_at, finished_at FROM run_records;
 
 # Probe signals
 duckdb .aqueduct/signals/signals.db

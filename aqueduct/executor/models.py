@@ -16,9 +16,9 @@ class ModuleResult:
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    """Aggregate outcome of a full pipeline run."""
+    """Aggregate outcome of a full blueprint run."""
 
-    pipeline_id: str
+    blueprint_id: str
     run_id: str
     status: str                          # "success" | "error"
     module_results: tuple[ModuleResult, ...]
@@ -26,7 +26,7 @@ class ExecutionResult:
 
     def to_dict(self) -> dict:
         return {
-            "pipeline_id": self.pipeline_id,
+            "blueprint_id": self.blueprint_id,
             "run_id": self.run_id,
             "status": self.status,
             "trigger_agent": self.trigger_agent,

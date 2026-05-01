@@ -1,7 +1,7 @@
 # CLAUDE.md — Aqueduct Development Guidebook
 
 ## Project Context
-Aqueduct is an intelligent, declarative Spark pipeline engine with LLM-driven self-healing.
+Aqueduct is an intelligent, declarative Spark blueprint engine with LLM-driven self-healing.
 - **Full spec**: `docs/specs.md` (20+ pages, read it once, don't restate it).
 - **This file**: Practical guidance for working on the codebase.
 

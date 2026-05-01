@@ -2,14 +2,14 @@
 
 Delivery is best-effort: all network calls run in a daemon thread so the CLI
 is never blocked.  Failures are logged to stderr and silently swallowed —
-the pipeline result is authoritative.
+the blueprint result is authoritative.
 
 Payload templating
 ------------------
 When WebhookEndpointConfig.payload is set, each string value in the dict is
 rendered by substituting ${VAR} tokens.  Resolution order:
 
-  1. Built-in failure vars passed by the caller (run_id, pipeline_id, etc.)
+  1. Built-in failure vars passed by the caller (run_id, blueprint_id, etc.)
   2. os.environ (useful for secrets in header values)
   3. Leave token as-is if not found
 
@@ -64,7 +64,7 @@ def fire_webhook(
         full_payload:  Fallback payload sent when config.payload is None (full FailureContext).
         template_vars: Built-in variables available for ${VAR} substitution in
                        config.payload values and config.headers values.
-                       Keys: run_id, pipeline_id, pipeline_name, failed_module,
+                       Keys: run_id, blueprint_id, blueprint_name, failed_module,
                        error_message, error_type, started_at, attempt.
 
     Returns:

@@ -1,4 +1,4 @@
-"""Surveyor — monitors pipeline execution and persists observability signals.
+"""Surveyor — monitors blueprint execution and persists observability signals.
 
 Lifecycle (called from CLI):
 
@@ -39,17 +39,17 @@ logger = logging.getLogger(__name__)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS run_records (
-    run_id       VARCHAR PRIMARY KEY,
-    pipeline_id  VARCHAR NOT NULL,
-    status       VARCHAR NOT NULL,
-    started_at   TIMESTAMPTZ NOT NULL,
-    finished_at  TIMESTAMPTZ,
+    run_id        VARCHAR PRIMARY KEY,
+    blueprint_id  VARCHAR NOT NULL,
+    status        VARCHAR NOT NULL,
+    started_at    TIMESTAMPTZ NOT NULL,
+    finished_at   TIMESTAMPTZ,
     module_results JSON
 );
 
 CREATE TABLE IF NOT EXISTS failure_contexts (
     run_id         VARCHAR PRIMARY KEY,
-    pipeline_id    VARCHAR NOT NULL,
+    blueprint_id   VARCHAR NOT NULL,
     failed_module  VARCHAR NOT NULL,
     error_message  VARCHAR NOT NULL,
     stack_trace    VARCHAR,
@@ -98,7 +98,7 @@ def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 class Surveyor:
-    """Observability recorder for a single pipeline instance.
+    """Observability recorder for a single blueprint instance.
 
     One Surveyor per ``aqueduct run`` invocation.  Not thread-safe itself —
     the webhook is fire-and-forget in a daemon thread; everything else is
@@ -150,10 +150,10 @@ class Surveyor:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO run_records
-                (run_id, pipeline_id, status, started_at, finished_at, module_results)
+                (run_id, blueprint_id, status, started_at, finished_at, module_results)
             VALUES (?, ?, 'running', ?, NULL, '[]')
             """,
-            [run_id, self._manifest.pipeline_id, _iso(self._started_at)],
+            [run_id, self._manifest.blueprint_id, _iso(self._started_at)],
         )
 
     def record(
@@ -204,7 +204,7 @@ class Surveyor:
 
         ctx = FailureContext(
             run_id=result.run_id,
-            pipeline_id=self._manifest.pipeline_id,
+            blueprint_id=self._manifest.blueprint_id,
             failed_module=_first_failed_module(result),
             error_message=_first_error_message(result, exc),
             stack_trace=stack_trace,
@@ -216,13 +216,13 @@ class Surveyor:
         self._conn.execute(
             """
             INSERT OR REPLACE INTO failure_contexts
-                (run_id, pipeline_id, failed_module, error_message,
+                (run_id, blueprint_id, failed_module, error_message,
                  stack_trace, manifest_json, started_at, finished_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 ctx.run_id,
-                ctx.pipeline_id,
+                ctx.blueprint_id,
                 ctx.failed_module,
                 ctx.error_message,
                 ctx.stack_trace,
@@ -236,8 +236,8 @@ class Surveyor:
             attempt = sum(1 for mr in result.module_results if mr.status == "error")
             template_vars = {
                 "run_id": ctx.run_id,
-                "pipeline_id": ctx.pipeline_id,
-                "pipeline_name": self._manifest.name,
+                "blueprint_id": ctx.blueprint_id,
+                "blueprint_name": self._manifest.name,
                 "failed_module": ctx.failed_module,
                 "error_message": ctx.error_message,
                 "error_type": (ctx.stack_trace or "").splitlines()[0] if ctx.stack_trace else "ExecuteError",

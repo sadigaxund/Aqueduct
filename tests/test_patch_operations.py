@@ -26,7 +26,7 @@ def base_bp():
     """Returns a minimal Blueprint dict."""
     return {
         "aqueduct": "1.0",
-        "id": "test.pipeline",
+        "id": "test.blueprint",
         "modules": [
             {"id": "in", "type": "Ingress", "config": {"path": "p1"}},
             {"id": "out", "type": "Egress", "config": {"path": "p2"}},

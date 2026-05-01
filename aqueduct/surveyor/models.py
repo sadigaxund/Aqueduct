@@ -13,10 +13,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RunRecord:
-    """Persisted record of a single pipeline run."""
+    """Persisted record of a single blueprint run."""
 
     run_id: str
-    pipeline_id: str
+    blueprint_id: str
     status: str                     # "running" | "success" | "error"
     started_at: str                 # ISO-8601 UTC
     finished_at: str | None         # None while running
@@ -25,7 +25,7 @@ class RunRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
-            "pipeline_id": self.pipeline_id,
+            "blueprint_id": self.blueprint_id,
             "status": self.status,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
@@ -43,7 +43,7 @@ class FailureContext:
     """
 
     run_id: str
-    pipeline_id: str
+    blueprint_id: str
     failed_module: str          # module_id of the first failing module, or "_executor"
     error_message: str
     stack_trace: str | None
@@ -54,7 +54,7 @@ class FailureContext:
     def to_dict(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
-            "pipeline_id": self.pipeline_id,
+            "blueprint_id": self.blueprint_id,
             "failed_module": self.failed_module,
             "error_message": self.error_message,
             "stack_trace": self.stack_trace,

@@ -1,6 +1,6 @@
 aqueduct: "1.0"
-id: pipeline.regulator.test
-name: "Regulator Test Pipeline"
+id: blueprint.regulator.test
+name: "Regulator Test Blueprint"
 description: |
   Two Regulators:
     - quality_gate: has a signal edge → active, stays in Manifest.

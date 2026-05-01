@@ -1,4 +1,4 @@
-"""Aqueduct — Intelligent Spark Pipeline Engine."""
+"""Aqueduct — Intelligent Spark Blueprint Engine."""
 
 __version__ = "1.0.0a0"
 

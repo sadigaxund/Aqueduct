@@ -3,7 +3,7 @@
 Test file format (YAML):
 
     aqueduct_test: "1.0"
-    blueprint: pipeline.yml      # relative to test file
+    blueprint: blueprint.yml      # relative to test file
 
     tests:
       - id: test_filter_nulls
@@ -230,7 +230,7 @@ def _execute_module(
         if len(input_dfs) != 1:
             raise TestError(f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
         df = next(iter(input_dfs.values()))
-        passing_df, _ = execute_assert(module, df, spark, run_id="test", pipeline_id="test")
+        passing_df, _ = execute_assert(module, df, spark, run_id="test", blueprint_id="test")
         return passing_df
 
     else:

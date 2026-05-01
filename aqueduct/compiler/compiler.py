@@ -144,7 +144,7 @@ def compile(  # noqa: A001
                 )
 
     return Manifest(
-        pipeline_id=blueprint.id,
+        blueprint_id=blueprint.id,
         name=blueprint.name,
         description=blueprint.description,
         aqueduct_version=blueprint.aqueduct_version,

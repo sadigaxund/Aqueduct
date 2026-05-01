@@ -1,7 +1,7 @@
 aqueduct: "1.0"
 id: test.probe
 name: "Probe Signals Test"
-description: "Ingress → Probe (schema_snapshot + sample_rows) → Egress. Pipeline succeeds; signals written to store."
+description: "Ingress → Probe (schema_snapshot + sample_rows) → Egress. Blueprint succeeds; signals written to store."
 
 context:
   input_path: "OVERRIDE_ME"

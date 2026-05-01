@@ -48,7 +48,7 @@ webhooks:
 agent:
 #     # "disabled" → LLM never fires (default when agent: block is omitted)
 #     # "human"    → patch written to patches/pending/ for manual review
-#     # "auto"     → patch applied immediately to Blueprint, pipeline retried
+#     # "auto"     → patch applied immediately to Blueprint, blueprint retried
   approval_mode: "human"
 #
 #     # What to do when patches/pending/ is non-empty at run time.

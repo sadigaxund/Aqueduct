@@ -1,7 +1,7 @@
 # =============================================================================
 # AQUEDUCT — COMPREHENSIVE REFERENCE BLUEPRINT
 # =============================================================================
-# This file is documentation, not a runnable pipeline.
+# This file is documentation, not a runnable blueprint.
 # Every module type, every config key, every edge variant, every policy option
 # is shown here so you can copy-paste directly into real Blueprints.
 #
@@ -18,7 +18,7 @@
 #       4f. Probe           — all signal types
 #       4g. Regulator       — all on_block actions
 #       4h. Egress          — parquet, delta, depot, collect
-#       4i. Arcade          — sub-pipeline reference
+#       4i. Arcade          — sub-blueprint reference
 #   5.  Edges              — main, spillway, signal, branch ports
 #   6.  Spark config
 #   7.  Retry policy
@@ -29,7 +29,7 @@
 # 1. TOP-LEVEL FIELDS
 # ---------------------------------------------------------------------------
 aqueduct: "1.0"
-id: reference.comprehensive.pipeline
+id: reference.comprehensive.blueprint
 name: "Aqueduct Comprehensive Reference"
 description: |
   Reference Blueprint — not intended to run.
@@ -351,7 +351,7 @@ modules:
           on_fail:
             action: webhook
             url: "${ctx.params.alert_webhook}"
-          # pipeline continues; webhook fires async
+          # blueprint continues; webhook fires async
 
         # sql — arbitrary aggregate expression in batched agg()
         - type: sql
@@ -625,7 +625,7 @@ modules:
         batchsize: "5000"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # 4i. ARCADE — encapsulated sub-pipeline (expanded at compile time)
+  # 4i. ARCADE — encapsulated sub-blueprint (expanded at compile time)
   # ─────────────────────────────────────────────────────────────────────────
 
   - id: enrich_with_customer_arcade
@@ -752,7 +752,7 @@ spark_config:
   spark.hadoop.fs.s3a.endpoint: "s3.amazonaws.com"
 
 # ---------------------------------------------------------------------------
-# 7. RETRY POLICY (pipeline-level default)
+# 7. RETRY POLICY (blueprint-level default)
 # ---------------------------------------------------------------------------
 # Individual modules can override with on_failure: field.
 retry_policy:
@@ -789,9 +789,9 @@ retry_policy:
 agent:
   # disabled    — LLM never fires (safe default)
   # human       — patch written to patches/pending/, you review and apply manually
-  # auto        — patch applied in-memory, pipeline re-run to validate;
+  # auto        — patch applied in-memory, blueprint re-run to validate;
   #               written to Blueprint permanently only if re-run succeeds
-  # aggressive  — patch written to Blueprint immediately, pipeline re-runs;
+  # aggressive  — patch written to Blueprint immediately, blueprint re-runs;
   #               loops up to max_patches_per_run; ⚠ permanent changes, no gate
   approval_mode: disabled
 

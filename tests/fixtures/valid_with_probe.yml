@@ -1,6 +1,6 @@
 aqueduct: "1.0"
-id: pipeline.probe.test
-name: "Probe Test Pipeline"
+id: blueprint.probe.test
+name: "Probe Test Blueprint"
 description: "Tests Probe attach_to wiring."
 
 context: {}

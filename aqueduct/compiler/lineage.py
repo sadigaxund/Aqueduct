@@ -6,7 +6,7 @@ output column back to the source table(s) (upstream module IDs) that
 contribute to it.
 
 DuckDB schema (store_dir/lineage.db):
-  column_lineage — one row per (pipeline_id, channel_id, output_column, source_table, source_column)
+  column_lineage — one row per (blueprint_id, channel_id, output_column, source_table, source_column)
 
 Limitations:
   - Only covers SQL Channels (op: sql).  Junctions, Funnels are structural.
@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS column_lineage (
-    pipeline_id    VARCHAR NOT NULL,
+    blueprint_id   VARCHAR NOT NULL,
     run_id         VARCHAR NOT NULL,
     channel_id     VARCHAR NOT NULL,
     output_column  VARCHAR NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS column_lineage (
     captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_channel
-    ON column_lineage (pipeline_id, channel_id);
+    ON column_lineage (blueprint_id, channel_id);
 """
 
 
@@ -127,7 +127,7 @@ def _opaque_row(channel_id: str, upstream_ids: list[str]) -> list[dict[str, str]
 
 
 def write_lineage(
-    pipeline_id: str,
+    blueprint_id: str,
     run_id: str,
     modules: tuple[Any, ...],
     edges: tuple[Any, ...],
@@ -136,7 +136,7 @@ def write_lineage(
     """Extract and persist column-level lineage for all Channel modules.
 
     Args:
-        pipeline_id: Pipeline ID (from Manifest).
+        blueprint_id: Blueprint ID (from Manifest).
         run_id:      Run UUID.
         modules:     Compiled module list (flat, post-expansion).
         edges:       Compiled edge list.
@@ -180,12 +180,12 @@ def write_lineage(
             conn.executemany(
                 """
                 INSERT INTO column_lineage
-                    (pipeline_id, run_id, channel_id, output_column, source_table, source_column, captured_at)
+                    (blueprint_id, run_id, channel_id, output_column, source_table, source_column, captured_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
-                        pipeline_id,
+                        blueprint_id,
                         run_id,
                         r["channel_id"],
                         r["output_column"],
@@ -200,8 +200,8 @@ def write_lineage(
             conn.close()
 
         logger.debug(
-            "Lineage: wrote %d rows for pipeline %r run %r",
-            len(all_rows), pipeline_id, run_id,
+            "Lineage: wrote %d rows for blueprint %r run %r",
+            len(all_rows), blueprint_id, run_id,
         )
 
     except Exception as exc:

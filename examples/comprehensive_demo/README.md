@@ -2,7 +2,7 @@
 
 Validates all Phase 6 Aqueduct module types against real MinIO and Spark services.
 
-## Pipeline
+## Blueprint
 
 ```
 raw_orders   (Ingress, MinIO s3a://) ─┐
@@ -66,14 +66,14 @@ Uploading …
 ✓ Upload complete.
 ```
 
-### 2 — Run the pipeline
+### 2 — Run the blueprint
 ```bash
 aqueduct run blueprint.yml --config aqueduct.yml
 ```
 
 Expected output (abbreviated):
 ```
-▶ comprehensive.order.pipeline  (9 modules)  run=<uuid>  master=spark://<IP ADDRESS>:7077
+▶ comprehensive.order.blueprint  (9 modules)  run=<uuid>  master=spark://<IP ADDRESS>:7077
   ✓ raw_orders
   ✓ raw_customers
   ✓ clean_and_enrich
@@ -84,7 +84,7 @@ Expected output (abbreviated):
   ✓ tag_metadata
   ✓ final_output
 
-✓ pipeline complete  run_id=<uuid>
+✓ blueprint complete  run_id=<uuid>
 ```
 
 Note the run_id — needed for verification queries below.
@@ -124,13 +124,13 @@ duckdb .aqueduct/signals/runs.db
 ```
 
 ```sql
-SELECT run_id, pipeline_id, status, started_at, finished_at
+SELECT run_id, blueprint_id, status, started_at, finished_at
 FROM run_records
 ORDER BY started_at DESC
 LIMIT 3;
 ```
 
-Expected: one row per pipeline execution with `status='success'`.
+Expected: one row per blueprint execution with `status='success'`.
 
 ### C — Probe signals in DuckDB
 
@@ -177,7 +177,7 @@ aqueduct compile blueprint.yml | python -m json.tool | head -60
 ```
 
 Verify that:
-- `pipeline_id` = `comprehensive.order.pipeline`
+- `blueprint_id` = `comprehensive.order.blueprint`
 - All 9 module IDs are present
 - `probe_enriched.attach_to` = `clean_and_enrich`
 - `quality_gate` config has `on_block: skip`

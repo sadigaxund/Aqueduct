@@ -2,7 +2,7 @@
 
 **AQUEDUCT**
 
-Intelligent Spark Pipeline Engine
+Intelligent Spark Blueprint Engine
 
 *System Design & Implementation Reference*
 
@@ -792,7 +792,7 @@ Table: signals
 ```text
 Table: run_records
   run_id        TEXT PRIMARY KEY
-  pipeline_id   TEXT
+  blueprint_id   TEXT
   blueprint_sha TEXT        -- git SHA of Blueprint at run time
   manifest_path TEXT        -- path to compiled Manifest JSON
   started_at    TIMESTAMP
@@ -856,7 +856,7 @@ The ColumnLineageGraph supports two query patterns used in practice:
 ```text
 Table: column_lineage
   blueprint_sha   TEXT        -- graph is keyed to a specific Blueprint version
-  pipeline_id     TEXT
+  blueprint_id     TEXT
   from_module     TEXT
   from_column     TEXT
   to_module       TEXT
@@ -867,7 +867,7 @@ Table: column_lineage
 ```text
 Table: quality_lineage
   run_id          TEXT
-  pipeline_id     TEXT
+  blueprint_id     TEXT
   module_id       TEXT
   column_name     TEXT
   spark_type      TEXT
@@ -939,7 +939,7 @@ The unpruned full manifest is always written to disk at `runs/<run_id>/failure_c
 ```JSON
 {
   "run_id":             "run_20240412_143022_a3f9",
-  "pipeline_id":        "pipeline.orders.daily_aggregate",
+  "blueprint_id":        "pipeline.orders.daily_aggregate",
   "failed_module":      "cast_and_clean",
   "failed_module_label":"Cast types and strip whitespace",
   "failure_type":       "AnalysisException",
@@ -1165,14 +1165,14 @@ webhooks:
     headers:
       Authorization: "Bearer ${API_TOKEN}"   # ${ENV_VAR} reads os.environ
     payload:                       # null = send full FailureContext JSON
-      text: "Pipeline *${pipeline_id}* failed on `${failed_module}`"
+      text: "Pipeline *${blueprint_id}* failed on `${failed_module}`"
       run_id: "${run_id}"
     timeout: 10
   on_success:
     url: "${SLACK_WEBHOOK_URL}"
     method: POST
     payload:
-      text: "Pipeline *${pipeline_id}* complete — ${module_count} modules  run_id=${run_id}"
+      text: "Pipeline *${blueprint_id}* complete — ${module_count} modules  run_id=${run_id}"
 ```
 
 **Three webhook scopes:**
@@ -1191,8 +1191,8 @@ All webhooks are best-effort (daemon thread), non-blocking, and do not affect pi
 | Variable | Value |
 | :- | :- |
 | `${run_id}` | UUID of the pipeline run |
-| `${pipeline_id}` | Pipeline identifier string |
-| `${pipeline_name}` | Pipeline display name |
+| `${blueprint_id}` | Pipeline identifier string |
+| `${blueprint_name}` | Pipeline display name |
 | `${failed_module}` | Module ID of first failure (`on_failure` only) |
 | `${error_message}` | Human-readable error string (`on_failure` only) |
 | `${error_type}` | Exception class name (`on_failure` only) |
@@ -1206,7 +1206,7 @@ All webhooks are best-effort (daemon thread), non-blocking, and do not affect pi
 | Variable | Value |
 | :- | :- |
 | `${run_id}` | UUID of the pipeline run |
-| `${pipeline_id}` | Pipeline identifier string |
+| `${blueprint_id}` | Pipeline identifier string |
 | `${module_id}` | ID of the module that exhausted retries |
 | `${error_message}` | Error description |
 | `${error_type}` | Exception class name |
@@ -1270,7 +1270,7 @@ The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports
 **Safe patterns:**
 - Sequential pipeline runs (even different pipelines) sharing the same depot file: fully safe.
 - Parallel runs from different machines pointing to a shared depot file over a network filesystem: not supported — use a centralized backend (future: `depot.backend: postgres`).
-- Parallel runs on the same machine: use a separate depot file per pipeline (`depot.path: .aqueduct/<pipeline_id>.duckdb`), or serialize invocations through an orchestrator.
+- Parallel runs on the same machine: use a separate depot file per pipeline (`depot.path: .aqueduct/<blueprint_id>.duckdb`), or serialize invocations through an orchestrator.
 
 **Scheduler integration pattern:** When using Airflow, Prefect, or similar tools, pass `--execution-date {{ ds }}` to make `@aq.date.*` functions idempotent. Use the depot watermark pattern to track last-processed state. Query `run_records` in the DuckDB observability store to detect and backfill missed runs.
 

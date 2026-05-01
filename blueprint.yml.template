@@ -1,6 +1,6 @@
-# blueprint.yml — Pipeline Blueprint Template
+# blueprint.yml — Blueprint Blueprint Template
 #
-# A Blueprint defines a single data pipeline: modules (data sources, transforms,
+# A Blueprint defines a single data blueprint: modules (data sources, transforms,
 # sinks) and the edges connecting them. The engine compiles it into a Manifest
 # and executes it on Spark.
 #
@@ -10,23 +10,23 @@
 # Key concepts:
 #   @aq.*        Runtime tokens resolved at compile time (dates, secrets, depot)
 #   ${ctx.*}     Blueprint context variables (resolved at parse time)
-#   module.id    Unique identifier within this pipeline; used in edges and attach_to
+#   module.id    Unique identifier within this blueprint; used in edges and attach_to
 #
 # Usage:
-#   aqueduct validate pipeline.yml
-#   aqueduct compile  pipeline.yml
-#   aqueduct run      pipeline.yml --config aqueduct.yml
+#   aqueduct validate blueprint.yml
+#   aqueduct compile  blueprint.yml
+#   aqueduct run      blueprint.yml --config aqueduct.yml
 
 aqueduct: "1.0"
-id: my.pipeline.id          # dot-notation identifier; must be unique across your depot
-name: "My Pipeline"
+id: my.blueprint.id          # dot-notation identifier; must be unique across your depot
+name: "My Blueprint"
 description: "Optional human-readable description"
 
 
 # ── Context variables ─────────────────────────────────────────────────────────
 #
 # Resolved at parse time. Reference with ${ctx.key} anywhere in the Blueprint.
-# Override at runtime: aqueduct run pipeline.yml --ctx env=prod --ctx date=2026-01-01
+# Override at runtime: aqueduct run blueprint.yml --ctx env=prod --ctx date=2026-01-01
 
 context:
   env: dev
@@ -58,7 +58,7 @@ macros:
   trunc:  "DATE_TRUNC('{{ period }}', {{ col }})"
 
 
-# ── Spark config (pipeline-level overrides) ───────────────────────────────────
+# ── Spark config (blueprint-level overrides) ───────────────────────────────────
 #
 # Merged with engine spark_config at runtime; Blueprint values win on conflict.
 
@@ -66,7 +66,7 @@ spark_config:
   spark.sql.shuffle.partitions: "200"
 
 
-# ── Retry policy (pipeline-level default) ─────────────────────────────────────
+# ── Retry policy (blueprint-level default) ─────────────────────────────────────
 #
 # Applied to every module unless overridden by module-level on_failure.
 
@@ -87,10 +87,10 @@ retry_policy:
 
 # ── LLM self-healing policy ───────────────────────────────────────────────────
 #
-# Per-pipeline. Connection defaults (provider, model) come from aqueduct.yml.
+# Per-blueprint. Connection defaults (provider, model) come from aqueduct.yml.
 
 agent:
-  # approval_mode controls what happens when the pipeline fails:
+  # approval_mode controls what happens when the blueprint fails:
   #   disabled   — LLM never fires (default)
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
@@ -103,7 +103,7 @@ agent:
   max_patches_per_run: 3
   validate_patch: false           # true = compile-check patch before writing (aggressive only)
 
-  # LLM Guardrails — per-pipeline restrictions on what the LLM may patch.
+  # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
 
   # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
@@ -122,13 +122,13 @@ agent:
   #     add_probe                 add a Probe tapping an existing module
   #     replace_edge              change an edge's from / to / port
   #     set_module_on_failure     set per-module retry policy
-  #     replace_retry_policy      replace the pipeline-level RetryPolicy
+  #     replace_retry_policy      replace the blueprint-level RetryPolicy
   #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
   # forbidden_ops:
   #   - remove_module
   #   - replace_retry_policy
 
-  # Override connection defaults for this pipeline only:
+  # Override connection defaults for this blueprint only:
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "qwen2.5-coder:14b"
@@ -153,15 +153,15 @@ modules:
       #   - name: amount
       #     type: double
 
-    # Per-module retry override (overrides pipeline-level retry_policy):
+    # Per-module retry override (overrides blueprint-level retry_policy):
     # on_failure:
     #   max_attempts: 5
     #   backoff_strategy: exponential
-    #   on_exhaustion: alert_only   # pipeline continues even if this module fails
+    #   on_exhaustion: alert_only   # blueprint continues even if this module fails
 
     # Per-module failure webhook — fires when retry is exhausted, regardless of
     # on_exhaustion (alert_only, abort, or trigger_agent). Useful for alerting on
-    # a critical upstream module even when the pipeline continues.
+    # a critical upstream module even when the blueprint continues.
     # Simple form (full context JSON sent as POST body):
     # on_failure_webhook: "https://hooks.slack.com/services/T.../B.../"
     # Full form:
@@ -169,11 +169,11 @@ modules:
     #   url: "${SLACK_WEBHOOK_URL}"
     #   method: POST
     #   payload:
-    #     text: "Module `${module_id}` in *${pipeline_id}* failed — ${error_message}"
+    #     text: "Module `${module_id}` in *${blueprint_id}* failed — ${error_message}"
     #   headers:
     #     Authorization: "Bearer ${OPS_TOKEN}"
     #   timeout: 10
-    # Template variables: ${run_id}, ${pipeline_id}, ${module_id}, ${error_message}, ${error_type}
+    # Template variables: ${run_id}, ${blueprint_id}, ${module_id}, ${error_message}, ${error_type}
 
 
   # ── CHANNEL — SQL transform ───────────────────────────────────────────────────
@@ -234,7 +234,7 @@ modules:
       schema_check: strict          # strict | permissive
 
 
-  # ── PROBE — observability tap (never halts pipeline) ─────────────────────────
+  # ── PROBE — observability tap (never halts blueprint) ─────────────────────────
   #
   # Attaches to a module's output edge. Writes signals to signals.db.
   # schema_snapshot also writes a JSON file to store_dir/signals/<run_id>/.
