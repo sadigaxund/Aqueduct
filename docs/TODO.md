@@ -43,3 +43,49 @@ connection.isClosed()
 connection.close()
 ```
 
+11. See if cli.py line 796 is correct.
+12. what is the point of setting "deployment: target: local" and at the same time "deployment: master_url: "local[*]". Are they redundant?
+13. we have "webhooks: on_failure: null" in config file, but is there on_success? or more complex alerting system? Like on assert send webhook and etc.
+14. within aqueduct.template.yml at 'LLM Guardrails' section, where can i see full list of ops for forbidden ops? I am assuming they are our grammer ops that LLM can't use for patches? Should you add list in there as a comment for ease of use? Are these per pipeline?
+15. why is 'Assert module (inline data quality gates)' within aqueduct.template.yml. Is it about config or blueprint? I initially thought we would have comprehensive_demo/ for as a reference for blueprint.yml. Should we have one more 'blueprint.yml.template' and rename 'aqueduct.template.yml' to 'aqueduct.yml.template'? Once again, why tf the 'Observability CLI Commands' section is in there?
+
+16. I have tried to use the 'lineage' cli command. But not sure, why it fails: 
+
+>>> aqueduct run blueprint.yml 
+▶ nyc_taxi_demo  (1 modules)  run=905873af-1830-46b8-aea5-2163bcacae12  engine=spark  master=local[*]
+Setting default log level to "WARN".
+To adjust logging level use sc.setLogLevel(newLevel). For SparkR, use setLogLevel(newLevel).
+26/05/01 22:10:33 WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable
+  ✓ yellow_taxi_trips                                                           
+
+✓ pipeline complete  run_id=905873af-1830-46b8-aea5-2163bcacae12
+
+>>> aqueduct lineage blueprint.yml 
+✗ lineage.db not found at .aqueduct/signals/lineage.db
+
+
+
+
+
+17. regarding 'report' cli command, it requires user to pass run_id, should we create some kind list command to see all the run_ids? or too confusing, or is useful? should user keep track of the run_ids themselves?
+
+
+
+
+18. when approval_mode = human, does it ignore 'max_patches_per_run' config, since it has to be 1 right? did we specify this in docs anywhere as a note or warning. However i ran with such settings and see such logs: 'LLM self-healing (1/3)\nLLM API call failed (attempt 1/3): timed out\nLLM API call failed (attempt 1/3): timed out' . Moreover, when 'max_patches_per_run' unspecified the default is 5, is there a reason?
+
+
+
+
+19. I have created a very simple, you can say the simplest ever case of failure as a test to see if llm would work, which i purposefully tried to read '*.parqut' files instead of '*.parquet' files, but all I see is these logs:
+
+Module 'yellow_taxi_trips': attempt 1/1 failed ([yellow_taxi_trips] source not found or unreadable at 'data/yellow//*.parqut': [PATH_NOT_FOUND] Path does not exist: file:/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parqut.); giving up
+  ↻ LLM self-healing (1/5)  failed_module=yellow_taxi_trips
+LLM API call failed (attempt 1/3): timed out
+LLM agent failed to produce a valid PatchSpec after 3 attempts for pipeline 'nyc_taxi_demo' run '64852305-3369-4371-bc6f-3ab0b192ef58'
+  ✗ LLM: failed to generate valid patch, stopping
+  ✗ yellow_taxi_trips  — [yellow_taxi_trips] source not found or unreadable at 'data/yellow//*.parqut': [PATH_NOT_FOUND] Path does not exist: file:/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parqut.
+
+✗ pipeline failed  run_id=64852305-3369-4371-bc6f-3ab0b192ef58  failed_module=yellow_taxi_trips
+
+20. from previous example I see 3 different retry mechanisms, one is: 'LLM API call failed (attempt 1/3): timed out', then 2. 'LLM agent failed to produce a valid PatchSpec after 3 attempts for pipeline ...', then 3. 'LLM self-healing (1/5)  failed_module=...' , can you make it more coherent, make it more understandable and clear. Can use set/configure all of them? If yes, where can i see reference/documentation on that?

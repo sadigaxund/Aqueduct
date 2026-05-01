@@ -12,6 +12,105 @@ Alpha release preparation for PyPI.
 
 ---
 
+## 2026-05-01 — Change 9: Phase 15 — Probe Signal Types Expansion
+
+### Accomplished
+
+**4 new Probe signal types** added to `aqueduct/executor/spark/probe.py`:
+
+**`value_distribution`**
+- Computes min / max / mean / stddev / configurable percentiles per column on a random sample
+- Defaults to all numeric columns when `columns` is omitted (uses `isinstance(f.dataType, NumericType)`)
+- 1 `df.agg()` action for all stats + 1 `approxQuantile` driver call per column (no additional Spark action)
+- Blocked when `block_full_actions=True`
+- Config: `columns` (optional), `fraction` (default 0.1), `percentiles` (default [0.25, 0.5, 0.75])
+
+**`distinct_count`**
+- Approximate distinct-value count per column via `approx_count_distinct` — error < 5%
+- Batched into 1 `agg()` on a sample; all columns in one pass
+- Blocked when `block_full_actions=True`
+- Config: `columns` (optional, defaults to all), `fraction` (default 0.1)
+
+**`data_freshness`**
+- Captures `max(column)` — latest timestamp / date seen in the DataFrame
+- Full scan by default (sample max is inaccurate); set `allow_sample: true` + `fraction` to trade accuracy for speed
+- Blocked when `block_full_actions=True` unless `allow_sample: true`
+- Config: `column` (required), `allow_sample` (default false), `fraction` (default 0.1)
+
+**`partition_stats`**
+- `df.rdd.getNumPartitions()` — purely a driver call, zero Spark action, never blocked
+- Returns `{"num_partitions": N}`
+- Config: none
+
+**Also:**
+- Fixed `--cov-fail-under=80` removed from default `addopts` in `pyproject.toml`; 80% threshold now enforced explicitly in CI only (running isolated test files no longer fails with exit code 2)
+- `docs/specs.md` Probe section rewritten with full signal-type table + production guard note
+- `README.md` Probe description updated
+- `examples/comprehensive_demo/blueprint.yml` Probe block updated with all 8 signal types
+- `.dev/TESTING.md` ⏳ items added for all 4 new signal types (12 test cases)
+
+### Design Notes
+- `value_distribution` and `distinct_count` share the same sampling pattern as `null_rates` — consistent UX.
+- `data_freshness` intentionally defaults to full scan because max(ts) from a 10% sample can miss the actual maximum by hours in skewed data. `allow_sample: true` is an explicit opt-in for users who accept the tradeoff.
+- `partition_stats` has zero Spark cost — useful for diagnosing data skew without triggering any shuffle.
+- All 4 new types follow the same failure-isolation pattern: exceptions are caught per-signal, other signals continue.
+
+---
+
+## 2026-05-01 — Change 8: Phases 12-14 + Active Stubs 1-4
+
+### Accomplished
+
+**Phase 12 — Assert module** (already in executor from prior session; this session: docs pass only)
+- `docs/specs.md` Assert section verified; `README.md` Assert usage example added; `TESTING.md` checklist complete; `aqueduct.template.yml` Assert block added; `examples/comprehensive_demo/blueprint.yml` updated.
+
+**Phase 13 — `aqueduct test` command**
+- New file: `aqueduct/executor/spark/test_runner.py` — `run_test_file()`, `TestSuiteResult`, `TestCaseResult`, `AssertionResult`, `TestError`
+- Test YAML format: `aqueduct_test: "1.0"`, `blueprint:`, `tests[].{id, module, inputs, assertions}`
+- Input schema: `{col: type}` dict → PySpark StructType via `_parse_datatype_string` (supports `long → bigint`, `bool → boolean` etc.)
+- Assertion types: `row_count` (exact match), `contains` (rows must appear), `sql` (expr over `__output__` view)
+- Testable: Channel, Junction, Funnel, Assert — Ingress/Egress raise `TestError`
+- `aqueduct test <file>` CLI command: `--blueprint`, `--config`, `--quiet`; exit 1 on failure
+- Example: `examples/comprehensive_demo/tests.aqtest.yml`
+
+**Phase 14 — Patch dry-run (`validate_patch`)**
+- `validate_patch: bool = False` on `AgentSchema`, `AgentConfig`, parser, `Manifest.to_dict()`
+- In `aggressive` mode with `validate_patch=true`: patch compiled in memory first; invalid patches staged to `patches/pending/`, loop stops; on-disk Blueprint never touched
+
+**Stubs 1-4 — Wiring previously inert schema fields**
+
+*Stub 1 — `on_exhaustion: alert_only | trigger_agent`*
+- `_on_retry_exhausted(exc, policy, module, pipeline_id, run_id, module_results)` helper added to `executor.py`
+- All 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress) replaced bare `return _fail(...)` with `_on_retry_exhausted()` call
+- `alert_only`: logs warning, sets `_GATE_CLOSED` in frame_store (or `continue` for Egress), pipeline does not stop
+- `trigger_agent`: returns `_fail(..., trigger_agent=True)` — LLM loop fires even if `approval_mode=disabled`
+
+*Stub 2 — `AssertError.trigger_agent` propagation*
+- `executor.py` Assert dispatch `except AssertError` now passes `trigger_agent=exc.trigger_agent` to `_fail()`
+
+*Stub 3 — `Regulator on_block=trigger_agent` propagation*
+- `executor.py` Regulator dispatch `on_block=trigger_agent` branch now calls `_fail(..., trigger_agent=True)`
+
+*Stub 4 — `probes.block_full_actions_in_prod`*
+- `execute_probe()`, `_row_count_estimate()`, `_null_rates()` in `probe.py` all accept `block_full_actions: bool = False`
+- `_row_count_estimate` sample path: skips `.count()`, returns `{"blocked": True, "estimate": None}` + warning
+- `_null_rates`: skips `.count()` + `.collect()`, returns `{"blocked": True, "null_rates": {col: None}}` + warning
+- `execute()` in `executor.py` gains `block_full_actions: bool = False` param
+- CLI `run` command threads `cfg.probes.block_full_actions_in_prod` into `execute()`
+
+*`ExecutionResult.trigger_agent` + CLI override*
+- `ExecutionResult` gains `trigger_agent: bool = False` field (and `to_dict()` key)
+- `_fail()` accepts `trigger_agent=` kwarg
+- CLI run loop: computes `effective_mode = approval_mode`; if `result.trigger_agent` and `effective_mode == "disabled"`, escalates to `"human"` — LLM generates + stages patch even when healing is normally off
+
+### Design Notes
+- `alert_only` on data-producing modules propagates the `_GATE_CLOSED` sentinel so downstream modules skip cleanly. On Egress (terminal), it just `continue`s — no sentinel needed.
+- `trigger_agent` bypasses `approval_mode=disabled` intentionally: an explicit rule asking for healing should always fire at minimum human-review staging.
+- `block_full_actions_in_prod` only suppresses the sample-based Spark actions in Probe (`row_count_estimate method=sample`, `null_rates`). The zero-action `schema_snapshot` and `sample_rows` (`df.take()`) paths are unaffected — `take()` is not a full scan and is left to caller discretion.
+- Stub 5 (non-env secrets providers) permanently deferred — env injection is the correct pattern; adding boto3/vault SDK dependencies for marginal benefit violates zero-extra-dependency philosophy.
+
+---
+
 ## 2026-04-23 — Change 6: SparkListener Wiring + Assert Module + Docs
 
 ### Accomplished

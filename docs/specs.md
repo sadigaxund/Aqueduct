@@ -386,30 +386,52 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
 ```yaml
 - id: probe_after_dedup
   type: Probe
-  label: "Capture schema and null rates after deduplication"
+  label: "Capture observability signals after deduplication"
   attach_to: dedup_orders          # emits signals after this Module completes
   config:
     signals:
-      - schema_snapshot            # always free — metadata only
-      - row_count_estimate:        # zero cost — from SparkListener task metrics
-          method: spark_listener
-      - null_rates:
-          sample_fraction: 0.01   # 1% sample — low cost
-          columns: [order_id, region, amount]
-          alert_threshold:
-            order_id: 0.0          # zero nulls tolerated
-            region: 0.05           # 5% max
+      - type: schema_snapshot          # always free — metadata only
+
+      - type: row_count_estimate       # two methods:
+        method: spark_listener         #   spark_listener = zero cost (from stage metrics)
+                                       #   sample = count() on a fraction
+
+      - type: null_rates
+        columns: [order_id, region, amount]
+        fraction: 0.01                 # 1% sample
+
+      - type: sample_rows
+        n: 20
+
+      - type: value_distribution
+        columns: [amount, fare]        # omit → all numeric columns
+        fraction: 0.1
+        percentiles: [0.25, 0.5, 0.75]
+
+      - type: distinct_count
+        columns: [region, status]      # omit → all columns
+        fraction: 0.1
+
+      - type: data_freshness
+        column: event_time             # required
+        # allow_sample: true           # use fraction below instead of full scan
+        # fraction: 0.1
+
+      - type: partition_stats          # zero Spark action — always free
 ```
 
-|**Signal type**|**Implementation & cost**|
-| :- | :- |
-|**schema\_snapshot**|Calls DataFrame.schema — metadata only, no scan. Records column names, types, nullability. Free.|
-|**row\_count\_estimate**|method: spark\_listener reads recordsWritten from SparkListener task metrics after the stage completes. Exact for completed stages, zero additional cost. method: sample triggers a count() on a sample fraction — low cost, approximate.|
-|**null\_rates**|Applies DataFrame.sample(fraction).select([count(when(col.isNull,1)) for each col]). One Spark action on the sample only. Cost proportional to sample\_fraction and partition count.|
-|**value\_distribution**|Uses approx\_count\_distinct() and percentile\_approx() on sampled data. Approximate results, low cost.|
-|**sample\_rows**|Calls DataFrame.take(N). Short-circuit scan — reads only enough data to return N rows. N is capped at max\_sample\_rows in engine config (default 100).|
+|**Signal type**|**Spark cost**|**Implementation**|
+| :- | :- | :- |
+|**schema\_snapshot**|Zero — metadata only|`df.schema` is always available on a lazy DataFrame. Writes DuckDB row + JSON file.|
+|**row\_count\_estimate**|Zero (spark\_listener) or 1 action on fraction (sample)|`spark_listener`: reads `recordsWritten` from SparkListener stage metrics. `sample`: `df.sample(fraction).count()`.|
+|**null\_rates**|1 action on sample|`df.sample(fraction).agg(sum(isNull(c)) for each col)`. Never touches full DataFrame.|
+|**sample\_rows**|1 bounded action|`df.take(n)` — short-circuits after N rows. Not considered a full scan.|
+|**value\_distribution**|1 agg() + 1 approxQuantile per column on sample|`df.sample(fraction).agg(min, max, mean, stddev, count)`. Percentiles via `approxQuantile`. Numeric columns only by default.|
+|**distinct\_count**|1 agg() on sample|`df.sample(fraction).agg(approx_count_distinct(c) for each col)`. Approximate; error < 5%.|
+|**data\_freshness**|1 action (full scan by default)|`df.select(max(column)).collect()`. Set `allow_sample: true` to use a fraction instead (trades accuracy for speed in production).|
+|**partition\_stats**|Zero — no Spark action|`df.rdd.getNumPartitions()`. Purely a driver-side call.|
 
-|**Hard rule:**  count(), collect(), and show() are blocked on Probe DataFrames in production mode. This is enforced by the Probe API wrapper — it is not a convention. Engineers who need exact counts must use an Egress module with collect: true on a debug branch, making the cost explicit in the Blueprint.|
+|**Production guard:**  `row_count_estimate` (sample method), `null_rates`, `value_distribution`, and `distinct_count` are suppressed when `probes.block_full_actions_in_prod: true` is set in `aqueduct.yml`. `data_freshness` is also suppressed unless `allow_sample: true`. `schema_snapshot`, `sample_rows`, and `partition_stats` are never suppressed.|
 | :- |
 
 |**REGULATOR**|**Trigger gate — passive by default, blocks downstream on False or error signal**|

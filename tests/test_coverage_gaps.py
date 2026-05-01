@@ -1409,6 +1409,422 @@ class TestValidatePatch:
         assert d["agent"]["validate_patch"] is True
 
 
+# ── Stub 1: ExecutionResult.trigger_agent ────────────────────────────────────
+
+class TestExecutionResultTriggerAgent:
+    """ExecutionResult.trigger_agent field — models.py."""
+
+    def test_trigger_agent_defaults_to_false(self):
+        from aqueduct.executor.models import ExecutionResult
+        result = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=())
+        assert result.trigger_agent is False
+
+    def test_trigger_agent_true_stored_and_returned(self):
+        from aqueduct.executor.models import ExecutionResult
+        result = ExecutionResult(
+            pipeline_id="p", run_id="r", status="error",
+            module_results=(), trigger_agent=True,
+        )
+        assert result.trigger_agent is True
+
+    def test_to_dict_includes_trigger_agent_false(self):
+        from aqueduct.executor.models import ExecutionResult
+        d = ExecutionResult(pipeline_id="p", run_id="r", status="success", module_results=()).to_dict()
+        assert "trigger_agent" in d
+        assert d["trigger_agent"] is False
+
+    def test_to_dict_includes_trigger_agent_true(self):
+        from aqueduct.executor.models import ExecutionResult
+        d = ExecutionResult(
+            pipeline_id="p", run_id="r", status="error",
+            module_results=(), trigger_agent=True,
+        ).to_dict()
+        assert d["trigger_agent"] is True
+
+
+# ── Stub 2: _on_retry_exhausted and _fail ─────────────────────────────────────
+
+class TestOnRetryExhausted:
+    """_on_retry_exhausted behavior — executor.py."""
+
+    def _make_policy(self, on_exhaustion: str):
+        from aqueduct.parser.models import RetryPolicy
+        return RetryPolicy(max_attempts=1, on_exhaustion=on_exhaustion)
+
+    def _make_module(self, mid: str = "m1"):
+        from aqueduct.parser.models import Module
+        return Module(id=mid, type="Ingress", label="L", config={})
+
+    def test_abort_returns_false_with_fail_result(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("abort")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("boom"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is False
+        assert fail_result is not None
+        assert fail_result.status == "error"
+        assert fail_result.trigger_agent is False
+
+    def test_alert_only_returns_true_with_none(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("alert_only")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("non-critical"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is True
+        assert fail_result is None
+
+    def test_trigger_agent_returns_false_with_trigger_agent_true(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("trigger_agent")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("agent needed"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is False
+        assert fail_result is not None
+        assert fail_result.trigger_agent is True
+
+    def test_abort_records_module_result_as_error(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("abort")
+        module = self._make_module("failing_module")
+        results: list[ModuleResult] = []
+        _on_retry_exhausted(RuntimeError("boom"), policy, module, "pipe.id", "run-1", results)
+        assert len(results) == 1
+        assert results[0].module_id == "failing_module"
+        assert results[0].status == "error"
+
+    def test_fail_with_trigger_agent_true(self):
+        from aqueduct.executor.spark.executor import _fail
+        from aqueduct.executor.models import ModuleResult
+
+        result = _fail("pipe.id", "run-1", [], trigger_agent=True)
+        assert result.trigger_agent is True
+        assert result.status == "error"
+
+    def test_fail_without_trigger_agent_defaults_false(self):
+        from aqueduct.executor.spark.executor import _fail
+
+        result = _fail("pipe.id", "run-1", [])
+        assert result.trigger_agent is False
+
+
+# ── Stub 3: Probe block_full_actions ──────────────────────────────────────────
+
+class TestProbeBlockFullActions:
+    """_row_count_estimate and _null_rates with block_full_actions=True — probe.py."""
+
+    def test_row_count_estimate_blocked_returns_blocked_dict(self):
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _row_count_estimate
+
+        fake_df = MagicMock()
+        result = _row_count_estimate(
+            fake_df, {"method": "sample", "fraction": 0.1},
+            probe_id="p1", run_id="r1",
+            block_full_actions=True,
+        )
+        assert result.get("blocked") is True
+        assert result.get("estimate") is None
+        # df.sample().count() must NOT have been called
+        fake_df.sample.assert_not_called()
+
+    def test_row_count_estimate_spark_listener_ignores_block_full_actions(self):
+        """spark_listener method should run regardless of block_full_actions."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _row_count_estimate
+
+        fake_df = MagicMock()
+        result = _row_count_estimate(
+            fake_df, {"method": "spark_listener"},
+            probe_id="p1", run_id="r1",
+            block_full_actions=True,
+        )
+        # Should return spark_listener result (estimate=None since no DB)
+        assert result.get("method") == "spark_listener"
+        assert result.get("estimate") is None
+
+    def test_null_rates_blocked_returns_blocked_dict(self):
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _null_rates
+
+        fake_df = MagicMock()
+        fake_df.columns = ["col_a", "col_b"]
+        result = _null_rates(fake_df, {"columns": ["col_a", "col_b"]}, block_full_actions=True)
+        assert result.get("blocked") is True
+        assert result["null_rates"] == {"col_a": None, "col_b": None}
+        # df.sample() should not have been called
+        fake_df.sample.assert_not_called()
+
+    def test_null_rates_not_blocked_calls_sample(self):
+        """With block_full_actions=False, sample() IS called on the DataFrame."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _null_rates
+
+        # We verify sample() is invoked (not that it succeeds — no real Spark needed)
+        fake_df = MagicMock()
+        # Mimic spark sample().select().count() chain returning 0 rows
+        fake_sample = MagicMock()
+        fake_df.sample.return_value = fake_sample
+        fake_select = MagicMock()
+        fake_sample.select.return_value = fake_select
+        fake_select.count.return_value = 0
+
+        result = _null_rates(fake_df, {"columns": ["col_a"], "fraction": 0.5}, block_full_actions=False)
+        # sample() should have been called
+        fake_df.sample.assert_called_once()
+        # When total==0, null_rates values should be None
+        assert result["null_rates"]["col_a"] is None
+
+
+class TestExecuteProbeBlockFullActionsSignature:
+    """execute_probe accepts block_full_actions kwarg (signature test)."""
+
+    def test_execute_probe_has_block_full_actions_param(self):
+        import inspect
+        from aqueduct.executor.spark.probe import execute_probe
+
+        sig = inspect.signature(execute_probe)
+        assert "block_full_actions" in sig.parameters
+        assert sig.parameters["block_full_actions"].default is False
+
+
+# ── Stub 4: execute() block_full_actions param ────────────────────────────────
+
+class TestExecutorBlockFullActionsParam:
+    """execute() accepts block_full_actions kwarg."""
+
+    def test_execute_has_block_full_actions_param(self):
+        import inspect
+        from aqueduct.executor.spark.executor import execute
+
+        sig = inspect.signature(execute)
+        assert "block_full_actions" in sig.parameters
+        assert sig.parameters["block_full_actions"].default is False
+
+
+# ── Stub: Assert trigger_agent propagation ────────────────────────────────────
+
+class TestAssertTriggerAgentPropagation:
+    """End-to-end: Assert on_fail=trigger_agent → ExecutionResult.trigger_agent=True."""
+
+    def test_assert_trigger_agent_sets_flag(self, spark, tmp_path):
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.models import Edge, Module, RetryPolicy
+
+        in_path = str(tmp_path / "in.parquet")
+        spark.range(5).write.parquet(in_path)
+
+        manifest = Manifest(
+            pipeline_id="test.assert_trigger_agent",
+            modules=(
+                Module(
+                    id="src", type="Ingress", label="Src",
+                    config={"format": "parquet", "path": in_path},
+                ),
+                Module(
+                    id="chk", type="Assert", label="Chk",
+                    config={
+                        "rules": [
+                            {"type": "min_rows", "min": 9999, "on_fail": "trigger_agent"},
+                        ],
+                    },
+                ),
+            ),
+            edges=(Edge(from_id="src", to_id="chk", port="main"),),
+            context={},
+            spark_config={},
+        )
+
+        result = execute(manifest, spark)
+        assert result.status == "error"
+        assert result.trigger_agent is True
+
+
+# ── Stub: Regulator trigger_agent propagation ─────────────────────────────────
+
+class TestRegulatorTriggerAgentPropagation:
+    """Regulator on_block=trigger_agent → ExecutionResult.trigger_agent=True."""
+
+    def test_regulator_trigger_agent_sets_flag(self, spark, tmp_path):
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.models import Edge, Module
+
+        in_path = str(tmp_path / "in.parquet")
+        out_path = str(tmp_path / "out.parquet")
+        spark.range(5).write.parquet(in_path)
+
+        class _ClosedSurveyor:
+            def evaluate_regulator(self, module_id: str) -> bool:
+                return False
+
+        manifest = Manifest(
+            pipeline_id="test.reg_trigger_agent",
+            modules=(
+                Module(
+                    id="src", type="Ingress", label="Src",
+                    config={"format": "parquet", "path": in_path},
+                ),
+                Module(
+                    id="gate", type="Regulator", label="Gate",
+                    config={"on_block": "trigger_agent"},
+                ),
+                Module(
+                    id="sink", type="Egress", label="Sink",
+                    config={"format": "parquet", "path": out_path},
+                ),
+            ),
+            edges=(
+                Edge(from_id="src", to_id="gate", port="main"),
+                Edge(from_id="gate", to_id="sink", port="main"),
+            ),
+            context={},
+            spark_config={},
+        )
+
+        result = execute(manifest, spark, surveyor=_ClosedSurveyor())
+        assert result.status == "error"
+        assert result.trigger_agent is True
+
+
+# ── on_exhaustion=alert_only integration (pipeline continues) ─────────────────
+
+class TestOnExhaustionAlertOnlyIntegration:
+    """alert_only: module fails but pipeline reports success (gate_closed path)."""
+
+    def test_alert_only_pipeline_continues(self, spark, tmp_path):
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.models import Edge, Module, RetryPolicy
+
+        # Non-existent path causes IngressError on module "bad_src"
+        # A second Ingress → Egress succeeds
+        good_path = str(tmp_path / "good.parquet")
+        out_path = str(tmp_path / "out.parquet")
+        spark.range(3).write.parquet(good_path)
+
+        policy = RetryPolicy(max_attempts=1, on_exhaustion="alert_only")
+
+        manifest = Manifest(
+            pipeline_id="test.alert_only",
+            retry_policy=policy,
+            modules=(
+                Module(
+                    id="bad_src", type="Ingress", label="Bad",
+                    config={"format": "parquet", "path": "/nonexistent/does_not_exist.parquet"},
+                ),
+                Module(
+                    id="good_src", type="Ingress", label="Good",
+                    config={"format": "parquet", "path": good_path},
+                ),
+                Module(
+                    id="sink", type="Egress", label="Sink",
+                    config={"format": "parquet", "path": out_path},
+                ),
+            ),
+            edges=(
+                Edge(from_id="good_src", to_id="sink", port="main"),
+            ),
+            context={},
+            spark_config={},
+        )
+
+        result = execute(manifest, spark)
+        # bad_src fails but alert_only propagates GATE_CLOSED — pipeline finishes
+        statuses = {r.module_id: r.status for r in result.module_results}
+        assert statuses.get("bad_src") == "error"
+        # The overall pipeline should not abort with status="error" due to alert_only
+        # bad_src has no downstream, so sink is still reachable and succeeds
+        assert statuses.get("sink") == "success"
+
+
+# ── executor/__init__.py get_executor ─────────────────────────────────────────
+
+class TestGetExecutor:
+    """get_executor() factory — executor/__init__.py."""
+
+    def test_spark_engine_returns_callable(self):
+        from aqueduct.executor import get_executor
+        fn = get_executor("spark")
+        assert callable(fn)
+
+    def test_flink_engine_raises_not_implemented(self):
+        from aqueduct.executor import get_executor
+        with pytest.raises(NotImplementedError, match="Flink"):
+            get_executor("flink")
+
+    def test_unknown_engine_raises_value_error(self):
+        from aqueduct.executor import get_executor
+        with pytest.raises(ValueError, match="Unknown execution engine"):
+            get_executor("beam")
+
+
+# ── parser/graph.py topological sort and build_adjacency ─────────────────────
+
+class TestParserGraphTopologicalSort:
+    """topological_order and _build_adjacency uncovered paths."""
+
+    def test_topological_order_linear(self):
+        from aqueduct.parser.graph import topological_order
+        from aqueduct.parser.models import Module, Edge
+
+        m1 = Module(id="a", type="Ingress", label="A", config={})
+        m2 = Module(id="b", type="Channel", label="B", config={})
+        edge = Edge(from_id="a", to_id="b", port="main")
+        order = topological_order([m1, m2], [edge])
+        assert order == ["a", "b"]
+
+    def test_topological_order_with_depends_on(self):
+        from aqueduct.parser.graph import topological_order
+        from aqueduct.parser.models import Module, Edge
+        import dataclasses
+
+        m1 = Module(id="x", type="Ingress", label="X", config={})
+        m2 = dataclasses.replace(
+            Module(id="y", type="Channel", label="Y", config={}),
+            depends_on=("x",),
+        )
+        order = topological_order([m1, m2], [])
+        assert "x" in order
+        assert "y" in order
+        assert order.index("x") < order.index("y")
+
+    def test_build_adjacency_unknown_from_raises(self):
+        from aqueduct.parser.graph import _build_adjacency
+        from aqueduct.parser.models import Module, Edge
+
+        m1 = Module(id="a", type="Ingress", label="A", config={})
+        bad_edge = Edge(from_id="NOPE", to_id="a", port="main")
+        with pytest.raises(ValueError, match="NOPE"):
+            _build_adjacency([m1], [bad_edge])
+
+    def test_build_adjacency_unknown_to_raises(self):
+        from aqueduct.parser.graph import _build_adjacency
+        from aqueduct.parser.models import Module, Edge
+
+        m1 = Module(id="a", type="Ingress", label="A", config={})
+        bad_edge = Edge(from_id="a", to_id="NOPE", port="main")
+        with pytest.raises(ValueError, match="NOPE"):
+            _build_adjacency([m1], [bad_edge])
+
+
 class TestCompilerEdgeCases:
     """Cover uncovered compiler paths."""
 
