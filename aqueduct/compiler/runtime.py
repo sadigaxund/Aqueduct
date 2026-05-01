@@ -16,7 +16,7 @@ import ast
 import os
 import re
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 # Matches the innermost @aq.* call — args must not contain another @aq.
@@ -44,23 +44,32 @@ def _java_to_strftime(pattern: str) -> str:
 class AqFunctions:
     """Callable registry for all @aq.* Tier 1 functions."""
 
-    def __init__(self, run_id: str | None = None, depot: Any = None) -> None:
+    def __init__(
+        self,
+        run_id: str | None = None,
+        depot: Any = None,
+        execution_date: date | None = None,
+    ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
-        self._depot = depot  # connected in Phase 4 (Surveyor)
+        self._depot = depot
+        self._execution_date = execution_date  # None = use system clock
+
+    def _base_date(self) -> date:
+        return self._execution_date if self._execution_date is not None else date.today()
 
     # ── date ──────────────────────────────────────────────────────────────────
 
     def date_today(self, format: str = "yyyy-MM-dd") -> str:  # noqa: A002
-        return date.today().strftime(_java_to_strftime(format))
+        return self._base_date().strftime(_java_to_strftime(format))
 
     def date_yesterday(self, format: str = "yyyy-MM-dd") -> str:  # noqa: A002
-        return (date.today() - timedelta(days=1)).strftime(_java_to_strftime(format))
+        return (self._base_date() - timedelta(days=1)).strftime(_java_to_strftime(format))
 
     def date_offset(self, base: str, days: int | str) -> str:
         return (date.fromisoformat(base) + timedelta(days=int(days))).isoformat()
 
     def date_month_start(self, format: str = "yyyy-MM-dd") -> str:  # noqa: A002
-        return date.today().replace(day=1).strftime(_java_to_strftime(format))
+        return self._base_date().replace(day=1).strftime(_java_to_strftime(format))
 
     def date_format(self, date_str: str, pattern: str) -> str:
         return date.fromisoformat(date_str).strftime(_java_to_strftime(pattern))
@@ -68,6 +77,8 @@ class AqFunctions:
     # ── runtime ───────────────────────────────────────────────────────────────
 
     def runtime_timestamp(self) -> str:
+        if self._execution_date is not None:
+            return datetime.combine(self._execution_date, time.min, tzinfo=timezone.utc).isoformat()
         return datetime.now(tz=timezone.utc).isoformat()
 
     def runtime_run_id(self) -> str:

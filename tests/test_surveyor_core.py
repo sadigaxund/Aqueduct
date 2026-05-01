@@ -135,7 +135,7 @@ def test_surveyor_orchestration_webhook_firing(manifest, tmp_path):
         surveyor.record(res_fail)
         mock_hook.assert_called_once()
         args, kwargs = mock_hook.call_args
-        assert args[0] == url
+        assert args[0].url == url
         assert args[1]["run_id"] == run_id
     
     surveyor.stop()

@@ -145,6 +145,9 @@ def parse(
         max_patches_per_run=validated.agent.max_patches_per_run,
         provider=validated.agent.provider,
         base_url=validated.agent.base_url,
+        ollama_options=validated.agent.ollama_options,
+        allowed_paths=tuple(validated.agent.allowed_paths),
+        forbidden_ops=tuple(validated.agent.forbidden_ops),
     )
 
     return Blueprint(

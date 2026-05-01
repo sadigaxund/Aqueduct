@@ -156,9 +156,12 @@ retry_policy:                          # see Section 8.2
   # ... other fields
 
 agent:                                 # LLM self-healing config (see Section 8)
-  approval_mode: auto                  # auto | human
+  approval_mode: auto                  # disabled | human | auto | aggressive
   model: claude-sonnet-4-20250514
   max_patches_per_run: 5
+  # Guardrails (optional — recommended for auto/aggressive modes)
+  allowed_paths: ["s3://company-data/*"]   # fnmatch patterns; empty = unrestricted
+  forbidden_ops: ["insert_module"]         # PatchSpec op names blocked from auto-apply
 ```
 
 ## **4.3 Module Schema — Common Fields**
@@ -247,6 +250,31 @@ For SQL-based transformations:
 |**key**|Column name or list. Used by deduplicate, join, and other key-based ops.|
 |**order\_by**|Sort expression string. Used by deduplicate (to pick which row to keep) and sort ops.|
 |**condition**|Filter expression string (op: filter). Standard Spark SQL boolean expression.|
+
+**Channel op: join — config reference:**
+
+```yaml
+- id: enrich_orders
+  type: Channel
+  label: "Join orders with customer data"
+  config:
+    op: join
+    left: orders            # upstream Module ID (registered as temp view)
+    right: customers        # upstream Module ID (registered as temp view)
+    join_type: left         # inner | left | right | full | semi | anti | cross
+    condition: "orders.customer_id = customers.id"
+    broadcast_side: right   # optional Spark broadcast hint for the smaller side
+```
+
+|**Join config field**|**Description**|
+| :- | :- |
+|**left**|Module ID of the left-side DataFrame. Must be registered as a temp view.|
+|**right**|Module ID of the right-side DataFrame. Must be registered as a temp view.|
+|**join\_type**|Spark join type: inner, left, right, full, semi, anti, cross. Default: inner.|
+|**condition**|SQL join predicate string. Both sides accessible by their module IDs.|
+|**broadcast\_side**|Optional: left or right. Adds a `BROADCAST` hint to the smaller side to avoid shuffle.|
+
+> **Note:** `op: join` is sugar over `op: sql`. It is translated to `SELECT * FROM left JOIN right ON condition` before reaching Spark. For complex multi-table joins, multi-way expressions, or window functions, use `op: sql` directly.
 
 |**EGRESS**|**Sink — writes data to an external target or triggers a Spark action**|
 | :-: | :- |
@@ -602,10 +630,17 @@ context_profiles:
 ## **5.4 Tier 1 — Runtime Functions (@aq.\*)**
 A curated, versioned set of built-in functions resolved on the driver before any Spark job starts. All return scalar values that substitute into the Blueprint exactly as Tier 0 values do.
 
+**Logical Execution Date:** All `@aq.date.*` functions and `@aq.runtime.timestamp()` evaluate relative to the logical execution date, not the system clock, when `--execution-date YYYY-MM-DD` is passed via the CLI. This enables idempotent backfills: rerunning a pipeline for a historical date yields the same resolved values regardless of when the run actually occurs.
+
+```bash
+# Backfill for a specific date — @aq.date.today() resolves to 2026-03-01
+aqueduct run pipeline.yml --execution-date 2026-03-01
+```
+
 |**Function**|**Description**|
 | :- | :- |
-|**@aq.date.today()**|Current date as string. Optional format arg: @aq.date.today(format="yyyy/MM/dd"). Default: yyyy-MM-dd.|
-|**@aq.date.yesterday()**|Yesterday's date. Same format arg as today().|
+|**@aq.date.today()**|Current date as string (or logical execution date if `--execution-date` set). Optional format arg: @aq.date.today(format="yyyy/MM/dd"). Default: yyyy-MM-dd.|
+|**@aq.date.yesterday()**|Yesterday relative to logical execution date. Same format arg as today().|
 |**@aq.date.offset(base, days)**|Date offset. base is a date string or another @aq.date.\*. days is integer (negative for past). E.g. @aq.date.offset(base=@aq.date.today(), days=-7).|
 |**@aq.date.month\_start()**|First day of the current month.|
 |**@aq.date.format(date, pattern)**|Reformats a date string using Java SimpleDateFormat pattern.|
@@ -913,15 +948,45 @@ Example PatchSpec (single operation):
 }
 ```
 
-## **8.6 Patch Lifecycle**
+## **8.6 Agent Guardrails**
+
+When `approval_mode` is `auto` or `aggressive`, the LLM applies patches without human review. Guardrails limit what can be autonomously changed:
+
+```yaml
+agent:
+  approval_mode: auto
+  allowed_paths: ["s3://company-data/*", "gs://prod-bucket/*"]
+  forbidden_ops: ["insert_module", "remove_module"]
+```
+
+| Field | Type | Description |
+| :- | :- | :- |
+| `allowed_paths` | list[str] | fnmatch patterns. Any `path` field in a patch operation must match at least one pattern. Empty list = unrestricted. |
+| `forbidden_ops` | list[str] | PatchSpec operation names that are always blocked. Blocked patches are automatically staged for human review instead of auto-applied. |
+
+If a patch violates either guardrail, it is moved to `patches/pending/` for human review regardless of `approval_mode`. A clear error message is emitted.
+
+**Recommended guardrail policy for production:**
+
+```yaml
+agent:
+  approval_mode: auto
+  allowed_paths: ["s3://your-company-bucket/*"]
+  forbidden_ops: ["insert_module", "remove_module"]  # structural changes require human review
+```
+
+## **8.7 Patch Lifecycle**
 1. Surveyor detects failure, exhausts retry policy if applicable, assembles FailureContext.
 1. FailureContext is posted to the configured LLM endpoint (model specified in agent: block).
 1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error and its response. Maximum 3 re-prompt attempts before escalating to human approval regardless of approval\_mode.
-1. Valid PatchSpec is written to patches/pending/<patch\_id>.json.
-1. If approval\_mode: auto — PatchSpec is applied immediately. Blueprint is updated atomically. Manifest is recompiled. Execution resumes from the failed Module forward (not from the beginning of the pipeline).
-1. If approval\_mode: human — Patch is held in patches/pending/. An alert is emitted (configured webhook/email). Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
+1. Valid PatchSpec is checked against guardrails (allowed\_paths, forbidden\_ops). If any guardrail fires, patch is staged in patches/pending/ for human review regardless of approval\_mode.
+1. If approval\_mode: disabled — LLM never fires.
+1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
+1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
+1. If approval\_mode: aggressive — Patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
 1. Applied patch is moved to patches/applied/<patch\_id>.json with applied\_at timestamp, run\_id, and agent rationale preserved.
-1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted and a human escalation alert is emitted.
+1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
+1. To undo an applied patch: aqueduct patch rollback <patch\_id>. This atomically restores the Blueprint from the backup in patches/backups/ and moves the patch record to patches/rolled\_back/.
 
 ## **8.7 Resume-From Semantics** *(Deferred — Advanced Feature)*
 
@@ -1086,6 +1151,19 @@ These are explicit guarantees that Aqueduct makes regarding its performance over
 - Regulator modules with no wired signal input are compiled away entirely — they add zero overhead.
 - The Parser → Compiler → Planner pipeline is designed to complete in under 500ms for Blueprints containing up to 500 Modules on standard driver hardware (4 cores, 8GB RAM).
 
+**Job Fusion:** Channels, Junctions, and Funnels produce lazy DataFrame references — no Spark action is triggered by these modules themselves. Aqueduct does not submit a separate Spark job per Module. The entire lazy computation graph is fused by Spark's Catalyst optimizer and materialised only when an Egress (or a sample-based Probe) triggers an action. The number of Spark jobs is bounded by the number of Egress modules in the Blueprint, not by the number of Modules.
+
+## **10.5 Depot Concurrency Limitations**
+
+The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports multiple concurrent readers but only one writer at a time per database file. **Two `aqueduct run` processes writing to the same `depot.duckdb` file simultaneously may produce write errors or data corruption.**
+
+**Safe patterns:**
+- Sequential pipeline runs (even different pipelines) sharing the same depot file: fully safe.
+- Parallel runs from different machines pointing to a shared depot file over a network filesystem: not supported — use a centralized backend (future: `depot.backend: postgres`).
+- Parallel runs on the same machine: use a separate depot file per pipeline (`depot.path: .aqueduct/<pipeline_id>.duckdb`), or serialize invocations through an orchestrator.
+
+**Scheduler integration pattern:** When using Airflow, Prefect, or similar tools, pass `--execution-date {{ ds }}` to make `@aq.date.*` functions idempotent. Use the depot watermark pattern to track last-processed state. Query `run_records` in the DuckDB observability store to detect and backfill missed runs.
+
 
 # **11. CLI Reference**
 ## **11.1 Core Commands**
@@ -1093,12 +1171,13 @@ These are explicit guarantees that Aqueduct makes regarding its performance over
 |**Command**|**Description**|
 | :- | :- |
 |**aqueduct new \<name\>**|Scaffold a minimal valid Blueprint file named \<name\>.yml in the current directory. Generates a hello-world Ingress → Channel → Egress pipeline with default context variables and local Spark config. Designed so the user can run it immediately to verify their Spark connection.|
-|**aqueduct run <blueprint.yml>**|Parse, compile, plan, and execute a Blueprint. Accepts --profile, --ctx key=val, --target, --dry-run (compile only, no execution).|
+|**aqueduct run <blueprint.yml>**|Parse, compile, plan, and execute a Blueprint. Accepts --profile, --ctx key=val, --config, --run-id, --store-dir, --webhook, --resume, --from, --to, --execution-date.|
 |**aqueduct validate <blueprint.yml>**|Parse and validate a Blueprint without compiling or running. Reports all schema errors. Exit code 0 = valid.|
-|**aqueduct compile <blueprint.yml>**|Parse, compile, and write the Manifest to stdout or --output path. Useful for inspecting the resolved Manifest before running.|
+|**aqueduct compile <blueprint.yml>**|Parse, compile, and write the Manifest to stdout or --output path. Accepts --profile, --ctx, --execution-date. Useful for inspecting the resolved Manifest before running.|
 |**aqueduct heal <run\_id>**|Manually trigger the LLM agent loop for a failed run. Optionally scoped with --module <module\_id> to focus the agent on a specific Module.|
 |**aqueduct patch apply <patch\_id>**|Apply a pending Patch. Recompiles the Manifest and resumes execution from the patched Module.|
 |**aqueduct patch reject <patch\_id>**|Reject a pending Patch. Records rejection reason (--reason flag). Pipeline remains in failed state.|
+|**aqueduct patch rollback <patch\_id>**|Roll back an applied patch. Atomically restores the Blueprint from patches/backups/ and moves the patch record to patches/rolled\_back/. Only works for patches applied via Aqueduct (which create automatic backups).|
 |**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table|json|csv.|
 |**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <module\_id> --column <col> for targeted queries.|
 |**aqueduct signal <run\_id> <signal\_id>**|Send a signal to a Regulator gate. Signal value defaults to True. Pass --value false to close the gate. Pass --error "message" to send an error signal.|
@@ -1106,7 +1185,26 @@ These are explicit guarantees that Aqueduct makes regarding its performance over
 |**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
 |**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|
 |**aqueduct check-config**|Validate aqueduct.yml schema without running a pipeline. Prints resolved engine, stores, webhook, and secrets summary. Exit 0 = valid, 1 = invalid. Accepts --config to specify a non-default path.|
-|**aqueduct doctor**|Probe all configured resources end-to-end: config schema, DuckDB stores (depot + observability), secrets provider, webhook reachability, Spark connectivity, and object storage auth. Each check is independent. Accepts --config and --skip-spark (skips JVM startup for fast CI use). Exit 0 = all ok/warn/skip, 1 = any check failed.|
+|**aqueduct doctor**|Probe all configured resources end-to-end: config schema, DuckDB stores (depot + observability), secrets provider, LLM endpoint reachability, webhook reachability, Spark connectivity, and object storage auth. Each check is independent. Accepts --config and --skip-spark (skips JVM startup for fast CI use). Exit 0 = all ok/warn/skip, 1 = any check failed.|
+
+**Key flags for `aqueduct run`:**
+
+| Flag | Description |
+| :- | :- |
+| `--from <module_id>` | Start execution at this module. Modules before it in the DAG are skipped (status=skipped). Their upstream data must already exist (e.g., from a prior run or external write). |
+| `--to <module_id>` | Stop execution after this module. All its ancestors run normally; modules after are skipped. |
+| `--execution-date YYYY-MM-DD` | Logical execution date. All `@aq.date.*` functions evaluate relative to this date instead of the system clock. Required for idempotent backfills. |
+| `--resume <run_id>` | Resume from checkpoints written by a prior run. Modules with a `_aq_done` checkpoint marker are skipped. |
+
+**Sub-DAG execution example:**
+
+```bash
+# Test only the transform step without re-running expensive Ingress
+aqueduct run pipeline.yml --from clean_orders --to write_output
+
+# Backfill for a missed date
+aqueduct run pipeline.yml --execution-date 2026-04-28
+```
 
 
 # **12. Deferred Topics & Open Items**

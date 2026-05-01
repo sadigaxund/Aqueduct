@@ -4,8 +4,10 @@ aqueduct.yml is separate from Blueprint YAML files.  It configures the engine
 itself: deployment target, store backends, probe limits, secrets provider, and
 webhook endpoints.  It is NOT the pipeline definition.
 
-LLM agent config (model, approval_mode, provider) lives in the Blueprint agent:
-block — not here — so each pipeline can configure its own healing policy.
+LLM agent connection config (provider, base_url, model, ollama_options) lives
+here as engine-level defaults.  Per-pipeline policy (approval_mode,
+on_pending_patches, max_patches_per_run) lives in the Blueprint agent: block.
+Blueprint connection values override engine defaults on conflict.
 
 Default behaviour (no file present):
   load_config() returns AqueductConfig with all defaults — equivalent to a
@@ -93,6 +95,21 @@ class SecretsConfig(BaseModel):
     )
 
 
+class AgentConnectionConfig(BaseModel):
+    """Engine-level LLM connection defaults.
+
+    Sets provider, endpoint, and model used by all pipelines unless overridden
+    in the Blueprint agent: block.  Policy fields (approval_mode,
+    on_pending_patches, max_patches_per_run) belong in the Blueprint, not here.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    provider: Literal["anthropic", "openai_compat"] = "anthropic"
+    base_url: str | None = None
+    model: str = "claude-sonnet-4-6"
+    ollama_options: dict[str, Any] | None = None
+
+
 class WebhookEndpointConfig(BaseModel):
     """Configuration for a single webhook endpoint.
 
@@ -154,9 +171,8 @@ class AqueductConfig(BaseModel):
     All fields have sensible defaults so that running without an aqueduct.yml
     (development / CI) works out of the box.
 
-    Note: LLM agent configuration (model, provider, approval_mode) belongs in
-    the Blueprint agent: block, not here.  Each pipeline manages its own
-    healing policy.
+    LLM connection defaults (provider, base_url, model) live here.
+    Per-pipeline policy (approval_mode) lives in the Blueprint agent: block.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -166,6 +182,7 @@ class AqueductConfig(BaseModel):
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
+    agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     spark_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",

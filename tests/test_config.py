@@ -78,7 +78,7 @@ def test_config_defaults():
     assert config.stores.observability.path == ".aqueduct/signals"
     assert config.stores.lineage.path == ".aqueduct/lineage"
     assert config.stores.depot.path == ".aqueduct/depot.duckdb"
-    assert config.agent.default_model == "claude-sonnet-4-20250514"
+    assert config.agent.model == "claude-sonnet-4-6"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"
     assert config.webhooks.on_failure is None

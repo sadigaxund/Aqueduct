@@ -50,6 +50,7 @@ def compile(  # noqa: A001
     blueprint_path: Path | None = None,
     run_id: str | None = None,
     depot: Any = None,
+    execution_date: Any = None,
 ) -> Manifest:
     """Compile a parsed Blueprint into a fully-resolved Manifest.
 
@@ -66,7 +67,7 @@ def compile(  # noqa: A001
     Raises:
         CompileError: On any Tier 1 resolution, expansion, or wiring failure.
     """
-    registry = AqFunctions(run_id=run_id, depot=depot)
+    registry = AqFunctions(run_id=run_id, depot=depot, execution_date=execution_date)
 
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────
     try:

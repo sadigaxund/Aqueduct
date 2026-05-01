@@ -43,12 +43,17 @@ class RetryPolicySchema(BaseModel):
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    approval_mode: Literal["disabled", "auto", "human"] = "disabled"
+    approval_mode: Literal["disabled", "human", "auto", "aggressive"] = "disabled"
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
-    model: str = "claude-sonnet-4-20250514"
     max_patches_per_run: int = 5
-    provider: Literal["anthropic", "openai_compat", "ollama"] = "anthropic"
+    # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
+    provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None
+    model: str | None = None
+    ollama_options: dict[str, Any] | None = None
+    # Guardrail policy — limits what the LLM can autonomously modify
+    allowed_paths: list[str] = Field(default_factory=list)
+    forbidden_ops: list[str] = Field(default_factory=list)
 
 
 class ModuleSchema(BaseModel):
