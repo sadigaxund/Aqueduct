@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.compiler.models import Manifest
+from aqueduct.config import WebhookEndpointConfig
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
@@ -1036,6 +1037,25 @@ def _on_retry_exhausted(
         If gate_closed is False, return fail_result immediately.
     """
     module_results.append(ModuleResult(module_id=module.id, status="error", error=str(exc)))
+
+    # Per-module failure webhook — fires regardless of on_exhaustion action.
+    if module.on_failure_webhook is not None:
+        from aqueduct.surveyor.webhook import fire_webhook
+        raw = module.on_failure_webhook
+        wh_cfg = WebhookEndpointConfig(**({"url": raw} if isinstance(raw, str) else raw))
+        full_payload = {
+            "run_id": run_id,
+            "pipeline_id": pipeline_id,
+            "module_id": module.id,
+            "error_message": str(exc),
+            "error_type": type(exc).__name__,
+        }
+        fire_webhook(
+            wh_cfg,
+            full_payload=full_payload,
+            template_vars={k: str(v) for k, v in full_payload.items()},
+        )
+
     on_exhaustion = policy.on_exhaustion
     if on_exhaustion == "alert_only":
         logger.warning("[%s] Retry exhausted (alert_only): %s — pipeline continues.", module.id, exc)

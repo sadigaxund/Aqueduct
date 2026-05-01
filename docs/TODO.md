@@ -43,11 +43,7 @@ connection.isClosed()
 connection.close()
 ```
 
-11. See if cli.py line 796 is correct.
-12. what is the point of setting "deployment: target: local" and at the same time "deployment: master_url: "local[*]". Are they redundant?
-13. we have "webhooks: on_failure: null" in config file, but is there on_success? or more complex alerting system? Like on assert send webhook and etc.
-14. within aqueduct.template.yml at 'LLM Guardrails' section, where can i see full list of ops for forbidden ops? I am assuming they are our grammer ops that LLM can't use for patches? Should you add list in there as a comment for ease of use? Are these per pipeline?
-15. why is 'Assert module (inline data quality gates)' within aqueduct.template.yml. Is it about config or blueprint? I initially thought we would have comprehensive_demo/ for as a reference for blueprint.yml. Should we have one more 'blueprint.yml.template' and rename 'aqueduct.template.yml' to 'aqueduct.yml.template'? Once again, why tf the 'Observability CLI Commands' section is in there?
+
 
 16. I have tried to use the 'lineage' cli command. But not sure, why it fails: 
 

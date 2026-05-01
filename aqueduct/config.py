@@ -153,11 +153,15 @@ class WebhooksConfig(BaseModel):
         default=None,
         description="Endpoint to POST when a pipeline run fails. Accepts a URL string or full config object.",
     )
+    on_success: WebhookEndpointConfig | None = Field(
+        default=None,
+        description="Endpoint to POST when a pipeline run succeeds. Accepts a URL string or full config object.",
+    )
 
-    @field_validator("on_failure", mode="before")
+    @field_validator("on_failure", "on_success", mode="before")
     @classmethod
     def coerce_string_url(cls, v: Any) -> Any:
-        """Allow on_failure: 'https://...' as shorthand for {url: 'https://...'}."""
+        """Allow on_failure/on_success: 'https://...' as shorthand for {url: 'https://...'}."""
         if isinstance(v, str):
             return {"url": v}
         return v

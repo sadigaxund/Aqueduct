@@ -1152,9 +1152,10 @@ probes:
 secrets:
   provider: env                    # env | aws | gcp | azure | vault
 
-# Simple form — plain URL, sends full FailureContext JSON via POST
+# Simple form — plain URL, sends full context JSON via POST
 webhooks:
   on_failure: "https://hooks.slack.com/services/T.../B.../"
+  on_success: "https://hooks.example.com/pipeline-complete"
 
 # Full form — custom method, headers, templated payload
 webhooks:
@@ -1167,23 +1168,69 @@ webhooks:
       text: "Pipeline *${pipeline_id}* failed on `${failed_module}`"
       run_id: "${run_id}"
     timeout: 10
+  on_success:
+    url: "${SLACK_WEBHOOK_URL}"
+    method: POST
+    payload:
+      text: "Pipeline *${pipeline_id}* complete — ${module_count} modules  run_id=${run_id}"
 ```
 
-**Webhook template variables** (available in `payload` values and `headers` values):
+**Three webhook scopes:**
+
+| Scope | Config location | Fires when |
+| :- | :- | :- |
+| Pipeline failure | `aqueduct.yml webhooks.on_failure` | Run ends with `status=error` |
+| Pipeline success | `aqueduct.yml webhooks.on_success` | Run ends with `status=success` |
+| Per-module failure | Blueprint `on_failure_webhook` on any module | That module's retry is exhausted (fires regardless of `on_exhaustion` — even `alert_only`) |
+| Per-Assert-rule | Blueprint Assert rule `on_fail: {action: webhook, url: ...}` | That specific rule fails |
+
+All webhooks are best-effort (daemon thread), non-blocking, and do not affect pipeline outcome.
+
+**`on_failure` / `on_success` template variables:**
 
 | Variable | Value |
 | :- | :- |
 | `${run_id}` | UUID of the pipeline run |
 | `${pipeline_id}` | Pipeline identifier string |
 | `${pipeline_name}` | Pipeline display name |
-| `${failed_module}` | Module ID of first failure |
-| `${error_message}` | Human-readable error string |
-| `${error_type}` | Exception class name |
-| `${started_at}` | ISO-8601 run start timestamp |
-| `${attempt}` | Number of failed modules in this run |
-| `${ANY_ENV_VAR}` | Falls back to `os.environ` if not a built-in var — useful for auth tokens in headers |
+| `${failed_module}` | Module ID of first failure (`on_failure` only) |
+| `${error_message}` | Human-readable error string (`on_failure` only) |
+| `${error_type}` | Exception class name (`on_failure` only) |
+| `${started_at}` | ISO-8601 run start timestamp (`on_failure` only) |
+| `${attempt}` | Number of failed modules (`on_failure` only) |
+| `${module_count}` | Number of modules executed (`on_success` only) |
+| `${ANY_ENV_VAR}` | Falls back to `os.environ` — useful for auth tokens in headers |
 
-If `payload` is omitted, the complete `FailureContext` JSON document is sent (run metadata, failed module, stack trace, probe signals, manifest snapshot).
+**`on_failure_webhook` (per-module) template variables:**
+
+| Variable | Value |
+| :- | :- |
+| `${run_id}` | UUID of the pipeline run |
+| `${pipeline_id}` | Pipeline identifier string |
+| `${module_id}` | ID of the module that exhausted retries |
+| `${error_message}` | Error description |
+| `${error_type}` | Exception class name |
+
+If `payload` is omitted, the full context JSON is sent unchanged.
+
+**Per-module webhook YAML:**
+```yaml
+modules:
+  - id: critical_ingress
+    type: Ingress
+    config:
+      format: parquet
+      path: "s3a://bucket/critical/"
+    on_failure:
+      max_attempts: 3
+      on_exhaustion: alert_only     # pipeline continues
+    on_failure_webhook: "https://hooks.slack.com/services/T.../B.../"
+    # or full form:
+    # on_failure_webhook:
+    #   url: "${SLACK_WEBHOOK_URL}"
+    #   payload:
+    #     text: "Module `${module_id}` failed — ${error_message}"
+```
 
 ## **10.2 Deployment Targets**
 

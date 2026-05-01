@@ -68,6 +68,7 @@ class ModuleSchema(BaseModel):
     tags: list[str] = Field(default_factory=list)
     config: dict[str, Any] = Field(default_factory=dict)
     on_failure: dict[str, Any] | None = None
+    on_failure_webhook: str | dict[str, Any] | None = None
     spillway: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     checkpoint: bool = False

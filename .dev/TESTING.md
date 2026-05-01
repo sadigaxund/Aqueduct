@@ -311,6 +311,20 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ network error (unreachable host) does not raise — failure logged to stderr
 - ✅ HTTP 4xx response does not raise — warning logged to stderr
 
+### Webhook scopes
+- ⏳ `on_success` webhook fires after successful run (mock HTTP server)
+- ⏳ `on_success` webhook NOT fired when run fails
+- ⏳ `on_success: null` (default) — no webhook call made on success
+- ⏳ `on_success` simple string URL form accepted by `WebhooksConfig`
+- ⏳ `on_success` template vars: `${run_id}`, `${pipeline_id}`, `${pipeline_name}`, `${module_count}` resolved in payload
+- ⏳ `on_failure_webhook` on module fires when retry exhausts (mock HTTP server)
+- ⏳ `on_failure_webhook` fires even when `on_exhaustion=alert_only` (pipeline continues)
+- ⏳ `on_failure_webhook` fires even when `on_exhaustion=abort` (pipeline fails)
+- ⏳ `on_failure_webhook` simple string URL form accepted by schema
+- ⏳ `on_failure_webhook` full dict form (url, method, payload, headers) accepted by schema
+- ⏳ `on_failure_webhook` template vars: `${module_id}`, `${error_message}`, `${error_type}`, `${run_id}`, `${pipeline_id}` resolved
+- ⏳ `on_failure_webhook=None` (default) — no per-module webhook call made
+
 ### `surveyor.py` — `Surveyor`
 - ✅ `start()` creates `.aqueduct/runs.db` and tables if not existing
 - ✅ `start()` inserts a `run_records` row with `status='running'`
@@ -452,6 +466,8 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `probes.max_sample_rows` defaults to `100`
 - ✅ `secrets.provider` defaults to `"env"`
 - ✅ `webhooks.on_failure` defaults to `None`
+- ⏳ `webhooks.on_success` defaults to `None`
+- ⏳ `webhooks.on_success` string URL coerced to `WebhookEndpointConfig`
 - ✅ `AqueductConfig` is frozen; mutation raises `ValidationError`
 
 ### Config file overrides
