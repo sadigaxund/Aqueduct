@@ -491,6 +491,7 @@ def run(
                 resume_run_id=resume_run_id if patch_count == 0 else None,
                 from_module=from_module,
                 to_module=to_module,
+                block_full_actions=cfg.probes.block_full_actions_in_prod,
             )
         except ExecuteError as exc:
             execute_exc = exc
@@ -508,7 +509,16 @@ def run(
         if result.status == "success":
             break
 
-        if approval_mode == "disabled" or failure_ctx is None:
+        # trigger_agent flag overrides approval_mode=disabled — escalate to human staging at minimum
+        effective_mode = approval_mode
+        if result.trigger_agent and effective_mode == "disabled":
+            effective_mode = "human"
+            click.echo(
+                "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
+                err=True,
+            )
+
+        if effective_mode == "disabled" or failure_ctx is None:
             break
 
         if patch_count >= max_patches:
@@ -550,7 +560,7 @@ def run(
 
         patch_count += 1
 
-        if approval_mode == "human":
+        if effective_mode == "human":
             stage_patch_for_human(patch, patches_dir, failure_ctx)
             click.echo(
                 f"  ✎ LLM patch staged → patches/pending/{patch.patch_id}.json\n"
@@ -560,7 +570,7 @@ def run(
             )
             break  # human reviews; no re-run
 
-        elif approval_mode == "auto":
+        elif effective_mode == "auto":
             # Apply in-memory → re-run → write permanently only if success
             new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
             if new_manifest is None:
@@ -596,7 +606,7 @@ def run(
                 failure_ctx = failure_ctx2
             break  # auto: one patch attempt only
 
-        elif approval_mode == "aggressive":
+        elif effective_mode == "aggressive":
             # Dry-run: pre-validate patched Blueprint before writing to disk
             if manifest.agent.validate_patch:
                 pre_manifest = _apply_patch_in_memory(

@@ -465,6 +465,7 @@ def execute(
     resume_run_id: str | None = None,
     from_module: str | None = None,
     to_module: str | None = None,
+    block_full_actions: bool = False,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -590,19 +591,23 @@ def execute(
         if module.type == "Ingress":
             if _listener:
                 _listener.set_active_module(module.id)
+            mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:
                 df = _with_retry(
                     lambda: read_ingress(module, spark),
-                    _module_retry_policy(module, manifest.retry_policy),
+                    mod_policy,
                     module.id,
                 )
             except IngressError as exc:
                 if _listener:
                     _listener.collect_metrics()  # reset state
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=str(exc))
+                gate_closed, fail_result = _on_retry_exhausted(
+                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                if gate_closed:
+                    frame_store[module.id] = _GATE_CLOSED
+                    continue
+                return fail_result
             if _listener:
                 _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             frame_store[module.id] = df
@@ -640,19 +645,23 @@ def execute(
             else:
                 if _listener:
                     _listener.set_active_module(module.id)
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
                 try:
                     df = _with_retry(
                         lambda: execute_sql_channel(module, upstream_dfs, spark),
-                        _module_retry_policy(module, manifest.retry_policy),
+                        mod_policy,
                         module.id,
                     )
                 except ChannelError as exc:
                     if _listener:
                         _listener.collect_metrics()
-                    module_results.append(
-                        ModuleResult(module_id=module.id, status="error", error=str(exc))
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results)
+                    if gate_closed:
+                        frame_store[module.id] = _GATE_CLOSED
+                        continue
+                    return fail_result
 
                 # ── Spillway split ─────────────────────────────────────────────
                 spillway_condition: str | None = module.config.get("spillway_condition")
@@ -721,19 +730,25 @@ def execute(
 
             if _listener:
                 _listener.set_active_module(module.id)
+            mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:
                 branch_dfs = _with_retry(
                     lambda: execute_junction(module, val),
-                    _module_retry_policy(module, manifest.retry_policy),
+                    mod_policy,
                     module.id,
                 )
             except JunctionError as exc:
                 if _listener:
                     _listener.collect_metrics()
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=str(exc))
+                gate_closed, fail_result = _on_retry_exhausted(
+                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                if gate_closed:
+                    branches = module.config.get("branches", [])
+                    for branch in branches:
+                        frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
+                    continue
+                return fail_result
 
             if _listener:
                 _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
@@ -777,19 +792,23 @@ def execute(
 
             if _listener:
                 _listener.set_active_module(module.id)
+            mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:
                 df = _with_retry(
                     lambda: execute_funnel(module, funnel_upstream),
-                    _module_retry_policy(module, manifest.retry_policy),
+                    mod_policy,
                     module.id,
                 )
             except FunnelError as exc:
                 if _listener:
                     _listener.collect_metrics()
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=str(exc))
+                gate_closed, fail_result = _on_retry_exhausted(
+                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                if gate_closed:
+                    frame_store[module.id] = _GATE_CLOSED
+                    continue
+                return fail_result
             if _listener:
                 _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             frame_store[module.id] = df
@@ -831,7 +850,10 @@ def execute(
                 module_results.append(
                     ModuleResult(module_id=module.id, status="error", error=str(exc))
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                return _fail(
+                    manifest.pipeline_id, run_id, module_results,
+                    trigger_agent=exc.trigger_agent,
+                )
 
             frame_store[module.id] = passing_df
             if quarantine_df is not None and has_spillway_edge:
@@ -883,10 +905,9 @@ def execute(
                     )
                     return _fail(manifest.pipeline_id, run_id, module_results)
                 elif on_block == "trigger_agent":
-                    # Record failure and let Surveyor fire the LLM loop on return
                     logger.info(
                         "Regulator %r: gate closed, on_block=trigger_agent; "
-                        "downstream skipped — Surveyor will trigger LLM patch loop.",
+                        "downstream skipped — LLM patch loop will fire.",
                         module.id,
                     )
                     module_results.append(
@@ -896,7 +917,7 @@ def execute(
                             error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
                         )
                     )
-                    return _fail(manifest.pipeline_id, run_id, module_results)
+                    return _fail(manifest.pipeline_id, run_id, module_results, trigger_agent=True)
                 # skip (default): propagate sentinel
                 frame_store[module.id] = _GATE_CLOSED
                 module_results.append(ModuleResult(module_id=module.id, status="skipped"))
@@ -928,19 +949,22 @@ def execute(
 
             if _listener:
                 _listener.set_active_module(module.id)
+            mod_policy = _module_retry_policy(module, manifest.retry_policy)
             try:
                 _with_retry(
                     lambda: write_egress(val, module, depot=depot),
-                    _module_retry_policy(module, manifest.retry_policy),
+                    mod_policy,
                     module.id,
                 )
             except EgressError as exc:
                 if _listener:
                     _listener.collect_metrics()
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=str(exc))
+                gate_closed, fail_result = _on_retry_exhausted(
+                    exc, mod_policy, module, manifest.pipeline_id, run_id, module_results
                 )
-                return _fail(manifest.pipeline_id, run_id, module_results)
+                if gate_closed:
+                    continue  # Egress is terminal; no frame_store update needed
+                return fail_result
             if _listener:
                 _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
             _write_checkpoint(module, checkpoint_dir, manifest)  # done-sentinel only
@@ -958,7 +982,7 @@ def execute(
                 )
             elif store_dir is not None:
                 try:
-                    execute_probe(module, source_val, spark, run_id, store_dir)
+                    execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions)
                 except Exception as exc:
                     logger.warning("Probe %r failed: %s", module.id, exc)
 
@@ -984,10 +1008,39 @@ def _fail(
     pipeline_id: str,
     run_id: str,
     module_results: list[ModuleResult],
+    *,
+    trigger_agent: bool = False,
 ) -> ExecutionResult:
     return ExecutionResult(
         pipeline_id=pipeline_id,
         run_id=run_id,
         status="error",
         module_results=tuple(module_results),
+        trigger_agent=trigger_agent,
     )
+
+
+def _on_retry_exhausted(
+    exc: Exception,
+    policy: "RetryPolicy",
+    module: "Module",
+    pipeline_id: str,
+    run_id: str,
+    module_results: "list[ModuleResult]",
+) -> "tuple[bool, ExecutionResult | None]":
+    """Handle retry exhaustion per on_exhaustion policy.
+
+    Returns:
+        (gate_closed, fail_result) — if gate_closed is True the caller should
+        set _GATE_CLOSED in frame_store and `continue`; fail_result is None.
+        If gate_closed is False, return fail_result immediately.
+    """
+    module_results.append(ModuleResult(module_id=module.id, status="error", error=str(exc)))
+    on_exhaustion = policy.on_exhaustion
+    if on_exhaustion == "alert_only":
+        logger.warning("[%s] Retry exhausted (alert_only): %s — pipeline continues.", module.id, exc)
+        return True, None
+    elif on_exhaustion == "trigger_agent":
+        return False, _fail(pipeline_id, run_id, module_results, trigger_agent=True)
+    else:  # "abort" (default)
+        return False, _fail(pipeline_id, run_id, module_results)

@@ -22,12 +22,14 @@ class ExecutionResult:
     run_id: str
     status: str                          # "success" | "error"
     module_results: tuple[ModuleResult, ...]
+    trigger_agent: bool = False          # LLM loop should fire even if approval_mode=disabled
 
     def to_dict(self) -> dict:
         return {
             "pipeline_id": self.pipeline_id,
             "run_id": self.run_id,
             "status": self.status,
+            "trigger_agent": self.trigger_agent,
             "module_results": [
                 {
                     "module_id": r.module_id,
