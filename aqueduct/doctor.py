@@ -360,16 +360,25 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
         if path_val:
             # Resolve relative to project root (same as runtime chdir behaviour)
             p = (project_root / path_val).resolve() if not Path(path_val).is_absolute() else Path(path_val)
-            # Strip glob patterns to check the parent directory
-            p_check = p.parent if ("*" in str(p) or "?" in str(p)) else p
+            is_glob = "*" in str(p) or "?" in str(p)
 
             if module.type == "Ingress":
-                if p_check.exists():
-                    results.append(CheckResult(name, "ok", f"readable: {path_val}", _ms(t)))
+                if is_glob:
+                    import glob as _glob
+                    matches = _glob.glob(str(p))
+                    if matches:
+                        results.append(CheckResult(name, "ok", f"readable: {path_val} ({len(matches)} file(s))", _ms(t)))
+                    elif p.parent.exists():
+                        results.append(CheckResult(name, "warn", f"dir exists but no files match pattern: {path_val}", _ms(t)))
+                    else:
+                        results.append(CheckResult(name, "fail", f"not found: {p.parent}", _ms(t)))
                 else:
-                    results.append(CheckResult(name, "fail", f"not found: {p_check}", _ms(t)))
+                    if p.exists():
+                        results.append(CheckResult(name, "ok", f"readable: {path_val}", _ms(t)))
+                    else:
+                        results.append(CheckResult(name, "fail", f"not found: {p}", _ms(t)))
             else:  # Egress
-                parent = p.parent if not ("*" in str(p)) else p.parent.parent
+                parent = p.parent if not is_glob else p.parent.parent
                 if parent.exists():
                     results.append(CheckResult(name, "ok", f"parent dir exists: {path_val}", _ms(t)))
                 else:
