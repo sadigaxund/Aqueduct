@@ -30,16 +30,14 @@ modules:
       path: "${ctx.paths.yellow_path}/*.parquet"
       options:
         mergeSchema: "true"
-  
   - id: green_taxi_trips
     type: Ingress
     label: "Load Green Trips"
     config:
-      format: parquet
+      format: "parquet"
       path: "${ctx.paths.green_path}/*.parquet"
       options:
         mergeSchema: "true"
-
   - id: taxi_zone_lookup
     type: Ingress
     label: "Load Taxi Zone Lookup"
@@ -51,7 +49,6 @@ modules:
         inferSchema: "true"
 
   # ── 2. Normalize Trips ──────────────────────────────────────────
-  
   - id: yellow_trips_prepared
     type: Channel
     label: "Prepare Yellow Data"
@@ -99,8 +96,7 @@ modules:
       inputs: [yellow_trips_prepared, green_trips_prepared]
 
 
-  # ── 3. Observe Schema --------|
-  
+  # ── N. Observe Schema --------|
   - id: yellow_taxi_input
     type: Probe
     label: "Observe Yellow Taxi Input"
@@ -139,45 +135,20 @@ edges:
     to: yellow_trips_prepared
   - from: green_taxi_trips
     to: green_trips_prepared
-#   - from: yellow_trips_prepared
-#     to: all_taxi_trips
-#   - from: green_trips_prepared
-#     to: all_taxi_trips
+  - from: yellow_trips_prepared
+    to: all_taxi_trips
+  - from: green_trips_prepared
+    to: all_taxi_trips
 
 agent:
-
   approval_mode: human
   on_pending_patches: warn            # ignore | warn | block
-  # max_patches_per_run: 3
-
-  # ── Anthropic (default; connection from aqueduct.yml agent: block) ────────
-  # provider: anthropic                 # anthropic | openai_compat
-  # model: "claude-sonnet-4-6"
-  # ANTHROPIC_API_KEY env var required
-
-  # ── Ollama / vLLM / LM Studio (override aqueduct.yml defaults) ───────────
-  provider: openai_compat
-  base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
-  model: "deepseek-r1:14b"
-  # ollama_options:
-  #   num_thread: 16
-  #   num_gpu: 0                             # 0 = CPU only; 99 = all on GPU
-  #   mlock: true
-  #   num_batch: 1024
-  #   num_predict: -1
-
-  # ── LLM Guardrails ────────────────────────────────────────────────────────
-  # Patches violating these rules are staged for human review instead of applied.
-  #
-  # allowed_paths: fnmatch whitelist for config.path values the LLM may touch.
-  #   Empty (default) = unrestricted. Paths not matching → human review.
+  max_patches_per_run: 1
   allowed_paths:
     - "data/*"
     - "data/zones/*"
     - "data/trips/*"
-  #
-  # forbidden_ops: PatchSpec operation names the LLM is never allowed to use.
-  #   Empty (default) = all ops permitted. Matching op → human review.
+
   forbidden_ops:
     - remove_module              # never delete modules autonomously
     - replace_retry_policy       # retry policy is managed by humans only
