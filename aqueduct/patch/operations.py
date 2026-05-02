@@ -66,6 +66,7 @@ from aqueduct.patch.grammar import (
     ReplaceModuleConfigOp,
     ReplaceModuleLabelOp,
     ReplaceRetryPolicyOp,
+    SetModuleConfigKeyOp,
     SetModuleOnFailureOp,
 )
 
@@ -247,6 +248,19 @@ def apply_replace_edge(bp: dict, op: ReplaceEdgeOp) -> dict:
     return bp
 
 
+def apply_set_module_config_key(bp: dict, op: SetModuleConfigKeyOp) -> dict:
+    """Set a single dot-notation key inside a Module's config, leaving other keys intact."""
+    module = _find_module(bp, op.module_id)
+    if "config" not in module or module["config"] is None:
+        module["config"] = {}
+    value = _to_ruamel(op.value) if isinstance(op.value, (dict, list)) else op.value
+    if isinstance(op.value, str):
+        from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+        value = DoubleQuotedScalarString(op.value)
+    _set_nested(module["config"], op.key, value)
+    return bp
+
+
 def apply_set_module_on_failure(bp: dict, op: SetModuleOnFailureOp) -> dict:
     """Set (or replace) the on_failure block for a Module."""
     module = _find_module(bp, op.module_id)
@@ -289,8 +303,9 @@ def apply_add_arcade_ref(bp: dict, op: AddArcadeRefOp) -> dict:
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
-    "replace_module_config":  apply_replace_module_config,
-    "replace_module_label":   apply_replace_module_label,
+    "replace_module_config":    apply_replace_module_config,
+    "set_module_config_key":    apply_set_module_config_key,
+    "replace_module_label":     apply_replace_module_label,
     "insert_module":          apply_insert_module,
     "remove_module":          apply_remove_module,
     "replace_context_value":  apply_replace_context_value,

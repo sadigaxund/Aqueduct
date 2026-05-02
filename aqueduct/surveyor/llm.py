@@ -62,8 +62,12 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 - Respond with ONLY valid JSON matching the PatchSpec schema above. No prose, no markdown fences.
 - Use only module IDs and field names that appear in the failure report.
 - Prefer the simplest fix: correct a config value before adding new modules.
-- SQL syntax error → fix the query via replace_module_config.
-- Wrong path or format → fix those config keys only.
+- Single config field wrong (path typo, bad format string, wrong option value) → use set_module_config_key. It patches ONE key and leaves all other config keys untouched.
+- NEVER use replace_module_config for a single-field fix — it replaces the entire config block and will silently drop any key you forget to re-emit (format, options, mode, etc.).
+- Use replace_module_config ONLY when restructuring the whole config block or changing multiple keys at once. If you use it, you MUST re-emit every existing config key.
+- SQL query wrong → set_module_config_key with key="query".
+- Path typo → set_module_config_key with key="path".
+- Nested config (e.g. options.mergeSchema) → set_module_config_key with dot-notation key.
 - patch_id: short slug (e.g. "fix-sql-syntax-clean-orders").
 - description: root cause + fix in one sentence.
 - CRITICAL: When patching config values that contain paths, expressions, or strings, use the template expressions from the Original Blueprint YAML (e.g. "${{ctx.paths.input}}/*.parquet"), NOT the resolved literal values shown in the compiled module config. The patch is applied to the raw Blueprint, not the compiled Manifest.

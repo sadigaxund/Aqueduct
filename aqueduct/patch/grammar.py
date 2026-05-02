@@ -110,6 +110,21 @@ class ReplaceEdgeOp(BaseModel, extra="forbid"):
     new_port: str | None = None
 
 
+class SetModuleConfigKeyOp(BaseModel, extra="forbid"):
+    """Set a single key inside a Module's config without touching other keys.
+
+    Prefer over replace_module_config when fixing one field (path typo, bad
+    format value, wrong option).  replace_module_config replaces the entire
+    config block and risks silently dropping fields the LLM forgot to re-emit.
+
+    key uses dot-notation for nested values (e.g. 'options.mergeSchema').
+    """
+    op: Literal["set_module_config_key"]
+    module_id: str = Field(..., description="ID of the module to patch")
+    key: str = Field(..., description="Dot-notation config key, e.g. 'path' or 'options.mergeSchema'")
+    value: Any = Field(..., description="New value for the key")
+
+
 class SetModuleOnFailureOp(BaseModel, extra="forbid"):
     """Change the on_failure policy for a specific Module."""
     op: Literal["set_module_on_failure"]
@@ -143,6 +158,7 @@ class AddArcadeRefOp(BaseModel, extra="forbid"):
 PatchOperation = Annotated[
     Union[
         ReplaceModuleConfigOp,
+        SetModuleConfigKeyOp,
         ReplaceModuleLabelOp,
         InsertModuleOp,
         RemoveModuleOp,

@@ -30,7 +30,6 @@ modules:
       path: "${ctx.paths.yellow_path}/*.parquet"
       options:
         mergeSchema: "true"
-  
   - id: green_taxi_trips
     type: Ingress
     label: "Load Green Trips"
@@ -51,7 +50,6 @@ modules:
         inferSchema: "true"
 
   # ── 2. Normalize Trips ──────────────────────────────────────────
-  
   - id: yellow_trips_prepared
     type: Channel
     label: "Prepare Yellow Data"
@@ -100,7 +98,6 @@ modules:
 
 
   # ── N. Observe Schema --------|
-  
   - id: yellow_taxi_input
     type: Probe
     label: "Observe Yellow Taxi Input"
