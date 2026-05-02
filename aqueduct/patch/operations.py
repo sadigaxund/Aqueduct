@@ -22,7 +22,39 @@ Blueprint dict shape (mirrors YAML structure):
 
 from __future__ import annotations
 
+from io import StringIO
 from typing import Any
+
+from ruamel.yaml import YAML as _YAML
+from ruamel.yaml.scalarstring import DoubleQuotedScalarString as _DQ
+
+_ryaml = _YAML()
+_ryaml.preserve_quotes = True
+_ryaml.default_flow_style = False
+_ryaml.width = 4096
+_ryaml.indent(mapping=2, sequence=4, offset=2)
+
+
+def _quote_strings(data: Any) -> Any:
+    """Recursively wrap str values in DoubleQuotedScalarString.
+
+    Ensures strings that look like YAML booleans/numbers ('true', 'false', '1')
+    and template expressions ('${ctx.*}', '@aq.*') are always double-quoted in output.
+    """
+    if isinstance(data, dict):
+        return {k: _quote_strings(v) for k, v in data.items()}
+    if isinstance(data, list):
+        return [_quote_strings(v) for v in data]
+    if isinstance(data, str):
+        return _DQ(data)
+    return data
+
+
+def _to_ruamel(data: Any) -> Any:
+    """Convert plain Python dict/list to ruamel CommentedMap/CommentedSeq with double-quoted strings."""
+    buf = StringIO()
+    _ryaml.dump(_quote_strings(data), buf)
+    return _ryaml.load(buf.getvalue())
 
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
@@ -120,7 +152,7 @@ def _add_edges(bp: dict, edge_specs: list[dict]) -> None:
 def apply_replace_module_config(bp: dict, op: ReplaceModuleConfigOp) -> dict:
     """Replace config block of a named Module."""
     module = _find_module(bp, op.module_id)
-    module["config"] = op.config
+    module["config"] = _to_ruamel(op.config)
     return bp
 
 
@@ -144,7 +176,7 @@ def apply_insert_module(bp: dict, op: InsertModuleOp) -> dict:
             f"insert_module: module {new_id!r} already exists in Blueprint."
         )
 
-    bp.setdefault("modules", []).append(op.module)
+    bp.setdefault("modules", []).append(_to_ruamel(op.module))
     _remove_edges_matching(bp, op.edges_to_remove)
     _add_edges(bp, op.edges_to_add)
     return bp
@@ -191,7 +223,7 @@ def apply_add_probe(bp: dict, op: AddProbeOp) -> dict:
     # Verify attach_to target exists
     _find_module(bp, attach_to)
 
-    bp.setdefault("modules", []).append(op.module)
+    bp.setdefault("modules", []).append(_to_ruamel(op.module))
     _add_edges(bp, op.edges_to_add)
     return bp
 
@@ -248,7 +280,7 @@ def apply_add_arcade_ref(bp: dict, op: AddArcadeRefOp) -> dict:
             f"add_arcade_ref: module {arcade_id!r} already exists in Blueprint."
         )
 
-    bp.setdefault("modules", []).append(op.module)
+    bp.setdefault("modules", []).append(_to_ruamel(op.module))
     _remove_edges_matching(bp, op.edges_to_remove)
     _add_edges(bp, op.edges_to_add)
     return bp

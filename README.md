@@ -134,10 +134,12 @@ spark_config:
   spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
 
 stores:
-  observability:
-    path: ".aqueduct/signals"
+  obs:
+    path: ".aqueduct/obs.db"
+  lineage:
+    path: ".aqueduct/lineage.db"
   depot:
-    path: ".aqueduct/depot.duckdb"
+    path: ".aqueduct/depot.db"
 ```
 
 ### 3. Run
@@ -389,7 +391,7 @@ aqueduct compile  pipeline.yml --execution-date 2026-01-15  # backfill: pin @aq.
 aqueduct run      pipeline.yml              # Compile and execute
 aqueduct run      pipeline.yml \
   --config aqueduct.yml \
-  --store-dir .aqueduct/signals \
+  --store-dir .aqueduct \
   --run-id my-run-001 \
   --ctx env=prod
 
@@ -423,6 +425,11 @@ aqueduct signal   <signal_id>                         # show current override st
 aqueduct heal     <run_id>                  # manually trigger LLM self-healing for a failed run
 aqueduct heal     <run_id> --module <id>   # scope healing to a specific module
 
+aqueduct runs                               # list recent runs (all blueprints)
+aqueduct runs --blueprint blueprint.yml     # filter by blueprint
+aqueduct runs --failed                      # show only failed runs
+aqueduct runs --last 20                     # show last N runs
+
 aqueduct patch apply patch.json --blueprint pipeline.yml
 aqueduct patch reject <patch-id> --reason "Incorrect column name"
 aqueduct patch rollback <patch-id> --blueprint pipeline.yml  # restore Blueprint from backup
@@ -444,20 +451,38 @@ aqueduct patch rollback <patch-id> --blueprint pipeline.yml  # restore Blueprint
 
 ## Observability
 
-Aqueduct writes all observability data to DuckDB files:
+Aqueduct writes all observability data to DuckDB files under `.aqueduct/`:
+
+```
+.aqueduct/
+  obs.db          — run records, probe signals, module metrics, signal overrides
+  lineage.db      — column-level lineage
+  depot.db        — depot KV store (@aq.depot.*)
+  snapshots/      — schema_snapshot JSON files (one per probe per run)
+```
 
 ```bash
-# Run records
-duckdb .aqueduct/signals/runs.db
+# Run records and probe signals (all in obs.db)
+duckdb .aqueduct/obs.db
 SELECT run_id, blueprint_id, status, started_at, finished_at FROM run_records;
-
-# Probe signals
-duckdb .aqueduct/signals/signals.db
 SELECT probe_id, signal_type, payload FROM probe_signals ORDER BY captured_at DESC;
 
 # Depot state
-duckdb .aqueduct/depot.duckdb
+duckdb .aqueduct/depot.db
 SELECT key, value, updated_at FROM depot_kv;
+
+# Column lineage
+duckdb .aqueduct/lineage.db
+SELECT channel_id, output_column, source_table, source_column FROM column_lineage;
+```
+
+Or use the CLI:
+
+```bash
+aqueduct runs                        # list recent runs
+aqueduct runs --failed --last 10     # last 10 failed runs
+aqueduct report <run_id>             # detailed flow report
+aqueduct lineage <blueprint_id>      # column lineage graph
 ```
 
 ---

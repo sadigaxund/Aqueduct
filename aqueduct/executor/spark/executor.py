@@ -240,14 +240,14 @@ def _write_stage_metrics(
     metrics: "dict[str, Any]",
     store_dir: "Path | None",
 ) -> None:
-    """Persist SparkListener stage metrics to signals.db (non-fatal)."""
+    """Persist SparkListener stage metrics to obs.db (non-fatal)."""
     if store_dir is None:
         return
     try:
         import duckdb
         from datetime import datetime, timezone
 
-        db_path = store_dir / "signals.db"
+        db_path = store_dir / "obs.db"
         store_dir.mkdir(parents=True, exist_ok=True)
         conn = duckdb.connect(str(db_path))
         try:

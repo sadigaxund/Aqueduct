@@ -56,6 +56,8 @@ class AgentSchema(BaseModel):
     forbidden_ops: list[str] = Field(default_factory=list)
     # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
     validate_patch: bool = False
+    # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
+    prompt_context: str | None = None
 
 
 class ModuleSchema(BaseModel):

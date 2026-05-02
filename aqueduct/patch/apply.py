@@ -17,7 +17,6 @@ the temp file is cleaned up and the backup is left in place.
 
 from __future__ import annotations
 
-import copy
 import json
 import os
 import shutil
@@ -39,6 +38,7 @@ _ryaml = YAML()
 _ryaml.preserve_quotes = True
 _ryaml.default_flow_style = False
 _ryaml.width = 4096  # prevent unwanted line wrapping
+_ryaml.indent(mapping=2, sequence=4, offset=2)  # ensures `  - item` style (dash at col+2, content at col+4)
 
 
 def _yaml_load(path: Path) -> Any:
@@ -105,15 +105,38 @@ def load_patch_spec(patch_path: Path) -> PatchSpec:
         ) from exc
 
 
+def _ruamel_copy(data: Any) -> Any:
+    """Deep-copy a ruamel CommentedMap/CommentedSeq via round-trip serialization.
+
+    copy.deepcopy() on ruamel objects corrupts internal lc/ca metadata, causing
+    invalid YAML output (e.g. `modules: -` instead of block sequence). Round-trip
+    through the YAML serializer preserves all comment and indent state.
+    """
+    buf = StringIO()
+    _ryaml.dump(data, buf)
+    return _ryaml.load(buf.getvalue())
+
+
+def _to_ruamel(data: Any) -> Any:
+    """Convert a plain Python dict/list to a ruamel CommentedMap/CommentedSeq.
+
+    Needed when PatchSpec operations inject plain dicts (parsed from JSON) into
+    a ruamel tree — without this, the dumper loses block-style formatting.
+    """
+    buf = StringIO()
+    _ryaml.dump(data, buf)
+    return _ryaml.load(buf.getvalue())
+
+
 def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
-    """Apply all operations in patch_spec to a deep copy of bp.
+    """Apply all operations in patch_spec to a ruamel-safe copy of bp.
 
     Returns the modified Blueprint dict.  bp is never mutated.
 
     Raises:
         PatchError: If any operation fails (all-or-nothing).
     """
-    working = copy.deepcopy(bp)
+    working = _ruamel_copy(bp)
     for i, op in enumerate(patch_spec.operations):
         try:
             working = apply_operation(working, op)

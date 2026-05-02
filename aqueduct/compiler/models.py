@@ -86,6 +86,7 @@ class Manifest:
                 "provider": self.agent.provider,
                 "base_url": self.agent.base_url,
                 "validate_patch": self.agent.validate_patch,
+                "prompt_context": self.agent.prompt_context,
             },
             "udf_registry": list(self.udf_registry),
             "macros": self.macros,

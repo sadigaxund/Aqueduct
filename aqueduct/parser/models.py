@@ -46,6 +46,8 @@ class AgentConfig:
     forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
     # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
     validate_patch: bool = False
+    # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
+    prompt_context: str | None = None
 
 
 @dataclass(frozen=True)

@@ -64,17 +64,17 @@ class StoreBackendConfig(BaseModel):
 class StoresConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    observability: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/signals"),
-        description="Observability store (run records, failure contexts)",
+    obs: StoreBackendConfig = Field(
+        default_factory=lambda: StoreBackendConfig(path=".aqueduct/obs.db"),
+        description="Observability DB — full file path. Contains run records, probe signals, module metrics, and signal overrides. snapshots/ dir is created alongside it.",
     )
     lineage: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/lineage"),
-        description="Column-level lineage store",
+        default_factory=lambda: StoreBackendConfig(path=".aqueduct/lineage.db"),
+        description="Column-level lineage DB — full file path. Must be in same directory as obs.db.",
     )
     depot: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/depot.duckdb"),
-        description="Depot KV store (blueprint state, @aq.depot.*)",
+        default_factory=lambda: StoreBackendConfig(path=".aqueduct/depot.db"),
+        description="Depot KV store (blueprint state, @aq.depot.*) — full file path.",
     )
 
 
@@ -108,6 +108,18 @@ class AgentConnectionConfig(BaseModel):
     base_url: str | None = None
     model: str = "claude-sonnet-4-6"
     ollama_options: dict[str, Any] | None = None
+    llm_timeout: float = Field(
+        default=120.0,
+        description="HTTP socket timeout in seconds for LLM API calls. Increase for slow local models (e.g. 600.0).",
+    )
+    llm_max_reprompts: int = Field(
+        default=3,
+        description="Max reprompt attempts when LLM returns invalid PatchSpec JSON.",
+    )
+    prompt_context: str | None = Field(
+        default=None,
+        description="Extra context appended to the LLM system prompt for all blueprints. Use for cluster constraints, naming conventions, schema hints.",
+    )
 
 
 class WebhookEndpointConfig(BaseModel):

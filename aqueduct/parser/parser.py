@@ -150,6 +150,7 @@ def parse(
         allowed_paths=tuple(validated.agent.allowed_paths),
         forbidden_ops=tuple(validated.agent.forbidden_ops),
         validate_patch=validated.agent.validate_patch,
+        prompt_context=validated.agent.prompt_context,
     )
 
     return Blueprint(

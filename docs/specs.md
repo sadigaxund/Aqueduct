@@ -1,4 +1,4 @@
-﻿**AQUEDUCT**  —  System Design & Implementation Reference
+**AQUEDUCT**  —  System Design & Implementation Reference
 
 **AQUEDUCT**
 
@@ -1040,16 +1040,22 @@ agent:
 
 ## **8.7 Patch Lifecycle**
 1. Surveyor detects failure, exhausts retry policy if applicable, assembles FailureContext.
-1. FailureContext is posted to the configured LLM endpoint (model specified in agent: block).
-1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error and its response. Maximum 3 re-prompt attempts before escalating to human approval regardless of approval\_mode.
+1. FailureContext includes: run metadata, manifest JSON (compiled), **raw Blueprint YAML source** (pre-compilation, with `${ctx.*}` and `@aq.*` expressions intact), error message, stack trace.
+1. FailureContext is posted to the configured LLM endpoint with the PatchSpec schema and optional `prompt_context` instructions.
+1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error. Maximum `llm_max_reprompts` attempts (default 3) before giving up. On timeout or network failure, the attempt aborts immediately without retry.
 1. Valid PatchSpec is checked against guardrails (allowed\_paths, forbidden\_ops). If any guardrail fires, patch is staged in patches/pending/ for human review regardless of approval\_mode.
 1. If approval\_mode: disabled — LLM never fires.
 1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
 1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
 1. If approval\_mode: aggressive — If `validate_patch: true`: patch is compiled in memory first; if invalid, staged for human review and loop stops. Otherwise: patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
-1. Applied patch is moved to patches/applied/<patch\_id>.json with applied\_at timestamp, run\_id, and agent rationale preserved.
+1. Applied patch is written to `patches/applied/<seq>_<timestamp>_<slug>.json` with applied\_at timestamp, run\_id, and agent rationale preserved.
 1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
-1. To undo an applied patch: aqueduct patch rollback <patch\_id>. This atomically restores the Blueprint from the backup in patches/backups/ and moves the patch record to patches/rolled\_back/.
+
+**Patch file naming:** `{seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `00001_20260502T143022_fix-green-path.json`. Sequence is monotonically increasing across all patches in the project. Enables chronological sort without reading file contents.
+
+**LLM template expression preservation:** The LLM receives both the compiled module config (with resolved values) and the raw Blueprint YAML source. The system prompt instructs it to write patches using template expressions from the raw YAML (e.g. `${ctx.paths.input}`) rather than hardcoded resolved values. Patches are applied to the raw Blueprint, not the compiled Manifest.
+
+**Custom prompt context:** `agent.prompt_context` in `aqueduct.yml` (engine-wide) and `agent.prompt_context` in the Blueprint `agent:` block (per-blueprint) append domain-specific instructions to the LLM system prompt. Blueprint-level context appends after engine-level. Use for cluster constraints, naming conventions, schema hints, or forbidden patterns.
 
 ## **8.7 Resume-From Semantics** *(Deferred — Advanced Feature)*
 
@@ -1130,21 +1136,28 @@ deployment:
   target: local                    # local | standalone | yarn | kubernetes | databricks
   master_url: "local[*]"]           # overridden per target type
 stores:
+  # Root store directory. All runtime DB files are created inside it:
+  #   runs.db     — run records, failure contexts, signal overrides
+  #   signals.db  — probe signals, module metrics
+  #   lineage.db  — column-level lineage
+  #   snapshots/  — schema_snapshot JSON files (one file per probe per run)
   observability:
     backend: duckdb                # duckdb (default) | s3 | gcs | adls
-    path: ".aqueduct/signals"      # directory; signals written as Parquet files
+    path: ".aqueduct"              # root dir; runs.db and signals.db created here
   lineage:
     backend: duckdb
-    path: ".aqueduct/lineage"      # directory; lineage records written as Parquet files
+    path: ".aqueduct"              # must match observability.path; lineage.db created here
   depot:
     backend: duckdb
-    path: ".aqueduct/depot.duckdb" # single DuckDB file for KV state
+    path: ".aqueduct/depot.db"     # single DuckDB file for KV state
 agent:
-  default_model: claude-sonnet-4-20250514
-  api_endpoint: https://api.anthropic.com/v1/messages
-  max_tokens: 4096
+  provider: "anthropic"            # "anthropic" | "openai_compat"
+  model: "claude-sonnet-4-6"
+  llm_timeout: 120.0               # HTTP timeout per LLM call; increase for slow local models
+  llm_max_reprompts: 3             # max retries when LLM returns invalid PatchSpec JSON
+  prompt_context: |                # optional: appended to LLM system prompt for all blueprints
+    This cluster runs Databricks. All paths use s3a:// or dbfs://.
   max_patches_per_run: 5
-  default_approval_mode: auto
 probes:
   max_sample_rows: 100
   default_sample_fraction: 0.01
@@ -1265,7 +1278,7 @@ These are explicit guarantees that Aqueduct makes regarding its performance over
 
 ## **10.5 Depot Concurrency Limitations**
 
-The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports multiple concurrent readers but only one writer at a time per database file. **Two `aqueduct run` processes writing to the same `depot.duckdb` file simultaneously may produce write errors or data corruption.**
+The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports multiple concurrent readers but only one writer at a time per database file. **Two `aqueduct run` processes writing to the same `depot.db` file simultaneously may produce write errors or data corruption.**
 
 **Safe patterns:**
 - Sequential pipeline runs (even different pipelines) sharing the same depot file: fully safe.
