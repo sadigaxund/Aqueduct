@@ -1,0 +1,59 @@
+aqueduct_config: "1.0"
+
+deployment:
+  engine: spark
+  target: local
+  # master_url: "spark://10.0.0.39:7077"
+  master_url: "local[*]"
+
+spark_config:
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.shuffle.partitions: "50"   # small for local mode
+  spark.sql.session.timeZone: "UTC"
+
+# stores:
+#   observability:
+#     backend: duckdb
+#     path: ".aqueduct/signals"
+#   lineage:
+#     backend: duckdb
+#     path: ".aqueduct/lineage"
+#   depot:
+#     backend: duckdb
+#     path: ".aqueduct/depot.duckdb"
+
+webhooks:
+  on_failure:
+    url: "https://webhook.site/9208374b-ff87-4364-b638-1e7f0f7f2a4a"
+    method: POST
+    headers:
+      Authorization: "Bearer ${OPS_API_TOKEN}"
+      X-Source: "aqueduct"
+    timeout: 15
+    payload:
+      blueprint_name: "${BLUEPRINT_NAME}"
+      blueprint_id: "${BLUEPRINT_ID}"
+      run_id: "${RUN_ID}"
+      status: "${STATUS}"
+
+
+agent:
+  provider: "openai_compat"
+  base_url: "http://10.0.0.39:11434/v1"
+  model: "qwen2.5-coder:7b-instruct-q8_0"
+  llm_timeout: 600.0
+  # ollama_options:
+  #   num_thread: 16
+  #   num_gpu: 0                             # 0 = CPU only; 99 = all on GPU
+  #   mlock: true
+  #   num_batch: 1024
+  #   num_predict: -1
+
+
+probes:
+  max_sample_rows: 1000
+  default_sample_fraction: 0.01
+  block_full_actions_in_prod: false
+
+secrets:
+  provider: "env"

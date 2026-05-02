@@ -1,4 +1,4 @@
-"""Patch apply orchestrator — atomic Blueprint update with backup and archive.
+"""Patch apply orchestrator — atomic Blueprint update and archive.
 
 Lifecycle for apply_patch_file():
   1. Load and validate PatchSpec JSON.
@@ -6,20 +6,18 @@ Lifecycle for apply_patch_file():
   3. Deep-copy Blueprint dict.
   4. Apply each operation left-to-right on the copy.
   5. Re-parse with the Parser to verify the result is a valid Blueprint.
-  6. Backup the original Blueprint to patches/backups/.
-  7. Write the patched Blueprint atomically (write temp → os.replace).
-  8. Archive the PatchSpec to patches/applied/ (with applied_at timestamp).
-  9. Return ApplyResult.
+  6. Write the patched Blueprint atomically (write temp → os.replace).
+  7. Archive the PatchSpec to patches/applied/ (with applied_at timestamp).
+  8. Return ApplyResult.
 
-On any failure between steps 4 and 8, the original Blueprint is unchanged —
-the temp file is cleaned up and the backup is left in place.
+Rollback strategy: use git (aqueduct rollback). No file backup is kept.
+On failure between steps 4 and 6, original Blueprint is unchanged.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,7 +65,6 @@ class PatchError(Exception):
 class ApplyResult:
     patch_id: str
     blueprint_path: Path
-    backup_path: Path
     archive_path: Path
     operations_applied: int
     applied_at: str
@@ -198,14 +195,7 @@ def apply_patch_file(
         if tmp_verify.exists():
             tmp_verify.unlink()
 
-    # ── 6. Backup original Blueprint ──────────────────────────────────────────
-    backup_dir = patches_dir / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup_path = backup_dir / f"{patch_spec.patch_id}_{ts}_{blueprint_path.name}"
-    shutil.copy2(blueprint_path, backup_path)
-
-    # ── 7. Write patched Blueprint atomically ─────────────────────────────────
+    # ── 6. Write patched Blueprint atomically ─────────────────────────────────
     tmp_out = blueprint_path.with_suffix(".patch_out.tmp.yml")
     try:
         _yaml_dump(patched, tmp_out)
@@ -215,7 +205,7 @@ def apply_patch_file(
             tmp_out.unlink()
         raise PatchError(f"Failed to write patched Blueprint: {exc}") from exc
 
-    # ── 8. Archive PatchSpec to patches/applied/ ──────────────────────────────
+    # ── 7. Archive PatchSpec to patches/applied/ ──────────────────────────────
     applied_dir = patches_dir / "applied"
     applied_dir.mkdir(parents=True, exist_ok=True)
     archive_path = applied_dir / patch_path.name
@@ -227,14 +217,12 @@ def apply_patch_file(
         raw_spec["blueprint_path"] = str(blueprint_path)
         archive_path.write_text(json.dumps(raw_spec, indent=2), encoding="utf-8")
     except Exception as exc:
-        # Archive failure is non-fatal — patch already applied to Blueprint
         import sys
         print(f"[patch] warning: could not archive patch to {archive_path}: {exc}", file=sys.stderr)
 
     return ApplyResult(
         patch_id=patch_spec.patch_id,
         blueprint_path=blueprint_path,
-        backup_path=backup_path,
         archive_path=archive_path,
         operations_applied=len(patch_spec.operations),
         applied_at=applied_at,
@@ -259,12 +247,17 @@ def reject_patch(
     Raises:
         PatchError: Patch not found in patches/pending/.
     """
-    pending_path = patches_dir / "pending" / f"{patch_id}.json"
+    pending_dir = patches_dir / "pending"
+    # Try exact filename first, then glob for new-style {seq}_{ts}_{slug}.json naming
+    pending_path = pending_dir / f"{patch_id}.json"
     if not pending_path.exists():
-        raise PatchError(
-            f"Patch {patch_id!r} not found in {patches_dir / 'pending'}. "
-            f"Available: {[p.stem for p in (patches_dir / 'pending').glob('*.json')]}"
-        )
+        matches = list(pending_dir.glob(f"*_{patch_id}.json")) if pending_dir.exists() else []
+        if not matches:
+            raise PatchError(
+                f"Patch {patch_id!r} not found in {pending_dir}. "
+                f"Available: {[p.name for p in pending_dir.glob('*.json')] if pending_dir.exists() else []}"
+            )
+        pending_path = sorted(matches)[-1]
 
     rejected_dir = patches_dir / "rejected"
     rejected_dir.mkdir(parents=True, exist_ok=True)

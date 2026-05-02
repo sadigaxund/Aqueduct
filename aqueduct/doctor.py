@@ -286,6 +286,113 @@ def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
         return CheckResult("storage", "warn", f"storage probe failed: {exc}", _ms(t))
 
 
+# ── Blueprint source checks ───────────────────────────────────────────────────
+
+def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
+    """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
+
+    Local paths: checked for existence (Ingress) or parent-dir writability (Egress).
+    Relative paths resolve from the project root (directory containing aqueduct.yml),
+    found by walking up from the blueprint — same logic as `aqueduct run`.
+    Cloud URIs (s3a://, gs://, abfss://): skipped here — covered by storage check.
+    JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
+               not credentials or schema).
+    """
+    import re
+    import socket
+
+    # Find project root (same walk-up logic as `run` command)
+    project_root = blueprint_path.parent
+    _search = blueprint_path.parent
+    for _ in range(8):
+        if (_search / "aqueduct.yml").exists():
+            project_root = _search
+            break
+        if _search.parent == _search:
+            break
+        _search = _search.parent
+
+    results: list[CheckResult] = []
+
+    try:
+        from aqueduct.parser.parser import parse
+        bp = parse(str(blueprint_path))
+    except Exception as exc:
+        return [CheckResult("blueprint", "fail", f"could not parse {blueprint_path}: {exc}")]
+
+    for module in bp.modules:
+        cfg = module.config if isinstance(module.config, dict) else {}
+        fmt: str = cfg.get("format", "")
+        path_val: str | None = cfg.get("path")
+        url_val: str | None = cfg.get("url")  # JDBC url key
+
+        if module.type not in ("Ingress", "Egress"):
+            continue
+
+        t = time.monotonic()
+        name = f"{module.type.lower()}:{module.id}"
+
+        # ── JDBC ──────────────────────────────────────────────────────────────
+        jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
+        if jdbc_url or fmt == "jdbc":
+            raw = jdbc_url or path_val or ""
+            # jdbc:postgresql://host:5432/db  or  jdbc:mysql://host/db
+            m = re.search(r"jdbc:[^:]+://([^/:]+)(?::(\d+))?", raw)
+            if not m:
+                results.append(CheckResult(name, "warn", f"JDBC URL not parseable: {raw!r}", _ms(t)))
+                continue
+            host = m.group(1)
+            port = int(m.group(2)) if m.group(2) else _jdbc_default_port(raw)
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    pass
+                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+            except OSError as exc:
+                results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
+            continue
+
+        # ── Cloud URIs — skip (covered by storage check) ───────────────────
+        if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
+            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            continue
+
+        # ── Local / relative path ──────────────────────────────────────────
+        if path_val:
+            # Resolve relative to project root (same as runtime chdir behaviour)
+            p = (project_root / path_val).resolve() if not Path(path_val).is_absolute() else Path(path_val)
+            # Strip glob patterns to check the parent directory
+            p_check = p.parent if ("*" in str(p) or "?" in str(p)) else p
+
+            if module.type == "Ingress":
+                if p_check.exists():
+                    results.append(CheckResult(name, "ok", f"readable: {path_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"not found: {p_check}", _ms(t)))
+            else:  # Egress
+                parent = p.parent if not ("*" in str(p)) else p.parent.parent
+                if parent.exists():
+                    results.append(CheckResult(name, "ok", f"parent dir exists: {path_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "warn", f"output dir does not exist yet: {parent}", _ms(t)))
+            continue
+
+        results.append(CheckResult(name, "skip", "no path or url in config", _ms(t)))
+
+    return results
+
+
+def _jdbc_default_port(jdbc_url: str) -> int:
+    defaults = {
+        "postgresql": 5432, "mysql": 3306, "sqlserver": 1433,
+        "oracle": 1521, "db2": 50000, "redshift": 5439,
+        "bigquery": 443, "snowflake": 443,
+    }
+    for key, port in defaults.items():
+        if key in jdbc_url.lower():
+            return port
+    return 5432  # safe fallback
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _ms(t: float) -> int:
@@ -309,6 +416,7 @@ def _storage_probe_paths(spark_config: dict[str, Any]) -> list[tuple[str, str]]:
 def run_doctor(
     config_path: Path | None = None,
     skip_spark: bool = False,
+    blueprint_path: Path | None = None,
 ) -> list[CheckResult]:
     """Run all checks and return results in order."""
     from aqueduct.config import load_config, ConfigError
@@ -362,10 +470,15 @@ def run_doctor(
     if skip_spark:
         results.append(CheckResult("spark", "skip", "--skip-spark flag set"))
         results.append(check_storage(cfg.spark_config, spark_ok=False))
+        if blueprint_path is not None:
+            results.extend(check_blueprint_sources(blueprint_path))
         return results
 
     spark_result, storage_result = check_spark(cfg.deployment.master_url, cfg.spark_config)
     results.append(spark_result)
     results.append(storage_result)
+
+    if blueprint_path is not None:
+        results.extend(check_blueprint_sources(blueprint_path))
 
     return results

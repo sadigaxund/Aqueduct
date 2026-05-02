@@ -781,17 +781,10 @@ Issues reported in:
 - ✅ `AgentConfig.forbidden_ops` round-trips through schema → parser → model (empty default)
 - ✅ `allowed_paths` + `forbidden_ops` in Blueprint YAML parsed correctly to `AgentConfig`
 
-### Patch Rollback — `aqueduct patch rollback` — `aqueduct/cli.py`
+### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
 
-**Behavior:** locates backup in `patches/backups/<patch_id>_*`; restores Blueprint atomically via tmp+rename; moves applied record to `patches/rolled_back/` with `rolled_back_at`.
-
-- ✅ `patch rollback <id>`: backup exists → Blueprint restored to backup content
-- ✅ `patch rollback <id>`: restore is atomic (tmp file + os.replace, not direct overwrite)
-- ✅ `patch rollback <id>`: applied record moved from `patches/applied/` to `patches/rolled_back/`
-- ✅ `patch rollback <id>`: rolled-back file contains `rolled_back_at` ISO timestamp
-- ✅ `patch rollback <id>`: no backup found → error message; Blueprint unchanged
-- ⏳ `patch rollback <id>`: multiple backups for same patch_id → most recent used (sort by filename ts)
-- ✅ `patch rollback <id>`: no applied record (patch was staged-only) → rollback still restores Blueprint if backup exists
+**Phase 18 redesign:** file backups eliminated; rollback uses git via `aqueduct rollback <blueprint> --to <patch_id>`.
+Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### Phase 10 — Channel `op: join` + SQL Macros ✅
 
@@ -1035,3 +1028,54 @@ Issues reported in:
 - ⏳ `git commit` run after scaffold; output line printed
 - ⏳ `git commit` fails with "nothing to commit" → no error printed (silent)
 - ⏳ git not installed → scaffold succeeds; git steps skipped with warning
+
+## Phase 18 — Git-Integrated Patch Lifecycle
+
+### `_uncommitted_applied_patches()` — `aqueduct/cli.py`
+- ⏳ applied patch with `applied_at` > last git commit timestamp → returned
+- ⏳ applied patch with `applied_at` ≤ last git commit timestamp → not returned
+- ⏳ not in a git repo → all applied patches returned
+- ⏳ blueprint never committed → all applied patches returned (git log returns empty)
+- ⏳ no applied patches dir → returns empty list
+- ⏳ `_aq_meta.applied_at` field used when top-level `applied_at` absent
+
+### Patch naming — `_patch_filename()` — `aqueduct/surveyor/llm.py`
+- ⏳ `stage_patch_for_human` writes `{seq:05d}_{ts}_{slug}.json` format
+- ⏳ `archive_patch` writes same structured naming
+- ⏳ seq = count of all .json files across pending/ + applied/ + rejected/ + 1
+- ⏳ `reject_patch` resolves `*_{patch_id}.json` glob when exact name not found
+
+### `aqueduct patch commit` — `aqueduct/cli.py`
+- ⏳ no uncommitted patches → prints "Nothing to commit" and exits 0
+- ⏳ 1 uncommitted patch → commit message subject = patch rationale
+- ⏳ N>1 uncommitted patches → commit message subject = "N patches applied"
+- ⏳ `---aqueduct---` block present in commit message with patch stems, run_id, ops
+- ⏳ `git add <blueprint> && git commit` run; short hash printed on success
+- ⏳ not in a git repo → error on `git add`; exits 1
+- ⏳ ops deduplicated (same op type multiple times → appears once in ops field)
+
+### `aqueduct patch discard` — `aqueduct/cli.py`
+- ⏳ `git checkout HEAD -- blueprint` restores blueprint to last committed state
+- ⏳ uncommitted applied patches moved back to `patches/pending/`
+- ⏳ no uncommitted patches → git checkout still runs; no patches moved
+- ⏳ git checkout failure → exits 1 with error message
+- ⏳ patches moved count printed in output
+
+### `aqueduct log <blueprint>` — `aqueduct/cli.py`
+- ⏳ no git history for blueprint → prints "No git history for this blueprint."
+- ⏳ commit with `---aqueduct---` block → patch_id + ops extracted and shown
+- ⏳ commit without `---aqueduct---` block → shows "(manual change)"
+- ⏳ `--format json` → array of objects with hash, date, patches, ops, run_id fields
+- ⏳ long patches column truncated to 40 chars with `..` suffix
+
+### `aqueduct rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
+- ⏳ patch_id found in git log → `git revert --no-edit <hash>` run; new commit created
+- ⏳ patch_id not found → error message with hint to run `aqueduct log`; exits 1
+- ⏳ `--hard` flag: requires typing "yes" to confirm; runs `git reset --hard <parent>`
+- ⏳ `--hard` with non-"yes" response → "Aborted." printed; no reset
+- ⏳ `git revert` failure (e.g. conflict) → exits 1 with stderr
+
+### Run-start uncommitted patch warning — `aqueduct/cli.py`
+- ⏳ uncommitted applied patches exist → warning printed to stderr before run starts
+- ⏳ no uncommitted patches → no warning
+- ⏳ warning text includes "aqueduct patch commit --blueprint <path>"
