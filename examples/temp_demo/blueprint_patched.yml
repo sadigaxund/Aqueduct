@@ -1,0 +1,152 @@
+aqueduct: "1.0"
+
+id: nyc_taxi_demo
+name: "NYC Taxi Demo"
+
+description: |
+  Simple NYC taxi blueprint that:
+    - Ingests yellow and green taxi trip data (Parquet)
+    - Cleans data and standardizes schemas
+    - Enriches with taxi zone information
+    - Aggregates hourly trip volumes
+    - Outputs hourly totals to a Parquet summary table
+
+context:
+  paths:
+    yellow_path: "data/yellow/"
+    green_path: "data/green/"
+    lookup_table: "data/zones/taxi_zone_lookup.csv"
+
+modules:
+
+  # ── 1. Load Taxi Data ─────────
+
+  - id: yellow_taxi_trips
+    type: Ingress
+    label: "Load Yellow Trips"
+    config:
+      format: parquet
+      path: "${ctx.paths.yellow_path}/*.parquet"
+      options:
+        mergeSchema: "true"
+  - id: green_taxi_trips
+    type: Ingress
+    label: "Load Green Trips"
+    config:
+      format: "parquet"
+      path: "${ctx.paths.green_path}/*.parquet"
+      options:
+        mergeSchema: "true"
+  - id: taxi_zone_lookup
+    type: Ingress
+    label: "Load Taxi Zone Lookup"
+    config:
+      format: csv
+      path: "${ctx.paths.lookup_table}"
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  # ── 2. Normalize Trips ──────────────────────────────────────────
+  - id: yellow_trips_prepared
+    type: Channel
+    label: "Prepare Yellow Data"
+    config:
+      op: sql
+      query: |
+        SELECT 
+          VendorID,
+          tpep_pickup_datetime AS pickup_datetime,
+          tpep_dropoff_datetime AS dropoff_datetime,
+          PULocationID,
+          DOLocationID,
+          passenger_count,
+          trip_distance,
+          fare_amount,
+          total_amount,
+          'yellow' AS taxi_type
+        FROM yellow_taxi_trips
+
+  - id: green_trips_prepared
+    type: Channel
+    label: "Prepare Green Data"
+    config:
+      op: sql
+      query: |
+        SELECT 
+          VendorID,
+          lpep_pickup_datetime AS pickup_datetime,
+          lpep_dropoff_datetime AS dropoff_datetime,
+          PULocationID,
+          DOLocationID,
+          passenger_count,
+          trip_distance,
+          fare_amount,
+          total_amount,
+          'green' AS taxi_type
+        FROM green_taxi_trips
+
+  # ── 3. Merge into Single Stream ──────────────────────────────────────────
+  - id: all_taxi_trips
+    type: Funnel
+    label: "Merge All Taxi Trips"
+    config:
+      mode: union_all
+      inputs: [yellow_trips_prepared, green_trips_prepared]
+
+
+  # ── N. Observe Schema --------|
+  - id: yellow_taxi_input
+    type: Probe
+    label: "Observe Yellow Taxi Input"
+    attach_to: yellow_taxi_trips
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+          method: sample
+          fraction: 0.1
+        - type: null_rates
+          columns: [VendorID, total_amount]
+          fraction: 0.1
+        - type: sample_rows
+          n: 20
+
+  - id: green_taxi_input
+    type: Probe
+    label: "Observe Green Taxi Input"
+    attach_to: green_taxi_trips
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+          method: sample
+          fraction: 0.1
+        - type: null_rates
+          columns: [VendorID, total_amount]
+          fraction: 0.1
+        - type: sample_rows
+          n: 20
+
+edges:
+  - from: yellow_taxi_trips
+    to: yellow_trips_prepared
+  - from: green_taxi_trips
+    to: green_trips_prepared
+  - from: yellow_trips_prepared
+    to: all_taxi_trips
+  - from: green_trips_prepared
+    to: all_taxi_trips
+
+agent:
+  approval_mode: human
+  on_pending_patches: warn            # ignore | warn | block
+  max_patches_per_run: 1
+  allowed_paths:
+    - "data/*"
+    - "data/zones/*"
+    - "data/trips/*"
+
+  forbidden_ops:
+    - remove_module              # never delete modules autonomously
+    - replace_retry_policy       # retry policy is managed by humans only

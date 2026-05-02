@@ -35,3 +35,17 @@ Moreover, should we really let LLM patches let loose on production environments 
 10. regarding nyc example, was last trying to make llm work, couldnt because of above.
 
 
+11. Prove that this claim stands true: "What context_override does: at expansion time, the compiler merges the parent's context with the arcade's context_override. So ${ctx.input_table} inside the arcade resolves to whatever the parent passed — not a global. Each use of the same Arcade in the same Blueprint gets its own context values.
+
+12. Update CHANGELOG.md with latest changes, you move completed tasks from TODOs.md there.
+
+
+fix: anchor run CWD to project root; add doctor --blueprint source check
+- 'aqueduct run' now resolves all CLI paths to absolute, then os.chdir to
+the project root (dir containing aqueduct.yml, found by walking up from
+the blueprint file). Relative paths in Blueprint YAML resolve consistently
+regardless of where the CLI is invoked.
+- 'aqueduct doctor --blueprint <file>' probes every Ingress/Egress source:
+local path existence, parent-dir writability for Egress, TCP socket probe
+(3s) for JDBC endpoints. Cloud URIs skipped (covered by storage check).
+Path resolution uses the same project-root walk-up logic as run.

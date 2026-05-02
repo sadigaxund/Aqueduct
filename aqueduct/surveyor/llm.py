@@ -413,6 +413,19 @@ def generate_llm_patch(
     return patch_spec
 
 
+def _patch_filename(patch_spec: PatchSpec, patches_dir: Path) -> str:
+    """Generate structured filename: {seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json."""
+    from datetime import datetime, timezone
+
+    seq = 1 + sum(
+        len(list(d.glob("*.json")))
+        for d in [patches_dir / "pending", patches_dir / "applied", patches_dir / "rejected"]
+        if d.exists()
+    )
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    return f"{seq:05d}_{ts}_{patch_spec.patch_id}.json"
+
+
 def stage_patch_for_human(
     patch_spec: PatchSpec,
     patches_dir: Path,
@@ -421,7 +434,8 @@ def stage_patch_for_human(
     """Write patch to patches/pending/ for human review."""
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
-    out_path = pending_dir / f"{patch_spec.patch_id}.json"
+    filename = _patch_filename(patch_spec, patches_dir)
+    out_path = pending_dir / filename
     payload = patch_spec.model_dump()
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
@@ -446,7 +460,8 @@ def archive_patch(
     """Write patch to patches/applied/ with metadata."""
     applied_dir = patches_dir / "applied"
     applied_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = applied_dir / f"{patch_spec.patch_id}.json"
+    filename = _patch_filename(patch_spec, patches_dir)
+    archive_path = applied_dir / filename
     payload = patch_spec.model_dump()
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,

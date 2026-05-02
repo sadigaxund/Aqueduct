@@ -1,8 +1,8 @@
 """Aqueduct CLI.
 
-Active commands: init, validate, compile, run, check-config, doctor,
-                 runs, report, lineage, signal, heal,
-                 patch apply, patch reject, patch rollback.
+Commands: init, validate, compile, run, check-config, doctor, runs, report,
+          lineage, signal, heal, log, rollback,
+          patch apply, patch reject, patch commit, patch discard.
 """
 
 from __future__ import annotations
@@ -175,11 +175,21 @@ def check_config(config_path: str | None) -> None:
     default=False,
     help="Skip Spark connectivity check (fast mode — avoids JVM startup).",
 )
-def doctor(config_path: str | None, skip_spark: bool) -> None:
+@click.option(
+    "--blueprint",
+    "blueprint_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Also probe all Ingress/Egress paths and JDBC endpoints declared in this Blueprint.",
+)
+def doctor(config_path: str | None, skip_spark: bool, blueprint_path: str | None) -> None:
     """Probe all configured resources: config, stores, Spark, webhook, secrets, storage.
 
     Each check is independent. Spark check requires pyspark and may take 10-15s
     for JVM startup. Use --skip-spark to skip it in fast CI contexts.
+
+    With --blueprint: additionally checks all Ingress/Egress sources — local path
+    existence, cloud auth probes, and TCP connectivity for JDBC endpoints.
 
     Exit codes: 0 = all ok/warn/skip, 1 = any check failed.
     """
@@ -197,6 +207,7 @@ def doctor(config_path: str | None, skip_spark: bool) -> None:
     results = run_doctor(
         config_path=Path(config_path) if config_path else None,
         skip_spark=skip_spark,
+        blueprint_path=Path(blueprint_path) if blueprint_path else None,
     )
 
     col_w = max(len(r.name) for r in results) + 2
@@ -328,6 +339,7 @@ def run(
     execution_date_str: str | None,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
+    import os
     import uuid
     from pathlib import Path
 
@@ -340,15 +352,47 @@ def run(
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
 
+    # ── Anchor CWD to project root ────────────────────────────────────────────
+    # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
+    # flags like --config ../shared/aqueduct.yml keep their original meaning.
+    #
+    # Project root = the directory containing aqueduct.yml.  We find it by:
+    #   1. If --config is given, use that file's parent dir.
+    #   2. Otherwise walk up from the blueprint file until aqueduct.yml is found
+    #      (up to 8 levels), falling back to the blueprint's own directory.
+    #
+    # After chdir, relative paths in Blueprint YAML (e.g. "data/input/*.parquet")
+    # resolve from the project root regardless of where the CLI was invoked.
+    blueprint_abs = Path(blueprint).resolve()
+    config_path_abs = Path(config_path).resolve() if config_path else None
+    store_dir_abs = Path(store_dir).resolve() if store_dir else None
+
+    if config_path_abs:
+        _project_root = config_path_abs.parent
+    else:
+        _project_root = blueprint_abs.parent
+        _search = blueprint_abs.parent
+        for _ in range(8):
+            if (_search / "aqueduct.yml").exists():
+                _project_root = _search
+                break
+            if _search.parent == _search:
+                break
+            _search = _search.parent
+
+    os.chdir(_project_root)
+    # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
+    blueprint = str(blueprint_abs)
+
     # ── Load engine config ─────────────────────────────────────────────────────
     try:
-        cfg = load_config(Path(config_path) if config_path else None)
+        cfg = load_config(config_path_abs)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
     # CLI flags override config file; config file overrides built-in defaults
-    resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+    resolved_store_dir = store_dir_abs if store_dir_abs else Path(cfg.stores.obs.path).parent
     # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
     resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
@@ -419,6 +463,16 @@ def run(
             sys.exit(1)
         elif policy == "warn":
             click.echo(msg, err=True)
+
+    # ── Uncommitted applied patch warning ──────────────────────────────────────
+    uncommitted_applied = _uncommitted_applied_patches(Path(blueprint), patches_dir)
+    if uncommitted_applied:
+        n_uc = len(uncommitted_applied)
+        click.echo(
+            f"⚠ {n_uc} applied patch(es) not yet committed to git — "
+            f"run 'aqueduct patch commit --blueprint {blueprint}'",
+            err=True,
+        )
 
     run_id = run_id or str(uuid.uuid4())
     selector_note = ""
@@ -697,6 +751,49 @@ def run(
     click.echo(f"\n✓ blueprint complete  run_id={result.run_id}")
 
 
+# ── patch helpers ────────────────────────────────────────────────────────────
+
+def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> list[Path]:
+    """Return applied patches with applied_at newer than the last git commit for blueprint_path.
+
+    Falls back to returning all applied patches when not in a git repo or blueprint
+    has never been committed.
+    """
+    import subprocess
+
+    applied_dir = patches_root / "applied"
+    if not applied_dir.exists():
+        return []
+
+    all_applied = sorted(applied_dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
+    if not all_applied:
+        return []
+
+    # Get ISO timestamp of last git commit touching this blueprint
+    result = subprocess.run(
+        ["git", "log", "-1", "--format=%cI", "--", str(blueprint_path)],
+        capture_output=True, text=True,
+    )
+    last_commit_ts: str | None = result.stdout.strip() if result.returncode == 0 else None
+
+    if not last_commit_ts:
+        # Not in git or never committed — treat everything as uncommitted
+        return all_applied
+
+    uncommitted = []
+    for p in all_applied:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        # applied_at may be top-level or inside _aq_meta
+        applied_at = data.get("applied_at") or (data.get("_aq_meta") or {}).get("applied_at")
+        if applied_at and applied_at > last_commit_ts:
+            uncommitted.append(p)
+
+    return uncommitted
+
+
 # ── patch command group ───────────────────────────────────────────────────────
 
 @cli.group()
@@ -740,9 +837,9 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str) -> None:
 
     click.echo(f"✓ patch applied  id={result.patch_id}")
     click.echo(f"  blueprint  → {result.blueprint_path}")
-    click.echo(f"  backup     → {result.backup_path}")
     click.echo(f"  archived   → {result.archive_path}")
     click.echo(f"  operations   {result.operations_applied} applied")
+    click.echo(f"  commit with: aqueduct patch commit --blueprint {blueprint}")
 
 
 @patch.command("reject")
@@ -779,13 +876,12 @@ def patch_reject(patch_id: str, reason: str, patches_dir: str) -> None:
     click.echo(f"  reason: {reason}")
 
 
-@patch.command("rollback")
-@click.argument("patch_id")
+@patch.command("commit")
 @click.option(
     "--blueprint",
     required=True,
-    type=click.Path(dir_okay=False),
-    help="Blueprint YAML file to restore",
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file to commit",
 )
 @click.option(
     "--patches-dir",
@@ -793,65 +889,143 @@ def patch_reject(patch_id: str, reason: str, patches_dir: str) -> None:
     show_default=True,
     help="Root directory for patch lifecycle subdirs",
 )
-def patch_rollback(patch_id: str, blueprint: str, patches_dir: str) -> None:
-    """Roll back an applied patch — restores the pre-patch Blueprint backup.
+def patch_commit(blueprint: str, patches_dir: str) -> None:
+    """Commit applied patches to git with a structured commit message.
 
-    Finds the backup in patches/backups/, restores it atomically to the Blueprint,
-    and moves the patch record to patches/rolled_back/.
+    Finds applied patches newer than the last git commit for this Blueprint,
+    then runs: git add <blueprint> && git commit.
     """
-    import json
-    import os
-    import shutil
-    from datetime import datetime, timezone
+    import subprocess
     from pathlib import Path
 
-    patches_root = Path(patches_dir)
     blueprint_path = Path(blueprint)
+    patches_root = Path(patches_dir)
 
-    # Locate backup — name format: <patch_id>_<timestamp>_<blueprint_name>
-    backup_dir = patches_root / "backups"
-    matches = list(backup_dir.glob(f"{patch_id}_*")) if backup_dir.exists() else []
-    if not matches:
-        click.echo(
-            f"✗ no backup found for patch {patch_id!r} in {backup_dir}\n"
-            "  (Only patches applied by Aqueduct have automatic backups.)",
-            err=True,
-        )
-        sys.exit(1)
+    uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
+    if not uncommitted:
+        click.echo("Nothing to commit — no applied patches since last git commit.")
+        return
 
-    backup_path = sorted(matches)[-1]  # most recent backup if multiple
-
-    # Restore backup → blueprint (atomic via temp file)
-    tmp = blueprint_path.with_suffix(".rollback.tmp.yml")
+    # Parse blueprint_id
     try:
-        shutil.copy2(backup_path, tmp)
-        os.replace(tmp, blueprint_path)
-    except OSError as exc:
-        tmp.unlink(missing_ok=True)
-        click.echo(f"✗ rollback failed: {exc}", err=True)
+        from aqueduct.parser.parser import parse as _parse
+        bp = _parse(blueprint)
+        blueprint_id = bp.id
+    except Exception:
+        blueprint_id = blueprint_path.stem
+
+    # Build commit message
+    patch_lines: list[str] = []
+    all_ops: list[str] = []
+    run_id: str | None = None
+    rationales: list[str] = []
+
+    for p in uncommitted:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            data = {}
+        rat = data.get("rationale", "")
+        if rat:
+            rationales.append(rat)
+        ops = [op.get("op", "?") for op in data.get("operations", [])]
+        all_ops.extend(ops)
+        meta = data.get("_aq_meta", {})
+        if not run_id:
+            run_id = meta.get("run_id") or data.get("run_id")
+        patch_lines.append(f"  - {p.stem}: {rat or '(no rationale)'}")
+
+    n = len(uncommitted)
+    summary = rationales[0] if n == 1 and rationales else f"{n} patches applied"
+    combined_rationale = "\n".join(rationales) if rationales else ""
+    ops_str = ", ".join(dict.fromkeys(all_ops))  # deduplicated, ordered
+
+    aqueduct_block = "---aqueduct---\npatches:\n" + "\n".join(patch_lines)
+    if run_id:
+        aqueduct_block += f"\nrun_id: {run_id}"
+    if ops_str:
+        aqueduct_block += f"\nops: {ops_str}"
+    aqueduct_block += "\n---"
+
+    commit_msg = f"fix(aqueduct/{blueprint_id}): {summary}"
+    if combined_rationale:
+        commit_msg += f"\n\n{combined_rationale}"
+    commit_msg += f"\n\n{aqueduct_block}"
+
+    add = subprocess.run(["git", "add", str(blueprint_path)], capture_output=True, cwd=blueprint_path.parent)
+    if add.returncode != 0:
+        click.echo(f"✗ git add failed: {add.stderr.decode().strip()}", err=True)
         sys.exit(1)
 
-    # Move applied → rolled_back
-    applied_path = patches_root / "applied" / f"{patch_id}.json"
-    rolled_back_dir = patches_root / "rolled_back"
-    rolled_back_dir.mkdir(parents=True, exist_ok=True)
-    rolled_back_path = rolled_back_dir / f"{patch_id}.json"
+    commit = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        capture_output=True, text=True, cwd=blueprint_path.parent,
+    )
+    if commit.returncode != 0:
+        click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
+        sys.exit(1)
 
-    if applied_path.exists():
+    short_hash = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, cwd=blueprint_path.parent,
+    ).stdout.strip()
+
+    click.echo(f"✓ committed {n} patch(es)  [{short_hash}]  {blueprint_id}")
+    for p in uncommitted:
+        click.echo(f"  {p.name}")
+
+
+@patch.command("discard")
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file to restore from git HEAD",
+)
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle subdirs",
+)
+def patch_discard(blueprint: str, patches_dir: str) -> None:
+    """Discard applied patches — restore Blueprint to last git commit.
+
+    Runs: git checkout HEAD -- <blueprint>
+    Moves uncommitted applied patches back to patches/pending/.
+    """
+    import subprocess
+    from pathlib import Path
+
+    blueprint_path = Path(blueprint)
+    patches_root = Path(patches_dir)
+
+    uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
+
+    restore = subprocess.run(
+        ["git", "checkout", "HEAD", "--", str(blueprint_path)],
+        capture_output=True, text=True, cwd=blueprint_path.parent,
+    )
+    if restore.returncode != 0:
+        click.echo(f"✗ git checkout failed: {restore.stderr.strip()}", err=True)
+        sys.exit(1)
+
+    click.echo(f"✓ blueprint restored to HEAD: {blueprint_path}")
+
+    pending_dir = patches_root / "pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for patch_file in uncommitted:
+        dest = pending_dir / patch_file.name
         try:
-            data = json.loads(applied_path.read_text(encoding="utf-8"))
-            meta = data.get("_aq_meta", {})
-            meta["rolled_back_at"] = datetime.now(tz=timezone.utc).isoformat()
-            data["_aq_meta"] = meta
-            rolled_back_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            applied_path.unlink()
+            patch_file.rename(dest)
+            moved += 1
         except OSError:
-            pass  # non-fatal — blueprint already restored
+            pass
 
-    click.echo(f"✓ patch rolled back  id={patch_id}")
-    click.echo(f"  blueprint  ← {backup_path}")
-    if rolled_back_path.exists():
-        click.echo(f"  archived   → {rolled_back_path}")
+    if moved:
+        click.echo(f"  moved {moved} applied patch(es) back to patches/pending/")
+        click.echo(f"  re-apply with: aqueduct patch apply patches/pending/<file> --blueprint {blueprint}")
 
 
 # ── aqueduct test ────────────────────────────────────────────────────────────
@@ -1532,6 +1706,190 @@ def heal(
     stage_patch_for_human(patch, patches_path, failure_ctx)
     click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
     click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
+
+
+# ── aqueduct log ─────────────────────────────────────────────────────────────
+
+@cli.command("log")
+@click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+def log_cmd(blueprint: str, fmt: str) -> None:
+    """Show git commit history for a Blueprint with Aqueduct patch metadata.
+
+    Parses ---aqueduct--- blocks from commit messages.  Manual commits (no
+    block) are shown as '(manual change)'.
+    """
+    import re
+    import subprocess
+
+    blueprint_path = Path(blueprint)
+
+    result = subprocess.run(
+        ["git", "log", "--follow", "--format=%H\x1f%ci\x1f%s\x1f%B\x1eENDCOMMIT", "--", str(blueprint_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
+        sys.exit(1)
+
+    raw = result.stdout.strip()
+    if not raw:
+        click.echo("No git history for this blueprint.")
+        return
+
+    _AQ_BLOCK_RE = re.compile(r"---aqueduct---(.*?)---", re.DOTALL)
+    _PATCH_LINE_RE = re.compile(r"^\s*-\s+(\S+):\s*(.*)", re.MULTILINE)
+
+    entries = []
+    for commit_raw in raw.split("\x1eENDCOMMIT"):
+        commit_raw = commit_raw.strip()
+        if not commit_raw:
+            continue
+        # First line is the \x1f-separated header
+        header_line, _, body = commit_raw.partition("\n")
+        parts = header_line.split("\x1f")
+        if len(parts) < 3:
+            continue
+        commit_hash = parts[0].strip()
+        commit_date = parts[1].strip()
+        subject = parts[2].strip()
+
+        aq_match = _AQ_BLOCK_RE.search(body)
+        if aq_match:
+            block = aq_match.group(1)
+            patch_ids = [m.group(1) for m in _PATCH_LINE_RE.finditer(block)]
+            ops_match = re.search(r"^ops:\s*(.+)", block, re.MULTILINE)
+            ops = ops_match.group(1).strip() if ops_match else ""
+            run_match = re.search(r"^run_id:\s*(\S+)", block, re.MULTILINE)
+            run_id = run_match.group(1) if run_match else ""
+        else:
+            patch_ids = []
+            ops = ""
+            run_id = ""
+
+        entries.append({
+            "hash": commit_hash[:8],
+            "date": commit_date[:19],
+            "subject": subject,
+            "patches": ", ".join(patch_ids) if patch_ids else "(manual change)",
+            "ops": ops,
+            "run_id": run_id,
+        })
+
+    if fmt == "json":
+        click.echo(json.dumps(entries, indent=2))
+        return
+
+    if not entries:
+        click.echo("No commits found.")
+        return
+
+    click.echo(f"  {'hash':<10} {'date':<20} {'patches':<40} {'ops'}")
+    click.echo(f"  {'-'*10} {'-'*20} {'-'*40} {'-'*30}")
+    for e in entries:
+        patches_col = e["patches"][:38] + ".." if len(e["patches"]) > 40 else e["patches"]
+        click.echo(f"  {e['hash']:<10} {e['date']:<20} {patches_col:<40} {e['ops']}")
+
+
+# ── aqueduct rollback ─────────────────────────────────────────────────────────
+
+@cli.command("rollback")
+@click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
+@click.option("--to", "patch_id", required=True, help="Revert the git commit containing this patch_id")
+@click.option(
+    "--hard",
+    is_flag=True,
+    default=False,
+    help="Destructive: git reset --hard to the commit BEFORE the patch (requires confirmation)",
+)
+def rollback_cmd(blueprint: str, patch_id: str, hard: bool) -> None:
+    """Revert a Blueprint to before a specific patch was applied.
+
+    Safe mode (default): runs git revert <commit> — adds a new revert commit.
+    Hard mode (--hard):  runs git reset --hard <commit~1> — rewrites history,
+    requires explicit confirmation.
+    """
+    import re
+    import subprocess
+
+    blueprint_path = Path(blueprint)
+
+    # Walk git log to find the commit containing patch_id in ---aqueduct--- block
+    result = subprocess.run(
+        ["git", "log", "--follow", "--format=%H\x1f%B\x1eENDCOMMIT", "--", str(blueprint_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
+        sys.exit(1)
+
+    target_hash: str | None = None
+    for commit_raw in result.stdout.split("\x1eENDCOMMIT"):
+        commit_raw = commit_raw.strip()
+        if not commit_raw:
+            continue
+        header_line, _, body = commit_raw.partition("\n")
+        commit_hash = header_line.split("\x1f")[0].strip()
+        if patch_id in body:
+            target_hash = commit_hash
+            break
+
+    if not target_hash:
+        click.echo(
+            f"✗ patch_id {patch_id!r} not found in git history for {blueprint}\n"
+            "  Use 'aqueduct log <blueprint>' to list available patch_ids.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if hard:
+        click.echo(
+            f"WARNING: --hard will reset HEAD to the commit before {target_hash[:8]}.\n"
+            f"This rewrites git history and cannot be undone without a reflog.\n"
+            f"Blueprint: {blueprint}\n"
+        )
+        confirm = click.prompt("Type 'yes' to confirm", default="no")
+        if confirm.lower() != "yes":
+            click.echo("Aborted.")
+            return
+
+        parent = subprocess.run(
+            ["git", "rev-parse", f"{target_hash}~1"],
+            capture_output=True, text=True,
+        )
+        if parent.returncode != 0:
+            click.echo(f"✗ could not resolve parent commit: {parent.stderr.strip()}", err=True)
+            sys.exit(1)
+        parent_hash = parent.stdout.strip()
+
+        reset = subprocess.run(
+            ["git", "reset", "--hard", parent_hash],
+            capture_output=True, text=True,
+        )
+        if reset.returncode != 0:
+            click.echo(f"✗ git reset --hard failed: {reset.stderr.strip()}", err=True)
+            sys.exit(1)
+        click.echo(f"✓ hard reset to {parent_hash[:8]}  (before patch {patch_id!r})")
+    else:
+        revert = subprocess.run(
+            ["git", "revert", "--no-edit", target_hash],
+            capture_output=True, text=True,
+        )
+        if revert.returncode != 0:
+            click.echo(f"✗ git revert failed: {revert.stderr.strip()}", err=True)
+            sys.exit(1)
+        short = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        click.echo(f"✓ reverted patch {patch_id!r}  [{short}]")
+        click.echo(f"  Blueprint restored to state before commit {target_hash[:8]}")
 
 
 # ── aqueduct init ─────────────────────────────────────────────────────────────
