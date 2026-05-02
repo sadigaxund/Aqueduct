@@ -133,6 +133,10 @@ agent:
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "qwen2.5-coder:14b"
 
+  # prompt_context: |           # Blueprint-level context appended to LLM system prompt (after engine-level).
+  #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.
+  #   All output paths must stay within the data/ directory.
+
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 

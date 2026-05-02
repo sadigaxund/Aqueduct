@@ -63,19 +63,18 @@ def check_depot(depot_path: Path) -> CheckResult:
         return CheckResult("depot", "fail", f"{depot_path}: {exc}", _ms(t))
 
 
-def check_observability(obs_path: Path) -> CheckResult:
-    """Create the observability directory and open runs.db."""
+def check_observability(obs_db: Path) -> CheckResult:
+    """Create obs.db (and parent dirs) and verify connectivity."""
     import duckdb
     t = time.monotonic()
     try:
-        obs_path.mkdir(parents=True, exist_ok=True)
-        db = obs_path / "runs.db"
-        conn = duckdb.connect(str(db))
+        obs_db.parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(obs_db))
         conn.execute("SELECT 1").fetchone()
         conn.close()
-        return CheckResult("observability", "ok", str(obs_path), _ms(t))
+        return CheckResult("observability", "ok", str(obs_db), _ms(t))
     except Exception as exc:
-        return CheckResult("observability", "fail", f"{obs_path}: {exc}", _ms(t))
+        return CheckResult("observability", "fail", f"{obs_db}: {exc}", _ms(t))
 
 
 def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
@@ -338,7 +337,7 @@ def run_doctor(
     results.append(check_depot(Path(cfg.stores.depot.path)))
 
     # Observability
-    results.append(check_observability(Path(cfg.stores.observability.path)))
+    results.append(check_observability(Path(cfg.stores.obs.path)))
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider))

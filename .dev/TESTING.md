@@ -143,7 +143,7 @@ Spark artifacts are isolated to `/tmp/`:
 ### `execute_probe()`
 - ✅ no `signals` in config → returns immediately without writing anything
 - ✅ unknown signal type → warning logged; other signals still captured
-- ✅ `schema_snapshot`: JSON file written to `store_dir/signals/<run_id>/<probe_id>_schema.json`
+- ✅ `schema_snapshot`: JSON file written to `store_dir/snapshots/<run_id>/<probe_id>_schema.json`
 - ✅ `schema_snapshot`: DuckDB row inserted into `probe_signals` with correct payload shape
 - ✅ `schema_snapshot`: zero Spark actions triggered (no count/collect)
 - ✅ `row_count_estimate` method=sample: DuckDB row inserted with `estimate` > 0
@@ -183,7 +183,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `AqueductMetricsListener.collect_metrics()` with no active module returns all-zero dict
 - ✅ `_write_stage_metrics()` creates `module_metrics` table if absent and inserts one row
 - ✅ `_write_stage_metrics()` with `store_dir=None` is a no-op
-- ✅ Egress succeeds → `module_metrics` row exists in `signals.db` with `module_id` matching Egress
+- ✅ Egress succeeds → `module_metrics` row exists in `obs.db` with `module_id` matching Egress
 - ✅ Egress failure → no `module_metrics` row written (listener reset on exception)
 - ✅ `row_count_estimate` method=spark_listener: when `module_metrics` row exists, `estimate` equals `records_written` value
 
@@ -218,7 +218,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ end-to-end: Ingress → Assert(`sql_row` quarantine) → Egress(good) + Egress(quarantine), both written
 
 ### Surveyor `get_probe_signal()`
-- ✅ returns empty list when `signals.db` does not exist
+- ✅ returns empty list when `obs.db` does not exist
 - ✅ returns rows matching `probe_id` after `execute_probe` writes them
 - ✅ `signal_type` filter returns only rows of that type
 - ✅ `payload` field is a deserialized dict (not a raw JSON string)
@@ -326,7 +326,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ⏳ `on_failure_webhook=None` (default) — no per-module webhook call made
 
 ### `surveyor.py` — `Surveyor`
-- ✅ `start()` creates `.aqueduct/runs.db` and tables if not existing
+- ✅ `start()` creates `.aqueduct/obs.db` and tables if not existing
 - ✅ `start()` inserts a `run_records` row with `status='running'`
 - ✅ `record()` raises `RuntimeError` if called before `start()`
 - ✅ `record()` updates `run_records` row to `status='success'` on success
@@ -459,10 +459,13 @@ Spark artifacts are isolated to `/tmp/`:
 ### `AqueductConfig` defaults
 - ✅ `deployment.target` defaults to `"local"`
 - ✅ `deployment.master_url` defaults to `"local[*]"`
-- ✅ `stores.observability.path` defaults to `".aqueduct/signals"`
-- ✅ `stores.lineage.path` defaults to `".aqueduct/lineage"`
-- ✅ `stores.depot.path` defaults to `".aqueduct/depot.duckdb"`
-- ✅ `agent.default_model` defaults to `"claude-sonnet-4-20250514"`
+- ⏳ `stores.obs.path` defaults to `".aqueduct/obs.db"` ← **renamed from `observability`; now full file path**
+- ⏳ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` ← **now full file path**
+- ⏳ `stores.depot.path` defaults to `".aqueduct/depot.db"` ← **updated (was `.aqueduct/depot.duckdb`)**
+- ⏳ `agent.llm_timeout` defaults to `120.0`
+- ⏳ `agent.llm_max_reprompts` defaults to `3`
+- ⏳ `agent.prompt_context` defaults to `None`
+- ✅ `agent.default_model` defaults to `"claude-sonnet-4-6"`
 - ✅ `probes.max_sample_rows` defaults to `100`
 - ✅ `secrets.provider` defaults to `"env"`
 - ✅ `webhooks.on_failure` defaults to `None`
@@ -491,7 +494,7 @@ Spark artifacts are isolated to `/tmp/`:
 ### `Surveyor.evaluate_regulator()`
 - ✅ returns `True` when `start()` not called (no run_id)
 - ✅ returns `True` when no signal-port edge wired to regulator
-- ✅ returns `True` when `signals.db` does not exist
+- ✅ returns `True` when `obs.db` does not exist
 - ✅ returns `True` when no rows found for probe_id / run_id
 - ✅ returns `True` when latest signal payload has no `passed` key
 - ✅ returns `True` when latest signal `passed=None`
@@ -524,7 +527,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `test_junction_conditional_split`: Junction splits US/EU; each output has 5 correct-region rows
 - ✅ `test_funnel_union_all`: two identical inputs stacked; output has 20 rows
 - ✅ `test_spillway_error_routing`: null row → spillway (1 row + `_aq_error_*`); good rows → main (9 rows)
-- ✅ `test_probe_does_not_halt_blueprint`: Probe runs; signals.db written; blueprint succeeds
+- ✅ `test_probe_does_not_halt_blueprint`: Probe runs; obs.db written; blueprint succeeds
 - ✅ `test_regulator_open_gate_passthrough`: no surveyor → gate open → all 10 rows in output
 - ✅ `test_regulator_closed_gate_skips_downstream`: mock surveyor returns False → gate + sink both "skipped"
 - ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `blueprint_tag` column in output
@@ -828,7 +831,7 @@ Issues reported in:
 - ⏳ valid run_id + `--format json` → JSON with run_id, blueprint_id, status, module_results
 - ⏳ valid run_id + `--format csv` → CSV with header row
 - ⏳ unknown run_id → exit code 1 with error message
-- ⏳ missing runs.db → exit code 1 with error message
+- ⏳ missing obs.db → exit code 1 with error message
 
 #### `aqueduct lineage` — `aqueduct/cli.py`
 
@@ -856,7 +859,7 @@ Issues reported in:
 - ⏳ run_id with failure_context → FailureContext reconstructed, generate_llm_patch called
 - ⏳ `--module` overrides `failed_module` field in FailureContext passed to LLM
 - ⏳ run_id with no failure_context → exit code 1 with clear message
-- ⏳ missing runs.db → exit code 1
+- ⏳ missing obs.db → exit code 1
 - ⏳ no agent model configured in aqueduct.yml → exit code 1 with clear message
 - ⏳ LLM returns valid patch → patch staged in patches/pending/
 
@@ -950,3 +953,65 @@ Issues reported in:
 - ⏳ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
 - ⏳ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
 - ⏳ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
+
+---
+
+## Phase 16 — Store Layout + `aqueduct runs` + LLM Patch Reliability
+
+### Store layout — `obs.db` merge (`aqueduct/config.py`, `surveyor/`, `executor/spark/`)
+
+- ⏳ `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
+- ⏳ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
+- ⏳ `stores.depot.path` defaults to `".aqueduct/depot.db"`
+- ⏳ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
+- ⏳ `Surveyor.start()` creates `obs.db` (not `runs.db`)
+- ⏳ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
+- ⏳ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
+- ⏳ `execute_probe()`: writes `probe_signals` rows to `obs.db`
+- ⏳ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
+- ⏳ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
+- ⏳ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
+
+### `schema_snapshot` path (`aqueduct/executor/spark/probe.py`)
+
+- ⏳ `schema_snapshot`: JSON written to `store_dir/snapshots/<run_id>/<probe_id>_schema.json` (not `store_dir/signals/<run_id>/...`)
+
+### `aqueduct runs` command (`aqueduct/cli.py`)
+
+- ⏳ `aqueduct runs` with no obs.db → prints "No runs found" without error
+- ⏳ `aqueduct runs` lists recent runs ordered by `started_at DESC`
+- ⏳ `aqueduct runs --failed` → shows only runs with `status="error"`
+- ⏳ `aqueduct runs --blueprint blueprint.yml` → filters by blueprint_id from file
+- ⏳ `aqueduct runs --last 5` → shows at most 5 rows
+- ⏳ default output has columns: `run_id`, `blueprint_id`, `status`, `started_at`, `finished_at`
+
+### LLM `prompt_context` threading (`aqueduct/surveyor/llm.py`, `aqueduct/parser/`, `aqueduct/compiler/`)
+
+- ⏳ `agent.prompt_context` in `aqueduct.yml` → appended to LLM system prompt
+- ⏳ `agent.prompt_context` in Blueprint `agent:` block → appended to LLM system prompt (after engine-level context)
+- ⏳ both engine and blueprint `prompt_context` set → both included; blueprint comes second
+- ⏳ `AgentConfig.prompt_context` round-trips through Parser → `Blueprint.agent.prompt_context`
+- ⏳ `Manifest.to_dict()["agent"]["prompt_context"]` present when set
+
+### `blueprint_source_yaml` in LLM context (`aqueduct/surveyor/`)
+
+- ⏳ `FailureContext.blueprint_source_yaml` populated when blueprint file exists at `_blueprint_path`
+- ⏳ `FailureContext.blueprint_source_yaml` is `None` when blueprint file path not set
+- ⏳ `FailureContext.to_dict()` includes `"blueprint_source_yaml"` key
+- ⏳ LLM user prompt includes "Original Blueprint YAML" section when `blueprint_source_yaml` is non-None
+- ⏳ LLM system prompt includes CRITICAL rule about using template expressions (not resolved literal paths)
+
+### ruamel YAML formatting preservation (`aqueduct/patch/apply.py`, `aqueduct/patch/operations.py`)
+
+- ⏳ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
+- ⏳ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
+- ⏳ `insert_module` op: injected module dict preserves string quotes in output YAML
+- ⏳ `replace_module_config` op: injected config dict strings are double-quoted in output YAML
+- ⏳ round-trip of patched Blueprint through Parser succeeds (no YAML parse error)
+
+### `agent.llm_timeout` / `agent.llm_max_reprompts` (`aqueduct/config.py`, `aqueduct/surveyor/llm.py`)
+
+- ⏳ `AgentConnectionConfig.llm_timeout` default `120.0`; custom value in YAML respected
+- ⏳ `AgentConnectionConfig.llm_max_reprompts` default `3`; custom value in YAML respected
+- ⏳ `generate_llm_patch()` uses `llm_timeout` for HTTP socket timeout (not hardcoded 120)
+- ⏳ LLM returns invalid PatchSpec JSON → reprompts up to `llm_max_reprompts` times; returns None after

@@ -1,8 +1,8 @@
 """Probe executor — captures observability signals from a lazy DataFrame.
 
-Signals are written to DuckDB (``store_dir/signals.db``) so the Surveyor
+Signals are written to DuckDB (``store_dir/obs.db``) so the Surveyor
 can serve them via ``get_probe_signal()``.  For ``schema_snapshot`` a JSON
-file is also written to ``store_dir/signals/<run_id>/<probe_id>_schema.json``
+file is also written to ``store_dir/snapshots/<run_id>/<probe_id>_schema.json``
 for human inspection.
 
 Supported signal types
@@ -11,7 +11,7 @@ schema_snapshot      Captures ``df.schema`` — zero Spark action.
 
 row_count_estimate   Two methods:
   method: spark_listener   No action; queries ``module_metrics`` table in
-                           ``signals.db`` for the upstream module's stage count.
+                           ``obs.db`` for the upstream module's stage count.
                            Returns ``estimate: null`` if no row exists yet.
   method: sample           ``df.sample(fraction).count()`` on a fraction only.
                            Blocked when ``block_full_actions=True``.
@@ -144,7 +144,7 @@ def _schema_snapshot(
     payload: dict[str, Any] = {"fields": fields}
 
     # Write human-readable JSON file too
-    sig_dir = store_dir / "signals" / run_id
+    sig_dir = store_dir / "snapshots" / run_id
     sig_dir.mkdir(parents=True, exist_ok=True)
     (sig_dir / f"{probe_id}_schema.json").write_text(
         json.dumps(payload, indent=2), encoding="utf-8"
@@ -170,7 +170,7 @@ def _row_count_estimate(
         if store_dir:
             try:
                 import duckdb
-                db_path = store_dir / "signals.db"
+                db_path = store_dir / "obs.db"
                 if db_path.exists():
                     conn = duckdb.connect(str(db_path))
                     try:
@@ -375,7 +375,7 @@ def execute_probe(
 ) -> None:
     """Capture observability signals for a single Probe module.
 
-    Writes one DuckDB row per signal to ``store_dir/signals.db``.
+    Writes one DuckDB row per signal to ``store_dir/obs.db``.
     For ``schema_snapshot``, also writes a JSON file.
 
     Args:
@@ -398,7 +398,7 @@ def execute_probe(
             return
 
         store_dir.mkdir(parents=True, exist_ok=True)
-        db_path = store_dir / "signals.db"
+        db_path = store_dir / "obs.db"
 
         conn = duckdb.connect(str(db_path))
         try:

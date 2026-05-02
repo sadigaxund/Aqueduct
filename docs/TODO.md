@@ -32,41 +32,12 @@ Moreover, should we really let LLM patches let loose on production environments 
 
 8. When at Phase where we do LLM vector DB thing, also discuss possibility of editing custom prompts to the LLM. 
 9. Update SPARK_GUIDE.md with notes from book.
-10. with doctor command do we do this: "After you have defined the connection properties, you can test your connection to the database
-itself to ensure that it is functional. This is an excellent troubleshooting technique to confirm that
-your database is available to (at the very least) the Spark driver" Example:
-
-```java
-import java.sql.DriverManager
-val connection = DriverManager.getConnection(url)
-connection.isClosed()
-connection.close()
-```
+10. regarding nyc example, was last trying to make llm work, couldnt because of above.
 
 
-
-
-17. regarding 'report' cli command, it requires user to pass run_id, should we create some kind list command to see all the run_ids? or too confusing, or is useful? should user keep track of the run_ids themselves?
-
-
-
-
-18. when approval_mode = human, does it ignore 'max_patches_per_run' config, since it has to be 1 right? did we specify this in docs anywhere as a note or warning. However i ran with such settings and see such logs: 'LLM self-healing (1/3)\nLLM API call failed (attempt 1/3): timed out\nLLM API call failed (attempt 1/3): timed out' . Moreover, when 'max_patches_per_run' unspecified the default is 5, is there a reason?
-
-
-
-
-19. I have created a very simple, you can say the simplest ever case of failure as a test to see if llm would work, which i purposefully tried to read '*.parqut' files instead of '*.parquet' files, but all I see is these logs:
-
-Module 'yellow_taxi_trips': attempt 1/1 failed ([yellow_taxi_trips] source not found or unreadable at 'data/yellow//*.parqut': [PATH_NOT_FOUND] Path does not exist: file:/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parqut.); giving up
-↻ LLM self-healing (1/5)failed_module=yellow_taxi_trips
-LLM API call failed (attempt 1/3): timed out
-LLM agent failed to produce a valid PatchSpec after 3 attempts for pipeline 'nyc_taxi_demo' run '64852305-3369-4371-bc6f-3ab0b192ef58'
-✗ LLM: failed to generate valid patch, stopping
-✗ yellow_taxi_trips— [yellow_taxi_trips] source not found or unreadable at 'data/yellow//*.parqut': [PATH_NOT_FOUND] Path does not exist: file:/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parqut.
-
-✗ pipeline failedrun_id=64852305-3369-4371-bc6f-3ab0b192ef58failed_module=yellow_taxi_trips
-
-20. from previous example I see 3 different retry mechanisms, one is: 'LLM API call failed (attempt 1/3): timed out', then 2. 'LLM agent failed to produce a valid PatchSpec after 3 attempts for pipeline ...', then 3. 'LLM self-healing (1/5)failed_module=...' , can you make it more coherent, make it more understandable and clear. Can use set/configure all of them? If yes, where can i see reference/documentation on that?
-
-
+Phase 16b — obs.db merge: 
+- runs.db + signals.db → single obs.db (5 tables: run_records, failure_contexts, signal_overrides, probe_signals, 
+module_metrics) 
+- StoresConfig.observability → obs; all store paths now full file paths (".aqueduct/obs.db", ".aqueduct/lineage.db",
+ ".aqueduct/depot.db")
+- store_dir = Path(cfg.stores.obs.path).parent in cli.py — all files co-located in .aqueduct/ 

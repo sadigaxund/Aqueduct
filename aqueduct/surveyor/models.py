@@ -50,6 +50,7 @@ class FailureContext:
     manifest_json: str          # JSON-serialised Manifest.to_dict()
     started_at: str             # ISO-8601 UTC
     finished_at: str            # ISO-8601 UTC
+    blueprint_source_yaml: str | None = None  # raw Blueprint YAML (pre-compilation, with ${ctx.*} unexpanded)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +62,7 @@ class FailureContext:
             "manifest_json": self.manifest_json,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "blueprint_source_yaml": self.blueprint_source_yaml,
         }
 
     def to_json(self) -> str:

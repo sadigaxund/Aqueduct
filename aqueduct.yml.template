@@ -90,23 +90,29 @@ spark_config: {}
 
 # ── Stores ────────────────────────────────────────────────────────────────────
 #
-# All stores default to local DuckDB files under .aqueduct/.
+# All stores are DuckDB files. Default layout under .aqueduct/:
+#   obs.db      — run records, failure contexts, signal overrides, probe signals, module metrics
+#   lineage.db  — column-level lineage
+#   depot.db    — depot KV store (@aq.depot.*)
+#   snapshots/  — schema_snapshot JSON files (one file per probe per run)
+#
+# Each path is a full file path (not a directory).
 
 stores:
 
-  observability:
+  obs:
     backend: duckdb
-    path: ".aqueduct/signals"
-    # path: "s3://my-bucket/aqueduct/signals"
+    path: ".aqueduct/obs.db"
+    # path: "s3://my-bucket/aqueduct/obs.db"   # remote path for future backends
 
   lineage:
     backend: duckdb
-    path: ".aqueduct/lineage"
+    path: ".aqueduct/lineage.db"
 
   depot:
     backend: duckdb
-    path: ".aqueduct/depot.duckdb"
-    # path: "s3://my-bucket/aqueduct/depot.duckdb"
+    path: ".aqueduct/depot.db"
+    # path: "s3://my-bucket/aqueduct/depot.db"
 
 
 # ── Probes ────────────────────────────────────────────────────────────────────
@@ -252,10 +258,23 @@ agent:
   model: "claude-sonnet-4-6"
   # ANTHROPIC_API_KEY env var required at runtime
 
+  # ── Timeouts and retries ──────────────────────────────────────────────────
+  # llm_timeout: 120.0          # HTTP socket timeout in seconds per LLM call.
+  #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
+  # llm_max_reprompts: 3        # Retries when LLM returns invalid PatchSpec JSON.
+  #                             # Does NOT retry on timeout/network failure (those abort immediately).
+
+  # ── Custom prompt context ─────────────────────────────────────────────────
+  # prompt_context: |           # Engine-wide context appended to LLM system prompt.
+  #   This cluster runs Databricks. Use Delta Lake paths (dbfs:// or s3a://).
+  #   All column names follow snake_case convention.
+  #   Never reference local filesystem paths in config.path values.
+
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
   # model: "deepseek-r1:14b"
+  # llm_timeout: 600.0          # large local models need more time
   # ollama_options:                          # forwarded as payload["options"]
   #   num_thread: 16
   #   num_gpu: 0                             # 0 = CPU only; 99 = all on GPU

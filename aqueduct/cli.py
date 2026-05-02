@@ -1,7 +1,7 @@
 """Aqueduct CLI.
 
 Active commands: validate, compile, run, check-config, doctor,
-                 report, lineage, signal, heal,
+                 runs, report, lineage, signal, heal,
                  patch apply, patch reject, patch rollback.
 """
 
@@ -147,7 +147,7 @@ def check_config(config_path: str | None) -> None:
     source = config_path or "aqueduct.yml (CWD) or defaults"
     click.echo(f"✓ config valid  [{source}]")
     click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-    click.echo(f"  stores:  observability={cfg.stores.observability.path}  depot={cfg.stores.depot.path}")
+    click.echo(f"  stores:  obs={cfg.stores.obs.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
     click.echo(f"  secrets: provider={cfg.secrets.provider}")
     wh_lines = []
     if cfg.webhooks.on_failure:
@@ -301,7 +301,7 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
 @click.option(
     "--store-dir",
     default=None,
-    help="Observability store directory (overrides aqueduct.yml; default: .aqueduct/signals)",
+    help="Store directory (overrides aqueduct.yml; default: .aqueduct)",
 )
 @click.option("--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)")
 @click.option("--resume", "resume_run_id", default=None, help="Resume from checkpoints of a previous run_id")
@@ -348,7 +348,7 @@ def run(
         sys.exit(1)
 
     # CLI flags override config file; config file overrides built-in defaults
-    resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    resolved_store_dir = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
     # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
     resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
@@ -443,6 +443,10 @@ def run(
     resolved_agent_base_url = bp_agent.base_url or eng.base_url
     resolved_agent_model = bp_agent.model or eng.model
     resolved_agent_ollama_options = bp_agent.ollama_options or eng.ollama_options
+    resolved_agent_llm_timeout = eng.llm_timeout
+    resolved_agent_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_agent_engine_prompt_context = eng.prompt_context
+    resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
 
     # ── Aggressive mode disclaimer ────────────────────────────────────────────
     approval_mode = manifest.agent.approval_mode
@@ -545,6 +549,10 @@ def run(
             provider=resolved_agent_provider,
             base_url=resolved_agent_base_url,
             ollama_options=resolved_agent_ollama_options,
+            llm_timeout=resolved_agent_llm_timeout,
+            llm_max_reprompts=resolved_agent_llm_max_reprompts,
+            engine_prompt_context=resolved_agent_engine_prompt_context,
+            blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
         )
         if patch is None:
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
@@ -963,7 +971,7 @@ def test_cmd(
 @click.option(
     "--store-dir",
     default=None,
-    help="Observability store directory (default: aqueduct.yml or .aqueduct/signals)",
+    help="Store directory (default: aqueduct.yml or .aqueduct)",
 )
 @click.option(
     "--config",
@@ -993,13 +1001,13 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
-    runs_db = resolved / "runs.db"
-    if not runs_db.exists():
-        click.echo(f"✗ runs.db not found at {runs_db}", err=True)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+    obs_db = resolved / "obs.db"
+    if not obs_db.exists():
+        click.echo(f"✗ obs.db not found at {obs_db}", err=True)
         sys.exit(1)
 
-    conn = _duckdb.connect(str(runs_db), read_only=True)
+    conn = _duckdb.connect(str(obs_db), read_only=True)
     try:
         row = conn.execute(
             """
@@ -1015,7 +1023,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         conn.close()
 
     if row is None:
-        click.echo(f"✗ run {run_id!r} not found in {runs_db}", err=True)
+        click.echo(f"✗ run {run_id!r} not found in {obs_db}", err=True)
         sys.exit(1)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
@@ -1061,6 +1069,77 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         if len(err) > 60:
             err = err[:57] + "..."
         click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
+
+
+# ── aqueduct runs ─────────────────────────────────────────────────────────────
+
+@cli.command("runs")
+@click.option("--blueprint", default=None, metavar="PATH_OR_ID", help="Filter by blueprint file path or blueprint ID")
+@click.option("--failed", is_flag=True, default=False, help="Show only failed runs")
+@click.option("--last", "limit", default=20, show_default=True, help="Max rows to show")
+@click.option("--store-dir", default=None, help="Store directory (default: .aqueduct)")
+@click.option("--config", "config_path", default=None, metavar="PATH", help="Path to aqueduct.yml")
+def runs(blueprint: str | None, failed: bool, limit: int, store_dir: str | None, config_path: str | None) -> None:
+    """List recent blueprint runs."""
+    import duckdb as _duckdb
+    from aqueduct.config import load_config
+
+    cfg = load_config(Path(config_path) if config_path else None)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+    obs_db = resolved / "obs.db"
+    if not obs_db.exists():
+        click.echo(f"No runs found (obs.db not at {obs_db})")
+        return
+
+    blueprint_id: str | None = None
+    if blueprint:
+        arg_path = Path(blueprint)
+        if arg_path.suffix in (".yml", ".yaml") and arg_path.exists():
+            from aqueduct.parser.parser import ParseError, parse
+            try:
+                bp = parse(str(arg_path))
+                blueprint_id = bp.id
+            except ParseError:
+                blueprint_id = blueprint
+        else:
+            blueprint_id = blueprint
+
+    conn = _duckdb.connect(str(obs_db), read_only=True)
+    try:
+        where_parts = []
+        params: list = []
+        if blueprint_id:
+            where_parts.append("blueprint_id = ?")
+            params.append(blueprint_id)
+        if failed:
+            where_parts.append("status = 'error'")
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        params.append(limit)
+
+        rows = conn.execute(
+            f"""
+            SELECT run_id, blueprint_id, status, started_at, finished_at,
+                   json_extract_string(module_results, '$[0].module_id') AS first_failed
+            FROM run_records
+            {where}
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        click.echo("No runs found.")
+        return
+
+    click.echo(f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}")
+    click.echo(f"  {'-'*38} {'-'*30} {'-'*10} {'-'*22} {'-'*20}")
+    for run_id_val, bp_id, status, started_at, finished_at, first_failed in rows:
+        icon = "✓" if status == "success" else ("↻" if status == "running" else "✗")
+        failed_col = (first_failed or "") if status == "error" else ""
+        click.echo(f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}")
 
 
 # ── aqueduct lineage ──────────────────────────────────────────────────────────
@@ -1133,7 +1212,7 @@ def lineage(
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
     lineage_db = resolved / "lineage.db"
     if not lineage_db.exists():
         click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
@@ -1245,9 +1324,9 @@ def signal(
         except ConfigError as exc:
             click.echo(f"✗ config error: {exc}", err=True)
             sys.exit(1)
-        resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
-        signals_db = resolved / "signals.db"
-        conn = _duckdb.connect(str(signals_db))
+        resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+        obs_db = resolved / "obs.db"
+        conn = _duckdb.connect(str(obs_db))
         try:
             conn.execute(_SIGNAL_OVERRIDES_DDL)
             row = conn.execute(
@@ -1281,12 +1360,12 @@ def signal(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
     resolved.mkdir(parents=True, exist_ok=True)
-    signals_db = resolved / "signals.db"
+    obs_db = resolved / "obs.db"
 
     now = datetime.now(tz=timezone.utc).isoformat()
-    conn = _duckdb.connect(str(signals_db))
+    conn = _duckdb.connect(str(obs_db))
     try:
         conn.execute(_SIGNAL_OVERRIDES_DDL)
         if passed:
@@ -1364,13 +1443,13 @@ def heal(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path)
-    runs_db = resolved / "runs.db"
-    if not runs_db.exists():
-        click.echo(f"✗ runs.db not found at {runs_db}", err=True)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+    obs_db = resolved / "obs.db"
+    if not obs_db.exists():
+        click.echo(f"✗ obs.db not found at {obs_db}", err=True)
         sys.exit(1)
 
-    conn = _duckdb.connect(str(runs_db), read_only=True)
+    conn = _duckdb.connect(str(obs_db), read_only=True)
     try:
         fc_row = conn.execute(
             """
@@ -1417,6 +1496,9 @@ def heal(
     resolved_base_url = eng.base_url
     resolved_model = eng.model
     resolved_ollama_options = eng.ollama_options
+    resolved_llm_timeout = eng.llm_timeout
+    resolved_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_engine_prompt_context = eng.prompt_context
 
     if resolved_model is None:
         click.echo(
@@ -1438,6 +1520,9 @@ def heal(
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
         ollama_options=resolved_ollama_options,
+        llm_timeout=resolved_llm_timeout,
+        llm_max_reprompts=resolved_llm_max_reprompts,
+        engine_prompt_context=resolved_engine_prompt_context,
     )
 
     if patch is None:

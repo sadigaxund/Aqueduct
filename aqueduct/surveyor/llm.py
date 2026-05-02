@@ -48,7 +48,8 @@ You are an expert Apache Spark blueprint repair agent for the Aqueduct blueprint
 
 A blueprint has failed. You will receive a structured failure report describing:
 - What the blueprint does (human-readable summary)
-- The failing module and its configuration
+- The failing module and its configuration (compiled/resolved values)
+- The original Blueprint YAML source (pre-compilation, with template expressions intact)
 - The error message and relevant stack trace lines
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
 
@@ -65,7 +66,8 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 - Wrong path or format → fix those config keys only.
 - patch_id: short slug (e.g. "fix-sql-syntax-clean-orders").
 - description: root cause + fix in one sentence.
-{previous_patches_section}"""
+- CRITICAL: When patching config values that contain paths, expressions, or strings, use the template expressions from the Original Blueprint YAML (e.g. "${{ctx.paths.input}}/*.parquet"), NOT the resolved literal values shown in the compiled module config. The patch is applied to the raw Blueprint, not the compiled Manifest.
+{previous_patches_section}{custom_context_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
 ## Blueprint: {blueprint_name}
@@ -78,7 +80,7 @@ _USER_PROMPT_TEMPLATE = """\
 - **Failed module**: `{failed_module}`
 - **Error**: {error_message}
 
-## Failed module config
+## Failed module config (compiled — paths/expressions are resolved)
 ```json
 {failed_module_config}
 ```
@@ -90,7 +92,7 @@ _USER_PROMPT_TEMPLATE = """\
 
 ## Full module list (for reference when writing patch IDs)
 {module_list}
-
+{blueprint_source_section}
 Produce the PatchSpec JSON now.
 """
 
@@ -178,7 +180,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     blueprint_name = manifest.get("name") or failure_ctx.blueprint_id
     blueprint_desc = manifest.get("description", "")
 
-    # Failed module config
+    # Failed module config (compiled — resolved values)
     failed_mod = next((m for m in modules if m["id"] == failure_ctx.failed_module), None)
     failed_config = json.dumps(failed_mod.get("config", {}) if failed_mod else {}, indent=2)
 
@@ -186,6 +188,17 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     module_list = "\n".join(
         f"  - {m['id']} ({m['type']}): {m.get('label', '')}" for m in modules
     ) or "  (none)"
+
+    # Raw Blueprint YAML (pre-compilation) — lets LLM see template expressions
+    if failure_ctx.blueprint_source_yaml:
+        blueprint_source_section = (
+            "\n## Original Blueprint YAML (pre-compilation — use these template expressions in your patch)\n"
+            "```yaml\n"
+            f"{failure_ctx.blueprint_source_yaml.strip()}\n"
+            "```\n"
+        )
+    else:
+        blueprint_source_section = ""
 
     return _USER_PROMPT_TEMPLATE.format(
         blueprint_name=blueprint_name,
@@ -196,10 +209,15 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         failed_module_config=failed_config,
         stack_trace=_truncate_stack(failure_ctx.stack_trace),
         module_list=module_list,
+        blueprint_source_section=blueprint_source_section,
     )
 
 
-def _build_system_prompt(patches_dir: Path) -> str:
+def _build_system_prompt(
+    patches_dir: Path,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
+) -> str:
     schema = json.dumps(PatchSpec.model_json_schema(), indent=2)
     prev = _load_previous_patches(patches_dir)
     if prev:
@@ -209,9 +227,18 @@ def _build_system_prompt(patches_dir: Path) -> str:
         prev_section = "\n".join(lines)
     else:
         prev_section = ""
+
+    # Merge engine-level and blueprint-level prompt_context (blueprint appends after engine)
+    ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
+    if ctx_parts:
+        custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(ctx_parts)
+    else:
+        custom_context_section = ""
+
     return _SYSTEM_PROMPT_TEMPLATE.format(
         patch_schema=schema,
         previous_patches_section=prev_section,
+        custom_context_section=custom_context_section,
     )
 
 
@@ -225,14 +252,17 @@ def _call_llm(
     base_url: str | None,
     patches_dir: Path,
     ollama_options: dict[str, Any] | None = None,
+    timeout: float = 120.0,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
 ) -> str:
     """Call the configured LLM provider and return raw text response."""
-    system_prompt = _build_system_prompt(patches_dir)
+    system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context)
 
     if provider == "openai_compat":
-        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, ollama_options)
+        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, ollama_options, timeout=timeout)
     else:
-        return _call_anthropic(messages, model, max_tokens, system_prompt)
+        return _call_anthropic(messages, model, max_tokens, system_prompt, timeout=timeout)
 
 
 def _call_anthropic(
@@ -240,6 +270,7 @@ def _call_anthropic(
     model: str,
     max_tokens: int,
     system_prompt: str,
+    timeout: float = 120.0,
 ) -> str:
     import httpx
 
@@ -262,7 +293,7 @@ def _call_anthropic(
             "system": system_prompt,
             "messages": messages,
         },
-        timeout=120.0,
+        timeout=timeout,
     )
     response.raise_for_status()
     return response.json()["content"][0]["text"]
@@ -275,6 +306,7 @@ def _call_openai_compat(
     base_url: str | None,
     system_prompt: str,
     ollama_options: dict[str, Any] | None = None,
+    timeout: float = 120.0,
 ) -> str:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -300,7 +332,7 @@ def _call_openai_compat(
         url,
         json=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout=120.0,
+        timeout=timeout,
     )
     response.raise_for_status()
     data = response.json()
@@ -328,13 +360,17 @@ def generate_llm_patch(
     base_url: str | None = None,
     max_tokens: int = 4096,
     ollama_options: dict[str, Any] | None = None,
+    llm_timeout: float = 120.0,
+    llm_max_reprompts: int = MAX_REPROMPTS,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
 ) -> PatchSpec | None:
     """Call the LLM and return a validated PatchSpec.
 
     Does not apply or stage the patch — caller decides what to do with it.
 
     Returns None if the LLM failed to produce a valid PatchSpec after
-    MAX_REPROMPTS attempts.
+    llm_max_reprompts attempts.
     """
     messages: list[dict[str, Any]] = [
         {
@@ -345,12 +381,12 @@ def generate_llm_patch(
 
     patch_spec: PatchSpec | None = None
 
-    for attempt in range(MAX_REPROMPTS):
+    for attempt in range(llm_max_reprompts):
         try:
-            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options)
+            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context)
         except Exception as exc:
             logger.error(
-                "LLM API call failed (attempt %d/%d): %s", attempt + 1, MAX_REPROMPTS, exc
+                "LLM API call failed (attempt %d/%d): %s", attempt + 1, llm_max_reprompts, exc
             )
             break
 
@@ -360,7 +396,7 @@ def generate_llm_patch(
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
             logger.warning(
                 "LLM patch response invalid (attempt %d/%d): %s",
-                attempt + 1, MAX_REPROMPTS, exc,
+                attempt + 1, llm_max_reprompts, exc,
             )
             messages.append({"role": "assistant", "content": raw})
             messages.append({
@@ -372,7 +408,7 @@ def generate_llm_patch(
         logger.error(
             "LLM agent failed to produce a valid PatchSpec after %d attempts "
             "for blueprint %r run %r",
-            MAX_REPROMPTS, failure_ctx.blueprint_id, failure_ctx.run_id,
+            llm_max_reprompts, failure_ctx.blueprint_id, failure_ctx.run_id,
         )
     return patch_spec
 
