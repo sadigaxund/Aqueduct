@@ -61,6 +61,15 @@ Requires Python 3.11+ and Java 17 (for local Spark).
 
 ## Quick Start
 
+```bash
+mkdir my-pipeline && cd my-pipeline
+aqueduct init --name my-pipeline
+# Creates: blueprints/example.yml, aqueduct.yml, .gitignore, patches/, arcades/
+# Runs git init + initial commit automatically
+```
+
+Or manually:
+
 ### 1. Write a Blueprint
 
 ```yaml
@@ -384,6 +393,9 @@ With `validate_patch: true`: the patched Blueprint is compiled in memory first. 
 ## CLI Reference
 
 ```bash
+aqueduct init                               # Scaffold new project in current directory
+aqueduct init --name my-pipeline           # Set project name (used for blueprint ID)
+
 aqueduct validate pipeline.yml              # Parse and validate only
 aqueduct compile  pipeline.yml              # Output resolved Manifest JSON
 aqueduct compile  pipeline.yml --execution-date 2026-01-15  # backfill: pin @aq.date.* to date

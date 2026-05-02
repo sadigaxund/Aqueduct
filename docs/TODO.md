@@ -35,9 +35,3 @@ Moreover, should we really let LLM patches let loose on production environments 
 10. regarding nyc example, was last trying to make llm work, couldnt because of above.
 
 
-Phase 16b — obs.db merge: 
-- runs.db + signals.db → single obs.db (5 tables: run_records, failure_contexts, signal_overrides, probe_signals, 
-module_metrics) 
-- StoresConfig.observability → obs; all store paths now full file paths (".aqueduct/obs.db", ".aqueduct/lineage.db",
- ".aqueduct/depot.db")
-- store_dir = Path(cfg.stores.obs.path).parent in cli.py — all files co-located in .aqueduct/ 
