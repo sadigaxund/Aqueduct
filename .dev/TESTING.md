@@ -1015,3 +1015,23 @@ Issues reported in:
 - ⏳ `AgentConnectionConfig.llm_max_reprompts` default `3`; custom value in YAML respected
 - ⏳ `generate_llm_patch()` uses `llm_timeout` for HTTP socket timeout (not hardcoded 120)
 - ⏳ LLM returns invalid PatchSpec JSON → reprompts up to `llm_max_reprompts` times; returns None after
+
+---
+
+## Phase 17 — `aqueduct init`
+
+### `init` command (`aqueduct/cli.py`)
+
+- ⏳ `aqueduct init` in empty dir: creates `blueprints/example.yml`, `aqueduct.yml`, `.gitignore`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`
+- ⏳ `aqueduct init --name foo-bar`: blueprint id = `foo.bar`, name = `foo-bar`
+- ⏳ `aqueduct init` with no `--name`: uses `cwd.name` as project name
+- ⏳ `aqueduct.yml` generated contains valid `aqueduct_config: "1.0"` and correct store paths (`obs`, `lineage`, `depot`)
+- ⏳ generated `aqueduct.yml` passes `load_config()` validation without error
+- ⏳ `blueprints/example.yml` contains `id` matching slugified project name
+- ⏳ generated `blueprints/example.yml` passes `parse()` validation without error
+- ⏳ `.gitignore` contains `.aqueduct/` and `patches/applied/` entries
+- ⏳ `aqueduct init` when files already exist: existing files skipped (not overwritten), new dirs still created
+- ⏳ `git init` run when not already in a git repo; skipped when already in one
+- ⏳ `git commit` run after scaffold; output line printed
+- ⏳ `git commit` fails with "nothing to commit" → no error printed (silent)
+- ⏳ git not installed → scaffold succeeds; git steps skipped with warning

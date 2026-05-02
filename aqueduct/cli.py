@@ -1,6 +1,6 @@
 """Aqueduct CLI.
 
-Active commands: validate, compile, run, check-config, doctor,
+Active commands: init, validate, compile, run, check-config, doctor,
                  runs, report, lineage, signal, heal,
                  patch apply, patch reject, patch rollback.
 """
@@ -1532,6 +1532,163 @@ def heal(
     stage_patch_for_human(patch, patches_path, failure_ctx)
     click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
     click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
+
+
+# ── aqueduct init ─────────────────────────────────────────────────────────────
+
+_GITIGNORE = """\
+# Aqueduct runtime stores
+.aqueduct/
+
+# Applied patches (tracked by git commit message; backups unnecessary)
+patches/applied/
+patches/backups/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+.env
+"""
+
+_AQUEDUCT_YML = """\
+aqueduct_config: "1.0"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  obs:
+    path: ".aqueduct/obs.db"
+  lineage:
+    path: ".aqueduct/lineage.db"
+  depot:
+    path: ".aqueduct/depot.db"
+
+agent:
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  # ANTHROPIC_API_KEY env var required for LLM self-healing
+"""
+
+_EXAMPLE_BLUEPRINT = """\
+id: {blueprint_id}
+name: {name}
+
+context:
+  input_path: "data/input"
+  output_path: "data/output"
+
+modules:
+  - id: ingest
+    type: Ingress
+    config:
+      format: parquet
+      path: "${{ctx.input_path}}"
+
+  - id: transform
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT * FROM ingest"
+
+  - id: output
+    type: Egress
+    config:
+      format: parquet
+      path: "${{ctx.output_path}}"
+      mode: overwrite
+
+edges:
+  - from: ingest
+    to: transform
+  - from: transform
+    to: output
+"""
+
+
+@cli.command("init")
+@click.option("--name", default=None, help="Project name (defaults to current directory name)")
+def init(name: str | None) -> None:
+    """Scaffold a new Aqueduct project in the current directory."""
+    import subprocess
+
+    cwd = Path.cwd()
+    project_name = name or cwd.name
+    blueprint_id = project_name.lower().replace(" ", ".").replace("-", ".").replace("_", ".")
+
+    created: list[str] = []
+    skipped: list[str] = []
+
+    def _write(path: Path, content: str) -> None:
+        if path.exists():
+            skipped.append(str(path.relative_to(cwd)))
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            created.append(str(path.relative_to(cwd)))
+
+    def _mkdir(path: Path) -> None:
+        if not path.exists():
+            path.mkdir(parents=True, exist_ok=True)
+            (path / ".gitkeep").write_text("", encoding="utf-8")
+            created.append(str(path.relative_to(cwd)) + "/")
+
+    # Directories
+    _mkdir(cwd / "arcades")
+    _mkdir(cwd / "tests")
+    _mkdir(cwd / "patches" / "pending")
+    _mkdir(cwd / "patches" / "rejected")
+
+    # Files
+    _write(
+        cwd / "blueprints" / "example.yml",
+        _EXAMPLE_BLUEPRINT.format(blueprint_id=blueprint_id, name=project_name),
+    )
+    _write(cwd / "aqueduct.yml", _AQUEDUCT_YML)
+    _write(cwd / ".gitignore", _GITIGNORE)
+
+    for f in created:
+        click.echo(f"  create  {f}")
+    for f in skipped:
+        click.echo(f"  skip    {f}  (already exists)")
+
+    # Git
+    in_git = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True, cwd=cwd,
+    ).returncode == 0
+
+    if not in_git:
+        r = subprocess.run(["git", "init"], capture_output=True, text=True, cwd=cwd)
+        if r.returncode == 0:
+            click.echo("  git init")
+        else:
+            click.echo(f"  ⚠ git init failed: {r.stderr.strip()}")
+
+    # Initial commit
+    add = subprocess.run(["git", "add", "."], capture_output=True, cwd=cwd)
+    if add.returncode == 0:
+        commit = subprocess.run(
+            ["git", "commit", "-m", f"init: aqueduct project ({project_name})"],
+            capture_output=True, text=True, cwd=cwd,
+        )
+        if commit.returncode == 0:
+            click.echo("  git commit  init: aqueduct project")
+        elif "nothing to commit" in commit.stdout + commit.stderr:
+            pass  # already clean
+        else:
+            click.echo(f"  ⚠ git commit failed: {commit.stderr.strip()}")
+
+    click.echo(f"\n✓ {project_name} ready")
+    click.echo(f"\nNext steps:")
+    click.echo(f"  1. Edit blueprints/example.yml to define your pipeline")
+    click.echo(f"  2. aqueduct validate blueprints/example.yml")
+    click.echo(f"  3. aqueduct run blueprints/example.yml")
 
 
 if __name__ == "__main__":
