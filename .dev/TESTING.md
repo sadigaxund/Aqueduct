@@ -1079,3 +1079,19 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ uncommitted applied patches exist → warning printed to stderr before run starts
 - ⏳ no uncommitted patches → no warning
 - ⏳ warning text includes "aqueduct patch commit --blueprint <path>"
+
+### `aqueduct patch reject` — path-or-slug argument — `aqueduct/cli.py`
+- ⏳ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/
+- ⏳ bare patch_id slug passed (old behaviour) → `--patches-dir` or CWD/patches used
+- ⏳ file path with `parent.name == "pending"` but file does not exist → derivation still correct, not found error from reject_patch
+- ⏳ rejected file written with `rejected_at` and `rejection_reason` fields
+
+### `aqueduct patch list` — `aqueduct/cli.py`
+- ⏳ pending patches present → tabular output with file, patch_id, rationale columns
+- ⏳ no pending patches → "No pending patches found" message
+- ⏳ `--status=applied` → lists applied/ dir
+- ⏳ `--status=all` → lists pending/, applied/, rejected/ sections
+- ⏳ `--blueprint <path>` → patches_dir = blueprint parent / patches
+- ⏳ no blueprint, no patches-dir → walk-up to aqueduct.yml to find project root
+- ⏳ rationale truncated to 60 chars in table output
+- ⏳ apply/reject hint lines printed after pending table

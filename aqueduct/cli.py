@@ -2,7 +2,7 @@
 
 Commands: init, validate, compile, run, check-config, doctor, runs, report,
           lineage, signal, heal, log, rollback,
-          patch apply, patch reject, patch commit, patch discard.
+          patch apply, patch reject, patch commit, patch discard, patch list.
 """
 
 from __future__ import annotations
@@ -447,7 +447,7 @@ def run(
         sys.exit(1)
 
     # ── Pending patch check ────────────────────────────────────────────────────
-    patches_dir = Path(blueprint).parent / "patches"
+    patches_dir = _project_root / "patches"
     pending_dir = patches_dir / "pending"
     pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
     if pending_patches:
@@ -627,10 +627,13 @@ def run(
 
         if effective_mode == "human":
             stage_patch_for_human(patch, patches_dir, failure_ctx)
+            pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
+                or patches_dir / "pending" / f"{patch.patch_id}.json"
+            rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
+            rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
             click.echo(
-                f"  ✎ LLM patch staged → patches/pending/{patch.patch_id}.json\n"
-                f"    Review: aqueduct patch apply patches/pending/{patch.patch_id}.json "
-                f"--blueprint {blueprint}",
+                f"  ✎ LLM patch staged → {rel_patch}\n"
+                f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
                 err=True,
             )
             break  # human reviews; no re-run
@@ -781,15 +784,29 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
         return all_applied
 
     uncommitted = []
+    from datetime import datetime
     for p in all_applied:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
         # applied_at may be top-level or inside _aq_meta
-        applied_at = data.get("applied_at") or (data.get("_aq_meta") or {}).get("applied_at")
-        if applied_at and applied_at > last_commit_ts:
-            uncommitted.append(p)
+        applied_at_str = data.get("applied_at") or (data.get("_aq_meta") or {}).get("applied_at")
+        if not applied_at_str:
+            continue
+
+        try:
+            # Use fromisoformat which handles the Z and offset formats in Python 3.11+
+            # For older versions, we might need to replace 'Z' with '+00:00'
+            applied_at = datetime.fromisoformat(applied_at_str.replace("Z", "+00:00"))
+            last_commit = datetime.fromisoformat(last_commit_ts.replace("Z", "+00:00"))
+
+            if applied_at > last_commit:
+                uncommitted.append(p)
+        except (ValueError, TypeError):
+            # Fallback to string comparison if parsing fails for some reason
+            if applied_at_str > last_commit_ts:
+                uncommitted.append(p)
 
     return uncommitted
 
@@ -811,11 +828,10 @@ def patch() -> None:
 )
 @click.option(
     "--patches-dir",
-    default="patches",
-    show_default=True,
-    help="Root directory for patch lifecycle subdirs (backups/, applied/)",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
-def patch_apply(patch_file: str, blueprint: str, patches_dir: str) -> None:
+def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> None:
     """Validate and apply a PatchSpec JSON file to a Blueprint YAML.
 
     Backs up the original Blueprint, applies all operations atomically,
@@ -825,11 +841,14 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str) -> None:
 
     from aqueduct.patch.apply import PatchError, apply_patch_file
 
+    blueprint_path = Path(blueprint)
+    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
+
     try:
         result = apply_patch_file(
-            blueprint_path=Path(blueprint),
+            blueprint_path=blueprint_path,
             patch_path=Path(patch_file),
-            patches_dir=Path(patches_dir),
+            patches_dir=patches_root,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -843,29 +862,43 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str) -> None:
 
 
 @patch.command("reject")
-@click.argument("patch_id")
+@click.argument("patch_ref")
 @click.option("--reason", required=True, help="Rejection reason (recorded in patch file)")
 @click.option(
     "--patches-dir",
-    default="patches",
-    show_default=True,
-    help="Root directory for patch lifecycle subdirs (pending/, rejected/)",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: derived from patch file path or CWD/patches)",
 )
-def patch_reject(patch_id: str, reason: str, patches_dir: str) -> None:
+def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
     """Reject a pending patch and record the reason.
 
-    Moves patches/pending/<patch_id>.json → patches/rejected/<patch_id>.json
-    with a rejection_reason annotation.
+    PATCH_REF can be a file path (patches/pending/00001_*.json) or a bare patch_id slug.
+
+    Moves patches/pending/<file> → patches/rejected/<file> with a rejection_reason annotation.
     """
     from pathlib import Path
 
     from aqueduct.patch.apply import PatchError, reject_patch
 
+    # Accept either a file path or a bare patch_id slug.
+    ref_path = Path(patch_ref)
+    if ref_path.suffix == ".json" and ref_path.exists():
+        # Full path given — derive patches_dir from grandparent (pending/ → patches/)
+        resolved_patches_dir = ref_path.parent.parent
+        patch_id = ref_path.stem
+    elif ref_path.suffix == ".json" and not ref_path.exists() and ref_path.parent.name == "pending":
+        # Path given but file not found via CWD — try same derivation
+        resolved_patches_dir = ref_path.parent.parent
+        patch_id = ref_path.stem
+    else:
+        resolved_patches_dir = Path(patches_dir) if patches_dir else Path("patches")
+        patch_id = patch_ref
+
     try:
         rejected_path = reject_patch(
             patch_id=patch_id,
             reason=reason,
-            patches_dir=Path(patches_dir),
+            patches_dir=resolved_patches_dir,
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
@@ -885,11 +918,10 @@ def patch_reject(patch_id: str, reason: str, patches_dir: str) -> None:
 )
 @click.option(
     "--patches-dir",
-    default="patches",
-    show_default=True,
-    help="Root directory for patch lifecycle subdirs",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
-def patch_commit(blueprint: str, patches_dir: str) -> None:
+def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     """Commit applied patches to git with a structured commit message.
 
     Finds applied patches newer than the last git commit for this Blueprint,
@@ -899,7 +931,7 @@ def patch_commit(blueprint: str, patches_dir: str) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir)
+    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
     if not uncommitted:
@@ -952,14 +984,14 @@ def patch_commit(blueprint: str, patches_dir: str) -> None:
         commit_msg += f"\n\n{combined_rationale}"
     commit_msg += f"\n\n{aqueduct_block}"
 
-    add = subprocess.run(["git", "add", str(blueprint_path)], capture_output=True, cwd=blueprint_path.parent)
+    add = subprocess.run(["git", "add", blueprint_path.name], capture_output=True, cwd=blueprint_path.parent or None)
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.decode().strip()}", err=True)
         sys.exit(1)
 
     commit = subprocess.run(
         ["git", "commit", "-m", commit_msg],
-        capture_output=True, text=True, cwd=blueprint_path.parent,
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
@@ -967,7 +999,7 @@ def patch_commit(blueprint: str, patches_dir: str) -> None:
 
     short_hash = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
-        capture_output=True, text=True, cwd=blueprint_path.parent,
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
     ).stdout.strip()
 
     click.echo(f"✓ committed {n} patch(es)  [{short_hash}]  {blueprint_id}")
@@ -984,11 +1016,10 @@ def patch_commit(blueprint: str, patches_dir: str) -> None:
 )
 @click.option(
     "--patches-dir",
-    default="patches",
-    show_default=True,
-    help="Root directory for patch lifecycle subdirs",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
-def patch_discard(blueprint: str, patches_dir: str) -> None:
+def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     """Discard applied patches — restore Blueprint to last git commit.
 
     Runs: git checkout HEAD -- <blueprint>
@@ -998,13 +1029,13 @@ def patch_discard(blueprint: str, patches_dir: str) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir)
+    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
 
     restore = subprocess.run(
-        ["git", "checkout", "HEAD", "--", str(blueprint_path)],
-        capture_output=True, text=True, cwd=blueprint_path.parent,
+        ["git", "checkout", "HEAD", "--", blueprint_path.name],
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
     )
     if restore.returncode != 0:
         click.echo(f"✗ git checkout failed: {restore.stderr.strip()}", err=True)
@@ -1026,6 +1057,89 @@ def patch_discard(blueprint: str, patches_dir: str) -> None:
     if moved:
         click.echo(f"  moved {moved} applied patch(es) back to patches/pending/")
         click.echo(f"  re-apply with: aqueduct patch apply patches/pending/<file> --blueprint {blueprint}")
+
+
+@patch.command("list")
+@click.option(
+    "--blueprint",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file (used to locate patches/ dir)",
+)
+@click.option(
+    "--patches-dir",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches or CWD/patches)",
+)
+@click.option(
+    "--status",
+    "filter_status",
+    default="pending",
+    type=click.Choice(["pending", "applied", "rejected", "all"]),
+    show_default=True,
+    help="Which lifecycle directory to list",
+)
+def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: str) -> None:
+    """List patches, showing metadata for each.
+
+    Defaults to showing pending patches. Use --status=applied/rejected/all for other dirs.
+    """
+    from pathlib import Path
+
+    if patches_dir:
+        patches_root = Path(patches_dir)
+    elif blueprint:
+        patches_root = Path(blueprint).parent / "patches"
+    else:
+        # Walk up to find project root
+        _search = Path.cwd()
+        patches_root = _search / "patches"
+        for _ in range(8):
+            if (_search / "aqueduct.yml").exists():
+                patches_root = _search / "patches"
+                break
+            if _search.parent == _search:
+                break
+            _search = _search.parent
+
+    dirs_to_show: list[tuple[str, Path]] = []
+    if filter_status == "all":
+        for sub in ("pending", "applied", "rejected"):
+            d = patches_root / sub
+            if d.exists():
+                dirs_to_show.append((sub, d))
+    else:
+        d = patches_root / filter_status
+        if d.exists():
+            dirs_to_show.append((filter_status, d))
+
+    total = 0
+    for status_label, d in dirs_to_show:
+        files = sorted(d.glob("*.json"), key=lambda f: f.name)
+        if not files:
+            continue
+
+        click.echo(f"\n  [{status_label}]  {d}")
+        click.echo(f"  {'file':<55} {'patch_id':<36} {'rationale'}")
+        click.echo(f"  {'-'*55} {'-'*36} {'-'*40}")
+
+        for f in files:
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                data = {}
+            pid = data.get("patch_id", f.stem)
+            rationale = (data.get("rationale") or "").replace("\n", " ")[:60]
+            click.echo(f"  {f.name:<55} {pid:<36} {rationale}")
+            total += 1
+
+    if total == 0:
+        click.echo(f"No {filter_status} patches found in {patches_root}")
+        return
+
+    if filter_status == "pending":
+        click.echo(f"\n  Apply: aqueduct patch apply patches/pending/<file> --blueprint <blueprint.yml>")
+        click.echo(f"  Reject: aqueduct patch reject patches/pending/<file> --reason '<reason>'")
 
 
 # ── aqueduct test ────────────────────────────────────────────────────────────

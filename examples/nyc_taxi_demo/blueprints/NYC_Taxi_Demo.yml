@@ -30,6 +30,7 @@ modules:
       path: "${ctx.paths.yellow_path}/*.parquet"
       options:
         mergeSchema: "true"
+
   - id: green_taxi_trips
     type: Ingress
     label: "Load Green Trips"
