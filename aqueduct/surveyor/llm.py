@@ -98,7 +98,7 @@ _USER_PROMPT_TEMPLATE = """\
 
 ## Full module list (for reference when writing patch IDs)
 {module_list}
-{blueprint_source_section}
+{doctor_hints_section}{blueprint_source_section}
 Produce the PatchSpec JSON now.
 """
 
@@ -206,6 +206,17 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     else:
         blueprint_source_section = ""
 
+    # Doctor pre-flight hints (warn/fail from check_blueprint_sources)
+    hints = getattr(failure_ctx, "doctor_hints", None) or ()
+    if hints:
+        hint_lines = "\n".join(f"- {h}" for h in hints)
+        doctor_hints_section = (
+            "\n## Blueprint issues detected before run (may explain the failure)\n"
+            f"{hint_lines}\n"
+        )
+    else:
+        doctor_hints_section = ""
+
     return _USER_PROMPT_TEMPLATE.format(
         blueprint_name=blueprint_name,
         blueprint_description=f"> {blueprint_desc}" if blueprint_desc else "",
@@ -215,6 +226,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         failed_module_config=failed_config,
         stack_trace=_truncate_stack(failure_ctx.stack_trace),
         module_list=module_list,
+        doctor_hints_section=doctor_hints_section,
         blueprint_source_section=blueprint_source_section,
     )
 

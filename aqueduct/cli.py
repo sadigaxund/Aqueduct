@@ -596,6 +596,21 @@ def run(
             f"failed_module={failure_ctx.failed_module}",
             err=True,
         )
+
+        # Run blueprint doctor checks and attach any warn/fail hints to failure context
+        try:
+            from aqueduct.doctor import check_blueprint_sources
+            from dataclasses import replace as _dc_replace
+            _dr = check_blueprint_sources(blueprint_abs)
+            _hints = tuple(
+                f"{r.name} — {r.detail}"
+                for r in _dr if r.status in ("warn", "fail")
+            )
+            if _hints:
+                failure_ctx = _dc_replace(failure_ctx, doctor_hints=_hints)
+        except Exception:
+            pass  # doctor errors must never block self-healing
+
         patch = generate_llm_patch(
             failure_ctx,
             model=resolved_agent_model,
@@ -811,6 +826,22 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
     return uncommitted
 
 
+# ── patch helpers ────────────────────────────────────────────────────────────
+
+def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
+    """Return <project_root>/patches by walking up from blueprint to find aqueduct.yml."""
+    _search = blueprint_path.parent
+    project_root = blueprint_path.parent
+    for _ in range(8):
+        if (_search / "aqueduct.yml").exists():
+            project_root = _search
+            break
+        if _search.parent == _search:
+            break
+        _search = _search.parent
+    return project_root / "patches"
+
+
 # ── patch command group ───────────────────────────────────────────────────────
 
 @cli.group()
@@ -842,7 +873,7 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
     from aqueduct.patch.apply import PatchError, apply_patch_file
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
+    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
     try:
         result = apply_patch_file(
@@ -931,7 +962,7 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
+    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
     if not uncommitted:
@@ -1029,7 +1060,7 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     from pathlib import Path
 
     blueprint_path = Path(blueprint)
-    patches_root = Path(patches_dir) if patches_dir else blueprint_path.parent / "patches"
+    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
     uncommitted = _uncommitted_applied_patches(blueprint_path, patches_root)
 
@@ -1089,18 +1120,9 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
     if patches_dir:
         patches_root = Path(patches_dir)
     elif blueprint:
-        patches_root = Path(blueprint).parent / "patches"
+        patches_root = _patches_root_from_blueprint(Path(blueprint))
     else:
-        # Walk up to find project root
-        _search = Path.cwd()
-        patches_root = _search / "patches"
-        for _ in range(8):
-            if (_search / "aqueduct.yml").exists():
-                patches_root = _search / "patches"
-                break
-            if _search.parent == _search:
-                break
-            _search = _search.parent
+        patches_root = _patches_root_from_blueprint(Path.cwd() / "_sentinel")
 
     dirs_to_show: list[tuple[str, Path]] = []
     if filter_status == "all":

@@ -1091,7 +1091,28 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ no pending patches → "No pending patches found" message
 - ⏳ `--status=applied` → lists applied/ dir
 - ⏳ `--status=all` → lists pending/, applied/, rejected/ sections
-- ⏳ `--blueprint <path>` → patches_dir = blueprint parent / patches
+- ⏳ `--blueprint <path>` → patches_dir derived via walk-up from blueprint
 - ⏳ no blueprint, no patches-dir → walk-up to aqueduct.yml to find project root
 - ⏳ rationale truncated to 60 chars in table output
 - ⏳ apply/reject hint lines printed after pending table
+
+### `_patches_root_from_blueprint()` — `aqueduct/cli.py`
+- ⏳ blueprint in `blueprints/` subdir, `aqueduct.yml` at project root → returns `<root>/patches`
+- ⏳ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
+- ⏳ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
+
+### `aqueduct doctor --blueprint` — format/extension mismatch — `aqueduct/doctor.py`
+- ⏳ `format=parquet` + path `*.parquet` → ok, no mismatch warning
+- ⏳ `format=csv` + path `*.parquet` → warn: "format='csv' but file extension suggests different format"
+- ⏳ `format=parquet` + path `*.csv` → warn
+- ⏳ `format=delta` → no mismatch check (delta dirs have no single extension)
+- ⏳ unknown format → no mismatch check
+- ⏳ glob with mixed extensions (some match, some don't) → warn on mismatch files
+- ⏳ non-glob path: single file checked for extension mismatch
+
+### LLM doctor hints injection — `aqueduct/cli.py` + `aqueduct/surveyor/llm.py`
+- ⏳ blueprint has warn doctor result → `failure_ctx.doctor_hints` non-empty before LLM call
+- ⏳ doctor check throws exception → exception swallowed; `doctor_hints` stays empty; self-healing continues
+- ⏳ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
+- ⏳ `doctor_hints` empty → section absent from LLM prompt
+- ⏳ `FailureContext.to_dict()` includes `doctor_hints` list
