@@ -24,7 +24,7 @@ spark_config:
 
 webhooks:
   on_failure:
-    url: "https://webhook.site/9208374b-ff87-4364-b638-1e7f0f7f2a4a"
+    url: "https://webhook.scsadascdasite/9208374b-ff87-4364-b638-1e7f0f7f2a4a"
     method: POST
     headers:
       Authorization: "Bearer ${OPS_API_TOKEN}"

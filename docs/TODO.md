@@ -35,39 +35,14 @@
 18. think about interactive TUI style selection feature, where for commands like lineage, report or patch, if you don't specify something it would justlist possible options
 
 19. Streaming, Machine Learning / MLOps
+
+20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
+however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
+
+21. Extend on predefined doctor checks like file format mismatch, by adding more tests that are common and can genuinely help detect common bugs.
 ---
 
 ### Running Thoughts/Notes
 
-17. okay so lets discuss what's happening here: I have changed a format from 'parquet' option to 'csv' to simulate a faulty scenario. If you look at the module you can deduct that within path the file extension is .parquet but then it must be format = parquet, since format = csv caused an error in processing. However, I believe the error message itself might have confused an LLM, because Spark was actually able to decode parquet files as csv. Therefore, an issue (which was guessed to be a column name mismatch) propogated into the next sql module, and finally the below patch was generated, however I couldn't apply it, see the output below:
 
------------ GENERATED PATCH ----------
-{
-"patch_id": "fix-green-taxi-path",
-"run_id": null,
-"rationale": "The SQL query in 'green_trips_prepared' has a unresolved column reference 'VendorID'. Correct it by setti>
-"operations": [
-{
-"op": "set_module_config_key",
-"module_id": "green_trips_prepared",
-"key": "query",
-"value": "SELECT \nVendorID,\nlpep_pickup_datetime AS pickup_datetime,\nlpep_dropoff_datetime AS dropoff_date>
-}
-],
-"_aq_meta": {
-"run_id": "586675f3-6989-457a-a147-4dbf2ae4e4a6",
-"blueprint_id": "nyc_taxi_demo",
-"failed_module": "green_trips_prepared",
-"staged_at": "2026-05-02T23:45:37.219217+00:00"
-}
-}
------------ COMMAND OUTPUT ----------
-aqueduct patch apply patches/pending/00002_20260502T234537_fix-green-taxi-path.json --blueprint blueprints/NYC_Taxi_Demo.yml 
-✗ patch failed: Patched Blueprint is invalid (PatchSpec operations produced a Blueprint that does not pass the Parser):
-Module config resolution failed: Undefined context reference: ${ctx.tables.green_taxi_trips}
-
-
-
-12. Update CHANGELOG.md with latest changes, you move completed tasks from TODOs.md there.
-
-
+13. Test if the patch/commit/apply and rollback works as expected.

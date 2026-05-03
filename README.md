@@ -442,9 +442,19 @@ aqueduct runs --blueprint blueprint.yml     # filter by blueprint
 aqueduct runs --failed                      # show only failed runs
 aqueduct runs --last 20                     # show last N runs
 
-aqueduct patch apply patch.json --blueprint pipeline.yml
-aqueduct patch reject <patch-id> --reason "Incorrect column name"
-aqueduct patch rollback <patch-id> --blueprint pipeline.yml  # restore Blueprint from backup
+aqueduct doctor --blueprint blueprints/pipeline.yml  # check Ingress/Egress sources + format/extension mismatches
+
+aqueduct patch list                                   # show pending patches (walks up to project root)
+aqueduct patch list --blueprint blueprints/pipeline.yml --status all  # pending + applied + rejected
+aqueduct patch apply patches/pending/00001_*.json --blueprint blueprints/pipeline.yml
+aqueduct patch reject patches/pending/00001_*.json --reason "Incorrect column name"  # accepts file path or slug
+aqueduct patch commit --blueprint blueprints/pipeline.yml   # git commit applied patches
+aqueduct patch discard --blueprint blueprints/pipeline.yml  # restore blueprint to HEAD; move patches back to pending
+
+aqueduct log blueprints/pipeline.yml                 # show git history of patch commits for this blueprint
+aqueduct log blueprints/pipeline.yml --format json
+aqueduct rollback blueprints/pipeline.yml --to <patch_id>   # git revert the commit that applied patch_id
+aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive reset (requires "yes" confirmation)
 ```
 
 ### Key `aqueduct run` flags

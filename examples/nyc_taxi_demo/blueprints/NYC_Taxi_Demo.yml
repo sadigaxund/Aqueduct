@@ -35,7 +35,7 @@ modules:
     type: Ingress
     label: "Load Green Trips"
     config:
-      format: parquet
+      format: "parquet"
       path: "${ctx.paths.green_path}/*.parquet"
       options:
         mergeSchema: "true"
@@ -74,22 +74,8 @@ modules:
     type: Channel
     label: "Prepare Green Data"
     config:
-      op: sql
-      query: |
-        SELECT 
-          VendorID,
-          lpep_pickup_datetime AS pickup_datetime,
-          lpep_dropoff_datetime AS dropoff_datetime,
-          PULocationID,
-          DOLocationID,
-          passenger_count,
-          trip_distance,
-          fare_amount,
-          total_amount,
-          'green' AS taxi_type
-        FROM green_taxi_trips
-
-  # ── 3. Merge into Single Stream ──────────────────────────────────────────
+      op: "sql"
+      query: "SELECT \n  VendorID,\n  lpep_pickup_datetime AS pickup_datetime,\n  lpep_dropoff_datetime AS dropoff_datetime,\n  PULocationID,\n  DOLocationID,\n  passenger_count,\n  trip_distance,\n  fare_amount,\n  total_amount,\n  'green' AS taxi_type\nFROM green_taxi_trips\n"
   - id: all_taxi_trips
     type: Funnel
     label: "Merge All Taxi Trips"

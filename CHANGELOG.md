@@ -1,5 +1,51 @@
 # Changelog
 
+## [Unreleased] — 2026-05-03
+
+### Phase 18 — Git-Integrated Patch Lifecycle
+
+**Patch lifecycle commands**
+- `aqueduct patch commit --blueprint <path>` — finds applied patches newer than last git commit, builds structured `---aqueduct---` commit message, runs `git add && git commit`
+- `aqueduct patch discard --blueprint <path>` — `git checkout HEAD -- <blueprint>`; moves uncommitted applied patches back to `patches/pending/`
+- `aqueduct log <blueprint>` — parses git log with `---aqueduct---` blocks; table + `--format json` output; shows `(manual change)` for non-aqueduct commits
+- `aqueduct rollback <blueprint> --to <patch_id>` — `git revert --no-edit <hash>`; `--hard` destructive mode with "yes" confirmation
+- `aqueduct patch reject` now accepts a file path (`patches/pending/00001_*.json`) in addition to bare patch_id slug; derives `patches_dir` from file path grandparent
+- `aqueduct patch list` — new command; tabular view of pending/applied/rejected patches; `--status` filter; `--blueprint` or walk-up to `aqueduct.yml` for patches root
+- All patch commands (`apply`, `commit`, `discard`, `list`, `reject`) now consistently resolve `patches/` from project root (walk-up to `aqueduct.yml`) instead of blueprint parent dir
+- `_patches_root_from_blueprint()` shared helper centralises walk-up logic
+- Run-start warning when uncommitted applied patches exist before `aqueduct run`
+- Patch naming: `{seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json` structured scheme
+
+**`aqueduct init` — project scaffold (Phase 17)**
+- Creates: `blueprints/example.yml`, `aqueduct.yml`, `.gitignore`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`
+- `git init` + initial commit when not already in a git repo
+- Existing files skipped; missing dirs always created
+
+**Project root detection**
+- `aqueduct run` and `doctor --blueprint` walk up from blueprint file to find `aqueduct.yml` (up to 8 levels); `os.chdir(project_root)` before Spark execution so relative YAML paths resolve correctly
+
+**Patch grammar — `set_module_config_key`**
+- New `set_module_config_key` operation: surgical dot-notation key update inside a module's config, leaves all other keys intact
+- LLM system prompt updated: prefer `set_module_config_key` for single-field fixes; `replace_module_config` only for full restructures and must re-emit all keys
+
+**LLM self-healing improvements**
+- System prompt: SQL Channel queries reference upstream module IDs as Spark temp views — `${ctx.*}` is never valid inside SQL strings
+- System prompt: garbled column names in a Channel failure → check upstream Ingress `format` for mismatches; Spark silently reads Parquet as CSV without erroring
+- Doctor blueprint checks injected as hints into LLM prompt at failure time: `check_blueprint_sources()` runs before patch generation, warn/fail results included as "Blueprint issues detected before run" section
+
+**`aqueduct doctor --blueprint`**
+- Checks every Ingress/Egress path in the blueprint (local existence, glob matching, JDBC TCP reachability)
+- **Format/extension mismatch detection**: warns when declared `format` doesn't match file extension (e.g. `format=csv` + `*.parquet`) — catches the silent Spark misread scenario
+- Relative paths resolved from project root (same walk-up logic as `run`)
+- JDBC TCP socket probe (3s timeout)
+
+**`FailureContext` — `doctor_hints` field**
+- `doctor_hints: tuple[str, ...]` added; populated at LLM call time with warn/fail blueprint doctor results
+- Rendered in LLM user prompt as "Blueprint issues detected before run" section
+- Stored in `to_dict()` output (DuckDB observability record)
+
+---
+
 ## 1.0.0a0 — 2026-04-27
 
 Alpha release preparation for PyPI.

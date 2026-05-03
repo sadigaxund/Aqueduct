@@ -51,6 +51,7 @@ class FailureContext:
     started_at: str             # ISO-8601 UTC
     finished_at: str            # ISO-8601 UTC
     blueprint_source_yaml: str | None = None  # raw Blueprint YAML (pre-compilation, with ${ctx.*} unexpanded)
+    doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,6 +64,7 @@ class FailureContext:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "blueprint_source_yaml": self.blueprint_source_yaml,
+            "doctor_hints": list(self.doctor_hints),
         }
 
     def to_json(self) -> str:
