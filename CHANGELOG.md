@@ -44,6 +44,24 @@
 - Rendered in LLM user prompt as "Blueprint issues detected before run" section
 - Stored in `to_dict()` output (DuckDB observability record)
 
+### Phase 16 — Store Layout Cleanup + `aqueduct runs` + LLM Patch Reliability
+- `llm_timeout`, `llm_max_reprompts`, `prompt_context` added to `AgentConnectionConfig` in `config.py`
+- `blueprint_source_yaml` added to `FailureContext`; surveyor reads Blueprint file and populates it
+- LLM system prompt: CRITICAL rule — use template expressions from Blueprint source, not resolved literal paths
+- LLM user prompt: "Original Blueprint YAML" section injected when `blueprint_source_yaml` present
+- ruamel deepcopy corruption fix: `_ruamel_copy()` round-trip instead of `copy.deepcopy`
+- `aqueduct runs` CLI command: `[--blueprint] [--failed] [--last N]`; reads `obs.db`
+- `obs.db` merge: `runs.db` + `signals.db` → single `obs.db`; all store paths now full file paths
+- Store directory defaults unified: `observability.path=".aqueduct"`, `lineage.path=".aqueduct"`, `depot.path=".aqueduct/depot.db"`
+
+### Phase 15 — Probe Signal Types Expansion
+- `value_distribution`: min/max/mean/stddev + percentiles on sample
+- `distinct_count`: approx_count_distinct per column on sample
+- `data_freshness`: max(column); full scan by default; `allow_sample: true` for prod safety
+- `partition_stats`: df.rdd.getNumPartitions() — zero Spark action; never blocked
+- All 4 respect `block_full_actions` flag (partition_stats always runs)
+
+
 ---
 
 ## 1.0.0a0 — 2026-04-27
