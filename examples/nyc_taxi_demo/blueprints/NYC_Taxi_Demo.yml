@@ -4,133 +4,95 @@ id: nyc_taxi_demo
 name: "NYC Taxi Demo"
 
 description: |
-  Simple NYC taxi blueprint that:
-    - Ingests yellow and green taxi trip data (Parquet)
-    - Cleans data and standardizes schemas
-    - Enriches with taxi zone information
-    - Aggregates hourly trip volumes
-    - Outputs hourly totals to a Parquet summary table
-
+  Refactored NYC taxi blueprint using Arcades for reusable processing logic.
+  Ingests yellow and green taxi trip data, cleans, standardizes, and merges.
 
 context:
   paths:
-    yellow_path: "data/yellow/"
-    green_path: "data/green/"
-    lookup_table: "data/zones/taxi_zone_lookup.csv"
+    yellow_path: "data/yellow/*.parquet"
+    green_path: "data/green/*.parquet"
+    zones_path: "data/zones/taxi_zone_lookup.csv"
+    output_path: "output"
+    dead_letter_path: "dead_letter"
 
 modules:
 
-  # ── 1. Load Taxi Data ─────────
+  # ── 1. Process Taxi Data via Arcade ─────────
 
-  - id: yellow_taxi_trips
-    type: Ingress
-    label: "Load Yellow Trips"
-    config:
-      format: parquet
-      path: "${ctx.paths.yellow_path}/*.parquet"
-      options:
-        mergeSchema: "true"
+  - id: yellow_process
+    type: Arcade
+    label: "Process Yellow Taxi"
+    ref: ../arcades/taxi_processor.yml
+    context_override:
+      taxi_type: yellow
+      input_path: "${ctx.paths.yellow_path}"
+      dead_letter_path: "${ctx.paths.dead_letter_path}/yellow"
+      pickup_col: tpep_pickup_datetime
+      dropoff_col: tpep_dropoff_datetime
 
-  - id: green_taxi_trips
-    type: Ingress
-    label: "Load Green Trips"
-    config:
-      format: "parquet"
-      path: "${ctx.paths.green_path}/*.parquet"
-      options:
-        mergeSchema: "true"
+  - id: green_process
+    type: Arcade
+    label: "Process Green Taxi"
+    ref: ../arcades/taxi_processor.yml
+    context_override:
+      taxi_type: green
+      input_path: "${ctx.paths.green_path}"
+      dead_letter_path: "${ctx.paths.dead_letter_path}/green"
+      pickup_col: lpep_pickup_datetime
+      dropoff_col: lpep_dropoff_datetime
 
   - id: taxi_zone_lookup
     type: Ingress
     label: "Load Taxi Zone Lookup"
     config:
       format: csv
-      path: "${ctx.paths.lookup_table}"
+      path: "${ctx.paths.zones_path}"
       options:
         header: "true"
         inferSchema: "true"
 
-  # ── 2. Normalize Trips ──────────────────────────────────────────
-  - id: yellow_trips_prepared
-    type: Channel
-    label: "Prepare Yellow Data"
-    config:
-      op: sql
-      query: |
-        SELECT 
-          VendorID,
-          tpep_pickup_datetime AS pickup_datetime,
-          tpep_dropoff_datetime AS dropoff_datetime,
-          PULocationID,
-          DOLocationID,
-          passenger_count,
-          trip_distance,
-          fare_amount,
-          total_amount,
-          'yellow' AS taxi_type
-        FROM yellow_taxi_trips
+  # ── 2. Merge All Data ──────────────────────────────────────────
 
-  - id: green_trips_prepared
-    type: Channel
-    label: "Prepare Green Data"
-    config:
-      op: "sql"
-      query: "SELECT \n  VendorID,\n  lpep_pickup_datetime AS pickup_datetime,\n  lpep_dropoff_datetime AS dropoff_datetime,\n  PULocationID,\n  DOLocationID,\n  passenger_count,\n  trip_distance,\n  fare_amount,\n  total_amount,\n  'green' AS taxi_type\nFROM green_taxi_trips\n"
   - id: all_taxi_trips
     type: Funnel
     label: "Merge All Taxi Trips"
     config:
       mode: union_all
-      inputs: [yellow_trips_prepared, green_trips_prepared]
+      inputs: [yellow_process, green_process]
 
+  # ── N. Observe Schema ────────────────────────────────────────────
 
-  # ── N. Observe Schema --------|
-  - id: yellow_taxi_input
+  - id: yellow_input_probe
     type: Probe
-    label: "Observe Yellow Taxi Input"
-    attach_to: yellow_taxi_trips
+    label: "Observe Yellow Input"
+    attach_to: yellow_process__ingress
     config:
       signals:
         - type: schema_snapshot
         - type: row_count_estimate
           method: sample
           fraction: 0.1
-        - type: null_rates
-          columns: [VendorID, total_amount]
-          fraction: 0.1
-        - type: sample_rows
-          n: 20
 
-  - id: green_taxi_input
+  - id: green_input_probe
     type: Probe
-    label: "Observe Green Taxi Input"
-    attach_to: green_taxi_trips
+    label: "Observe Green Input"
+    attach_to: green_process__ingress
     config:
       signals:
         - type: schema_snapshot
         - type: row_count_estimate
           method: sample
           fraction: 0.1
-        - type: null_rates
-          columns: [VendorID, total_amount]
-          fraction: 0.1
-        - type: sample_rows
-          n: 20
-
 
 edges:
-  - from: yellow_taxi_trips
-    to: yellow_trips_prepared
-  - from: green_taxi_trips
-    to: green_trips_prepared
-  - from: yellow_trips_prepared
+  - from: yellow_process
     to: all_taxi_trips
-  - from: green_trips_prepared
+  - from: green_process
     to: all_taxi_trips
 
 agent:
   approval_mode: human
-  on_pending_patches: warn            # ignore | warn | block
+  on_pending_patches: warn
   max_patches_per_run: 1
   allowed_paths:
     - "data/*"
@@ -138,5 +100,5 @@ agent:
     - "data/trips/*"
 
   forbidden_ops:
-    - remove_module              # never delete modules autonomously
-    - replace_retry_policy       # retry policy is managed by humans only
+    - remove_module
+    - replace_retry_policy

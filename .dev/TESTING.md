@@ -177,15 +177,22 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `execute()` with `store_dir=None`: Probe result is `status="success"` but no DB written
 - ✅ Ingress → Probe (schema_snapshot) → Egress blueprint returns `ExecutionResult(status="success")`
 
-### SparkListener / `module_metrics`
-- ✅ `AqueductMetricsListener.set_active_module()` resets accumulated metrics
-- ✅ `AqueductMetricsListener.collect_metrics()` returns accumulated dict and resets state
-- ✅ `AqueductMetricsListener.collect_metrics()` with no active module returns all-zero dict
+### `module_metrics` / `df.observe()` collection
+- ⏳ `observe_df()` on Spark 3.3+: returns `(observed_df, Observation)` with correct alias
+- ⏳ `observe_df()` on Spark < 3.3 (or mock): returns `(original_df, None)` — no crash
+- ⏳ `get_observation(obs, alias)` returns correct count after action fired
+- ⏳ `get_observation(None, alias)` returns 0
+- ⏳ `dir_bytes()` on existing local file: returns non-zero size
+- ⏳ `dir_bytes()` on existing local directory: returns sum of file sizes
+- ⏳ `dir_bytes()` on cloud path (s3://...): returns 0
+- ⏳ `dir_bytes()` on nonexistent path: returns 0
 - ✅ `_write_stage_metrics()` creates `module_metrics` table if absent and inserts one row
 - ✅ `_write_stage_metrics()` with `store_dir=None` is a no-op
-- ✅ Egress succeeds → `module_metrics` row exists in `obs.db` with `module_id` matching Egress
-- ✅ Egress failure → no `module_metrics` row written (listener reset on exception)
-- ✅ `row_count_estimate` method=spark_listener: when `module_metrics` row exists, `estimate` equals `records_written` value
+- ⏳ Egress succeeds → `module_metrics` row has `records_written > 0` (Spark 3.3+, local write)
+- ⏳ Egress succeeds → `module_metrics` row has `bytes_written > 0` for local path
+- ⏳ Egress succeeds → `module_metrics` row has `duration_ms > 0`
+- ⏳ Ingress succeeds → `module_metrics` row has `bytes_read > 0` for local path, `records_read = 0`
+- ⏳ Channel/Junction/Funnel → `module_metrics` row has `duration_ms > 0`, other fields zero
 
 ### Assert module
 - ✅ `schema_match` passes: zero Spark action triggered
@@ -764,22 +771,23 @@ Issues reported in:
 - ⏳ CLI `--execution-date 2026-01-15` parses to `date(2026,1,15)` and passed to compiler
 - ⏳ CLI `--execution-date` invalid format → click error with clear message
 
-### LLM Guardrails — `aqueduct/cli.py` + `aqueduct/parser/`
+### LLM Guardrails — `aqueduct/patch/apply.py` + `aqueduct/parser/`
 
-**`_check_guardrails(patch, agent)`:** returns error string on violation, else None.
-**`AgentConfig.allowed_paths`:** tuple of fnmatch patterns; empty = unrestricted.
-**`AgentConfig.forbidden_ops`:** tuple of op names; empty = all permitted.
+**`_check_guardrails(patch_spec, bp_raw)`:** deterministic enforcement — reads `agent.guardrails` from Blueprint YAML dict, raises `PatchError` on violation. Not LLM-dependent.
+**`GuardrailsConfig.allowed_paths`:** fnmatch patterns for `path`/`output_path` config values; empty = unrestricted.
+**`GuardrailsConfig.forbidden_ops`:** op names blocked from auto-apply; empty = all permitted.
 
 - ✅ `allowed_paths=[]` → no path violations regardless of patch content
 - ✅ `forbidden_ops=[]` → no op violations regardless of patch content
-- ✅ patch op in `forbidden_ops` → returns error message containing op name
-- ✅ patch config.path matching an `allowed_paths` pattern → no violation
-- ✅ patch config.path NOT matching any `allowed_paths` pattern → returns error message containing path
-- ✅ patch with no `config.path` (e.g. `replace_module_label`) → no path violation even if `allowed_paths` set
-- ⏳ guardrail violation → patch staged in `patches/pending/`, not applied; blueprint ends with status="error"
-- ✅ `AgentConfig.allowed_paths` round-trips through schema → parser → model (empty default)
-- ✅ `AgentConfig.forbidden_ops` round-trips through schema → parser → model (empty default)
-- ✅ `allowed_paths` + `forbidden_ops` in Blueprint YAML parsed correctly to `AgentConfig`
+- ✅ patch op in `forbidden_ops` → `PatchError` raised containing op name (deterministic)
+- ✅ patch `set_module_config_key` with `key=path`, value matching an `allowed_paths` pattern → no violation
+- ✅ patch `set_module_config_key` with `key=path`, value NOT matching any `allowed_paths` → `PatchError` raised
+- ✅ patch with non-path key (e.g. `key=format`) → no path violation even if `allowed_paths` set
+- ✅ no `agent.guardrails` in Blueprint → unrestricted (no error)
+- ⏳ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
+- ✅ `GuardrailsConfig` round-trips through schema → parser → model (empty defaults)
+- ✅ `agent.guardrails.allowed_paths` + `forbidden_ops` in Blueprint YAML parsed to `GuardrailsConfig`
+- ⏳ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
 
 ### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
 

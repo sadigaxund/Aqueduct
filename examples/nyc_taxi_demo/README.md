@@ -130,7 +130,7 @@ print(pq.read_schema('data/green/2024-01.parquet'))
 | Yellow column | Green column | Notes |
 |---|---|---|
 | `tpep_pickup_datetime` | `lpep_pickup_datetime` | Different names — normalize in Channel |
-| `tpep_dropoff_datetime` | `lpep_dropoff_datetime` | Same |
+| `tpep_dropoff_datetime` | `lpep_dropoff_datetime` | Different names — normalize in Channel |
 | `PULocationID` | `PULocationID` | Same |
 | `DOLocationID` | `DOLocationID` | Same |
 | `fare_amount` | `fare_amount` | Same |
@@ -208,7 +208,10 @@ Read Yellow, Green, and Zone CSV. Each is a separate Ingress.
 ### 3.3 — Normalize Zones (Channel)
 
 Simple SQL to standardize the zone lookup table. Rename columns:
-`LocationID → zone_id`, `Borough → borough`, `Zone → zone_name`, `service_zone → service_zone`
+- `LocationID` → `zone_id`
+- `Borough`    → `borough`
+- `Zone`       → `zone_name`
+- `service_zone` → `service_zone`
 
 **Checklist:**
 - [ ] `normalize_zones` Channel with `op: sql`
@@ -220,7 +223,7 @@ This is the core data quality gate. Yellow trips have known issues:
 
 | Rule | Type | Value | on_fail |
 |---|---|---|---|
-| Schema has required columns | `schema_match` | `{fare_amount: double, PULocationID: long, ...}` | `abort` |
+| Schema has required columns | `schema_match` | `{fare_amount: double, PULocationID: int, ...}` | `abort` |
 | Not empty | `min_rows` | 1000 | `abort` |
 | `fare_amount` not mostly null | `null_rate` | column: fare_amount, max: 0.05 | `abort` |
 | Pickup time exists | `null_rate` | column: tpep_pickup_datetime, max: 0.001 | `abort` |
@@ -613,10 +616,18 @@ print(f'Quarantined yellow rows: {len(t)}')
 print(t.to_pandas()[['fare_amount','trip_distance','_aq_error_rule']].head(10))
 "
 
+```
+
+```bash
 # Run with checkpoint enabled, then resume after crash
 # (Set checkpoint: true on merge_trips, kill after Funnel succeeds)
 aqueduct run blueprint.yml --resume <run_id_from_first_run>
 ```
+
+### Pro-tips for Production
+- **Targeted Runs**: Use `aqueduct run blueprint.yml --module agg_manhattan` to run only a specific module and its dependencies.
+- **Secret Management**: Instead of hardcoding paths or credentials, use `${sec.my_secret}` in the YAML and provide them via environment variables or a secret manager.
+- **Incremental Ingress**: For S3/GCS sources, use `format: parquet` with `options: {recursiveFileLookup: "true"}` and combined with Aqueduct's state store to only process new files.
 
 ---
 

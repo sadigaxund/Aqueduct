@@ -20,6 +20,7 @@ from aqueduct.parser.models import (
     Blueprint,
     ContextRegistry,
     Edge,
+    GuardrailsConfig,
     Module,
     RetryPolicy,
 )
@@ -96,7 +97,7 @@ def parse(
                 depends_on=tuple(m.depends_on),
                 attach_to=m.attach_to,
                 ref=m.ref,
-                context_override=m.context_override,
+                context_override=resolve_value(m.context_override, ctx_map),
             )
             for m in validated.modules
         )
@@ -147,8 +148,10 @@ def parse(
         provider=validated.agent.provider,
         base_url=validated.agent.base_url,
         ollama_options=validated.agent.ollama_options,
-        allowed_paths=tuple(validated.agent.allowed_paths),
-        forbidden_ops=tuple(validated.agent.forbidden_ops),
+        guardrails=GuardrailsConfig(
+            forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
+            allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
+        ),
         validate_patch=validated.agent.validate_patch,
         prompt_context=validated.agent.prompt_context,
     )

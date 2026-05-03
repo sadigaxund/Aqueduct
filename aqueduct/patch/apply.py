@@ -16,6 +16,7 @@ On failure between steps 4 and 6, original Blueprint is unchanged.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 from dataclasses import dataclass
@@ -145,6 +146,38 @@ def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
     return working
 
 
+def _check_guardrails(patch_spec: PatchSpec, bp_raw: dict) -> None:
+    """Deterministically enforce agent.guardrails declared in the Blueprint.
+
+    Raises PatchError if any operation violates:
+      - forbidden_ops: op type is in the blocklist
+      - allowed_paths: set_module_config_key targeting a path/output_path key whose
+                       value doesn't match any allowed_paths fnmatch pattern
+    """
+    guardrails = (bp_raw.get("agent") or {}).get("guardrails") or {}
+    forbidden_ops: list[str] = guardrails.get("forbidden_ops") or []
+    allowed_paths: list[str] = guardrails.get("allowed_paths") or []
+
+    for op in patch_spec.operations:
+        op_name = op.op
+
+        if op_name in forbidden_ops:
+            raise PatchError(
+                f"Operation {op_name!r} is forbidden by agent.guardrails.forbidden_ops. "
+                f"Blocked ops: {forbidden_ops}"
+            )
+
+        if allowed_paths and op_name == "set_module_config_key":
+            key = getattr(op, "key", None)
+            if key in ("path", "output_path"):
+                value = str(getattr(op, "value", "") or "")
+                if not any(fnmatch.fnmatch(value, pat) for pat in allowed_paths):
+                    raise PatchError(
+                        f"Path value {value!r} in op {op_name!r} (module {getattr(op, 'module_id', '?')!r}) "
+                        f"does not match any agent.guardrails.allowed_paths pattern: {allowed_paths}"
+                    )
+
+
 def apply_patch_file(
     blueprint_path: Path,
     patch_path: Path,
@@ -175,6 +208,9 @@ def apply_patch_file(
         bp_raw = _yaml_load(blueprint_path)
     except Exception as exc:
         raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
+
+    # ── 2.5 Guardrail enforcement (deterministic — blueprint config, not prompt) ─
+    _check_guardrails(patch_spec, bp_raw)
 
     # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
     patched = apply_patch_to_dict(bp_raw, patch_spec)

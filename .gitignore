@@ -5,10 +5,17 @@ archive/
 tmp/
 data/
 patches/
-examples/*/*.db
-examples/*/*.json
-examples/*/*.parquet
-examples/*/*/signals/
+
+*.parquet*
+examples/**/*.json
+examples/**/*.parquet
+examples/**/signals
+examples/**/*.crc
+examples/**/dead_letter/
+
+*.db
+
+
 
 # --- Spark / Hadoop / Data ---
 .spark-staging/

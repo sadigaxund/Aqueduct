@@ -1,0 +1,72 @@
+aqueduct: "1.0"
+
+id: arcade.taxi_processor
+name: "Taxi Data Processor Arcade"
+
+required_context:
+  - taxi_type
+  - input_path
+  - dead_letter_path
+  - pickup_col
+  - dropoff_col
+
+modules:
+  - id: ingress
+    type: Ingress
+    label: "Load ${ctx.taxi_type} Trips"
+    config:
+      format: parquet
+      path: "${ctx.input_path}"
+      options:
+        mergeSchema: "true"
+
+  - id: assert_quality
+    type: Assert
+    label: "Quality Check ${ctx.taxi_type}"
+    config:
+      rules:
+        - type: schema_match
+          expected: {fare_amount: double, PULocationID: int, DOLocationID: int}
+          on_fail: abort
+        - type: min_rows
+          min: 100
+          on_fail: abort
+        - type: sql_row
+          expr: "fare_amount >= 0 AND trip_distance >= 0"
+          on_fail: quarantine
+
+  - id: normalize
+    type: Channel
+    label: "Normalize ${ctx.taxi_type}"
+    config:
+      op: sql
+      query: |
+        SELECT 
+          VendorID, 
+          ${ctx.pickup_col} AS pickup_datetime, 
+          ${ctx.dropoff_col} AS dropoff_datetime, 
+          PULocationID, 
+          DOLocationID, 
+          passenger_count, 
+          trip_distance, 
+          fare_amount, 
+          total_amount, 
+          '${ctx.taxi_type}' AS taxi_type 
+        FROM __input__
+
+  - id: dead_letter_egress
+    type: Egress
+    label: "Quarantine ${ctx.taxi_type}"
+    config:
+      format: parquet
+      path: "${ctx.dead_letter_path}"
+      mode: overwrite
+
+edges:
+  - from: ingress
+    to: assert_quality
+  - from: assert_quality
+    to: normalize
+  - from: assert_quality
+    to: dead_letter_egress
+    port: spillway
