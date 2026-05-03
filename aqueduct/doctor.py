@@ -368,6 +368,9 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
                     matches = _glob.glob(str(p))
                     if matches:
                         results.append(CheckResult(name, "ok", f"readable: {path_val} ({len(matches)} file(s))", _ms(t)))
+                        # Check format/extension mismatch (e.g. format=csv but path=*.parquet)
+                        if fmt:
+                            _check_format_ext_mismatch(results, name, fmt, matches, path_val, _ms(t))
                     elif p.parent.exists():
                         results.append(CheckResult(name, "warn", f"dir exists but no files match pattern: {path_val}", _ms(t)))
                     else:
@@ -375,6 +378,8 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
                 else:
                     if p.exists():
                         results.append(CheckResult(name, "ok", f"readable: {path_val}", _ms(t)))
+                        if fmt:
+                            _check_format_ext_mismatch(results, name, fmt, [str(p)], path_val, _ms(t))
                     else:
                         results.append(CheckResult(name, "fail", f"not found: {p}", _ms(t)))
             else:  # Egress
@@ -388,6 +393,43 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
         results.append(CheckResult(name, "skip", "no path or url in config", _ms(t)))
 
     return results
+
+
+_FORMAT_EXTENSIONS: dict[str, set[str]] = {
+    "parquet": {".parquet"},
+    "orc":     {".orc"},
+    "avro":    {".avro"},
+    "csv":     {".csv", ".tsv", ".txt"},
+    "json":    {".json", ".jsonl", ".ndjson"},
+    "text":    {".txt"},
+    "delta":   set(),  # Delta dirs have no single extension — skip check
+}
+
+
+def _check_format_ext_mismatch(
+    results: list[CheckResult],
+    name: str,
+    fmt: str,
+    file_paths: list[str],
+    path_val: str,
+    elapsed_ms: int,
+) -> None:
+    """Append a warn CheckResult if file extension doesn't match declared format."""
+    expected_exts = _FORMAT_EXTENSIONS.get(fmt.lower())
+    if expected_exts is None or not expected_exts:
+        return  # unknown or extension-free format (delta) — skip
+    mismatched = [
+        f for f in file_paths
+        if Path(f).suffix.lower() not in expected_exts
+    ]
+    if mismatched:
+        sample = Path(mismatched[0]).name
+        results.append(CheckResult(
+            name, "warn",
+            f"format={fmt!r} but file extension suggests different format "
+            f"(e.g. {sample!r}). Spark may silently misread the data.",
+            elapsed_ms,
+        ))
 
 
 def _jdbc_default_port(jdbc_url: str) -> int:

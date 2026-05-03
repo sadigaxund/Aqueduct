@@ -39,7 +39,7 @@
 
 ### Running Thoughts/Notes
 
-17. okay so I have change a format from 'parquet' option to 'csv' to simulate a faulty scenario. If you look at the module you can deduct that within path the file extension is .parquet but then it must be format = parquet, since format = csv caused an error in processing. However, I believe the error message itself might have confused an LLM, because Spark was actually able to decode parquet files as csv. Therefore, an issue (which was guessed to be a column name mismatch) propogated into the next sql module, and finally the below patch was generated, however I couldn't apply it, see the output below:
+17. okay so lets discuss what's happening here: I have changed a format from 'parquet' option to 'csv' to simulate a faulty scenario. If you look at the module you can deduct that within path the file extension is .parquet but then it must be format = parquet, since format = csv caused an error in processing. However, I believe the error message itself might have confused an LLM, because Spark was actually able to decode parquet files as csv. Therefore, an issue (which was guessed to be a column name mismatch) propogated into the next sql module, and finally the below patch was generated, however I couldn't apply it, see the output below:
 
 ----------- GENERATED PATCH ----------
 {

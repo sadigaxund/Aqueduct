@@ -71,6 +71,8 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 - patch_id: short slug (e.g. "fix-sql-syntax-clean-orders").
 - description: root cause + fix in one sentence.
 - CRITICAL: When patching config values that contain paths, expressions, or strings, use the template expressions from the Original Blueprint YAML (e.g. "${{ctx.paths.input}}/*.parquet"), NOT the resolved literal values shown in the compiled module config. The patch is applied to the raw Blueprint, not the compiled Manifest.
+- SQL Channel queries reference upstream module IDs as Spark temp view names. If an Ingress module has id "green_taxi_trips", the Channel SQL uses `FROM green_taxi_trips`. NEVER use `${{ctx.*}}` inside a SQL query string — context references resolve at Blueprint level, not inside SQL.
+- If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` value. Spark can silently read Parquet files as CSV or vice versa, producing garbage column names that propagate to downstream SQL. In that case, fix the upstream Ingress `format` key with set_module_config_key, not the Channel SQL.
 {previous_patches_section}{custom_context_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
