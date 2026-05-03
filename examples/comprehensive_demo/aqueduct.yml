@@ -62,3 +62,11 @@ agent:
   model: "qwen3:32b"
   base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
 #     max_patches_per_run: 5
+
+#   # Guardrails — deterministically enforced at patch-apply time (not prompt hints)
+#   guardrails:
+#     forbidden_ops:
+#       - remove_module        # LLM can never delete modules autonomously
+#       - replace_retry_policy
+#     allowed_paths:
+#       - "data/*"             # fnmatch — LLM may only set path values matching these
