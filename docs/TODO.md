@@ -46,3 +46,26 @@ however we have a python module with that name, I very much liked something simi
 
 
 13. Test if the patch/commit/apply and rollback works as expected.
+
+14. When a webhook fails the pipeline also failed, and LLM triggered. Is this a correct behavior? What can a LLM do about this? Should we quarantine webhook 
+
+Metrics: 
+- Deleted listener.py (broken py4j registration) 
+- Created metrics.py with observe_df() (Spark 3.3+ row counts, graceful fallback), get_observation(),
+ dir_bytes() (filesystem bytes, cloud returns 0), zero_metrics() 
+- Removed all _aq_metrics_listener plumbing from session.py and executor.py
+- Egress: observe_df for records_written + dir_bytes for bytes_written + wall-clock duration_ms
+- Ingress: dir_bytes for bytes_read + wall-clock duration_ms (records_read stays 0)
+- Channel/Junction/Funnel: wall-clock duration_ms only 
+- Documented Spark 3.3 requirement in docs/specs.md
+
+Guardrails:
+- Added GuardrailsSchema + GuardrailsConfig — nested under agent.guardrails: in YAML 
+- Updated schema.py, models.py, parser.py, compiler/models.py
+- Added _check_guardrails() in apply.py — deterministic enforcement before any Blueprint mutation
+- Updated comprehensive_demo/blueprint.yml and docs/specs.md 
+
+Arcade separator:
+- Your __ separator is correct — dots break Spark's createTempView (multi-part name parsing) 
+- Fixed missing Any import in expander.py
+- Updated docstring from . to __

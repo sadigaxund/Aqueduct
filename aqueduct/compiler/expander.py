@@ -3,7 +3,7 @@
 Expansion contract (per spec §4.4 Arcade):
   - Arcade modules are expanded at Manifest compile time.
   - The Manifest always contains a flat Module list (no nesting).
-  - Module IDs within Arcades are namespaced: {arcade_id}.{child_id}.
+  - Module IDs within Arcades are namespaced: {arcade_id}__{child_id}.
   - Spark sees a single flat execution plan with no nesting overhead.
 
 Edge rewiring:
@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from typing import Any
 
 from aqueduct.parser.models import Blueprint, Edge, Module
 
@@ -32,9 +33,15 @@ def _entry_modules(sub_bp: Blueprint) -> list[str]:
 
 
 def _exit_modules(sub_bp: Blueprint) -> list[str]:
-    """Module IDs in sub-Blueprint with no outgoing edges (graph exit points)."""
+    """Module IDs in sub-Blueprint with no outgoing edges (graph exit points).
+    Note: Egress modules are excluded because they don't produce a DataFrame
+    for downstream consumption.
+    """
     sources = {e.from_id for e in sub_bp.edges}
-    return [m.id for m in sub_bp.modules if m.id not in sources]
+    return [
+        m.id for m in sub_bp.modules 
+        if m.id not in sources and m.type != "Egress"
+    ]
 
 
 def _expand_single(
@@ -44,7 +51,7 @@ def _expand_single(
 ) -> tuple[list[Module], list[Edge]]:
     """Expand one Arcade module into namespaced sub-modules + rewired edges."""
     ns = arcade.id
-    id_map = {m.id: f"{ns}.{m.id}" for m in sub_bp.modules}
+    id_map = {m.id: f"{ns}__{m.id}" for m in sub_bp.modules}
 
     # Namespace sub-Blueprint modules
     expanded_modules: list[Module] = []
@@ -179,11 +186,47 @@ def _expand_recursive(
         expanded_mods, new_edges = _expand_single(m, sub_bp, edges)
         result_modules.extend(expanded_mods)
 
+        exit_ids_ns = [f"{m.id}__{eid}" for eid in _exit_modules(sub_bp)]
+        
+        # Helper to recursively replace IDs in nested structures
+        def _replace_ids(val: Any) -> Any:
+            if isinstance(val, str):
+                return exit_ids_ns if val == m.id else val
+            if isinstance(val, list):
+                new_list = []
+                for item in val:
+                    res = _replace_ids(item)
+                    if isinstance(res, list):
+                        # Special case: flatten inputs list if it matched an arcade ID
+                        new_list.extend(res)
+                    else:
+                        new_list.append(res)
+                return new_list
+            if isinstance(val, dict):
+                return {k: _replace_ids(v) for k, v in val.items()}
+            return val
+
+        # Update references in all modules (processed and pending)
+        for other_m in (result_modules + modules):
+            if other_m.config and "inputs" in other_m.config and m.id in other_m.config["inputs"]:
+                other_m.config["inputs"] = _replace_ids(other_m.config["inputs"])
+
         # Replace edges touching this Arcade with rewired ones
         edges = [
             e for e in edges
             if e.from_id != m.id and e.to_id != m.id
         ] + new_edges
+
+    # Detect ID collisions produced by expansion before recursing
+    seen: dict[str, str] = {}
+    for mod in result_modules:
+        if mod.id in seen:
+            raise ExpandError(
+                f"Module ID collision after Arcade expansion: '{mod.id}' appears more than once. "
+                f"An Arcade expansion produced this ID and it conflicts with an existing module. "
+                f"Rename the conflicting module or the Arcade/child module."
+            )
+        seen[mod.id] = mod.id
 
     # Recurse in case sub-Blueprints themselves contain Arcades
     return _expand_recursive(result_modules, edges, base_dir, depth + 1)

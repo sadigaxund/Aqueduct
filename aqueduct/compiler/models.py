@@ -87,6 +87,10 @@ class Manifest:
                 "base_url": self.agent.base_url,
                 "validate_patch": self.agent.validate_patch,
                 "prompt_context": self.agent.prompt_context,
+                "guardrails": {
+                    "forbidden_ops": list(self.agent.guardrails.forbidden_ops),
+                    "allowed_paths": list(self.agent.guardrails.allowed_paths),
+                },
             },
             "udf_registry": list(self.udf_registry),
             "macros": self.macros,

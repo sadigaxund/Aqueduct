@@ -92,9 +92,4 @@ def make_spark_session(
     else:
         session = builder.getOrCreate()
 
-    from aqueduct.executor.spark.listener import AqueductMetricsListener
-    listener = AqueductMetricsListener()
-    listener.register(session)
-    session._aq_metrics_listener = listener  # type: ignore[attr-defined]
-
     return session

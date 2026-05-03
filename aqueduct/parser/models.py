@@ -32,6 +32,12 @@ class RetryPolicy:
 
 
 @dataclass(frozen=True)
+class GuardrailsConfig:
+    forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
+    allowed_paths: tuple[str, ...] = ()   # fnmatch patterns for config path values; empty = unrestricted
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive"
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
@@ -41,9 +47,8 @@ class AgentConfig:
     base_url: str | None = None
     model: str | None = None
     ollama_options: dict | None = None
-    # Guardrail policy — limits what LLM can autonomously patch
-    allowed_paths: tuple[str, ...] = ()   # fnmatch patterns; empty = unrestricted
-    forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
+    # Guardrail policy — deterministically enforced in apply_patch
+    guardrails: GuardrailsConfig = field(default_factory=GuardrailsConfig)
     # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
     validate_patch: bool = False
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)

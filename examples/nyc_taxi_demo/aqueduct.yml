@@ -22,19 +22,19 @@ spark_config:
 #     backend: duckdb
 #     path: ".aqueduct/depot.duckdb"
 
-webhooks:
-  on_failure:
-    url: "https://webhook.scsadascdasite/9208374b-ff87-4364-b638-1e7f0f7f2a4a"
-    method: POST
-    headers:
-      Authorization: "Bearer ${OPS_API_TOKEN}"
-      X-Source: "aqueduct"
-    timeout: 15
-    payload:
-      blueprint_name: "${BLUEPRINT_NAME}"
-      blueprint_id: "${BLUEPRINT_ID}"
-      run_id: "${RUN_ID}"
-      status: "${STATUS}"
+# webhooks:
+#   on_failure:
+#     url: "https://webhook.scsadascdasite/9208374b-ff87-4364-b638-1e7f0f7f2a4a"
+#     method: POST
+#     headers:
+#       Authorization: "Bearer ${OPS_API_TOKEN}"
+#       X-Source: "aqueduct"
+#     timeout: 15
+#     payload:
+#       blueprint_name: "${BLUEPRINT_NAME}"
+#       blueprint_id: "${BLUEPRINT_ID}"
+#       run_id: "${RUN_ID}"
+#       status: "${STATUS}"
 
 
 agent:

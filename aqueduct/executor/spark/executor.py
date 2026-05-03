@@ -64,6 +64,7 @@ from aqueduct.executor.spark.egress import EgressError, write_egress
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
+from aqueduct.executor.spark.metrics import dir_bytes, get_observation, observe_df, zero_metrics
 from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -500,9 +501,6 @@ def execute(
 
     run_id = run_id or str(uuid.uuid4())
 
-    # Grab listener attached by make_spark_session (None if session created externally)
-    _listener = getattr(spark, "_aq_metrics_listener", None)
-
     # Checkpoint / resume paths (None when feature disabled)
     checkpoint_dir: Path | None = None
     any_checkpoint = manifest.checkpoint or any(m.checkpoint for m in manifest.modules)
@@ -590,9 +588,8 @@ def execute(
 
         # ── Ingress ───────────────────────────────────────────────────────────
         if module.type == "Ingress":
-            if _listener:
-                _listener.set_active_module(module.id)
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 df = _with_retry(
                     lambda: read_ingress(module, spark),
@@ -600,8 +597,6 @@ def execute(
                     module.id,
                 )
             except IngressError as exc:
-                if _listener:
-                    _listener.collect_metrics()  # reset state
                 gate_closed, fail_result = _on_retry_exhausted(
                     exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
@@ -609,8 +604,12 @@ def execute(
                     frame_store[module.id] = _GATE_CLOSED
                     continue
                 return fail_result
-            if _listener:
-                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
+            _write_stage_metrics(
+                module.id, run_id,
+                {**zero_metrics(), "bytes_read": dir_bytes(module.config.get("path", "")),
+                 "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                store_dir,
+            )
             frame_store[module.id] = df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -644,9 +643,8 @@ def execute(
                     return _fail(manifest.blueprint_id, run_id, module_results)
                 upstream_dfs[edge.from_id] = val
             else:
-                if _listener:
-                    _listener.set_active_module(module.id)
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
                 try:
                     df = _with_retry(
                         lambda: execute_sql_channel(module, upstream_dfs, spark),
@@ -654,8 +652,6 @@ def execute(
                         module.id,
                     )
                 except ChannelError as exc:
-                    if _listener:
-                        _listener.collect_metrics()
                     gate_closed, fail_result = _on_retry_exhausted(
                         exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                     )
@@ -697,8 +693,11 @@ def execute(
                 else:
                     frame_store[module.id] = df
 
-                if _listener:
-                    _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
+                _write_stage_metrics(
+                    module.id, run_id,
+                    {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    store_dir,
+                )
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
                 module_results.append(ModuleResult(module_id=module.id, status="success"))
 
@@ -729,9 +728,8 @@ def execute(
                 )
                 return _fail(manifest.blueprint_id, run_id, module_results)
 
-            if _listener:
-                _listener.set_active_module(module.id)
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 branch_dfs = _with_retry(
                     lambda: execute_junction(module, val),
@@ -739,8 +737,6 @@ def execute(
                     module.id,
                 )
             except JunctionError as exc:
-                if _listener:
-                    _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
                     exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
@@ -751,8 +747,11 @@ def execute(
                     continue
                 return fail_result
 
-            if _listener:
-                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
+            _write_stage_metrics(
+                module.id, run_id,
+                {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                store_dir,
+            )
             for branch_id, branch_df in branch_dfs.items():
                 frame_store[f"{module.id}.{branch_id}"] = branch_df
             _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
@@ -791,9 +790,8 @@ def execute(
                 module_results.append(ModuleResult(module_id=module.id, status="skipped"))
                 continue
 
-            if _listener:
-                _listener.set_active_module(module.id)
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _t0 = time.monotonic()
             try:
                 df = _with_retry(
                     lambda: execute_funnel(module, funnel_upstream),
@@ -801,8 +799,6 @@ def execute(
                     module.id,
                 )
             except FunnelError as exc:
-                if _listener:
-                    _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
                     exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
@@ -810,8 +806,11 @@ def execute(
                     frame_store[module.id] = _GATE_CLOSED
                     continue
                 return fail_result
-            if _listener:
-                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
+            _write_stage_metrics(
+                module.id, run_id,
+                {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                store_dir,
+            )
             frame_store[module.id] = df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -948,26 +947,30 @@ def execute(
                 )
                 return _fail(manifest.blueprint_id, run_id, module_results)
 
-            if _listener:
-                _listener.set_active_module(module.id)
             mod_policy = _module_retry_policy(module, manifest.retry_policy)
+            _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written")
+            _t0 = time.monotonic()
             try:
                 _with_retry(
-                    lambda: write_egress(val, module, depot=depot),
+                    lambda: write_egress(_obs_df, module, depot=depot),
                     mod_policy,
                     module.id,
                 )
             except EgressError as exc:
-                if _listener:
-                    _listener.collect_metrics()
                 gate_closed, fail_result = _on_retry_exhausted(
                     exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
                 )
                 if gate_closed:
                     continue  # Egress is terminal; no frame_store update needed
                 return fail_result
-            if _listener:
-                _write_stage_metrics(module.id, run_id, _listener.collect_metrics(), store_dir)
+            _write_stage_metrics(
+                module.id, run_id,
+                {**zero_metrics(),
+                 "records_written": get_observation(_obs, "records_written"),
+                 "bytes_written": dir_bytes(module.config.get("path", "")),
+                 "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                store_dir,
+            )
             _write_checkpoint(module, checkpoint_dir, manifest)  # done-sentinel only
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 

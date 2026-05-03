@@ -448,70 +448,25 @@ class TestBuildUserPrompt:
         assert "Traceback" in result
 
 
-# ── listener.py onStageCompleted ──────────────────────────────────────────────
+# ── metrics.py helpers ────────────────────────────────────────────────────────
 
-class TestListenerOnStageCompleted:
-    def _make_listener(self):
-        from aqueduct.executor.spark.listener import AqueductMetricsListener
-        listener = AqueductMetricsListener()
-        listener._active_module = "test_module"
-        return listener
+class TestMetricsHelpers:
+    def test_get_observation_none_returns_zero(self):
+        from aqueduct.executor.spark.metrics import get_observation
+        assert get_observation(None, "records_written") == 0
 
-    def _make_stage_completed(self, records_read=100, bytes_read=1024,
-                               records_written=50, bytes_written=512,
-                               duration_ms=1000):
-        stage = MagicMock()
-        info = MagicMock()
-        tm = MagicMock()
-        input_m = MagicMock()
-        output_m = MagicMock()
+    def test_dir_bytes_cloud_path_returns_zero(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("s3://bucket/key") == 0
+        assert dir_bytes("hdfs://namenode/path") == 0
 
-        input_m.recordsRead.return_value = records_read
-        input_m.bytesRead.return_value = bytes_read
-        output_m.recordsWritten.return_value = records_written
-        output_m.bytesWritten.return_value = bytes_written
+    def test_dir_bytes_empty_returns_zero(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("") == 0
 
-        completion_time = MagicMock()
-        submission_time = MagicMock()
-        completion_time.isDefined.return_value = True
-        submission_time.isDefined.return_value = True
-        completion_time.get.return_value = duration_ms
-        submission_time.get.return_value = 0
-
-        info.taskMetrics.return_value = tm
-        info.completionTime.return_value = completion_time
-        info.submissionTime.return_value = submission_time
-        tm.inputMetrics.return_value = input_m
-        tm.outputMetrics.return_value = output_m
-        stage.stageInfo.return_value = info
-        return stage
-
-    def test_on_stage_completed_accumulates_metrics(self):
-        listener = self._make_listener()
-        stage = self._make_stage_completed(records_read=200, bytes_read=2048,
-                                            records_written=100, bytes_written=1024,
-                                            duration_ms=500)
-        listener.onStageCompleted(stage)
-        metrics = listener.collect_metrics()
-        assert metrics["records_read"] == 200
-        assert metrics["bytes_read"] == 2048
-        assert metrics["records_written"] == 100
-        assert metrics["bytes_written"] == 1024
-
-    def test_on_stage_completed_no_active_module_skips(self):
-        from aqueduct.executor.spark.listener import AqueductMetricsListener
-        listener = AqueductMetricsListener()
-        # _active_module is None — should silently skip
-        stage = self._make_stage_completed()
-        listener.onStageCompleted(stage)  # no crash, no accumulation
-        assert listener._accumulated["records_read"] == 0
-
-    def test_on_stage_completed_exception_swallowed(self):
-        listener = self._make_listener()
-        bad_stage = MagicMock()
-        bad_stage.stageInfo.side_effect = RuntimeError("JVM exploded")
-        listener.onStageCompleted(bad_stage)  # must not raise
-        assert listener._accumulated["records_read"] == 0
+    def test_dir_bytes_nonexistent_returns_zero(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("/definitely/does/not/exist/path") == 0
 
     def test_on_stage_completed_time_undefined(self):
         listener = self._make_listener()

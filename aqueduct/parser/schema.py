@@ -40,6 +40,15 @@ class RetryPolicySchema(BaseModel):
     deadline_seconds: int | None = None
 
 
+class GuardrailsSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # PatchSpec op names that are blocked from auto-apply (deterministic enforcement in apply_patch)
+    forbidden_ops: list[str] = Field(default_factory=list)
+    # fnmatch patterns for config `path` values LLM may write; empty = unrestricted
+    allowed_paths: list[str] = Field(default_factory=list)
+
+
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -51,9 +60,8 @@ class AgentSchema(BaseModel):
     base_url: str | None = None
     model: str | None = None
     ollama_options: dict[str, Any] | None = None
-    # Guardrail policy — limits what the LLM can autonomously modify
-    allowed_paths: list[str] = Field(default_factory=list)
-    forbidden_ops: list[str] = Field(default_factory=list)
+    # Guardrail policy — deterministically enforced in apply_patch
+    guardrails: GuardrailsSchema = Field(default_factory=GuardrailsSchema)
     # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
     validate_patch: bool = False
     # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)

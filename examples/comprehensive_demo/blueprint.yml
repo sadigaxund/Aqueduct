@@ -815,17 +815,17 @@ agent:
   #   num_predict: -1
 
   # ── LLM Guardrails ────────────────────────────────────────────────────────
-  # Patches violating these rules are staged for human review instead of applied.
-  #
-  # allowed_paths: fnmatch whitelist for config.path values the LLM may touch.
-  #   Empty (default) = unrestricted. Paths not matching → human review.
-  allowed_paths:
-    - "s3a://raw/${ctx.env}/*"
-    - "s3a://processed/${ctx.env}/*"
-    - "s3a://quarantine/${ctx.env}/*"
-  #
-  # forbidden_ops: PatchSpec operation names the LLM is never allowed to use.
-  #   Empty (default) = all ops permitted. Matching op → human review.
-  forbidden_ops:
-    - remove_module              # never delete modules autonomously
-    - replace_retry_policy       # retry policy is managed by humans only
+  # Deterministically enforced at patch-apply time — LLM cannot bypass these
+  # even if it generates a structurally valid patch.
+  guardrails:
+    # allowed_paths: fnmatch whitelist for config.path values LLM may write.
+    #   Empty (default) = unrestricted.
+    allowed_paths:
+      - "s3a://raw/${ctx.env}/*"
+      - "s3a://processed/${ctx.env}/*"
+      - "s3a://quarantine/${ctx.env}/*"
+    # forbidden_ops: PatchSpec operation names the LLM is never allowed to use.
+    #   Empty (default) = all ops permitted.
+    forbidden_ops:
+      - remove_module              # never delete modules autonomously
+      - replace_retry_policy       # retry policy is managed by humans only
