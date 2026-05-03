@@ -55,7 +55,7 @@ pip install aqueduct-core[all]
 
 The base package installs the CLI, parser, compiler, and LLM self-healing. All LLM providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency - no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
 
-Requires Python 3.11+ and Java 17 (for local Spark).
+Requires Python 3.11+ and Java 17 (for local Spark). **Spark 3.3+ recommended** for full metrics collection (`records_written`, `records_read`). Older versions collect `bytes` and `duration_ms` only; row counts will be 0.
 
 ---
 
@@ -387,6 +387,27 @@ agent:
 ```
 
 With `validate_patch: true`: the patched Blueprint is compiled in memory first. Only if compilation succeeds does Aqueduct write it to disk and continue the self-healing loop. Invalid patches are staged in `patches/pending/` for human review.
+
+### Agent Guardrails
+
+Guardrails are **deterministically enforced at patch-apply time** — not prompt hints. The code rejects violations regardless of what the LLM generated.
+
+```yaml
+agent:
+  approval_mode: auto
+  guardrails:
+    forbidden_ops:
+      - remove_module        # LLM can never delete modules autonomously
+      - replace_retry_policy # retry config managed by humans only
+    allowed_paths:
+      - "s3://company-data/*"   # fnmatch — LLM may only write paths matching these patterns
+      - "data/raw/*"
+```
+
+- `forbidden_ops` — list of PatchSpec operation names that are always blocked. Empty = all ops permitted.
+- `allowed_paths` — fnmatch patterns restricting `path`/`output_path` config values a patch may set. Empty = unrestricted.
+
+If a patch violates either rule, `apply_patch` raises an error before touching the Blueprint file.
 
 ---
 

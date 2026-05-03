@@ -94,11 +94,12 @@ agent:
   approval_mode: human
   on_pending_patches: warn
   max_patches_per_run: 1
-  allowed_paths:
-    - "data/*"
-    - "data/zones/*"
-    - "data/trips/*"
+  guardrails:
+    allowed_paths:
+      - "data/*"
+      - "data/zones/*"
+      - "data/trips/*"
 
-  forbidden_ops:
-    - remove_module
-    - replace_retry_policy
+    forbidden_ops:
+      - remove_module
+      - replace_retry_policy

@@ -541,7 +541,7 @@ modules:
       ref: ${ctx.input_table}       # resolves to the parent Module id
 ```
 
-|**Expansion contract:**  Arcades are fully expanded at Manifest compile time. The Manifest always contains a flat Module list. Spark sees a single flat execution plan with no nesting. Module IDs within Arcades are namespaced (parent\_module\_id.child\_module\_id) to prevent collision.|
+|**Expansion contract:**  Arcades are fully expanded at Manifest compile time. The Manifest always contains a flat Module list. Spark sees a single flat execution plan with no nesting. Module IDs within Arcades are namespaced (`{arcade_id}__{child_id}`) to prevent collision. The `__` separator is safe for Spark `createTempView` (dots would be parsed as multi-part identifiers). If expansion produces a duplicate ID (e.g. an existing module is already named `arcade__child`), a `CompileError` is raised with a clear message.|
 | :- |
 
 |**ASSERT**|**Inline data quality gate — evaluates rules on a flowing DataFrame, routes failures to spillway or aborts**|
