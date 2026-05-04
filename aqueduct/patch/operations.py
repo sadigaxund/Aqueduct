@@ -82,6 +82,15 @@ def _find_module(bp: dict, module_id: str) -> dict:
     for m in bp.get("modules", []):
         if m.get("id") == module_id:
             return m
+    # Detect arcade-expanded IDs early to give a clearer error
+    if "__" in module_id:
+        arcade_id, sub_id = module_id.split("__", 1)
+        raise PatchOperationError(
+            f"Module {module_id!r} is an arcade-expanded ID and does not exist in the Blueprint YAML. "
+            f"Arcade '{arcade_id}' expands sub-module '{sub_id}' at compile time. "
+            f"To fix a value in this module, use replace_context_value on the context key "
+            f"that the arcade injects via context_override."
+        )
     raise PatchOperationError(
         f"Module {module_id!r} not found in Blueprint. "
         f"Available: {[m.get('id') for m in bp.get('modules', [])]}"

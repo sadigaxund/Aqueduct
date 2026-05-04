@@ -39,17 +39,47 @@ def _exit_modules(sub_bp: Blueprint) -> list[str]:
     """
     sources = {e.from_id for e in sub_bp.edges}
     return [
-        m.id for m in sub_bp.modules 
+        m.id for m in sub_bp.modules
         if m.id not in sources and m.type not in ("Egress", "Probe")
     ]
+
+
+def _load_raw_module_configs(sub_path: Path) -> dict[str, dict]:
+    """Load sub-blueprint YAML without context resolution.
+
+    Returns {module_id: raw_config_dict} so we can capture original expressions
+    (e.g. '${ctx.input_path}') before they were resolved via context_override.
+    Uses plain yaml.safe_load — no Pydantic, no resolution, no side effects.
+    """
+    import yaml
+    try:
+        raw = yaml.safe_load(sub_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            m["id"]: (m.get("config") or {})
+            for m in (raw.get("modules") or [])
+            if isinstance(m, dict) and "id" in m
+        }
+    except Exception:
+        return {}
 
 
 def _expand_single(
     arcade: Module,
     sub_bp: Blueprint,
     parent_edges: list[Edge],
-) -> tuple[list[Module], list[Edge]]:
-    """Expand one Arcade module into namespaced sub-modules + rewired edges."""
+    sub_blueprint_path: str,
+    raw_module_configs: dict[str, dict],
+) -> tuple[list[Module], list[Edge], dict]:
+    """Expand one Arcade module into namespaced sub-modules + rewired edges + provenance.
+
+    Returns:
+        (expanded_modules, all_edges, arcade_provenance)
+        arcade_provenance: dict[namespaced_module_id → ModuleProvenance]
+    """
+    from aqueduct.compiler.provenance import ModuleProvenance, build_config_provenance
+
     ns = arcade.id
     id_map = {m.id: f"{ns}__{m.id}" for m in sub_bp.modules}
 
@@ -106,14 +136,38 @@ def _expand_single(
                     dataclasses.replace(e, from_id=id_map[exit_id])
                 )
 
-    return expanded_modules, internal_edges + rewired
+    # Build provenance for each expanded module
+    # raw_module_configs has the pre-resolution config (original ${ctx.*} expressions)
+    # sub_bp.modules have the resolved config (context_override applied)
+    arcade_provenance: dict[str, ModuleProvenance] = {}
+    sub_bp_modules_by_orig_id = {m.id: m for m in sub_bp.modules}
+    for orig_m, expanded_m in zip(sub_bp.modules, expanded_modules):
+        raw_cfg = raw_module_configs.get(orig_m.id, {})
+        resolved_cfg = orig_m.config or {}
+        config_prov = build_config_provenance(
+            raw_cfg,
+            resolved_cfg,
+            arcade_module_id=arcade.id,
+            arcade_sub_module_id=orig_m.id,
+            sub_blueprint_path=sub_blueprint_path,
+        )
+        arcade_provenance[expanded_m.id] = ModuleProvenance(
+            module_id=expanded_m.id,
+            module_type=expanded_m.type,
+            arcade_module_id=arcade.id,
+            sub_blueprint_path=sub_blueprint_path,
+            original_module_id=orig_m.id,
+            config=config_prov,
+        )
+
+    return expanded_modules, internal_edges + rewired, arcade_provenance
 
 
 def expand_arcades(
     modules: list[Module],
     edges: list[Edge],
     base_dir: Path,
-) -> tuple[list[Module], list[Edge]]:
+) -> tuple[list[Module], list[Edge], dict]:
     """Expand all Arcade modules in-place.
 
     Arcades are resolved depth-first: an Arcade inside an Arcade sub-Blueprint
@@ -123,6 +177,10 @@ def expand_arcades(
         modules:  Module list from the parsed Blueprint.
         edges:    Edge list from the parsed Blueprint.
         base_dir: Directory of the parent Blueprint file (ref paths are relative).
+
+    Returns:
+        (expanded_modules, rewired_edges, arcade_provenance_map)
+        arcade_provenance_map: dict[manifest_module_id → ModuleProvenance]
     """
     return _expand_recursive(modules, edges, base_dir, depth=0)
 
@@ -132,16 +190,16 @@ def _expand_recursive(
     edges: list[Edge],
     base_dir: Path,
     depth: int,
-) -> tuple[list[Module], list[Edge]]:
+) -> tuple[list[Module], list[Edge], dict]:
     if depth > 10:
         raise ExpandError("Arcade nesting depth exceeds 10. Check for recursive Arcade refs.")
 
     has_arcade = any(m.type == "Arcade" for m in modules)
     if not has_arcade:
-        return modules, edges
+        return modules, edges, {}
 
     result_modules: list[Module] = []
-    arcade_edges_consumed: set[int] = set()
+    merged_provenance: dict = {}
 
     for m in modules:
         if m.type != "Arcade":
@@ -157,6 +215,9 @@ def _expand_recursive(
             raise ExpandError(
                 f"Arcade {m.id!r}: sub-Blueprint not found at {sub_path}"
             )
+
+        # Load raw YAML first (for provenance original expressions)
+        raw_module_configs = _load_raw_module_configs(sub_path)
 
         # Inline import to avoid circular deps (parser → compiler → parser)
         from aqueduct.parser.parser import parse, ParseError  # noqa: PLC0415
@@ -183,11 +244,15 @@ def _expand_recursive(
                 f"Add them under the Arcade module's context_override field."
             )
 
-        expanded_mods, new_edges = _expand_single(m, sub_bp, edges)
+        sub_blueprint_path = str(Path(m.ref))  # relative path as declared in Blueprint
+        expanded_mods, new_edges, arcade_prov = _expand_single(
+            m, sub_bp, edges, sub_blueprint_path, raw_module_configs,
+        )
         result_modules.extend(expanded_mods)
+        merged_provenance.update(arcade_prov)
 
         exit_ids_ns = [f"{m.id}__{eid}" for eid in _exit_modules(sub_bp)]
-        
+
         # Helper to recursively replace IDs in nested structures
         def _replace_ids(val: Any) -> Any:
             if isinstance(val, str):
@@ -197,7 +262,6 @@ def _expand_recursive(
                 for item in val:
                     res = _replace_ids(item)
                     if isinstance(res, list):
-                        # Special case: flatten inputs list if it matched an arcade ID
                         new_list.extend(res)
                     else:
                         new_list.append(res)
@@ -229,4 +293,6 @@ def _expand_recursive(
         seen[mod.id] = mod.id
 
     # Recurse in case sub-Blueprints themselves contain Arcades
-    return _expand_recursive(result_modules, edges, base_dir, depth + 1)
+    rec_modules, rec_edges, rec_prov = _expand_recursive(result_modules, edges, base_dir, depth + 1)
+    merged_provenance.update(rec_prov)
+    return rec_modules, rec_edges, merged_provenance

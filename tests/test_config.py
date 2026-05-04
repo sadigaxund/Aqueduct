@@ -75,9 +75,9 @@ def test_config_defaults():
     config = AqueductConfig()
     assert config.deployment.target == "local"
     assert config.deployment.master_url == "local[*]"
-    assert config.stores.observability.path == ".aqueduct/signals"
-    assert config.stores.lineage.path == ".aqueduct/lineage"
-    assert config.stores.depot.path == ".aqueduct/depot.duckdb"
+    assert config.stores.obs.path == ".aqueduct/obs.db"
+    assert config.stores.lineage.path == ".aqueduct/lineage.db"
+    assert config.stores.depot.path == ".aqueduct/depot.db"
     assert config.agent.model == "claude-sonnet-4-6"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"

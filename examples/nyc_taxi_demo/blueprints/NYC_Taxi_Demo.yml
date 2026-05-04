@@ -7,9 +7,23 @@ description: |
   Refactored NYC taxi blueprint using Arcades for reusable processing logic.
   Ingests yellow and green taxi trip data, cleans, standardizes, and merges.
 
+agent:
+  approval_mode: human
+  on_pending_patches: warn
+  max_patches_per_run: 1
+  guardrails:
+    allowed_paths:
+      - "data/*"
+      - "data/zones/*"
+      - "data/trips/*"
+
+    forbidden_ops:
+      - remove_module
+      - replace_retry_policy
+
 context:
   paths:
-    yellow_path: "data/yellow/*.parquet"
+    yellow_path: "data/yellow/*.parqut"
     green_path: "data/green/*.parquet"
     zones_path: "data/zones/taxi_zone_lookup.csv"
     output_path: "data/output"
@@ -67,16 +81,4 @@ edges:
   - from: green_process
     to: all_taxi_trips
 
-agent:
-  approval_mode: human
-  on_pending_patches: warn
-  max_patches_per_run: 1
-  guardrails:
-    allowed_paths:
-      - "data/*"
-      - "data/zones/*"
-      - "data/trips/*"
 
-    forbidden_ops:
-      - remove_module
-      - replace_retry_policy

@@ -155,7 +155,7 @@ def test_probe_does_not_halt_blueprint(spark: SparkSession, sample_data, tmp_pat
     assert spark.read.parquet(str(out)).count() == 10
 
     # Signals DB written
-    assert (store / "signals.db").exists()
+    assert (store / "obs.db").exists()
 
 
 # ── Regulator ─────────────────────────────────────────────────────────────────

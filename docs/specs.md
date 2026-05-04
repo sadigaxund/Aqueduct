@@ -930,6 +930,30 @@ The Surveyor triggers the agent loop on any of the following:
 ## **8.4 FailureContext Package**
 Before invoking the LLM, the Surveyor assembles a FailureContext — a complete, self-contained JSON document. The agent must never need to make additional queries to understand what happened.
 
+### Provenance Layer
+
+Every resolved config value in the Manifest carries **provenance metadata** — a record of where it came from in the Blueprint source. This is built during compilation and stored as `ProvenanceMap` on the Manifest. On failure, a slice of the ProvenanceMap (failed module + full context block) is serialised as `provenance_json` in the FailureContext and passed to the LLM instead of the raw Blueprint YAML source.
+
+**Why:** The LLM previously received both the compiled Manifest (resolved values) and the raw Blueprint YAML (template expressions), and had to mentally reverse-engineer the compilation to generate correct patch ops. This breaks for Arcade-expanded modules (their IDs don't exist in the Blueprint YAML) and context refs (`${ctx.*}` values in patch ops confuse guardrails). The provenance layer eliminates the impedance mismatch.
+
+**`ValueProvenance` source types:**
+
+| source_type | Meaning | Correct patch op |
+|---|---|---|
+| `literal` | Hardcoded value in Blueprint YAML | `set_module_config_key` on the module |
+| `context_ref` | `${ctx.key}` reference | `replace_context_value(key=...)` |
+| `env_ref` | `${ENV_VAR}` environment variable | Change env var — do not patch Blueprint |
+| `tier1` | `@aq.*` function call | `set_module_config_key` with literal replacement |
+| `arcade_inherited` | Value injected via arcade `context_override` | `replace_context_value` on parent context key — **module ID does not exist in Blueprint YAML** |
+
+**Arcade-expanded modules** (IDs containing `__`) are compile-time artefacts. The LLM is explicitly instructed never to use `set_module_config_key` on such IDs. The provenance section in the LLM prompt shows:
+- Which parent arcade the module came from
+- Which `context_override` key injected each value
+- Which parent context key maps to the resolved value
+- A warning that the module does not exist in Blueprint YAML
+
+**Guardrails** use the ProvenanceMap to resolve `${ctx.*}` path values before matching against `allowed_paths` patterns, eliminating false positives when the LLM references a context key instead of a literal path.
+
 ### ContextPruner
 
 Before the FailureContext is sent to the model, it passes through a **ContextPruner** component. The pruner trims irrelevant sections to improve model accuracy and response latency. Pruning rules:
@@ -1056,7 +1080,7 @@ agent:
 
 ## **8.7 Patch Lifecycle**
 1. Surveyor detects failure, exhausts retry policy if applicable, assembles FailureContext.
-1. FailureContext includes: run metadata, manifest JSON (compiled), **raw Blueprint YAML source** (pre-compilation, with `${ctx.*}` and `@aq.*` expressions intact), error message, stack trace.
+1. FailureContext includes: run metadata, manifest JSON (compiled), **provenance_json** (ProvenanceMap slice for the failed module + full context block — replaces raw Blueprint YAML source), error message, stack trace, doctor pre-flight hints.
 1. FailureContext is posted to the configured LLM endpoint with the PatchSpec schema and optional `prompt_context` instructions.
 1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error. Maximum `llm_max_reprompts` attempts (default 3) before giving up. On timeout or network failure, the attempt aborts immediately without retry.
 1. Valid PatchSpec is checked against guardrails (allowed\_paths, forbidden\_ops). If any guardrail fires, patch is staged in patches/pending/ for human review regardless of approval\_mode.
@@ -1064,7 +1088,7 @@ agent:
 1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
 1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
 1. If approval\_mode: aggressive — If `validate_patch: true`: patch is compiled in memory first; if invalid, staged for human review and loop stops. Otherwise: patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
-1. Applied patch is written to `patches/applied/<seq>_<timestamp>_<slug>.json` with applied\_at timestamp, run\_id, and agent rationale preserved.
+1. Pending patch is moved from `patches/pending/<timestamp>_<slug>.json` to `patches/applied/<timestamp>_<slug>.json` with `applied_at` timestamp, run\_id, and agent rationale preserved. `patches/pending/` and `patches/rejected/` are gitignored; `patches/applied/` is committed alongside the Blueprint change.
 1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
 
 **Patch file naming:** `{seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `00001_20260502T143022_fix-green-path.json`. Sequence is monotonically increasing across all patches in the project. Enables chronological sort without reading file contents.

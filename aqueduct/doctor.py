@@ -288,6 +288,109 @@ def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
 
 # ── Blueprint source checks ───────────────────────────────────────────────────
 
+def check_blueprint_sources_from_manifest(manifest: Any) -> list[CheckResult]:
+    """Check all Ingress/Egress paths using an already-compiled Manifest.
+
+    Advantages over check_blueprint_sources():
+    - Arcade-expanded modules are already flat — no recursion needed
+    - All ${ctx.*} refs are resolved — path values are concrete strings
+    - No re-parsing; no workarounds for sub-blueprint context injection
+
+    Falls back to check_blueprint_sources() if provenance_map is unavailable.
+    """
+    import re
+    import socket
+
+    # Derive project root from provenance_map blueprint_path if available
+    pmap = getattr(manifest, "provenance_map", None)
+    if pmap and pmap.blueprint_path:
+        bp_path = Path(pmap.blueprint_path)
+        project_root = bp_path.parent
+        _search = bp_path.parent
+        for _ in range(8):
+            if (_search / "aqueduct.yml").exists():
+                project_root = _search
+                break
+            if _search.parent == _search:
+                break
+            _search = _search.parent
+    else:
+        project_root = Path.cwd()
+
+    results: list[CheckResult] = []
+
+    for module in manifest.modules:
+        cfg = module.config if isinstance(module.config, dict) else {}
+        fmt: str = cfg.get("format", "")
+        path_val: str | None = cfg.get("path")
+        url_val: str | None = cfg.get("url")
+
+        if module.type not in ("Ingress", "Egress"):
+            continue
+
+        t = time.monotonic()
+        name = f"{module.type.lower()}:{module.id}"
+
+        # ── JDBC ──────────────────────────────────────────────────────────────
+        jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
+        if jdbc_url or fmt == "jdbc":
+            raw = jdbc_url or path_val or ""
+            m = re.search(r"jdbc:[^:]+://([^/:]+)(?::(\d+))?", raw)
+            if not m:
+                results.append(CheckResult(name, "warn", f"JDBC URL not parseable: {raw!r}", _ms(t)))
+                continue
+            host = m.group(1)
+            port = int(m.group(2)) if m.group(2) else _jdbc_default_port(raw)
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    pass
+                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+            except OSError as exc:
+                results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
+            continue
+
+        # ── Cloud URIs ─────────────────────────────────────────────────────────
+        if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
+            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            continue
+
+        # ── Local / relative path (already fully resolved — no ${ctx.*} refs) ─
+        if path_val:
+            p = (project_root / path_val).resolve() if not Path(path_val).is_absolute() else Path(path_val)
+            is_glob = "*" in str(p) or "?" in str(p)
+
+            if module.type == "Ingress":
+                if is_glob:
+                    import glob as _glob
+                    matches = _glob.glob(str(p))
+                    if matches:
+                        results.append(CheckResult(name, "ok", f"readable: {path_val} ({len(matches)} file(s))", _ms(t)))
+                        if fmt:
+                            _check_format_ext_mismatch(results, name, fmt, matches, path_val, _ms(t))
+                    elif p.parent.exists():
+                        results.append(CheckResult(name, "warn", f"dir exists but no files match pattern: {path_val}", _ms(t)))
+                    else:
+                        results.append(CheckResult(name, "fail", f"not found: {p.parent}", _ms(t)))
+                else:
+                    if p.exists():
+                        results.append(CheckResult(name, "ok", f"readable: {path_val}", _ms(t)))
+                        if fmt:
+                            _check_format_ext_mismatch(results, name, fmt, [str(p)], path_val, _ms(t))
+                    else:
+                        results.append(CheckResult(name, "fail", f"not found: {p}", _ms(t)))
+            else:  # Egress
+                parent = p.parent if not is_glob else p.parent.parent
+                if parent.exists():
+                    results.append(CheckResult(name, "ok", f"parent dir exists: {path_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "warn", f"output dir does not exist yet: {parent}", _ms(t)))
+            continue
+
+        results.append(CheckResult(name, "skip", "no path or url in config", _ms(t)))
+
+    return results
+
+
 def check_blueprint_sources(
     blueprint_path: Path,
     _context_override: dict[str, Any] | None = None,

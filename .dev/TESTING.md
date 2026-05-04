@@ -1124,3 +1124,72 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
 - ⏳ `doctor_hints` empty → section absent from LLM prompt
 - ⏳ `FailureContext.to_dict()` includes `doctor_hints` list
+
+## Phase 19 — Provenance Layer
+
+### `ValueProvenance` / `infer_value_provenance()` — `aqueduct/compiler/provenance.py`
+- ⏳ literal string → source_type="literal", original_expression=value
+- ⏳ non-string literal (int, bool) → source_type="literal"
+- ⏳ `${ctx.paths.foo}` → source_type="context_ref", context_key="paths.foo"
+- ⏳ `${ENV_VAR:-default}` → source_type="env_ref", env_var="ENV_VAR"
+- ⏳ `@aq.date.today()` → source_type="tier1"
+- ⏳ arcade_module_id set + ctx ref → source_type="arcade_inherited", context_key preserved
+- ⏳ arcade_module_id set + literal → source_type="arcade_inherited", context_key=None
+
+### `build_config_provenance()` — `aqueduct/compiler/provenance.py`
+- ⏳ flat config dict → one key per scalar
+- ⏳ nested config dict → dot-notation keys (e.g. "options.mergeSchema")
+- ⏳ list value → tracked at list key level (not per-item)
+- ⏳ None raw_config → empty result
+
+### `ProvenanceMap` — `aqueduct/compiler/provenance.py`
+- ⏳ `for_module()` returns correct `ModuleProvenance` or None
+- ⏳ `to_dict()` is JSON-serializable (no pyspark types, no dataclasses)
+
+### Compiler builds ProvenanceMap — `aqueduct/compiler/compiler.py`
+- ⏳ top-level module with literal path → `source_type="literal"` in provenance
+- ⏳ top-level module with `${ctx.path}` → `source_type="context_ref"`, context_key correct
+- ⏳ context value tracked with correct source_type in `ProvenanceMap.context`
+- ⏳ `blueprint_path=None` → provenance_map still built (empty blueprint_path)
+- ⏳ `Manifest.provenance_map` is not None after `compile()` with blueprint_path
+
+### Expander tags arcade modules — `aqueduct/compiler/expander.py`
+- ⏳ expanded module ID (`arcade__submod`) has `arcade_module_id` set
+- ⏳ expanded module has correct `sub_blueprint_path` and `original_module_id`
+- ⏳ arcade config value from context_override key → `source_type="arcade_inherited"`, `context_key` set
+- ⏳ arcade config literal value → `source_type="arcade_inherited"`, `context_key=None`
+- ⏳ `expand_arcades()` returns 3-tuple `(modules, edges, provenance_dict)`
+- ⏳ nested arcade (arcade inside arcade) → provenance tracked at both levels
+
+### `FailureContext.provenance_json` — `aqueduct/surveyor/models.py`
+- ⏳ `provenance_json` field present; `blueprint_source_yaml` absent
+- ⏳ `to_dict()` includes `provenance_json`, does not include `blueprint_source_yaml`
+- ⏳ `provenance_json=None` → `to_dict()["provenance_json"]` is None
+
+### Surveyor builds provenance_json — `aqueduct/surveyor/surveyor.py`
+- ⏳ Manifest has provenance_map → `failure_ctx.provenance_json` is valid JSON
+- ⏳ provenance slice contains only failed module + full context block (not all modules)
+- ⏳ Manifest has no provenance_map → `provenance_json` is None
+
+### LLM prompt provenance section — `aqueduct/surveyor/llm.py`
+- ⏳ `_build_provenance_section(None)` → empty string
+- ⏳ arcade-expanded module → "Arcade-expanded" and "does NOT exist in the Blueprint YAML" in output
+- ⏳ context_ref value → "use replace_context_value(key=...)" hint shown
+- ⏳ literal value → "use set_module_config_key" hint shown
+- ⏳ env_ref value → env var name shown, no patch suggestion
+- ⏳ context block summary lists all context keys with resolved values
+- ⏳ `blueprint_source_section` placeholder gone from template; `provenance_section` present
+
+### Guardrails resolve `${ctx.*}` — `aqueduct/patch/apply.py`
+- ⏳ `set_module_config_key` with `path="${ctx.paths.foo}"` + provenance_map with resolved value → matches `allowed_paths`
+- ⏳ `set_module_config_key` with literal path → matches normally without provenance_map
+- ⏳ `replace_context_value` op is never path-checked
+- ⏳ `apply_patch_file()` accepts optional `provenance_map` kwarg
+
+### `check_blueprint_sources_from_manifest()` — `aqueduct/doctor.py`
+- ⏳ arcade-expanded Ingress modules included (no recursion needed)
+- ⏳ path values are fully resolved strings (no `${ctx.*}` refs)
+- ⏳ format mismatch detected on resolved path
+- ⏳ JDBC module checked by host:port
+- ⏳ cloud URI → skip result
+- ⏳ project root derived from `provenance_map.blueprint_path`

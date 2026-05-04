@@ -23,6 +23,13 @@ from typing import Any
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
+from aqueduct.compiler.provenance import (
+    ModuleProvenance,
+    ProvenanceMap,
+    ValueProvenance,
+    build_config_provenance,
+    infer_value_provenance,
+)
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.wirer import (
     WireError,
@@ -107,7 +114,29 @@ def compile(  # noqa: A001
         except MacroError as exc:
             raise CompileError(f"SQL macro resolution failed: {exc}") from exc
 
+    # ── 3.7. Build provenance for top-level non-Arcade modules ───────────────
+    # Compare raw Blueprint context (pre-Tier1) vs resolved to infer source type.
+    raw_ctx = dict(blueprint.context.values)  # Tier 0 already resolved by parser
+    context_provenance: dict[str, ValueProvenance] = {
+        k: infer_value_provenance(raw_ctx.get(k, resolved_ctx[k]), resolved_ctx[k])
+        for k in resolved_ctx
+    }
+    raw_modules_by_id = {m.id: m for m in blueprint.modules}
+    module_provenance: dict[str, ModuleProvenance] = {}
+    for m in modules:
+        if m.type == "Arcade":
+            continue  # arcade provenance built during expansion
+        raw_m = raw_modules_by_id.get(m.id)
+        raw_cfg = (raw_m.config if raw_m else None) or {}
+        config_prov = build_config_provenance(raw_cfg, m.config or {})
+        module_provenance[m.id] = ModuleProvenance(
+            module_id=m.id,
+            module_type=m.type,
+            config=config_prov,
+        )
+
     # ── 4. Expand Arcades ─────────────────────────────────────────────────────
+    arcade_prov: dict = {}
     edges = list(blueprint.edges)
     if any(m.type == "Arcade" for m in modules):
         if blueprint_path is None:
@@ -116,9 +145,10 @@ def compile(  # noqa: A001
                 "Pass the Blueprint file path to compile() so Arcade refs can be resolved."
             )
         try:
-            modules, edges = expand_arcades(modules, edges, blueprint_path.parent)
+            modules, edges, arcade_prov = expand_arcades(modules, edges, blueprint_path.parent)
         except ExpandError as exc:
             raise CompileError(f"Arcade expansion failed: {exc}") from exc
+    module_provenance.update(arcade_prov)
 
     # ── 5. Validate Probes and Spillways ──────────────────────────────────────
     try:
@@ -143,6 +173,13 @@ def compile(  # noqa: A001
                     stacklevel=2,
                 )
 
+    prov_map = ProvenanceMap(
+        blueprint_id=blueprint.id,
+        blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",
+        modules=module_provenance,
+        context=context_provenance,
+    )
+
     return Manifest(
         blueprint_id=blueprint.id,
         name=blueprint.name,
@@ -157,4 +194,5 @@ def compile(  # noqa: A001
         udf_registry=blueprint.udf_registry,
         macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
+        provenance_map=prov_map,
     )
