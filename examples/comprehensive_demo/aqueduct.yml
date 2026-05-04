@@ -36,11 +36,12 @@ spark_config:
   # ── Log verbosity ─────────────────────────────────────────────────────────────
   spark.sql.adaptive.enabled: "true"
 
-# Observability store — DuckDB files written to .aqueduct/ relative to CWD.
-# (S3-backed observability store is a Phase 7+ feature.)
+# Observability / lineage stores — DuckDB files written to .aqueduct/ relative to CWD.
 stores:
-  observability:
-    path: ".aqueduct/signals"
+  obs:
+    path: ".aqueduct/obs.db"
+  lineage:
+    path: ".aqueduct/lineage.db"
 
 webhooks:
   on_failure: null   # set to an HTTPS URL to receive failure payloads

@@ -36,7 +36,6 @@ spark_config:
 #       run_id: "${RUN_ID}"
 #       status: "${STATUS}"
 
-
 agent:
   provider: "openai_compat"
   base_url: "http://10.0.0.39:11434/v1"

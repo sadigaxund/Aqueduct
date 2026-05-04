@@ -48,19 +48,35 @@ def observe_df(
         return df, None
 
 
-def get_observation(obs: Any, alias: str) -> int:
-    """Safely read a completed Observation.  Returns 0 on any failure."""
+def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> int:
+    """Safely read a completed Observation with a timeout.
+
+    obs.get blocks until the observation fires. If the DF was never consumed
+    by a write action (skipped downstream, gate closed, Probe-only path),
+    the observation never fires and obs.get hangs forever. A daemon thread
+    with join(timeout) ensures we return 0 rather than block.
+    """
     if obs is None:
         return 0
-    try:
-        return int(obs.get.get(alias, 0))
-    except Exception:
-        return 0
+    import threading
+    result: list[int] = [0]
+
+    def _get() -> None:
+        try:
+            result[0] = int(obs.get.get(alias, 0))
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_get, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    return result[0]
 
 
 def dir_bytes(path_str: str) -> int:
-    """Return total byte size of a local path (file or directory).
+    """Return total byte size of a local path (file, directory, or glob pattern).
 
+    Handles glob patterns (e.g. data/green/*.parquet) by expanding them.
     Returns 0 for cloud paths, empty/None paths, or any filesystem error.
     """
     if not path_str:
@@ -69,16 +85,21 @@ def dir_bytes(path_str: str) -> int:
         if path_str.startswith(scheme):
             return 0
     try:
+        import glob as _glob
         p = Path(path_str)
         if p.is_file():
             return p.stat().st_size
         if p.is_dir():
-            return sum(
-                f.stat().st_size
-                for f in p.rglob("*")
-                if f.is_file()
-            )
-        return 0
+            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+        # Try glob expansion (handles patterns like data/green/*.parquet)
+        total = 0
+        for match in _glob.glob(path_str, recursive=True):
+            mp = Path(match)
+            if mp.is_file():
+                total += mp.stat().st_size
+            elif mp.is_dir():
+                total += sum(f.stat().st_size for f in mp.rglob("*") if f.is_file())
+        return total
     except OSError:
         return 0
 
