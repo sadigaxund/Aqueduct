@@ -64,7 +64,7 @@ from aqueduct.executor.spark.egress import EgressError, write_egress
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
-from aqueduct.executor.spark.metrics import dir_bytes, get_observation, observe_df, zero_metrics
+from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
 from aqueduct.parser.models import Edge, Module, RetryPolicy
 
 logger = logging.getLogger(__name__)
@@ -277,7 +277,7 @@ def _write_stage_metrics(
         logger.debug("Stage metrics write failed for %r: %s", module_id, exc)
 
 
-def _update_metric(store_dir: "Path", run_id: str, module_id: str, column: str, value: int) -> None:
+def _update_metric(store_dir: "Path", run_id: str, module_id: str, column: str, value: "int | None") -> None:
     """UPDATE a single column in an existing module_metrics row (non-fatal)."""
     try:
         import duckdb
@@ -628,7 +628,7 @@ def execute(
             _ingress_obs[module.id] = _obs
             _write_stage_metrics(
                 module.id, run_id,
-                {**zero_metrics(),
+                {**null_metrics(),
                  "bytes_read": dir_bytes(module.config.get("path", "")),
                  "duration_ms": int((time.monotonic() - _t0) * 1000)},
                 store_dir,
@@ -718,7 +718,7 @@ def execute(
 
                 _write_stage_metrics(
                     module.id, run_id,
-                    {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
@@ -772,7 +772,7 @@ def execute(
 
             _write_stage_metrics(
                 module.id, run_id,
-                {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                 store_dir,
             )
             for branch_id, branch_df in branch_dfs.items():
@@ -831,7 +831,7 @@ def execute(
                 return fail_result
             _write_stage_metrics(
                 module.id, run_id,
-                {**zero_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                 store_dir,
             )
             frame_store[module.id] = df
@@ -988,7 +988,7 @@ def execute(
                 return fail_result
             _write_stage_metrics(
                 module.id, run_id,
-                {**zero_metrics(),
+                {**null_metrics(),
                  "records_written": get_observation(_obs, "records_written"),
                  "bytes_written": dir_bytes(module.config.get("path", "")),
                  "duration_ms": int((time.monotonic() - _t0) * 1000)},
@@ -1025,8 +1025,9 @@ def execute(
                 continue
             try:
                 _rr = get_observation(_obs, "records_read")
-                if _rr > 0:
+                if _rr is not None:  # observation fired — write actual value (0 = empty dataset)
                     _update_metric(store_dir, run_id, _mod_id, "records_read", _rr)
+                # None = observation didn't fire → column stays NULL (metric not collected)
             except Exception as exc:
                 logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 

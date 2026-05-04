@@ -48,18 +48,24 @@ def observe_df(
         return df, None
 
 
-def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> int:
+def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
     """Safely read a completed Observation with a timeout.
+
+    Returns:
+        int   — observation fired; value is the metric (may be 0 for empty dataset).
+        None  — observation did not fire within timeout (DF never consumed by a write
+                action, or Spark < 3.3). Callers should treat None as "not collected"
+                and leave the DB column NULL rather than writing 0.
 
     obs.get blocks until the observation fires. If the DF was never consumed
     by a write action (skipped downstream, gate closed, Probe-only path),
     the observation never fires and obs.get hangs forever. A daemon thread
-    with join(timeout) ensures we return 0 rather than block.
+    with join(timeout) guards against this.
     """
     if obs is None:
-        return 0
+        return None
     import threading
-    result: list[int] = [0]
+    result: list[int | None] = [None]
 
     def _get() -> None:
         try:
@@ -70,20 +76,25 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> int:
     t = threading.Thread(target=_get, daemon=True)
     t.start()
     t.join(timeout=timeout)
-    return result[0]
+    # If thread is still alive, observation never fired — return None (not collected)
+    # If thread finished, result[0] holds the actual count (could be 0 = empty dataset)
+    return None if t.is_alive() else result[0]
 
 
-def dir_bytes(path_str: str) -> int:
+def dir_bytes(path_str: str) -> "int | None":
     """Return total byte size of a local path (file, directory, or glob pattern).
 
-    Handles glob patterns (e.g. data/green/*.parquet) by expanding them.
-    Returns 0 for cloud paths, empty/None paths, or any filesystem error.
+    Returns:
+        int   — measured size in bytes (0 = path exists but is empty).
+        None  — size could not be determined: cloud path, missing path, or OS error.
+                Callers should store None as NULL rather than 0 to preserve the
+                distinction between "empty" and "unknown".
     """
     if not path_str:
-        return 0
+        return None
     for scheme in _CLOUD_SCHEMES:
         if path_str.startswith(scheme):
-            return 0
+            return None  # cloud — no local filesystem access; size unknown
     try:
         import glob as _glob
         p = Path(path_str)
@@ -93,22 +104,25 @@ def dir_bytes(path_str: str) -> int:
             return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
         # Try glob expansion (handles patterns like data/green/*.parquet)
         total = 0
+        matched = False
         for match in _glob.glob(path_str, recursive=True):
+            matched = True
             mp = Path(match)
             if mp.is_file():
                 total += mp.stat().st_size
             elif mp.is_dir():
                 total += sum(f.stat().st_size for f in mp.rglob("*") if f.is_file())
-        return total
+        return total if matched else None  # no glob matches → path not found
     except OSError:
-        return 0
+        return None
 
 
-def zero_metrics() -> dict[str, Any]:
+def null_metrics() -> "dict[str, Any]":
+    """Return a metrics dict with all collection fields set to None (unknown/not-yet-collected)."""
     return {
-        "records_read": 0,
-        "bytes_read": 0,
-        "records_written": 0,
-        "bytes_written": 0,
+        "records_read": None,
+        "bytes_read": None,
+        "records_written": None,
+        "bytes_written": None,
         "duration_ms": 0,
     }
