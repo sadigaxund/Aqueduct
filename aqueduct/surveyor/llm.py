@@ -59,20 +59,32 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 {patch_schema}
 
 ## Rules
+
+### Patch op disambiguation (READ THIS FIRST)
+There are exactly TWO ops for changing module config. They are distinct:
+- `set_module_config_key` — sets ONE field inside an existing module config, leaving all other fields unchanged. Use for literal values only.
+- `replace_module_config` — replaces the ENTIRE config block. Use only when restructuring the whole config.
+- **THERE IS NO OP NAMED `replace_module_config_key`.** That op does not exist. Do not use it.
+
+### Provenance-driven op selection
+- **Always read the "Value provenance" section before choosing a patch op.**
+- For a `context_ref` value: use `replace_context_value` with the dot-notation key shown. Do NOT use `set_module_config_key`.
+- For an `arcade_inherited` value with a `context_key`: the arcade inherits this value from the parent blueprint's context via context_override. Look in the "Blueprint context values" section to find which PARENT context key has the same resolved value, then use `replace_context_value` with the PARENT key. One op is the complete fix.
+- For a `literal` value: use `set_module_config_key` directly on the module.
+- For an `env_ref` value: do NOT patch the Blueprint; the value comes from an environment variable.
+- NEVER use `set_module_config_key` on a module whose ID contains `__` — those are arcade-expanded and do NOT exist in the Blueprint YAML.
+  WRONG: {{"op": "set_module_config_key", "module_id": "yellow_process__ingress", "key": "path", "value": "..."}}
+  RIGHT: {{"op": "replace_context_value", "key": "paths.yellow_path", "value": "..."}}
+- NEVER use `replace_module_config` for a single-field fix — it silently drops every key you forget to re-emit.
+
+### Path values
+- **ALWAYS use relative paths** (e.g. `data/yellow/*.parquet`). NEVER construct absolute paths even if the provenance section shows an absolute `blueprint_path`. The blueprint_path is shown for reference only — never use it to build a config value.
+- Preserve the original path format (relative stays relative, globs stay globs).
+
+### Other rules
 - Respond with ONLY valid JSON matching the PatchSpec schema above. No prose, no markdown fences.
 - Use only module IDs and field names that appear in the failure report.
 - Prefer the simplest fix: correct a config value before adding new modules.
-- **Always read the "Value provenance" section before choosing a patch op.**
-- For a `context_ref` value: the value came from a context key — use `replace_context_value` with the dot-notation key shown. Do NOT use `set_module_config_key`.
-- For an `arcade_inherited` value with a `context_key`: the arcade inherits this value from the parent blueprint's context via context_override. The context_key shown is the arcade's LOCAL key inside the sub-blueprint. Look in the "Blueprint context values" section to find which PARENT context key has the same resolved value, then use `replace_context_value` with the PARENT key. Do NOT add a second `set_module_config_key` op — one `replace_context_value` op is the complete fix.
-- For a `literal` value: the value is hardcoded in the Blueprint YAML — use `set_module_config_key` directly on the module.
-- For an `env_ref` value: the value comes from an environment variable — do NOT patch the Blueprint; inform the user to change the env var instead.
-- NEVER use `set_module_config_key` on a module whose ID contains `__` — those are arcade-expanded and do NOT exist in the Blueprint YAML. The patch will fail with "Module not found".
-  WRONG: {{"op": "set_module_config_key", "module_id": "yellow_process__ingress", "key": "path", "value": "..."}}
-  RIGHT: {{"op": "replace_context_value", "key": "paths.yellow_path", "value": "..."}}
-- Single config field wrong → prefer `set_module_config_key` (for literal values) or `replace_context_value` (for context_ref/arcade_inherited).
-- NEVER use `replace_module_config` for a single-field fix — it replaces the entire config block and silently drops keys you forget to re-emit.
-- Use `replace_module_config` ONLY when restructuring the whole config block. If used, re-emit every existing config key.
 - SQL query wrong → `set_module_config_key` with key="query".
 - SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
 - If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
@@ -195,7 +207,9 @@ def _build_provenance_section(provenance_json: str | None) -> str:
         return ""
 
     lines: list[str] = ["\n## Value provenance (where each config value originates in the Blueprint source)"]
-    lines.append(f"Blueprint: {prov.get('blueprint_path', '?')}")
+    bp_path_raw = prov.get("blueprint_path", "?")
+    bp_path_display = Path(bp_path_raw).name if bp_path_raw and bp_path_raw != "?" else "?"
+    lines.append(f"Blueprint: {bp_path_display}  (paths shown are for reference; always use relative paths in patch ops)")
 
     failed_mod = prov.get("failed_module")
     if failed_mod:
@@ -321,6 +335,7 @@ def _build_system_prompt(
     patches_dir: Path,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
+    last_apply_error: str | None = None,
 ) -> str:
     schema = json.dumps(PatchSpec.model_json_schema(), indent=2)
     prev = _load_previous_patches(patches_dir)
@@ -328,12 +343,29 @@ def _build_system_prompt(
         lines = ["\n## Previous patch attempts (do NOT repeat these)"]
         for p in prev:
             lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
+        if last_apply_error:
+            lines.append(
+                f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
+            )
         prev_section = "\n".join(lines)
+    elif last_apply_error:
+        prev_section = f"\n## Last patch apply error\n{last_apply_error}"
     else:
         prev_section = ""
 
     # Merge engine-level and blueprint-level prompt_context (blueprint appends after engine)
     ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
+
+    # Load operator-managed rules file: patches/rules.md (if present)
+    rules_file = patches_dir / "rules.md"
+    if rules_file.exists():
+        try:
+            rules_content = rules_file.read_text(encoding="utf-8").strip()
+            if rules_content:
+                ctx_parts.append(rules_content)
+        except Exception:
+            pass
+
     if ctx_parts:
         custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(ctx_parts)
     else:
@@ -359,14 +391,16 @@ def _call_llm(
     timeout: float = 120.0,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
+    last_apply_error: str | None = None,
 ) -> str:
     """Call the configured LLM provider and return raw text response."""
-    system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context)
+    system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context, last_apply_error)
 
     if provider == "openai_compat":
         return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, ollama_options, timeout=timeout)
     else:
         return _call_anthropic(messages, model, max_tokens, system_prompt, timeout=timeout)
+
 
 
 def _call_anthropic(
@@ -468,6 +502,7 @@ def generate_llm_patch(
     llm_max_reprompts: int = MAX_REPROMPTS,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
+    last_apply_error: str | None = None,
 ) -> PatchSpec | None:
     """Call the LLM and return a validated PatchSpec.
 
@@ -487,7 +522,7 @@ def generate_llm_patch(
 
     for attempt in range(llm_max_reprompts):
         try:
-            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context)
+            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
         except Exception as exc:
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s", attempt + 1, llm_max_reprompts, exc
@@ -518,16 +553,11 @@ def generate_llm_patch(
 
 
 def _patch_filename(patch_spec: PatchSpec, patches_dir: Path) -> str:
-    """Generate structured filename: {seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json."""
+    """Generate structured filename: {YYYYMMDDTHHmmss}_{slug}.json."""
     from datetime import datetime, timezone
 
-    seq = 1 + sum(
-        len(list(d.glob("*.json")))
-        for d in [patches_dir / "pending", patches_dir / "applied", patches_dir / "rejected"]
-        if d.exists()
-    )
     ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-    return f"{seq:05d}_{ts}_{patch_spec.patch_id}.json"
+    return f"{ts}_{patch_spec.patch_id}.json"
 
 
 def stage_patch_for_human(

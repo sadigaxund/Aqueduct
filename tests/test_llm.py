@@ -129,14 +129,17 @@ class TestStageForHuman:
         spec = _patch_spec()
         ctx = _failure_ctx()
         stage_patch_for_human(spec, patches_dir, ctx)
-        assert (patches_dir / "pending" / "test-fix.json").exists()
+        # Filename now contains timestamp: YYYYMMDDTHHmmss_test-fix.json
+        matches = list((patches_dir / "pending").glob("*_test-fix.json"))
+        assert len(matches) == 1
 
     def test_pending_file_contains_aq_meta(self, tmp_path):
         patches_dir = tmp_path / "patches"
         spec = _patch_spec()
         ctx = _failure_ctx(run_id="run-456", blueprint_id="my.pipe")
         stage_patch_for_human(spec, patches_dir, ctx)
-        data = json.loads((patches_dir / "pending" / "test-fix.json").read_text())
+        matches = list((patches_dir / "pending").glob("*_test-fix.json"))
+        data = json.loads(matches[0].read_text())
         assert "_aq_meta" in data
         assert data["_aq_meta"]["run_id"] == "run-456"
         assert data["_aq_meta"]["blueprint_id"] == "my.pipe"
@@ -156,14 +159,16 @@ class TestArchivePatch:
         spec = _patch_spec(patch_id="archive-me")
         ctx = _failure_ctx()
         archive_patch(spec, patches_dir, ctx, mode="auto")
-        assert (patches_dir / "applied" / "archive-me.json").exists()
+        matches = list((patches_dir / "applied").glob("*_archive-me.json"))
+        assert len(matches) == 1
 
     def test_applied_file_contains_meta(self, tmp_path):
         patches_dir = tmp_path / "patches"
         spec = _patch_spec(patch_id="archive-me")
         ctx = _failure_ctx(run_id="run-789")
         archive_patch(spec, patches_dir, ctx, mode="auto")
-        data = json.loads((patches_dir / "applied" / "archive-me.json").read_text())
+        matches = list((patches_dir / "applied").glob("*_archive-me.json"))
+        data = json.loads(matches[0].read_text())
         assert "_aq_meta" in data
         assert data["_aq_meta"]["run_id"] == "run-789"
         assert data["_aq_meta"]["approval_mode"] == "auto"

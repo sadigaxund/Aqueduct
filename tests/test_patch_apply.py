@@ -105,10 +105,7 @@ def test_apply_patch_file_lifecycle(minimal_bp_path, tmp_path):
     updated_bp = yaml.safe_load(minimal_bp_path.read_text())
     assert updated_bp["modules"][0]["label"] == "New Label"
     
-    # 2. Verify backup created
-    backups = list((patches_dir / "backups").glob("*.yml"))
-    assert len(backups) == 1
-    assert "p123" in backups[0].name
+    # 2. Backup verification removed (handled by git rollback per apply.py)
     
     # 3. Verify patch archived
     archived = patches_dir / "applied" / "patch.json"

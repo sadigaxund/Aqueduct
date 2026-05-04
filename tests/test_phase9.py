@@ -7,7 +7,7 @@ import shutil
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from click.testing import CliRunner
@@ -397,11 +397,12 @@ modules:
 edges: []
 agent:
   approval_mode: auto
-  allowed_paths:
-    - "s3a://prod/*"
-    - "s3a://staging/*"
-  forbidden_ops:
-    - remove_module
+  guardrails:
+    allowed_paths:
+      - "s3a://prod/*"
+      - "s3a://staging/*"
+    forbidden_ops:
+      - remove_module
 """
     bp_path = tmp_path / "bp.yml"
     bp_path.write_text(bp_text)
@@ -472,11 +473,32 @@ def test_patch_rollback_restores_blueprint(tmp_path):
     env = _setup_patch_env(tmp_path)
     runner = CliRunner()
 
-    result = runner.invoke(cli, [
-        "patch", "rollback", "abc123",
-        "--blueprint", str(env["bp_path"]),
-        "--patches-dir", str(env["patches_root"]),
-    ])
+    # Mock git log to find the patch, and git revert to restore the file
+    with patch("subprocess.run") as mock_run:
+        # 1. Mock 'git log'
+        mock_log = MagicMock()
+        mock_log.returncode = 0
+        # Body must be separated by \n for the CLI to find the patch_id in 'body'
+        mock_log.stdout = f"hash123\x1fSubject line\nBody with abc123\x1eENDCOMMIT"
+        
+        # 2. Mock 'git revert' (which we'll make actually restore the file from backup)
+        def side_effect(cmd, **kwargs):
+            if cmd[0] == "git" and cmd[1] == "log":
+                return mock_log
+            if cmd[0] == "git" and cmd[1] == "revert":
+                # Simulate git revert by copying backup back
+                env["bp_path"].write_text(env["backup_file"].read_text())
+                res = MagicMock()
+                res.returncode = 0
+                return res
+            return MagicMock(returncode=0)
+
+        mock_run.side_effect = side_effect
+
+        result = runner.invoke(cli, [
+            "rollback", str(env["bp_path"]),
+            "--to", "abc123",
+        ])
 
     assert result.exit_code == 0, result.output
     restored = env["bp_path"].read_text()
@@ -488,77 +510,62 @@ def test_patch_rollback_is_atomic(tmp_path):
     env = _setup_patch_env(tmp_path)
     runner = CliRunner()
 
-    original_content = env["bp_path"].read_text()
-    runner.invoke(cli, [
-        "patch", "rollback", "abc123",
-        "--blueprint", str(env["bp_path"]),
-        "--patches-dir", str(env["patches_root"]),
-    ])
+    with patch("subprocess.run") as mock_run:
+        mock_log = MagicMock(returncode=0, stdout=f"h1\x1fCommit with abc123\x1eENDCOMMIT")
+        mock_run.side_effect = lambda cmd, **kw: mock_log if "log" in cmd else MagicMock(returncode=0)
 
-    # No .rollback.tmp.yml file left behind
+        runner.invoke(cli, [
+            "rollback", str(env["bp_path"]),
+            "--to", "abc123",
+        ])
+
+    # No .rollback.tmp.yml file left behind (git handles atomicity)
     tmp_files = list(tmp_path.glob("*.rollback.tmp.yml"))
     assert len(tmp_files) == 0
 
 
-def test_patch_rollback_moves_applied_to_rolled_back(tmp_path):
-    env = _setup_patch_env(tmp_path)
-    runner = CliRunner()
-
-    runner.invoke(cli, [
-        "patch", "rollback", "abc123",
-        "--blueprint", str(env["bp_path"]),
-        "--patches-dir", str(env["patches_root"]),
-    ])
-
-    assert not env["applied_record"].exists()
-    rolled_back_path = env["patches_root"] / "rolled_back" / "abc123.json"
-    assert rolled_back_path.exists()
+# Removed outdated rolled_back/ directory tests (deprecated in favor of git)
 
 
-def test_patch_rollback_record_contains_rolled_back_at(tmp_path):
-    env = _setup_patch_env(tmp_path)
-    runner = CliRunner()
-
-    runner.invoke(cli, [
-        "patch", "rollback", "abc123",
-        "--blueprint", str(env["bp_path"]),
-        "--patches-dir", str(env["patches_root"]),
-    ])
-
-    rolled_back_path = env["patches_root"] / "rolled_back" / "abc123.json"
-    data = json.loads(rolled_back_path.read_text())
-    assert "rolled_back_at" in data["_aq_meta"]
-    ts = data["_aq_meta"]["rolled_back_at"]
-    datetime.fromisoformat(ts)  # must be valid ISO timestamp
-
-
-def test_patch_rollback_no_backup_exits_nonzero(tmp_path):
+def test_patch_rollback_no_history_exits_nonzero(tmp_path):
     bp_path = tmp_path / "blueprint.yml"
     bp_path.write_text(_MINIMAL_BP)
-    patches_root = tmp_path / "patches"
-    patches_root.mkdir()
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "patch", "rollback", "nonexistent_patch",
-        "--blueprint", str(bp_path),
-        "--patches-dir", str(patches_root),
-    ])
+    with patch("subprocess.run") as mock_run:
+        mock_run.returncode = 0
+        mock_run.stdout = "" # empty git log
+
+        result = runner.invoke(cli, [
+            "rollback", str(bp_path),
+            "--to", "nonexistent_patch",
+        ])
 
     assert result.exit_code != 0
 
 
 def test_patch_rollback_no_applied_record_still_restores_blueprint(tmp_path):
     env = _setup_patch_env(tmp_path)
-    # Remove the applied record — patch was staged-only
+    # Remove the applied record — patch was staged-only or applied but record missing
     env["applied_record"].unlink()
 
     runner = CliRunner()
-    result = runner.invoke(cli, [
-        "patch", "rollback", "abc123",
-        "--blueprint", str(env["bp_path"]),
-        "--patches-dir", str(env["patches_root"]),
-    ])
+    with patch("subprocess.run") as mock_run:
+        mock_log = MagicMock(returncode=0, stdout=f"h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT")
+        
+        def side_effect(cmd, **kw):
+            if "log" in cmd: return mock_log
+            if "revert" in cmd:
+                env["bp_path"].write_text(env["backup_file"].read_text())
+                return MagicMock(returncode=0)
+            return MagicMock(returncode=0)
+            
+        mock_run.side_effect = side_effect
+
+        result = runner.invoke(cli, [
+            "rollback", str(env["bp_path"]),
+            "--to", "abc123",
+        ])
 
     assert result.exit_code == 0
     restored = env["bp_path"].read_text()

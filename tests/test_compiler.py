@@ -163,8 +163,8 @@ class TestArcadeExpansion:
         # Arcade module itself must be gone
         assert "enricher" not in module_ids
         # Namespaced sub-modules must exist
-        assert "enricher.step_one" in module_ids
-        assert "enricher.step_two" in module_ids
+        assert "enricher__step_one" in module_ids
+        assert "enricher__step_two" in module_ids
 
     def test_non_arcade_modules_preserved(self):
         manifest = _parse_and_compile("valid_with_arcade.yml")
@@ -174,26 +174,26 @@ class TestArcadeExpansion:
 
     def test_total_module_count(self):
         manifest = _parse_and_compile("valid_with_arcade.yml")
-        # source + enricher.step_one + enricher.step_two + sink = 4
+        # source + enricher__step_one + enricher__step_two + sink = 4
         assert len(manifest.modules) == 4
 
     def test_internal_arcade_edges_namespaced(self):
         manifest = _parse_and_compile("valid_with_arcade.yml")
         edge_pairs = {(e.from_id, e.to_id) for e in manifest.edges}
-        assert ("enricher.step_one", "enricher.step_two") in edge_pairs
+        assert ("enricher__step_one", "enricher__step_two") in edge_pairs
 
     def test_parent_edges_rewired_to_entry(self):
         manifest = _parse_and_compile("valid_with_arcade.yml")
         edge_pairs = {(e.from_id, e.to_id) for e in manifest.edges}
-        # source → enricher  becomes  source → enricher.step_one
-        assert ("source", "enricher.step_one") in edge_pairs
+        # source → enricher  becomes  source → enricher__step_one
+        assert ("source", "enricher__step_one") in edge_pairs
         assert ("source", "enricher") not in edge_pairs
 
     def test_parent_edges_rewired_from_exit(self):
         manifest = _parse_and_compile("valid_with_arcade.yml")
         edge_pairs = {(e.from_id, e.to_id) for e in manifest.edges}
-        # enricher → sink  becomes  enricher.step_two → sink
-        assert ("enricher.step_two", "sink") in edge_pairs
+        # enricher → sink  becomes  enricher__step_two → sink
+        assert ("enricher__step_two", "sink") in edge_pairs
         assert ("enricher", "sink") not in edge_pairs
 
     def test_missing_ref_raises(self, tmp_path):
@@ -253,7 +253,7 @@ class TestArcadeExpansion:
         )
         bp = parse(parent_file)
         manifest = compile(bp, blueprint_path=parent_file)
-        assert any(m.id == "arc.m" for m in manifest.modules)
+        assert any(m.id == "arc__m" for m in manifest.modules)
 
     def test_arcade_partial_required_context_raises(self, tmp_path):
         arcade_file = tmp_path / "req_arcade.yml"
@@ -294,7 +294,7 @@ class TestArcadeExpansion:
         )
         bp = parse(parent_file)
         manifest = compile(bp, blueprint_path=parent_file)
-        assert any(m.id == "arc.m" for m in manifest.modules)
+        assert any(m.id == "arc__m" for m in manifest.modules)
 
     def test_blueprint_required_context_field_in_ast(self, tmp_path):
         bp_file = tmp_path / "bp.yml"

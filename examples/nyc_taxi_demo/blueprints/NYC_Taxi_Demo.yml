@@ -23,7 +23,7 @@ agent:
 
 context:
   paths:
-    yellow_path: "data/yellow/*.parqut"
+    yellow_path: "/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parquet"
     green_path: "data/green/*.parquet"
     zones_path: "data/zones/taxi_zone_lookup.csv"
     output_path: "data/output"
