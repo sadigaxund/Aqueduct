@@ -42,7 +42,7 @@ modules:
       op: sql
       query: |
         SELECT 
-          VendorID, 
+          VendorID AS, 
           ${ctx.pickup_col} AS pickup_datetime, 
           ${ctx.dropoff_col} AS dropoff_datetime, 
           PULocationID, 

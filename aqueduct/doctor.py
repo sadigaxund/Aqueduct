@@ -288,7 +288,10 @@ def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
 
 # ── Blueprint source checks ───────────────────────────────────────────────────
 
-def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
+def check_blueprint_sources(
+    blueprint_path: Path,
+    _context_override: dict[str, Any] | None = None,
+) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
     Local paths: checked for existence (Ingress) or parent-dir writability (Egress).
@@ -297,6 +300,7 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
     Cloud URIs (s3a://, gs://, abfss://): skipped here — covered by storage check.
     JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
                not credentials or schema).
+    _context_override: caller-provided context injected when checking Arcade sub-blueprints.
     """
     import re
     import socket
@@ -316,7 +320,7 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
 
     try:
         from aqueduct.parser.parser import parse
-        bp = parse(str(blueprint_path))
+        bp = parse(str(blueprint_path), cli_overrides=_context_override or {})
     except Exception as exc:
         return [CheckResult("blueprint", "fail", f"could not parse {blueprint_path}: {exc}")]
 
@@ -391,6 +395,27 @@ def check_blueprint_sources(blueprint_path: Path) -> list[CheckResult]:
             continue
 
         results.append(CheckResult(name, "skip", "no path or url in config", _ms(t)))
+
+    # ── Recurse into Arcade sub-blueprints ────────────────────────────────────
+    for module in bp.modules:
+        if module.type != "Arcade" or not module.ref:
+            continue
+        sub_path = (blueprint_path.parent / module.ref).resolve()
+        if not sub_path.exists():
+            results.append(CheckResult(
+                f"arcade:{module.id}", "warn",
+                f"sub-blueprint not found: {sub_path}",
+            ))
+            continue
+        sub_results = check_blueprint_sources(
+            sub_path,
+            _context_override=module.context_override or {},
+        )
+        # Prefix each result name so the user knows which arcade it came from
+        for r in sub_results:
+            results.append(CheckResult(
+                f"arcade:{module.id}/{r.name}", r.status, r.detail, r.elapsed_ms,
+            ))
 
     return results
 
