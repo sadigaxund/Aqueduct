@@ -25,16 +25,17 @@ def _check_guardrails(patch: Any, agent: Any) -> str | None:
     for op_dict in getattr(patch, "operations", []):
         op_name = op_dict.get("op", "") if isinstance(op_dict, dict) else ""
 
-        if agent.forbidden_ops and op_name in agent.forbidden_ops:
-            return f"Operation {op_name!r} blocked by agent.forbidden_ops"
+        if agent.guardrails.forbidden_ops and op_name in agent.guardrails.forbidden_ops:
+            return f"Operation {op_name!r} blocked by agent.guardrails.forbidden_ops"
 
-        if agent.allowed_paths:
+        if agent.guardrails.allowed_paths:
             config = (op_dict.get("config") or {}) if isinstance(op_dict, dict) else {}
             path_val = config.get("path") if isinstance(config, dict) else None
-            if path_val and not any(
-                fnmatch.fnmatch(str(path_val), pat) for pat in agent.allowed_paths
+            # Skip check for unresolved context refs — they're validated at runtime
+            if path_val and not str(path_val).startswith("${ctx.") and not any(
+                fnmatch.fnmatch(str(path_val), pat) for pat in agent.guardrails.allowed_paths
             ):
-                return f"Path {path_val!r} not in agent.allowed_paths whitelist"
+                return f"Path {path_val!r} not in agent.guardrails.allowed_paths whitelist"
 
     return None
 
@@ -597,11 +598,12 @@ def run(
             err=True,
         )
 
-        # Run blueprint doctor checks and attach any warn/fail hints to failure context
+        # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
+        # arcades expanded — no need to re-parse or recurse into sub-blueprints).
         try:
-            from aqueduct.doctor import check_blueprint_sources
+            from aqueduct.doctor import check_blueprint_sources_from_manifest
             from dataclasses import replace as _dc_replace
-            _dr = check_blueprint_sources(blueprint_abs)
+            _dr = check_blueprint_sources_from_manifest(manifest)
             _hints = tuple(
                 f"{r.name} — {r.detail}"
                 for r in _dr if r.status in ("warn", "fail")
@@ -627,8 +629,18 @@ def run(
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
             break
 
-        # ── Guardrail check ───────────────────────────────────────────────────
-        guardrail_err = _check_guardrails(patch, manifest.agent)
+        # ── Guardrail check (pre-staging) ─────────────────────────────────────
+        # Use apply.py's guardrail check — resolves ${ctx.*} path values via provenance_map
+        try:
+            from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
+            import yaml as _yaml
+            _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
+            _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
+            guardrail_err = None
+        except _PatchError as _ge:
+            guardrail_err = str(_ge)
+        except Exception:
+            guardrail_err = None  # don't block on unexpected errors
         if guardrail_err:
             click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
             stage_patch_for_human(patch, patches_dir, failure_ctx)

@@ -146,13 +146,18 @@ def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
     return working
 
 
-def _check_guardrails(patch_spec: PatchSpec, bp_raw: dict) -> None:
+def _check_guardrails(
+    patch_spec: PatchSpec,
+    bp_raw: dict,
+    provenance_map: "Any | None" = None,
+) -> None:
     """Deterministically enforce agent.guardrails declared in the Blueprint.
 
     Raises PatchError if any operation violates:
       - forbidden_ops: op type is in the blocklist
       - allowed_paths: set_module_config_key targeting a path/output_path key whose
-                       value doesn't match any allowed_paths fnmatch pattern
+                       resolved value doesn't match any allowed_paths fnmatch pattern.
+                       ${ctx.*} values are resolved via provenance_map before matching.
     """
     guardrails = (bp_raw.get("agent") or {}).get("guardrails") or {}
     forbidden_ops: list[str] = guardrails.get("forbidden_ops") or []
@@ -168,9 +173,23 @@ def _check_guardrails(patch_spec: PatchSpec, bp_raw: dict) -> None:
             )
 
         if allowed_paths and op_name == "set_module_config_key":
+            module_id = getattr(op, "module_id", "") or ""
+            # Arcade-expanded modules (ID contains __) don't exist in Blueprint YAML.
+            # Skip path guardrail — the apply step will raise a clear "Module not found" error.
+            if "__" in module_id:
+                continue
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
                 value = str(getattr(op, "value", "") or "")
+                # ${ctx.*} refs are unresolved template expressions — resolve via ProvenanceMap
+                # so guardrails check the actual runtime path, not the template string.
+                import re as _re
+                ctx_match = _re.match(r"^\$\{ctx\.([a-zA-Z0-9_.]+)\}$", value)
+                if ctx_match and provenance_map is not None:
+                    ctx_key = ctx_match.group(1)
+                    ctx_prov = provenance_map.context.get(ctx_key)
+                    if ctx_prov is not None and ctx_prov.resolved_value is not None:
+                        value = str(ctx_prov.resolved_value)
                 if not any(fnmatch.fnmatch(value, pat) for pat in allowed_paths):
                     raise PatchError(
                         f"Path value {value!r} in op {op_name!r} (module {getattr(op, 'module_id', '?')!r}) "
@@ -182,6 +201,7 @@ def apply_patch_file(
     blueprint_path: Path,
     patch_path: Path,
     patches_dir: Path = Path("patches"),
+    provenance_map: "Any | None" = None,
 ) -> ApplyResult:
     """Full apply lifecycle: validate → apply → verify → backup → write → archive.
 
@@ -210,7 +230,7 @@ def apply_patch_file(
         raise PatchError(f"Cannot load Blueprint YAML from {blueprint_path}: {exc}") from exc
 
     # ── 2.5 Guardrail enforcement (deterministic — blueprint config, not prompt) ─
-    _check_guardrails(patch_spec, bp_raw)
+    _check_guardrails(patch_spec, bp_raw, provenance_map=provenance_map)
 
     # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
     patched = apply_patch_to_dict(bp_raw, patch_spec)
@@ -252,6 +272,9 @@ def apply_patch_file(
         raw_spec["applied_at"] = applied_at
         raw_spec["blueprint_path"] = str(blueprint_path)
         archive_path.write_text(json.dumps(raw_spec, indent=2), encoding="utf-8")
+        # Remove from pending — patch has been applied and archived
+        if patch_path.exists():
+            patch_path.unlink()
     except Exception as exc:
         import sys
         print(f"[patch] warning: could not archive patch to {archive_path}: {exc}", file=sys.stderr)

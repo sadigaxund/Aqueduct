@@ -298,7 +298,8 @@ def test_execution_date_pinned_through_compile():
 # ── Guardrails: _check_guardrails ────────────────────────────────────────────
 
 def _make_agent(allowed_paths=(), forbidden_ops=()):
-    return AgentConfig(allowed_paths=allowed_paths, forbidden_ops=forbidden_ops)
+    from aqueduct.parser.models import GuardrailsConfig
+    return AgentConfig(guardrails=GuardrailsConfig(allowed_paths=allowed_paths, forbidden_ops=forbidden_ops))
 
 
 def _make_patch(*ops):
@@ -364,18 +365,19 @@ def test_guardrails_empty_operations_list():
 
 def test_agent_config_allowed_paths_default_empty():
     a = AgentConfig()
-    assert a.allowed_paths == ()
+    assert a.guardrails.allowed_paths == ()
 
 
 def test_agent_config_forbidden_ops_default_empty():
     a = AgentConfig()
-    assert a.forbidden_ops == ()
+    assert a.guardrails.forbidden_ops == ()
 
 
 def test_agent_config_fields_set():
-    a = AgentConfig(allowed_paths=("s3a://prod/*",), forbidden_ops=("remove_module",))
-    assert "s3a://prod/*" in a.allowed_paths
-    assert "remove_module" in a.forbidden_ops
+    from aqueduct.parser.models import GuardrailsConfig
+    a = AgentConfig(guardrails=GuardrailsConfig(allowed_paths=("s3a://prod/*",), forbidden_ops=("remove_module",)))
+    assert "s3a://prod/*" in a.guardrails.allowed_paths
+    assert "remove_module" in a.guardrails.forbidden_ops
 
 
 def test_agent_config_schema_parses_allowed_paths(tmp_path):
@@ -404,9 +406,9 @@ agent:
     bp_path = tmp_path / "bp.yml"
     bp_path.write_text(bp_text)
     bp = parse(str(bp_path))
-    assert "s3a://prod/*" in bp.agent.allowed_paths
-    assert "s3a://staging/*" in bp.agent.allowed_paths
-    assert "remove_module" in bp.agent.forbidden_ops
+    assert "s3a://prod/*" in bp.agent.guardrails.allowed_paths
+    assert "s3a://staging/*" in bp.agent.guardrails.allowed_paths
+    assert "remove_module" in bp.agent.guardrails.forbidden_ops
 
 
 # ── Patch Rollback CLI ────────────────────────────────────────────────────────

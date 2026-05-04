@@ -13,9 +13,12 @@ verbatim in FailureContext packages sent to the LLM agent.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aqueduct.parser.models import AgentConfig, Edge, Module, RetryPolicy
+
+if TYPE_CHECKING:
+    from aqueduct.compiler.provenance import ProvenanceMap
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -35,6 +38,7 @@ class Manifest:
     udf_registry: tuple[dict[str, Any], ...] = ()
     macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
+    provenance_map: "ProvenanceMap | None" = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -95,4 +99,5 @@ class Manifest:
             "udf_registry": list(self.udf_registry),
             "macros": self.macros,
             "checkpoint": self.checkpoint,
+            "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
         }

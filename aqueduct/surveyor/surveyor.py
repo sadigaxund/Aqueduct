@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
     error_message  VARCHAR NOT NULL,
     stack_trace    VARCHAR,
     manifest_json  JSON,
+    provenance_json JSON,
     started_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ NOT NULL
 );
@@ -146,6 +147,13 @@ class Surveyor:
         db_path = self._store_dir / "obs.db"
         self._conn = duckdb.connect(str(db_path))
         self._conn.execute(_DDL)
+        # Additive migrations — safe to run on existing DBs
+        try:
+            self._conn.execute(
+                "ALTER TABLE failure_contexts ADD COLUMN IF NOT EXISTS provenance_json JSON"
+            )
+        except Exception:
+            pass  # DuckDB older versions may not support IF NOT EXISTS on ALTER
 
         self._conn.execute(
             """
@@ -202,12 +210,19 @@ class Surveyor:
         if exc is not None:
             stack_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
-        blueprint_source: str | None = None
-        if self._blueprint_path and self._blueprint_path.exists():
-            try:
-                blueprint_source = self._blueprint_path.read_text(encoding="utf-8")
-            except OSError:
-                pass
+        # Build provenance slice: failed module + full context block
+        provenance_json: str | None = None
+        pmap = getattr(self._manifest, "provenance_map", None)
+        if pmap is not None:
+            failed_mid = _first_failed_module(result)
+            failed_mod_prov = pmap.for_module(failed_mid)
+            prov_slice = {
+                "blueprint_id": pmap.blueprint_id,
+                "blueprint_path": pmap.blueprint_path,
+                "failed_module": failed_mod_prov.to_dict() if failed_mod_prov else None,
+                "context": {k: v.to_dict() for k, v in pmap.context.items()},
+            }
+            provenance_json = json.dumps(prov_slice, indent=2)
 
         ctx = FailureContext(
             run_id=result.run_id,
@@ -218,15 +233,15 @@ class Surveyor:
             manifest_json=json.dumps(self._manifest.to_dict()),
             started_at=_iso(self._started_at),  # type: ignore[arg-type]
             finished_at=_iso(finished_at),
-            blueprint_source_yaml=blueprint_source,
+            provenance_json=provenance_json,
         )
 
         self._conn.execute(
             """
             INSERT OR REPLACE INTO failure_contexts
                 (run_id, blueprint_id, failed_module, error_message,
-                 stack_trace, manifest_json, started_at, finished_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 stack_trace, manifest_json, provenance_json, started_at, finished_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 ctx.run_id,
@@ -235,6 +250,7 @@ class Surveyor:
                 ctx.error_message,
                 ctx.stack_trace,
                 ctx.manifest_json,
+                ctx.provenance_json,
                 ctx.started_at,
                 ctx.finished_at,
             ],

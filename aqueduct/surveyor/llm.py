@@ -48,8 +48,8 @@ You are an expert Apache Spark blueprint repair agent for the Aqueduct blueprint
 
 A blueprint has failed. You will receive a structured failure report describing:
 - What the blueprint does (human-readable summary)
-- The failing module and its configuration (compiled/resolved values)
-- The original Blueprint YAML source (pre-compilation, with template expressions intact)
+- The failing module and its resolved configuration
+- A "Value provenance" section showing exactly where each config value comes from in the Blueprint source
 - The error message and relevant stack trace lines
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
 
@@ -62,17 +62,22 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 - Respond with ONLY valid JSON matching the PatchSpec schema above. No prose, no markdown fences.
 - Use only module IDs and field names that appear in the failure report.
 - Prefer the simplest fix: correct a config value before adding new modules.
-- Single config field wrong (path typo, bad format string, wrong option value) → use set_module_config_key. It patches ONE key and leaves all other config keys untouched.
-- NEVER use replace_module_config for a single-field fix — it replaces the entire config block and will silently drop any key you forget to re-emit (format, options, mode, etc.).
-- Use replace_module_config ONLY when restructuring the whole config block or changing multiple keys at once. If you use it, you MUST re-emit every existing config key.
-- SQL query wrong → set_module_config_key with key="query".
-- Path typo → set_module_config_key with key="path".
-- Nested config (e.g. options.mergeSchema) → set_module_config_key with dot-notation key.
-- patch_id: short slug (e.g. "fix-sql-syntax-clean-orders").
+- **Always read the "Value provenance" section before choosing a patch op.**
+- For a `context_ref` value: the value came from a context key — use `replace_context_value` with the dot-notation key shown. Do NOT use `set_module_config_key`.
+- For an `arcade_inherited` value with a `context_key`: the arcade inherits this value from the parent blueprint's context via context_override. The context_key shown is the arcade's LOCAL key inside the sub-blueprint. Look in the "Blueprint context values" section to find which PARENT context key has the same resolved value, then use `replace_context_value` with the PARENT key. Do NOT add a second `set_module_config_key` op — one `replace_context_value` op is the complete fix.
+- For a `literal` value: the value is hardcoded in the Blueprint YAML — use `set_module_config_key` directly on the module.
+- For an `env_ref` value: the value comes from an environment variable — do NOT patch the Blueprint; inform the user to change the env var instead.
+- NEVER use `set_module_config_key` on a module whose ID contains `__` — those are arcade-expanded and do NOT exist in the Blueprint YAML. The patch will fail with "Module not found".
+  WRONG: {{"op": "set_module_config_key", "module_id": "yellow_process__ingress", "key": "path", "value": "..."}}
+  RIGHT: {{"op": "replace_context_value", "key": "paths.yellow_path", "value": "..."}}
+- Single config field wrong → prefer `set_module_config_key` (for literal values) or `replace_context_value` (for context_ref/arcade_inherited).
+- NEVER use `replace_module_config` for a single-field fix — it replaces the entire config block and silently drops keys you forget to re-emit.
+- Use `replace_module_config` ONLY when restructuring the whole config block. If used, re-emit every existing config key.
+- SQL query wrong → `set_module_config_key` with key="query".
+- SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
+- If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
+- patch_id: short slug (e.g. "fix-yellow-taxi-path").
 - description: root cause + fix in one sentence.
-- CRITICAL: When patching config values that contain paths, expressions, or strings, use the template expressions from the Original Blueprint YAML (e.g. "${{ctx.paths.input}}/*.parquet"), NOT the resolved literal values shown in the compiled module config. The patch is applied to the raw Blueprint, not the compiled Manifest.
-- SQL Channel queries reference upstream module IDs as Spark temp view names. If an Ingress module has id "green_taxi_trips", the Channel SQL uses `FROM green_taxi_trips`. NEVER use `${{ctx.*}}` inside a SQL query string — context references resolve at Blueprint level, not inside SQL.
-- If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` value. Spark can silently read Parquet files as CSV or vice versa, producing garbage column names that propagate to downstream SQL. In that case, fix the upstream Ingress `format` key with set_module_config_key, not the Channel SQL.
 {previous_patches_section}{custom_context_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
@@ -86,7 +91,7 @@ _USER_PROMPT_TEMPLATE = """\
 - **Failed module**: `{failed_module}`
 - **Error**: {error_message}
 
-## Failed module config (compiled — paths/expressions are resolved)
+## Failed module config (compiled — all expressions resolved)
 ```json
 {failed_module_config}
 ```
@@ -98,7 +103,7 @@ _USER_PROMPT_TEMPLATE = """\
 
 ## Full module list (for reference when writing patch IDs)
 {module_list}
-{doctor_hints_section}{blueprint_source_section}
+{provenance_section}{doctor_hints_section}
 Produce the PatchSpec JSON now.
 """
 
@@ -176,6 +181,95 @@ def _load_previous_patches(patches_dir: Path, limit: int = _PATCH_HISTORY_MAX) -
     return patches
 
 
+def _build_provenance_section(provenance_json: str | None) -> str:
+    """Build the value provenance section for the LLM user prompt.
+
+    Shows where each config value of the failing module came from in the Blueprint
+    source, with actionable patch op guidance per source type.
+    """
+    if not provenance_json:
+        return ""
+    try:
+        prov = json.loads(provenance_json)
+    except Exception:
+        return ""
+
+    lines: list[str] = ["\n## Value provenance (where each config value originates in the Blueprint source)"]
+    lines.append(f"Blueprint: {prov.get('blueprint_path', '?')}")
+
+    failed_mod = prov.get("failed_module")
+    if failed_mod:
+        mid = failed_mod.get("module_id", "?")
+        mtype = failed_mod.get("module_type", "?")
+        lines.append(f"\n### Failed module: {mid} ({mtype})")
+        if failed_mod.get("arcade_module_id"):
+            lines.append(
+                f"  **Arcade-expanded** from arcade module `{failed_mod['arcade_module_id']}` "
+                f"(sub-blueprint: {failed_mod.get('sub_blueprint_path', '?')})"
+            )
+            lines.append(
+                f"  Original sub-module ID inside sub-blueprint: `{failed_mod.get('original_module_id', '?')}`"
+            )
+            lines.append(
+                "  **This module does NOT exist in the Blueprint YAML.** "
+                "Do not use set_module_config_key on this module_id."
+            )
+
+        for key, vp in (failed_mod.get("config") or {}).items():
+            src = vp.get("source_type", "?")
+            orig = vp.get("original_expression", "?")
+            resolved = vp.get("resolved_value")
+            ctx_key = vp.get("context_key")
+
+            if src == "context_ref":
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← context_ref  →  use replace_context_value(key={ctx_key!r}, value=<fix>)"
+                )
+            elif src == "arcade_inherited":
+                if ctx_key:
+                    lines.append(
+                        f"  config.{key} = {resolved!r}"
+                        f"  ← arcade_inherited via context_override key {ctx_key!r}"
+                        f"  →  find parent context key with this resolved value and use replace_context_value"
+                    )
+                else:
+                    lines.append(
+                        f"  config.{key} = {resolved!r}"
+                        f"  ← arcade_inherited (expr: {orig!r})"
+                        f"  →  fix the arcade module's context_override in the parent Blueprint"
+                    )
+            elif src == "env_ref":
+                env_var = vp.get("env_var", "?")
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← env_ref ${{{env_var}}}  →  change the environment variable, do NOT patch the Blueprint"
+                )
+            elif src == "tier1":
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← @aq.* expression: {orig!r}"
+                )
+            else:
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← literal  →  use set_module_config_key(module_id={mid!r}, key={key!r}, value=<fix>)"
+                )
+
+    # Context block — helps LLM find the parent context key for arcade_inherited values
+    ctx_block = prov.get("context") or {}
+    if ctx_block:
+        lines.append("\n### Blueprint context values (all resolved — editable via replace_context_value)")
+        for key, vp in ctx_block.items():
+            resolved = vp.get("resolved_value")
+            src = vp.get("source_type", "?")
+            env_hint = f" (from env ${{{vp['env_var']}}})" if src == "env_ref" else ""
+            lines.append(f"  {key} = {resolved!r}{env_hint}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     try:
         manifest = json.loads(failure_ctx.manifest_json)
@@ -195,18 +289,10 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         f"  - {m['id']} ({m['type']}): {m.get('label', '')}" for m in modules
     ) or "  (none)"
 
-    # Raw Blueprint YAML (pre-compilation) — lets LLM see template expressions
-    if failure_ctx.blueprint_source_yaml:
-        blueprint_source_section = (
-            "\n## Original Blueprint YAML (pre-compilation — use these template expressions in your patch)\n"
-            "```yaml\n"
-            f"{failure_ctx.blueprint_source_yaml.strip()}\n"
-            "```\n"
-        )
-    else:
-        blueprint_source_section = ""
+    # Provenance section (replaces raw Blueprint YAML dump)
+    provenance_section = _build_provenance_section(getattr(failure_ctx, "provenance_json", None))
 
-    # Doctor pre-flight hints (warn/fail from check_blueprint_sources)
+    # Doctor pre-flight hints (warn/fail from check_blueprint_sources_from_manifest)
     hints = getattr(failure_ctx, "doctor_hints", None) or ()
     if hints:
         hint_lines = "\n".join(f"- {h}" for h in hints)
@@ -226,8 +312,8 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         failed_module_config=failed_config,
         stack_trace=_truncate_stack(failure_ctx.stack_trace),
         module_list=module_list,
+        provenance_section=provenance_section,
         doctor_hints_section=doctor_hints_section,
-        blueprint_source_section=blueprint_source_section,
     )
 
 
