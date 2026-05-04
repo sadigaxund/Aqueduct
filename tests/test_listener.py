@@ -11,16 +11,20 @@ import duckdb
 import pytest
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.spark.metrics import dir_bytes, get_observation, observe_df, zero_metrics
+from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
 from aqueduct.executor.spark.executor import _write_stage_metrics
 
 
-# ── zero_metrics ──────────────────────────────────────────────────────────────
+# ── null_metrics ──────────────────────────────────────────────────────────────
 
 
-def test_zero_metrics_all_zero():
-    m = zero_metrics()
-    assert all(v == 0 for v in m.values())
+def test_null_metrics_all_none_except_duration():
+    m = null_metrics()
+    assert m["duration_ms"] == 0
+    assert m["records_read"] is None
+    assert m["bytes_read"] is None
+    assert m["records_written"] is None
+    assert m["bytes_written"] is None
     assert set(m) == {"records_read", "bytes_read", "records_written", "bytes_written", "duration_ms"}
 
 
@@ -39,18 +43,18 @@ def test_dir_bytes_local_directory(tmp_path: Path):
     assert dir_bytes(str(tmp_path)) == 100
 
 
-def test_dir_bytes_cloud_path_returns_zero():
-    assert dir_bytes("s3://my-bucket/data/") == 0
-    assert dir_bytes("hdfs://namenode/data/") == 0
-    assert dir_bytes("gs://bucket/path") == 0
+def test_dir_bytes_cloud_path_returns_none():
+    assert dir_bytes("s3://my-bucket/data/") is None
+    assert dir_bytes("hdfs://namenode/data/") is None
+    assert dir_bytes("gs://bucket/path") is None
 
 
-def test_dir_bytes_nonexistent_returns_zero():
-    assert dir_bytes("/nonexistent/path/does/not/exist") == 0
+def test_dir_bytes_nonexistent_returns_none():
+    assert dir_bytes("/nonexistent/path/does/not/exist") is None
 
 
-def test_dir_bytes_empty_returns_zero():
-    assert dir_bytes("") == 0
+def test_dir_bytes_empty_string_returns_none():
+    assert dir_bytes("") is None
 
 
 # ── observe_df + get_observation ─────────────────────────────────────────────
@@ -66,12 +70,13 @@ def test_observe_df_spark_33_plus(spark: SparkSession):
 
     # Trigger action to populate observation
     observed.count()
-    assert get_observation(obs, "row_count") == 10
+    result = get_observation(obs, "row_count")
+    assert result == 10  # observation fired → int, not None
 
 
-def test_observe_df_none_observation_returns_zero():
-    """get_observation(None, alias) always returns 0."""
-    assert get_observation(None, "records_written") == 0
+def test_observe_df_none_observation_returns_none():
+    """get_observation(None, alias) returns None — obs=None means Spark < 3.3."""
+    assert get_observation(None, "records_written") is None
 
 
 def test_observe_df_graceful_fallback_on_old_spark(monkeypatch):
