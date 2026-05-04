@@ -78,6 +78,15 @@ class StoresConfig(BaseModel):
     )
 
 
+class MetricsConfig(BaseModel):
+    """Reserved for future performance-degrading metric toggles.
+
+    All flags must default to False (zero-cost production mode) and emit a
+    startup warning when enabled.  See .dev/SPARK_GUIDE.md rule 2.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
 class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -195,6 +204,7 @@ class AqueductConfig(BaseModel):
     aqueduct_config: str = Field(default="1.0", description="Config schema version")
     deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     stores: StoresConfig = Field(default_factory=StoresConfig)
+    metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)

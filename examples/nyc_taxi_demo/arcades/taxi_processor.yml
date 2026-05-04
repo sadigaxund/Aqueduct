@@ -62,6 +62,17 @@ modules:
       path: "${ctx.dead_letter_path}"
       mode: overwrite
 
+  - id: input_probe
+    type: Probe
+    label: "Observe ${ctx.taxi_type} Input"
+    attach_to: ingress
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+          method: sample
+          fraction: 0.1
+
 edges:
   - from: ingress
     to: assert_quality

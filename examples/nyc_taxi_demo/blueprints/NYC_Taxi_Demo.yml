@@ -12,8 +12,8 @@ context:
     yellow_path: "data/yellow/*.parquet"
     green_path: "data/green/*.parquet"
     zones_path: "data/zones/taxi_zone_lookup.csv"
-    output_path: "output"
-    dead_letter_path: "dead_letter"
+    output_path: "data/output"
+    dead_letter_path: "data/dead_letter"
 
 modules:
 
@@ -49,7 +49,7 @@ modules:
       path: "${ctx.paths.zones_path}"
       options:
         header: "true"
-        inferSchema: "true"
+        # inferSchema: "true"
 
   # ── 2. Merge All Data ──────────────────────────────────────────
 
@@ -60,29 +60,6 @@ modules:
       mode: union_all
       inputs: [yellow_process, green_process]
 
-  # ── N. Observe Schema ────────────────────────────────────────────
-
-  - id: yellow_input_probe
-    type: Probe
-    label: "Observe Yellow Input"
-    attach_to: yellow_process__ingress
-    config:
-      signals:
-        - type: schema_snapshot
-        - type: row_count_estimate
-          method: sample
-          fraction: 0.1
-
-  - id: green_input_probe
-    type: Probe
-    label: "Observe Green Input"
-    attach_to: green_process__ingress
-    config:
-      signals:
-        - type: schema_snapshot
-        - type: row_count_estimate
-          method: sample
-          fraction: 0.1
 
 edges:
   - from: yellow_process

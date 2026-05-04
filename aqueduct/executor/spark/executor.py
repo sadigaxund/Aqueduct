@@ -277,6 +277,23 @@ def _write_stage_metrics(
         logger.debug("Stage metrics write failed for %r: %s", module_id, exc)
 
 
+def _update_metric(store_dir: "Path", run_id: str, module_id: str, column: str, value: int) -> None:
+    """UPDATE a single column in an existing module_metrics row (non-fatal)."""
+    try:
+        import duckdb
+        db_path = store_dir / "obs.db"
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(
+                f"UPDATE module_metrics SET {column} = ? WHERE run_id = ? AND module_id = ?",
+                [value, run_id, module_id],
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Metric update failed for %r.%s: %s", module_id, column, exc)
+
+
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
     {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator", "Assert"}
 )
@@ -549,6 +566,8 @@ def execute(
 
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
+    # Ingress observations: collected after all Egress writes fire (obs.get is then safe)
+    _ingress_obs: dict[str, Any] = {}   # module_id → Observation | None
 
     for module in order:
         # ── Selector skip ─────────────────────────────────────────────────────
@@ -604,13 +623,17 @@ def execute(
                     frame_store[module.id] = _GATE_CLOSED
                     continue
                 return fail_result
+            # Attach observation — fires zero-cost when downstream Egress writes this DF.
+            _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read")
+            _ingress_obs[module.id] = _obs
             _write_stage_metrics(
                 module.id, run_id,
-                {**zero_metrics(), "bytes_read": dir_bytes(module.config.get("path", "")),
+                {**zero_metrics(),
+                 "bytes_read": dir_bytes(module.config.get("path", "")),
                  "duration_ms": int((time.monotonic() - _t0) * 1000)},
                 store_dir,
             )
-            frame_store[module.id] = df
+            frame_store[module.id] = _obs_df
             _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
             module_results.append(ModuleResult(module_id=module.id, status="success"))
 
@@ -991,6 +1014,21 @@ def execute(
                     logger.warning("Probe %r failed: %s", module.id, exc)
 
             module_results.append(ModuleResult(module_id=module.id, status="success"))
+
+    # ── Collect deferred Ingress observations (fire after all Egress writes) ───
+    # observe_df attaches a zero-cost CollectMetrics node; it fires when the
+    # downstream Egress write action consumes the DF plan.
+    if store_dir is not None and _ingress_obs:
+        _succeeded = {r.module_id for r in module_results if r.status == "success"}
+        for _mod_id, _obs in _ingress_obs.items():
+            if _mod_id not in _succeeded or _obs is None:
+                continue
+            try:
+                _rr = get_observation(_obs, "records_read")
+                if _rr > 0:
+                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr)
+            except Exception as exc:
+                logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 
     # ── Lineage — write after successful execution ─────────────────────────────
     if store_dir is not None:

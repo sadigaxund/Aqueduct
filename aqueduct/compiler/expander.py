@@ -34,13 +34,13 @@ def _entry_modules(sub_bp: Blueprint) -> list[str]:
 
 def _exit_modules(sub_bp: Blueprint) -> list[str]:
     """Module IDs in sub-Blueprint with no outgoing edges (graph exit points).
-    Note: Egress modules are excluded because they don't produce a DataFrame
+    Note: Egress and Probe modules are excluded because they don't produce a DataFrame
     for downstream consumption.
     """
     sources = {e.from_id for e in sub_bp.edges}
     return [
         m.id for m in sub_bp.modules 
-        if m.id not in sources and m.type != "Egress"
+        if m.id not in sources and m.type not in ("Egress", "Probe")
     ]
 
 
