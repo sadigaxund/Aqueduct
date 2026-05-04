@@ -249,13 +249,11 @@ def test_execute_probe_distinct_count(spark: SparkSession, tmp_path: Path):
 
 
 def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
-    from datetime import datetime, timezone
-    ts = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-    df = spark.createDataFrame([(ts,)], ["ts"])
+    df = spark.sql("SELECT CAST('2026-01-01 12:00:00' AS TIMESTAMP) as ts")
     
     module = Module(
         id="p1", type="Probe", label="P1", 
-        config={"signals": [{"type": "data_freshness", "column": "ts", "allow_sample": false}]}
+        config={"signals": [{"type": "data_freshness", "column": "ts", "allow_sample": False}]}
     )
     store_dir = tmp_path / "store"
     

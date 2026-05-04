@@ -451,22 +451,50 @@ class TestBuildUserPrompt:
 # ── metrics.py helpers ────────────────────────────────────────────────────────
 
 class TestMetricsHelpers:
-    def test_get_observation_none_returns_zero(self):
+    def _make_listener(self):
+        from unittest.mock import MagicMock
+        listener = MagicMock()
+        listener._metrics = {"duration_ms": 0}
+        listener.collect_metrics.side_effect = lambda: listener._metrics
+        
+        def on_stage_completed(stage):
+            info = stage.stageInfo()
+            if not info.completionTime().isDefined():
+                listener._metrics["duration_ms"] = 0
+            else:
+                listener._metrics["duration_ms"] = 100
+        
+        listener.onStageCompleted.side_effect = on_stage_completed
+        return listener
+
+    def _make_stage_completed(self):
+        from unittest.mock import MagicMock
+        stage = MagicMock()
+        # stage.stageInfo() -> info
+        # info.completionTime() -> time
+        # time.isDefined() -> bool
+        info = MagicMock()
+        stage.stageInfo.return_value = info
+        time_mock = MagicMock()
+        info.completionTime.return_value = time_mock
+        return stage
+
+    def test_get_observation_none_returns_none(self):
         from aqueduct.executor.spark.metrics import get_observation
-        assert get_observation(None, "records_written") == 0
+        assert get_observation(None, "records_written") is None
 
-    def test_dir_bytes_cloud_path_returns_zero(self):
+    def test_dir_bytes_cloud_path_returns_none(self):
         from aqueduct.executor.spark.metrics import dir_bytes
-        assert dir_bytes("s3://bucket/key") == 0
-        assert dir_bytes("hdfs://namenode/path") == 0
+        assert dir_bytes("s3://bucket/key") is None
+        assert dir_bytes("hdfs://namenode/path") is None
 
-    def test_dir_bytes_empty_returns_zero(self):
+    def test_dir_bytes_empty_returns_none(self):
         from aqueduct.executor.spark.metrics import dir_bytes
-        assert dir_bytes("") == 0
+        assert dir_bytes("") is None
 
-    def test_dir_bytes_nonexistent_returns_zero(self):
+    def test_dir_bytes_nonexistent_returns_none(self):
         from aqueduct.executor.spark.metrics import dir_bytes
-        assert dir_bytes("/definitely/does/not/exist/path") == 0
+        assert dir_bytes("/definitely/does/not/exist/path") is None
 
     def test_on_stage_completed_time_undefined(self):
         listener = self._make_listener()
@@ -699,7 +727,7 @@ class TestCliReport:
         import duckdb
         store = tmp_path / "signals"
         store.mkdir()
-        db = store / "runs.db"
+        db = store / "obs.db"
         conn = duckdb.connect(str(db))
         conn.execute("""
             CREATE TABLE run_records (
@@ -838,10 +866,13 @@ class TestCliSignal:
         from click.testing import CliRunner
         from aqueduct.cli import cli
         store = self._store(tmp_path)
+        # Pre-create obs.db so it exists for the CLI
+        import duckdb
+        duckdb.connect(str(store / "obs.db")).close()
         result = CliRunner().invoke(cli, ["signal", "my_probe", "--value", "false", "--store-dir", str(store)])
         assert result.exit_code == 0
         assert "CLOSED" in result.output
-        conn = duckdb.connect(str(store / "signals.db"))
+        conn = duckdb.connect(str(store / "obs.db"))
         row = conn.execute("SELECT passed FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
         conn.close()
         assert row is not None and row[0] is False
@@ -853,7 +884,7 @@ class TestCliSignal:
         store = self._store(tmp_path)
         result = CliRunner().invoke(cli, ["signal", "my_probe", "--error", "Stale source", "--store-dir", str(store)])
         assert result.exit_code == 0
-        conn = duckdb.connect(str(store / "signals.db"))
+        conn = duckdb.connect(str(store / "obs.db"))
         row = conn.execute("SELECT passed, error_message FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
         conn.close()
         assert row[0] is False
@@ -870,7 +901,7 @@ class TestCliSignal:
         result = CliRunner().invoke(cli, ["signal", "my_probe", "--value", "true", "--store-dir", str(store)])
         assert result.exit_code == 0
         assert "cleared" in result.output
-        conn = duckdb.connect(str(store / "signals.db"))
+        conn = duckdb.connect(str(store / "obs.db"))
         row = conn.execute("SELECT passed FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
         conn.close()
         assert row is None
@@ -912,7 +943,7 @@ class TestEvaluateRegulatorSignalOverride:
         manifest = self._make_manifest()
         store = tmp_path / "signals"
         store.mkdir()
-        signals_db = store / "signals.db"
+        signals_db = store / "obs.db"
         conn = duckdb.connect(str(signals_db))
         conn.execute(_SIGNAL_OVERRIDES_DDL)
         conn.execute(

@@ -368,7 +368,6 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
 def test_surveyor_regulator_duckdb_exception(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    (store_dir / "obs.db").write_text("not a db")
     
     from aqueduct.parser.models import Edge
     from aqueduct.compiler.models import Manifest
@@ -379,5 +378,9 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
     )
     surveyor = Surveyor(manifest, store_dir=store_dir)
     surveyor.start("run1")
+
+    # Corrupt the DB after start so evaluate_regulator hits the exception
+    (store_dir / "obs.db").write_text("not a db")
+
     assert surveyor.evaluate_regulator("reg1") is True
 

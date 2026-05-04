@@ -539,6 +539,7 @@ def run(
     patch_count = 0
     failure_ctx = None
     result = None
+    last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
 
     while True:
         current_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
@@ -624,6 +625,7 @@ def run(
             llm_max_reprompts=resolved_agent_llm_max_reprompts,
             engine_prompt_context=resolved_agent_engine_prompt_context,
             blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+            last_apply_error=last_apply_error,
         )
         if patch is None:
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
@@ -642,6 +644,7 @@ def run(
         except Exception:
             guardrail_err = None  # don't block on unexpected errors
         if guardrail_err:
+            last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
             click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
             stage_patch_for_human(patch, patches_dir, failure_ctx)
             click.echo(
@@ -725,8 +728,10 @@ def run(
                 patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive"
             )
             if new_manifest is None:
+                last_apply_error = f"Patch {patch.patch_id!r} produced an invalid Blueprint and was not applied."
                 click.echo("  ✗ LLM patch failed to apply, stopping", err=True)
                 break
+            last_apply_error = None  # patch applied — reset for next iteration
             manifest = new_manifest
             click.echo(
                 f"  ✓ LLM patch applied ({patch_count}/{max_patches}) → {blueprint}",

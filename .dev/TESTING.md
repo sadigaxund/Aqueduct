@@ -156,18 +156,18 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ exception inside `execute_probe` does not propagate to caller
 
 #### New signal types (Phase 15)
-- ⏳ `value_distribution`: payload has `stats` dict; each column has `min`, `max`, `mean`, `stddev`, `count_non_null`, `percentiles` keys
-- ⏳ `value_distribution` with no `columns` → only numeric columns included automatically
-- ⏳ `value_distribution` `block_full_actions=True` → `{"blocked": True, "stats": {}}`; warning logged
-- ⏳ `distinct_count`: payload has `distinct_counts` dict keyed by columns with integer values
-- ⏳ `distinct_count` with no `columns` → all DataFrame columns
-- ⏳ `distinct_count` `block_full_actions=True` → `{"blocked": True, "distinct_counts": {col: None}}`
-- ⏳ `data_freshness`: payload has `column`, `max_value` keys
-- ⏳ `data_freshness` missing `column` → signal fails, other signals captured normally
-- ⏳ `data_freshness` `block_full_actions=True` + `allow_sample=false` (default) → `{"blocked": True, "column": ...}`
-- ⏳ `data_freshness` `block_full_actions=True` + `allow_sample=true` → executes on sample; `sampled=True` in payload
-- ⏳ `partition_stats`: payload has `num_partitions` key; integer ≥ 1; zero Spark action
-- ⏳ `partition_stats` `block_full_actions=True` → still executes (not a Spark action)
+- ✅ `value_distribution`: payload has `stats` dict; each column has `min`, `max`, `mean`, `stddev`, `count_non_null`, `percentiles` keys
+- ✅ `value_distribution` with no `columns` → only numeric columns included automatically
+- ✅ `value_distribution` `block_full_actions=True` → `{"blocked": True, "stats": {}}`; warning logged
+- ✅ `distinct_count`: payload has `distinct_counts` dict keyed by columns with integer values
+- ✅ `distinct_count` with no `columns` → all DataFrame columns
+- ✅ `distinct_count` `block_full_actions=True` → `{"blocked": True, "distinct_counts": {col: None}}`
+- ✅ `data_freshness`: payload has `column`, `max_value` keys
+- ✅ `data_freshness` missing `column` → signal fails, other signals captured normally
+- ✅ `data_freshness` `block_full_actions=True` + `allow_sample=false` (default) → `{"blocked": True, "column": ...}`
+- ✅ `data_freshness` `block_full_actions=True` + `allow_sample=true` → executes on sample; `sampled=True` in payload
+- ✅ `partition_stats`: payload has `num_partitions` key; integer ≥ 1; zero Spark action
+- ✅ `partition_stats` `block_full_actions=True` → still executes (not a Spark action)
 
 ### Executor integration (`executor.py`)
 - ✅ Probe appended after non-Probe modules in execution order (runs last)
@@ -466,12 +466,12 @@ Spark artifacts are isolated to `/tmp/`:
 ### `AqueductConfig` defaults
 - ✅ `deployment.target` defaults to `"local"`
 - ✅ `deployment.master_url` defaults to `"local[*]"`
-- ⏳ `stores.obs.path` defaults to `".aqueduct/obs.db"` ← **renamed from `observability`; now full file path**
-- ⏳ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` ← **now full file path**
-- ⏳ `stores.depot.path` defaults to `".aqueduct/depot.db"` ← **updated (was `.aqueduct/depot.duckdb`)**
-- ⏳ `agent.llm_timeout` defaults to `120.0`
-- ⏳ `agent.llm_max_reprompts` defaults to `3`
-- ⏳ `agent.prompt_context` defaults to `None`
+- ✅ `stores.obs.path` defaults to `".aqueduct/obs.db"` ← **renamed from `observability`; now full file path**
+- ✅ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` ← **now full file path**
+- ✅ `stores.depot.path` defaults to `".aqueduct/depot.db"` ← **updated (was `.aqueduct/depot.duckdb`)**
+- ✅ `agent.llm_timeout` defaults to `120.0`
+- ✅ `agent.llm_max_reprompts` defaults to `3`
+- ✅ `agent.prompt_context` defaults to `None`
 - ✅ `agent.default_model` defaults to `"claude-sonnet-4-6"`
 - ✅ `probes.max_sample_rows` defaults to `100`
 - ✅ `secrets.provider` defaults to `"env"`
@@ -511,8 +511,11 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ returns `True` on any DuckDB exception (open-gate-on-error policy)
 
 ### Executor integration (`executor.py`)
-- ✅ Regulator with open gate (no surveyor): transparent pass-through, `status="success"`
-- ✅ Regulator with open gate (surveyor returns True): downstream receives DataFrame
+- ✅ Regulator with open gate
+- [✅] `test_surveyor_start_stop`
+- [✅] `test_surveyor_record_success`
+- [✅] `test_surveyor_record_failure_with_ctx`
+- [✅] `test_surveyor_regulator_duckdb_exception` (fail-open verified)
 - ✅ Regulator with closed gate + `on_block=skip`: `frame_store[regulator_id] = _GATE_CLOSED`, `status="skipped"`
 - ✅ Regulator with closed gate + `on_block=abort`: blueprint returns `ExecutionResult(status="error")`
 - ✅ Regulator with closed gate + `on_block=trigger_agent`: `ExecutionResult(status="error", trigger_agent=True)` — LLM loop fires even with `approval_mode=disabled`
@@ -786,7 +789,8 @@ Issues reported in:
 - ✅ no `agent.guardrails` in Blueprint → unrestricted (no error)
 - ⏳ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
 - ✅ `GuardrailsConfig` round-trips through schema → parser → model (empty defaults)
-- ✅ `agent.guardrails.allowed_paths` + `forbidden_ops` in Blueprint YAML parsed to `GuardrailsConfig`
+- [✅] `test_agent_config_schema_parses_allowed_paths`
+- [✅] `test_patch_rollback_restores_blueprint` (updated to Git-based CLI)
 - ⏳ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
 
 ### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`

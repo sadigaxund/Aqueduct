@@ -100,8 +100,8 @@ def test_observe_df_graceful_fallback_on_old_spark(monkeypatch):
     with patch("aqueduct.executor.spark.metrics.observe_df", side_effect=None) as _:
         pass  # can't easily mock the internals; test the actual error handling:
 
-    # Actual graceful test: if obs is None, get_observation returns 0
-    assert get_observation(None, "any_alias") == 0
+    # Actual graceful test: if obs is None, get_observation returns None
+    assert get_observation(None, "any_alias") is None
 
 
 # ── _write_stage_metrics ─────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ def test_write_stage_metrics_creates_table_and_inserts(tmp_path: Path):
 
     _write_stage_metrics("egress_01", "run-xyz", metrics, store_dir)
 
-    db_path = store_dir / "signals.db"
+    db_path = store_dir / "obs.db"
     assert db_path.exists()
 
     conn = duckdb.connect(str(db_path))
@@ -171,7 +171,7 @@ def test_egress_writes_module_metrics_on_success(spark: SparkSession, tmp_path: 
     result = execute(manifest, spark, run_id="run-mm1", store_dir=store_dir)
     assert result.status == "success"
 
-    db_path = store_dir / "signals.db"
+    db_path = store_dir / "obs.db"
     assert db_path.exists()
 
     conn = duckdb.connect(str(db_path))
@@ -203,7 +203,7 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
 
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    db_path = store_dir / "signals.db"
+    db_path = store_dir / "obs.db"
 
     conn = duckdb.connect(str(db_path))
     try:
