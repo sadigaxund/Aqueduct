@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib
 import logging
 from typing import TYPE_CHECKING, Any
+from pyspark.sql.functions import UserDefinedFunction
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -90,7 +91,12 @@ def _register_python_udf(
         )
 
     try:
-        spark.udf.register(udf_id, fn, return_type)
+        # If fn is already a Spark UDF object (class-based or duck-typed with returnType),
+        # don't pass the redundant return_type string.
+        if isinstance(fn, UserDefinedFunction) or hasattr(fn, "returnType"):
+            spark.udf.register(udf_id, fn)
+        else:
+            spark.udf.register(udf_id, fn, return_type)
     except Exception as exc:
         raise UDFError(
             f"UDF {udf_id!r}: spark.udf.register() failed: {exc}"

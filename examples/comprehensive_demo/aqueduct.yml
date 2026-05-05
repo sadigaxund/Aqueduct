@@ -59,9 +59,9 @@ agent:
   on_pending_patches: "warn"
 
   # LLM provider.
-  provider: "ollama"               # "anthropic" | "openai_compat" | "ollama"
+  provider: "openai_compat"        # "anthropic" | "openai_compat" (Ollama: use openai_compat + base_url)
   model: "qwen3:32b"
-  base_url: "http://10.0.0.39:11434"  # required for openai_compat / ollama
+  base_url: "http://10.0.0.39:11434/v1"  # required for openai_compat
 #     max_patches_per_run: 5
 
 #   # Guardrails — deterministically enforced at patch-apply time (not prompt hints)

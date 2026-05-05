@@ -79,7 +79,7 @@ nyc_taxi_demo/
   aqueduct.yml       ← engine config (Spark master, store dir)
   blueprint.yml      ← YOUR pipeline (you build this)
   patches/           ← LLM-generated patches land here
-  .aqueduct/         ← observability store (signals.db, runs.db)
+  .aqueduct/         ← observability store (obs.db)
 ```
 
 ---
@@ -593,7 +593,7 @@ aqueduct run blueprint.yml
 # Check observability
 python -c "
 import duckdb
-con = duckdb.connect('.aqueduct/signals.db')
+con = duckdb.connect('.aqueduct/obs.db')
 print(con.sql('SELECT module_id, records_written, duration_ms FROM module_metrics ORDER BY captured_at').df())
 con.close()
 "
@@ -601,7 +601,7 @@ con.close()
 # Check probe signals (null rates after enrichment)
 python -c "
 import duckdb, json
-con = duckdb.connect('.aqueduct/signals.db')
+con = duckdb.connect('.aqueduct/obs.db')
 rows = con.sql(\"SELECT probe_id, signal_type, payload FROM probe_signals\").fetchall()
 for r in rows:
     print(r[0], r[1], json.loads(r[2]))
@@ -671,14 +671,14 @@ print(df.groupby('pickup_hour')['avg_fare'].mean().sort_index())
 ### KPI from depot store
 ```python
 import duckdb
-con = duckdb.connect('.aqueduct/depot.duckdb')
+con = duckdb.connect('.aqueduct/depot.db')
 print(con.sql("SELECT key, value, updated_at FROM depot ORDER BY updated_at DESC").df())
 ```
 
 ### Run history
 ```python
 import duckdb
-con = duckdb.connect('.aqueduct/runs.db')
+con = duckdb.connect('.aqueduct/obs.db')
 print(con.sql("SELECT run_id, status, started_at, finished_at FROM run_records").df())
 ```
 
