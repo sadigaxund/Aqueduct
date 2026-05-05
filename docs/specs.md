@@ -64,6 +64,9 @@ These names are canonical and used consistently throughout the codebase, documen
 |**Patch**|A structured diff to a Blueprint proposed by the LLM agent or a human. Expressed as a PatchSpec JSON. Applied atomically. Version-controlled in patches/.|
 |**Flow Report**|The post-run column-level quality report. Shows per-column status (OK / Degraded / Error) across each Module, sourced from Probe signals.|
 |**Flow Graph**|The directed acyclic graph (DAG) of Modules extracted from a Blueprint and used for execution planning.|
+|**FailureContext**|The structured failure document assembled by the Surveyor when a pipeline run ends in error. Contains: run metadata, compiled Manifest JSON, ProvenanceMap slice, error message, stack trace, and doctor pre-flight hints. Passed to the LLM self-healing loop.|
+|**PatchSpec**|The JSON document that describes a set of operations to apply to a Blueprint. Produced by the LLM agent or authored by hand. Validated by Pydantic before application. Stored in `patches/pending/` (awaiting review) or `patches/applied/` (committed).|
+|**ProvenanceMap**|A compile-time index of every resolved config value in the Manifest: where it came from (literal, context ref, env var, Arcade inheritance), the original Blueprint expression, and the resolved value. Attached to the Manifest. Used by the LLM prompt (eliminates need to send raw Blueprint YAML), guardrails (resolves `${ctx.*}` before pattern matching), and doctor checks.|
 
 
 # **3. System Architecture**
@@ -542,6 +545,8 @@ modules:
 ```
 
 |**Expansion contract:**  Arcades are fully expanded at Manifest compile time. The Manifest always contains a flat Module list. Spark sees a single flat execution plan with no nesting. Module IDs within Arcades are namespaced (`{arcade_id}__{child_id}`) to prevent collision. The `__` separator is safe for Spark `createTempView` (dots would be parsed as multi-part identifiers). If expansion produces a duplicate ID (e.g. an existing module is already named `arcade__child`), a `CompileError` is raised with a clear message.|
+
+> **Naming constraint:** Blueprint module IDs must not contain `__` (double underscore). Any ID with `__` collides with the Arcade expansion namespace and will cause a `ParseError` at validation time with message: `"Module ID '{id}' contains '__' which is reserved for Arcade expansion. Use a single underscore or hyphen instead."` This is enforced by the Parser before compilation.|
 | :- |
 
 |**ASSERT**|**Inline data quality gate — evaluates rules on a flowing DataFrame, routes failures to spillway or aborts**|
@@ -615,9 +620,18 @@ edges:
 | `freshness` | Batched into one `df.agg()` | Asserts `MAX(column) >= NOW() - max_age_hours`. |
 | `sql` | Batched into one `df.agg()` | Evaluates an aggregate SQL expression; result must be truthy. |
 | `sql_row` | Lazy filter (no action) | Rows failing `expr` go to spillway; passing rows continue. |
+| `spillway_rate` | Batched into one `df.agg()` | Asserts fraction of rows reaching spillway ≤ `max`. Prevents "silent data loss" where the Spark job succeeds but most data was quarantined. |
 | `custom` | Determined by callable | Python fn receives full DataFrame; returns `{passed, message, quarantine_df}`. |
 
-**Performance model:** All aggregate rules (`min_rows`, `freshness`, `sql`) are collected into a single `df.agg()` call. All `null_rate` rules share a single `df.sample(fraction).agg()` call. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters — no Spark action. Net: **at most 2 Spark actions** per Assert module, regardless of rule count.
+**Performance model:** All aggregate rules (`min_rows`, `freshness`, `sql`, `spillway_rate`) are collected into a single `df.agg()` call. All `null_rate` rules share a single `df.sample(fraction).agg()` call. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters — no Spark action. Net: **at most 2 Spark actions** per Assert module, regardless of rule count.
+
+**`spillway_rate` rule example:**
+```yaml
+- type: spillway_rate
+  max: 0.05          # fail if > 5% of input rows are quarantined
+  on_fail: abort     # or trigger_agent to invoke self-healing
+```
+Use this whenever you have `sql_row` or `custom` quarantine rules to prevent the pipeline from "succeeding" with 90% of data silently dropped.
 
 **`on_fail` actions (per rule):**
 
@@ -703,6 +717,10 @@ aqueduct run pipeline.yml --execution-date 2026-03-01
 |**@aq.depot.get(key)**|Reads a value from the Depot KV store. Returns null if key does not exist. Useful for watermarks and last-run state.|
 |**@aq.depot.get(key, default)**|Reads a value from the Depot with a fallback default if the key does not exist.|
 
+> **⚠ Stale-read footgun:** `@aq.depot.get()` is a Tier 1 function — it resolves at compile time, before any Spark job starts. If Pipeline A compiles with `@aq.depot.get('watermarks.orders')` at T=0, and Pipeline B writes a new watermark value at T=1 during A's execution, A has already compiled with the stale T=0 value. This is by design (Manifest is immutable once compiled), but it means overlapping pipeline runs that share a Depot key will each see the value from their own compile time. Design accordingly: write watermarks at Egress time, read them at the next run's compile time. Do not use `@aq.depot.get()` for values that must reflect within-run writes.
+
+> **⚠ `${ctx.*}` and shell env substitution:** The `${ctx.namespace.key}` syntax resembles POSIX shell variable syntax. If your CI system runs `envsubst`, `sed`, or other substitution tools on YAML files before invoking Aqueduct, `${ctx.*}` tokens will be mangled or silently dropped. **Never run env substitution tools on Blueprint YAML files.** Aqueduct reads the file directly; inject runtime values via `--ctx key=value` flags or `AQUEDUCT_CTX_*` environment variables instead.
+
 ## **5.5 UDF Registry (Tier 2)**
 UDFs are not Context values — they operate on DataFrame columns during Spark execution, not on scalar config values. They are registered in a udf\_registry block at the top level of the Blueprint or in a shared udf\_registry.yml file referenced by multiple Blueprints.
 
@@ -711,7 +729,7 @@ udf_registry:
   - id: clean_phone
     label: "Normalise phone to E.164 format"
     lang: python
-    path: udfs/clean_phone.py
+    module: udfs.clean_phone
     entry: clean_phone_fn          # function name within the module
     return_type: STRING            # Spark DDL type string
     deterministic: true
@@ -798,26 +816,26 @@ Table: run_records
   manifest_path TEXT        -- path to compiled Manifest JSON
   started_at    TIMESTAMP
   completed_at  TIMESTAMP
-  status        TEXT        -- running | success | failed | patched | skipped
+  status        TEXT        -- running | success | error | patched | skipped
   patch_count   INTEGER     -- number of patches applied in this run
 ```
 
 ## **6.4 Module Metrics Collection**
 Aqueduct collects per-module I/O metrics using `DataFrame.observe()` (Spark 3.3+) and filesystem inspection. No extra Spark actions are triggered.
 
-**Minimum recommended Spark version: 3.3** for row count collection. On Spark < 3.3, `observe()` is unavailable — `records_read` and `records_written` in `module_metrics` will be 0; `bytes_read`, `bytes_written`, and `duration_ms` are still collected.
+**Minimum recommended Spark version: 3.3** for row count collection. On Spark < 3.3, `observe()` is unavailable — `records_read` and `records_written` in `module_metrics` will be `NULL` (not `0` — `0` would imply a measured result of zero records, which is incorrect). `bytes_read`, `bytes_written`, and `duration_ms` are still collected.
 
 Metrics collected per module:
 
 | Metric | Source | Spark 3.3+ | Spark < 3.3 |
 |---|---|---|---|
-| `records_written` | `df.observe()` on Egress write | ✓ exact | 0 |
+| `records_written` | `df.observe()` on Egress write | ✓ exact | NULL |
 | `bytes_written` | filesystem inspection post-write | ✓ local paths | ✓ local paths |
-| `records_read` | not collected (no write action at Ingress) | 0 | 0 |
+| `records_read` | not collected (no write action at Ingress) | NULL | NULL |
 | `bytes_read` | filesystem inspection at Ingress read | ✓ local paths | ✓ local paths |
 | `duration_ms` | wall-clock around module action | ✓ | ✓ |
 
-Cloud paths (s3://, hdfs://, gs://, abfs://) return 0 for byte metrics — filesystem inspection requires local access.
+Cloud paths (`s3://`, `hdfs://`, `gs://`, `abfs://`) return `NULL` for byte metrics — filesystem inspection requires local path access. `NULL` in any metric field means "not collected", never "zero records processed."
 
 ## **6.5 Flow Report**
 The Flow Report is generated by the Surveyor after each run. It is a per-column, per-Module quality summary sourced from Probe signals. It is stored in the Lineage Store and accessible via aqueduct report <run\_id>.
@@ -997,7 +1015,8 @@ The agent responds exclusively with a PatchSpec JSON object. Any response that i
 
 |**Operation**|**Description**|
 | :- | :- |
-|**replace\_module\_config**|Replace the config block of a named Module. The most common operation. Used to fix wrong paths, bad SQL, incorrect params, wrong format strings.|
+|**replace\_module\_config**|Replace the **entire** config block of a named Module. Use when multiple config keys must change together, or when restructuring the module type. The whole `config:` dict is replaced.|
+|**set\_module\_config\_key**|Set a **single** key inside a module's config block, leaving all other keys intact. Prefer over `replace_module_config` for targeted fixes (path typo, one param, one column name). The key may be a dotted path (e.g. `"schema_hint.columns.order_id"`) for nested values.|
 |**replace\_module\_label**|Update the label of a Module. Used when the agent renames a Module for clarity after restructuring.|
 |**insert\_module**|Insert a new Module at a specified position in the graph. Requires specifying upstream and downstream edges. Used to add a cast step, filter, Probe, or Regulator.|
 |**remove\_module**|Remove a Module and rewire its edges. The agent must specify how to reconnect the graph. Used to eliminate a broken step.|
@@ -1177,13 +1196,12 @@ deployment:
   master_url: "local[*]"]           # overridden per target type
 stores:
   # Root store directory. All runtime DB files are created inside it:
-  #   runs.db     — run records, failure contexts, signal overrides
-  #   signals.db  — probe signals, module metrics
+  #   obs.db      — run records, failure contexts, probe signals, module metrics, signal overrides
   #   lineage.db  — column-level lineage
   #   snapshots/  — schema_snapshot JSON files (one file per probe per run)
   observability:
     backend: duckdb                # duckdb (default) | s3 | gcs | adls
-    path: ".aqueduct"              # root dir; runs.db and signals.db created here
+    path: ".aqueduct"              # root dir; obs.db created here
   lineage:
     backend: duckdb
     path: ".aqueduct"              # must match observability.path; lineage.db created here
@@ -1405,10 +1423,11 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |**aqueduct patch rollback <patch\_id>**|Roll back an applied patch. Atomically restores the Blueprint from patches/backups/ and moves the patch record to patches/rolled\_back/. Only works for patches applied via Aqueduct (which create automatic backups).|
 |**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table\|json\|csv.|
 |**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <source\_table> --column <col> for targeted queries.|
-|**aqueduct signal <signal\_id>**|Set or clear a persistent gate override for a Probe signal (identified by Probe module ID). `--value false` closes the gate for all future runs. `--error "msg"` closes with a reason. `--value true` clears the override, resuming normal Probe evaluation. Omitting all flags prints the current override status. Override stored in `signal_overrides` table in signals.db; Regulator checks it before any run-scoped Probe data.|
+|**aqueduct signal <signal\_id>**|Set or clear a persistent gate override for a Probe signal (identified by Probe module ID). `--value false` closes the gate for all future runs. `--error "msg"` closes with a reason. `--value true` clears the override, resuming normal Probe evaluation. Omitting all flags prints the current override status. Override stored in `signal_overrides` table in `obs.db`; Regulator checks it before any run-scoped Probe data.|
 |**aqueduct depot get <key>**|Read a value from the Depot KV store.|
 |**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
 |**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|
+|**aqueduct runs [blueprint.yml]**|List recent run history from obs.db. Optional `--blueprint` filters by pipeline. `--failed` shows only error runs. `--limit N` (default 20) caps output. Columns: run_id, blueprint_id, status, started_at, finished_at. Status values: `success`, `error`, `patched`, `running`.|
 |**aqueduct check-config**|Validate aqueduct.yml schema without running a pipeline. Prints resolved engine, stores, webhook, and secrets summary. Exit 0 = valid, 1 = invalid. Accepts --config to specify a non-default path.|
 |**aqueduct doctor**|Probe all configured resources end-to-end: config schema, DuckDB stores (depot + observability), secrets provider, LLM endpoint reachability, webhook reachability, Spark connectivity, and object storage auth. Each check is independent. Accepts --config and --skip-spark (skips JVM startup for fast CI use). Exit 0 = all ok/warn/skip, 1 = any check failed.|
 
@@ -1498,22 +1517,269 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 - **On-demand**: Manual invocation from CI/CD pipelines or by the LLM agent via `aqueduct run` after patch application.
 
 
-# **14. Implementation Phases** *(Implementer Reference)*
+# **14. Production Deployment**
 
-> This section is a guide for phased implementation. It is not part of the public specification.
+> This section describes what changes when moving from a local development setup to a production Spark cluster. It covers configuration, path conventions, state persistence, and the LLM self-healing lifecycle in distributed environments.
 
-The recommended build order prioritises fast feedback loops and defers complex subsystems until the core is proven.
+---
 
-| **Phase** | **Deliverable** | **Done when** |
-| :- | :- | :- |
-| **Phase 1 — Parser & Manifest** | YAML → AST → Manifest JSON. Tier 0 context substitution only. No Spark. | `aqueduct compile hello.yml` produces valid Manifest JSON with all `${ctx.*}` tokens substituted. |
-| **Phase 2 — Ingress / Egress** | Executor reads a Parquet file (Ingress) and writes it back out (Egress). Minimal SparkSession management. | `aqueduct run hello.yml` reads a CSV and writes a Parquet file on local Spark. |
-| **Phase 3 — Channel: sql** | Single `op: sql` Channel executing a Spark SQL query. Upstream Module ID registered as temp view. | A Blueprint with `Ingress → Channel (op: sql) → Egress` runs end-to-end. |
-| **Phase 4 — Mock Surveyor** | Surveyor detects job failure and emits a webhook payload. No LLM yet. | A broken SQL query triggers a webhook with the error details. |
-| **Phase 5 — Patch Grammar (manual)** | PatchSpec JSON schema defined. `aqueduct patch apply` reads a hand-written PatchSpec and updates the Blueprint. | A human-authored PatchSpec fixes the broken SQL from Phase 4 when applied via CLI. |
-| **Phase 6 — LLM Integration** | Surveyor packages FailureContext, calls the LLM, validates the PatchSpec response, applies it. | An end-to-end self-healing run: pipeline breaks, LLM proposes a patch, patch is applied, pipeline retries successfully. |
+## **14.1 Deployment Environments**
 
+Aqueduct supports three deployment environments, declared in `aqueduct.yml`:
 
+```yaml
+deployment_env: local        # default — relative paths, local Spark, local DuckDB
+# deployment_env: cluster    # Spark standalone / YARN — shared FS, driver is persistent
+# deployment_env: cloud      # K8s / EMR / Dataproc — ephemeral driver, object storage
+```
+
+The value affects:
+- Path validation in `aqueduct doctor` (warns on local paths in `cluster`/`cloud` mode)
+- Self-healing patch lifecycle guidance
+- Observability state persistence guidance
+
+---
+
+## **14.2 Spark Cluster Configuration**
+
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is fully controlled via environment variables and config — no code changes required.
+
+**Environment variables:**
+
+| Variable | Purpose | Example |
+|---|---|---|
+| `AQ_SPARK_MASTER` | Spark master URL | `yarn`, `spark://host:7077`, `k8s://https://...` |
+| `AQ_SPARK_EXECUTOR_CORES` | Cores per executor | `4` |
+| `AQ_SPARK_EXECUTOR_MEMORY` | Memory per executor | `8g` |
+| `AQ_SPARK_DRIVER_MEMORY` | Driver memory | `4g` |
+
+**`aqueduct.yml` Spark config block:**
+```yaml
+spark:
+  master: "${AQ_SPARK_MASTER}"
+  config:
+    spark.sql.shuffle.partitions: "200"
+    spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+```
+
+**Running on a cluster:**
+```bash
+# YARN client mode (driver on edge node)
+AQ_SPARK_MASTER=yarn aqueduct run pipeline.yml
+
+# Spark standalone
+AQ_SPARK_MASTER=spark://master:7077 aqueduct run pipeline.yml
+
+# Kubernetes — driver runs as a pod
+AQ_SPARK_MASTER="k8s://https://cluster-endpoint" aqueduct run pipeline.yml
+```
+
+In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observability state and patch history survive pod restarts.
+
+---
+
+## **14.3 Path Conventions for Production**
+
+**Rule: all I/O paths in production Blueprints must be cloud/HDFS URIs, never local filesystem paths.**
+
+Local paths (`data/yellow/*.parquet`) are relative to the working directory of the driver process. In a container or remote driver, that directory contains no data.
+
+**Correct pattern — context refs resolved from environment variables:**
+```yaml
+context:
+  paths:
+    yellow_input: "${YELLOW_DATA_PATH}"    # e.g. s3a://my-bucket/yellow/
+    output:       "${OUTPUT_PATH}"         # e.g. s3a://my-bucket/output/
+
+modules:
+  - id: yellow_ingress
+    type: Ingress
+    config:
+      path: "${ctx.paths.yellow_input}"
+      format: parquet
+```
+
+**`allowed_paths` guardrail for production:**
+```yaml
+agent:
+  guardrails:
+    allowed_paths:
+      - "s3a://my-bucket/**"
+      - "hdfs://namenode/**"
+      - "gs://my-gcs-bucket/**"
+    forbidden_ops:
+      - remove_module
+      - insert_module
+```
+
+In `cluster` or `cloud` deployment environments, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
+
+---
+
+## **15.4 Observability State Persistence**
+
+`obs.db` (DuckDB) runs on the driver — always correct. Spark workers never access it.
+
+| Deployment | Driver persistence | Action required |
+|---|---|---|
+| Local / dev | Permanent | None |
+| YARN client mode | Permanent (edge node) | None |
+| Spark standalone | Permanent (driver host) | None |
+| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
+
+**`store_dir` config:**
+```yaml
+# aqueduct.yml
+store_dir: "/mnt/aqueduct-state"   # PVC mount in K8s, or shared NFS path
+```
+
+---
+
+## **15.5 LLM Service Configuration**
+
+In production, LLM inference runs as a remote HTTP service.
+
+**OpenAI-compatible endpoint (vLLM, Bedrock proxy, Azure OpenAI, together.ai, etc.):**
+```yaml
+agent:
+  provider: openai_compat
+  base_url: "${LLM_BASE_URL}"
+  model: "${LLM_MODEL}"
+  llm_timeout: 60
+  approval_mode: human
+```
+
+**Anthropic API:**
+```yaml
+agent:
+  provider: anthropic
+  model: claude-opus-4-7-20251001
+  approval_mode: human
+```
+
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`.
+
+---
+
+## **15.6 Danger Settings**
+
+Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false` (safe). If any key is set to `true`, Aqueduct prints a startup warning to stderr listing which danger settings are active.
+
+```yaml
+danger:
+  allow_aggressive_patching: false  # if true, agent permanently modifies Blueprint without human review
+  allow_full_probe_actions: false   # if true, Probes may run expensive Spark actions (null_rates, value_distribution, etc.)
+```
+
+**`allow_aggressive_patching`:** Gates `approval_mode: aggressive`. If this is `false` (default) and `approval_mode: aggressive` is set, Aqueduct raises a `ConfigError` at startup with an explanation. Can also be overridden per-run via CLI flag `--allow-aggressive` without touching config.
+
+**`allow_full_probe_actions`:** Probes default to zero-cost observability (schema snapshots, SparkListener metrics). Opt-in signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require Spark sampling actions — `count()`, `agg()`, `collect()` on a sample. These are safe in dev but add latency in prod. This flag gates those signals globally. Even when `false`, Probes still emit schema snapshots and SparkListener row/byte counts.
+
+**Never set `danger.*: true` in a production `aqueduct.yml` checked into git.** Use environment-specific config overrides or per-run CLI flags.
+
+---
+
+## **15.7 Patch Lifecycle in Production**
+
+The patch lifecycle differs significantly between development and production.
+
+### Development (local)
+```
+pipeline fails → LLM generates patch → patch written to patches/pending/
+→ human reviews → aqueduct patch apply → Blueprint updated → re-run
+```
+`approval_mode: auto` or `aggressive` is acceptable locally — git provides rollback.
+
+### Production (recommended)
+
+**Rule: in production, use `approval_mode: human`. The LLM must never autonomously modify a Blueprint managed by CI/CD.**
+
+Recommended flow:
+```
+pipeline fails → webhook fires (alert to Slack/PagerDuty)
+→ LLM generates patch → staged to patches/pending/
+→ operator reviews patch JSON
+→ aqueduct patch apply on a git branch → PR opened
+→ CI/CD validates (aqueduct validate) → human approves → merge → redeploy
+```
+
+**`approval_mode: ci` (Phase 20):**
+When set, instead of writing to `patches/pending/`, Aqueduct fires a `POST` request to `agent.ci_webhook_url` with:
+```json
+{
+  "run_id": "...",
+  "blueprint_id": "...",
+  "patch": { /* PatchSpec JSON */ },
+  "patch_diff": "--- before\n+++ after\n...",
+  "rationale": "LLM root cause + fix description",
+  "failed_module": "...",
+  "confidence": 0.87
+}
+```
+The receiving CI system (GitHub Actions, GitLab CI, Jenkins, custom script) creates the branch and PR. Aqueduct does not couple to any git provider — a reference GitHub Actions handler ships in `examples/ci/`. This is the recommended production pattern.
+
+**`on_patch_pending` webhook:** When a patch is staged to `patches/pending/` (`approval_mode: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification. Without this, `approval_mode: human` is impractical in team settings.
+
+### `patches/rules.md` — project-specific LLM rules
+
+`patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt on every self-healing call. Use it to encode project-specific repair rules the LLM should always follow:
+
+```markdown
+## Project rules
+- All I/O paths must be `s3a://my-bucket/**` globs — never local paths.
+- Never change `mode: overwrite` on any Egress — data loss risk.
+- The context key `paths.yellow_path` must always end in `*.parquet`.
+```
+
+No code change needed to add a rule. Edit the file, commit it, rules apply on next run.
+
+### `patches/` directory in production
+
+| Directory | Commit to git? | Notes |
+|---|---|---|
+| `patches/applied/` | **Yes** | Audit trail |
+| `patches/pending/` | No (`.gitignore`) | Ephemeral — human review staging area |
+| `patches/rejected/` | No (`.gitignore`) | Ephemeral |
+| `patches/rules.md` | **Yes** | Project-specific LLM repair rules |
+
+### Git rollback
+
+`aqueduct rollback` (uses `git revert`) is a **development tool only**.
+
+In production: rollback = revert the commit in git → CI/CD redeployment. Do not run `git` commands on production driver nodes.
+
+---
+
+## **15.8 Security Considerations**
+
+| Concern | Mitigation |
+|---|---|
+| API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
+| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
+| `aggressive` mode in production | Requires `danger.allow_aggressive_patching: true` — do not set in prod config. |
+| `obs.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
+| Patch tampering | Phase 25 (planned): patch signature verification for `aggressive` mode. |
+| `danger.*` settings in shared config | Never commit `danger.*: true` to a shared/prod `aqueduct.yml`. Use env-specific overrides or per-run CLI flags. |
+
+---
+
+## **15.9 Production Readiness Checklist**
+
+Before promoting a Blueprint to production:
+
+- [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
+- [ ] `aqueduct doctor --blueprint pipeline.yml` passes with no errors in `cluster`/`cloud` deployment_env
+- [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
+- [ ] `agent.approval_mode: human` or `ci` (not `auto` or `aggressive`)
+- [ ] No `danger.*: true` in production `aqueduct.yml`
+- [ ] API keys injected via environment, not in YAML
+- [ ] `store_dir` points to a persistent path (PVC in K8s, persistent edge node in YARN)
+- [ ] `patches/pending/` and `patches/rejected/` in `.gitignore`
+- [ ] `patches/applied/` and `patches/rules.md` committed to git
+- [ ] `agent.webhooks.on_patch_pending` configured if using `approval_mode: human` in a team setting
+
+---
 
 *AQUEDUCT — System Design & Implementation Reference — v1.0*
 v1.0  —  Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Probe · Regulator · Spillway · Arcade · Surveyor

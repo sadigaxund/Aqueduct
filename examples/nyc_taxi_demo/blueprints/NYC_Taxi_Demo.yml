@@ -10,7 +10,7 @@ description: |
 agent:
   approval_mode: human
   on_pending_patches: warn
-  max_patches_per_run: 1
+  max_patches_per_run: 0
   guardrails:
     allowed_paths:
       - "data/*"
@@ -23,11 +23,18 @@ agent:
 
 context:
   paths:
-    yellow_path: "/home/sakhund/Personal/Projects/Aqueduct/examples/nyc_taxi_demo/data/yellow/*.parquet"
+    yellow_path: "data/yellow/*.parquet"
     green_path: "data/green/*.parquet"
     zones_path: "data/zones/taxi_zone_lookup.csv"
     output_path: "data/output"
     dead_letter_path: "data/dead_letter"
+
+udf_registry:
+  - id: calc_duration_min
+    label: "Calculate Trip Duration"
+    lang: python
+    module: udfs/taxi_math.py
+    entry: calc_duration_min
 
 modules:
 
@@ -63,9 +70,8 @@ modules:
       path: "${ctx.paths.zones_path}"
       options:
         header: "true"
-        # inferSchema: "true"
 
-  # ── 2. Merge All Data ──────────────────────────────────────────
+  # ── 2. Merge and Enrich Data ──────────────────────────────────
 
   - id: all_taxi_trips
     type: Funnel
@@ -74,11 +80,90 @@ modules:
       mode: union_all
       inputs: [yellow_process, green_process]
 
+  - id: trip_features
+    type: Channel
+    label: "Feature Engineering (UDF)"
+    config:
+      op: sql
+      udfs: [calc_duration_min]
+      query: |
+        SELECT 
+          *,
+          calc_duration_min(pickup_datetime, dropoff_datetime) as duration_min
+        FROM all_taxi_trips
+
+  - id: enriched_trips
+    type: Channel
+    label: "Enrich with Zone Names"
+    config:
+      op: join
+      left: trip_features
+      right: taxi_zone_lookup
+      join_type: left
+      condition: "trip_features.PULocationID = taxi_zone_lookup.LocationID"
+
+  # ── 3. Branch and Output ──────────────────────────────────────
+
+  - id: split_by_borough
+    type: Junction
+    label: "Route by Borough"
+    config:
+      mode: conditional
+      branches:
+        - id: manhattan
+          label: "Manhattan Trips"
+          condition: "Borough = 'Manhattan'"
+        - id: outer
+          label: "Outer Borough Trips"
+          condition: "Borough != 'Manhattan' OR Borough IS NULL"
+
+  - id: manhattan_output
+    type: Egress
+    label: "Save Manhattan Trips"
+    config:
+      format: parquet
+      path: "${ctx.paths.output_path}/manhattan"
+      mode: overwrite
+
+  - id: outer_output
+    type: Egress
+    label: "Save Outer Borough Trips"
+    config:
+      format: parquet
+      path: "${ctx.paths.output_path}/outer"
+      mode: overwrite
+
+  - id: final_stats
+    type: Probe
+    label: "Final Data Observability"
+    attach_to: enriched_trips
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+        - type: distinct_count
+          columns: [Borough, taxi_type]
+        - type: value_distribution
+          columns: [fare_amount, trip_distance, total_amount, duration_min]
 
 edges:
   - from: yellow_process
     to: all_taxi_trips
   - from: green_process
     to: all_taxi_trips
+  - from: all_taxi_trips
+    to: trip_features
+  - from: trip_features
+    to: enriched_trips
+  - from: taxi_zone_lookup
+    to: enriched_trips
+  - from: enriched_trips
+    to: split_by_borough
+  - from: split_by_borough
+    to: manhattan_output
+    port: manhattan
+  - from: split_by_borough
+    to: outer_output
+    port: outer
 
 
