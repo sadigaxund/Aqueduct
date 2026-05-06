@@ -22,21 +22,11 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 ---
 
-## Open-Core Model
+## License & Philosophy
 
-**Aqueduct Core is Apache 2.0 licensed and always will be.**
+**Aqueduct is Apache 2.0 licensed.**
 
-You can run it locally, in CI, or on a production Spark cluster - free, forever.
-
-A commercial frontend, **Aqueduct Platform**, adds:
-- Centralized dashboards for all your pipelines
-- Team collaboration and RBAC
-- Managed Depot (persistent KV store)
-- Audit logs of every LLM patch
-
-The Core engine emits a documented webhook event stream so you can integrate it with any frontend: ours, yours, or a third-party.
-
-**This repository contains the full engine. No telemetry. No proprietary code.**
+This repository contains the full, production-ready engine. There are no "pro" versions, no telemetry, and no proprietary lock-ins. You can run it locally, in CI, or on a production Spark cluster—free and open, forever.
 
 ---
 

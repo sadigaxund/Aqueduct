@@ -8,7 +8,7 @@ description: |
   Ingests yellow and green taxi trip data, cleans, standardizes, and merges.
 
 agent:
-  approval_mode: human
+  approval_mode: disabled
   on_pending_patches: warn
   max_patches_per_run: 0
   guardrails:
@@ -33,8 +33,9 @@ udf_registry:
   - id: calc_duration_min
     label: "Calculate Trip Duration"
     lang: python
-    module: udfs/taxi_math.py
+    module: udfs.taxi_math
     entry: calc_duration_min
+    return_type: double
 
 modules:
 

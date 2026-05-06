@@ -47,16 +47,13 @@ however we have a python module with that name, I very much liked something simi
 
 13. Test if the patch/commit/apply and rollback works as expected.
 
-14. Fix Issue with UDFs
-
-
-15 FOUND ISSUE with hallucinating shitty '_key', i think:
-
-PatchSpec op names: §8.5 lists replace_module_config, but guardrails in §8.6 and README mention set_module_config_key. Standardize on one.
-
 
 16. Add Audit instructions to Specs.md so that developer would have guideline on how to fix the faulty blueprints.
 
 
 
+17. Fix Issue with UDFs. I want to make sure that users find it straightforward when defining their UDFs, it should be as close to native spark as possible. For now what i envision is this, correct if anything: within UDFs folder you can either have a single python file or a module (which naturally has to have __init__.py), or other languages that spark supports for User Defined Functions. More
 
+18. Make clear this parts of specs.md :
+1. how to debug properly
+2. how the healing process is done
