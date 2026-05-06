@@ -1410,35 +1410,65 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 # **11. CLI Reference**
 ## **11.1 Core Commands**
 
-|**Command**|**Description**|
-| :- | :- |
-|**aqueduct new \<name\>**|Scaffold a minimal valid Blueprint file named \<name\>.yml in the current directory. Generates a hello-world Ingress → Channel → Egress pipeline with default context variables and local Spark config. Designed so the user can run it immediately to verify their Spark connection.|
-|**aqueduct run <blueprint.yml>**|Parse, compile, plan, and execute a Blueprint. Accepts --profile, --ctx key=val, --config, --run-id, --store-dir, --webhook, --resume, --from, --to, --execution-date.|
-|**aqueduct validate <blueprint.yml>**|Parse and validate a Blueprint without compiling or running. Reports all schema errors. Exit code 0 = valid.|
-|**aqueduct compile <blueprint.yml>**|Parse, compile, and write the Manifest to stdout or --output path. Accepts --profile, --ctx, --execution-date. Useful for inspecting the resolved Manifest before running.|
-|**aqueduct test <test\_file.yml>**|Run isolated module tests from a YAML test file. Executes Channel/Junction/Funnel/Assert against inline data. No Ingress/Egress. Uses same SparkSession config as `aqueduct run`. Accepts --blueprint, --config, --quiet.|
-|**aqueduct heal <run\_id>**|Manually trigger the LLM agent loop for a failed run. Optionally scoped with --module <module\_id> to focus the agent on a specific Module.|
-|**aqueduct patch apply <patch\_id>**|Apply a pending Patch. Recompiles the Manifest and resumes execution from the patched Module.|
-|**aqueduct patch reject <patch\_id>**|Reject a pending Patch. Records rejection reason (--reason flag). Pipeline remains in failed state.|
-|**aqueduct patch rollback <patch\_id>**|Roll back an applied patch. Atomically restores the Blueprint from patches/backups/ and moves the patch record to patches/rolled\_back/. Only works for patches applied via Aqueduct (which create automatic backups).|
-|**aqueduct report <run\_id>**|Print the Flow Report for a completed or failed run. Accepts --format table\|json\|csv.|
-|**aqueduct lineage <pipeline\_id>**|Print the ColumnLineageGraph for a pipeline. Accepts --from <source\_table> --column <col> for targeted queries.|
-|**aqueduct signal <signal\_id>**|Set or clear a persistent gate override for a Probe signal (identified by Probe module ID). `--value false` closes the gate for all future runs. `--error "msg"` closes with a reason. `--value true` clears the override, resuming normal Probe evaluation. Omitting all flags prints the current override status. Override stored in `signal_overrides` table in `obs.db`; Regulator checks it before any run-scoped Probe data.|
-|**aqueduct depot get <key>**|Read a value from the Depot KV store.|
-|**aqueduct depot set <key> <value>**|Write a value to the Depot KV store. Requires the key to have access: readwrite.|
-|**aqueduct depot list [prefix]**|List all Depot keys, optionally filtered by prefix.|
-|**aqueduct runs [blueprint.yml]**|List recent run history from obs.db. Optional `--blueprint` filters by pipeline. `--failed` shows only error runs. `--limit N` (default 20) caps output. Columns: run_id, blueprint_id, status, started_at, finished_at. Status values: `success`, `error`, `patched`, `running`.|
-|**aqueduct check-config**|Validate aqueduct.yml schema without running a pipeline. Prints resolved engine, stores, webhook, and secrets summary. Exit 0 = valid, 1 = invalid. Accepts --config to specify a non-default path.|
-|**aqueduct doctor**|Probe all configured resources end-to-end: config schema, DuckDB stores (depot + observability), secrets provider, LLM endpoint reachability, webhook reachability, Spark connectivity, and object storage auth. Each check is independent. Accepts --config and --skip-spark (skips JVM startup for fast CI use). Exit 0 = all ok/warn/skip, 1 = any check failed.|
+|**Command**|**Description**|**Key Flags**|
+| :- | :- | :- |
+|`aqueduct init <name>`|Scaffold a new project in the current directory.|`--name`|
+|`aqueduct validate <blueprint.yml>`|Validate Blueprint schema and logic.|(none)|
+|`aqueduct compile <blueprint.yml>`|Compile to a resolved Manifest JSON.|`-p/--profile`, `--ctx`, `--execution-date`, `-o/--output`|
+|`aqueduct run <blueprint.yml>`|Execute a Blueprint on Spark.|(see Run Flags below)|
+|`aqueduct test <test_file.yml>`|Run isolated module tests.|`--blueprint`, `--config`, `--quiet`|
+
+### **11.2 Observability Commands**
+
+|**Command**|**Description**|**Key Flags**|
+| :- | :- | :- |
+|`aqueduct runs [blueprint]`|List recent run history from `obs.db`.|`--blueprint`, `--failed`, `--last <N>`, `--config`|
+|`aqueduct report <run_id>`|Print Flow Report for a run.|`--format <table|json|csv>`, `--config`, `--store-dir`|
+|`aqueduct lineage <blueprint>`|Print column-level lineage graph.|`--from <table_id>`, `--column <col>`, `--format <table|json>`|
+|`aqueduct log <blueprint.yml>`|Show git history with patch metadata.|`--format <table|json>`|
+
+### **11.3 Self-Healing & Signal Commands**
+
+|**Command**|**Description**|**Key Flags**|
+| :- | :- | :- |
+|`aqueduct heal <run_id>`|Manually trigger LLM healing for a failure.|`--module <module_id>`, `--config`, `--patches-dir`|
+|`aqueduct signal <signal_id>`|Set/clear persistent gate overrides.|`--value <true|false>`, `--error <msg>`, `--config`|
+
+### **11.4 Patch Management Commands**
+
+|**Command**|**Description**|**Key Flags**|
+| :- | :- | :- |
+|`aqueduct patch list`|List patches in the lifecycle.|`--blueprint`, `--status <pending|applied|rejected|all>`|
+|`aqueduct patch apply <file>`|Apply a pending patch to a Blueprint.|`--blueprint` (required), `--patches-dir`|
+|`aqueduct patch reject <ref>`|Reject a pending patch with a reason.|`--reason` (required), `--patches-dir`|
+|`aqueduct patch commit`|Commit applied patches to git.|`--blueprint` (required), `--patches-dir`|
+|`aqueduct patch discard`|Revert Blueprint to git HEAD.|`--blueprint` (required), `--patches-dir`|
+|`aqueduct rollback <blueprint>`|Revert commit containing a specific patch.|`--to <patch_id>`, `--hard` (destructive)|
+
+### **11.5 System Integrity Commands**
+
+|**Command**|**Description**|**Key Flags**|
+| :- | :- | :- |
+|`aqueduct check-config`|Validate `aqueduct.yml` schema.|`--config`|
+|`aqueduct doctor`|Probe all resources (Spark, DBs, Cloud).|`--config`, `--skip-spark`, `--blueprint`|
+
+### **11.6 Key Flags for `aqueduct run`**
+
+Detailed reference for the most common command:
 
 **Key flags for `aqueduct run`:**
 
 | Flag | Description |
 | :- | :- |
-| `--from <module_id>` | Start execution at this module. Modules before it in the DAG are skipped (status=skipped). Their upstream data must already exist (e.g., from a prior run or external write). |
-| `--to <module_id>` | Stop execution after this module. All its ancestors run normally; modules after are skipped. |
-| `--execution-date YYYY-MM-DD` | Logical execution date. All `@aq.date.*` functions evaluate relative to this date instead of the system clock. Required for idempotent backfills. |
-| `--resume <run_id>` | Resume from checkpoints written by a prior run. Modules with a `_aq_done` checkpoint marker are skipped. |
+| `--config <path>` | Path to the engine configuration file. Default: `aqueduct.yml` in the current directory. |
+| `--profile <name>` | Activate a specific block in `context_profiles:`. Overrides default `context:` values. |
+| `--ctx <key=val>` | Override a Context Registry variable. Repeatable. Higher priority than profiles or YAML defaults. |
+| `--execution-date <ISO>` | Pin logical date for `@aq.date.*` and `@aq.runtime.timestamp()`. Format: `YYYY-MM-DD`. Enables idempotent backfills. |
+| `--from <module_id>` | Start execution at this module (inclusive). Upstream modules are skipped. Requires their output data to already exist. |
+| `--to <module_id>` | Stop execution after this module (inclusive). Downstream modules are skipped. |
+| `--resume <run_id>` | Resume a failed run from its last successful checkpoints. Skips all modules marked as `_aq_done` in the previous attempt. |
+| `--run-id <uuid>` | Force a specific UUID for this run. Useful for tracking runs across external systems. |
+| `--store-dir <path>` | Override the default `.aqueduct` directory for observability and state storage. |
 
 **Sub-DAG execution example:**
 
@@ -1459,9 +1489,6 @@ Architecturally compatible with Aqueduct's Module model — a streaming Ingress 
 
 ### **MLOps Integration**
 A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI endpoint) is architecturally straightforward. Feature store reads as Ingress modules are natural. The open question is whether Aqueduct should own training pipeline orchestration or defer to MLflow Pipelines / Vertex AI Pipelines. Recommendation: ML inference as a built-in Channel op type in v1.1. Training orchestration out of scope for v1.
-
-### **Visual Graph Editor (UI)**
-The Blueprint YAML is always the source of truth. The UI is a visualisation and editing layer that reads and writes valid Blueprint YAML — never a separate representation. Module labels are shown in the UI; Module IDs are managed internally. The UI must enforce the same JSON Schema validation as the Parser. Full UI specification is a separate document.
 
 ### **Multi-pipeline Orchestration**
 Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies (pipeline A must complete before pipeline B starts) are handled externally via Depot watermarks and standard orchestrators (Airflow, Prefect, etc.) triggering aqueduct run commands. A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential v1.2 feature.
