@@ -1,0 +1,19 @@
+aqueduct_config: "1.0"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  obs:
+    path: ".aqueduct/obs.db"
+  lineage:
+    path: ".aqueduct/lineage.db"
+  depot:
+    path: ".aqueduct/depot.db"
+
+agent:
+  provider: "anthropic"
+  model: "claude-sonnet-4-6"
+  # ANTHROPIC_API_KEY env var required for LLM self-healing
