@@ -1,0 +1,32 @@
+id: 03.healing.demo
+name: 03-healing-demo
+
+context:
+  input_path: "data/input"
+  output_path: "data/output"
+
+modules:
+  - id: ingest
+    type: Ingress
+    config:
+      format: parquet
+      path: "${ctx.input_path}"
+
+  - id: transform
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT * FROM ingest"
+
+  - id: output
+    type: Egress
+    config:
+      format: parquet
+      path: "${ctx.output_path}"
+      mode: overwrite
+
+edges:
+  - from: ingest
+    to: transform
+  - from: transform
+    to: output
