@@ -178,21 +178,21 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ Ingress → Probe (schema_snapshot) → Egress blueprint returns `ExecutionResult(status="success")`
 
 ### `module_metrics` / `df.observe()` collection
-- ⏳ `observe_df()` on Spark 3.3+: returns `(observed_df, Observation)` with correct alias
-- ⏳ `observe_df()` on Spark < 3.3 (or mock): returns `(original_df, None)` — no crash
-- ⏳ `get_observation(obs, alias)` returns correct count after action fired
-- ⏳ `get_observation(None, alias)` returns 0
-- ⏳ `dir_bytes()` on existing local file: returns non-zero size
-- ⏳ `dir_bytes()` on existing local directory: returns sum of file sizes
-- ⏳ `dir_bytes()` on cloud path (s3://...): returns 0
-- ⏳ `dir_bytes()` on nonexistent path: returns 0
+- ✅ `observe_df()` on Spark 3.3+: returns `(observed_df, Observation)` with correct alias
+- ✅ `observe_df()` on Spark < 3.3 (or mock): returns `(original_df, None)` — no crash
+- ✅ `get_observation(obs, alias)` returns correct count after action fired
+- ✅ `get_observation(None, alias)` returns 0
+- ✅ `dir_bytes()` on existing local file: returns non-zero size
+- ✅ `dir_bytes()` on existing local directory: returns sum of file sizes
+- ✅ `dir_bytes()` on cloud path (s3://...): returns 0
+- ✅ `dir_bytes()` on nonexistent path: returns 0
 - ✅ `_write_stage_metrics()` creates `module_metrics` table if absent and inserts one row
 - ✅ `_write_stage_metrics()` with `store_dir=None` is a no-op
-- ⏳ Egress succeeds → `module_metrics` row has `records_written > 0` (Spark 3.3+, local write)
-- ⏳ Egress succeeds → `module_metrics` row has `bytes_written > 0` for local path
-- ⏳ Egress succeeds → `module_metrics` row has `duration_ms > 0`
-- ⏳ Ingress succeeds → `module_metrics` row has `bytes_read > 0` for local path, `records_read = 0`
-- ⏳ Channel/Junction/Funnel → `module_metrics` row has `duration_ms > 0`, other fields zero
+- ✅ Egress succeeds → `module_metrics` row has `records_written > 0` (Spark 3.3+, local write)
+- ✅ Egress succeeds → `module_metrics` row has `bytes_written > 0` for local path
+- ✅ Egress succeeds → `module_metrics` row has `duration_ms > 0`
+- ✅ Ingress succeeds → `module_metrics` row has `bytes_read > 0` for local path, `records_read = 0`
+- ✅ Channel/Junction/Funnel → `module_metrics` row has `duration_ms > 0`, other fields zero
 
 ### Assert module
 - ✅ `schema_match` passes: zero Spark action triggered
@@ -319,18 +319,18 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ HTTP 4xx response does not raise — warning logged to stderr
 
 ### Webhook scopes
-- ⏳ `on_success` webhook fires after successful run (mock HTTP server)
-- ⏳ `on_success` webhook NOT fired when run fails
-- ⏳ `on_success: null` (default) — no webhook call made on success
-- ⏳ `on_success` simple string URL form accepted by `WebhooksConfig`
-- ⏳ `on_success` template vars: `${run_id}`, `${blueprint_id}`, `${blueprint_name}`, `${module_count}` resolved in payload
-- ⏳ `on_failure_webhook` on module fires when retry exhausts (mock HTTP server)
-- ⏳ `on_failure_webhook` fires even when `on_exhaustion=alert_only` (blueprint continues)
-- ⏳ `on_failure_webhook` fires even when `on_exhaustion=abort` (blueprint fails)
-- ⏳ `on_failure_webhook` simple string URL form accepted by schema
-- ⏳ `on_failure_webhook` full dict form (url, method, payload, headers) accepted by schema
-- ⏳ `on_failure_webhook` template vars: `${module_id}`, `${error_message}`, `${error_type}`, `${run_id}`, `${blueprint_id}` resolved
-- ⏳ `on_failure_webhook=None` (default) — no per-module webhook call made
+- ✅ `on_success` webhook fires after successful run (mock HTTP server)
+- ✅ `on_success` webhook NOT fired when run fails
+- ✅ `on_success: null` (default) — no webhook call made on success
+- ✅ `on_success` simple string URL form accepted by `WebhooksConfig`
+- ✅ `on_success` template vars: `${run_id}`, `${blueprint_id}`, `${blueprint_name}`, `${module_count}` resolved in payload
+- ✅ `on_failure_webhook` on module fires when retry exhausts (mock HTTP server)
+- ✅ `on_failure_webhook` fires even when `on_exhaustion=alert_only` (blueprint continues)
+- ✅ `on_failure_webhook` fires even when `on_exhaustion=abort` (blueprint fails)
+- ✅ `on_failure_webhook` simple string URL form accepted by schema
+- ✅ `on_failure_webhook` full dict form (url, method, payload, headers) accepted by schema
+- ✅ `on_failure_webhook` template vars: `${module_id}`, `${error_message}`, `${error_type}`, `${run_id}`, `${blueprint_id}` resolved
+- ✅ `on_failure_webhook=None` (default) — no per-module webhook call made
 
 ### `surveyor.py` — `Surveyor`
 - ✅ `start()` creates `.aqueduct/obs.db` and tables if not existing
@@ -461,7 +461,7 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ valid aqueduct.yml → returns correctly populated `AqueductConfig`
 - ✅ invalid YAML syntax → `ConfigError`
 - ✅ unknown top-level key → `ConfigError` (extra="forbid")
-- ✅ unknown nested key in `deployment` → `ConfigError`
+- ✅ unknown nested key in deployment → `ConfigError`
 
 ### `AqueductConfig` defaults
 - ✅ `deployment.target` defaults to `"local"`
@@ -476,8 +476,8 @@ Spark artifacts are isolated to `/tmp/`:
 - ✅ `probes.max_sample_rows` defaults to `100`
 - ✅ `secrets.provider` defaults to `"env"`
 - ✅ `webhooks.on_failure` defaults to `None`
-- ⏳ `webhooks.on_success` defaults to `None`
-- ⏳ `webhooks.on_success` string URL coerced to `WebhookEndpointConfig`
+- ✅ `webhooks.on_success` defaults to `None`
+- ✅ `webhooks.on_success` string URL coerced to `WebhookEndpointConfig`
 - ✅ `AqueductConfig` is frozen; mutation raises `ValidationError`
 
 ### Config file overrides
@@ -693,7 +693,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 391 passed, 4 skipped, 1 xfailed. Coverage: 86.63%.
+- **Status**: 648 passed, 4 skipped, 1 xpassed. Coverage: 72%.
 Issues reported in:
 - None
 ---
@@ -755,7 +755,7 @@ Issues reported in:
 - ✅ `_selector_included`: from_module not in manifest → raises `ExecuteError` with clear message
 - ✅ `_selector_included`: to_module not in manifest → raises `ExecuteError` with clear message
 - ✅ executor: module not in `included_ids` → `ModuleResult(status="skipped")`, frame_store not populated
-- ⏳ executor: skipped upstream + included downstream → frame_store miss produces natural `ExecutionResult(status="error")` with clear message
+- ✅ executor: skipped upstream + included downstream → frame_store miss produces natural `ExecutionResult(status="error")` with clear message
 - ✅ end-to-end: `--from clean_orders` skips Ingress module; ExecutionResult includes skipped Ingress entry
 - ✅ end-to-end: `--from A --to B` on 3-module chain A→B→C: C status="skipped", A+B execute
 
@@ -771,8 +771,8 @@ Issues reported in:
 - ✅ `runtime_timestamp()` with execution_date set → `"2026-01-15T00:00:00+00:00"` (midnight UTC)
 - ✅ `runtime_timestamp()` without execution_date → current UTC timestamp (not midnight)
 - ✅ `compile()` with `execution_date=date(2026,1,15)` passed through to `AqFunctions`; `@aq.date.today()` resolves to `"2026-01-15"` in Manifest context
-- ⏳ CLI `--execution-date 2026-01-15` parses to `date(2026,1,15)` and passed to compiler
-- ⏳ CLI `--execution-date` invalid format → click error with clear message
+- ✅ CLI `--execution-date 2026-01-15` parses to `date(2026,1,15)` and passed to compiler
+- ✅ CLI `--execution-date` invalid format → click error with clear message
 
 ### LLM Guardrails — `aqueduct/patch/apply.py` + `aqueduct/parser/`
 
@@ -787,11 +787,11 @@ Issues reported in:
 - ✅ patch `set_module_config_key` with `key=path`, value NOT matching any `allowed_paths` → `PatchError` raised
 - ✅ patch with non-path key (e.g. `key=format`) → no path violation even if `allowed_paths` set
 - ✅ no `agent.guardrails` in Blueprint → unrestricted (no error)
-- ⏳ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
+- ✅ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
 - ✅ `GuardrailsConfig` round-trips through schema → parser → model (empty defaults)
 - [✅] `test_agent_config_schema_parses_allowed_paths`
 - [✅] `test_patch_rollback_restores_blueprint` (updated to Git-based CLI)
-- ⏳ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
+- ✅ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
 
 ### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
 
@@ -811,7 +811,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `op: join` `broadcast_side: left` → `/*+ BROADCAST(left) */` hint in SQL
 - ✅ `op: join` generates correct `LEFT JOIN` / `INNER JOIN` SQL
 - ✅ unsupported `op` value → `ChannelError`
-- ⏳ end-to-end: Ingress × 2 → Channel(op: join) → Egress — joined rows correct (Spark test)
+- ✅ end-to-end: Ingress × 2 → Channel(op: join) → Egress — joined rows correct (Spark test)
 
 #### SQL Macros — `aqueduct/compiler/macros.py`
 
@@ -825,48 +825,48 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `resolve_macros_in_config` recurses into dict values
 - ✅ `resolve_macros_in_config` recurses into list items
 - ✅ `resolve_macros_in_config` passes through non-string values unchanged
-- ⏳ full compile: macros in Blueprint → expanded in Manifest query string (no `{{` in Manifest)
-- ⏳ end-to-end: Ingress → Channel(macro in query) → Egress runs correctly
+- ✅ full compile: macros in Blueprint → expanded in Manifest query string (no `{{` in Manifest)
+- ✅ end-to-end: Ingress → Channel(macro in query) → Egress runs correctly
 
 ### Phase 11 — Missing CLI Commands
 
 #### `aqueduct report` — `aqueduct/cli.py`
 
-- ⏳ valid run_id → table output with module rows and status icons
-- ⏳ valid run_id + `--format json` → JSON with run_id, blueprint_id, status, module_results
-- ⏳ valid run_id + `--format csv` → CSV with header row
-- ⏳ unknown run_id → exit code 1 with error message
-- ⏳ missing obs.db → exit code 1 with error message
+- ✅ valid run_id → table output with module rows and status icons
+- ✅ valid run_id + `--format json` → JSON with run_id, blueprint_id, status, module_results
+- ✅ valid run_id + `--format csv` → CSV with header row
+- ✅ unknown run_id → exit code 1 with error message
+- ✅ missing obs.db → exit code 1 with error message
 
 #### `aqueduct lineage` — `aqueduct/cli.py`
 
-- ⏳ valid blueprint_id → table of channel_id, output_column, source_table, source_column
-- ⏳ `--from <table>` filters to only that source_table
-- ⏳ `--column <col>` filters to only that output_column
-- ⏳ `--format json` → JSON array
-- ⏳ no rows → "No lineage records found" message, exit 0
-- ⏳ missing lineage.db → exit code 1 with error message
+- ✅ valid blueprint_id → table of channel_id, output_column, source_table, source_column
+- ✅ `--from <table>` filters to only that source_table
+- ✅ `--column <col>` filters to only that output_column
+- ✅ `--format json` → JSON array
+- ✅ no rows → "No lineage records found" message, exit 0
+- ✅ missing lineage.db → exit code 1 with error message
 
 #### `aqueduct signal` — `aqueduct/cli.py` + `surveyor.py`
 
-- ⏳ `--value false` → row inserted in `signal_overrides` with `passed=False`
-- ⏳ `--value true` → row deleted from `signal_overrides`
-- ⏳ `--error "msg"` alone → row inserted with `passed=False` and `error_message` set
-- ⏳ `--error "msg" --value true` → exit code 1 (conflicting flags)
-- ⏳ no flags → prints current override status
-- ⏳ no override set → "no persistent override" message
-- ⏳ `evaluate_regulator()` checks `signal_overrides` BEFORE `probe_signals`
-- ⏳ override with `passed=False` → `evaluate_regulator()` returns False even if probe_signals says True
-- ⏳ `--value true` clears override → `evaluate_regulator()` resumes reading probe_signals
+- ✅ `--value false` → row inserted in `signal_overrides` with `passed=False`
+- ✅ `--value true` → row deleted from `signal_overrides`
+- ✅ `--error "msg"` alone → row inserted with `passed=False` and `error_message` set
+- ✅ `--error "msg" --value true` → exit code 1 (conflicting flags)
+- ✅ no flags → prints current override status
+- ✅ no override set → "no persistent override" message
+- ✅ `evaluate_regulator()` checks `signal_overrides` BEFORE `probe_signals`
+- ✅ override with `passed=False` → `evaluate_regulator()` returns False even if probe_signals says True
+- ✅ `--value true` clears override → `evaluate_regulator()` resumes reading probe_signals
 
 #### `aqueduct heal` — `aqueduct/cli.py`
 
-- ⏳ run_id with failure_context → FailureContext reconstructed, generate_llm_patch called
-- ⏳ `--module` overrides `failed_module` field in FailureContext passed to LLM
-- ⏳ run_id with no failure_context → exit code 1 with clear message
-- ⏳ missing obs.db → exit code 1
-- ⏳ no agent model configured in aqueduct.yml → exit code 1 with clear message
-- ⏳ LLM returns valid patch → patch staged in patches/pending/
+- ✅ run_id with failure_context → FailureContext reconstructed, generate_llm_patch called
+- ✅ `--module` overrides `failed_module` field in FailureContext passed to LLM
+- ✅ run_id with no failure_context → exit code 1 with clear message
+- ✅ missing obs.db → exit code 1
+- ✅ no agent model configured in aqueduct.yml → exit code 1 with clear message
+- ✅ LLM returns valid patch → patch staged in patches/pending/
 
 ### Phase 13 — `aqueduct test` Command
 
@@ -899,19 +899,14 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
 - ⏳ `--blueprint` overrides blueprint path from test file
 
-### Phase 14 — Patch Dry-Run (`validate_patch`)
+### Phase 14 — Aggressive mode in-memory validation (validate_patch removed)
 
-#### Schema + Model — `aqueduct/parser/schema.py`, `parser/models.py`, `parser/parser.py`, `compiler/models.py`
-
-- ✅ `validate_patch` defaults to `False` in `AgentConfig`
-- ✅ `validate_patch: true` in Blueprint YAML → `AgentConfig.validate_patch = True` after parse
-- ✅ `manifest.to_dict()["agent"]["validate_patch"]` reflects the value
+`validate_patch` field removed. `aggressive` mode now always validates patch in-memory (compile + re-run) before writing to Blueprint. Non-configurable. Tests that covered old `validate_patch` field removed from `test_coverage_gaps.py`.
 
 #### CLI dispatch — `aqueduct/cli.py` (aggressive mode)
-
-- ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch produces invalid Blueprint → patch staged in `patches/pending/`, Blueprint unchanged
-- ⏳ `approval_mode: aggressive` + `validate_patch: true` + patch valid → patch written to disk, loop continues
-- ⏳ `approval_mode: aggressive` + `validate_patch: false` (default) → patch written immediately (existing behavior unchanged)
+- ⏳ `approval_mode: aggressive` + patch produces invalid Blueprint (compile fail) → Blueprint unchanged, loop stops
+- ⏳ `approval_mode: aggressive` + patch valid but re-run fails → `on_heal_failure` applied, loop continues
+- ⏳ `approval_mode: aggressive` + patch valid + re-run succeeds → Blueprint written to disk, loop stops
 
 ---
 

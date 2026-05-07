@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Individual operation models ───────────────────────────────────────────────
@@ -175,6 +175,18 @@ PatchOperation = Annotated[
 
 # ── Top-level PatchSpec ───────────────────────────────────────────────────────
 
+_OP_ALIASES: dict[str, str] = {
+    # LLM frequently hallucinates this mashup of two real op names
+    "replace_module_config_key": "set_module_config_key",
+    # Other common confusions
+    "set_module_config": "replace_module_config",
+    "update_module_config": "replace_module_config",
+    "patch_module_config": "replace_module_config",
+    "update_module_config_key": "set_module_config_key",
+    "patch_module_config_key": "set_module_config_key",
+}
+
+
 class PatchSpec(BaseModel, extra="forbid"):
     """A structured diff to a Blueprint.
 
@@ -189,6 +201,59 @@ class PatchSpec(BaseModel, extra="forbid"):
         operations: Ordered list of operations to apply.  Applied left-to-right;
                     later operations see the Blueprint state left by earlier ones.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_op_aliases(cls, data: Any) -> Any:
+        """Silently fix common LLM field name and op name hallucinations."""
+        if not isinstance(data, dict):
+            return data
+
+        # ── Top-level field aliases ───────────────────────────────────────────
+        if "description" in data and "rationale" not in data:
+            data["rationale"] = data.pop("description")
+        if "summary" in data and "rationale" not in data:
+            data["rationale"] = data.pop("summary")
+
+        # All known aliases for "operations"
+        _OPS_ALIASES = ("ops", "op_list", "patches", "steps", "fix", "changes",
+                        "actions", "modifications", "updates", "patch_operations")
+        if "operations" not in data:
+            for alias in _OPS_ALIASES:
+                if alias in data:
+                    data["operations"] = data.pop(alias)
+                    break
+
+        # Smart fallback: if still no "operations", look for any key whose value
+        # is a non-empty list of dicts (likely the operations list under a novel name)
+        if "operations" not in data:
+            for key, val in list(data.items()):
+                if (
+                    key not in ("module_results",)
+                    and isinstance(val, list)
+                    and val
+                    and isinstance(val[0], dict)
+                    and ("op" in val[0] or "type" in val[0])
+                ):
+                    data["operations"] = data.pop(key)
+                    break
+
+        # ── Op name normalization inside each operation ───────────────────────
+        _DISCRIMINATOR_ALIASES = ("type", "action", "operation", "method", "kind", "name")
+        for op in data.get("operations") or []:
+            if not isinstance(op, dict):
+                continue
+            # Rename wrong discriminator key → "op"
+            if "op" not in op:
+                for alias in _DISCRIMINATOR_ALIASES:
+                    if alias in op:
+                        op["op"] = op.pop(alias)
+                        break
+            # Normalize op name itself
+            raw_op = op.get("op")
+            if raw_op in _OP_ALIASES:
+                op["op"] = _OP_ALIASES[raw_op]
+        return data
 
     patch_id: str = Field(..., description="Unique patch identifier")
     run_id: str | None = Field(None, description="Run ID that triggered this patch")

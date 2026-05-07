@@ -1143,19 +1143,6 @@ agent:
 
 If a patch violates either guardrail, `apply_patch` raises `PatchError` — the Blueprint is never written. A clear error message is emitted. This is enforced before any Blueprint mutation occurs.
 
-**`validate_patch: true` — Patch Dry-Run (aggressive mode)**
-
-When enabled, the patched Blueprint is compiled in memory before being written to disk in `aggressive` mode. If compilation fails (parse error, compile error), the patch is staged for human review and the self-healing loop stops — the on-disk Blueprint is never touched:
-
-```yaml
-agent:
-  approval_mode: aggressive
-  validate_patch: true
-  max_patches_per_run: 5
-```
-
-Provides a safety net for aggressive mode: schema errors, invalid references, and compile-time violations are caught before the Blueprint is mutated. Has no effect on `auto` or `human` modes (which already validate before writing or never write autonomously).
-
 **Recommended guardrail policy for production:**
 
 ```yaml
@@ -1169,19 +1156,53 @@ agent:
 ```
 
 ## **8.7 Patch Lifecycle**
-1. Surveyor detects failure, exhausts retry policy if applicable, assembles FailureContext.
-1. FailureContext includes: run metadata, manifest JSON (compiled), **provenance_json** (ProvenanceMap slice for the failed module + full context block — replaces raw Blueprint YAML source), error message, stack trace, doctor pre-flight hints.
-1. FailureContext is posted to the configured LLM endpoint with the PatchSpec schema and optional `prompt_context` instructions.
-1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error. Maximum `llm_max_reprompts` attempts (default 3) before giving up. On timeout or network failure, the attempt aborts immediately without retry.
-1. Valid PatchSpec is checked against guardrails (allowed\_paths, forbidden\_ops). If any guardrail fires, patch is staged in patches/pending/ for human review regardless of approval\_mode.
-1. **Confidence check:** If the LLM returns `confidence < 0.7`, the patch is automatically escalated to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied. The threshold is fixed at 0.7 and is not configurable.
-1. If approval\_mode: disabled — LLM never fires.
-1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
-1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
-1. If approval\_mode: aggressive — If `validate_patch: true`: patch is compiled in memory first; if invalid, staged for human review and loop stops. Otherwise: patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
-1. If approval\_mode: ci — Patch is staged to `patches/pending/` AND a `POST` is fired to `agent.ci_webhook_url` (or `webhooks.on_ci_patch`) with the full PatchSpec JSON + `run_id` + `failed_module` + `confidence`. External CI creates the branch and PR. The pipeline is not re-run automatically.
-1. Pending patch is moved from `patches/pending/<timestamp>_<slug>.json` to `patches/applied/<timestamp>_<slug>.json` with `applied_at` timestamp, run\_id, and agent rationale preserved. `patches/pending/` and `patches/rejected/` are gitignored; `patches/applied/` is committed alongside the Blueprint change.
-1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
+
+### Step-by-step flow
+
+1. Module fails. Executor exhausts its retry policy (if configured). Failure bubbles to `cli.py`.
+2. If `approval_mode: disabled` — LLM never fires. Run ends with `status=error`. **All other steps skipped.**
+3. If unreviewed patches exist in `patches/pending/` and `on_pending_patches: block` — LLM skipped, run ends.
+4. **Assembles FailureContext:** compiled module config with resolved values, **provenance map** (shows which context key or literal each config value came from), error message, truncated stack trace, doctor pre-flight hints.
+5. **Calls LLM** with FailureContext + PatchSpec JSON schema + optional `prompt_context` injections (engine-level, then blueprint-level appended after).
+6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct appends the specific field-level errors to the conversation and re-prompts. This is a real multi-turn conversation — the LLM sees its previous response and the exact errors. Repeats up to `llm_max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry.
+7. **Confidence check.** If `confidence < 0.7`, the patch is forced to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied.
+8. **Guardrails check.** If the patch touches a path outside `allowed_paths` or uses a `forbidden_ops` operation, it is staged in `patches/pending/` for human review regardless of `approval_mode`.
+9. **Approval mode routing** (after confidence + guardrail checks pass):
+
+### Approval modes
+
+| Mode | What happens | Blueprint file changed? | Safe for prod? |
+| :- | :- | :- | :- |
+| `disabled` | LLM never fires | No | N/A |
+| `human` | Patch staged to `patches/pending/`. Engineer reviews via `aqueduct patch apply` or `aqueduct patch reject`. Run ends. | Only after human apply | Yes |
+| `auto` | **Fully automatic, single-shot.** Patch applied in-memory → pipeline re-runs. Blueprint written to disk only if re-run succeeds. If re-run fails, `on_heal_failure` policy applies. One patch attempt per run. | Only on successful re-run | Yes |
+| `aggressive` | **Fully automatic, looping.** Same as `auto` but loops up to `max_patches_per_run` attempts. Each patch is tested in-memory; Blueprint only written when re-run succeeds. If a patch fails, `on_heal_failure` policy applies and the loop continues. Requires `danger.allow_aggressive_patching: true`. | Only on successful re-run | Dev/trusted |
+| `ci` | Patch staged to `patches/pending/`. Full PatchSpec JSON + metadata POSTed to `agent.ci_webhook_url` (or `webhooks.on_ci_patch`). External CI creates branch and PR. Pipeline not re-run. | Only after external merge | Yes |
+
+> **`auto` vs `aggressive`:** Both are safe — Blueprint is only written when the in-memory re-run confirms the fix works. `auto` makes one attempt per run. `aggressive` keeps trying up to `max_patches_per_run` times, generating a new patch for each remaining failure. Use `auto` in production for a single healing attempt per failure. Use `aggressive` in dev or trusted environments for hands-free multi-step repair.
+
+> **`on_heal_failure`** controls what happens when a patch is generated but fails to fix the pipeline: `stage` (default) — the failed patch is written to `patches/pending/` for human inspection. `discard` — silently thrown away. `abort` — loop stops immediately. Applies in `auto` and `aggressive` modes.
+
+10. Applied patch moves from `patches/pending/<ts>_<slug>.json` to `patches/applied/<ts>_<slug>.json` with `applied_at`, `run_id`, and `rationale` preserved. `patches/pending/` and `patches/rejected/` are gitignored; `patches/applied/` is committed alongside the Blueprint.
+11. If `max_patches_per_run` is reached without a successful run, pipeline aborts.
+
+### Per-blueprint LLM overrides
+
+All connection fields in the Blueprint `agent:` block override the engine defaults from `aqueduct.yml`:
+
+| Blueprint field | Engine default field | Description |
+| :- | :- | :- |
+| `provider` | `agent.provider` | `"anthropic"` or `"openai_compat"` |
+| `model` | `agent.model` | Model name string |
+| `base_url` | `agent.base_url` | Endpoint URL |
+| `ollama_options` | `agent.ollama_options` | Ollama-specific options dict |
+| `llm_timeout` | `agent.llm_timeout` | HTTP timeout in seconds (default 120) |
+| `llm_max_reprompts` | `agent.llm_max_reprompts` | Reprompt retries on invalid PatchSpec (default 3) |
+| `confidence_threshold` | — (blueprint-only) | Minimum confidence to auto-apply patch (default 0.7; below → human review) |
+| `on_heal_failure` | — (blueprint-only) | `stage` \| `discard` \| `abort` — what to do when patch fails to fix pipeline (default `stage`) |
+| `prompt_context` | `agent.prompt_context` | Extra text appended to LLM system prompt (blueprint appended after engine) |
+
+Blueprint values win on conflict. `null` (unset) means inherit from engine.
 
 **`healing_outcomes` table:** Every healing attempt — whether the patch was applied, whether the re-run succeeded — is recorded in `obs.db`'s `healing_outcomes` table:
 

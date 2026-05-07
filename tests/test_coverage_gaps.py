@@ -21,15 +21,17 @@ class TestUdfRegistration:
         from aqueduct.executor.spark.udf import UDFError, register_udfs
 
         mock_spark = MagicMock()
-        with pytest.raises(UDFError, match="language 'scala' is not supported"):
-            register_udfs(({"id": "my_udf", "lang": "scala"},), mock_spark)
+        with pytest.raises(UDFError, match="language 'fortran' is not supported"):
+            register_udfs(({"id": "my_udf", "lang": "fortran"},), mock_spark)
 
-    def test_unsupported_lang_java_raises(self):
+    def test_java_scala_missing_jar_raises(self):
         from aqueduct.executor.spark.udf import UDFError, register_udfs
 
         mock_spark = MagicMock()
-        with pytest.raises(UDFError, match="language 'java' is not supported"):
+        with pytest.raises(UDFError, match="'jar' is required"):
             register_udfs(({"id": "my_udf", "lang": "java"},), mock_spark)
+        with pytest.raises(UDFError, match="'jar' is required"):
+            register_udfs(({"id": "my_udf", "lang": "scala"},), mock_spark)
 
     def test_missing_module_raises(self):
         from aqueduct.executor.spark.udf import UDFError, register_udfs
@@ -1354,45 +1356,8 @@ class TestRunTestFileLoop:
         assert suite.success is False
 
 
-class TestValidatePatch:
-    """Tests for Phase 14 validate_patch field."""
-
-    def test_agent_config_validate_patch_default_false(self):
-        from aqueduct.parser.models import AgentConfig
-        assert AgentConfig().validate_patch is False
-
-    def test_agent_config_validate_patch_true(self):
-        from aqueduct.parser.models import AgentConfig
-        a = AgentConfig(validate_patch=True)
-        assert a.validate_patch is True
-
-    def test_blueprint_parses_validate_patch(self, tmp_path):
-        from aqueduct.parser.parser import parse
-        bp_file = tmp_path / "bp.yml"
-        bp_file.write_text(
-            "aqueduct: '1.0'\nid: p\nname: P\n"
-            "agent:\n  approval_mode: aggressive\n  validate_patch: true\n"
-            "modules: []\nedges: []\n",
-            encoding="utf-8",
-        )
-        bp = parse(str(bp_file))
-        assert bp.agent.validate_patch is True
-
-    def test_manifest_to_dict_includes_validate_patch(self, tmp_path):
-        from aqueduct.parser.parser import parse
-        from aqueduct.compiler.compiler import compile as compiler_compile
-        bp_file = tmp_path / "bp.yml"
-        bp_file.write_text(
-            "aqueduct: '1.0'\nid: p\nname: P\n"
-            "agent:\n  validate_patch: true\n"
-            "modules: []\nedges: []\n",
-            encoding="utf-8",
-        )
-        bp = parse(str(bp_file))
-        from unittest.mock import MagicMock
-        manifest = compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
-        d = manifest.to_dict()
-        assert d["agent"]["validate_patch"] is True
+# TestValidatePatch removed — validate_patch field removed.
+# aggressive mode now always validates in-memory before writing (non-configurable).
 
 
 # ── Stub 1: ExecutionResult.trigger_agent ────────────────────────────────────

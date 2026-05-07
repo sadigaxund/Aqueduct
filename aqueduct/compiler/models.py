@@ -89,7 +89,6 @@ class Manifest:
                 "max_patches_per_run": self.agent.max_patches_per_run,
                 "provider": self.agent.provider,
                 "base_url": self.agent.base_url,
-                "validate_patch": self.agent.validate_patch,
                 "prompt_context": self.agent.prompt_context,
                 "guardrails": {
                     "forbidden_ops": list(self.agent.guardrails.forbidden_ops),

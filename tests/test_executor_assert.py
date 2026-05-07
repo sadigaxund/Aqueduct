@@ -76,7 +76,7 @@ def test_null_rate_passes(spark: SparkSession):
     df = spark.range(10).withColumn("val", F.when(F.col("id") < 2, None).otherwise(1))
     module = Module(
         id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.5}]}
+        config={"rules": [{"type": "null_rate", "column": "val", "max": 0.5, "fraction": 1.0}]}
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None

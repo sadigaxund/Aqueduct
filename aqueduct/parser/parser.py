@@ -179,8 +179,11 @@ def parse(
             forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
             allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
         ),
-        validate_patch=validated.agent.validate_patch,
         prompt_context=validated.agent.prompt_context,
+        llm_timeout=validated.agent.llm_timeout,
+        llm_max_reprompts=validated.agent.llm_max_reprompts,
+        confidence_threshold=validated.agent.confidence_threshold,
+        on_heal_failure=validated.agent.on_heal_failure,
     )
 
     return Blueprint(

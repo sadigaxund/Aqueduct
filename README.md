@@ -365,19 +365,6 @@ aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
 
 **Assertion types:** `row_count` (exact count), `contains` (rows must appear in output), `sql` (SQL expression over `__output__` view returns truthy).
 
-### Patch Dry-Run (`validate_patch`)
-
-Enable pre-validation before the LLM agent applies patches in `aggressive` mode. If the patched Blueprint doesn't compile, the patch is staged for human review instead of applied:
-
-```yaml
-agent:
-  approval_mode: aggressive
-  validate_patch: true     # compile-check patch before writing to disk
-  max_patches_per_run: 5
-```
-
-With `validate_patch: true`: the patched Blueprint is compiled in memory first. Only if compilation succeeds does Aqueduct write it to disk and continue the self-healing loop. Invalid patches are staged in `patches/pending/` for human review.
-
 ### Agent Guardrails
 
 Guardrails are **deterministically enforced at patch-apply time** — not prompt hints. The code rejects violations regardless of what the LLM generated.

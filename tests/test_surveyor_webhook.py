@@ -66,3 +66,42 @@ def test_fire_webhook_generic_exception_swallowed(capsys):
 
         captured = capsys.readouterr()
         assert "Panic!" in captured.err
+
+
+def test_fire_webhook_template_vars_resolution():
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+
+        config = WebhookEndpointConfig(
+            url="http://test.com",
+            method="PUT",
+            headers={"Authorization": "Bearer ${AUTH_TOKEN}"},
+            payload={"msg": "Blueprint ${blueprint_name} failed in ${failed_module}"},
+        )
+        template_vars = {
+            "blueprint_name": "MyBlueprint",
+            "failed_module": "raw_users",
+            "AUTH_TOKEN": "secret-123"
+        }
+
+        fire_webhook(config, {}, template_vars=template_vars).join(timeout=2)
+
+        mock_req.assert_called_once()
+        _, kwargs = mock_req.call_args
+        assert kwargs["headers"]["Authorization"] == "Bearer secret-123"
+        assert kwargs["json"]["msg"] == "Blueprint MyBlueprint failed in raw_users"
+
+
+def test_fire_webhook_environ_fallback(monkeypatch):
+    monkeypatch.setenv("GLOBAL_KEY", "env-value")
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+
+        config = WebhookEndpointConfig(
+            url="http://test.com",
+            payload={"key": "${GLOBAL_KEY}"}
+        )
+
+        fire_webhook(config, {}).join(timeout=2)
+
+        assert mock_req.call_args[1]["json"]["key"] == "env-value"

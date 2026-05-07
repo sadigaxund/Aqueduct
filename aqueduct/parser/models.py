@@ -47,10 +47,14 @@ class AgentConfig:
     base_url: str | None = None
     model: str | None = None
     ollama_options: dict | None = None
+    llm_timeout: float | None = None
+    llm_max_reprompts: int | None = None
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsConfig = field(default_factory=GuardrailsConfig)
-    # Dry-run: pre-validate patched Blueprint before writing to disk (aggressive mode)
-    validate_patch: bool = False
+    # Minimum LLM confidence to auto-apply patch (below threshold → escalate to human)
+    confidence_threshold: float = 0.7
+    # What to do when patch is generated but fails to fix the pipeline: stage | discard | abort
+    on_heal_failure: str = "stage"
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
     prompt_context: str | None = None
 

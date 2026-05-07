@@ -91,14 +91,23 @@ agent:
   #   disabled   — LLM never fires (default)
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
-  #   auto       — LLM applies patch in-memory → re-runs → writes permanently only on success
-  #   aggressive — LLM writes patch to Blueprint immediately → loops up to max_patches_per_run
-  #                ⚠ Blueprint may be modified multiple times without validation gate.
+  #   auto       — Single-shot: patch applied in-memory → re-runs → written to disk only on success
+  #   aggressive — Looping auto: up to max_patches_per_run attempts; each validated in-memory first
+  #                Requires danger.allow_aggressive_patching: true in aqueduct.yml
+  #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   approval_mode: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
-  max_patches_per_run: 3
-  validate_patch: false           # true = compile-check patch before writing (aggressive only)
+  max_patches_per_run: 3          # aggressive only: max loop iterations per run
+
+  # on_heal_failure: what to do when a patch is generated but the re-run still fails
+  #   stage   — stage failed patch to patches/pending/ for human inspection (default)
+  #   discard — silently discard, continue (aggressive) or stop (auto)
+  #   abort   — stop the healing loop immediately
+  on_heal_failure: "stage"
+
+  # confidence_threshold: LLM patches with confidence below this are escalated to human review
+  confidence_threshold: 0.7
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
@@ -125,12 +134,14 @@ agent:
   #   - remove_module
   #   - replace_retry_policy
 
-  # Override connection defaults for this blueprint only:
+  # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "qwen2.5-coder:14b"
+  # llm_timeout: 300.0            # seconds; increase for slow local models
+  # llm_max_reprompts: 5          # max conversation turns when LLM returns invalid PatchSpec
 
-  # prompt_context: |           # Blueprint-level context appended to LLM system prompt (after engine-level).
+  # prompt_context: |             # Appended to LLM system prompt after engine-level prompt_context.
   #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.
   #   All output paths must stay within the data/ directory.
 

@@ -82,17 +82,42 @@ There are exactly TWO ops for changing module config. They are distinct:
 - Preserve the original path format (relative stays relative, globs stay globs).
 
 ### Other rules
-- Respond with ONLY valid JSON matching the PatchSpec schema above. No prose, no markdown fences.
 - Use only module IDs and field names that appear in the failure report.
 - Prefer the simplest fix: correct a config value before adding new modules.
 - SQL query wrong → `set_module_config_key` with key="query".
 - SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
 - If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
-- patch_id: short slug (e.g. "fix-yellow-taxi-path").
-- description: root cause + fix in one sentence.
-- confidence (float 0.0-1.0): your estimated probability that this patch will fix the failure. Required.
-- category (string): failure category — one of: schema_drift, bad_path, format_mismatch, oom_config, sql_column_not_found, type_mismatch, missing_context, permission_error, other
-- root_cause (string): one-sentence root cause diagnosis
+
+## Required output — complete example
+Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.
+
+```json
+{{
+  "patch_id": "fix-example-path",
+  "rationale": "One sentence: what was wrong and what the fix does.",
+  "confidence": 0.9,
+  "category": "bad_path",
+  "root_cause": "One sentence: root cause.",
+  "operations": [
+    {{
+      "op": "set_module_config_key",
+      "module_id": "my_ingress",
+      "key": "format",
+      "value": "csv"
+    }}
+  ]
+}}
+```
+
+Field rules:
+- patch_id: short slug (e.g. "fix-yellow-taxi-path")
+- rationale: field is named "rationale" — do NOT use "description"
+- confidence: float 0.0–1.0 — required
+- category: one of: schema_drift, bad_path, format_mismatch, oom_config, sql_column_not_found, type_mismatch, missing_context, permission_error, other
+- root_cause: one-sentence diagnosis
+- operations: list of patch ops — use "op" as the key (NOT "type" or "action")
+
+Respond with ONLY valid JSON. No prose, no markdown fences, no explanation outside the JSON object.
 {previous_patches_section}{custom_context_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
@@ -119,16 +144,41 @@ _USER_PROMPT_TEMPLATE = """\
 ## Full module list (for reference when writing patch IDs)
 {module_list}
 {provenance_section}{doctor_hints_section}
-Produce the PatchSpec JSON now.
+Produce the complete PatchSpec JSON now. Remember: the `operations` list is REQUIRED — a response without it is invalid.
 """
 
 _REPROMPT_TEMPLATE = """\
-Your previous response was not valid PatchSpec JSON. Validation error:
+Your previous response failed PatchSpec validation.
 
+## Your previous output (what you sent)
+```json
+{raw_truncated}
+```
+
+## Errors to fix
 {error}
 
-Produce a corrected PatchSpec JSON now.
+Rewrite the COMPLETE PatchSpec JSON from scratch, fixing the errors above. Output ONLY valid JSON — no prose, no markdown fences.
 """
+
+# Known field name mistakes the LLM commonly makes → correct name
+_FIELD_ALIASES: dict[str, str] = {
+    "description": "rationale",
+    "ops": "operations",
+    "op_list": "operations",
+    "patches": "operations",
+    "steps": "operations",
+    "fix": "operations",
+}
+
+# Wrong discriminator keys LLM uses instead of "op"
+_OP_DISCRIMINATOR_ALIASES = ("type", "action", "operation", "method", "kind", "name")
+
+_VALID_OPS = (
+    "replace_module_config", "set_module_config_key", "replace_module_label",
+    "insert_module", "remove_module", "replace_context_value", "add_probe",
+    "replace_edge", "set_module_on_failure", "replace_retry_policy", "add_arcade_ref",
+)
 
 
 def _truncate_stack(trace: str | None, max_lines: int = _STACK_TRACE_MAX_LINES) -> str:
@@ -473,7 +523,7 @@ def _call_openai_compat(
         url,
         json=payload,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout=timeout,
+        timeout=httpx.Timeout(connect=15.0, read=timeout, write=30.0, pool=5.0),
     )
     response.raise_for_status()
     data = response.json()
@@ -482,13 +532,120 @@ def _call_openai_compat(
 
 # ── Response parsing ──────────────────────────────────────────────────────────
 
+def _format_reprompt_error(exc: Exception, raw: str) -> str:
+    """Turn a ValidationError or JSONDecodeError into specific, actionable feedback."""
+    if isinstance(exc, json.JSONDecodeError):
+        lines = raw.splitlines()
+        # Show 3 lines of context around the error (1-indexed)
+        err_line = exc.lineno  # 1-indexed
+        ctx_start = max(0, err_line - 3)
+        ctx_end = min(len(lines), err_line + 2)
+        ctx_lines = []
+        for i, ln in enumerate(lines[ctx_start:ctx_end], start=ctx_start + 1):
+            marker = " --> " if i == err_line else "     "
+            ctx_lines.append(f"{marker}{i:3}: {ln}")
+        context_block = "\n".join(ctx_lines)
+        return (
+            f"JSON parse error at line {exc.lineno}, column {exc.colno}: {exc.msg}\n\n"
+            f"Your output near the error:\n{context_block}\n\n"
+            f"Common causes: missing comma between fields, trailing comma after last field, "
+            f"unescaped newline or quote inside a string value, truncated output."
+        )
+
+    if not isinstance(exc, ValidationError):
+        return str(exc)
+
+    lines: list[str] = []
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = {}
+
+    for e in exc.errors(include_url=False):
+        loc = e["loc"]
+        etype = e["type"]
+        input_val = e.get("input")
+
+        # Human-readable location: operations[0] not operations.0
+        loc_parts: list[str] = []
+        for part in loc:
+            if isinstance(part, int):
+                loc_parts.append(f"[{part}]")
+            elif loc_parts:
+                loc_parts.append(f".{part}")
+            else:
+                loc_parts.append(str(part))
+        loc_str = "".join(loc_parts)
+
+        if etype == "missing":
+            field_name = str(loc[-1]) if loc else ""
+            hint = ""
+            for wrong, correct in _FIELD_ALIASES.items():
+                if correct == field_name and wrong in parsed:
+                    hint = f' (you used "{wrong}" — rename it to "{field_name}")'
+            lines.append(f'• {loc_str}: required field missing{hint}.')
+
+        elif etype == "extra_forbidden":
+            wrong_field = str(loc[-1]) if loc else loc_str
+            correct = _FIELD_ALIASES.get(wrong_field)
+            if correct:
+                lines.append(f'• {loc_str}: "{wrong_field}" is not valid — use "{correct}" instead.')
+            else:
+                lines.append(f'• {loc_str}: "{wrong_field}" is not a recognized field — remove it.')
+
+        elif etype == "union_tag_not_found":
+            # LLM used wrong discriminator for PatchOperation (should be "op", not "type" etc.)
+            hint = ""
+            if isinstance(input_val, dict):
+                wrong_key = next((k for k in _OP_DISCRIMINATOR_ALIASES if k in input_val), None)
+                if wrong_key:
+                    guessed_op = input_val.get(wrong_key, "")
+                    hint = f' You used "{wrong_key}: {guessed_op}" — rename the key to "op".'
+                elif "op" not in input_val:
+                    hint = ' The "op" field is missing entirely.'
+            lines.append(
+                f'• {loc_str}: invalid operation.{hint}\n'
+                f'  Valid ops: {", ".join(_VALID_OPS)}'
+            )
+
+        elif etype == "literal_error":
+            expected = e.get("ctx", {}).get("expected", "")
+            alias_hint = ""
+            if isinstance(input_val, str) and input_val in ("replace_module_config_key",):
+                alias_hint = (
+                    ' `replace_module_config_key` does NOT exist. '
+                    'Use `set_module_config_key` (one field) or `replace_module_config` (entire config block).'
+                )
+            lines.append(
+                f'• {loc_str}: invalid value {input_val!r}.{alias_hint}'
+                + (f' Expected one of: {expected}.' if expected and not alias_hint else "")
+            )
+
+        elif etype in ("string_type", "int_type", "float_type", "bool_type"):
+            expected_type = etype.replace("_type", "")
+            lines.append(f'• {loc_str}: expected {expected_type}, got {type(input_val).__name__} {input_val!r}.')
+
+        else:
+            lines.append(f'• {loc_str}: {e["msg"]}')
+
+    return "\n".join(lines) if lines else str(exc)
+
+
 def _parse_patch_spec(text: str) -> PatchSpec:
     """Parse and validate LLM response as PatchSpec."""
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-    return PatchSpec.model_validate_json(text)
+        text = text.strip()
+    # Find the start of the first JSON object (handles leading prose like "Here is the JSON:")
+    brace_idx = text.find("{")
+    if brace_idx > 0:
+        text = text[brace_idx:]
+    # raw_decode stops at the end of the first complete JSON object, ignoring
+    # any trailing prose or markdown the LLM adds after the closing brace.
+    obj, _ = json.JSONDecoder().raw_decode(text)
+    return PatchSpec.model_validate(obj)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -532,18 +689,25 @@ def generate_llm_patch(
             )
             break
 
+        logger.debug("LLM raw response (attempt %d):\n%s", attempt + 1, raw)
         try:
             patch_spec = _parse_patch_spec(raw)
             break
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+            friendly = _format_reprompt_error(exc, raw)
             logger.warning(
-                "LLM patch response invalid (attempt %d/%d): %s",
-                attempt + 1, llm_max_reprompts, exc,
+                "LLM patch response invalid (attempt %d/%d):\n%s",
+                attempt + 1, llm_max_reprompts, friendly,
             )
+            # Truncate raw to 80 lines max to keep reprompt context tight
+            raw_lines = raw.splitlines()
+            raw_truncated = "\n".join(raw_lines[:80])
+            if len(raw_lines) > 80:
+                raw_truncated += f"\n... ({len(raw_lines) - 80} more lines truncated)"
             messages.append({"role": "assistant", "content": raw})
             messages.append({
                 "role": "user",
-                "content": _REPROMPT_TEMPLATE.format(error=str(exc)),
+                "content": _REPROMPT_TEMPLATE.format(error=friendly, raw_truncated=raw_truncated),
             })
 
     if patch_spec is None:
