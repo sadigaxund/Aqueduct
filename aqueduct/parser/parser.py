@@ -32,6 +32,33 @@ class ParseError(Exception):
     """Raised for any Blueprint parse, validation, or resolution failure."""
 
 
+def _format_validation_error(exc: ValidationError, raw: dict | None = None) -> str:
+    """Format Pydantic ValidationError into a readable message."""
+    errors = exc.errors(include_url=False)
+    n = len(errors)
+    header = f"{n} validation error{'s' if n != 1 else ''} in Blueprint:"
+    lines = [header]
+    modules_raw = raw.get("modules", []) if raw else []
+    for e in errors:
+        loc = e["loc"]
+        loc_parts: list[str] = []
+        for i, part in enumerate(loc):
+            if part == "modules" and i == 0:
+                loc_parts.append("module")
+            elif isinstance(part, int) and i == 1 and loc[0] == "modules":
+                mod = modules_raw[part] if part < len(modules_raw) else {}
+                name = mod.get("id") or mod.get("label") or f"#{part}"
+                loc_parts.append(f' "{name}"')
+            elif isinstance(part, int):
+                loc_parts.append(f"[{part}]")
+            elif loc_parts:
+                loc_parts.append(f" → {part}")
+            else:
+                loc_parts.append(str(part))
+        lines.append(f"  • {''.join(loc_parts)} — {e['msg']}")
+    return "\n".join(lines)
+
+
 def parse(
     path: str | Path,
     profile: str | None = None,
@@ -67,7 +94,7 @@ def parse(
     try:
         validated = BlueprintSchema.model_validate(raw)
     except ValidationError as exc:
-        raise ParseError(f"Blueprint schema validation failed:\n{exc}") from exc
+        raise ParseError(_format_validation_error(exc, raw)) from exc
 
     # ── 3. Tier 0 context resolution ──────────────────────────────────────────
     try:
