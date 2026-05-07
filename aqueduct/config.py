@@ -52,6 +52,10 @@ class DeploymentConfig(BaseModel):
         default="local[*]",
         description="Engine-specific cluster URL (Spark: SparkSession.builder.master()).",
     )
+    env: Literal["local", "cluster", "cloud"] = Field(
+        default="local",
+        description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
+    )
 
 
 class StoreBackendConfig(BaseModel):
@@ -95,6 +99,19 @@ class ProbesConfig(BaseModel):
     block_full_actions_in_prod: bool = True
 
 
+class DangerConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_full_probe_actions: bool = Field(
+        default=False,
+        description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
+    )
+    allow_aggressive_patching: bool = Field(
+        default=False,
+        description="Allow approval_mode: aggressive to auto-apply LLM patches without human review.",
+    )
+
+
 class SecretsConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -128,6 +145,10 @@ class AgentConnectionConfig(BaseModel):
     prompt_context: str | None = Field(
         default=None,
         description="Extra context appended to the LLM system prompt for all blueprints. Use for cluster constraints, naming conventions, schema hints.",
+    )
+    ci_webhook_url: str | None = Field(
+        default=None,
+        description="Webhook URL for approval_mode: ci. POST target for external CI to create PR.",
     )
 
 
@@ -178,8 +199,16 @@ class WebhooksConfig(BaseModel):
         default=None,
         description="Endpoint to POST when a blueprint run succeeds. Accepts a URL string or full config object.",
     )
+    on_patch_pending: WebhookEndpointConfig | None = Field(
+        default=None,
+        description="Endpoint to POST when a patch is staged to patches/pending/.",
+    )
+    on_ci_patch: WebhookEndpointConfig | None = Field(
+        default=None,
+        description="Endpoint for approval_mode: ci — receives patch JSON for external PR creation.",
+    )
 
-    @field_validator("on_failure", "on_success", mode="before")
+    @field_validator("on_failure", "on_success", "on_patch_pending", "on_ci_patch", mode="before")
     @classmethod
     def coerce_string_url(cls, v: Any) -> Any:
         """Allow on_failure/on_success: 'https://...' as shorthand for {url: 'https://...'}."""
@@ -206,6 +235,7 @@ class AqueductConfig(BaseModel):
     stores: StoresConfig = Field(default_factory=StoresConfig)
     metrics: MetricsConfig = Field(default_factory=MetricsConfig)
     probes: ProbesConfig = Field(default_factory=ProbesConfig)
+    danger: DangerConfig = Field(default_factory=DangerConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)

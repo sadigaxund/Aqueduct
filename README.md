@@ -479,6 +479,7 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive 
 | `--run-id <uuid>` | Override auto-generated run UUID (useful for idempotent reruns) |
 | `--ctx key=value` | Override a Blueprint `context:` variable |
 | `--profile <name>` | Activate a `context_profiles:` entry |
+| `--allow-aggressive` | Allow `approval_mode: aggressive` for this run without setting `danger.allow_aggressive_patching: true` in config |
 
 ---
 

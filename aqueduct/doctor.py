@@ -288,7 +288,7 @@ def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
 
 # ── Blueprint source checks ───────────────────────────────────────────────────
 
-def check_blueprint_sources_from_manifest(manifest: Any) -> list[CheckResult]:
+def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "local") -> list[CheckResult]:
     """Check all Ingress/Egress paths using an already-compiled Manifest.
 
     Advantages over check_blueprint_sources():
@@ -387,6 +387,21 @@ def check_blueprint_sources_from_manifest(manifest: Any) -> list[CheckResult]:
             continue
 
         results.append(CheckResult(name, "skip", "no path or url in config", _ms(t)))
+
+    if deployment_env in ("cluster", "cloud"):
+        for module in manifest.modules:
+            if module.type not in ("Ingress", "Egress"):
+                continue
+            path_val = (module.config or {}).get("path", "")
+            if path_val and "://" not in str(path_val) and not str(path_val).startswith("/"):
+                results.append(CheckResult(
+                    name=f"path_no_uri_scheme:{module.id}",
+                    status="warn",
+                    detail=(
+                        f"Module {module.id!r} path {path_val!r} has no URI scheme "
+                        f"(expected s3a://, hdfs://, gs://, abfs://) in {deployment_env} mode."
+                    ),
+                ))
 
     return results
 

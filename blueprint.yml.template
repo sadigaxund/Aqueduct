@@ -4,9 +4,6 @@
 # sinks) and the edges connecting them. The engine compiles it into a Manifest
 # and executes it on Spark.
 #
-# This file is a reference template. For a working example with real data, see:
-#   examples/comprehensive_demo/blueprint.yml
-#
 # Key concepts:
 #   @aq.*        Runtime tokens resolved at compile time (dates, secrets, depot)
 #   ${ctx.*}     Blueprint context variables (resolved at parse time)
@@ -151,11 +148,23 @@ modules:
       format: parquet               # any Spark format: parquet, delta, csv, json, jdbc, orc, avro...
       path: "s3a://bucket/orders/date=${ctx.today}/"
       # options: {}                 # forwarded verbatim to df.read.options()
-      # schema_hint:                # optional: cast columns after read
+      # schema_hint:                # strict mode (default) — all hinted columns must exist + match type
       #   - name: order_id
       #     type: long
       #   - name: amount
       #     type: double
+      #
+      # schema_hint:                # additive mode — extra upstream columns allowed (schema evolution)
+      #   mode: additive
+      #   columns:
+      #     - name: order_id
+      #       type: long
+      #
+      # schema_hint:                # subset mode — missing optional columns allowed
+      #   mode: subset
+      #   columns:
+      #     - name: amount
+      #       type: double
 
     # Per-module retry override (overrides blueprint-level retry_policy):
     # on_failure:
@@ -381,12 +390,20 @@ modules:
   # ── UDF registry ─────────────────────────────────────────────────────────────
 
 udf_registry:
+  # Python UDF — module must be importable from project root (udfs/ dir or any package)
   - id: parse_phone
     lang: python
-    module: my_pkg.udfs
-    fn: parse_phone_number
-    return_type: string
-    entry: parse_phone             # name registered in Spark; defaults to id
+    module: udfs.parse_phone       # dotted module path relative to project root
+    entry: parse_phone             # callable name within the module; defaults to id
+    return_type: string            # Spark DDL type string (omit if function uses @udf decorator)
+    deterministic: true
+
+  # Java/Scala UDF — no cloudpickle; runs as JVM bytecode
+  # - id: haversine_distance
+  #   lang: java                   # or scala
+  #   jar: udfs/geo-udfs.jar       # path to compiled JAR (relative to project root)
+  #   entry: com.myco.geo.Haversine  # fully-qualified class name
+  #   return_type: double
 
 
 # ── Edges ─────────────────────────────────────────────────────────────────────

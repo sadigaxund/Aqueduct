@@ -51,9 +51,11 @@ however we have a python module with that name, I very much liked something simi
 16. Add Audit instructions to Specs.md so that developer would have guideline on how to fix the faulty blueprints.
 
 
-
 17. Fix Issue with UDFs. I want to make sure that users find it straightforward when defining their UDFs, it should be as close to native spark as possible. For now what i envision is this, correct if anything: within UDFs folder you can either have a single python file or a module (which naturally has to have __init__.py), or other languages that spark supports for User Defined Functions. More
 
 18. Make clear this parts of specs.md :
 1. how to debug properly
 2. how the healing process is done
+
+
+19. see if 

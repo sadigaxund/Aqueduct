@@ -198,3 +198,15 @@ class PatchSpec(BaseModel, extra="forbid"):
         min_length=1,
         description="Ordered list of patch operations",
     )
+    confidence: float | None = Field(
+        default=None,
+        description="LLM-estimated fix confidence 0.0-1.0. Below 0.7 auto-escalates to human review.",
+    )
+    category: str | None = Field(
+        default=None,
+        description="Failure category (e.g. schema_drift, bad_path, oom_config, sql_column_not_found).",
+    )
+    root_cause: str | None = Field(
+        default=None,
+        description="LLM-identified root cause of the failure.",
+    )
