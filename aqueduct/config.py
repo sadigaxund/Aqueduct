@@ -287,6 +287,25 @@ def _expand_env_vars(text: str) -> tuple[str, list[str]]:
     return text, missing
 
 
+def _format_config_error(resolved: Path, exc: ValidationError) -> str:
+    errors = exc.errors(include_url=False)
+    n = len(errors)
+    header = f"{n} validation error{'s' if n != 1 else ''} in {resolved}:"
+    lines = [header]
+    for e in errors:
+        loc_parts = []
+        for part in e["loc"]:
+            if isinstance(part, int):
+                loc_parts.append(f"[{part}]")
+            elif loc_parts:
+                loc_parts.append(f".{part}")
+            else:
+                loc_parts.append(str(part))
+        loc = "".join(loc_parts)
+        lines.append(f"  • {loc} — {e['msg']}")
+    return "\n".join(lines)
+
+
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
 
@@ -335,6 +354,4 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     try:
         return AqueductConfig.model_validate(data)
     except ValidationError as exc:
-        raise ConfigError(
-            f"Config validation failed for {resolved}:\n{exc}"
-        ) from exc
+        raise ConfigError(_format_config_error(resolved, exc)) from exc
