@@ -1,32 +1,38 @@
-id: 03.healing.demo
-name: 03-healing-demo
+id: healing_demo
+name: Healing Process Demo
+
+# Self-healing policy
+agent:
+  approval_mode: auto  # Auto-apply patches if they pass validation
+  max_patches_per_run: 1
 
 context:
-  input_path: "data/input"
-  output_path: "data/output"
+  input_file: "data/users.csv"
+  output_dir: "data/output"
 
 modules:
-  - id: ingest
+  - id: raw_users
     type: Ingress
+    description: "Intentionally misconfigured to read CSV as Parquet"
     config:
-      format: parquet
-      path: "${ctx.input_path}"
+      format: parquet  # THIS IS THE BUG
+      path: "${ctx.input_file}"
 
-  - id: transform
+  - id: select_users
     type: Channel
     config:
       op: sql
-      query: "SELECT * FROM ingest"
+      query: "SELECT id, name FROM raw_users"
 
-  - id: output
+  - id: save_users
     type: Egress
     config:
       format: parquet
-      path: "${ctx.output_path}"
+      path: "${ctx.output_dir}"
       mode: overwrite
 
 edges:
-  - from: ingest
-    to: transform
-  - from: transform
-    to: output
+  - from: raw_users
+    to: select_users
+  - from: select_users
+    to: save_users

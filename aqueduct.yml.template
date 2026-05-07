@@ -135,9 +135,24 @@ probes:
 
 # ── Secrets ───────────────────────────────────────────────────────────────────
 #
-# @aq.secret('KEY') resolves via the provider below.
+# @aq.secret('KEY') in Blueprints resolves via secrets.provider below.
 # "env" reads os.environ — works for local dev, CI, and secret-injected envs
 # (Kubernetes Secrets, AWS SSM + env export, etc.).
+#
+# ── Environment variable substitution in aqueduct.yml itself ─────────────────
+#
+# aqueduct.yml supports two substitution syntaxes expanded before YAML parsing:
+#   ${VAR}            — os.environ["VAR"]; error if unset
+#   ${VAR:-default}   — os.environ["VAR"] if set, else "default"
+#   ${VAR:default}    — same (dash optional)
+#   @aq.secret('KEY')— reads os.environ["KEY"] directly (always env — secrets
+#                      provider is not yet live when this file is loaded)
+#
+# Use these to avoid hardcoding credentials in aqueduct.yml:
+#   agent:
+#     provider: ${AQUEDUCT_LLM_PROVIDER:-openai_compat}
+#     model: "@aq.secret('AQUEDUCT_LLM_MODEL')"
+#     base_url: "@aq.secret('AQUEDUCT_LLM_BASE_URL')"
 
 secrets:
   provider: "env"

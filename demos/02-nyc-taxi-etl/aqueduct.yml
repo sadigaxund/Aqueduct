@@ -37,9 +37,9 @@ spark_config:
 #       status: "${STATUS}"
 
 agent:
-  provider: "openai_compat"
-  base_url: "http://10.0.0.39:11434/v1"
-  model: "qwen2.5-coder:7b-instruct-q8_0"
+  provider: "${AQUEDUCT_LLM_PROVIDER:-openai_compat}"
+  base_url: "${AQUEDUCT_LLM_BASE_URL:-http://localhost:11434/v1}"
+  model: "${AQUEDUCT_LLM_MODEL:-qwen2.5-coder:7b-instruct-q8_0}"
   llm_timeout: 600.0
   # ollama_options:
   #   num_thread: 16

@@ -22,6 +22,8 @@ Schema reference: docs/specs.md §10.1
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -249,6 +251,41 @@ class AqueductConfig(BaseModel):
 
 _DEFAULT_FILENAME = "aqueduct.yml"
 
+_ENV_VAR_RE = re.compile(r'\$\{([^}:]+)(?::[-]?(.*?))?\}')
+# Matches: "@aq.secret('KEY')" or "@aq.secret(\"KEY\")" with optional surrounding YAML quotes
+_AQ_SECRET_RE = re.compile(r"""["']?@aq\.secret\(['"]([^'"]+)['"]\)["']?""")
+
+
+def _expand_env_vars(text: str) -> tuple[str, list[str]]:
+    """Expand ${VAR}, ${VAR:-default}, and @aq.secret('KEY') in aqueduct.yml.
+
+    Returns (expanded_text, missing_vars). Caller raises ConfigError if missing_vars
+    is non-empty. @aq.secret() resolves via os.environ only (provider not live yet).
+    """
+    missing: list[str] = []
+
+    def _replace_env(m: re.Match) -> str:
+        var, default = m.group(1), m.group(2)
+        val = os.environ.get(var)
+        if val is not None:
+            return val
+        if default is not None:
+            return default
+        missing.append(f"${{{var}}}")
+        return ""
+
+    def _replace_secret(m: re.Match) -> str:
+        key = m.group(1)
+        val = os.environ.get(key)
+        if val is not None:
+            return val
+        missing.append(f"@aq.secret('{key}')")
+        return ""
+
+    text = _ENV_VAR_RE.sub(_replace_env, text)
+    text = _AQ_SECRET_RE.sub(_replace_secret, text)
+    return text, missing
+
 
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
@@ -277,6 +314,12 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         raw_text = resolved.read_text(encoding="utf-8")
     except OSError as exc:
         raise ConfigError(f"Cannot read config file {resolved}: {exc}") from exc
+
+    raw_text, missing = _expand_env_vars(raw_text)
+    if missing:
+        raise ConfigError(
+            f"Missing environment variables in {resolved}: {', '.join(missing)}"
+        )
 
     try:
         data = yaml.safe_load(raw_text)
