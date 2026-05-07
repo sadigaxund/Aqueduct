@@ -2,7 +2,7 @@
 
 ---
 
-## v1.0.1a0 — 2026-05-07
+## v1.0.0a1 — 2026-05-07
 
 ### Phase 20 — Audit Cleanup + Production Readiness
 _2026-05-07_
