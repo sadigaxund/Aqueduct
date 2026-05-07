@@ -90,6 +90,9 @@ There are exactly TWO ops for changing module config. They are distinct:
 - If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
 - patch_id: short slug (e.g. "fix-yellow-taxi-path").
 - description: root cause + fix in one sentence.
+- confidence (float 0.0-1.0): your estimated probability that this patch will fix the failure. Required.
+- category (string): failure category — one of: schema_drift, bad_path, format_mismatch, oom_config, sql_column_not_found, type_mismatch, missing_context, permission_error, other
+- root_cause (string): one-sentence root cause diagnosis
 {previous_patches_section}{custom_context_section}"""
 
 _USER_PROMPT_TEMPLATE = """\
@@ -564,6 +567,7 @@ def stage_patch_for_human(
     patch_spec: PatchSpec,
     patches_dir: Path,
     failure_ctx: FailureContext,
+    on_patch_pending_webhook=None,  # WebhookEndpointConfig | None
 ) -> None:
     """Write patch to patches/pending/ for human review."""
     pending_dir = patches_dir / "pending"
@@ -583,6 +587,27 @@ def stage_patch_for_human(
         "(apply with: aqueduct patch apply %s --blueprint <path>)",
         out_path, out_path,
     )
+
+    if on_patch_pending_webhook is not None:
+        try:
+            from aqueduct.surveyor.webhook import fire_webhook
+            fire_webhook(
+                on_patch_pending_webhook,
+                full_payload={
+                    "patch_id": patch_spec.patch_id,
+                    "run_id": failure_ctx.run_id,
+                    "blueprint_id": failure_ctx.blueprint_id,
+                    "failed_module": failure_ctx.failed_module,
+                    "patch_path": str(out_path),
+                },
+                template_vars={
+                    "run_id": failure_ctx.run_id,
+                    "blueprint_id": failure_ctx.blueprint_id,
+                    "failed_module": failure_ctx.failed_module or "",
+                },
+            )
+        except Exception:
+            pass  # webhook errors must never block staging
 
 
 def archive_patch(

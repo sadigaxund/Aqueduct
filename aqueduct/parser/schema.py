@@ -52,7 +52,7 @@ class GuardrailsSchema(BaseModel):
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    approval_mode: Literal["disabled", "human", "auto", "aggressive"] = "disabled"
+    approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = "disabled"
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
     max_patches_per_run: int = 5
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
@@ -93,6 +93,11 @@ class ModuleSchema(BaseModel):
     def validate_id(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("Module id must not be empty")
+        if "__" in v:
+            raise ValueError(
+                f"Module ID {v!r} contains '__' which is reserved for Arcade expansion. "
+                "Use a single underscore or hyphen instead."
+            )
         return v
 
     @field_validator("type")

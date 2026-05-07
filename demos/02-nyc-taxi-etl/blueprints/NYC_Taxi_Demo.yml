@@ -88,7 +88,7 @@ modules:
       op: sql
       udfs: [calc_duration_min]
       query: |
-        SELECT 
+        SELECT
           *,
           calc_duration_min(pickup_datetime, dropoff_datetime) as duration_min
         FROM all_taxi_trips

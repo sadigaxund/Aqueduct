@@ -742,7 +742,71 @@ udf_registry:
     deterministic: true
 ```
 
-UDFs are registered with the SparkSession before any Channel that references them executes. Spillway routing is automatically applied to UDF calls — if a UDF raises an exception on a row, the row is routed to the Channel's spillway port with the exception captured in \_aq\_error\_msg.
+UDFs are registered with the SparkSession before any Channel that references them executes. Spillway routing is automatically applied to UDF calls — if a UDF raises an exception on a row, the row is routed to the Channel's spillway port with the exception captured in `_aq_error_msg`.
+
+**Python UDFs — module layout**
+
+Place UDF code in a `udfs/` directory at the project root. Either a single `.py` file or a package with `__init__.py` works — both import the same way:
+
+```
+udfs/
+  taxi_math.py          # → module: udfs.taxi_math
+  geo/
+    __init__.py
+    haversine.py        # → module: udfs.geo.haversine
+```
+
+The `entry` field names the callable inside the module. If omitted, defaults to `id`.
+
+**Decorated UDFs (recommended):**
+
+```python
+from pyspark.sql.functions import udf
+from pyspark.sql.types import DoubleType
+
+@udf(returnType=DoubleType())
+def calc_duration_min(pickup_dt, dropoff_dt):
+    if pickup_dt is None or dropoff_dt is None:
+        return 0.0
+    return float((dropoff_dt - pickup_dt).total_seconds() / 60.0)
+```
+
+When the function carries a `returnType` attribute (set by `@udf` or `@pandas_udf`), Aqueduct skips the `return_type` field in Blueprint — the type is already encoded in the function.
+
+**Python version constraint:** PySpark 3.5 bundles cloudpickle 2.2.1, which does not support Python 3.13+. On Python 3.13+, install `cloudpickle` separately (`pip install cloudpickle`) — Aqueduct will automatically patch PySpark's bundled version at UDF registration time. Python ≤ 3.12 requires no extra steps.
+
+**Java/Scala UDFs**
+
+Java/Scala UDFs bypass Python serialisation entirely — they run as JVM bytecode with no cloudpickle dependency:
+
+1. Write a class implementing `org.apache.spark.sql.api.java.UDF1<T, R>` (or `UDF2`, `UDF3`, ...) and package it as a JAR.
+2. Reference it in the Blueprint:
+
+```yaml
+udf_registry:
+  - id: haversine_distance
+    lang: java                              # or scala
+    jar: udfs/geo-udfs.jar                  # path relative to project root
+    entry: com.myco.udfs.Haversine          # fully-qualified class name
+    return_type: DOUBLE
+```
+
+Aqueduct calls `spark.sparkContext.addJar(jar_path)` and `spark.udf.registerJavaFunction(id, class_name, return_type)`. No additional Spark configuration required for local mode.
+
+**UDAFs (User-Defined Aggregate Functions)**
+
+UDAFs aggregate across rows (custom `SUM`, `AVG`, windowed stats). In PySpark, use `@pandas_udf` with `PandasUDFType.GROUPED_AGG`:
+
+```python
+import pandas as pd
+from pyspark.sql.functions import pandas_udf, PandasUDFType
+
+@pandas_udf("double", PandasUDFType.GROUPED_AGG)
+def weighted_avg(value: pd.Series, weight: pd.Series) -> float:
+    return (value * weight).sum() / weight.sum()
+```
+
+Register in Blueprint identically to regular Python UDFs. Aqueduct detects the `returnType` attribute and skips the redundant `return_type` Blueprint field. UDAFs are only valid in grouped SQL queries — call them in a Channel `query` with a `GROUP BY` clause.
 
 ## **5.6 Depot — Persistent KV Store**
 The Depot is Aqueduct's built-in state store for cross-run persistence. It supports watermarking, incremental load patterns, and cross-pipeline coordination.
@@ -1027,23 +1091,30 @@ The agent responds exclusively with a PatchSpec JSON object. Any response that i
 |**replace\_retry\_policy**|Replace the pipeline-level retry policy. Used when the agent determines the current policy is causing repeated failures.|
 |**add\_arcade\_ref**|Reference a new or existing Arcade sub-Blueprint. Used when the agent restructures repeated logic into a reusable Arcade.|
 
+**Patch metadata fields** (returned by the LLM alongside operations):
+
+| Field | Type | Description |
+|---|---|---|
+| `confidence` | float 0.0–1.0 | LLM-estimated probability this patch fixes the failure. If < 0.7, patch is auto-escalated to human review regardless of `approval_mode`. |
+| `category` | string | Failure category: `schema_drift`, `bad_path`, `format_mismatch`, `oom_config`, `sql_column_not_found`, `type_mismatch`, `missing_context`, `permission_error`, `other`. Used in `healing_outcomes` analytics. |
+| `root_cause` | string | One-sentence root cause diagnosis. Included in patch rationale. |
+
 Example PatchSpec (single operation):
 
-```JSON
+```json
 {
   "patch_id":   "patch_20240412_143155",
   "run_id":     "run_20240412_143022_a3f9",
-  "rationale":  "Column event_ts is STRING but cast to TIMESTAMP without explicit
-                 format. Replacing with explicit format string cast.",
+  "rationale":  "Column event_ts is STRING but cast to TIMESTAMP without explicit format. Replacing with explicit format string cast.",
+  "confidence": 0.92,
+  "category":   "type_mismatch",
+  "root_cause": "event_ts column is STRING type but used directly in TIMESTAMP cast without format argument.",
   "operations": [
     {
-      "op":        "replace_module_config",
+      "op":        "set_module_config_key",
       "module_id": "cast_and_clean",
-      "config": {
-        "op": "sql",
-        "query": "SELECT *, TO_TIMESTAMP(event_ts, 'yyyy-MM-dd HH:mm:ss')
-                  AS event_ts FROM dedup_orders"
-      }
+      "key":       "query",
+      "value":     "SELECT *, TO_TIMESTAMP(event_ts, 'yyyy-MM-dd HH:mm:ss') AS event_ts FROM dedup_orders"
     }
   ]
 }
@@ -1103,12 +1174,30 @@ agent:
 1. FailureContext is posted to the configured LLM endpoint with the PatchSpec schema and optional `prompt_context` instructions.
 1. LLM responds with a PatchSpec JSON. Aqueduct validates the PatchSpec against its schema. If invalid, the LLM is re-prompted with the validation error. Maximum `llm_max_reprompts` attempts (default 3) before giving up. On timeout or network failure, the attempt aborts immediately without retry.
 1. Valid PatchSpec is checked against guardrails (allowed\_paths, forbidden\_ops). If any guardrail fires, patch is staged in patches/pending/ for human review regardless of approval\_mode.
+1. **Confidence check:** If the LLM returns `confidence < 0.7`, the patch is automatically escalated to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied. The threshold is fixed at 0.7 and is not configurable.
 1. If approval\_mode: disabled — LLM never fires.
 1. If approval\_mode: human — Patch is held in patches/pending/. Engineer reviews and runs: aqueduct patch apply <patch\_id> or aqueduct patch reject <patch\_id>.
 1. If approval\_mode: auto — Patch is applied in-memory and validated by re-running the pipeline. Only if the re-run succeeds is the Blueprint updated on disk. If the re-run fails, the Blueprint is unchanged. One patch attempt per run.
 1. If approval\_mode: aggressive — If `validate_patch: true`: patch is compiled in memory first; if invalid, staged for human review and loop stops. Otherwise: patch is applied to the Blueprint immediately and the pipeline re-runs. Loops up to max\_patches\_per\_run times. ⚠ Blueprint may be modified multiple times autonomously.
+1. If approval\_mode: ci — Patch is staged to `patches/pending/` AND a `POST` is fired to `agent.ci_webhook_url` (or `webhooks.on_ci_patch`) with the full PatchSpec JSON + `run_id` + `failed_module` + `confidence`. External CI creates the branch and PR. The pipeline is not re-run automatically.
 1. Pending patch is moved from `patches/pending/<timestamp>_<slug>.json` to `patches/applied/<timestamp>_<slug>.json` with `applied_at` timestamp, run\_id, and agent rationale preserved. `patches/pending/` and `patches/rejected/` are gitignored; `patches/applied/` is committed alongside the Blueprint change.
 1. If max\_patches\_per\_run is reached without a successful run, the pipeline is aborted.
+
+**`healing_outcomes` table:** Every healing attempt — whether the patch was applied, whether the re-run succeeded — is recorded in `obs.db`'s `healing_outcomes` table:
+
+| Column | Description |
+|---|---|
+| `run_id` | The original failed run |
+| `failed_module` | Module that triggered healing |
+| `failure_category` | LLM-assigned category string |
+| `model` | LLM model used |
+| `patch_id` | PatchSpec identifier |
+| `confidence` | LLM confidence score |
+| `patch_applied` | Whether the patch was written to Blueprint |
+| `run_success_after_patch` | Whether re-run succeeded |
+| `applied_at` | ISO-8601 timestamp |
+
+Query with: `SELECT * FROM healing_outcomes WHERE blueprint_id = '...' ORDER BY applied_at DESC;`
 
 **Patch file naming:** `{seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `00001_20260502T143022_fix-green-path.json`. Sequence is monotonically increasing across all patches in the project. Enables chronological sort without reading file contents.
 
@@ -1130,6 +1219,79 @@ agent:
 - Any Module whose output was not yet consumed is re-executed from the first un-cached ancestor.
 - The Surveyor records which Modules completed successfully in the RunRecord before failure, enabling precise resume targeting.
 - If the patch modifies a Module that ran successfully before the failure, Aqueduct forces re-execution of that Module and all its descendants.
+
+## **8.8 Debugging a Failed Pipeline**
+
+Standard debugging workflow after a pipeline failure:
+
+**Step 1 — Identify the failure**
+```bash
+aqueduct runs blueprints/pipeline.yml --failed --last 5
+```
+Shows recent failed runs with `run_id`, `failed_module`, and `started_at`. Pick the `run_id`.
+
+**Step 2 — Check sources and config**
+```bash
+aqueduct doctor --blueprint blueprints/pipeline.yml
+```
+Checks Ingress/Egress paths exist, formats match file extensions, LLM is reachable, Spark is healthy. Warnings here often explain the failure.
+
+**Step 3 — Inspect the failure context**
+
+The failure context is stored in `obs.db` (table: `failure_contexts`). The full context — including provenance JSON, stack trace, and probe signals — is what the LLM receives:
+```bash
+# Query directly
+duckdb .aqueduct/obs/<blueprint_id>/obs.db \
+  "SELECT error_message, failed_module FROM failure_contexts WHERE run_id='<run_id>'"
+```
+
+**Step 4 — Check the module output trail**
+```bash
+aqueduct report <run_id>
+```
+Shows which modules succeeded, which failed, and byte/row counts from SparkListener.
+
+**Step 5 — Check lineage for column-level impact**
+```bash
+aqueduct lineage blueprints/pipeline.yml --from <failed_module>
+```
+Shows which columns flow into the failed module and from which sources.
+
+**Step 6 — Manually trigger healing**
+```bash
+aqueduct heal blueprints/pipeline.yml
+```
+Generates a patch for the most recent failed run. Useful when `approval_mode: disabled` but you want to try the LLM on demand. The patch is always staged to `patches/pending/` — never auto-applied by `heal`.
+
+**Step 7 — Inspect the patch**
+```bash
+aqueduct patch list --blueprint blueprints/pipeline.yml --status pending
+cat patches/pending/<patch_file>.json
+```
+Review `rationale`, `confidence`, `category`, `root_cause`, and `operations`.
+
+**Step 8 — Apply and re-run**
+```bash
+aqueduct patch apply patches/pending/<file> --blueprint blueprints/pipeline.yml
+aqueduct run blueprints/pipeline.yml
+```
+
+**Step 9 — Check healing analytics**
+```bash
+duckdb .aqueduct/obs/<blueprint_id>/obs.db \
+  "SELECT patch_id, confidence, failure_category, patch_applied, run_success_after_patch FROM healing_outcomes ORDER BY applied_at DESC LIMIT 10"
+```
+
+**Common failure patterns and fixes:**
+
+| Error | Likely cause | Patch op |
+|---|---|---|
+| `AnalysisException: Column 'X' not found` | Schema drift — upstream renamed column | `set_module_config_key` on `query` |
+| `IngressError: source not found` | Wrong path, missing file | `replace_context_value` on path key |
+| `IngressError: schema_hint mismatch` | Upstream schema changed | `set_module_config_key` on `schema_hint` or change `mode: additive` |
+| `AssertError: min_rows` | Empty dataset — data quality issue | Check source data; may not be a Blueprint bug |
+| `OutOfMemoryError` | Spark executor memory too low | `set_module_config_key` on `spark_config.spark.executor.memory` |
+| `UDFError: cannot import module` | Module not on `sys.path` / cloudpickle incompatibility | Check `udfs/` layout; run `pip install cloudpickle` on Python 3.13+ |
 
 
 # **9. Type System**
@@ -1216,10 +1378,16 @@ agent:
   prompt_context: |                # optional: appended to LLM system prompt for all blueprints
     This cluster runs Databricks. All paths use s3a:// or dbfs://.
   max_patches_per_run: 5
+deployment:
+  target: local                    # local | standalone | yarn | kubernetes | databricks
+  env: local                       # local | cluster | cloud  — doctor warns on local paths in cluster/cloud
+  master_url: "local[*]"
 probes:
   max_sample_rows: 100
   default_sample_fraction: 0.01
-  block_full_actions_in_prod: true
+danger:
+  allow_full_probe_actions: false  # if true, Probes may run full Spark actions (adds latency)
+  allow_aggressive_patching: false # if true, approval_mode: aggressive is allowed
 secrets:
   provider: env                    # env | aws | gcp | azure | vault
 
@@ -1254,6 +1422,8 @@ webhooks:
 | Pipeline success | `aqueduct.yml webhooks.on_success` | Run ends with `status=success` |
 | Per-module failure | Blueprint `on_failure_webhook` on any module | That module's retry is exhausted (fires regardless of `on_exhaustion` — even `alert_only`) |
 | Per-Assert-rule | Blueprint Assert rule `on_fail: {action: webhook, url: ...}` | That specific rule fails |
+| Patch staged | `aqueduct.yml webhooks.on_patch_pending` | A patch is written to `patches/pending/` (fires in `human` and `ci` modes) |
+| CI patch | `aqueduct.yml webhooks.on_ci_patch` | `approval_mode: ci` — fires with full patch JSON for external PR creation |
 
 All webhooks are best-effort (daemon thread), non-blocking, and do not affect pipeline outcome.
 
@@ -1469,6 +1639,7 @@ Detailed reference for the most common command:
 | `--resume <run_id>` | Resume a failed run from its last successful checkpoints. Skips all modules marked as `_aq_done` in the previous attempt. |
 | `--run-id <uuid>` | Force a specific UUID for this run. Useful for tracking runs across external systems. |
 | `--store-dir <path>` | Override the default `.aqueduct` directory for observability and state storage. |
+| `--allow-aggressive` | Allow `approval_mode: aggressive` for this run, overriding `danger.allow_aggressive_patching: false` in config. Single-use — does not modify `aqueduct.yml`. |
 
 **Sub-DAG execution example:**
 

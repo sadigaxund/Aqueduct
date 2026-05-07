@@ -67,9 +67,16 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         ) from exc
 
     # schema_hint check — uses df.schema (metadata only, not an action)
-    schema_hint: list[dict[str, str]] | None = cfg.get("schema_hint")
+    schema_hint_raw = cfg.get("schema_hint")
+    schema_hint_mode = "strict"  # default
+    schema_hint: list[dict[str, str]] | None = None
+    if isinstance(schema_hint_raw, dict):
+        schema_hint_mode = schema_hint_raw.get("mode", "strict")
+        schema_hint = schema_hint_raw.get("columns")
+    elif isinstance(schema_hint_raw, list):
+        schema_hint = schema_hint_raw
     if schema_hint:
-        _validate_schema_hint(module.id, df, schema_hint)
+        _validate_schema_hint(module.id, df, schema_hint, mode=schema_hint_mode)
 
     return df
 
@@ -78,6 +85,7 @@ def _validate_schema_hint(
     module_id: str,
     df: DataFrame,
     schema_hint: list[dict[str, str]],
+    mode: str = "strict",
 ) -> None:
     """Assert df.schema satisfies all hinted fields.
 
@@ -89,20 +97,51 @@ def _validate_schema_hint(
     """
     actual: dict[str, str] = {f.name: f.dataType.simpleString() for f in df.schema.fields}
 
-    for hint in schema_hint:
-        name: str | None = hint.get("name")
-        if not name:
-            continue
-
-        if name not in actual:
-            raise IngressError(
-                f"[{module_id}] schema_hint field {name!r} not found in source schema. "
-                f"Available columns: {sorted(actual)}"
-            )
-
-        expected_type: str | None = hint.get("type")
-        if expected_type and actual[name] != expected_type:
-            raise IngressError(
-                f"[{module_id}] schema_hint type mismatch on {name!r}: "
-                f"expected {expected_type!r}, actual {actual[name]!r}"
-            )
+    if mode == "strict":
+        # All hinted columns must exist with matching types
+        for hint in schema_hint:
+            name = hint.get("name")
+            if not name:
+                continue
+            if name not in actual:
+                raise IngressError(
+                    f"[{module_id}] schema_hint field {name!r} not found in source schema. "
+                    f"Available columns: {sorted(actual)}"
+                )
+            expected_type = hint.get("type")
+            if expected_type and actual[name] != expected_type:
+                raise IngressError(
+                    f"[{module_id}] schema_hint type mismatch on {name!r}: "
+                    f"expected {expected_type!r}, actual {actual[name]!r}"
+                )
+    elif mode == "additive":
+        # Extra upstream columns are allowed; only check hinted columns
+        for hint in schema_hint:
+            name = hint.get("name")
+            if not name:
+                continue
+            if name not in actual:
+                raise IngressError(
+                    f"[{module_id}] schema_hint field {name!r} not found in source schema. "
+                    f"Available columns: {sorted(actual)}"
+                )
+            expected_type = hint.get("type")
+            if expected_type and actual[name] != expected_type:
+                raise IngressError(
+                    f"[{module_id}] schema_hint type mismatch on {name!r}: "
+                    f"expected {expected_type!r}, actual {actual[name]!r}"
+                )
+    elif mode == "subset":
+        # Missing optional columns are allowed; only validate present ones
+        for hint in schema_hint:
+            name = hint.get("name")
+            if not name or name not in actual:
+                continue  # missing is OK in subset mode
+            expected_type = hint.get("type")
+            if expected_type and actual[name] != expected_type:
+                raise IngressError(
+                    f"[{module_id}] schema_hint type mismatch on {name!r}: "
+                    f"expected {expected_type!r}, actual {actual[name]!r}"
+                )
+    else:
+        raise IngressError(f"[{module_id}] Unknown schema_hint mode: {mode!r}. Use strict, additive, or subset.")

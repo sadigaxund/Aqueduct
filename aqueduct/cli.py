@@ -326,6 +326,12 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     metavar="YYYY-MM-DD",
     help="Logical execution date for @aq.date.* functions — enables idempotent backfills",
 )
+@click.option(
+    "--allow-aggressive",
+    is_flag=True,
+    default=False,
+    help="Allow approval_mode: aggressive for this run (overrides danger.allow_aggressive_patching=false)",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -338,6 +344,7 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
+    allow_aggressive: bool = False,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import os
@@ -393,11 +400,33 @@ def run(
         sys.exit(1)
 
     # CLI flags override config file; config file overrides built-in defaults
-    resolved_store_dir = store_dir_abs if store_dir_abs else Path(cfg.stores.obs.path).parent
+    # Per-pipeline store paths: default .aqueduct/obs/<blueprint_id>.db instead of shared obs.db
+    if store_dir_abs:
+        resolved_store_dir = store_dir_abs
+    else:
+        _obs_path = cfg.stores.obs.path
+        _default_obs = ".aqueduct/obs.db"
+        if _obs_path == _default_obs:
+            # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
+            resolved_store_dir = None  # set below after manifest
+        else:
+            resolved_store_dir = Path(_obs_path).parent
     # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
     resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
     master_url = cfg.deployment.master_url
+
+    # ── Danger settings startup warning ──────────────────────────────────────
+    danger_active = []
+    if cfg.danger.allow_full_probe_actions:
+        danger_active.append("allow_full_probe_actions=true")
+    if cfg.danger.allow_aggressive_patching:
+        danger_active.append("allow_aggressive_patching=true")
+    if danger_active:
+        click.echo(
+            f"⚠  DANGER settings active: {', '.join(danger_active)}",
+            err=True,
+        )
 
     # Resolve executor early so an unsupported engine exits before any Spark work
     try:
@@ -446,6 +475,21 @@ def run(
     except CompileError as exc:
         click.echo(f"✗ compile error: {exc}", err=True)
         sys.exit(1)
+
+    # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
+    if resolved_store_dir is None:
+        resolved_store_dir = Path(f".aqueduct/obs/{manifest.blueprint_id}")
+        resolved_store_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Aggressive mode danger gate ────────────────────────────────────────────
+    if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:
+        if not cfg.danger.allow_aggressive_patching:
+            click.echo(
+                "✗ approval_mode: aggressive requires danger.allow_aggressive_patching: true "
+                "in aqueduct.yml, or pass --allow-aggressive for this run.",
+                err=True,
+            )
+            sys.exit(1)
 
     # ── Pending patch check ────────────────────────────────────────────────────
     patches_dir = _project_root / "patches"
@@ -554,7 +598,7 @@ def run(
                 resume_run_id=resume_run_id if patch_count == 0 else None,
                 from_module=from_module,
                 to_module=to_module,
-                block_full_actions=cfg.probes.block_full_actions_in_prod,
+                block_full_actions=not cfg.danger.allow_full_probe_actions,
             )
         except ExecuteError as exc:
             execute_exc = exc
@@ -604,7 +648,7 @@ def run(
         try:
             from aqueduct.doctor import check_blueprint_sources_from_manifest
             from dataclasses import replace as _dc_replace
-            _dr = check_blueprint_sources_from_manifest(manifest)
+            _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
             _hints = tuple(
                 f"{r.name} — {r.detail}"
                 for r in _dr if r.status in ("warn", "fail")
@@ -631,8 +675,15 @@ def run(
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
             break
 
+        # ── Confidence escalation — low-confidence patches go to human ─────────
+        if patch.confidence is not None and patch.confidence < 0.7 and effective_mode not in ("human", "disabled"):
+            click.echo(
+                f"  ↑ LLM patch confidence {patch.confidence:.0%} < 70% — escalating to human review",
+                err=True,
+            )
+            effective_mode = "human"
+
         # ── Guardrail check (pre-staging) ─────────────────────────────────────
-        # Use apply.py's guardrail check — resolves ${ctx.*} path values via provenance_map
         try:
             from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
             import yaml as _yaml
@@ -642,21 +693,29 @@ def run(
         except _PatchError as _ge:
             guardrail_err = str(_ge)
         except Exception:
-            guardrail_err = None  # don't block on unexpected errors
+            guardrail_err = None
         if guardrail_err:
             last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
             click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
-            stage_patch_for_human(patch, patches_dir, failure_ctx)
+            stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                  on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
             click.echo(
                 f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
                 err=True,
+            )
+            surveyor.record_healing_outcome(
+                run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                failure_category=patch.category, model=resolved_agent_model,
+                patch_id=patch.patch_id, confidence=patch.confidence,
+                patch_applied=False, run_success_after_patch=False,
             )
             break
 
         patch_count += 1
 
         if effective_mode == "human":
-            stage_patch_for_human(patch, patches_dir, failure_ctx)
+            stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                  on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
             pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
                 or patches_dir / "pending" / f"{patch.patch_id}.json"
             rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
@@ -666,10 +725,43 @@ def run(
                 f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
                 err=True,
             )
-            break  # human reviews; no re-run
+            surveyor.record_healing_outcome(
+                run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                failure_category=patch.category, model=resolved_agent_model,
+                patch_id=patch.patch_id, confidence=patch.confidence,
+                patch_applied=False, run_success_after_patch=False,
+            )
+            break
+
+        elif effective_mode == "ci":
+            _ci_url = resolved_agent_base_url or (cfg.agent.ci_webhook_url if hasattr(cfg.agent, "ci_webhook_url") else None)
+            if _ci_url:
+                try:
+                    import json as _json
+                    import httpx as _httpx
+                    _httpx.post(_ci_url, json={
+                        "patch": patch.model_dump(),
+                        "run_id": current_run_id,
+                        "blueprint_id": manifest.blueprint_id,
+                        "failed_module": failure_ctx.failed_module,
+                    }, timeout=10)
+                except Exception as _ce:
+                    click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
+            stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                  on_patch_pending_webhook=cfg.webhooks.on_ci_patch)
+            click.echo(
+                f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
+                err=True,
+            )
+            surveyor.record_healing_outcome(
+                run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                failure_category=patch.category, model=resolved_agent_model,
+                patch_id=patch.patch_id, confidence=patch.confidence,
+                patch_applied=False, run_success_after_patch=False,
+            )
+            break
 
         elif effective_mode == "auto":
-            # Apply in-memory → re-run → write permanently only if success
             new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
             if new_manifest is None:
                 click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
@@ -689,23 +781,26 @@ def run(
                     status="error",
                     module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
                 )
-            failure_ctx2 = surveyor.record(result2)
-            if result2.status == "success":
+            patch_success = result2.status == "success"
+            failure_ctx2 = surveyor.record(result2, patched=patch_success)
+            surveyor.record_healing_outcome(
+                run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                failure_category=patch.category, model=resolved_agent_model,
+                patch_id=patch.patch_id, confidence=patch.confidence,
+                patch_applied=True, run_success_after_patch=patch_success,
+            )
+            if patch_success:
                 _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
-                click.echo(
-                    f"  ✓ LLM patch validated and applied → {blueprint}",
-                    err=True,
-                )
+                click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
                 result = result2
                 failure_ctx = failure_ctx2
             else:
                 click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
                 result = result2
                 failure_ctx = failure_ctx2
-            break  # auto: one patch attempt only
+            break
 
         elif effective_mode == "aggressive":
-            # Dry-run: pre-validate patched Blueprint before writing to disk
             if manifest.agent.validate_patch:
                 pre_manifest = _apply_patch_in_memory(
                     patch, Path(blueprint), depot, profile, cli_overrides or {}
@@ -716,28 +811,39 @@ def run(
                         f"staging for human review.",
                         err=True,
                     )
-                    stage_patch_for_human(patch, patches_dir, failure_ctx)
-                    click.echo(
-                        f"  ✎ Patch staged → patches/pending/{patch.patch_id}.json",
-                        err=True,
+                    stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                          on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                    click.echo(f"  ✎ Patch staged → patches/pending/{patch.patch_id}.json", err=True)
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=False, run_success_after_patch=False,
                     )
                     break
 
-            # Write to Blueprint permanently, re-compile, continue loop
             new_manifest = _write_patch_to_blueprint(
                 patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive"
             )
             if new_manifest is None:
                 last_apply_error = f"Patch {patch.patch_id!r} produced an invalid Blueprint and was not applied."
                 click.echo("  ✗ LLM patch failed to apply, stopping", err=True)
+                surveyor.record_healing_outcome(
+                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    failure_category=patch.category, model=resolved_agent_model,
+                    patch_id=patch.patch_id, confidence=patch.confidence,
+                    patch_applied=False, run_success_after_patch=False,
+                )
                 break
-            last_apply_error = None  # patch applied — reset for next iteration
-            manifest = new_manifest
-            click.echo(
-                f"  ✓ LLM patch applied ({patch_count}/{max_patches}) → {blueprint}",
-                err=True,
+            surveyor.record_healing_outcome(
+                run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                failure_category=patch.category, model=resolved_agent_model,
+                patch_id=patch.patch_id, confidence=patch.confidence,
+                patch_applied=True, run_success_after_patch=False,  # unknown until next iteration
             )
-            # Continue loop with updated manifest
+            last_apply_error = None
+            manifest = new_manifest
+            click.echo(f"  ✓ LLM patch applied ({patch_count}/{max_patches}) → {blueprint}", err=True)
 
     # ── Surveyor stop ─────────────────────────────────────────────────────────
     surveyor.stop()
@@ -757,7 +863,7 @@ def run(
             line += f"  — {mr.error}"
         click.echo(line)
 
-    if result.status != "success":
+    if result.status not in ("success", "patched"):
         if failure_ctx:
             click.echo(
                 f"\n✗ blueprint failed  run_id={result.run_id}"
@@ -783,7 +889,8 @@ def run(
             template_vars=success_payload,
         )
 
-    click.echo(f"\n✓ blueprint complete  run_id={result.run_id}")
+    status_label = "patched" if result.status == "patched" else "complete"
+    click.echo(f"\n✓ blueprint {status_label}  run_id={result.run_id}")
 
 
 # ── patch helpers ────────────────────────────────────────────────────────────
@@ -2054,6 +2161,10 @@ _GITIGNORE = """\
 # Applied patches (tracked by git commit message; backups unnecessary)
 patches/applied/
 patches/backups/
+
+# Unreviewed and rejected patches — do not commit
+patches/pending/
+patches/rejected/
 
 # Python
 __pycache__/

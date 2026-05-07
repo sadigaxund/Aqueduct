@@ -58,6 +58,19 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
     started_at     TIMESTAMPTZ NOT NULL,
     finished_at    TIMESTAMPTZ NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS healing_outcomes (
+    id           INTEGER PRIMARY KEY,
+    run_id       VARCHAR NOT NULL,
+    failed_module VARCHAR,
+    failure_category VARCHAR,
+    model        VARCHAR,
+    patch_id     VARCHAR,
+    confidence   DOUBLE,
+    patch_applied BOOLEAN,
+    run_success_after_patch BOOLEAN,
+    applied_at   VARCHAR
+);
 """
 
 _SIGNAL_OVERRIDES_DDL = """
@@ -168,6 +181,7 @@ class Surveyor:
         self,
         result: ExecutionResult,
         exc: Exception | None = None,
+        patched: bool = False,
     ) -> FailureContext | None:
         """Persist the final run outcome.
 
@@ -193,13 +207,14 @@ class Surveyor:
              for r in result.module_results]
         )
 
+        effective_status = "patched" if (patched and result.status == "success") else result.status
         self._conn.execute(
             """
             UPDATE run_records
             SET status = ?, finished_at = ?, module_results = ?
             WHERE run_id = ?
             """,
-            [result.status, _iso(finished_at), module_results_json, result.run_id],
+            [effective_status, _iso(finished_at), module_results_json, result.run_id],
         )
 
         if result.status == "success":
@@ -271,6 +286,36 @@ class Surveyor:
             fire_webhook(self._webhook_config, ctx.to_dict(), template_vars)
 
         return ctx
+
+    def record_healing_outcome(
+        self,
+        *,
+        run_id: str,
+        failed_module: str | None,
+        failure_category: str | None,
+        model: str | None,
+        patch_id: str | None,
+        confidence: float | None,
+        patch_applied: bool,
+        run_success_after_patch: bool,
+    ) -> None:
+        """Persist one LLM healing attempt to healing_outcomes table."""
+        if self._conn is None:
+            return
+        import datetime as _dt
+        self._conn.execute(
+            """
+            INSERT INTO healing_outcomes
+            (run_id, failed_module, failure_category, model, patch_id, confidence,
+             patch_applied, run_success_after_patch, applied_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                run_id, failed_module, failure_category, model, patch_id, confidence,
+                patch_applied, run_success_after_patch,
+                _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            ],
+        )
 
     def evaluate_regulator(self, regulator_id: str) -> bool:
         """Evaluate whether a Regulator's gate is open (True) or closed (False).

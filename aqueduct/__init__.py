@@ -1,6 +1,6 @@
 """Aqueduct — Intelligent Spark Blueprint Engine."""
 
-__version__ = "1.0.0a0"
+__version__ = "1.0.1a0"
 
 from aqueduct.parser.parser import parse, ParseError
 
