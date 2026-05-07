@@ -1390,6 +1390,8 @@ danger:
   allow_aggressive_patching: false # if true, approval_mode: aggressive is allowed
 secrets:
   provider: env                    # env | aws | gcp | azure | vault
+                                   # Controls @aq.secret() resolution inside Blueprints.
+                                   # Only "env" (os.environ) is fully implemented today.
 
 # Simple form — plain URL, sends full context JSON via POST
 webhooks:
@@ -1412,6 +1414,26 @@ webhooks:
     method: POST
     payload:
       text: "Pipeline *${blueprint_id}* complete — ${module_count} modules  run_id=${run_id}"
+```
+
+**Environment variable substitution in `aqueduct.yml`**
+
+`aqueduct.yml` is expanded before YAML parsing. Two syntaxes are supported:
+
+| Syntax | Behavior |
+| :- | :- |
+| `${VAR}` | Replaced with `os.environ["VAR"]`; left as-is if unset (Pydantic error) |
+| `${VAR:-default}` or `${VAR:default}` | Replaced with env var if set, otherwise `default` (dash optional) |
+| `@aq.secret('KEY')` | Resolved via `os.environ["KEY"]` (always — see note below) |
+
+> **Note on `@aq.secret()` in `aqueduct.yml`:** The secrets provider (e.g. Vault, AWS SSM) is initialized *after* `aqueduct.yml` is loaded. So `@aq.secret()` inside `aqueduct.yml` always resolves via `os.environ`, ignoring `secrets.provider`. Use `@aq.secret()` in Blueprints (where the provider is live) for Vault/AWS/GCP keys. In `aqueduct.yml`, use `${VAR:-default}` for optional fields and plain env vars for credentials.
+
+```yaml
+# Example — LLM agent config with env-var fallback and secret lookup:
+agent:
+  provider: ${AQUEDUCT_LLM_PROVIDER:-openai_compat}
+  model: "@aq.secret('AQUEDUCT_LLM_MODEL')"        # reads os.environ["AQUEDUCT_LLM_MODEL"]
+  base_url: "@aq.secret('AQUEDUCT_LLM_BASE_URL')"  # reads os.environ["AQUEDUCT_LLM_BASE_URL"]
 ```
 
 **Three webhook scopes:**
