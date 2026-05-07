@@ -31,7 +31,7 @@ class TestSchemaValidation:
         assert len(bp.edges) == 2
 
     def test_invalid_module_type_raises(self):
-        with pytest.raises(ParseError, match="schema validation"):
+        with pytest.raises(ParseError, match="validation error"):
             parse(FIXTURES / "invalid_schema.yml")
 
     def test_invalid_yaml_syntax_raises(self, tmp_path):
@@ -55,7 +55,7 @@ class TestSchemaValidation:
         bad.write_text(
             "aqueduct: '2.0'\nid: test\nname: Test\ncontext: {}\nmodules:\n  - id: m\n    type: Channel\n    label: M\nedges: []\n"
         )
-        with pytest.raises(ParseError, match="schema validation"):
+        with pytest.raises(ParseError, match="validation error"):
             parse(bad)
 
     def test_unknown_top_level_field_raises(self, tmp_path):
@@ -65,7 +65,7 @@ class TestSchemaValidation:
             "modules:\n  - id: m\n    type: Channel\n    label: M\n"
             "edges: []\nunknown_field: oops\n"
         )
-        with pytest.raises(ParseError, match="schema validation"):
+        with pytest.raises(ParseError, match="validation error"):
             parse(bad)
 
     def test_duplicate_module_ids_raises(self, tmp_path):
@@ -77,13 +77,13 @@ class TestSchemaValidation:
             "  - id: dup\n    type: Egress\n    label: B\n"
             "edges: []\n"
         )
-        with pytest.raises(ParseError, match="schema validation"):
+        with pytest.raises(ParseError, match="validation error"):
             parse(bad)
 
     def test_modules_field_required(self, tmp_path):
         bad = tmp_path / "no_modules.yml"
         bad.write_text("aqueduct: '1.0'\nid: test\nname: Test\ncontext: {}\nedges: []\n")
-        with pytest.raises(ParseError, match="schema validation"):
+        with pytest.raises(ParseError, match="validation error"):
             parse(bad)
 
 

@@ -59,7 +59,7 @@ def test_load_config_unknown_top_level_key(tmp_path):
     """unknown top-level key -> ConfigError (extra='forbid')"""
     path = tmp_path / "extra.yml"
     path.write_text("unknown_field: 123")
-    with pytest.raises(ConfigError, match="Config validation failed"):
+    with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
 
 
@@ -67,7 +67,7 @@ def test_load_config_unknown_nested_key(tmp_path):
     """unknown nested key in deployment -> ConfigError"""
     path = tmp_path / "nested.yml"
     path.write_text("deployment:\n  alien_tech: true")
-    with pytest.raises(ConfigError, match="Config validation failed"):
+    with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
 
 
@@ -113,3 +113,22 @@ def test_config_overrides(tmp_path):
     
     # Dict preserved
     assert config.spark_config == {"spark.driver.memory": "2g"}
+
+
+def test_webhook_config_defaults():
+    config = AqueductConfig()
+    assert config.webhooks.on_success is None
+    assert config.webhooks.on_failure is None
+
+
+def test_webhook_config_coercion(tmp_path):
+    path = tmp_path / "webhooks.yml"
+    data = {
+        "webhooks": {
+            "on_success": "http://api.test/success"
+        }
+    }
+    path.write_text(yaml.dump(data))
+    config = load_config(path)
+    assert config.webhooks.on_success.url == "http://api.test/success"
+    assert config.webhooks.on_success.method == "POST"

@@ -267,3 +267,54 @@ def test_lineage_written_after_channel_run(spark: SparkSession, sample_data, tmp
     count = conn.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
     conn.close()
     assert count > 0, "At least one lineage row must be recorded"
+
+
+def test_linear_ingress_egress_metrics(spark: SparkSession, sample_data, tmp_path):
+    """Ingress → Egress: verify module_metrics recorded in obs.db."""
+    out = tmp_path / "out"
+    store = tmp_path / "store"
+    result = _run("bp_linear.yml", {
+        "input_path": str(sample_data / "orders.parquet"),
+        "output_path": str(out),
+    }, spark, store_dir=store)
+
+    assert result.status == "success"
+
+    import duckdb
+    conn = duckdb.connect(str(store / "obs.db"))
+    # Schema: (run_id, module_id, records_read, bytes_read, records_written, bytes_written, duration_ms, captured_at)
+    metrics = conn.execute("SELECT module_id, records_read, bytes_read, records_written, bytes_written, duration_ms FROM module_metrics").fetchall()
+    conn.close()
+
+    metrics_map = {m[0]: m[1:] for m in metrics}
+
+    # src (Ingress)
+    src = metrics_map["src"]
+    assert src[0] == 10  # records_read
+    assert src[1] > 0    # bytes_read
+    assert src[4] > 0    # duration_ms
+
+    # sink (Egress)
+    sink = metrics_map["sink"]
+    assert sink[2] == 10  # records_written
+    assert sink[3] > 0    # bytes_written
+    assert sink[4] > 0    # duration_ms
+
+
+def test_channel_metrics(spark: SparkSession, sample_data, tmp_path):
+    """Channel: verify duration_ms recorded."""
+    out = tmp_path / "out"
+    store = tmp_path / "store"
+    result = _run("bp_channel_filter.yml", {
+        "input_path": str(sample_data / "orders.parquet"),
+        "output_path": str(out),
+    }, spark, store_dir=store)
+
+    assert result.status == "success"
+
+    import duckdb
+    conn = duckdb.connect(str(store / "obs.db"))
+    metrics = conn.execute("SELECT module_id, duration_ms FROM module_metrics WHERE module_id = 'clean'").fetchone()
+    conn.close()
+
+    assert metrics[1] > 0

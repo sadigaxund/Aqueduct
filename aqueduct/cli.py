@@ -102,10 +102,31 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         return None
 
 
+def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
+    """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
+    if on_heal_failure == "stage":
+        from aqueduct.surveyor.llm import stage_patch_for_human
+        stage_patch_for_human(patch, patches_dir, failure_ctx,
+                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+        click_mod.echo(
+            f"  ✎ Failed patch staged for review → patches/pending/{patch.patch_id}.json",
+            err=True,
+        )
+    # discard: do nothing
+    # abort: caller handles break
+
+
 @click.group()
 @click.version_option(package_name="aqueduct")
-def cli() -> None:
+@click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
+    import logging
+    if verbose:
+        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
+    else:
+        logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
 
 
 @cli.command()
@@ -542,8 +563,8 @@ def run(
     resolved_agent_base_url = bp_agent.base_url or eng.base_url
     resolved_agent_model = bp_agent.model or eng.model
     resolved_agent_ollama_options = bp_agent.ollama_options or eng.ollama_options
-    resolved_agent_llm_timeout = eng.llm_timeout
-    resolved_agent_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_agent_llm_timeout = bp_agent.llm_timeout or eng.llm_timeout
+    resolved_agent_llm_max_reprompts = bp_agent.llm_max_reprompts or eng.llm_max_reprompts
     resolved_agent_engine_prompt_context = eng.prompt_context
     resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
 
@@ -552,8 +573,8 @@ def run(
     max_patches = manifest.agent.max_patches_per_run
     if approval_mode == "aggressive":
         click.echo(
-            f"⚠  approval_mode=aggressive — LLM may modify this Blueprint up to "
-            f"{max_patches} time(s) autonomously. All changes are permanent. "
+            f"⚠  approval_mode=aggressive — LLM will attempt up to {max_patches} patch(es). "
+            f"Each patch is validated in-memory before being written to Blueprint. "
             f"Review patches/applied/ after the run.",
             err=True,
         )
@@ -673,12 +694,19 @@ def run(
         )
         if patch is None:
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
+            on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
+            if on_hf == "stage":
+                click.echo(
+                    "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in obs.db.",
+                    err=True,
+                )
             break
 
         # ── Confidence escalation — low-confidence patches go to human ─────────
-        if patch.confidence is not None and patch.confidence < 0.7 and effective_mode not in ("human", "disabled"):
+        _conf_threshold = manifest.agent.confidence_threshold
+        if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
             click.echo(
-                f"  ↑ LLM patch confidence {patch.confidence:.0%} < 70% — escalating to human review",
+                f"  ↑ LLM patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
                 err=True,
             )
             effective_mode = "human"
@@ -796,38 +824,18 @@ def run(
                 failure_ctx = failure_ctx2
             else:
                 click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
+                _stage_failed_patch(
+                    manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                )
                 result = result2
                 failure_ctx = failure_ctx2
             break
 
         elif effective_mode == "aggressive":
-            if manifest.agent.validate_patch:
-                pre_manifest = _apply_patch_in_memory(
-                    patch, Path(blueprint), depot, profile, cli_overrides or {}
-                )
-                if pre_manifest is None:
-                    click.echo(
-                        f"  ✗ LLM patch produces invalid Blueprint (validate_patch=true); "
-                        f"staging for human review.",
-                        err=True,
-                    )
-                    stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                          on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
-                    click.echo(f"  ✎ Patch staged → patches/pending/{patch.patch_id}.json", err=True)
-                    surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                        failure_category=patch.category, model=resolved_agent_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                    )
-                    break
-
-            new_manifest = _write_patch_to_blueprint(
-                patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive"
-            )
+            new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
             if new_manifest is None:
-                last_apply_error = f"Patch {patch.patch_id!r} produced an invalid Blueprint and was not applied."
-                click.echo("  ✗ LLM patch failed to apply, stopping", err=True)
+                click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
+                last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
                 surveyor.record_healing_outcome(
                     run_id=current_run_id, failed_module=failure_ctx.failed_module,
                     failure_category=patch.category, model=resolved_agent_model,
@@ -835,15 +843,54 @@ def run(
                     patch_applied=False, run_success_after_patch=False,
                 )
                 break
+            try:
+                result2 = execute(
+                    new_manifest, session,
+                    run_id=str(uuid.uuid4()),
+                    store_dir=resolved_store_dir,
+                    surveyor=surveyor,
+                    depot=depot,
+                )
+            except ExecuteError as exc:
+                result2 = ExecutionResult(
+                    blueprint_id=manifest.blueprint_id,
+                    run_id=str(uuid.uuid4()),
+                    status="error",
+                    module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                )
+            patch_success = result2.status == "success"
+            failure_ctx2 = surveyor.record(result2, patched=patch_success)
             surveyor.record_healing_outcome(
                 run_id=current_run_id, failed_module=failure_ctx.failed_module,
                 failure_category=patch.category, model=resolved_agent_model,
                 patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=True, run_success_after_patch=False,  # unknown until next iteration
+                patch_applied=True, run_success_after_patch=patch_success,
             )
-            last_apply_error = None
-            manifest = new_manifest
-            click.echo(f"  ✓ LLM patch applied ({patch_count}/{max_patches}) → {blueprint}", err=True)
+            if patch_success:
+                _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                click.echo(
+                    f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                    err=True,
+                )
+                result = result2
+                failure_ctx = failure_ctx2
+                break
+            else:
+                last_apply_error = (
+                    f"Patch {patch.patch_id!r} applied in-memory but re-run still failed: "
+                    + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
+                )
+                click.echo(
+                    f"  ✗ LLM patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                )
+                _stage_failed_patch(
+                    manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                )
+                result = result2
+                failure_ctx = failure_ctx2
+                if manifest.agent.on_heal_failure == "abort":
+                    break
+                # discard/stage: loop continues → try next patch
 
     # ── Surveyor stop ─────────────────────────────────────────────────────────
     surveyor.stop()

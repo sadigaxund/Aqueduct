@@ -8,7 +8,18 @@ deployment:
 secrets:
   provider: env
 
+# LLM Agent Configuration
+# Set these env vars: AQUEDUCT_LLM_PROVIDER, AQUEDUCT_LLM_MODEL, AQUEDUCT_LLM_BASE_URL
+# and either OPENAI_API_KEY or ANTHROPIC_API_KEY.
+
 agent:
-  provider: ${AQUEDUCT_LLM_PROVIDER:openai_compat}
-  model: "@aq.secret('AQUEDUCT_LLM_MODEL')"
-  base_url: "@aq.secret('AQUEDUCT_LLM_BASE_URL')"
+  provider: "@aq.secret('AQUEDUCT_LLM_PROVIDER')"   # e.g., anthropic, openai_compat
+  model: "@aq.secret('AQUEDUCT_LLM_MODEL')"        # e.g., gpt-4o, claude-3-5-sonnet-20240620
+  base_url: "@aq.secret('AQUEDUCT_LLM_BASE_URL')"  # e.g., https://api.openai.com/v1
+
+  ollama_options:
+    num_thread: 16
+    num_gpu: 0                             # 0 = CPU only; 99 = all on GPU
+    mlock: true
+    num_batch: 1024
+    num_predict: -1

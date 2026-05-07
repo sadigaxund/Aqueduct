@@ -228,6 +228,41 @@ def test_executor_from_to_skips_downstream(spark, tmp_path):
     assert statuses["eg"] == "skipped"
 
 
+@pytest.mark.usefixtures("spark")
+def test_executor_included_downstream_skipped_upstream_fails(spark, tmp_path):
+    from aqueduct.compiler.models import Manifest
+    from aqueduct.executor.spark.executor import execute
+
+    in_path = str(tmp_path / "in.parquet")
+    out_path = str(tmp_path / "out.parquet")
+    spark.range(5).write.parquet(in_path)
+
+    manifest = Manifest(
+        blueprint_id="test.subdag.broken",
+        modules=(
+            Module(id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}),
+            Module(id="eg", type="Egress", label="Eg", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(
+            Edge(from_id="ing", to_id="eg"),
+        ),
+        context={},
+        spark_config={},
+    )
+
+    # --from eg: includes eg, but skips ing.
+    # eg depends on ing, but ing won't be in frame_store.
+    result = execute(manifest, spark, from_module="eg")
+
+    assert result.status == "error"
+    statuses = {r.module_id: r.status for r in result.module_results}
+    assert statuses["ing"] == "skipped"
+    assert statuses["eg"] == "error"
+    # The error message should mention missing upstream DataFrame
+    eg_result = [r for r in result.module_results if r.module_id == "eg"][0]
+    assert "produced no DataFrame" in eg_result.error or "not found" in eg_result.error
+
+
 # ── Logical execution date ────────────────────────────────────────────────────
 
 def test_base_date_returns_execution_date_when_set():
@@ -412,6 +447,24 @@ agent:
     assert "remove_module" in bp.agent.guardrails.forbidden_ops
 
 
+def test_old_guardrails_schema_rejected(tmp_path):
+    from aqueduct.parser.parser import parse, ParseError
+    # Test that old flat schema is rejected
+    bp_text = """
+aqueduct: "1.0"
+id: test.old_guardrails
+name: Old Guardrails
+modules: []
+edges: []
+agent:
+  allowed_paths: ["/tmp/*"]
+"""
+    bp_path = tmp_path / "bp.yml"
+    bp_path.write_text(bp_text)
+    with pytest.raises(ParseError, match="Extra inputs are not permitted"):
+        parse(str(bp_path))
+
+
 # ── Patch Rollback CLI ────────────────────────────────────────────────────────
 
 _MINIMAL_BP = """aqueduct: "1.0"
@@ -570,3 +623,60 @@ def test_patch_rollback_no_applied_record_still_restores_blueprint(tmp_path):
     assert result.exit_code == 0
     restored = env["bp_path"].read_text()
     assert "Original" in restored
+
+
+def test_guardrail_violation_breaks_loop(tmp_path, monkeypatch):
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+    from aqueduct.patch.grammar import PatchSpec
+
+    runner = CliRunner()
+    
+    # 1. Setup blueprint with guardrails
+    bp_text = """
+aqueduct: "1.0"
+id: test.guardrails.loop
+name: Test
+modules:
+  - id: m
+    type: Ingress
+    label: M
+    config:
+      format: parquet
+      path: /tmp/in
+edges: []
+agent:
+  approval_mode: auto
+  guardrails:
+    forbidden_ops: [remove_module]
+"""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text(bp_text)
+    
+    # 2. Mock execute to fail
+    mock_execute = MagicMock()
+    mock_execute.return_value = ExecutionResult(
+        blueprint_id="test.guardrails.loop",
+        run_id="run-1",
+        status="error",
+        module_results=(ModuleResult(module_id="m", status="error", error="Boom"),)
+    )
+    
+    monkeypatch.setattr("aqueduct.executor.get_executor", lambda engine: mock_execute)
+    
+    # 3. Mock LLM to return a patch that uses forbidden_ops
+    mock_patch = PatchSpec(
+        patch_id="fix-it",
+        rationale="Fixing it",
+        category="other",
+        confidence=0.9,
+        operations=[{"op": "remove_module", "module_id": "m"}]
+    )
+    
+    with patch("aqueduct.surveyor.llm.generate_llm_patch", return_value=mock_patch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        # Use str(bp_path) because Click Path(exists=True) needs a string
+        result = runner.invoke(cli, ["run", str(bp_path)])
+        
+    assert "LLM patch blocked by guardrail" in result.output
+    assert "remove_module" in result.output
+    assert mock_execute.call_count == 1

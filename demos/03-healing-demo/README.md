@@ -1,37 +1,31 @@
 # Demo 03: Self-Healing Process
 
-This demo illustrates Aqueduct's ability to automatically detect and fix blueprint errors using an LLM.
+This demo shows Aqueduct's ability to automatically detect and fix blueprint errors using an LLM.
 
-## Scenario
-The blueprint `blueprints/example.yml` is configured to read `data/users.csv` as a **Parquet** file. This will cause a Spark exception during execution.
+## Quick Start
 
-## How to Run
+1.  **Configure LLM**: Set your credentials so Aqueduct can talk to the LLM. 
+    You need to set `AQUEDUCT_LLM_PROVIDER`, `AQUEDUCT_LLM_MODEL`, and your API key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`).
 
-1.  **Configure your LLM**:
-    Set your environment variables for your preferred provider (Anthropic, OpenAI, or Ollama):
+    **Example (OpenAI)**:
     ```bash
-    export AQUEDUCT_LLM_PROVIDER="openai"
-    export AQUEDUCT_LLM_MODEL="gpt-4o"
-    export AQUEDUCT_LLM_BASE_URL="https://api.openai.com/v1"
-    export OPENAI_API_KEY="your-key-here"
+    export AQUEDUCT_LLM_PROVIDER="openai_compat" AQUEDUCT_LLM_MODEL="gpt-4o" AQUEDUCT_LLM_BASE_URL="https://api.openai.com/v1" OPENAI_API_KEY="sk-..."
     ```
 
-2.  **Run the blueprint**:
+
+2.  **Run the demo**:
+
     ```bash
     aqueduct run blueprints/example.yml
     ```
 
 3.  **Observe the Healing**:
-    - The first run will fail with a Spark error: `NOT_A_PARQUET_FILE`.
-    - Aqueduct will capture the failure context and send it to the LLM.
-    - The LLM will generate a patch to change `format: parquet` to `format: csv`.
-    - Because `approval_mode: auto` is set in the blueprint, the patch will be applied and the run will be restarted automatically.
-    - The second run should succeed.
+    - The first run will fail because it tries to read a CSV file as Parquet.
+    - Aqueduct will automatically ask the LLM for a fix.
+    - The patch will be applied and the run will restart (and succeed) automatically.
 
-4.  **Verify the Patch**:
-    - Check the `patches/` directory to see the generated patch.
-    - Check `blueprints/example.yml` to see the applied fix.
-    - View the run history:
-      ```bash
-      aqueduct runs
-      ```
+## How it works
+The blueprint `blueprints/example.yml` has `approval_mode: auto` enabled. When a module fails, Aqueduct captures the error, sends it to your configured LLM, and applies the suggested fix if it passes basic validation.
+
+Check the `patches/` directory after the run to see the generated patch file.
+

@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
 );
 
 CREATE TABLE IF NOT EXISTS healing_outcomes (
-    id           INTEGER PRIMARY KEY,
+    id           VARCHAR PRIMARY KEY,
     run_id       VARCHAR NOT NULL,
     failed_module VARCHAR,
     failure_category VARCHAR,
@@ -167,6 +167,17 @@ class Surveyor:
             )
         except Exception:
             pass  # DuckDB older versions may not support IF NOT EXISTS on ALTER
+        try:
+            # Migrate healing_outcomes.id from INTEGER to VARCHAR (needed for UUID inserts)
+            col_type = self._conn.execute(
+                "SELECT data_type FROM information_schema.columns "
+                "WHERE table_name='healing_outcomes' AND column_name='id'"
+            ).fetchone()
+            if col_type and col_type[0].upper() == "INTEGER":
+                self._conn.execute("ALTER TABLE healing_outcomes DROP COLUMN id")
+                self._conn.execute("ALTER TABLE healing_outcomes ADD COLUMN id VARCHAR")
+        except Exception:
+            pass
 
         self._conn.execute(
             """
@@ -303,14 +314,16 @@ class Surveyor:
         if self._conn is None:
             return
         import datetime as _dt
+        import uuid as _uuid
         self._conn.execute(
             """
             INSERT INTO healing_outcomes
-            (run_id, failed_module, failure_category, model, patch_id, confidence,
+            (id, run_id, failed_module, failure_category, model, patch_id, confidence,
              patch_applied, run_success_after_patch, applied_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
+                str(_uuid.uuid4()),
                 run_id, failed_module, failure_category, model, patch_id, confidence,
                 patch_applied, run_success_after_patch,
                 _dt.datetime.now(_dt.timezone.utc).isoformat(),

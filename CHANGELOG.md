@@ -99,10 +99,9 @@ _2026-05-02_
 ---
 
 ### Phase 14 — Patch Dry-Run
-_2026-05-01_
+_2026-05-01_ | **Superseded by aggressive mode redesign**
 
-- `validate_patch: bool = False` on `AgentSchema`, `AgentConfig`, parser, `Manifest.to_dict()`
-- In `aggressive` mode with `validate_patch=true`: patch compiled in memory first; invalid patches staged to `patches/pending/` and loop stops; on-disk Blueprint never touched
+- ~~`validate_patch` field~~ — **removed**. `aggressive` mode now always validates in-memory (compile + full re-run) before writing. Behavior that required `validate_patch: true` is now the default and non-configurable. Blueprints with `validate_patch` in their `agent:` block will fail with "Extra inputs are not permitted" — remove the field.
 
 ---
 
