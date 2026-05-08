@@ -398,12 +398,14 @@ aqueduct validate pipeline.yml              # Parse and validate only
 aqueduct compile  pipeline.yml              # Output resolved Manifest JSON
 aqueduct compile  pipeline.yml --execution-date 2026-01-15  # backfill: pin @aq.date.* to date
 
-aqueduct run      pipeline.yml              # Compile and execute
+aqueduct run      pipeline.yml              # Compile and execute (auto-loads .env if present)
 aqueduct run      pipeline.yml \
   --config aqueduct.yml \
   --store-dir .aqueduct \
   --run-id my-run-001 \
   --ctx env=prod
+aqueduct run      pipeline.yml --env-file secrets/.env   # explicit .env path
+aqueduct -v run   pipeline.yml              # verbose — prints LLM responses, resolver steps
 
 # Sub-DAG execution — run only a slice of the pipeline
 aqueduct run pipeline.yml --from clean_orders              # from module onwards
@@ -455,6 +457,12 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id>   # git revert the com
 aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive reset (requires "yes" confirmation)
 ```
 
+### Global flags (before subcommand)
+
+| Flag | Description |
+|---|---|
+| `-v`, `--verbose` | Enable DEBUG logging — prints LLM raw responses, SQL plans, and internal resolver steps |
+
 ### Key `aqueduct run` flags
 
 | Flag | Description |
@@ -467,6 +475,8 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive 
 | `--ctx key=value` | Override a Blueprint `context:` variable |
 | `--profile <name>` | Activate a `context_profiles:` entry |
 | `--allow-aggressive` | Allow `approval_mode: aggressive` for this run without setting `danger.allow_aggressive_patching: true` in config |
+| `--env-file <path>` | Load a `.env` file into the environment before running. If omitted, Aqueduct auto-discovers `.env` in the project root (directory containing `aqueduct.yml`). |
+| `--no-env-file` | Disable `.env` auto-discovery entirely |
 
 ---
 

@@ -1164,7 +1164,7 @@ agent:
 3. If unreviewed patches exist in `patches/pending/` and `on_pending_patches: block` — LLM skipped, run ends.
 4. **Assembles FailureContext:** compiled module config with resolved values, **provenance map** (shows which context key or literal each config value came from), error message, truncated stack trace, doctor pre-flight hints.
 5. **Calls LLM** with FailureContext + PatchSpec JSON schema + optional `prompt_context` injections (engine-level, then blueprint-level appended after).
-6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct appends the specific field-level errors to the conversation and re-prompts. This is a real multi-turn conversation — the LLM sees its previous response and the exact errors. Repeats up to `llm_max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry.
+6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct sends a reprompt showing the model its exact previous output alongside field-level error annotations (e.g. "line 8, column 3: missing comma — your output near the error: ..."). This is a real multi-turn conversation. Repeats up to `llm_max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry. Common field name aliases (`ops`→`operations`, `description`→`rationale`, `type`→`op` in operations) are silently normalized before validation, so minor LLM naming deviations do not consume reprompt budget.
 7. **Confidence check.** If `confidence < 0.7`, the patch is forced to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied.
 8. **Guardrails check.** If the patch touches a path outside `allowed_paths` or uses a `forbidden_ops` operation, it is staged in `patches/pending/` for human review regardless of `approval_mode`.
 9. **Approval mode routing** (after confidence + guardrail checks pass):
@@ -1437,13 +1437,33 @@ webhooks:
       text: "Pipeline *${blueprint_id}* complete — ${module_count} modules  run_id=${run_id}"
 ```
 
+**`.env` file auto-loading**
+
+`aqueduct run` auto-discovers a `.env` file in the **project root** (the directory containing `aqueduct.yml`) and loads it into `os.environ` before any config parsing. This means `${VAR}`, `${VAR:-default}`, and `@aq.secret('KEY')` in both `aqueduct.yml` and Blueprints all see the loaded values.
+
+- Existing env vars are never overwritten (env always wins over `.env`).
+- Drop a `.env` next to the blueprint for local dev — no manual `export` needed.
+- `--env-file <path>` — explicit override; loads that file instead of auto-discovery.
+- `--no-env-file` — disables auto-discovery entirely (for CI where vars are injected externally).
+
+```bash
+# .env next to blueprint — loaded automatically
+AQUEDUCT_LLM_MODEL=qwen3:32b
+AQUEDUCT_LLM_BASE_URL=http://localhost:11434/v1
+S3_SECRET=mysecret
+
+aqueduct run pipeline.yml                        # auto-loads .env
+aqueduct run pipeline.yml --env-file prod/.env   # explicit path
+aqueduct run pipeline.yml --no-env-file          # skip (CI)
+```
+
 **Environment variable substitution in `aqueduct.yml`**
 
 `aqueduct.yml` is expanded before YAML parsing. Two syntaxes are supported:
 
 | Syntax | Behavior |
 | :- | :- |
-| `${VAR}` | Replaced with `os.environ["VAR"]`; left as-is if unset (Pydantic error) |
+| `${VAR}` | Replaced with `os.environ["VAR"]`; error if unset and no default |
 | `${VAR:-default}` or `${VAR:default}` | Replaced with env var if set, otherwise `default` (dash optional) |
 | `@aq.secret('KEY')` | Resolved via `os.environ["KEY"]` (always — see note below) |
 
@@ -1623,6 +1643,12 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 # **11. CLI Reference**
 ## **11.1 Core Commands**
 
+**Global flags (placed before subcommand):**
+
+| Flag | Description |
+| :- | :- |
+| `-v`, `--verbose` | Enable DEBUG logging. Prints LLM raw responses, resolver steps, and Spark plan annotations. Use to diagnose healing failures or config resolution issues. |
+
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
 |`aqueduct init <name>`|Scaffold a new project in the current directory.|`--name`|
@@ -1683,6 +1709,8 @@ Detailed reference for the most common command:
 | `--run-id <uuid>` | Force a specific UUID for this run. Useful for tracking runs across external systems. |
 | `--store-dir <path>` | Override the default `.aqueduct` directory for observability and state storage. |
 | `--allow-aggressive` | Allow `approval_mode: aggressive` for this run, overriding `danger.allow_aggressive_patching: false` in config. Single-use — does not modify `aqueduct.yml`. |
+| `--env-file <path>` | Load environment variables from a `.env` file before running. If omitted, Aqueduct auto-discovers `.env` in the blueprint's directory. Existing env vars are never overwritten. |
+| `--no-env-file` | Disable `.env` auto-discovery. Use in CI where variables are injected externally and a local `.env` might cause conflicts. |
 
 **Sub-DAG execution example:**
 
