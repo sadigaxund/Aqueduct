@@ -615,7 +615,7 @@ def run(
 
     # ── Aggressive mode disclaimer ────────────────────────────────────────────
     approval_mode = manifest.agent.approval_mode
-    max_patches = manifest.agent.max_patches_per_run
+    max_patches = manifest.agent.aggressive_max_patches
     if approval_mode == "aggressive":
         click.echo(
             f"⚠  approval_mode=aggressive — LLM will attempt up to {max_patches} patch(es). "
@@ -696,15 +696,20 @@ def run(
 
         if patch_count >= max_patches:
             click.echo(
-                f"⚠  LLM: max_patches_per_run={max_patches} reached, stopping self-healing loop",
+                f"⚠  LLM: aggressive_max_patches={max_patches} reached, stopping self-healing loop",
                 err=True,
             )
             break
 
         # ── Generate patch ────────────────────────────────────────────────────
         from aqueduct.surveyor.llm import archive_patch, generate_llm_patch, stage_patch_for_human
+        _attempt_display = (
+            f"{patch_count + 1}/{max_patches}"
+            if approval_mode == "aggressive"
+            else f"{patch_count + 1}"
+        )
         click.echo(
-            f"  ↻ LLM self-healing ({patch_count + 1}/{max_patches})  "
+            f"  ↻ LLM self-healing ({_attempt_display})  "
             f"failed_module={failure_ctx.failed_module}",
             err=True,
         )

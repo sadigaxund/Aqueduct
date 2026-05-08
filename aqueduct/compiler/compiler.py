@@ -17,8 +17,11 @@ The Compiler does NOT:
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
@@ -115,19 +118,28 @@ def compile(  # noqa: A001
             raise CompileError(f"SQL macro resolution failed: {exc}") from exc
 
     # ── 3.7. Build provenance for top-level non-Arcade modules ───────────────
-    # Compare raw Blueprint context (pre-Tier1) vs resolved to infer source type.
-    raw_ctx = dict(blueprint.context.values)  # Tier 0 already resolved by parser
-    context_provenance: dict[str, ValueProvenance] = {
-        k: infer_value_provenance(raw_ctx.get(k, resolved_ctx[k]), resolved_ctx[k])
-        for k in resolved_ctx
-    }
-    raw_modules_by_id = {m.id: m for m in blueprint.modules}
+    # We re-load the raw YAML to get the original expressions (${ctx.*}, etc.)
+    # for provenance. The blueprint object only has resolved values.
+    raw_module_configs: dict[str, dict] = {}
+    raw_context: dict[str, Any] = {}
+    if blueprint_path and blueprint_path.exists():
+        try:
+            raw_yaml = yaml.safe_load(blueprint_path.read_text(encoding="utf-8"))
+            if isinstance(raw_yaml, dict):
+                raw_context = raw_yaml.get("context") or {}
+                for m_raw in raw_yaml.get("modules") or []:
+                    if isinstance(m_raw, dict) and "id" in m_raw:
+                        raw_module_configs[m_raw["id"]] = m_raw.get("config") or {}
+        except Exception:
+            pass  # Fall back to empty raw configs if load fails
+
+    context_provenance: dict[str, ValueProvenance] = build_config_provenance(raw_context, resolved_ctx)
+    
     module_provenance: dict[str, ModuleProvenance] = {}
     for m in modules:
         if m.type == "Arcade":
             continue  # arcade provenance built during expansion
-        raw_m = raw_modules_by_id.get(m.id)
-        raw_cfg = (raw_m.config if raw_m else None) or {}
+        raw_cfg = raw_module_configs.get(m.id, {})
         config_prov = build_config_provenance(raw_cfg, m.config or {})
         module_provenance[m.id] = ModuleProvenance(
             module_id=m.id,
@@ -162,7 +174,6 @@ def compile(  # noqa: A001
 
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
     if blueprint.retry_policy.max_attempts > 1:
-        import warnings
         for m in modules:
             if m.type == "Egress" and m.config.get("mode") == "append":
                 warnings.warn(

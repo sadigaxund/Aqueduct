@@ -6,7 +6,7 @@ webhook endpoints.  It is NOT the blueprint definition.
 
 LLM agent connection config (provider, base_url, model, ollama_options) lives
 here as engine-level defaults.  Per-blueprint policy (approval_mode,
-on_pending_patches, max_patches_per_run) lives in the Blueprint agent: block.
+on_pending_patches, aggressive_max_patches) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
 
 Default behaviour (no file present):
@@ -128,7 +128,7 @@ class AgentConnectionConfig(BaseModel):
 
     Sets provider, endpoint, and model used by all blueprints unless overridden
     in the Blueprint agent: block.  Policy fields (approval_mode,
-    on_pending_patches, max_patches_per_run) belong in the Blueprint, not here.
+    on_pending_patches, aggressive_max_patches) belong in the Blueprint, not here.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 

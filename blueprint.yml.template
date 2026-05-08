@@ -92,13 +92,13 @@ agent:
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
   #   auto       — Single-shot: patch applied in-memory → re-runs → written to disk only on success
-  #   aggressive — Looping auto: up to max_patches_per_run attempts; each validated in-memory first
+  #   aggressive — Looping auto: up to aggressive_max_patches attempts; each validated in-memory first
   #                Requires danger.allow_aggressive_patching: true in aqueduct.yml
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   approval_mode: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
-  max_patches_per_run: 3          # aggressive only: max loop iterations per run
+  aggressive_max_patches: 3          # aggressive only: max loop iterations per run
 
   # on_heal_failure: what to do when a patch is generated but the re-run still fails
   #   stage   — stage failed patch to patches/pending/ for human inspection (default)

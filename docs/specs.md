@@ -161,7 +161,7 @@ retry_policy:                          # see Section 8.2
 agent:                                 # LLM self-healing config (see Section 8)
   approval_mode: auto                  # disabled | human | auto | aggressive
   model: claude-sonnet-4-20250514
-  max_patches_per_run: 5
+  aggressive_max_patches: 5
   # Guardrails — deterministically enforced at patch-apply time (recommended for auto/aggressive)
   guardrails:
     allowed_paths: ["s3://company-data/*"]   # fnmatch patterns; empty = unrestricted
@@ -974,7 +974,7 @@ Table: quality_lineage
 ## **8.1 Design Philosophy**
 The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint is not a limitation: it makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer. The agent cannot produce an invalid Blueprint.
 
-**On LLM cost and context window size:** The default FailureContext is intentionally generous. Even a full, unpruned context package of approximately 40,000 tokens costs less than $0.50 per patch attempt with current frontier models. Over a month of pipeline operations, this is orders of magnitude cheaper than maintaining on-call engineering coverage. The ContextPruner (Section 8.4) exists to improve model accuracy and reduce latency — not primarily to reduce cost. Engineers should size `max_patches_per_run` based on risk tolerance for auto-applied patches, not on token cost.
+**On LLM cost and context window size:** The default FailureContext is intentionally generous. Even a full, unpruned context package of approximately 40,000 tokens costs less than $0.50 per patch attempt with current frontier models. Over a month of pipeline operations, this is orders of magnitude cheaper than maintaining on-call engineering coverage. The ContextPruner (Section 8.4) exists to improve model accuracy and reduce latency — not primarily to reduce cost. Engineers should size `aggressive_max_patches` based on risk tolerance for auto-applied patches, not on token cost.
 
 ## **8.2 Retry Policy**
 The retry\_policy block defines behaviour before the LLM agent is invoked. The Surveyor applies this policy on failure before escalating to the agent loop.
@@ -1176,15 +1176,15 @@ agent:
 | `disabled` | LLM never fires | No | N/A |
 | `human` | Patch staged to `patches/pending/`. Engineer reviews via `aqueduct patch apply` or `aqueduct patch reject`. Run ends. | Only after human apply | Yes |
 | `auto` | **Fully automatic, single-shot.** Patch applied in-memory → pipeline re-runs. Blueprint written to disk only if re-run succeeds. If re-run fails, `on_heal_failure` policy applies. One patch attempt per run. | Only on successful re-run | Yes |
-| `aggressive` | **Fully automatic, looping.** Same as `auto` but loops up to `max_patches_per_run` attempts. Each patch is tested in-memory; Blueprint only written when re-run succeeds. If a patch fails, `on_heal_failure` policy applies and the loop continues. Requires `danger.allow_aggressive_patching: true`. | Only on successful re-run | Dev/trusted |
+| `aggressive` | **Fully automatic, looping.** Same as `auto` but loops up to `aggressive_max_patches` attempts. Each patch is tested in-memory; Blueprint only written when re-run succeeds. If a patch fails, `on_heal_failure` policy applies and the loop continues. Requires `danger.allow_aggressive_patching: true`. | Only on successful re-run | Dev/trusted |
 | `ci` | Patch staged to `patches/pending/`. Full PatchSpec JSON + metadata POSTed to `agent.ci_webhook_url` (or `webhooks.on_ci_patch`). External CI creates branch and PR. Pipeline not re-run. | Only after external merge | Yes |
 
-> **`auto` vs `aggressive`:** Both are safe — Blueprint is only written when the in-memory re-run confirms the fix works. `auto` makes one attempt per run. `aggressive` keeps trying up to `max_patches_per_run` times, generating a new patch for each remaining failure. Use `auto` in production for a single healing attempt per failure. Use `aggressive` in dev or trusted environments for hands-free multi-step repair.
+> **`auto` vs `aggressive`:** Both are safe — Blueprint is only written when the in-memory re-run confirms the fix works. `auto` makes one attempt per run. `aggressive` keeps trying up to `aggressive_max_patches` times, generating a new patch for each remaining failure. Use `auto` in production for a single healing attempt per failure. Use `aggressive` in dev or trusted environments for hands-free multi-step repair.
 
 > **`on_heal_failure`** controls what happens when a patch is generated but fails to fix the pipeline: `stage` (default) — the failed patch is written to `patches/pending/` for human inspection. `discard` — silently thrown away. `abort` — loop stops immediately. Applies in `auto` and `aggressive` modes.
 
 10. Applied patch moves from `patches/pending/<ts>_<slug>.json` to `patches/applied/<ts>_<slug>.json` with `applied_at`, `run_id`, and `rationale` preserved. `patches/pending/` and `patches/rejected/` are gitignored; `patches/applied/` is committed alongside the Blueprint.
-11. If `max_patches_per_run` is reached without a successful run, pipeline aborts.
+11. If `aggressive_max_patches` is reached without a successful run, pipeline aborts.
 
 ### Per-blueprint LLM overrides
 
@@ -1398,7 +1398,7 @@ agent:
   llm_max_reprompts: 3             # max retries when LLM returns invalid PatchSpec JSON
   prompt_context: |                # optional: appended to LLM system prompt for all blueprints
     This cluster runs Databricks. All paths use s3a:// or dbfs://.
-  max_patches_per_run: 5
+  aggressive_max_patches: 5
 deployment:
   target: local                    # local | standalone | yarn | kubernetes | databricks
   env: local                       # local | cluster | cloud  — doctor warns on local paths in cluster/cloud

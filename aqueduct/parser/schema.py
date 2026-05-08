@@ -54,7 +54,7 @@ class AgentSchema(BaseModel):
 
     approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = "disabled"
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
-    max_patches_per_run: int = 5
+    aggressive_max_patches: int = 5
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None

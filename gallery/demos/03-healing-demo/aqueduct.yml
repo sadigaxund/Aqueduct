@@ -8,6 +8,10 @@ deployment:
 secrets:
   provider: env
 
+# Allow autonomous (aggressive) patching during this run
+danger:
+  allow_aggressive_patching: true
+
 # LLM Agent Configuration
 # Set these env vars: AQUEDUCT_LLM_PROVIDER, AQUEDUCT_LLM_MODEL, AQUEDUCT_LLM_BASE_URL
 # and either OPENAI_API_KEY or ANTHROPIC_API_KEY.
