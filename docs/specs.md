@@ -208,7 +208,7 @@ Every Module regardless of type shares these fields:
 | :- | :- |
 |**format**|Spark data source format string. Standard formats: parquet, delta, csv, json, orc, avro, jdbc, kafka. Custom formats use the fully qualified DataSource class name.|
 |**path**|Source path or URL. Context Registry references allowed. For JDBC: the full connection URL.|
-|**schema\_hint**|Optional. Map of column\_name: SparkDDLType. Aqueduct enforces this at read time by calling .schema() and comparing. Mismatch raises SchemaIncompatibleException and triggers the Surveyor.|
+|**schema\_hint**|Optional. Flat dict `{col: type}` checks all listed columns with strict matching. Nested form `{mode: strict\|additive\|subset, columns: [{name, type}]}` selects check mode: strict (all must match), additive (extra upstream cols allowed), subset (missing cols allowed). Common type aliases accepted: `STRING`→`string`, `LONG`→`bigint`, `INTEGER`→`int`, `BOOL`→`boolean`, `SHORT`→`smallint`, `BYTE`→`tinyint`. Mismatch raises IngressError.|
 |**options**|Passed directly to Spark DataFrameReader.option(k,v). Aqueduct does not validate these — Spark handles unknown options.|
 |**credentials**|Optional. Reference to a Depot key or @aq.secret() call resolving to a credentials map. Injected as Spark config before session creation.|
 
@@ -733,10 +733,10 @@ edges:
 | `freshness` | Batched into one `df.agg()` | Asserts `MAX(column) >= NOW() - max_age_hours`. |
 | `sql` | Batched into one `df.agg()` | Evaluates an aggregate SQL expression; result must be truthy. |
 | `sql_row` | Lazy filter (no action) | Rows failing `expr` go to spillway; passing rows continue. |
-| `spillway_rate` | Batched into one `df.agg()` | Asserts fraction of rows reaching spillway ≤ `max`. Prevents "silent data loss" where the Spark job succeeds but most data was quarantined. |
+| `spillway_rate` | 2 Spark actions post-row-level (`df.count` + `quarantine.count`) | Asserts fraction of rows reaching spillway ≤ `max`. Prevents "silent data loss" where the Spark job succeeds but most data was quarantined. |
 | `custom` | Determined by callable | Python fn receives full DataFrame; returns `{passed, message, quarantine_df}`. |
 
-**Performance model:** All aggregate rules (`min_rows`, `freshness`, `sql`, `spillway_rate`) are collected into a single `df.agg()` call. All `null_rate` rules share a single `df.sample(fraction).agg()` call. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters — no Spark action. Net: **at most 2 Spark actions** per Assert module, regardless of rule count.
+**Performance model:** All aggregate rules (`min_rows`, `freshness`, `sql`) are collected into a single `df.agg()` call. All `null_rate` rules share a single `df.sample(fraction).agg()` call. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters — no Spark action. `spillway_rate` adds 2 Spark actions (`df.count` + `quarantine_df.count`) and is evaluated after row-level rules. Net: **at most 2 Spark actions** without `spillway_rate`; **4 actions maximum** when `spillway_rate` is configured.
 
 **`spillway_rate` rule example:**
 ```yaml

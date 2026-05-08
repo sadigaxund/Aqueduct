@@ -21,7 +21,7 @@ from aqueduct.parser.models import Module
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore"})
+SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore", "merge"})
 
 
 class EgressError(Exception):
@@ -61,6 +61,10 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
             f"[{module.id}] unsupported write mode {mode!r}. "
             f"Supported: {sorted(SUPPORTED_MODES)}"
         )
+
+    if mode == "merge":
+        _write_merge(df, module)
+        return
 
     writer = df.write.format(fmt).mode(mode)
 
@@ -111,6 +115,62 @@ def _register_external_table(
             "[%s] register_as_table %r failed (non-fatal): %s",
             module_id, table_name, exc,
         )
+
+
+def _write_merge(df: "DataFrame", module: Module) -> None:
+    """Delta MERGE INTO: upsert df into an existing Delta table.
+
+    Config keys:
+      format:    must be 'delta'
+      path:      path to Delta table (use delta.`path` syntax)
+      table:     catalog table name (takes precedence over path)
+      merge_key: column name or list of column names for the ON clause
+    """
+    cfg = module.config
+    fmt = cfg.get("format")
+    if fmt != "delta":
+        raise EgressError(
+            f"[{module.id}] mode=merge only supported with format=delta, got {fmt!r}"
+        )
+
+    table: str | None = cfg.get("table")
+    path: str | None = cfg.get("path")
+    if not table and not path:
+        raise EgressError(f"[{module.id}] mode=merge requires 'path' or 'table'")
+
+    merge_key = cfg.get("merge_key")
+    if not merge_key:
+        raise EgressError(f"[{module.id}] mode=merge requires 'merge_key'")
+    keys: list[str] = [merge_key] if isinstance(merge_key, str) else list(merge_key)
+
+    target = table if table else f"delta.`{path}`"
+    view_name = "_aq_merge_src"
+    spark = df.sparkSession
+
+    spark.catalog.dropTempView(view_name)
+    df.createTempView(view_name)
+
+    on_clause = " AND ".join(
+        f"_aq_target.{k} = _aq_src.{k}" for k in keys
+    )
+    merge_sql = (
+        f"MERGE INTO {target} AS _aq_target "
+        f"USING {view_name} AS _aq_src "
+        f"ON {on_clause} "
+        f"WHEN MATCHED THEN UPDATE SET * "
+        f"WHEN NOT MATCHED THEN INSERT *"
+    )
+
+    try:
+        spark.sql(merge_sql)
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] mode=merge failed against {target!r}: {exc}"
+        ) from exc
+    finally:
+        spark.catalog.dropTempView(view_name)
+
+    logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 
 
 def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:

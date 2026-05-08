@@ -22,11 +22,16 @@ Row-level rules (lazy filter, no extra Spark action):
   custom         Python callable: fn(df) -> {"passed": bool, "message": str,
                  "quarantine_df": DataFrame | None}
 
+Post-row-level rules (evaluated after quarantine is known):
+  spillway_rate  Max fraction of rows allowed in quarantine. 2 Spark actions
+                 (df.count + quarantine.count) when evaluated.
+
 Batching strategy:
   All aggregate rules (min_rows, freshness, sql) → one df.agg() collect().
   All null_rate rules → one df.sample(max_fraction).agg() collect().
   Row-level rules → lazy df.filter(); no collect() triggered.
-  Net: at most 2 Spark actions regardless of rule count.
+  spillway_rate → 2 actions post-row-level (only when configured).
+  Net: at most 2 Spark actions for aggregate path; spillway_rate adds 2 more if used.
 """
 
 from __future__ import annotations
@@ -116,6 +121,11 @@ def execute_assert(
     if quarantine_parts:
         from functools import reduce
         quarantine_df = reduce(lambda a, b: a.union(b), quarantine_parts)
+
+    # ── Phase 4: spillway_rate (post-row-level; needs quarantine count) ───────
+    spillway_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == "spillway_rate"]
+    if spillway_rules:
+        _check_spillway_rate(module.id, df, quarantine_df, spillway_rules, blueprint_id, run_id)
 
     return passing_df, quarantine_df
 
@@ -321,6 +331,36 @@ def _batch_aggregate_rules(
                     f"(sample_size={total}, fraction={fraction})",
                     blueprint_id, run_id,
                 )
+
+
+# ── Phase 4: spillway_rate ────────────────────────────────────────────────────
+
+def _check_spillway_rate(
+    module_id: str,
+    df: "DataFrame",
+    quarantine_df: "DataFrame | None",
+    spillway_rules: list[tuple[int, dict[str, Any]]],
+    blueprint_id: str,
+    run_id: str,
+) -> None:
+    """Evaluate spillway_rate rules after row-level rules have produced quarantine_df.
+
+    Triggers at most 2 Spark actions: df.count() and quarantine_df.count().
+    """
+    total = df.count()
+    quarantine_count = quarantine_df.count() if quarantine_df is not None else 0
+    actual_rate = quarantine_count / total if total > 0 else 0.0
+
+    for _i, rule in spillway_rules:
+        max_rate = float(rule.get("max", 1.0))
+        on_fail = rule.get("on_fail", "abort")
+        if actual_rate > max_rate:
+            _handle_fail(
+                on_fail, module_id, "spillway_rate",
+                f"spillway_rate: {actual_rate:.4%} of rows quarantined "
+                f"({quarantine_count}/{total}), max allowed {max_rate:.4%}",
+                blueprint_id, run_id,
+            )
 
 
 # ── Phase 3: row-level rules ──────────────────────────────────────────────────
