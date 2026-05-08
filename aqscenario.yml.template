@@ -1,0 +1,93 @@
+# Aqueduct Scenario Template — all possible fields documented
+# Used with: aqueduct heal --scenario <file>
+#            aqueduct benchmark --scenarios <dir>
+#
+# A scenario defines a simulated pipeline failure + assertions on what the
+# LLM healing agent should produce. No Spark required to run.
+
+aqueduct_scenario: "1.0"
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+
+id: my_scenario_id                 # unique slug; used in benchmark table headers
+description: >
+  One sentence explaining the failure scenario and what the LLM should fix.
+
+# ── Blueprint reference ───────────────────────────────────────────────────────
+
+# Path to the blueprint YAML, resolved relative to this scenario file.
+# Aqueduct parses + compiles it (no Spark) to produce a realistic manifest_json
+# for the LLM prompt. The blueprint does not need to run successfully.
+blueprint: ../blueprints/pipeline.yml
+
+# ── Injected failure ──────────────────────────────────────────────────────────
+
+inject_failure:
+  # module_id of the failing module (sets failed_module in FailureContext)
+  module: my_ingress_module
+
+  # Full error message as it would appear in the run log
+  error_message: >
+    IngressError: [my_ingress_module] source not found or unreadable
+    at 'data/orders.parquet': AnalysisException: Unable to infer schema
+
+  # Optional: stack trace (multi-line string)
+  stack_trace: |
+    Traceback (most recent call last):
+      File "aqueduct/executor/spark/ingress.py", line 61, in read_ingress
+        df = reader.load(path)
+      File "pyspark/sql/readwriter.py", line 228, in load
+        return self._df(self._jreader.load(path))
+    AnalysisException: Unable to infer schema for Parquet.
+
+# ── Expected patch ────────────────────────────────────────────────────────────
+
+expected_patch:
+
+  # Ops that MUST appear in the generated patch.
+  # Each entry is a partial match — only the specified keys are checked.
+  # All entries must match at least one generated op.
+  ops:
+    - op: set_module_config_key           # required: op name must match
+      module_id: my_ingress_module        # optional: exact match on module_id
+      key: format                         # optional: exact match on key
+      value_contains: "csv"              # optional: substring match on value field
+
+    # More complex ops can be partially matched too:
+    # - op: replace_context_value
+    #   key: paths.orders_raw            # exact match on context key
+
+  # Op types that must NOT appear anywhere in the generated patch.
+  forbidden_ops:
+    - replace_module_config              # full config replacement is heavy-handed
+    - replace_context_value              # format is a literal in this blueprint, not a ctx ref
+
+# ── Assertions ────────────────────────────────────────────────────────────────
+
+assertions:
+
+  # PatchSpec must parse without schema validation error.
+  # If false and patch parses: fail. If true and patch is None: fail.
+  - patch_is_valid: true
+
+  # Patch must be applicable to the blueprint (parse + compile with patch applied).
+  # Disabled automatically when blueprint path not found.
+  - patch_applies: true
+
+  # LLM must produce a valid PatchSpec on the first call (no reprompts needed).
+  # Failure here means: LLM knew the answer but couldn't format it correctly.
+  # Distinguishes "correct + well-formatted" from "correct after coaching".
+  # - max_attempts: 1
+
+  # LLM self-reported confidence must be at or above this threshold.
+  # - min_confidence: 0.8
+
+  # LLM must classify the failure into the correct category.
+  # Valid categories: schema_drift, bad_path, format_mismatch, oom_config,
+  #   sql_column_not_found, type_mismatch, missing_context, permission_error, other
+  # - expected_category: format_mismatch
+
+  # LLM's root_cause field must contain this keyword (case-insensitive substring).
+  # Tests diagnostic quality, not just patch op correctness.
+  # - root_cause_contains: "format"
+  # - root_cause_contains: "parquet"

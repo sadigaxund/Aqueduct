@@ -10,7 +10,7 @@ description: |
 agent:
   approval_mode: disabled
   on_pending_patches: warn
-  max_patches_per_run: 0
+  aggressive_max_patches: 0
   guardrails:
     allowed_paths:
       - "data/*"

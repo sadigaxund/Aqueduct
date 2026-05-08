@@ -23,8 +23,12 @@ File format:
     forbidden_ops:                      # NONE may appear in generated ops
       - replace_module_config
   assertions:
-    - patch_is_valid: true             # PatchSpec parses without error
+    - patch_is_valid: true             # PatchSpec parses without schema error
     - patch_applies: true              # patch can be applied to blueprint
+    - max_attempts: 1                  # must succeed on first LLM call (no reprompts)
+    - min_confidence: 0.8              # LLM self-reported confidence above threshold
+    - expected_category: format_mismatch  # LLM must classify the failure correctly
+    - root_cause_contains: "format"    # root_cause field must contain this keyword
 """
 
 from __future__ import annotations
@@ -87,12 +91,16 @@ class ScenarioResult:
     scenario_id: str
     model: str
     passed: bool
-    patch_valid: bool        # PatchSpec parsed without error
-    patch_applies: bool      # patch can be applied to blueprint
-    failures: list[str]      # descriptions of failed assertions
-    patch: Any               # PatchSpec | None
+    patch_valid: bool             # PatchSpec parsed without error
+    patch_applies: bool           # patch can be applied to blueprint
+    failures: list[str]           # descriptions of failed assertions
+    patch: Any                    # PatchSpec | None
     duration_seconds: float
     confidence: float | None = None
+    attempts_to_parse: int = 0    # LLM calls made (1=first try, >1=reprompts needed, 0=API error)
+    reprompt_errors: list[str] = field(default_factory=list)  # validation error per failed attempt
+    root_cause_match: bool | None = None   # None = assertion not configured
+    category_match: bool | None = None     # None = assertion not configured
 
 
 # ── Failure context builder ───────────────────────────────────────────────────
@@ -211,11 +219,18 @@ def _check_assertions(
     assertions: list[dict[str, Any]],
     patch: "Any",  # PatchSpec | None
     blueprint_path: Path | None,
-) -> tuple[list[str], bool, bool]:
-    """Evaluate assertion list.  Returns (failures, patch_valid, patch_applies)."""
+    attempts: int = 0,
+) -> tuple[list[str], bool, bool, bool | None, bool | None]:
+    """Evaluate assertion list.
+
+    Returns (failures, patch_valid, patch_applies, root_cause_match, category_match).
+    root_cause_match and category_match are None when those assertions are not configured.
+    """
     failures: list[str] = []
     patch_valid = patch is not None
     patch_applies = False
+    root_cause_match: bool | None = None
+    category_match: bool | None = None
 
     for assertion in assertions:
         if "patch_is_valid" in assertion:
@@ -241,7 +256,43 @@ def _check_assertions(
                 else:
                     logger.warning("patch_applies assertion: blueprint path not found; skipped")
 
-    return failures, patch_valid, patch_applies
+        if "max_attempts" in assertion:
+            max_att = int(assertion["max_attempts"])
+            if attempts > max_att:
+                failures.append(
+                    f"max_attempts: took {attempts} LLM call(s), max allowed {max_att} "
+                    f"(reprompts needed → LLM needed schema correction)"
+                )
+
+        if "min_confidence" in assertion:
+            min_conf = float(assertion["min_confidence"])
+            actual_conf = patch.confidence if patch else None
+            if actual_conf is None:
+                failures.append(f"min_confidence: patch has no confidence field (expected >= {min_conf})")
+            elif actual_conf < min_conf:
+                failures.append(
+                    f"min_confidence: {actual_conf:.2f} < {min_conf:.2f}"
+                )
+
+        if "expected_category" in assertion:
+            expected_cat = str(assertion["expected_category"])
+            actual_cat = patch.category if patch else None
+            category_match = actual_cat == expected_cat
+            if not category_match:
+                failures.append(
+                    f"expected_category: expected {expected_cat!r}, got {actual_cat!r}"
+                )
+
+        if "root_cause_contains" in assertion:
+            keyword = str(assertion["root_cause_contains"]).lower()
+            actual_rc = (patch.root_cause or "") if patch else ""
+            root_cause_match = keyword in actual_rc.lower()
+            if not root_cause_match:
+                failures.append(
+                    f"root_cause_contains: {keyword!r} not found in {actual_rc!r}"
+                )
+
+    return failures, patch_valid, patch_applies, root_cause_match, category_match
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -282,7 +333,7 @@ def run_scenario(
         )
 
     # Call LLM
-    patch = generate_llm_patch(
+    llm_result = generate_llm_patch(
         failure_ctx,
         model=model,
         patches_dir=patches_dir,
@@ -293,6 +344,7 @@ def run_scenario(
         llm_max_reprompts=llm_max_reprompts,
         engine_prompt_context=engine_prompt_context,
     )
+    patch = llm_result.patch
 
     duration = time.monotonic() - t0
 
@@ -304,8 +356,8 @@ def run_scenario(
             blueprint_path = bp_candidate
 
     # Check assertions
-    assertion_failures, patch_valid, patch_applies = _check_assertions(
-        scenario.assertions, patch, blueprint_path
+    assertion_failures, patch_valid, patch_applies, root_cause_match, category_match = (
+        _check_assertions(scenario.assertions, patch, blueprint_path, attempts=llm_result.attempts)
     )
 
     # Check expected_patch
@@ -326,6 +378,10 @@ def run_scenario(
         patch=patch,
         duration_seconds=duration,
         confidence=patch.confidence if patch else None,
+        attempts_to_parse=llm_result.attempts,
+        reprompt_errors=llm_result.reprompt_errors,
+        root_cause_match=root_cause_match,
+        category_match=category_match,
     )
 
 
@@ -339,42 +395,65 @@ def run_benchmark(
     llm_timeout: float = 120.0,
     llm_max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
+    workers: int = 4,
 ) -> dict[str, dict[str, ScenarioResult]]:
     """Run all scenarios in scenarios_dir against each model.
+
+    Executes (scenario, model) pairs in parallel using a thread pool.
+    Each pair is an independent LLM HTTP call — no shared state.
+
+    Args:
+        workers: Max concurrent LLM calls. Default 4. Set to 1 for serial execution.
 
     Returns:
         {scenario_id: {model: ScenarioResult}}
     """
+    import concurrent.futures
+
     scenario_files = sorted(scenarios_dir.glob("**/*.aqscenario.yml"))
     if not scenario_files:
         logger.warning("No .aqscenario.yml files found in %s", scenarios_dir)
         return {}
 
-    results: dict[str, dict[str, ScenarioResult]] = {}
-
+    loaded: list[Any] = []  # AqScenario list
     for spath in scenario_files:
         try:
-            scenario = load_scenario(spath)
+            loaded.append(load_scenario(spath))
         except Exception as exc:
             logger.error("Failed to load scenario %s: %s", spath, exc)
-            continue
 
-        results[scenario.id] = {}
+    if not loaded:
+        return {}
 
-        for model in models:
-            logger.info("Running scenario %r against model %r ...", scenario.id, model)
-            result = run_scenario(
-                scenario,
-                model=model,
-                patches_dir=patches_dir,
-                provider=provider,
-                base_url=base_url,
-                ollama_options=ollama_options,
-                llm_timeout=llm_timeout,
-                llm_max_reprompts=llm_max_reprompts,
-                engine_prompt_context=engine_prompt_context,
-            )
-            results[scenario.id][model] = result
+    # Pre-populate result dict to maintain scenario insertion order
+    results: dict[str, dict[str, ScenarioResult]] = {s.id: {} for s in loaded}
+
+    def _run_pair(scenario: Any, model: str) -> tuple[str, str, ScenarioResult]:
+        logger.info("Running scenario %r | model %r", scenario.id, model)
+        r = run_scenario(
+            scenario,
+            model=model,
+            patches_dir=patches_dir,
+            provider=provider,
+            base_url=base_url,
+            ollama_options=ollama_options,
+            llm_timeout=llm_timeout,
+            llm_max_reprompts=llm_max_reprompts,
+            engine_prompt_context=engine_prompt_context,
+        )
+        return scenario.id, model, r
+
+    pairs = [(s, m) for s in loaded for m in models]
+    effective_workers = min(workers, len(pairs))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as pool:
+        futures = [pool.submit(_run_pair, s, m) for s, m in pairs]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                sid, model, result = future.result()
+                results[sid][model] = result
+            except Exception as exc:
+                logger.error("Unexpected error in benchmark worker: %s", exc)
 
     return results
 
@@ -426,6 +505,14 @@ def format_benchmark_table(
         ("Avg confidence", lambda rs: (
             f"{sum(r.confidence for r in rs if r.confidence is not None) / max(1, sum(1 for r in rs if r.confidence is not None)):.2f}"
             if any(r.confidence is not None for r in rs) else "—"
+        )),
+        ("Avg attempts", lambda rs: (
+            f"{sum(r.attempts_to_parse for r in rs if r.attempts_to_parse > 0) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.1f}"
+            if any(r.attempts_to_parse > 0 for r in rs) else "—"
+        )),
+        ("1-shot rate", lambda rs: (
+            f"{sum(1 for r in rs if r.attempts_to_parse == 1) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.0%}"
+            if any(r.attempts_to_parse > 0 for r in rs) else "—"
         )),
     ]:
         cells = []
