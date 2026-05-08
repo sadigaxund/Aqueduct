@@ -39,13 +39,20 @@
 20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
 however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
 
-21. Extend on predefined doctor checks like file format mismatch, by adding more tests that are common and can genuinely help detect common bugs.
+21. **Benchmark CLI (`aqueduct benchmark`)**:
+    - Implement the evaluation runner that tests multiple LLM models against a scenario suite.
+    - Track metrics: Parse rate, Apply rate, and Accuracy vs. Ground Truth.
+    - Support comparison tables and CI/CD regression testing.
+
+22. **Blueprint Signing (Phase 25)**:
+    - Add integrity layer for `aggressive` approval mode.
+    - Sign patches on commit (`patches/applied/*.sig`).
+    - Verify signatures during autonomous healing loops to detect tampering.
+
 ---
 
 ### Running Thoughts/Notes
 
 
 13. Test if the patch/commit/apply and rollback works as expected.
-
-Reworked LLM heal workflow. Improved LLM debug outputs.
 

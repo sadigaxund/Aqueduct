@@ -4,12 +4,14 @@ This demo shows Aqueduct's ability to automatically detect and fix blueprint err
 
 ## Quick Start
 
-1.  **Configure LLM**: Set your credentials so Aqueduct can talk to the LLM. 
-    You need to set `AQUEDUCT_LLM_PROVIDER`, `AQUEDUCT_LLM_MODEL`, and your API key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`).
+1.  **Configure LLM**: Create a `.env` file in the same directory as your blueprint. Aqueduct auto-discovers and loads it before execution.
 
-    **Example (OpenAI)**:
-    ```bash
-    export AQUEDUCT_LLM_PROVIDER="openai_compat" AQUEDUCT_LLM_MODEL="gpt-4o" AQUEDUCT_LLM_BASE_URL="https://api.openai.com/v1" OPENAI_API_KEY="sk-..."
+    **Example `.env`**:
+    ```env
+    AQUEDUCT_LLM_PROVIDER="openai_compat"
+    AQUEDUCT_LLM_MODEL="gpt-4o"
+    AQUEDUCT_LLM_BASE_URL="https://api.openai.com/v1"
+    OPENAI_API_KEY="sk-..."
     ```
 
 

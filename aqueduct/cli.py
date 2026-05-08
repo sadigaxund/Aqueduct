@@ -116,6 +116,27 @@ def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, c
     # abort: caller handles break
 
 
+def _load_env_file(env_path: "Path") -> int:
+    """Load KEY=VALUE pairs from a .env file into os.environ.
+
+    Skips blank lines and comments (#). Existing env vars are NOT overwritten.
+    Returns number of variables loaded.
+    """
+    import os
+    loaded = 0
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        val = val.strip().strip("'\"")  # strip optional surrounding quotes
+        if key and key not in os.environ:
+            os.environ[key] = val
+            loaded += 1
+    return loaded
+
+
 @click.group()
 @click.version_option(package_name="aqueduct")
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
@@ -353,6 +374,20 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     default=False,
     help="Allow approval_mode: aggressive for this run (overrides danger.allow_aggressive_patching=false)",
 )
+@click.option(
+    "--env-file",
+    "env_file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Load environment variables from a .env file before running (auto-discovers .env next to blueprint if omitted).",
+)
+@click.option(
+    "--no-env-file",
+    "no_env_file",
+    is_flag=True,
+    default=False,
+    help="Disable automatic .env discovery.",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -366,6 +401,8 @@ def run(
     to_module: str | None,
     execution_date_str: str | None,
     allow_aggressive: bool = False,
+    env_file: str | None = None,
+    no_env_file: bool = False,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import os
@@ -410,6 +447,14 @@ def run(
             _search = _search.parent
 
     os.chdir(_project_root)
+
+    # ── .env loading (after project root, before config so vars are available) ─
+    if not no_env_file:
+        _env_path = Path(env_file).resolve() if env_file else _project_root / ".env"
+        if _env_path.exists():
+            _n = _load_env_file(_env_path)
+            if _n:
+                click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
     # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
     blueprint = str(blueprint_abs)
 
