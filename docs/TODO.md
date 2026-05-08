@@ -56,10 +56,14 @@ however we have a python module with that name, I very much liked something simi
 17. Add example maybe: aqueduct's usage with python
 
 
-The three highest-value additions in order:
-                                                                                                     
-  1. more metrics in ScenarioResult + generate_llm_patch returning it — reveals "correct but
-  can't format" vs "completely wrong" without changing assertions                                    
-  2. root_cause_contains / expected_category assertions — validate LLM's diagnosis quality, not just
-  op correctness                                                                                     
-  3. Parallel execution — makes benchmark feasible at scale (20+ scenarios)
+aqueduct init now scaffolds: 
+  arcades/
+  blueprints/
+    blueprint.yml.template
+  tests/
+    aqtest.yml.template
+  benchmarks/
+    aqscenario.yml.template
+  patches/pending/
+  patches/rejected/
+  aqueduct.yml.template
