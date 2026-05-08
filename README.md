@@ -175,7 +175,7 @@ The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens res
 |---|---|
 | `Ingress` | Load data from any Spark-supported source |
 | `Egress` | Write data to any Spark-supported sink, or `format: depot` for KV state |
-| `Channel` | SQL transform; optional `spillway_condition` routes bad rows |
+| `Channel` | Transformation (SQL or 11 native ops); optional `spillway_condition` routes bad rows |
 | `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
 | `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
 | `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) — never halts pipeline |

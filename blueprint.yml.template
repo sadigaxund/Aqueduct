@@ -137,7 +137,7 @@ agent:
   # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
-  # model: "qwen2.5-coder:14b"
+  # model: "claude-3-5-sonnet-latest"
   # llm_timeout: 300.0            # seconds; increase for slow local models
   # llm_max_reprompts: 5          # max conversation turns when LLM returns invalid PatchSpec
 
@@ -159,6 +159,8 @@ modules:
       format: parquet               # any Spark format: parquet, delta, csv, json, jdbc, orc, avro...
       path: "s3a://bucket/orders/date=${ctx.today}/"
       # options: {}                 # forwarded verbatim to df.read.options()
+      # schema_hint: {id: long, val: integer}  # flat form — checks presence + type
+      #
       # schema_hint:                # strict mode (default) — all hinted columns must exist + match type
       #   columns:
       #     - name: order_id
@@ -355,6 +357,10 @@ modules:
           expr: "amount > 0 AND order_id IS NOT NULL"
           on_fail: quarantine      # row-level rules support quarantine → spillway port
 
+        - type: spillway_rate
+          max: 0.1                 # fail if > 10% of rows are quarantined
+          on_fail: abort
+
         - type: custom
           fn: "my_pkg.quality.validate_orders"  # fn(df) -> {passed, message, quarantine_df}
           on_fail: quarantine
@@ -368,7 +374,8 @@ modules:
     config:
       format: parquet
       path: "s3a://bucket/clean/date=${ctx.today}/"
-      mode: overwrite               # overwrite | append | error | ignore
+      mode: overwrite               # overwrite | append | merge | error | ignore
+      # merge_key: [order_id]       # required for mode: merge (Delta Lake only)
       # partition_by: [region]
       # options: {}
 

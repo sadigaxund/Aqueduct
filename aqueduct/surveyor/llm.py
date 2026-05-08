@@ -36,6 +36,10 @@ from aqueduct.surveyor.models import FailureContext
 
 logger = logging.getLogger(__name__)
 
+# Bump manually when the system prompt changes significantly.
+# Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
+PROMPT_VERSION = "1.0"
+
 MAX_REPROMPTS = 3
 _STACK_TRACE_MAX_LINES = 25
 _PATCH_HISTORY_MAX = 3
@@ -744,6 +748,7 @@ def stage_patch_for_human(
         "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
         "staged_at": _utcnow(),
+        "prompt_version": PROMPT_VERSION,
     }
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     logger.info(
@@ -792,6 +797,7 @@ def archive_patch(
         "failed_module": failure_ctx.failed_module,
         "applied_at": _utcnow(),
         "approval_mode": mode,
+        "prompt_version": PROMPT_VERSION,
     }
     archive_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

@@ -1428,6 +1428,62 @@ duckdb .aqueduct/obs/<blueprint_id>/obs.db \
 | `UDFError: cannot import module` | Module not on `sys.path` / cloudpickle incompatibility | Check `udfs/` layout; run `pip install cloudpickle` on Python 3.13+ |
 
 
+## **8.9 Scenario-Based LLM Benchmark**
+
+Scenarios are `.aqscenario.yml` files that define a synthetic failure + expected LLM response. They test the self-healing agent without running a real Spark pipeline, enabling prompt regression testing and cross-model comparisons.
+
+**Scenario format:**
+```yaml
+aqueduct_scenario: "1.0"
+id: schema_drift_column_rename
+description: "Column renamed from event_ts to event_time upstream"
+blueprint: pipelines/orders.yml    # compiled to get manifest_json (no Spark)
+inject_failure:
+  module: cast_and_clean           # failed_module
+  error_message: "AnalysisException: Column 'event_ts' does not exist"
+  stack_trace: |                   # optional
+    ...
+expected_patch:
+  ops:                             # ALL must match at least one generated op
+    - op: set_module_config_key
+      module_id: cast_and_clean
+      key: query
+      value_contains: "event_time" # substring match on the 'value' field
+  forbidden_ops:                   # NONE may appear in the generated patch
+    - replace_module_config
+assertions:
+  - patch_is_valid: true           # PatchSpec parses without schema error
+  - patch_applies: true            # patch can be applied to the blueprint
+```
+
+**Running scenarios:**
+```bash
+# Single scenario test (PASS/FAIL with assertion details)
+aqueduct heal --scenario tests/scenario_format_mismatch.aqscenario.yml
+
+# Compare models across all scenarios in a directory
+aqueduct benchmark --scenarios tests/ --model claude-opus-4-7 --model llama3
+
+# JSON output for CI integration
+aqueduct benchmark --scenarios tests/ --model claude-opus-4-7 --output json
+```
+
+**Benchmark output:**
+```
+Scenario                          | claude-opus-4-7  | llama3
+-----------------------------------+------------------+----------
+schema_drift_column_rename        |  PASS 0.94 1.2s  | FAIL 2.1s
+format_mismatch_parquet_as_csv    |  PASS 0.99 0.8s  | PASS 0.88 1.5s
+-----------------------------------+------------------+----------
+Parse rate                        |      100%        |   92%
+Apply rate                        |       91%        |   85%
+Pass rate                         |       95%        |   80%
+Avg confidence                    |      0.91        |  0.82
+```
+
+**Prompt versioning:** `PROMPT_VERSION` constant in `surveyor/llm.py` is stored in patch `_aq_meta`. Bump it manually when the system prompt changes. This correlates benchmark scores to prompt versions over time.
+
+
 # **9. Type System**
 ## **9.1 Principle: Aqueduct Owns No Types**
 All column types throughout Aqueduct — in schema\_hint declarations, UDF return\_type fields, column assertions, and the Flow Report — use Spark DDL type strings verbatim. Aqueduct does not define its own type system and does not wrap or alias Spark types. This guarantees complete compatibility and eliminates any translation layer between Aqueduct's type references and what Spark executes.
@@ -1783,7 +1839,9 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct heal <run_id>`|Manually trigger LLM healing for a failure.|`--module <module_id>`, `--config`, `--patches-dir`|
+|`aqueduct heal <run_id>`|Manually trigger LLM healing for a failure.|`--module <module_id>`, `--scenario <path>`, `--config`, `--patches-dir`|
+|`aqueduct heal --scenario <path>`|Run scenario-based healing (no Spark). Builds FailureContext from a `.aqscenario.yml` file, calls the LLM, validates against expected assertions.||
+|`aqueduct benchmark`|Run scenario suite against one or more models and compare results.|`--scenarios <dir>`, `--model <model>` (repeatable), `--output <table\|json>`, `--config`|
 |`aqueduct signal <signal_id>`|Set/clear persistent gate overrides.|`--value <true|false>`, `--error <msg>`, `--config`|
 
 ### **11.4 Patch Management Commands**
@@ -1849,8 +1907,8 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 ### **Multi-pipeline Orchestration**
 Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies (pipeline A must complete before pipeline B starts) are handled externally via Depot watermarks and standard orchestrators (Airflow, Prefect, etc.) triggering aqueduct run commands. A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential v1.2 feature.
 
-### **LLM Model Benchmarking**
-Patch quality varies by LLM model. A benchmark suite of representative FailureContext scenarios with known correct PatchSpec responses is needed to evaluate and compare models. This is a product/eval concern and does not affect the architecture. Aqueduct's pluggable model configuration means model selection can be changed without code changes.
+### **LLM Model Benchmarking** *(implemented — Phase 22)*
+Scenario-based LLM benchmarking is implemented via `.aqscenario.yml` files and the `aqueduct benchmark` command. See §11.3 for command reference. Scenarios define a simulated failure, expected patch ops, and pass/fail assertions — no Spark required. Run `aqueduct benchmark --scenarios <dir> --model A --model B` to compare models.
 
 ### **MCP (Model Context Protocol) Readiness**
 Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools — moving from prompt engineering to structured tool use for greater reliability and composability.

@@ -1,7 +1,7 @@
 """Aqueduct CLI.
 
 Commands: init, validate, compile, run, check-config, doctor, runs, report,
-          lineage, signal, heal, log, rollback,
+          lineage, signal, heal, benchmark, log, rollback,
           patch apply, patch reject, patch commit, patch discard, patch list.
 """
 
@@ -1935,7 +1935,14 @@ def signal(
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
 
 @cli.command()
-@click.argument("run_id")
+@click.argument("run_id", required=False, default=None)
+@click.option(
+    "--scenario",
+    "scenario_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Run scenario-based healing from a .aqscenario.yml file instead of a live run_id",
+)
 @click.option(
     "--module",
     "module_id",
@@ -1960,28 +1967,101 @@ def signal(
     help="Root directory for patch lifecycle subdirs",
 )
 def heal(
-    run_id: str,
+    run_id: str | None,
+    scenario_path: str | None,
     module_id: str | None,
     store_dir: str | None,
     config_path: str | None,
     patches_dir: str,
 ) -> None:
-    """Manually trigger LLM self-healing for a failed run.
+    """Manually trigger LLM self-healing for a failed run or scenario.
 
-    Reads the FailureContext from the observability store, calls the LLM
-    agent, and stages the resulting patch for human review.
+    Two modes:
+
+    \b
+    Live run:      aqueduct heal <run_id>
+    Scenario test: aqueduct heal --scenario path/to/scenario.aqscenario.yml
+
+    In live mode, reads the FailureContext from the observability store.
+    In scenario mode, builds a synthetic FailureContext from the scenario file
+    (no Spark required) and validates the LLM response against expected assertions.
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.llm import generate_llm_patch, stage_patch_for_human
-    from aqueduct.surveyor.models import FailureContext
+
+    if not run_id and not scenario_path:
+        click.echo(
+            "✗ provide either a run_id argument or --scenario <path>",
+            err=True,
+        )
+        sys.exit(1)
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
+
+    eng = cfg.agent
+    resolved_provider = eng.provider
+    resolved_base_url = eng.base_url
+    resolved_model = eng.model
+    resolved_ollama_options = eng.ollama_options
+    resolved_llm_timeout = eng.llm_timeout
+    resolved_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_engine_prompt_context = eng.prompt_context
+
+    if resolved_model is None:
+        click.echo(
+            "✗ no LLM agent configured — set agent.model in aqueduct.yml",
+            err=True,
+        )
+        sys.exit(1)
+
+    patches_path = Path(patches_dir)
+
+    # ── Scenario mode ─────────────────────────────────────────────────────────
+    if scenario_path:
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario
+
+        try:
+            scenario = load_scenario(Path(scenario_path))
+        except Exception as exc:
+            click.echo(f"✗ failed to load scenario: {exc}", err=True)
+            sys.exit(1)
+
+        click.echo(
+            f"↻ heal scenario  id={scenario.id}  "
+            f"provider={resolved_provider}  model={resolved_model}"
+        )
+
+        result = run_scenario(
+            scenario,
+            model=resolved_model,
+            patches_dir=patches_path,
+            provider=resolved_provider or "anthropic",
+            base_url=resolved_base_url,
+            ollama_options=resolved_ollama_options,
+            llm_timeout=resolved_llm_timeout,
+            llm_max_reprompts=resolved_llm_max_reprompts,
+            engine_prompt_context=resolved_engine_prompt_context,
+        )
+
+        status = "PASS" if result.passed else "FAIL"
+        conf = f"  confidence={result.confidence:.2f}" if result.confidence is not None else ""
+        click.echo(f"{status}  scenario={scenario.id}  {result.duration_seconds:.1f}s{conf}")
+
+        if result.failures:
+            for f in result.failures:
+                click.echo(f"  ✗ {f}", err=True)
+            sys.exit(1)
+
+        click.echo("  All assertions passed.")
+        return
+
+    # ── Live run mode ─────────────────────────────────────────────────────────
+    import duckdb as _duckdb
+    from aqueduct.surveyor.models import FailureContext
 
     resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
     obs_db = resolved / "obs.db"
@@ -2016,7 +2096,6 @@ def heal(
         stack_trace, manifest_json_raw, started_at, finished_at,
     ) = fc_row
 
-    # Allow --module to override the recorded failed_module for scoped healing
     target_module = module_id or failed_module
 
     failure_ctx = FailureContext(
@@ -2030,29 +2109,11 @@ def heal(
         finished_at=finished_at,
     )
 
-    # Resolve agent config (same priority as `aqueduct run`)
-    eng = cfg.agent
-    resolved_provider = eng.provider
-    resolved_base_url = eng.base_url
-    resolved_model = eng.model
-    resolved_ollama_options = eng.ollama_options
-    resolved_llm_timeout = eng.llm_timeout
-    resolved_llm_max_reprompts = eng.llm_max_reprompts
-    resolved_engine_prompt_context = eng.prompt_context
-
-    if resolved_model is None:
-        click.echo(
-            "✗ no LLM agent configured — set agent.model in aqueduct.yml",
-            err=True,
-        )
-        sys.exit(1)
-
     click.echo(
         f"↻ heal  run={run_id}  module={target_module}  "
         f"provider={resolved_provider}  model={resolved_model}"
     )
 
-    patches_path = Path(patches_dir)
     patch = generate_llm_patch(
         failure_ctx,
         model=resolved_model,
@@ -2072,6 +2133,133 @@ def heal(
     stage_patch_for_human(patch, patches_path, failure_ctx)
     click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
     click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
+
+
+# ── aqueduct benchmark ────────────────────────────────────────────────────────
+
+@cli.command()
+@click.option(
+    "--scenarios",
+    "scenarios_dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False),
+    help="Directory containing .aqscenario.yml files (searched recursively)",
+)
+@click.option(
+    "--model",
+    "models",
+    multiple=True,
+    default=None,
+    help="Model to benchmark (repeatable: --model A --model B). Defaults to agent.model in aqueduct.yml",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle (for previous-patch history)",
+)
+@click.option(
+    "--output",
+    "fmt",
+    default="table",
+    type=click.Choice(["table", "json"]),
+    show_default=True,
+    help="Output format",
+)
+def benchmark(
+    scenarios_dir: str,
+    models: tuple[str, ...],
+    config_path: str | None,
+    patches_dir: str,
+    fmt: str,
+) -> None:
+    """Run scenario suite against one or more LLM models and compare results.
+
+    Example:
+      aqueduct benchmark --scenarios scenarios/ --model claude-opus-4-7 --model llama3
+
+    Discovers all .aqscenario.yml files recursively in the given directory,
+    runs each against every specified model, and prints a comparison table.
+    No Spark required — scenarios inject failures synthetically.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    eng = cfg.agent
+    resolved_provider = eng.provider
+    resolved_base_url = eng.base_url
+    resolved_model = eng.model
+    resolved_ollama_options = eng.ollama_options
+    resolved_llm_timeout = eng.llm_timeout
+    resolved_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_engine_prompt_context = eng.prompt_context
+
+    model_list = list(models) if models else ([resolved_model] if resolved_model else None)
+    if not model_list:
+        click.echo(
+            "✗ no models specified — use --model <model> or set agent.model in aqueduct.yml",
+            err=True,
+        )
+        sys.exit(1)
+
+    click.echo(
+        f"↻ benchmark  scenarios={scenarios_dir}  "
+        f"models={model_list}  provider={resolved_provider}"
+    )
+
+    results = run_benchmark(
+        scenarios_dir=Path(scenarios_dir),
+        models=model_list,
+        patches_dir=Path(patches_dir),
+        provider=resolved_provider or "anthropic",
+        base_url=resolved_base_url,
+        ollama_options=resolved_ollama_options,
+        llm_timeout=resolved_llm_timeout,
+        llm_max_reprompts=resolved_llm_max_reprompts,
+        engine_prompt_context=resolved_engine_prompt_context,
+    )
+
+    if fmt == "json":
+        output: dict = {}
+        for sid, model_results in results.items():
+            output[sid] = {}
+            for model, r in model_results.items():
+                output[sid][model] = {
+                    "passed": r.passed,
+                    "patch_valid": r.patch_valid,
+                    "patch_applies": r.patch_applies,
+                    "confidence": r.confidence,
+                    "duration_seconds": r.duration_seconds,
+                    "failures": r.failures,
+                }
+        click.echo(json.dumps(output, indent=2))
+    else:
+        click.echo(format_benchmark_table(results, model_list))
+
+    total = sum(
+        1 for model_results in results.values()
+        for r in model_results.values()
+    )
+    passed = sum(
+        1 for model_results in results.values()
+        for r in model_results.values()
+        if r.passed
+    )
+    failed = total - passed
+    if failed:
+        sys.exit(1)
 
 
 # ── aqueduct log ─────────────────────────────────────────────────────────────
@@ -2299,7 +2487,7 @@ stores:
 
 agent:
   provider: "anthropic"
-  model: "claude-sonnet-4-6"
+  model: "claude-3-5-sonnet-latest"
   # ANTHROPIC_API_KEY env var required for LLM self-healing
 """
 
@@ -2307,6 +2495,7 @@ _EXAMPLE_BLUEPRINT = """\
 aqueduct: "1.0"
 id: {blueprint_id}
 name: {name}
+description: "Generated by aqueduct init"
 
 context:
   input_path: "data/input"
