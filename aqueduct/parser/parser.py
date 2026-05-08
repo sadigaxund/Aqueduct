@@ -171,7 +171,7 @@ def parse(
         approval_mode=validated.agent.approval_mode,
         on_pending_patches=validated.agent.on_pending_patches,
         model=validated.agent.model,
-        max_patches_per_run=validated.agent.max_patches_per_run,
+        aggressive_max_patches=validated.agent.aggressive_max_patches,
         provider=validated.agent.provider,
         base_url=validated.agent.base_url,
         ollama_options=validated.agent.ollama_options,

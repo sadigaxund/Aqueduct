@@ -6,10 +6,10 @@ name: Healing Process Demo
 # Self-healing policy
 agent:
   approval_mode: auto  # Auto-apply patches if they pass validation
-  max_patches_per_run: 1
+  max_patches_per_run: 3
   llm_timeout: 1200.0              # 10 min read timeout for local/slow models (Ollama)
   llm_max_reprompts: 3
-  on_heal_failure: "stage"
+  on_heal_failure: "abort"
 
 context:
   input_file: "data_dir/users.csv"

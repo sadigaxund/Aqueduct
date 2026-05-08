@@ -99,20 +99,20 @@ def build_context_map(
         if isinstance(v, str) and not _TIER1_RE.search(v):
             flat[key] = _sub_env(v)
 
-    # Step 2 — AQUEDUCT_CTX_* env var overrides
-    _prefix = "AQUEDUCT_CTX_"
-    for env_key, env_val in os.environ.items():
-        if env_key.startswith(_prefix):
-            ctx_key = env_key[len(_prefix) :].lower()
-            flat[ctx_key] = env_val
-
-    # Step 3 — profile overrides
+    # Step 2 — profile overrides
     if profile and profiles and profile in profiles:
         for k, v in profiles[profile].items():
             if isinstance(v, str) and not _TIER1_RE.search(v):
                 flat[k] = _sub_env(v)
             else:
                 flat[k] = v
+
+    # Step 3 — AQUEDUCT_CTX_* env var overrides
+    _prefix = "AQUEDUCT_CTX_"
+    for env_key, env_val in os.environ.items():
+        if env_key.startswith(_prefix):
+            ctx_key = env_key[len(_prefix) :].lower()
+            flat[ctx_key] = env_val
 
     # Step 4 — CLI overrides (highest priority)
     if cli_overrides:

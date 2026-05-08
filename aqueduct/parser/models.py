@@ -41,7 +41,7 @@ class GuardrailsConfig:
 class AgentConfig:
     approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive"
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
-    max_patches_per_run: int = 5
+    aggressive_max_patches: int = 5
     # Connection fields — None = inherit from aqueduct.yml agent: defaults
     provider: str | None = None
     base_url: str | None = None
