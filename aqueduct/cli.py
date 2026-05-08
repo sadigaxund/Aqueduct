@@ -388,6 +388,13 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
     default=False,
     help="Disable automatic .env discovery.",
 )
+@click.option(
+    "--parallel",
+    is_flag=True,
+    default=False,
+    help="Execute independent DAG branches concurrently (one thread per connected component). "
+         "Only beneficial when the Blueprint has multiple fully-independent source trees.",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -403,6 +410,7 @@ def run(
     allow_aggressive: bool = False,
     env_file: str | None = None,
     no_env_file: bool = False,
+    parallel: bool = False,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import os
@@ -665,6 +673,7 @@ def run(
                 from_module=from_module,
                 to_module=to_module,
                 block_full_actions=not cfg.danger.allow_full_probe_actions,
+                parallel=parallel,
             )
         except ExecuteError as exc:
             execute_exc = exc
@@ -2295,6 +2304,7 @@ agent:
 """
 
 _EXAMPLE_BLUEPRINT = """\
+aqueduct: "1.0"
 id: {blueprint_id}
 name: {name}
 
@@ -2304,18 +2314,21 @@ context:
 
 modules:
   - id: ingest
+    label: "Ingest Orders"
     type: Ingress
     config:
       format: parquet
       path: "${{ctx.input_path}}"
 
   - id: transform
+    label: "Transform Orders"
     type: Channel
     config:
       op: sql
       query: "SELECT * FROM ingest"
 
   - id: output
+    label: "Output Results"
     type: Egress
     config:
       format: parquet

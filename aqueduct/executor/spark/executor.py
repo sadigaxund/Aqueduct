@@ -36,14 +36,24 @@ Regulator skip propagation:
   sentinel skips itself (status="skipped") and propagates the sentinel,
   so the entire skipped sub-graph is recorded without aborting the blueprint.
 
+Parallel execution (--parallel flag):
+  When parallel=True, the executor identifies independent connected components
+  in the data-flow DAG and submits each component to a ThreadPoolExecutor.
+  Each component runs its modules serially in its own thread. frame_store
+  writes are safe without locking because independent components write to
+  disjoint keys. module_results and _ingress_obs are merged under a lock
+  after each component completes (or fails). The first failure sets a
+  cancel_event; remaining components skip their pending modules.
+
 No Spark actions beyond the Egress .save() and Probe sampling calls.
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
-import math
 import random
+import threading
 import time
 import uuid
 from collections import defaultdict, deque
@@ -388,6 +398,48 @@ def _build_execution_order(manifest: Manifest) -> list[Module]:
     return final_order
 
 
+def _find_connected_components(
+    module_ids: set[str], edges: tuple[Edge, ...]
+) -> list[set[str]]:
+    """Union-Find: identify independent connected trees in the data-flow graph.
+
+    Two modules are in the same component if there is any data-flow path between
+    them (directly or transitively). Components with no shared edges can be
+    executed concurrently.
+
+    Returns a list of sets, each set containing the module IDs of one component.
+    """
+    parent: dict[str, str] = {mid: mid for mid in module_ids}
+    rank: dict[str, int] = {mid: 0 for mid in module_ids}
+
+    def _find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path halving
+            x = parent[x]
+        return x
+
+    def _union(x: str, y: str) -> None:
+        px, py = _find(x), _find(y)
+        if px == py:
+            return
+        if rank[px] < rank[py]:
+            px, py = py, px
+        parent[py] = px
+        if rank[px] == rank[py]:
+            rank[px] += 1
+
+    for e in edges:
+        if _is_data_edge(e) and e.from_id in module_ids and e.to_id in module_ids:
+            _union(e.from_id, e.to_id)
+
+    components: dict[str, set[str]] = {}
+    for mid in module_ids:
+        root = _find(mid)
+        components.setdefault(root, set()).add(mid)
+
+    return list(components.values())
+
+
 def _incoming_data(module_id: str, edges: tuple[Edge, ...]) -> list[Edge]:
     return [e for e in edges if e.to_id == module_id and _is_data_edge(e)]
 
@@ -485,6 +537,7 @@ def execute(
     from_module: str | None = None,
     to_module: str | None = None,
     block_full_actions: bool = False,
+    parallel: bool = False,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -504,6 +557,12 @@ def execute(
                         skipped (status="skipped") — upstream data must already exist.
         to_module:      If set, skip all modules that are NOT ancestors of this
                         module ID. Stops execution after to_module completes.
+        parallel:       If True, identify independent connected components in the
+                        DAG and execute each component in a separate thread.
+                        Only beneficial when the Blueprint has multiple independent
+                        source trees (e.g. two separate Ingress→Egress chains).
+                        Junction fan-out is already parallel via Spark's lazy
+                        evaluation — serial mode is sufficient for those.
 
     Returns:
         Frozen ExecutionResult.
@@ -564,460 +623,549 @@ def execute(
                 from_module, to_module, len(excluded), excluded,
             )
 
+    # Shared execution state — frame_store keys are disjoint across components so
+    # no locking needed for frame_store itself. module_results and _ingress_obs are
+    # merged under _merge_lock when each component finishes.
     frame_store: dict[str, Any] = {}
     module_results: list[ModuleResult] = []
-    # Ingress observations: collected after all Egress writes fire (obs.get is then safe)
-    _ingress_obs: dict[str, Any] = {}   # module_id → Observation | None
+    _ingress_obs: dict[str, Any] = {}
 
-    for module in order:
-        # ── Selector skip ─────────────────────────────────────────────────────
-        if included_ids is not None and module.id not in included_ids:
-            module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-            continue
+    # Cancellation state — set by the first failing component; sibling threads
+    # skip their remaining modules when they see it.
+    _cancel_event = threading.Event()
+    _merge_lock = threading.Lock()
+    # trigger_agent flag from the first failing component
+    _trigger_agent_flag: list[bool] = []
 
-        if module.type not in _SUPPORTED_TYPES:
-            raise ExecuteError(
-                f"Module type {module.type!r} (id={module.id!r}) is not supported. "
-                f"Supported: {sorted(_SUPPORTED_TYPES)}."
-            )
+    # ── Component runner ──────────────────────────────────────────────────────
+    def _run_component(comp_order: list[Module]) -> None:
+        """Execute one connected component serially.
 
-        # ── Resume: reload from checkpoint if available ───────────────────────
-        if resume_dir:
-            module_ckpt = resume_dir / module.id
-            done_marker = module_ckpt / "_aq_done"
-            if done_marker.exists():
-                # Reload DataFrame checkpoints back into frame_store
-                if module.type in ("Ingress", "Channel", "Funnel"):
-                    data_ckpt = module_ckpt / "data"
-                    if data_ckpt.exists():
-                        frame_store[module.id] = spark.read.parquet(str(data_ckpt))
-                elif module.type == "Junction":
-                    for branch in module.config.get("branches", []):
-                        bid = branch.get("id", "")
-                        branch_ckpt = module_ckpt / bid
-                        if branch_ckpt.exists():
-                            frame_store[f"{module.id}.{bid}"] = spark.read.parquet(
-                                str(branch_ckpt)
-                            )
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="success")
-                )
-                logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
+        On failure: sets _cancel_event, records trigger_agent flag, merges
+        local results into the shared lists, then returns. The main thread
+        checks _cancel_event after all components complete.
+        """
+        local_results: list[ModuleResult] = []
+        local_ingress_obs: dict[str, Any] = {}
+
+        def _merge() -> None:
+            with _merge_lock:
+                module_results.extend(local_results)
+                _ingress_obs.update(local_ingress_obs)
+
+        def _signal_fail(*, trigger_agent: bool = False) -> None:
+            _cancel_event.set()
+            if not _trigger_agent_flag:
+                _trigger_agent_flag.append(trigger_agent)
+            _merge()
+
+        for module in comp_order:
+            # ── Cancellation check ─────────────────────────────────────────────
+            if _cancel_event.is_set():
+                local_results.append(ModuleResult(module_id=module.id, status="skipped"))
                 continue
 
-        # ── Ingress ───────────────────────────────────────────────────────────
-        if module.type == "Ingress":
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                df = _with_retry(
-                    lambda: read_ingress(module, spark),
-                    mod_policy,
-                    module.id,
+            if module.type not in _SUPPORTED_TYPES:
+                _signal_fail()
+                raise ExecuteError(
+                    f"Module type {module.type!r} (id={module.id!r}) is not supported. "
+                    f"Supported: {sorted(_SUPPORTED_TYPES)}."
                 )
-            except IngressError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    frame_store[module.id] = _GATE_CLOSED
+
+            # ── Selector skip ──────────────────────────────────────────────────
+            if included_ids is not None and module.id not in included_ids:
+                local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                continue
+
+            # ── Resume: reload from checkpoint if available ────────────────────
+            if resume_dir:
+                module_ckpt = resume_dir / module.id
+                done_marker = module_ckpt / "_aq_done"
+                if done_marker.exists():
+                    if module.type in ("Ingress", "Channel", "Funnel"):
+                        data_ckpt = module_ckpt / "data"
+                        if data_ckpt.exists():
+                            frame_store[module.id] = spark.read.parquet(str(data_ckpt))
+                    elif module.type == "Junction":
+                        for branch in module.config.get("branches", []):
+                            bid = branch.get("id", "")
+                            branch_ckpt = module_ckpt / bid
+                            if branch_ckpt.exists():
+                                frame_store[f"{module.id}.{bid}"] = spark.read.parquet(
+                                    str(branch_ckpt)
+                                )
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="success")
+                    )
+                    logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
                     continue
-                return fail_result
-            # Attach observation — fires zero-cost when downstream Egress writes this DF.
-            _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read")
-            _ingress_obs[module.id] = _obs
-            _write_stage_metrics(
-                module.id, run_id,
-                {**null_metrics(),
-                 "bytes_read": dir_bytes(module.config.get("path", "")),
-                 "duration_ms": int((time.monotonic() - _t0) * 1000)},
-                store_dir,
-            )
-            frame_store[module.id] = _obs_df
-            _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
 
-        # ── Channel ───────────────────────────────────────────────────────────
-        elif module.type == "Channel":
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                err = f"[{module.id}] Channel has no main-port incoming edges"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            upstream_dfs: dict[str, Any] = {}
-            for edge in main_edges:
-                val = frame_store.get(edge.from_id)
-                if _is_gate_closed(val):
-                    frame_store[module.id] = _GATE_CLOSED
-                    module_results.append(
-                        ModuleResult(module_id=module.id, status="skipped")
-                    )
-                    break
-                if val is None:
-                    err = (
-                        f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
-                    )
-                    module_results.append(
-                        ModuleResult(module_id=module.id, status="error", error=err)
-                    )
-                    return _fail(manifest.blueprint_id, run_id, module_results)
-                upstream_dfs[edge.from_id] = val
-            else:
+            # ── Ingress ───────────────────────────────────────────────────────
+            if module.type == "Ingress":
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
                 _t0 = time.monotonic()
                 try:
                     df = _with_retry(
-                        lambda: execute_sql_channel(module, upstream_dfs, spark),
+                        lambda: read_ingress(module, spark),
                         mod_policy,
                         module.id,
                     )
-                except ChannelError as exc:
+                except IngressError as exc:
                     gate_closed, fail_result = _on_retry_exhausted(
-                        exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, local_results
                     )
                     if gate_closed:
                         frame_store[module.id] = _GATE_CLOSED
                         continue
-                    return fail_result
-
-                # ── Spillway split ─────────────────────────────────────────────
-                spillway_condition: str | None = module.config.get("spillway_condition")
-                has_spillway_edge = any(
-                    e.from_id == module.id and e.port == "spillway"
-                    for e in manifest.edges
+                    _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
+                    return
+                _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read")
+                local_ingress_obs[module.id] = _obs
+                _write_stage_metrics(
+                    module.id, run_id,
+                    {**null_metrics(),
+                     "bytes_read": dir_bytes(module.config.get("path", "")),
+                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    store_dir,
                 )
-                if spillway_condition and has_spillway_edge:
-                    from pyspark.sql import functions as F
-                    good_df = df.filter(f"NOT ({spillway_condition})")
-                    error_df = (
-                        df.filter(spillway_condition)
-                          .withColumn("_aq_error_module", F.lit(module.id))
-                          .withColumn("_aq_error_msg", F.lit("spillway_condition matched"))
-                          .withColumn("_aq_error_ts", F.current_timestamp())
+                frame_store[module.id] = _obs_df
+                _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
+
+            # ── Channel ───────────────────────────────────────────────────────
+            elif module.type == "Channel":
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    err = f"[{module.id}] Channel has no main-port incoming edges"
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
                     )
-                    frame_store[module.id] = good_df
-                    frame_store[f"{module.id}.spillway"] = error_df
-                elif spillway_condition and not has_spillway_edge:
-                    logger.warning(
-                        "Channel %r has spillway_condition but no spillway edge; "
-                        "all rows routed to main stream.", module.id
-                    )
-                    frame_store[module.id] = df
-                elif has_spillway_edge and not spillway_condition:
-                    logger.warning(
-                        "Channel %r has a spillway edge but no spillway_condition; "
-                        "spillway DataFrame will be empty.", module.id
-                    )
-                    frame_store[module.id] = df
-                    frame_store[f"{module.id}.spillway"] = df.filter("1=0")
+                    _signal_fail()
+                    return
+
+                upstream_dfs: dict[str, Any] = {}
+                for edge in main_edges:
+                    val = frame_store.get(edge.from_id)
+                    if _is_gate_closed(val):
+                        frame_store[module.id] = _GATE_CLOSED
+                        local_results.append(
+                            ModuleResult(module_id=module.id, status="skipped")
+                        )
+                        break
+                    if val is None:
+                        err = (
+                            f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
+                        )
+                        local_results.append(
+                            ModuleResult(module_id=module.id, status="error", error=err)
+                        )
+                        _signal_fail()
+                        return
+                    upstream_dfs[edge.from_id] = val
                 else:
-                    frame_store[module.id] = df
+                    mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                    _t0 = time.monotonic()
+                    try:
+                        df = _with_retry(
+                            lambda: execute_sql_channel(module, upstream_dfs, spark),
+                            mod_policy,
+                            module.id,
+                        )
+                    except ChannelError as exc:
+                        gate_closed, fail_result = _on_retry_exhausted(
+                            exc, mod_policy, module, manifest.blueprint_id, run_id, local_results
+                        )
+                        if gate_closed:
+                            frame_store[module.id] = _GATE_CLOSED
+                            continue
+                        _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
+                        return
+
+                    # ── Spillway split ─────────────────────────────────────────
+                    spillway_condition: str | None = module.config.get("spillway_condition")
+                    has_spillway_edge = any(
+                        e.from_id == module.id and e.port == "spillway"
+                        for e in manifest.edges
+                    )
+                    if spillway_condition and has_spillway_edge:
+                        from pyspark.sql import functions as F
+                        good_df = df.filter(f"NOT ({spillway_condition})")
+                        error_df = (
+                            df.filter(spillway_condition)
+                              .withColumn("_aq_error_module", F.lit(module.id))
+                              .withColumn("_aq_error_msg", F.lit("spillway_condition matched"))
+                              .withColumn("_aq_error_ts", F.current_timestamp())
+                        )
+                        frame_store[module.id] = good_df
+                        frame_store[f"{module.id}.spillway"] = error_df
+                    elif spillway_condition and not has_spillway_edge:
+                        logger.warning(
+                            "Channel %r has spillway_condition but no spillway edge; "
+                            "all rows routed to main stream.", module.id
+                        )
+                        frame_store[module.id] = df
+                    elif has_spillway_edge and not spillway_condition:
+                        logger.warning(
+                            "Channel %r has a spillway edge but no spillway_condition; "
+                            "spillway DataFrame will be empty.", module.id
+                        )
+                        frame_store[module.id] = df
+                        frame_store[f"{module.id}.spillway"] = df.filter("1=0")
+                    else:
+                        frame_store[module.id] = df
+
+                    _write_stage_metrics(
+                        module.id, run_id,
+                        {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                        store_dir,
+                    )
+                    _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
+                    local_results.append(ModuleResult(module_id=module.id, status="success"))
+
+            # ── Junction ──────────────────────────────────────────────────────
+            elif module.type == "Junction":
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    err = f"[{module.id}] Junction has no main-port incoming edges"
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                upstream_id = main_edges[0].from_id
+                val = frame_store.get(upstream_id)
+                if _is_gate_closed(val):
+                    branches = module.config.get("branches", [])
+                    for branch in branches:
+                        frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                    continue
+                if val is None:
+                    err = (
+                        f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
+                    )
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    branch_dfs = _with_retry(
+                        lambda: execute_junction(module, val),
+                        mod_policy,
+                        module.id,
+                    )
+                except JunctionError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, local_results
+                    )
+                    if gate_closed:
+                        branches = module.config.get("branches", [])
+                        for branch in branches:
+                            frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
+                        continue
+                    _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
+                    return
 
                 _write_stage_metrics(
                     module.id, run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
                 )
-                _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
-                module_results.append(ModuleResult(module_id=module.id, status="success"))
+                for branch_id, branch_df in branch_dfs.items():
+                    frame_store[f"{module.id}.{branch_id}"] = branch_df
+                _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
 
-        # ── Junction ──────────────────────────────────────────────────────────
-        elif module.type == "Junction":
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                err = f"[{module.id}] Junction has no main-port incoming edges"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            upstream_id = main_edges[0].from_id
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                branches = module.config.get("branches", [])
-                for branch in branches:
-                    frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-                continue
-            if val is None:
-                err = (
-                    f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
-                )
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                branch_dfs = _with_retry(
-                    lambda: execute_junction(module, val),
-                    mod_policy,
-                    module.id,
-                )
-            except JunctionError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    branches = module.config.get("branches", [])
-                    for branch in branches:
-                        frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
-                    continue
-                return fail_result
-
-            _write_stage_metrics(
-                module.id, run_id,
-                {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
-                store_dir,
-            )
-            for branch_id, branch_df in branch_dfs.items():
-                frame_store[f"{module.id}.{branch_id}"] = branch_df
-            _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
-
-        # ── Funnel ────────────────────────────────────────────────────────────
-        elif module.type == "Funnel":
-            data_edges = _incoming_data(module.id, manifest.edges)
-            if not data_edges:
-                err = f"[{module.id}] Funnel has no incoming data edges"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            funnel_upstream: dict[str, Any] = {}
-            skipped = False
-            for edge in data_edges:
-                store_key = _frame_key(edge.from_id, edge.port)
-                val = frame_store.get(store_key)
-                if _is_gate_closed(val):
-                    skipped = True
-                    break
-                if val is None:
-                    err = (
-                        f"[{module.id}] upstream {store_key!r} produced no DataFrame."
-                    )
-                    module_results.append(
+            # ── Funnel ────────────────────────────────────────────────────────
+            elif module.type == "Funnel":
+                data_edges = _incoming_data(module.id, manifest.edges)
+                if not data_edges:
+                    err = f"[{module.id}] Funnel has no incoming data edges"
+                    local_results.append(
                         ModuleResult(module_id=module.id, status="error", error=err)
                     )
-                    return _fail(manifest.blueprint_id, run_id, module_results)
-                funnel_upstream[store_key] = val
+                    _signal_fail()
+                    return
 
-            if skipped:
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-                continue
+                funnel_upstream: dict[str, Any] = {}
+                skipped = False
+                for edge in data_edges:
+                    store_key = _frame_key(edge.from_id, edge.port)
+                    val = frame_store.get(store_key)
+                    if _is_gate_closed(val):
+                        skipped = True
+                        break
+                    if val is None:
+                        err = (
+                            f"[{module.id}] upstream {store_key!r} produced no DataFrame."
+                        )
+                        local_results.append(
+                            ModuleResult(module_id=module.id, status="error", error=err)
+                        )
+                        _signal_fail()
+                        return
+                    funnel_upstream[store_key] = val
 
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _t0 = time.monotonic()
-            try:
-                df = _with_retry(
-                    lambda: execute_funnel(module, funnel_upstream),
-                    mod_policy,
-                    module.id,
-                )
-            except FunnelError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
+                if skipped:
                     frame_store[module.id] = _GATE_CLOSED
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
                     continue
-                return fail_result
-            _write_stage_metrics(
-                module.id, run_id,
-                {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
-                store_dir,
-            )
-            frame_store[module.id] = df
-            _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
 
-        # ── Assert ────────────────────────────────────────────────────────────
-        elif module.type == "Assert":
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                err = f"[{module.id}] Assert has no main-port incoming edges"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            upstream_id = main_edges[0].from_id
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-                continue
-            if val is None:
-                err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            has_spillway_edge = any(
-                e.from_id == module.id and e.port == "spillway" for e in manifest.edges
-            )
-
-            try:
-                passing_df, quarantine_df = execute_assert(
-                    module, val, spark, run_id, manifest.blueprint_id,
-                )
-            except AssertError as exc:
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=str(exc))
-                )
-                return _fail(
-                    manifest.blueprint_id, run_id, module_results,
-                    trigger_agent=exc.trigger_agent,
-                )
-
-            frame_store[module.id] = passing_df
-            if quarantine_df is not None and has_spillway_edge:
-                frame_store[f"{module.id}.spillway"] = quarantine_df
-            elif quarantine_df is not None:
-                logger.warning(
-                    "[%s] Assert quarantine rows produced but no spillway edge; discarded.",
-                    module.id,
-                )
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
-
-        # ── Regulator ─────────────────────────────────────────────────────────
-        elif module.type == "Regulator":
-            main_edges = _incoming_main(module.id, manifest.edges)
-            if not main_edges:
-                err = f"[{module.id}] Regulator has no main-port incoming edges"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            upstream_id = main_edges[0].from_id
-            val = frame_store.get(upstream_id)
-            if _is_gate_closed(val):
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-                continue
-            if val is None:
-                err = (
-                    f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
-                )
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
-
-            # Evaluate gate — defaults to open when no surveyor
-            gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
-
-            if gate_open:
-                frame_store[module.id] = val  # transparent pass-through
-                module_results.append(ModuleResult(module_id=module.id, status="success"))
-            else:
-                on_block = module.config.get("on_block", "skip")
-                if on_block == "abort":
-                    err = f"[{module.id}] Regulator gate closed; on_block=abort"
-                    module_results.append(
-                        ModuleResult(module_id=module.id, status="error", error=err)
-                    )
-                    return _fail(manifest.blueprint_id, run_id, module_results)
-                elif on_block == "trigger_agent":
-                    logger.info(
-                        "Regulator %r: gate closed, on_block=trigger_agent; "
-                        "downstream skipped — LLM patch loop will fire.",
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _t0 = time.monotonic()
+                try:
+                    df = _with_retry(
+                        lambda: execute_funnel(module, funnel_upstream),
+                        mod_policy,
                         module.id,
                     )
-                    module_results.append(
-                        ModuleResult(
-                            module_id=module.id,
-                            status="error",
-                            error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
-                        )
+                except FunnelError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, local_results
                     )
-                    return _fail(manifest.blueprint_id, run_id, module_results, trigger_agent=True)
-                # skip (default): propagate sentinel
-                frame_store[module.id] = _GATE_CLOSED
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                    if gate_closed:
+                        frame_store[module.id] = _GATE_CLOSED
+                        continue
+                    _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
+                    return
+                _write_stage_metrics(
+                    module.id, run_id,
+                    {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    store_dir,
+                )
+                frame_store[module.id] = df
+                _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
 
-        # ── Egress ────────────────────────────────────────────────────────────
-        elif module.type == "Egress":
-            data_edges = _incoming_data(module.id, manifest.edges)
-            if not data_edges:
-                err = f"[{module.id}] no main-port edge arriving at this Egress module"
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
+            # ── Assert ────────────────────────────────────────────────────────
+            elif module.type == "Assert":
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    err = f"[{module.id}] Assert has no main-port incoming edges"
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
 
-            edge = data_edges[0]
-            key = _frame_key(edge.from_id, edge.port)
-            val = frame_store.get(key)
-            if _is_gate_closed(val):
-                module_results.append(ModuleResult(module_id=module.id, status="skipped"))
-                continue
-            if val is None:
-                err = (
-                    f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
-                )
-                module_results.append(
-                    ModuleResult(module_id=module.id, status="error", error=err)
-                )
-                return _fail(manifest.blueprint_id, run_id, module_results)
+                upstream_id = main_edges[0].from_id
+                val = frame_store.get(upstream_id)
+                if _is_gate_closed(val):
+                    frame_store[module.id] = _GATE_CLOSED
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                    continue
+                if val is None:
+                    err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
 
-            mod_policy = _module_retry_policy(module, manifest.retry_policy)
-            _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written")
-            _t0 = time.monotonic()
-            try:
-                _with_retry(
-                    lambda: write_egress(_obs_df, module, depot=depot),
-                    mod_policy,
-                    module.id,
+                has_spillway_edge = any(
+                    e.from_id == module.id and e.port == "spillway" for e in manifest.edges
                 )
-            except EgressError as exc:
-                gate_closed, fail_result = _on_retry_exhausted(
-                    exc, mod_policy, module, manifest.blueprint_id, run_id, module_results
-                )
-                if gate_closed:
-                    continue  # Egress is terminal; no frame_store update needed
-                return fail_result
-            _write_stage_metrics(
-                module.id, run_id,
-                {**null_metrics(),
-                 "records_written": get_observation(_obs, "records_written"),
-                 "bytes_written": dir_bytes(module.config.get("path", "")),
-                 "duration_ms": int((time.monotonic() - _t0) * 1000)},
-                store_dir,
-            )
-            _write_checkpoint(module, checkpoint_dir, manifest)  # done-sentinel only
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
 
-        # ── Probe ─────────────────────────────────────────────────────────────
-        elif module.type == "Probe":
-            source_id = module.attach_to
-            source_val = frame_store.get(source_id) if source_id else None
-
-            if source_val is None or _is_gate_closed(source_val):
-                logger.debug(
-                    "Probe %r: attach_to=%r not available; skipping.",
-                    module.id, source_id,
-                )
-            elif store_dir is not None:
                 try:
-                    execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions)
-                except Exception as exc:
-                    logger.warning("Probe %r failed: %s", module.id, exc)
+                    passing_df, quarantine_df = execute_assert(
+                        module, val, spark, run_id, manifest.blueprint_id,
+                    )
+                except AssertError as exc:
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=str(exc))
+                    )
+                    _signal_fail(trigger_agent=exc.trigger_agent)
+                    return
 
-            module_results.append(ModuleResult(module_id=module.id, status="success"))
+                frame_store[module.id] = passing_df
+                if quarantine_df is not None and has_spillway_edge:
+                    frame_store[f"{module.id}.spillway"] = quarantine_df
+                elif quarantine_df is not None:
+                    logger.warning(
+                        "[%s] Assert quarantine rows produced but no spillway edge; discarded.",
+                        module.id,
+                    )
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
+
+            # ── Regulator ─────────────────────────────────────────────────────
+            elif module.type == "Regulator":
+                main_edges = _incoming_main(module.id, manifest.edges)
+                if not main_edges:
+                    err = f"[{module.id}] Regulator has no main-port incoming edges"
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                upstream_id = main_edges[0].from_id
+                val = frame_store.get(upstream_id)
+                if _is_gate_closed(val):
+                    frame_store[module.id] = _GATE_CLOSED
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                    continue
+                if val is None:
+                    err = (
+                        f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
+                    )
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
+
+                if gate_open:
+                    frame_store[module.id] = val
+                    local_results.append(ModuleResult(module_id=module.id, status="success"))
+                else:
+                    on_block = module.config.get("on_block", "skip")
+                    if on_block == "abort":
+                        err = f"[{module.id}] Regulator gate closed; on_block=abort"
+                        local_results.append(
+                            ModuleResult(module_id=module.id, status="error", error=err)
+                        )
+                        _signal_fail()
+                        return
+                    elif on_block == "trigger_agent":
+                        logger.info(
+                            "Regulator %r: gate closed, on_block=trigger_agent; "
+                            "downstream skipped — LLM patch loop will fire.",
+                            module.id,
+                        )
+                        local_results.append(
+                            ModuleResult(
+                                module_id=module.id,
+                                status="error",
+                                error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
+                            )
+                        )
+                        _signal_fail(trigger_agent=True)
+                        return
+                    # skip (default): propagate sentinel
+                    frame_store[module.id] = _GATE_CLOSED
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+
+            # ── Egress ────────────────────────────────────────────────────────
+            elif module.type == "Egress":
+                data_edges = _incoming_data(module.id, manifest.edges)
+                if not data_edges:
+                    err = f"[{module.id}] no main-port edge arriving at this Egress module"
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                edge = data_edges[0]
+                key = _frame_key(edge.from_id, edge.port)
+                val = frame_store.get(key)
+                if _is_gate_closed(val):
+                    local_results.append(ModuleResult(module_id=module.id, status="skipped"))
+                    continue
+                if val is None:
+                    err = (
+                        f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
+                    )
+                    local_results.append(
+                        ModuleResult(module_id=module.id, status="error", error=err)
+                    )
+                    _signal_fail()
+                    return
+
+                mod_policy = _module_retry_policy(module, manifest.retry_policy)
+                _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written")
+                _t0 = time.monotonic()
+                try:
+                    _with_retry(
+                        lambda: write_egress(_obs_df, module, depot=depot),
+                        mod_policy,
+                        module.id,
+                    )
+                except EgressError as exc:
+                    gate_closed, fail_result = _on_retry_exhausted(
+                        exc, mod_policy, module, manifest.blueprint_id, run_id, local_results
+                    )
+                    if gate_closed:
+                        continue
+                    _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
+                    return
+                _write_stage_metrics(
+                    module.id, run_id,
+                    {**null_metrics(),
+                     "records_written": get_observation(_obs, "records_written"),
+                     "bytes_written": dir_bytes(module.config.get("path", "")),
+                     "duration_ms": int((time.monotonic() - _t0) * 1000)},
+                    store_dir,
+                )
+                _write_checkpoint(module, checkpoint_dir, manifest)
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
+
+            # ── Probe ─────────────────────────────────────────────────────────
+            elif module.type == "Probe":
+                source_id = module.attach_to
+                source_val = frame_store.get(source_id) if source_id else None
+
+                if source_val is None or _is_gate_closed(source_val):
+                    logger.debug(
+                        "Probe %r: attach_to=%r not available; skipping.",
+                        module.id, source_id,
+                    )
+                elif store_dir is not None:
+                    try:
+                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions)
+                    except Exception as exc:
+                        logger.warning("Probe %r failed: %s", module.id, exc)
+
+                local_results.append(ModuleResult(module_id=module.id, status="success"))
+
+        # Component completed — merge local results into shared collections
+        _merge()
+
+    # ── Dispatch ──────────────────────────────────────────────────────────────
+    if parallel:
+        all_module_ids = {m.id for m in order}
+        components = _find_connected_components(all_module_ids, manifest.edges)
+
+        if len(components) > 1:
+            component_orders = [
+                [m for m in order if m.id in comp_ids]
+                for comp_ids in components
+            ]
+            logger.info(
+                "Parallel execution: %d independent components detected",
+                len(component_orders),
+            )
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(component_orders)
+            ) as pool:
+                futures = [pool.submit(_run_component, co) for co in component_orders]
+                for f in concurrent.futures.as_completed(futures):
+                    exc = f.exception()
+                    if exc is not None:
+                        logger.error(
+                            "Component thread raised unexpected exception: %s", exc
+                        )
+                        _cancel_event.set()
+        else:
+            # Single component — no thread overhead
+            _run_component(order)
+    else:
+        _run_component(order)
+
+    if _cancel_event.is_set():
+        return _fail(
+            manifest.blueprint_id, run_id, module_results,
+            trigger_agent=bool(_trigger_agent_flag and _trigger_agent_flag[0]),
+        )
 
     # ── Collect deferred Ingress observations (fire after all Egress writes) ───
-    # observe_df attaches a zero-cost CollectMetrics node; it fires when the
-    # downstream Egress write action consumes the DF plan.
     if store_dir is not None and _ingress_obs:
         _succeeded = {r.module_id for r in module_results if r.status == "success"}
         for _mod_id, _obs in _ingress_obs.items():
@@ -1025,9 +1173,8 @@ def execute(
                 continue
             try:
                 _rr = get_observation(_obs, "records_read")
-                if _rr is not None:  # observation fired — write actual value (0 = empty dataset)
+                if _rr is not None:
                     _update_metric(store_dir, run_id, _mod_id, "records_read", _rr)
-                # None = observation didn't fire → column stays NULL (metric not collected)
             except Exception as exc:
                 logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 
