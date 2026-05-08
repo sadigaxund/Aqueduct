@@ -97,7 +97,7 @@ The following sequence describes a complete pipeline run from Blueprint file to 
 1. Parser reads and validates Blueprint.yml against the versioned JSON Schema. Fails fast on any unknown field or schema violation.
 1. Context Registry is built: static values resolved, @aq.\* functions queued for Tier 1 resolution.
 1. Compiler resolves all @aq.\* runtime functions (date functions, secret fetches, Depot reads). All ${ctx.\*} tokens are substituted. Arcades are expanded. Manifest JSON is written to runs/<run\_id>/manifest.json.
-1. Planner partitions the flat Module list into ordered JobSpecs. Parallel branches are identified. Probe attachment points are annotated.
+1. Executor topologically sorts the Module list and inserts Probes immediately after their `attach_to` targets. When `--parallel` is set, independent connected components are identified via Union-Find and each component is submitted to a separate Python thread.
 1. Executor acquires or creates a SparkSession for the target deployment. RunRecord is opened in the Observability Store.
 1. Executor submits each JobSpec. SparkListener is attached, streaming task metrics to the Observability Store in real time.
 1. Surveyor runs concurrently, consuming the Observability Store event stream. It evaluates health signals and Regulator states continuously.
@@ -248,12 +248,39 @@ For SQL-based transformations:
 
 |**Config field**|**Description**|
 | :- | :- |
-|**op**|Operation type. Built-in ops: sql | deduplicate | filter | select | rename | cast | join | union | sort | repartition | cache. Custom ops reference a registered Python function by ID.|
-|**query**|SQL string (op: sql only). Upstream Module IDs are available as temp views. ${ctx.\*} references are substituted before the query reaches Spark.|
-|**udfs**|List of UDF IDs to register before executing this Channel. UDFs are defined in the udf\_registry block (see Section 5.4).|
-|**key**|Column name or list. Used by deduplicate, join, and other key-based ops.|
-|**order\_by**|Sort expression string. Used by deduplicate (to pick which row to keep) and sort ops.|
-|**condition**|Filter expression string (op: filter). Standard Spark SQL boolean expression.|
+|**op**|Operation type. Built-in ops: `sql` \| `deduplicate` \| `filter` \| `select` \| `rename` \| `cast` \| `join` \| `union` \| `sort` \| `repartition` \| `coalesce` \| `cache`.|
+|**query**|SQL string (`op: sql` only). Upstream Module IDs are available as temp views. `${ctx.*}` references are substituted before the query reaches Spark.|
+|**udfs**|List of UDF IDs to register before executing this Channel. UDFs are defined in the `udf_registry` block (see Section 5.4).|
+|**key**|Column name or list of column names. Used by `deduplicate` (partition key) and key-based ops.|
+|**order\_by**|Sort expression string. Used by `deduplicate` (determines which row to keep — e.g. `"event_ts DESC"` keeps the latest) and `sort`.|
+|**condition**|Filter expression (`op: filter`). Standard Spark SQL boolean expression.|
+|**columns**|Column mapping or list. Semantics depend on op: `select` = list of column names; `rename` = `{old: new}` dict or `[{from, to}]` list; `cast` = `{col: spark_type}` dict or `[{column, type}]` list.|
+|**num\_partitions**|Target partition count. Used by `repartition` and `coalesce`.|
+|**column**|Optional column name for `repartition` — partitions by hash of this column.|
+|**allow\_missing\_columns**|Boolean (default `true`). Used by `union` — when `true`, missing columns are filled with `null` (`unionByName` semantics).|
+|**storage\_level**|Storage level for `op: cache`. Default: `MEMORY_AND_DISK`. Valid: `MEMORY_AND_DISK`, `MEMORY_AND_DISK_SER`, `MEMORY_ONLY`, `MEMORY_ONLY_SER`, `DISK_ONLY`, `DISK_ONLY_2`, `OFF_HEAP`.|
+
+**Op reference — when to use which:**
+
+| Op | Spark action? | Single input | Notes |
+| :- | :-: | :-: | :- |
+| `sql` | No | No | Full SQL; upstreams as temp views |
+| `join` | No | No | Sugar over SQL JOIN with broadcast hint support |
+| `deduplicate` | No¹ | Yes | `dropDuplicates()` or Window+rank when `order_by` set |
+| `filter` | No | Yes | `df.filter(condition)` |
+| `select` | No | Yes | `df.select(*columns)` |
+| `rename` | No | Yes | `df.withColumnRenamed()` per column |
+| `cast` | No | Yes | `df.withColumn(col, col.cast(type))` per column |
+| `sort` | No² | Yes | `df.orderBy(*exprs)` — deferred until action |
+| `union` | No | No (multi) | `unionByName` across all upstreams |
+| `repartition` | No³ | Yes | Full shuffle — use to increase partitions or rebalance |
+| `coalesce` | No | Yes | No shuffle — use to shrink partition count (e.g. before single-file Egress) |
+| `cache` | Yes⁴ | Yes | `df.persist(StorageLevel)` — triggers materialisation |
+
+¹ `deduplicate` with `order_by` uses `row_number()` window function — lazy.
+² `sort` adds an exchange to the plan; the shuffle fires when downstream action triggers.
+³ `repartition` also adds an exchange; shuffle fires at action time.
+⁴ `cache`/`persist` fires a Spark action immediately to materialise the DataFrame into memory/disk.
 
 **Channel op: join — config reference:**
 
@@ -279,6 +306,92 @@ For SQL-based transformations:
 |**broadcast\_side**|Optional: left or right. Adds a `BROADCAST` hint to the smaller side to avoid shuffle.|
 
 > **Note:** `op: join` is sugar over `op: sql`. It is translated to `SELECT * FROM left JOIN right ON condition` before reaching Spark. For complex multi-table joins, multi-way expressions, or window functions, use `op: sql` directly.
+
+**Channel op examples — DataFrame API ops:**
+
+```yaml
+# deduplicate — keep latest row per order_id
+- id: dedup_orders
+  type: Channel
+  config:
+    op: deduplicate
+    key: order_id
+    order_by: "event_ts DESC"
+
+# deduplicate — keyless (all columns)
+- id: dedup_all
+  type: Channel
+  config:
+    op: deduplicate
+
+# filter
+- id: active_only
+  type: Channel
+  config:
+    op: filter
+    condition: "status = 'active' AND amount > 0"
+
+# select
+- id: slim_orders
+  type: Channel
+  config:
+    op: select
+    columns: [order_id, amount, region, event_ts]
+
+# rename — dict form
+- id: rename_cols
+  type: Channel
+  config:
+    op: rename
+    columns:
+      ReviewDate: review_date
+      CustomerID: customer_id
+
+# cast — dict form
+- id: cast_types
+  type: Channel
+  config:
+    op: cast
+    columns:
+      amount: "decimal(18,2)"
+      event_ts: timestamp
+
+# sort
+- id: sorted_orders
+  type: Channel
+  config:
+    op: sort
+    order_by: ["event_ts DESC", "order_id ASC"]
+
+# union — merges all upstream DataFrames
+- id: all_regions
+  type: Channel
+  config:
+    op: union
+    allow_missing_columns: true   # default true
+
+# repartition — increase parallelism before heavy transform
+- id: repart
+  type: Channel
+  config:
+    op: repartition
+    num_partitions: 200
+    column: region   # optional — partition by hash of this column
+
+# coalesce — shrink to single file before Egress (no shuffle)
+- id: single_file
+  type: Channel
+  config:
+    op: coalesce
+    num_partitions: 1
+
+# cache — materialise for reuse across multiple downstream paths
+- id: cached_base
+  type: Channel
+  config:
+    op: cache
+    storage_level: MEMORY_AND_DISK   # default; omit to use default
+```
 
 **SQL Macros — static compile-time fragments:**
 
@@ -1711,6 +1824,7 @@ Detailed reference for the most common command:
 | `--allow-aggressive` | Allow `approval_mode: aggressive` for this run, overriding `danger.allow_aggressive_patching: false` in config. Single-use — does not modify `aqueduct.yml`. |
 | `--env-file <path>` | Load environment variables from a `.env` file before running. If omitted, Aqueduct auto-discovers `.env` in the blueprint's directory. Existing env vars are never overwritten. |
 | `--no-env-file` | Disable `.env` auto-discovery. Use in CI where variables are injected externally and a local `.env` might cause conflicts. |
+| `--parallel` | Execute independent DAG branches concurrently. Aqueduct identifies fully-independent connected components in the data-flow graph (Union-Find) and submits each to a separate Python thread. Only beneficial when the Blueprint contains multiple independent source trees (e.g. two separate Ingress→Egress chains with no shared edges). Junction fan-out is already parallel via Spark's lazy evaluation — `--parallel` adds nothing for single-tree blueprints. First component failure cancels remaining components. |
 
 **Sub-DAG execution example:**
 

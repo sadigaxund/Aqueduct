@@ -477,6 +477,7 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive 
 | `--allow-aggressive` | Allow `approval_mode: aggressive` for this run without setting `danger.allow_aggressive_patching: true` in config |
 | `--env-file <path>` | Load a `.env` file into the environment before running. If omitted, Aqueduct auto-discovers `.env` in the project root (directory containing `aqueduct.yml`). |
 | `--no-env-file` | Disable `.env` auto-discovery entirely |
+| `--parallel` | Run independent DAG branches concurrently. Aqueduct identifies fully-independent source trees (Union-Find) and executes each in a separate thread. Only useful when a Blueprint has multiple independent Ingress→Egress chains with no shared ancestors. |
 
 ---
 
