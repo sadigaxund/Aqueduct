@@ -738,7 +738,7 @@ def run(
         except Exception:
             pass  # doctor errors must never block self-healing
 
-        patch = generate_llm_patch(
+        llm_result = generate_llm_patch(
             failure_ctx,
             model=resolved_agent_model,
             patches_dir=patches_dir,
@@ -751,6 +751,7 @@ def run(
             blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
             last_apply_error=last_apply_error,
         )
+        patch = llm_result.patch
         if patch is None:
             click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
             on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
@@ -2049,7 +2050,12 @@ def heal(
 
         status = "PASS" if result.passed else "FAIL"
         conf = f"  confidence={result.confidence:.2f}" if result.confidence is not None else ""
-        click.echo(f"{status}  scenario={scenario.id}  {result.duration_seconds:.1f}s{conf}")
+        att = f"  attempts={result.attempts_to_parse}" if result.attempts_to_parse else ""
+        click.echo(f"{status}  scenario={scenario.id}  {result.duration_seconds:.1f}s{conf}{att}")
+
+        if result.reprompt_errors:
+            for i, err in enumerate(result.reprompt_errors, 1):
+                click.echo(f"  reprompt {i}: {err}", err=True)
 
         if result.failures:
             for f in result.failures:
@@ -2114,7 +2120,7 @@ def heal(
         f"provider={resolved_provider}  model={resolved_model}"
     )
 
-    patch = generate_llm_patch(
+    llm_result = generate_llm_patch(
         failure_ctx,
         model=resolved_model,
         patches_dir=patches_path,
@@ -2125,9 +2131,15 @@ def heal(
         llm_max_reprompts=resolved_llm_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
     )
+    patch = llm_result.patch
 
     if patch is None:
-        click.echo("✗ LLM failed to produce a valid patch", err=True)
+        click.echo(
+            f"✗ LLM failed to produce a valid patch after {llm_result.attempts} attempt(s)",
+            err=True,
+        )
+        for err in llm_result.reprompt_errors:
+            click.echo(f"  · {err}", err=True)
         sys.exit(1)
 
     stage_patch_for_human(patch, patches_path, failure_ctx)
@@ -2172,12 +2184,19 @@ def heal(
     show_default=True,
     help="Output format",
 )
+@click.option(
+    "--workers",
+    default=4,
+    show_default=True,
+    help="Max concurrent LLM calls (set to 1 for serial execution)",
+)
 def benchmark(
     scenarios_dir: str,
     models: tuple[str, ...],
     config_path: str | None,
     patches_dir: str,
     fmt: str,
+    workers: int,
 ) -> None:
     """Run scenario suite against one or more LLM models and compare results.
 
@@ -2229,6 +2248,7 @@ def benchmark(
         llm_timeout=resolved_llm_timeout,
         llm_max_reprompts=resolved_llm_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
+        workers=workers,
     )
 
     if fmt == "json":
@@ -2242,6 +2262,10 @@ def benchmark(
                     "patch_applies": r.patch_applies,
                     "confidence": r.confidence,
                     "duration_seconds": r.duration_seconds,
+                    "attempts_to_parse": r.attempts_to_parse,
+                    "reprompt_errors": r.reprompt_errors,
+                    "root_cause_match": r.root_cause_match,
+                    "category_match": r.category_match,
                     "failures": r.failures,
                 }
         click.echo(json.dumps(output, indent=2))

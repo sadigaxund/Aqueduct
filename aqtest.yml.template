@@ -1,0 +1,89 @@
+# Aqueduct Test Template — all possible fields documented
+# Used with: aqueduct test <file>
+#
+# An aqtest defines fixture-based pipeline testing: run a blueprint against
+# known input data and assert the output matches expectations.
+# Requires a local Spark session (unlike .aqscenario.yml which is Spark-free).
+
+aqueduct_test: "1.0"
+
+# ── Identity ──────────────────────────────────────────────────────────────────
+
+id: my_pipeline_smoke_test
+description: >
+  One sentence describing what this test verifies.
+
+# ── Blueprint reference ───────────────────────────────────────────────────────
+
+# Path to the blueprint YAML, resolved relative to this test file.
+blueprint: ../blueprints/pipeline.yml
+
+# ── Context overrides ─────────────────────────────────────────────────────────
+
+# Override context values for this test run (equivalent to --ctx key=val).
+# Use to redirect paths to fixture data and output to temp directories.
+context:
+  tables.orders_raw: fixtures/orders.csv
+  tables.orders_out: /tmp/aqtest_output/orders
+
+# ── Fixtures ──────────────────────────────────────────────────────────────────
+
+# Maps Ingress module_id → fixture file path (relative to this test file).
+# Aqueduct reads the fixture instead of the real source path.
+# Supported formats: any format the blueprint's Ingress already declares.
+fixtures:
+  raw_orders: fixtures/orders.csv
+  raw_products: fixtures/products.json
+
+# ── Expected outputs ──────────────────────────────────────────────────────────
+
+# Assertions evaluated against each Egress module's output after the run.
+expected:
+  processed_orders:
+
+    # Row count assertions
+    row_count: 100                  # exact match
+    # min_row_count: 50             # at least N rows
+    # max_row_count: 200            # at most N rows
+
+    # Schema assertions (column name → Spark simpleString() type)
+    schema:
+      order_id: bigint
+      amount: double
+      region: string
+      event_ts: timestamp
+    # schema_contains:              # partial schema — only listed columns checked
+    #   order_id: bigint
+
+    # Null assertions
+    assert_no_nulls:
+      - order_id
+      - amount
+    # max_null_rate:                # per-column null fraction
+    #   region: 0.05
+
+    # Value range assertions
+    # assert_column_range:
+    #   amount:
+    #     min: 0.0
+    #     max: 99999.99
+
+    # Aggregate assertions (SQL expressions evaluated against output)
+    # assert_sql:
+    #   - "SUM(amount) > 0"
+    #   - "COUNT(DISTINCT region) >= 3"
+
+    # Sample row assertions (at least one row must match all conditions)
+    # assert_contains_row:
+    #   region: "EU"
+    #   order_id: 12345
+
+# ── Run options ───────────────────────────────────────────────────────────────
+
+# Options passed to the executor for this test run.
+run_options:
+  # profile: test                   # activate a context profile
+  # from_module: clean_orders       # start execution from this module
+  # to_module: write_output         # stop after this module
+  spark_config:
+    spark.sql.shuffle.partitions: "4"   # keep tests fast; default is 200

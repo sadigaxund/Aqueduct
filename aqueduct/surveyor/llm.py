@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,14 @@ from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LLMPatchResult:
+    """Return value of generate_llm_patch — patch + attempt metadata."""
+    patch: PatchSpec | None
+    attempts: int              # total LLM calls made (1 = succeeded first try)
+    reprompt_errors: list[str] = field(default_factory=list)  # validation errors per failed attempt
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
@@ -667,13 +676,14 @@ def generate_llm_patch(
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
-) -> PatchSpec | None:
-    """Call the LLM and return a validated PatchSpec.
+) -> LLMPatchResult:
+    """Call the LLM and return an LLMPatchResult with patch + attempt metadata.
 
     Does not apply or stage the patch — caller decides what to do with it.
 
-    Returns None if the LLM failed to produce a valid PatchSpec after
-    llm_max_reprompts attempts.
+    result.patch is None if the LLM failed to produce a valid PatchSpec after
+    llm_max_reprompts attempts. result.attempts counts all LLM calls made.
+    result.reprompt_errors lists the validation error from each failed attempt.
     """
     messages: list[dict[str, Any]] = [
         {
@@ -683,14 +693,18 @@ def generate_llm_patch(
     ]
 
     patch_spec: PatchSpec | None = None
+    reprompt_errors: list[str] = []
+    attempts_made = 0
 
     for attempt in range(llm_max_reprompts):
+        attempts_made = attempt + 1
         try:
             raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
         except Exception as exc:
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s", attempt + 1, llm_max_reprompts, exc
             )
+            reprompt_errors.append(f"API error: {exc}")
             break
 
         logger.debug("LLM raw response (attempt %d):\n%s", attempt + 1, raw)
@@ -699,11 +713,11 @@ def generate_llm_patch(
             break
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
             friendly = _format_reprompt_error(exc, raw)
+            reprompt_errors.append(friendly)
             logger.warning(
                 "LLM patch response invalid (attempt %d/%d):\n%s",
                 attempt + 1, llm_max_reprompts, friendly,
             )
-            # Truncate raw to 80 lines max to keep reprompt context tight
             raw_lines = raw.splitlines()
             raw_truncated = "\n".join(raw_lines[:80])
             if len(raw_lines) > 80:
@@ -720,7 +734,7 @@ def generate_llm_patch(
             "for blueprint %r run %r",
             llm_max_reprompts, failure_ctx.blueprint_id, failure_ctx.run_id,
         )
-    return patch_spec
+    return LLMPatchResult(patch=patch_spec, attempts=attempts_made, reprompt_errors=reprompt_errors)
 
 
 def _patch_filename(patch_spec: PatchSpec, patches_dir: Path) -> str:
