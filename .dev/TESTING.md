@@ -1302,3 +1302,40 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ mode=merge, table: catalog_name → uses catalog name (not delta.`path`)
 - ⏳ MERGE INTO: matched rows updated, unmatched rows inserted (end-to-end Delta)
 - ⏳ temp view `_aq_merge_src` dropped in finally block even on failure
+
+---
+
+### Phase 22 — Scenario Testing + LLM Benchmark
+
+#### `aqueduct/surveyor/scenario.py` — scenario model + runner
+- ⏳ `load_scenario`: valid .aqscenario.yml → AqScenario dataclass
+- ⏳ `load_scenario`: missing aqueduct_scenario version → ValueError
+- ⏳ `load_scenario`: missing `id` → ValueError
+- ⏳ `load_scenario`: missing `inject_failure` → ValueError
+- ⏳ `_match_op_spec`: exact key match → True
+- ⏳ `_match_op_spec`: value_contains substring → True / False
+- ⏳ `_match_op_spec`: partial spec (only `op`) → matches any op of that type
+- ⏳ `_check_expected_patch`: all ops matched → no failures
+- ⏳ `_check_expected_patch`: unmatched expected op → failure message with generated ops listed
+- ⏳ `_check_expected_patch`: forbidden op present → failure message
+- ⏳ `_check_assertions`: patch_is_valid=true + patch=None → failure
+- ⏳ `_check_assertions`: patch_applies=true + apply succeeds → patch_applies=True
+- ⏳ `_check_assertions`: patch_applies=true + apply fails → failure with error detail
+- ⏳ `run_scenario`: bad blueprint path → ScenarioResult(passed=False, failures=[...])
+- ⏳ `run_scenario`: LLM returns None → ScenarioResult(passed=False, patch_valid=False)
+- ⏳ `format_benchmark_table`: single model single scenario → correct table shape
+- ⏳ `format_benchmark_table`: summary rows (parse rate, apply rate, pass rate, avg confidence)
+
+#### Prompt versioning — `aqueduct/surveyor/llm.py`
+- ⏳ `PROMPT_VERSION` constant present in module
+- ⏳ `stage_patch_for_human`: _aq_meta includes prompt_version
+- ⏳ `archive_patch`: _aq_meta includes prompt_version
+
+#### CLI — `aqueduct/cli.py`
+- ⏳ `heal --scenario <path>`: loads scenario, runs against configured model, prints PASS/FAIL
+- ⏳ `heal --scenario <path>`: scenario fails → sys.exit(1)
+- ⏳ `heal <run_id>`: still works (existing flow unbroken)
+- ⏳ `heal` with no args: error message prompting for run_id or --scenario
+- ⏳ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
+- ⏳ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
+- ⏳ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
