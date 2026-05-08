@@ -1192,3 +1192,81 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ JDBC module checked by host:port
 - ⏳ cloud URI → skip result
 - ⏳ project root derived from `provenance_map.blueprint_path`
+
+### Parallel branch execution — `aqueduct/executor/spark/executor.py`
+- ⏳ `_find_connected_components`: single module → one component
+- ⏳ `_find_connected_components`: two modules connected by edge → one component
+- ⏳ `_find_connected_components`: two disconnected Ingress→Egress chains → two components
+- ⏳ `_find_connected_components`: signal-only edge (port="signal") does not merge components
+- ⏳ `parallel=False` (default) → `_find_connected_components` never called; serial loop runs
+- ⏳ `parallel=True`, single component → serial path used (no ThreadPoolExecutor)
+- ⏳ `parallel=True`, two independent components → both run concurrently; wall-clock ≈ max(T_A, T_B), not T_A + T_B
+- ⏳ `parallel=True`, one component fails → `cancel_event` set; other component's pending modules show status="skipped"
+- ⏳ `parallel=True`, trigger_agent failure → `ExecutionResult.trigger_agent=True` propagated
+- ⏳ `parallel=True`, both components succeed → `ExecutionResult(status="success")` with all module results merged
+- ⏳ `parallel=True` + `--from` selector → selector applied per-module inside each component thread
+- ⏳ unexpected thread exception (not ChannelError etc) → cancel_event set, error logged, run returns error
+
+### Channel op completion — `aqueduct/executor/spark/channel.py`
+
+#### op=deduplicate
+- ⏳ no key, no order_by → `dropDuplicates()` on all columns
+- ⏳ key only → `dropDuplicates([key_cols])` — arbitrary row kept per key
+- ⏳ key + order_by → Window+row_number(); row with rank=1 kept; `_aq_rank` column dropped
+- ⏳ order_by without key → ChannelError raised
+
+#### op=filter
+- ⏳ valid condition → rows matching condition returned
+- ⏳ missing condition → ChannelError
+- ⏳ invalid SQL expression → ChannelError wrapping Spark exception
+
+#### op=select
+- ⏳ list of columns → only those columns in result
+- ⏳ single string column → works (auto-wrapped in list)
+- ⏳ missing columns field → ChannelError
+- ⏳ non-existent column name → ChannelError from Spark
+
+#### op=rename
+- ⏳ dict form `{old: new}` → column renamed
+- ⏳ list form `[{from, to}]` → column renamed
+- ⏳ multiple renames applied in order
+- ⏳ missing columns → ChannelError
+
+#### op=cast
+- ⏳ dict form `{col: type}` → column cast
+- ⏳ list form `[{column, type}]` → column cast
+- ⏳ invalid type string → ChannelError wrapping Spark exception
+- ⏳ missing columns → ChannelError
+
+#### op=sort
+- ⏳ string order_by → single sort expr applied
+- ⏳ list order_by → multiple sort exprs applied in order
+- ⏳ missing order_by → ChannelError
+
+#### op=union
+- ⏳ two upstreams → rows combined via unionByName
+- ⏳ allow_missing_columns=true (default) → missing cols filled with null
+- ⏳ allow_missing_columns=false → AnalysisException if schemas differ
+- ⏳ single upstream → ChannelError (requires ≥2)
+
+#### op=repartition
+- ⏳ num_partitions only → df.repartition(n)
+- ⏳ num_partitions + column → df.repartition(n, col)
+- ⏳ missing num_partitions → ChannelError
+
+#### op=coalesce
+- ⏳ num_partitions set → df.coalesce(n)
+- ⏳ missing num_partitions → ChannelError
+- ⏳ coalesce to 1 → single partition (verified via df.rdd.getNumPartitions())
+
+#### op=cache
+- ⏳ no storage_level → defaults to MEMORY_AND_DISK
+- ⏳ storage_level: DISK_ONLY → df.persist(StorageLevel.DISK_ONLY)
+- ⏳ invalid storage_level → ChannelError with valid levels listed
+- ⏳ cached df is reused (same object reference in frame_store)
+
+#### multi-input guard
+- ⏳ single-input op with 2 upstreams → ChannelError mentioning "use op=union first"
+
+#### unknown op
+- ⏳ op: "banana" → ChannelError listing all valid ops
