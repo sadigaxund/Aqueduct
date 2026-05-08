@@ -160,10 +160,11 @@ modules:
       path: "s3a://bucket/orders/date=${ctx.today}/"
       # options: {}                 # forwarded verbatim to df.read.options()
       # schema_hint:                # strict mode (default) — all hinted columns must exist + match type
-      #   - name: order_id
-      #     type: long
-      #   - name: amount
-      #     type: double
+      #   columns:
+      #     - name: order_id
+      #       type: long
+      #     - name: amount
+      #       type: double
       #
       # schema_hint:                # additive mode — extra upstream columns allowed (schema evolution)
       #   mode: additive

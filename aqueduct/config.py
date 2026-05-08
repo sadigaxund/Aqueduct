@@ -134,7 +134,7 @@ class AgentConnectionConfig(BaseModel):
 
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
-    model: str = "claude-sonnet-4-6"
+    model: str = "claude-3-5-sonnet-latest"
     ollama_options: dict[str, Any] | None = None
     llm_timeout: float = Field(
         default=120.0,

@@ -53,14 +53,4 @@ however we have a python module with that name, I very much liked something simi
 -----------------------
 16. Verify if these changes are correct and justified:
 
-a. The documentation and the audit checklist both specify that Environment Variables should have higher priority than Profile Settings. The intended resolution order (highest to lowest) is: CLI Overrides (--ctx), Environment Variables (AQUEDUCT_CTX_*), Profile Settings, Blueprint Defaults. However, the code in build_context_map was implementing them in this order: Apply Environment Variables, Apply Profile Settings. The execution order in aqueduct/parser/resolver.py was swapped.
-
-b. identified a bug in the Provenance Map generation while validating top-level modules: The Parser is responsible for resolving all Tier 0 tokens (like ${ctx.var}) into final values. By the time the Compiler received the Blueprint object, the original expressions were already gone. For example, if a config value was ${ctx.path}, the compiler only saw the resolved string /data/raw. Because of this, the provenance map was incorrectly labeling almost everything as a "literal", losing the information that it actually originated from a context variable or an environment variable. The FIX: I modified aqueduct/compiler/compiler.py to preserve this history. Just like the compiler already does for Arcade sub-blueprints, it now re-loads the raw YAML of the main blueprint during the compilation phase. By comparing the raw YAML (which contains the original ${...} tokens) with the resolved values, the Compiler can now accurately reconstruct the provenance map.Specifically, I: 1) Updated the compile function to read the blueprint_path raw content. 2) Extracted the unresolved raw_context and raw_module_configs. 3) Used these to correctly identify context_ref, env_ref, and tier1 sources for the final Manifest. This ensures that the "Provenance Map" requirement is fully met: every resolved value in the Manifest now correctly tracks its original source.
-
-
-
-
-
-
-
-
+17. Add example maybe: aqueduct's usage with python

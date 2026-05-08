@@ -284,7 +284,7 @@ webhooks:
 agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────
   provider: "anthropic"              # "anthropic" | "openai_compat"
-  model: "claude-sonnet-4-6"
+  model: "claude-3-5-sonnet-latest"
   # ANTHROPIC_API_KEY env var required at runtime
 
   # ── Timeouts and retries ──────────────────────────────────────────────────
