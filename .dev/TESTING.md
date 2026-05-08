@@ -1270,3 +1270,35 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 #### unknown op
 - ⏳ op: "banana" → ChannelError listing all valid ops
+
+---
+
+### Phase 21 Part C: Bug Fixes — `aqueduct/executor/spark/`
+
+#### schema_hint flat dict bypass — `ingress.py`
+- ⏳ flat dict `{col_name: type}` → treated as strict schema check (previously silently skipped)
+- ⏳ nested dict `{mode: additive, columns: [...]}` → still works correctly
+- ⏳ list form `[{name, type}]` → still works correctly
+- ⏳ flat dict with wrong type → IngressError raised with column name and mismatch detail
+- ⏳ flat dict with missing column → IngressError raised
+- ⏳ type alias normalization: `LONG` accepted as `bigint`, `INTEGER` as `int`, `BOOL` as `boolean`, `SHORT` as `smallint`, `BYTE` as `tinyint`
+- ⏳ mixed case alias `Long`/`STRING` normalized correctly
+- ⏳ types not in alias map lowercased verbatim (`DOUBLE` → `double`)
+
+#### spillway_rate rule — `assert_.py`
+- ⏳ no quarantine rules → spillway_rate gets count=0, passes when max>0
+- ⏳ 20% rows quarantined, max=0.3 → passes
+- ⏳ 20% rows quarantined, max=0.1 → fires on_fail
+- ⏳ on_fail=abort → AssertError raised; passing_df still returned before raise
+- ⏳ on_fail=warn → warning logged, pipeline continues, quarantine_df returned
+- ⏳ spillway_rate always evaluated after row-level rules (Phase 4 ordering)
+- ⏳ empty quarantine_df (no row rules match) → quarantine_count=0
+
+#### mode: merge — `egress.py`
+- ⏳ mode=merge, format=delta, path, merge_key (str) → MERGE INTO executed via spark.sql
+- ⏳ mode=merge, merge_key=[list] → ON clause uses AND-joined conditions
+- ⏳ mode=merge, format=parquet → EgressError: only delta supported
+- ⏳ mode=merge, missing merge_key → EgressError
+- ⏳ mode=merge, table: catalog_name → uses catalog name (not delta.`path`)
+- ⏳ MERGE INTO: matched rows updated, unmatched rows inserted (end-to-end Delta)
+- ⏳ temp view `_aq_merge_src` dropped in finally block even on failure
