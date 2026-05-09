@@ -605,6 +605,73 @@ def _storage_probe_paths(spark_config: dict[str, Any]) -> list[tuple[str, str]]:
     return paths
 
 
+# ── Cloudpickle compatibility check ──────────────────────────────────────────
+
+def check_cloudpickle_compat(master_url: str) -> CheckResult:
+    """Detect Python / cloudpickle version mismatch that breaks Python UDFs.
+
+    PySpark 3.5 bundles cloudpickle 2.x. Python 3.13+ changed function
+    internals in ways cloudpickle 2.x cannot serialize — any Python UDF
+    will crash with infinite recursion. cloudpickle>=3.0 (system-installed)
+    fixes this on the driver via monkey-patch; workers need it independently.
+    """
+    t = time.monotonic()
+    py_ver = sys.version_info
+
+    try:
+        import pyspark.cloudpickle as bundled_cp
+        bundled_ver = tuple(int(x) for x in bundled_cp.__version__.split(".")[:2])
+    except Exception as exc:
+        return CheckResult("cloudpickle", "skip", f"pyspark not installed: {exc}", _ms(t))
+
+    try:
+        import cloudpickle as system_cp
+        system_ver = tuple(int(x) for x in system_cp.__version__.split(".")[:2])
+    except ImportError:
+        system_cp = None  # type: ignore[assignment]
+        system_ver = (0, 0)
+
+    # No issue below Python 3.13
+    if py_ver < (3, 13):
+        detail = (
+            f"python={py_ver.major}.{py_ver.minor}  "
+            f"bundled={'.'.join(str(x) for x in bundled_ver)}  "
+            f"system={'not installed' if system_ver == (0, 0) else '.'.join(str(x) for x in system_ver)}"
+            "  (no compatibility issue below Python 3.13)"
+        )
+        return CheckResult("cloudpickle", "ok", detail, _ms(t))
+
+    # Python 3.13+ — bundled cloudpickle must be >=3.0 or system >=3.0 present for patch
+    driver_ok = system_ver >= (3, 0)
+    is_local = master_url.startswith("local")
+
+    detail_parts = [
+        f"python={py_ver.major}.{py_ver.minor}",
+        f"bundled={'.'.join(str(x) for x in bundled_ver)}",
+        f"system={'not installed' if system_ver == (0, 0) else '.'.join(str(x) for x in system_ver)}",
+    ]
+
+    if not driver_ok:
+        detail_parts.append(
+            "DRIVER: cloudpickle<3.0 — Python UDFs will crash. "
+            "Fix: pip install 'cloudpickle>=3.0'"
+        )
+        return CheckResult("cloudpickle", "fail", "  ".join(detail_parts), _ms(t))
+
+    if is_local:
+        detail_parts.append("driver patched OK  (local mode — no workers)")
+        return CheckResult("cloudpickle", "ok", "  ".join(detail_parts), _ms(t))
+
+    # Remote cluster — workers need cloudpickle>=3.0 independently
+    detail_parts.append(
+        "driver patched OK  "
+        "WORKERS: ensure cloudpickle>=3.0 is installed on all worker nodes "
+        "(e.g. pip install cloudpickle>=3.0 in cluster init script) "
+        "or use lang: java UDFs to avoid Python serialization entirely"
+    )
+    return CheckResult("cloudpickle", "warn", "  ".join(detail_parts), _ms(t))
+
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 def run_doctor(
@@ -621,6 +688,7 @@ def run_doctor(
     cfg_result = check_config(config_path)
     results.append(cfg_result)
     if cfg_result.status == "fail":
+        results.append(CheckResult("cloudpickle", "skip", "config failed"))
         results.append(CheckResult("depot", "skip", "config failed"))
         results.append(CheckResult("observability", "skip", "config failed"))
         results.append(CheckResult("secrets", "skip", "config failed"))
@@ -634,6 +702,9 @@ def run_doctor(
         cfg = load_config(config_path)
     except ConfigError:
         return results  # already recorded above
+
+    # Cloudpickle compatibility (pure version check — no Spark needed)
+    results.append(check_cloudpickle_compat(cfg.deployment.master_url))
 
     # Depot
     results.append(check_depot(Path(cfg.stores.depot.path)))
