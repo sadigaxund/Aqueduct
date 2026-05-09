@@ -1,0 +1,30 @@
+aqueduct: "1.0"
+id: "context-test"
+name: "Context Resolution Test"
+
+context:
+  base_path: "/data/raw"
+  table_name: "users"
+  # Transitive ref
+  full_path: "${ctx.base_path}/${ctx.table_name}"
+  # Env ref with default
+  env_val: "${MY_VAR:-default_val}"
+  # Tier 1 ref (should be ignored by Tier 0 resolver)
+  dynamic_date: "@aq.date.today('yyyy-MM-dd')"
+
+context_profiles:
+  prod:
+    base_path: "/prod/data"
+    table_name: "customers"
+
+modules:
+  - id: "m1"
+    label: "Module 1"
+    type: "Ingress"
+    config:
+      path: "${ctx.full_path}"
+      env_check: "${ctx.env_val}"
+      tier1_check: "${ctx.dynamic_date}"
+      direct_env: "${MY_VAR:-fallback}"
+
+edges: []

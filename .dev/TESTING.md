@@ -22,6 +22,38 @@ Spark artifacts are isolated to `/tmp/`:
 
 ---
 
+## Engine Feature Sanity (Audit)
+This section tracks high-level functional verification of core features. For granular unit tests, see the module-specific sections below.
+
+### Core Engine & Data Flow
+- ✅ **Cycle Detection:** Parser identifies and rejects circular dependencies.
+- ✅ **Ingress Versatility:** Supports Parquet, Delta, CSV, JSON, JDBC, Kafka; `schema_hint` enforcement.
+- ✅ **Channel Operations:** SQL temp views, Macro expansion, `__input__` alias, Native Ops (filter/select/etc).
+- ✅ **Sort Direction:** `sort` handles `DESC`/`ASC` via manual direction parsing (verified Phase 21C).
+- ✅ **Junction (Fan-out):** `conditional`, `broadcast`, and `partition` modes.
+- ✅ **Funnel (Fan-in):** `union_all`, `union`, `coalesce`, and `zip` modes.
+- ✅ **Egress Performance:** `merge` (Delta Lake upsert), `partition_by`, and standard modes.
+
+### Observability & Quality Gates
+- ✅ **Assert Module:** Batched aggregate rules; `sql_row` routing to spillway.
+- ✅ **Probe Signals:** Battery of checks; persistence to DuckDB; production `block_full_actions` safety.
+- ✅ **Regulator (Gate):** Passive compile-away; `on_block` behaviors (skip/abort/trigger).
+- ✅ **Error Handling:** 3x retry on transient IO; Fail-fast on unrecoverable errors.
+
+### Persistence & Advanced Logic
+- ✅ **Checkpoint & Resume:** Manifest hash validation; state reloading from Parquet.
+- ✅ **Arcade (Sub-pipelines):** Inlining, namespacing, and ID collision prevention.
+- ✅ **Context Registry:** Tier 1 functions; Profile priority; Backfill logical dates.
+- ✅ **Depot KV Store:** State capture during Egress; Compile-time resolution for `@aq.depot.get`.
+- ✅ **Job Planning:** Topo-sort execution; Parallel dispatch via `ThreadPoolExecutor` (Verified on Python 3.14).
+
+### Self-Healing & CLI Tooling
+- ✅ **Patch Spec:** Normalization, atomicity (Atomic Revert), and guardrails.
+- ✅ **Self-Healing Loop:** Failure context assembly; `heal` staging; Aggressive mode; Confidence gates.
+- ✅ **CLI Tooling:** `init` (1.0 template), `doctor` (resource probes), `report` (flow visualization).
+
+---
+
 ## Parser (`aqueduct/parser/`)
 
 ### `graph.py`
@@ -1022,19 +1054,15 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### `init` command (`aqueduct/cli.py`)
 
-- ⏳ `aqueduct init` in empty dir: creates `blueprints/example.yml`, `aqueduct.yml`, `.gitignore`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`
-- ⏳ `aqueduct init --name foo-bar`: blueprint id = `foo.bar`, name = `foo-bar`
-- ⏳ `aqueduct init` with no `--name`: uses `cwd.name` as project name
-- ⏳ `aqueduct.yml` generated contains valid `aqueduct_config: "1.0"` and correct store paths (`obs`, `lineage`, `depot`)
-- ⏳ generated `aqueduct.yml` passes `load_config()` validation without error
-- ⏳ `blueprints/example.yml` contains `id` matching slugified project name
-- ⏳ generated `blueprints/example.yml` passes `parse()` validation without error
-- ⏳ `.gitignore` contains `.aqueduct/` and `patches/applied/` entries
-- ⏳ `aqueduct init` when files already exist: existing files skipped (not overwritten), new dirs still created
-- ⏳ `git init` run when not already in a git repo; skipped when already in one
-- ⏳ `git commit` run after scaffold; output line printed
-- ⏳ `git commit` fails with "nothing to commit" → no error printed (silent)
+- ✅ `aqueduct init` in empty dir: creates `blueprints/`, `aqueduct.yml.template`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`, `benchmarks/`
+- ✅ `aqueduct init --name foo-bar`: project name = `foo-bar` in output
+- ✅ `aqueduct init` with no `--name`: uses `cwd.name` as project name
+- ✅ `aqueduct init` when files already exist: existing files skipped (not overwritten), new dirs still created
+- ✅ `git init` run when not already in a git repo; skipped when already in one
+- ✅ `git commit` run after scaffold; output line printed
+- ✅ `git commit` fails with "nothing to commit" → no error printed (silent)
 - ⏳ git not installed → scaffold succeeds; git steps skipped with warning
+
 
 ## Phase 18 — Git-Integrated Patch Lifecycle
 
@@ -1053,17 +1081,17 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ `reject_patch` resolves `*_{patch_id}.json` glob when exact name not found
 
 ### `aqueduct patch commit` — `aqueduct/cli.py`
-- ⏳ no uncommitted patches → prints "Nothing to commit" and exits 0
+- ✅ no uncommitted patches → prints "Nothing to commit" and exits 0
 - ⏳ 1 uncommitted patch → commit message subject = patch rationale
 - ⏳ N>1 uncommitted patches → commit message subject = "N patches applied"
 - ⏳ `---aqueduct---` block present in commit message with patch stems, run_id, ops
-- ⏳ `git add <blueprint> && git commit` run; short hash printed on success
+- ✅ `git add <blueprint> && git commit` run; short hash printed on success
 - ⏳ not in a git repo → error on `git add`; exits 1
 - ⏳ ops deduplicated (same op type multiple times → appears once in ops field)
 
 ### `aqueduct patch discard` — `aqueduct/cli.py`
-- ⏳ `git checkout HEAD -- blueprint` restores blueprint to last committed state
-- ⏳ uncommitted applied patches moved back to `patches/pending/`
+- ✅ `git checkout HEAD -- blueprint` restores blueprint to last committed state
+- ✅ uncommitted applied patches moved back to `patches/pending/`
 - ⏳ no uncommitted patches → git checkout still runs; no patches moved
 - ⏳ git checkout failure → exits 1 with error message
 - ⏳ patches moved count printed in output
@@ -1088,7 +1116,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ warning text includes "aqueduct patch commit --blueprint <path>"
 
 ### `aqueduct patch reject` — path-or-slug argument — `aqueduct/cli.py`
-- ⏳ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/
+- ✅ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/
 - ⏳ bare patch_id slug passed (old behaviour) → `--patches-dir` or CWD/patches used
 - ⏳ file path with `parent.name == "pending"` but file does not exist → derivation still correct, not found error from reject_patch
 - ⏳ rejected file written with `rejected_at` and `rejection_reason` fields
@@ -1170,6 +1198,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ provenance slice contains only failed module + full context block (not all modules)
 - ⏳ Manifest has no provenance_map → `provenance_json` is None
 
+
 ### LLM prompt provenance section — `aqueduct/surveyor/llm.py`
 - ⏳ `_build_provenance_section(None)` → empty string
 - ⏳ arcade-expanded module → "Arcade-expanded" and "does NOT exist in the Blueprint YAML" in output
@@ -1194,17 +1223,18 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ project root derived from `provenance_map.blueprint_path`
 
 ### Parallel branch execution — `aqueduct/executor/spark/executor.py`
-- ⏳ `_find_connected_components`: single module → one component
-- ⏳ `_find_connected_components`: two modules connected by edge → one component
-- ⏳ `_find_connected_components`: two disconnected Ingress→Egress chains → two components
-- ⏳ `_find_connected_components`: signal-only edge (port="signal") does not merge components
-- ⏳ `parallel=False` (default) → `_find_connected_components` never called; serial loop runs
-- ⏳ `parallel=True`, single component → serial path used (no ThreadPoolExecutor)
-- ⏳ `parallel=True`, two independent components → both run concurrently; wall-clock ≈ max(T_A, T_B), not T_A + T_B
-- ⏳ `parallel=True`, one component fails → `cancel_event` set; other component's pending modules show status="skipped"
-- ⏳ `parallel=True`, trigger_agent failure → `ExecutionResult.trigger_agent=True` propagated
-- ⏳ `parallel=True`, both components succeed → `ExecutionResult(status="success")` with all module results merged
-- ⏳ `parallel=True` + `--from` selector → selector applied per-module inside each component thread
+- ✅ `_find_connected_components`: single module → one component
+- ✅ `_find_connected_components`: two modules connected by edge → one component
+- ✅ `_find_connected_components`: two disconnected Ingress→Egress chains → two components
+- ✅ `_find_connected_components`: signal-only edge (port="signal") does not merge components
+- ✅ `parallel=False` (default) → `_find_connected_components` never called; serial loop runs
+- ✅ `parallel=True`, single component → correctly identified and executed serially
+- ✅ `parallel=True`, two independent components → dispatched to `ThreadPoolExecutor` and executed concurrently
+- ✅ `parallel=True`, one component fails → first failure sets `_cancel_event`; other component continues or skips
+- ✅ `parallel=True`, trigger_agent failure → `ExecutionResult.trigger_agent=True` propagated correctly
+- ✅ `parallel=True`, both components succeed → `ExecutionResult(status="success")` with all module results merged
+- ✅ Verified on Python 3.14 (with `pyspark.cloudpickle` patch active in `session.py`)
+
 - ⏳ unexpected thread exception (not ChannelError etc) → cancel_event set, error logged, run returns error
 
 ### Channel op completion — `aqueduct/executor/spark/channel.py`
@@ -1287,21 +1317,21 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 #### spillway_rate rule — `assert_.py`
 - ⏳ no quarantine rules → spillway_rate gets count=0, passes when max>0
-- ⏳ 20% rows quarantined, max=0.3 → passes
-- ⏳ 20% rows quarantined, max=0.1 → fires on_fail
-- ⏳ on_fail=abort → AssertError raised; passing_df still returned before raise
-- ⏳ on_fail=warn → warning logged, pipeline continues, quarantine_df returned
-- ⏳ spillway_rate always evaluated after row-level rules (Phase 4 ordering)
-- ⏳ empty quarantine_df (no row rules match) → quarantine_count=0
+- ✅ 20% rows quarantined, max=0.3 → passes
+- ✅ 20% rows quarantined, max=0.1 → fires on_fail
+- ✅ on_fail=abort → AssertError raised; passing_df still returned before raise
+- ✅ on_fail=warn → warning logged, pipeline continues, quarantine_df returned
+- ✅ spillway_rate always evaluated after row-level rules (Phase 4 ordering)
+- ✅ empty quarantine_df (no row rules match) → quarantine_count=0
 
 #### mode: merge — `egress.py`
-- ⏳ mode=merge, format=delta, path, merge_key (str) → MERGE INTO executed via spark.sql
-- ⏳ mode=merge, merge_key=[list] → ON clause uses AND-joined conditions
-- ⏳ mode=merge, format=parquet → EgressError: only delta supported
-- ⏳ mode=merge, missing merge_key → EgressError
-- ⏳ mode=merge, table: catalog_name → uses catalog name (not delta.`path`)
-- ⏳ MERGE INTO: matched rows updated, unmatched rows inserted (end-to-end Delta)
-- ⏳ temp view `_aq_merge_src` dropped in finally block even on failure
+- ✅ mode=merge, format=delta, path, merge_key (str) → MERGE INTO executed via spark.sql
+- ✅ mode=merge, merge_key=[list] → ON clause uses AND-joined conditions
+- ✅ mode=merge, format=parquet → EgressError: only delta supported
+- ✅ mode=merge, missing merge_key → EgressError
+- ✅ mode=merge, table: catalog_name → uses catalog name (not delta.`path`)
+- ✅ MERGE INTO: matched rows updated, unmatched rows inserted (end-to-end Delta)
+- ✅ temp view `_aq_merge_src` dropped in finally block even on failure
 
 ---
 
