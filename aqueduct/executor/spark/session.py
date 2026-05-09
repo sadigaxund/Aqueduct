@@ -13,6 +13,8 @@ from typing import Any
 
 from pyspark.sql import SparkSession
 
+from aqueduct.executor.spark.udf import _patch_pyspark_cloudpickle
+
 _DEFAULT_MASTER = "local[*]"
 
 # log4j/log4j2 suppress flags injected into driver JVM before session start
@@ -71,6 +73,7 @@ def make_spark_session(
     Returns:
         An active SparkSession.
     """
+    _patch_pyspark_cloudpickle()
     builder = SparkSession.builder.master(master_url).appName(blueprint_id)
 
     if quiet:
