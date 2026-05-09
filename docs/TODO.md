@@ -39,6 +39,8 @@
 20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
 however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
 
+21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
+
 ---
 
 ### Running Thoughts/Notes
@@ -56,14 +58,6 @@ however we have a python module with that name, I very much liked something simi
 17. Add example maybe: aqueduct's usage with python
 
 
-aqueduct init now scaffolds: 
-  arcades/
-  blueprints/
-    blueprint.yml.template
-  tests/
-    aqtest.yml.template
-  benchmarks/
-    aqscenario.yml.template
-  patches/pending/
-  patches/rejected/
-  aqueduct.yml.template
+
+
+'Bugfix: change the fragile "F.expr" used in sort expression. It was misidentifying "DESC" as column name. Now it should work for any single-column expression with optional direction suffix.'

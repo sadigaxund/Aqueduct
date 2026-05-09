@@ -233,8 +233,16 @@ def _execute_sort(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
         raise ChannelError(f"[{module_id}] op=sort requires 'order_by'")
 
     exprs = [order_by] if isinstance(order_by, str) else list(order_by)
+
+    def _to_col(e: str) -> "Column":
+        # F.expr("amount DESC") misparses as `amount AS DESC` in expression context;
+        # use F.col + .asc()/.desc() to preserve sort direction.
+        parts = e.strip().split()
+        col = F.col(parts[0])
+        return col.desc() if len(parts) > 1 and parts[-1].upper() == "DESC" else col.asc()
+
     try:
-        return df.orderBy(*[F.expr(e) for e in exprs])
+        return df.orderBy(*[_to_col(e) for e in exprs])
     except Exception as exc:
         raise ChannelError(f"[{module_id}] op=sort failed: {exc}") from exc
 
