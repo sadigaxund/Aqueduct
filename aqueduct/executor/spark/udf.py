@@ -99,9 +99,6 @@ def register_udfs(
     if not udf_registry:
         return
 
-    has_python = any(e.get("lang", "python") == "python" for e in udf_registry)
-    if has_python:
-        _patch_pyspark_cloudpickle()
     _ensure_project_root_on_path()
 
     for entry in udf_registry:
