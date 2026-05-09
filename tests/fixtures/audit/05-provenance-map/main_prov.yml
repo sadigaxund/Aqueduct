@@ -1,0 +1,27 @@
+aqueduct: "1.0"
+id: "main-prov"
+name: "Main Provenance"
+
+context:
+  my_ctx: "ctx_value"
+  my_env: "${MY_VAR:-default_env}"
+  my_tier1: "@aq.runtime.run_id()"
+
+modules:
+  - id: "m1"
+    label: "Main Module"
+    type: "Ingress"
+    config:
+      c1: "${ctx.my_ctx}"
+      e1: "${ctx.my_env}"
+      t1: "${ctx.my_tier1}"
+      l1: "literal_value"
+
+  - id: "arc"
+    label: "Arcade"
+    type: "Arcade"
+    ref: "sub_prov.yml"
+    context_override:
+      shared_val: "injected"
+
+edges: []

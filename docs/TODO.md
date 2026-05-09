@@ -60,4 +60,3 @@ however we have a python module with that name, I very much liked something simi
 
 
 
-'Bugfix: change the fragile "F.expr" used in sort expression. It was misidentifying "DESC" as column name. Now it should work for any single-column expression with optional direction suffix.'

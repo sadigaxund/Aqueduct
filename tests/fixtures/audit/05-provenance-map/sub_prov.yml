@@ -1,0 +1,15 @@
+aqueduct: "1.0"
+id: "sub-prov"
+name: "Sub Provenance"
+
+required_context:
+  - shared_val
+
+modules:
+  - id: "m_sub"
+    label: "Sub Module"
+    type: "Ingress"
+    config:
+      sub_key: "${ctx.shared_val}"
+      literal_key: "fixed"
+edges: []

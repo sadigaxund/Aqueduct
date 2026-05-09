@@ -78,7 +78,7 @@ def test_config_defaults():
     assert config.stores.obs.path == ".aqueduct/obs.db"
     assert config.stores.lineage.path == ".aqueduct/lineage.db"
     assert config.stores.depot.path == ".aqueduct/depot.db"
-    assert config.agent.model == "claude-sonnet-4-6"
+    assert config.agent.model == "claude-3-5-sonnet-latest"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"
     assert config.webhooks.on_failure is None

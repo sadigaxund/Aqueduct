@@ -1,0 +1,17 @@
+aqueduct: "1.0"
+
+id: "invalid-blueprint"
+
+name: "Invalid Blueprint"
+
+unknown_field: "this should fail"
+
+modules:
+  - id: "m1"
+    label: "Module 1"
+    type: "Ingress"
+    description: "test"
+    unknown_module_field: "this should also fail"
+    config:
+      path: "/data"
+edges: []
