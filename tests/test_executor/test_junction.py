@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.junction import JunctionError, execute_junction

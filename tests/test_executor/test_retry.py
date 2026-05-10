@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.executor.spark.executor import _backoff_seconds, _is_retriable, _with_retry
 from aqueduct.parser.models import RetryPolicy

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+pytestmark = pytest.mark.unit
 import yaml
 from pathlib import Path
 from pydantic import ValidationError

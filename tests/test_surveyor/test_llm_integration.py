@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = [pytest.mark.llm, pytest.mark.integration, pytest.mark.slow]
+
 from tests.conftest import requires_ollama
 
 

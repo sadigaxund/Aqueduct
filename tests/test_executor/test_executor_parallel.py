@@ -1,4 +1,5 @@
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 import time
 import threading
 from pathlib import Path

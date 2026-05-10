@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 class TestUdfRegistration:
     def test_unsupported_lang_raises(self):

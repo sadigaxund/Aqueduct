@@ -6,6 +6,7 @@ import json
 from dataclasses import FrozenInstanceError
 
 import pytest
+pytestmark = pytest.mark.unit
 
 from aqueduct.surveyor.models import FailureContext, RunRecord
 

@@ -17,6 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration, pytest.mark.slow]
+
 from pyspark.sql import SparkSession
 
 from aqueduct.compiler.compiler import compile as compiler_compile

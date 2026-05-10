@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pathlib import Path
 from click.testing import CliRunner
 from aqueduct.cli import cli
