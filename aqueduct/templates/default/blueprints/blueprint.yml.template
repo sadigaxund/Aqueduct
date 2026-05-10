@@ -148,6 +148,8 @@ agent:
 
 # ── Modules ───────────────────────────────────────────────────────────────────
 
+# Replace [] with your module list — an empty modules list will run successfully
+# but produce no output and write no data. Uncomment the examples below to start.
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────
