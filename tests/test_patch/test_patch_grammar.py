@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pytest
+pytestmark = pytest.mark.unit
 from pydantic import ValidationError
 from aqueduct.patch.grammar import PatchSpec
 

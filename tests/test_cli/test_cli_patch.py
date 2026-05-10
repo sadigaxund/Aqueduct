@@ -1,5 +1,6 @@
 import json
 import pytest
+pytestmark = pytest.mark.integration
 import subprocess
 from pathlib import Path
 from click.testing import CliRunner

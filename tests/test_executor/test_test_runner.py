@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 class TestTestRunnerHelpers:
     """Tests for pure helpers in test_runner.py — no Spark needed."""

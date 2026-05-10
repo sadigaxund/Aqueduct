@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 import pytest
+pytestmark = pytest.mark.unit
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.compiler.compiler import compile
 from aqueduct.parser.parser import parse

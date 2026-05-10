@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+pytestmark = pytest.mark.unit
 import yaml
 
 from aqueduct.patch.apply import (

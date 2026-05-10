@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
+pytestmark = pytest.mark.unit
 from click.testing import CliRunner
 
 from aqueduct.cli import _check_guardrails, cli

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+pytestmark = pytest.mark.unit
 
 from aqueduct.depot.depot import DepotStore
 

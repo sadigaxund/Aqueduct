@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from aqueduct.parser.parser import ParseError, parse
 
+pytestmark = pytest.mark.unit
+
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 

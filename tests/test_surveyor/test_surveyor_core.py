@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+pytestmark = pytest.mark.unit
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult, ModuleResult

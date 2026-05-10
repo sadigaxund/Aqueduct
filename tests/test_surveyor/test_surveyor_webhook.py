@@ -7,6 +7,9 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
+import pytest
+pytestmark = pytest.mark.unit
+
 from aqueduct.config import WebhookEndpointConfig
 from aqueduct.surveyor.webhook import fire_webhook
 

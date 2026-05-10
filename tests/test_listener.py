@@ -9,6 +9,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df

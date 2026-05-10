@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.executor import (

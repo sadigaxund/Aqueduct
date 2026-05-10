@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 import os
 from pathlib import Path
 from aqueduct.executor.spark.metrics import observe_df, get_observation, dir_bytes

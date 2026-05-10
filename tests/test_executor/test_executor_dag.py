@@ -1,4 +1,5 @@
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from aqueduct.parser.models import Module, Edge
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.spark.executor import (

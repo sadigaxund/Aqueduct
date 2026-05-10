@@ -80,6 +80,13 @@ ignore = ["E501"]
 addopts   = "--cov=aqueduct --cov-report=term-missing"
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
+markers = [
+    "unit: Fast unit tests that can run on every commit (no external services).",
+    "integration: Tests that require a local Spark cluster, database, or long runtimes.",
+    "slow: Tests that take > 2 seconds to complete.",
+    "llm: Tests that require a live LLM endpoint (Anthropic, Ollama).",
+    "spark: Tests that require a SparkSession (local[1] ok).",
+]
 
 [tool.coverage.run]
 data_file = "/tmp/.aqueduct_coverage"

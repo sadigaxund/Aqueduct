@@ -1,6 +1,7 @@
 """Tests for the Assert executor."""
 
 import pytest
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from unittest.mock import patch
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F

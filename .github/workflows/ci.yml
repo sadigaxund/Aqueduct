@@ -1,0 +1,15 @@
+jobs:
+  quick-gate:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # This will create two jobs in parallel:
+        #  one for Python 3.11, one for Python 3.12
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -m "unit and not slow and not llm"

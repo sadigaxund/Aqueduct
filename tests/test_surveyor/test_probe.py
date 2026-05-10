@@ -5,6 +5,9 @@ from pathlib import Path
 
 import duckdb
 import pytest
+
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.probe import execute_probe

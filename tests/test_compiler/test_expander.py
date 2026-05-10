@@ -3,6 +3,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
+pytestmark = pytest.mark.unit
 from aqueduct.compiler.compiler import CompileError, compile
 from aqueduct.compiler.models import Manifest
 from aqueduct.parser.parser import parse

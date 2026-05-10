@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from click.testing import CliRunner
 import pytest
+pytestmark = pytest.mark.integration
 from aqueduct.cli import cli
 
 @pytest.fixture
