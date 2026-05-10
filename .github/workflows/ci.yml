@@ -1,10 +1,16 @@
+name: Aqueduct CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
 jobs:
   quick-gate:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # This will create two jobs in parallel:
-        #  one for Python 3.11, one for Python 3.12
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
