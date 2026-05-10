@@ -23,34 +23,70 @@ Spark artifacts are isolated to `/tmp/`:
 ---
 
 ## Engine Feature Sanity (Audit)
-This section tracks high-level functional verification of core features. For granular unit tests, see the module-specific sections below.
+This section tracks high-level functional verification of core features against the Technical Specifications.
 
-### Core Engine & Data Flow
+### Phase A: Core Engine (Structure & Data Flow)
 - ✅ **Cycle Detection:** Parser identifies and rejects circular dependencies.
-- ✅ **Ingress Versatility:** Supports Parquet, Delta, CSV, JSON, JDBC, Kafka; `schema_hint` enforcement.
-- ✅ **Channel Operations:** SQL temp views, Macro expansion, `__input__` alias, Native Ops (filter/select/etc).
+- ✅ **Ingress Versatility:**
+  - ✅ Formats: Parquet, Delta, CSV, JSON, JDBC, Kafka (via generic Spark pass-through).
+  - ✅ `schema_hint` enforcement: Supports both flat-dict `{col: type}` and nested `{mode, columns}` formats. Normalizes type aliases.
+- ✅ **Channel Operations:**
+  - ✅ SQL temp view registration: Modules available by ID in SQL.
+  - ✅ Macro Expansion: Parameterised `{{ macros.fn(args) }}` expand at compile time.
+  - ✅ `__input__` alias: Auto-registration for single-input channels.
+  - ✅ Native Ops: `deduplicate`, `filter`, `select`, `rename`, `cast`, `repartition`, `coalesce`, `cache`, `union` verified.
 - ✅ **Sort Direction:** `sort` handles `DESC`/`ASC` via manual direction parsing (verified Phase 21C).
-- ✅ **Junction (Fan-out):** `conditional`, `broadcast`, and `partition` modes.
-- ✅ **Funnel (Fan-in):** `union_all`, `union`, `coalesce`, and `zip` modes.
-- ✅ **Egress Performance:** `merge` (Delta Lake upsert), `partition_by`, and standard modes.
+- ✅ **Junction (Fan-out):** `conditional` (filter-based), `broadcast` (zero-shuffle), and `partition` (key-based) modes.
+- ✅ **Funnel (Fan-in):** `union_all` (zero-shuffle), `union` (distinct), `coalesce` (aligned), and `zip` (monotonically increasing ID join).
+- ✅ **Egress Performance:**
+  - ✅ Standard modes: `overwrite`, `append`, `error`, `ignore`.
+  - ✅ `mode: merge`: Delta Lake `MERGE INTO` support with key-based upserts.
+  - ✅ `partition_by`: Columns correctly passed to Spark writer.
 
-### Observability & Quality Gates
-- ✅ **Assert Module:** Batched aggregate rules; `sql_row` routing to spillway.
-- ✅ **Probe Signals:** Battery of checks; persistence to DuckDB; production `block_full_actions` safety.
-- ✅ **Regulator (Gate):** Passive compile-away; `on_block` behaviors (skip/abort/trigger).
-- ✅ **Error Handling:** 3x retry on transient IO; Fail-fast on unrecoverable errors.
+### Phase B: Observability & Quality Gates
+- ✅ **Assert Module (Inline):**
+  - ✅ Aggregate Rules: `min_rows`, `null_rate`, `freshness`, `sql` batched into 1-2 Spark actions.
+  - ✅ Row-level Rules: `sql_row` correctly routes failing rows to spillway port.
+  - ✅ `spillway_rate`: Evaluated post-row-level; aborts if quarantine fraction exceeds threshold.
+- ✅ **Probe Signals (Tap):**
+  - ✅ Signal Battery: Schema, null_rates, distribution, distinct, freshness, partition_stats.
+  - ✅ `row_count_estimate`: `method: sample` and `method: spark_listener` (with documented lazy limitation).
+  - ✅ Cost Controls: `block_full_actions` suppresses costly signals in production mode.
+  - ✅ Persistence: DuckDB `obs.db` stores signals with run_id/captured_at metadata.
+- ✅ **Regulator (Gate):**
+  - ✅ Passive Compile-away: Zero runtime overhead for unwired regulators.
+  - ✅ Active Evaluation: Gate closes on `False` or Surveyor evaluation error.
+  - ✅ `on_block` behaviors: `skip` (downstream propagation) vs `abort` vs `trigger_agent`.
+- ✅ **Error Handling:**
+  - ✅ Retry Logic: 3x retry on transient IO for Ingress/Egress.
+  - ✅ Fail-fast: Blueprint `status="error"` recorded on unrecoverable failure.
+  - ✅ Agent Signaling: `trigger_agent: true` set on result for self-healing.
 
-### Persistence & Advanced Logic
-- ✅ **Checkpoint & Resume:** Manifest hash validation; state reloading from Parquet.
+### Phase C: Persistence & Advanced Logic
+- ✅ **Checkpoint & Resume:**
+  - ✅ `checkpoint: true` writes intermediate DataFrames to Parquet in `store_dir`.
+  - ✅ `resume_run_id`: Reloads state and skips already-completed modules.
+  - ✅ Manifest Hash: Validation warns if blueprint changed since checkpoint.
 - ✅ **Arcade (Sub-pipelines):** Inlining, namespacing, and ID collision prevention.
-- ✅ **Context Registry:** Tier 1 functions; Profile priority; Backfill logical dates.
+- ✅ **Context Registry:**
+  - ✅ Tier 1 Functions: `@aq.date.today`, `@aq.runtime.run_id`, `@aq.env`, `@aq.secret`.
+  - ✅ Backfill: `--execution-date` flag correctly pins logical date functions.
+  - ✅ Profile Priority: CLI flags > Env Vars > Profile Overrides > Static Defaults.
 - ✅ **Depot KV Store:** State capture during Egress; Compile-time resolution for `@aq.depot.get`.
 - ✅ **Job Planning:** Topo-sort execution; Parallel dispatch via `ThreadPoolExecutor` (Verified on Python 3.14).
 
-### Self-Healing & CLI Tooling
-- ✅ **Patch Spec:** Normalization, atomicity (Atomic Revert), and guardrails.
-- ✅ **Self-Healing Loop:** Failure context assembly; `heal` staging; Aggressive mode; Confidence gates.
-- ✅ **CLI Tooling:** `init` (1.0 template), `doctor` (resource probes), `report` (flow visualization).
+### Phase D: Self-Healing & CLI Tooling
+- ✅ **Patch Grammar (PatchSpec):** Normalization, atomicity (Atomic Revert), and guardrails.
+- ✅ **Self-Healing Loop:**
+  - ✅ Failure Capture: `Surveyor` records `FailureContext` to DuckDB.
+  - ✅ Context Assembly: Evidence (logs, schema, provenance) passed to LLM.
+  - ✅ Staging: `aqueduct heal` stages patches for human review.
+  - ✅ Aggressive Mode: Autonomous fix-and-verify loop verified end-to-end.
+  - ✅ Confidence Gate: Low-confidence patches escalate to human review.
+- ✅ **CLI Tooling:**
+  - ✅ `aqueduct init`: 1.0 template with model defaults.
+  - ✅ `aqueduct doctor`: Engine, store, and resource connectivity probes.
+  - ✅ `aqueduct report`: Flow visualization showing duration and status.
 
 ---
 
@@ -725,7 +761,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 648 passed, 4 skipped, 1 xpassed. Coverage: 72%.
+- **Status**: 603 passed, 4 skipped, 1 xpassed. Coverage: 72%.
 Issues reported in:
 - None
 ---
@@ -904,32 +940,33 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 #### Test runner core — `aqueduct/executor/spark/test_runner.py`
 
-- ⏳ inline rows + schema → `createDataFrame` succeeds for all supported types (long, string, double, boolean, timestamp)
-- ⏳ unknown schema type → passes through to Spark DDL (Spark raises if truly invalid)
-- ⏳ `row_count` assertion passes: exact count match
-- ⏳ `row_count` assertion fails: non-zero exit, message shows expected vs actual
-- ⏳ `contains` assertion passes: all expected rows found in output
-- ⏳ `contains` assertion fails: missing rows listed in message
-- ⏳ `sql` assertion passes: expr over `__output__` returns truthy
-- ⏳ `sql` assertion fails: expr returns falsy
-- ⏳ `sql` assertion error: bad SQL → `passed=False` with error message
-- ⏳ Channel module executed against inline inputs → correct output rows
-- ⏳ Assert module: passing rows returned, quarantine rows discarded (no spillway edge in test)
-- ⏳ Ingress/Egress module → `TestError` with clear message
-- ⏳ missing `module` field → `TestCaseResult` with error
-- ⏳ module not found in blueprint → `TestCaseResult` with error
-- ⏳ missing `inputs` → `TestCaseResult` with error
-- ⏳ missing blueprint → `TestError`
-- ⏳ Junction module: first branch used when no `branch:` specified
-- ⏳ Junction module: `branch: <name>` targets specific branch
+- ✅ inline rows + schema → `createDataFrame` succeeds for all supported types (long, string, double, boolean, timestamp)
+- ✅ unknown schema type → passes through to Spark DDL (Spark raises if truly invalid)
+- ✅ `row_count` assertion passes: exact count match
+- ✅ `row_count` assertion fails: non-zero exit, message shows expected vs actual
+- ✅ `contains` assertion passes: all expected rows found in output
+- ✅ `contains` assertion fails: missing rows listed in message
+- ✅ `sql` assertion passes: expr over `__output__` returns truthy
+- ✅ `sql` assertion fails: expr returns falsy
+- ✅ `sql` assertion error: bad SQL → `passed=False` with error message
+- ✅ Channel module executed against inline inputs → correct output rows
+- ✅ Assert module: passing rows returned, quarantine rows discarded (no spillway edge in test)
+- ✅ Ingress/Egress module → `TestError` with clear message
+- ✅ missing `module` field → `TestCaseResult` with error
+- ✅ module not found in blueprint → `TestCaseResult` with error
+- ✅ missing `inputs` → `TestCaseResult` with error
+- ✅ missing blueprint → `TestError`
+- ✅ Junction module: first branch used when no `branch:` specified
+- ✅ Junction module: `branch: <name>` targets specific branch
 
 #### `aqueduct test` CLI command — `aqueduct/cli.py`
 
-- ⏳ all tests pass → exit code 0, "all N test(s) passed"
-- ⏳ any test fails → exit code 1, failure listed in output
-- ⏳ test file error (bad blueprint path) → exit code 1
-- ⏳ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
-- ⏳ `--blueprint` overrides blueprint path from test file
+- ✅ all tests pass → exit code 0, "N passed" in output
+- ✅ any test fails → exit code 1, failure details and "N failed" in output
+- ✅ test file error (bad blueprint path) → exit code 1 with error message
+- ✅ invalid YAML test file → exit code 1 with parser error
+- ✅ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
+- ✅ `--blueprint` overrides blueprint path from test file
 
 ### Phase 14 — Aggressive mode in-memory validation (validate_patch removed)
 
@@ -946,38 +983,38 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### `ExecutionResult.trigger_agent` — `aqueduct/executor/models.py`
 
-- ⏳ `ExecutionResult` has `trigger_agent: bool = False` field
-- ⏳ `ExecutionResult.to_dict()` includes `trigger_agent` key
-- ⏳ `trigger_agent=True` frozen dataclass — mutation raises `FrozenInstanceError`
+- ✅ `ExecutionResult` has `trigger_agent: bool = False` field
+- ✅ `ExecutionResult.to_dict()` includes `trigger_agent` key
+- ✅ `trigger_agent=True` frozen dataclass — mutation raises `FrozenInstanceError`
 
 ### `_on_retry_exhausted()` + `_fail()` — `aqueduct/executor/spark/executor.py`
 
 **Behavior:** `_fail()` accepts `trigger_agent` kwarg; `_on_retry_exhausted()` maps `on_exhaustion` → (gate_closed, fail_result).
 
-- ⏳ `on_exhaustion: abort` → `_on_retry_exhausted` returns `(False, fail_result)` with `trigger_agent=False`
-- ⏳ `on_exhaustion: alert_only` → returns `(True, None)` — warning logged, gate_closed sentinel set
-- ⏳ `on_exhaustion: trigger_agent` → returns `(False, fail_result)` with `trigger_agent=True`
-- ⏳ Ingress `on_exhaustion: alert_only` exhausted → `frame_store[module.id] = _GATE_CLOSED`, downstream skipped, blueprint continues
-- ⏳ Channel `on_exhaustion: alert_only` exhausted → same sentinel behavior
-- ⏳ Egress `on_exhaustion: alert_only` exhausted → `continue` (no sentinel needed — Egress is terminal)
-- ⏳ Ingress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
-- ⏳ Egress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
+- ✅ `on_exhaustion: abort` → `_on_retry_exhausted` returns `(False, fail_result)` with `trigger_agent=False`
+- ✅ `on_exhaustion: alert_only` → returns `(True, None)` — warning logged, gate_closed sentinel set
+- ✅ `on_exhaustion: trigger_agent` → returns `(False, fail_result)` with `trigger_agent=True`
+- ✅ Ingress `on_exhaustion: alert_only` exhausted → `frame_store[module.id] = _GATE_CLOSED`, downstream skipped, blueprint continues
+- ✅ Channel `on_exhaustion: alert_only` exhausted → same sentinel behavior
+- ✅ Egress `on_exhaustion: alert_only` exhausted → `continue` (no sentinel needed — Egress is terminal)
+- ✅ Ingress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
+- ✅ Egress `on_exhaustion: trigger_agent` exhausted → `ExecutionResult(trigger_agent=True)`
 
 ### Assert `trigger_agent` propagation — `executor.py` Assert dispatch
 
-- ⏳ Assert rule with `on_fail: trigger_agent` → `AssertError.trigger_agent=True` → `ExecutionResult.trigger_agent=True`
-- ⏳ Assert rule with `on_fail: abort` → `ExecutionResult.trigger_agent=False`
+- ✅ Assert rule with `on_fail: trigger_agent` → `AssertError.trigger_agent=True` → `ExecutionResult.trigger_agent=True`
+- ✅ Assert rule with `on_fail: abort` → `ExecutionResult.trigger_agent=False`
 
 ### `probes.block_full_actions_in_prod` — `executor/spark/probe.py`
 
 **`execute_probe(…, block_full_actions=False)`**, **`_row_count_estimate(…, block_full_actions=False)`**, **`_null_rates(…, block_full_actions=False)`**.
 
-- ⏳ `block_full_actions=False` (default) → `row_count_estimate` sample `.count()` executes normally
-- ⏳ `block_full_actions=True` → `row_count_estimate` method=sample → skips `.count()`, returns `{"blocked": True, "estimate": None}` + warning logged
-- ⏳ `block_full_actions=True` → `row_count_estimate` method=spark_listener → DuckDB query still runs (no Spark action, not affected)
-- ⏳ `block_full_actions=True` → `null_rates` → skips `.count()` + `.collect()`, returns `{"blocked": True, "null_rates": {col: None, ...}}` + warning logged
-- ⏳ `block_full_actions=False` → `null_rates` executes normally
-- ⏳ `execute()` accepts `block_full_actions: bool = False`; threaded to `execute_probe()`
+- ✅ `block_full_actions=False` (default) → `row_count_estimate` sample `.count()` executes normally
+- ✅ `block_full_actions=True` → `row_count_estimate` method=sample → skips `.count()`, returns `{"blocked": True, "estimate": None}` + warning logged
+- ✅ `block_full_actions=True` → `row_count_estimate` method=spark_listener → DuckDB query still runs (no Spark action, not affected)
+- ✅ `block_full_actions=True` → `null_rates` → skips `.count()` + `.collect()`, returns `{"blocked": True, "null_rates": {col: None, ...}}` + warning logged
+- ✅ `block_full_actions=False` → `null_rates` executes normally
+- ✅ `execute()` accepts `block_full_actions: bool = False`; threaded to `execute_probe()`
 
 ### CLI trigger_agent override — `aqueduct/cli.py`
 
@@ -996,13 +1033,13 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
 - ⏳ `stores.depot.path` defaults to `".aqueduct/depot.db"`
 - ⏳ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
-- ⏳ `Surveyor.start()` creates `obs.db` (not `runs.db`)
-- ⏳ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
-- ⏳ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
-- ⏳ `execute_probe()`: writes `probe_signals` rows to `obs.db`
+- ✅ `Surveyor.start()` creates `obs.db` (not `runs.db`)
+- ✅ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
+- ✅ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
+- ✅ `execute_probe()`: writes `probe_signals` rows to `obs.db`
 - ⏳ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
-- ⏳ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
-- ⏳ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
+- ✅ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
+- ✅ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
 
 ### `schema_snapshot` path (`aqueduct/executor/spark/probe.py`)
 
@@ -1249,6 +1286,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ valid condition → rows matching condition returned
 - ⏳ missing condition → ChannelError
 - ⏳ invalid SQL expression → ChannelError wrapping Spark exception
+
 
 #### op=select
 - ⏳ list of columns → only those columns in result

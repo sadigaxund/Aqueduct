@@ -304,3 +304,21 @@ def test_no_rules_configured(spark: SparkSession):
     passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
     assert quarantine is None
     assert passing is df
+
+
+class TestAssertTriggerAgentPropagation:
+    """Assert on_fail=trigger_agent → AssertError.trigger_agent=True."""
+
+    def test_aggregate_rule_trigger_agent_sets_flag(self, spark):
+        from aqueduct.executor.spark.assert_ import execute_assert, AssertError
+        from aqueduct.parser.models import Module
+
+        # 3 rows, but min_rows=5 → fail
+        df = spark.range(3)
+        module = Module(
+            id="a1", type="Assert", label="A1",
+            config={"rules": [{"type": "min_rows", "min": 5, "on_fail": "trigger_agent"}]}
+        )
+        with pytest.raises(AssertError) as exc:
+            execute_assert(module, df, spark, "run-1", "pipe.1")
+        assert exc.value.trigger_agent is True

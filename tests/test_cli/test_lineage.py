@@ -136,3 +136,71 @@ class TestWriteLineage:
         )
         edges = (_edge("src", "ch1"),)
         write_lineage("pipe1", "run1", modules, edges, tmp_path)  # must not raise
+
+
+class TestCliLineage:
+    """Tests for `aqueduct lineage` command."""
+
+    def _make_lineage_db(self, tmp_path: Path) -> Path:
+        import duckdb
+        store = tmp_path / "lineage_store"
+        store.mkdir()
+        db_path = store / "lineage.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE column_lineage (
+                blueprint_id VARCHAR, channel_id VARCHAR,
+                output_column VARCHAR, source_table VARCHAR, source_column VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?)",
+            ["pipe.a", "ch1", "amount", "orders", "total"],
+        )
+        conn.close()
+        return store
+
+    def test_table_output(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        import json
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
+        assert result.exit_code == 0
+        assert "ch1" in result.output
+        assert "amount" in result.output
+
+    def test_json_format(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        import json
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--format", "json"])
+        assert result.exit_code == 0
+        data = json.loads(result.output)
+        assert len(data) == 1
+        assert data[0]["output_column"] == "amount"
+
+    def test_from_filter(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--from", "orders"])
+        assert result.exit_code == 0
+        assert "amount" in result.output
+
+    def test_column_filter_no_match(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = self._make_lineage_db(tmp_path)
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store), "--column", "nope"])
+        assert result.exit_code == 0
+        assert "No lineage records" in result.output
+
+    def test_missing_lineage_db_exits_1(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        store = tmp_path / "empty"
+        store.mkdir()
+        result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
+        assert result.exit_code == 1

@@ -70,3 +70,47 @@ def test_surveyor_record_no_webhook_on_success():
         with patch("aqueduct.surveyor.surveyor.fire_webhook") as mock_fire:
             surveyor.record(result)
             mock_fire.assert_not_called()
+
+
+class TestEvaluateRegulatorSignalOverride:
+    """Tests that evaluate_regulator() checks signal_overrides before probe_signals."""
+
+    def _make_manifest(self, probe_id="probe1", regulator_id="reg1"):
+        from unittest.mock import MagicMock
+        from aqueduct.compiler.models import Manifest
+        edge = MagicMock()
+        edge.from_id = probe_id
+        edge.to_id = regulator_id
+        edge.port = "signal"
+        manifest = MagicMock(spec=Manifest)
+        manifest.edges = [edge]
+        return manifest
+
+    def test_override_false_blocks_even_if_probe_says_true(self, tmp_path):
+        import duckdb
+        from datetime import datetime, timezone
+        from aqueduct.surveyor.surveyor import Surveyor, _SIGNAL_OVERRIDES_DDL
+        manifest = self._make_manifest()
+        store = tmp_path / "signals"
+        store.mkdir()
+        signals_db = store / "obs.db"
+        conn = duckdb.connect(str(signals_db))
+        conn.execute(_SIGNAL_OVERRIDES_DDL)
+        conn.execute(
+            "INSERT INTO signal_overrides VALUES (?, ?, ?, ?)",
+            ["probe1", False, None, datetime.now(tz=timezone.utc).isoformat()],
+        )
+        conn.close()
+
+        s = Surveyor(manifest, store_dir=store)
+        s._run_id = "run-x"
+        assert s.evaluate_regulator("reg1") is False
+
+    def test_no_override_returns_true_when_no_probe_signals(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        manifest = self._make_manifest()
+        store = tmp_path / "signals"
+        store.mkdir()
+        s = Surveyor(manifest, store_dir=store)
+        s._run_id = "run-x"
+        assert s.evaluate_regulator("reg1") is True

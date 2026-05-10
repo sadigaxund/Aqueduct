@@ -285,3 +285,81 @@ def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
     
     payload = json.loads(payload_str)
     assert payload["num_partitions"] == 3
+
+
+class TestProbeBlockFullActions:
+    """_row_count_estimate and _null_rates with block_full_actions=True — probe.py."""
+
+    def test_row_count_estimate_blocked_returns_blocked_dict(self):
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _row_count_estimate
+
+        fake_df = MagicMock()
+        result = _row_count_estimate(
+            fake_df, {"method": "sample", "fraction": 0.1},
+            probe_id="p1", run_id="r1",
+            block_full_actions=True,
+        )
+        assert result.get("blocked") is True
+        assert result.get("estimate") is None
+        # df.sample().count() must NOT have been called
+        fake_df.sample.assert_not_called()
+
+    def test_row_count_estimate_spark_listener_ignores_block_full_actions(self):
+        """spark_listener method should run regardless of block_full_actions."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _row_count_estimate
+
+        fake_df = MagicMock()
+        result = _row_count_estimate(
+            fake_df, {"method": "spark_listener"},
+            probe_id="p1", run_id="r1",
+            block_full_actions=True,
+        )
+        # Should return spark_listener result (estimate=None since no DB)
+        assert result.get("method") == "spark_listener"
+        assert result.get("estimate") is None
+
+    def test_null_rates_blocked_returns_blocked_dict(self):
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _null_rates
+
+        fake_df = MagicMock()
+        fake_df.columns = ["col_a", "col_b"]
+        result = _null_rates(fake_df, {"columns": ["col_a", "col_b"]}, block_full_actions=True)
+        assert result.get("blocked") is True
+        assert result["null_rates"] == {"col_a": None, "col_b": None}
+        # df.sample() should not have been called
+        fake_df.sample.assert_not_called()
+
+    def test_null_rates_not_blocked_calls_sample(self):
+        """With block_full_actions=False, sample() IS called on the DataFrame."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.probe import _null_rates
+
+        # We verify sample() is invoked (not that it succeeds — no real Spark needed)
+        fake_df = MagicMock()
+        # Mimic spark sample().select().count() chain returning 0 rows
+        fake_sample = MagicMock()
+        fake_df.sample.return_value = fake_sample
+        fake_select = MagicMock()
+        fake_sample.select.return_value = fake_select
+        fake_select.count.return_value = 0
+
+        result = _null_rates(fake_df, {"columns": ["col_a"], "fraction": 0.5}, block_full_actions=False)
+        # sample() should have been called
+        fake_df.sample.assert_called_once()
+        # When total==0, null_rates values should be None
+        assert result["null_rates"]["col_a"] is None
+
+
+class TestExecuteProbeBlockFullActionsSignature:
+    """execute_probe accepts block_full_actions kwarg (signature test)."""
+
+    def test_execute_probe_has_block_full_actions_param(self):
+        import inspect
+        from aqueduct.executor.spark.probe import execute_probe
+
+        sig = inspect.signature(execute_probe)
+        assert "block_full_actions" in sig.parameters
+        assert sig.parameters["block_full_actions"].default is False

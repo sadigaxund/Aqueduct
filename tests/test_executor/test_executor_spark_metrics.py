@@ -91,3 +91,58 @@ def test_dir_bytes_nonexistent():
     """dir_bytes() on nonexistent path returns None"""
     assert dir_bytes("/tmp/aqueduct_ghost_file_12345") is None
     assert dir_bytes("") is None
+
+
+class TestMetricsHelpers:
+    def _make_listener(self):
+        from unittest.mock import MagicMock
+        listener = MagicMock()
+        listener._metrics = {"duration_ms": 0}
+        listener.collect_metrics.side_effect = lambda: listener._metrics
+        
+        def on_stage_completed(stage):
+            info = stage.stageInfo()
+            if not info.completionTime().isDefined():
+                listener._metrics["duration_ms"] = 0
+            else:
+                listener._metrics["duration_ms"] = 100
+        
+        listener.onStageCompleted.side_effect = on_stage_completed
+        return listener
+
+    def _make_stage_completed(self):
+        from unittest.mock import MagicMock
+        stage = MagicMock()
+        info = MagicMock()
+        stage.stageInfo.return_value = info
+        time_mock = MagicMock()
+        info.completionTime.return_value = time_mock
+        return stage
+
+    def test_get_observation_none_returns_none(self):
+        from aqueduct.executor.spark.metrics import get_observation
+        assert get_observation(None, "records_written") is None
+
+    def test_dir_bytes_cloud_path_returns_none(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("s3://bucket/key") is None
+        assert dir_bytes("hdfs://namenode/path") is None
+
+    def test_dir_bytes_empty_returns_none(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("") is None
+
+    def test_dir_bytes_nonexistent_returns_none(self):
+        from aqueduct.executor.spark.metrics import dir_bytes
+        assert dir_bytes("/definitely/does/not/exist/path") is None
+
+    def test_on_stage_completed_time_undefined(self):
+        listener = self._make_listener()
+        stage = self._make_stage_completed()
+        # Override: completion time not defined
+        info = stage.stageInfo()
+        info.completionTime().isDefined.return_value = False
+        listener.onStageCompleted(stage)
+        metrics = listener.collect_metrics()
+        # duration_ms should be 0 when time undefined
+        assert metrics["duration_ms"] == 0

@@ -17,13 +17,13 @@ def test_channel_unsupported_op(spark: SparkSession):
 
 def test_channel_missing_query(spark: SparkSession):
     module = Module(id="m1", type="Channel", label="M1", config={"op": "sql"})
-    with pytest.raises(ChannelError, match="'query' is required"):
+    with pytest.raises(ChannelError, match="requires a non-empty 'query'"):
         execute_sql_channel(module, {"in": spark.range(1)}, spark)
 
 
 def test_channel_empty_query(spark: SparkSession):
     module = Module(id="m1", type="Channel", label="M1", config={"op": "sql", "query": "  "})
-    with pytest.raises(ChannelError, match="'query' is required"):
+    with pytest.raises(ChannelError, match="requires a non-empty 'query'"):
         execute_sql_channel(module, {"in": spark.range(1)}, spark)
 
 
