@@ -454,448 +454,344 @@ def run(
                 break
             _search = _search.parent
 
+    _original_cwd = os.getcwd()
     os.chdir(_project_root)
-
-    # ── .env loading (after project root, before config so vars are available) ─
-    if not no_env_file:
-        _env_path = Path(env_file).resolve() if env_file else _project_root / ".env"
-        if _env_path.exists():
-            _n = _load_env_file(_env_path)
-            if _n:
-                click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
-    # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
-    blueprint = str(blueprint_abs)
-
-    # ── Load engine config ─────────────────────────────────────────────────────
     try:
-        cfg = load_config(config_path_abs)
-    except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        # ── .env loading (after project root, before config so vars are available) ─
+        if not no_env_file:
+            _env_path = Path(env_file).resolve() if env_file else _project_root / ".env"
+            if _env_path.exists():
+                _n = _load_env_file(_env_path)
+                if _n:
+                    click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
+        # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
+        blueprint = str(blueprint_abs)
 
-    # CLI flags override config file; config file overrides built-in defaults
-    # Per-pipeline store paths: default .aqueduct/obs/<blueprint_id>.db instead of shared obs.db
-    if store_dir_abs:
-        resolved_store_dir = store_dir_abs
-    else:
-        _obs_path = cfg.stores.obs.path
-        _default_obs = ".aqueduct/obs.db"
-        if _obs_path == _default_obs:
-            # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
-            resolved_store_dir = None  # set below after manifest
+        # ── Load engine config ─────────────────────────────────────────────────────
+        try:
+            cfg = load_config(config_path_abs)
+        except ConfigError as exc:
+            click.echo(f"✗ config error: {exc}", err=True)
+            sys.exit(1)
+
+        # CLI flags override config file; config file overrides built-in defaults
+        # Per-pipeline store paths: default .aqueduct/obs/<blueprint_id>.db instead of shared obs.db
+        if store_dir_abs:
+            resolved_store_dir = store_dir_abs
         else:
-            resolved_store_dir = Path(_obs_path).parent
-    # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
-    resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
-    engine = cfg.deployment.engine
-    master_url = cfg.deployment.master_url
+            _obs_path = cfg.stores.obs.path
+            _default_obs = ".aqueduct/obs.db"
+            if _obs_path == _default_obs:
+                # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
+                resolved_store_dir = None  # set below after manifest
+            else:
+                resolved_store_dir = Path(_obs_path).parent
+        # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
+        resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
+        engine = cfg.deployment.engine
+        master_url = cfg.deployment.master_url
 
-    # ── Danger settings startup warning ──────────────────────────────────────
-    danger_active = []
-    if cfg.danger.allow_full_probe_actions:
-        danger_active.append("allow_full_probe_actions=true")
-    if cfg.danger.allow_aggressive_patching:
-        danger_active.append("allow_aggressive_patching=true")
-    if danger_active:
-        click.echo(
-            f"⚠  DANGER settings active: {', '.join(danger_active)}",
-            err=True,
-        )
-
-    # Resolve executor early so an unsupported engine exits before any Spark work
-    try:
-        execute = get_executor(engine)
-    except (NotImplementedError, ValueError) as exc:
-        click.echo(f"✗ engine error: {exc}", err=True)
-        sys.exit(1)
-
-    cli_overrides: dict[str, str] = {}
-    for item in ctx:
-        if "=" not in item:
-            click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-            sys.exit(1)
-        k, _, v = item.partition("=")
-        cli_overrides[k.strip()] = v
-
-    # ── Parse --execution-date ─────────────────────────────────────────────────
-    execution_date = None
-    if execution_date_str:
-        from datetime import date as _date
-        try:
-            execution_date = _date.fromisoformat(execution_date_str)
-        except ValueError:
-            click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
-            sys.exit(1)
-
-    # ── Depot — open before compile so @aq.depot.get() resolves ──────────────
-    depot_path = Path(cfg.stores.depot.path)
-    depot = DepotStore(depot_path)
-
-    # ── Parse ──────────────────────────────────────────────────────────────────
-    try:
-        bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
-    except ParseError as exc:
-        click.echo(f"✗ parse error: {exc}", err=True)
-        sys.exit(1)
-
-    # ── Compile ────────────────────────────────────────────────────────────────
-    try:
-        manifest = compiler_compile(
-            bp,
-            blueprint_path=Path(blueprint),
-            depot=depot,
-            execution_date=execution_date,
-        )
-    except CompileError as exc:
-        click.echo(f"✗ compile error: {exc}", err=True)
-        sys.exit(1)
-
-    # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
-    if resolved_store_dir is None:
-        resolved_store_dir = Path(f".aqueduct/obs/{manifest.blueprint_id}")
-        resolved_store_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── Aggressive mode danger gate ────────────────────────────────────────────
-    if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:
-        if not cfg.danger.allow_aggressive_patching:
+        # ── Danger settings startup warning ──────────────────────────────────────
+        danger_active = []
+        if cfg.danger.allow_full_probe_actions:
+            danger_active.append("allow_full_probe_actions=true")
+        if cfg.danger.allow_aggressive_patching:
+            danger_active.append("allow_aggressive_patching=true")
+        if danger_active:
             click.echo(
-                "✗ approval_mode: aggressive requires danger.allow_aggressive_patching: true "
-                "in aqueduct.yml, or pass --allow-aggressive for this run.",
+                f"⚠  DANGER settings active: {', '.join(danger_active)}",
                 err=True,
             )
-            sys.exit(1)
 
-    # ── Pending patch check ────────────────────────────────────────────────────
-    patches_dir = _project_root / "patches"
-    pending_dir = patches_dir / "pending"
-    pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
-    if pending_patches:
-        policy = manifest.agent.on_pending_patches
-        names = ", ".join(p.stem for p in pending_patches)
-        msg = (
-            f"⚠ {len(pending_patches)} pending patch(es) unreviewed: {names}\n"
-            f"  Review with: aqueduct patch apply <file> --blueprint {blueprint}\n"
-            f"  Reject with: aqueduct patch reject <patch_id> --reason '...'"
-        )
-        if policy == "block":
-            click.echo(f"✗ blocked — {msg}", err=True)
-            sys.exit(1)
-        elif policy == "warn":
-            click.echo(msg, err=True)
-
-    # ── Uncommitted applied patch warning ──────────────────────────────────────
-    uncommitted_applied = _uncommitted_applied_patches(Path(blueprint), patches_dir)
-    if uncommitted_applied:
-        n_uc = len(uncommitted_applied)
-        click.echo(
-            f"⚠ {n_uc} applied patch(es) not yet committed to git — "
-            f"run 'aqueduct patch commit --blueprint {blueprint}'",
-            err=True,
-        )
-
-    run_id = run_id or str(uuid.uuid4())
-    selector_note = ""
-    if from_module or to_module:
-        parts = []
-        if from_module:
-            parts.append(f"from={from_module}")
-        if to_module:
-            parts.append(f"to={to_module}")
-        selector_note = "  [" + ", ".join(parts) + "]"
-    exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-    click.echo(
-        f"▶ {manifest.blueprint_id}  ({len(manifest.modules)} modules)"
-        f"  run={run_id}  engine={engine}  master={master_url}"
-        f"{selector_note}{exec_date_note}"
-    )
-
-    # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
-    eng = cfg.agent
-    bp_agent = manifest.agent
-    resolved_agent_provider = bp_agent.provider or eng.provider
-    resolved_agent_base_url = bp_agent.base_url or eng.base_url
-    resolved_agent_model = bp_agent.model or eng.model
-    resolved_agent_ollama_options = bp_agent.ollama_options or eng.ollama_options
-    resolved_agent_llm_timeout = bp_agent.llm_timeout or eng.llm_timeout
-    resolved_agent_llm_max_reprompts = bp_agent.llm_max_reprompts or eng.llm_max_reprompts
-    resolved_agent_engine_prompt_context = eng.prompt_context
-    resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
-
-    # ── Aggressive mode disclaimer ────────────────────────────────────────────
-    approval_mode = manifest.agent.approval_mode
-    max_patches = manifest.agent.aggressive_max_patches
-    if approval_mode == "aggressive":
-        click.echo(
-            f"⚠  approval_mode=aggressive — LLM will attempt up to {max_patches} patch(es). "
-            f"Each patch is validated in-memory before being written to Blueprint. "
-            f"Review patches/applied/ after the run.",
-            err=True,
-        )
-
-    # ── Surveyor — start ───────────────────────────────────────────────────────
-    surveyor = Surveyor(
-        manifest,
-        store_dir=resolved_store_dir,
-        webhook_config=resolved_webhook,
-        blueprint_path=Path(blueprint),
-        patches_dir=patches_dir,
-    )
-    surveyor.start(run_id)
-
-    # ── Engine session ────────────────────────────────────────────────────────
-    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-    if engine == "spark":
-        from aqueduct.executor.spark.session import make_spark_session
-        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
-    else:
-        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
-
-    import atexit
-    atexit.register(session.stop)
-
-    # ── Self-healing run loop ─────────────────────────────────────────────────
-    patch_count = 0
-    failure_ctx = None
-    result = None
-    last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
-
-    while True:
-        current_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
-        execute_exc: ExecuteError | None = None
+        # Resolve executor early so an unsupported engine exits before any Spark work
         try:
-            result = execute(
-                manifest, session,
-                run_id=current_run_id,
-                store_dir=resolved_store_dir,
-                surveyor=surveyor,
+            execute = get_executor(engine)
+        except (NotImplementedError, ValueError) as exc:
+            click.echo(f"✗ engine error: {exc}", err=True)
+            sys.exit(1)
+
+        cli_overrides: dict[str, str] = {}
+        for item in ctx:
+            if "=" not in item:
+                click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
+                sys.exit(1)
+            k, _, v = item.partition("=")
+            cli_overrides[k.strip()] = v
+
+        # ── Parse --execution-date ─────────────────────────────────────────────────
+        execution_date = None
+        if execution_date_str:
+            from datetime import date as _date
+            try:
+                execution_date = _date.fromisoformat(execution_date_str)
+            except ValueError:
+                click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
+                sys.exit(1)
+
+        # ── Depot — open before compile so @aq.depot.get() resolves ──────────────
+        depot_path = Path(cfg.stores.depot.path)
+        depot = DepotStore(depot_path)
+
+        # ── Parse ──────────────────────────────────────────────────────────────────
+        try:
+            bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
+        except ParseError as exc:
+            click.echo(f"✗ parse error: {exc}", err=True)
+            sys.exit(1)
+
+        # ── Compile ────────────────────────────────────────────────────────────────
+        try:
+            manifest = compiler_compile(
+                bp,
+                blueprint_path=Path(blueprint),
                 depot=depot,
-                resume_run_id=resume_run_id if patch_count == 0 else None,
-                from_module=from_module,
-                to_module=to_module,
-                block_full_actions=not cfg.danger.allow_full_probe_actions,
-                parallel=parallel,
+                execution_date=execution_date,
             )
-        except ExecuteError as exc:
-            execute_exc = exc
-            result = ExecutionResult(
-                blueprint_id=manifest.blueprint_id,
-                run_id=current_run_id,
-                status="error",
-                module_results=(
-                    ModuleResult(module_id="_executor", status="error", error=str(exc)),
-                ),
-            )
+        except CompileError as exc:
+            click.echo(f"✗ compile error: {exc}", err=True)
+            sys.exit(1)
 
-        failure_ctx = surveyor.record(result, exc=execute_exc)
+        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
+        if resolved_store_dir is None:
+            resolved_store_dir = Path(f".aqueduct/obs/{manifest.blueprint_id}")
+            resolved_store_dir.mkdir(parents=True, exist_ok=True)
 
-        if result.status == "success":
-            break
-
-        # trigger_agent flag overrides approval_mode=disabled — escalate to human staging at minimum
-        effective_mode = approval_mode
-        if result.trigger_agent and effective_mode == "disabled":
-            effective_mode = "human"
-            click.echo(
-                "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
-                err=True,
-            )
-
-        if effective_mode == "disabled" or failure_ctx is None:
-            break
-
-        if patch_count >= max_patches:
-            click.echo(
-                f"⚠  LLM: aggressive_max_patches={max_patches} reached, stopping self-healing loop",
-                err=True,
-            )
-            break
-
-        # ── Generate patch ────────────────────────────────────────────────────
-        from aqueduct.surveyor.llm import archive_patch, generate_llm_patch, stage_patch_for_human
-        _attempt_display = (
-            f"{patch_count + 1}/{max_patches}"
-            if approval_mode == "aggressive"
-            else f"{patch_count + 1}"
-        )
-        click.echo(
-            f"  ↻ LLM self-healing ({_attempt_display})  "
-            f"failed_module={failure_ctx.failed_module}",
-            err=True,
-        )
-
-        # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
-        # arcades expanded — no need to re-parse or recurse into sub-blueprints).
-        try:
-            from aqueduct.doctor import check_blueprint_sources_from_manifest
-            from dataclasses import replace as _dc_replace
-            _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
-            _hints = tuple(
-                f"{r.name} — {r.detail}"
-                for r in _dr if r.status in ("warn", "fail")
-            )
-            if _hints:
-                failure_ctx = _dc_replace(failure_ctx, doctor_hints=_hints)
-        except Exception:
-            pass  # doctor errors must never block self-healing
-
-        llm_result = generate_llm_patch(
-            failure_ctx,
-            model=resolved_agent_model,
-            patches_dir=patches_dir,
-            provider=resolved_agent_provider,
-            base_url=resolved_agent_base_url,
-            ollama_options=resolved_agent_ollama_options,
-            llm_timeout=resolved_agent_llm_timeout,
-            llm_max_reprompts=resolved_agent_llm_max_reprompts,
-            engine_prompt_context=resolved_agent_engine_prompt_context,
-            blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-            last_apply_error=last_apply_error,
-        )
-        patch = llm_result.patch
-        if patch is None:
-            click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
-            on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
-            if on_hf == "stage":
+        # ── Aggressive mode danger gate ────────────────────────────────────────────
+        if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:
+            if not cfg.danger.allow_aggressive_patching:
                 click.echo(
-                    "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in obs.db.",
+                    "✗ approval_mode: aggressive requires danger.allow_aggressive_patching: true "
+                    "in aqueduct.yml, or pass --allow-aggressive for this run.",
                     err=True,
                 )
-            break
+                sys.exit(1)
 
-        # ── Confidence escalation — low-confidence patches go to human ─────────
-        _conf_threshold = manifest.agent.confidence_threshold
-        if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
+        # ── Pending patch check ────────────────────────────────────────────────────
+        patches_dir = _project_root / "patches"
+        pending_dir = patches_dir / "pending"
+        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
+        if pending_patches:
+            policy = manifest.agent.on_pending_patches
+            names = ", ".join(p.stem for p in pending_patches)
+            msg = (
+                f"⚠ {len(pending_patches)} pending patch(es) unreviewed: {names}\n"
+                f"  Review with: aqueduct patch apply <file> --blueprint {blueprint}\n"
+                f"  Reject with: aqueduct patch reject <patch_id> --reason '...'"
+            )
+            if policy == "block":
+                click.echo(f"✗ blocked — {msg}", err=True)
+                sys.exit(1)
+            elif policy == "warn":
+                click.echo(msg, err=True)
+
+        # ── Uncommitted applied patch warning ──────────────────────────────────────
+        uncommitted_applied = _uncommitted_applied_patches(Path(blueprint), patches_dir)
+        if uncommitted_applied:
+            n_uc = len(uncommitted_applied)
             click.echo(
-                f"  ↑ LLM patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
+                f"⚠ {n_uc} applied patch(es) not yet committed to git — "
+                f"run 'aqueduct patch commit --blueprint {blueprint}'",
                 err=True,
             )
-            effective_mode = "human"
 
-        # ── Guardrail check (pre-staging) ─────────────────────────────────────
-        try:
-            from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
-            import yaml as _yaml
-            _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
-            _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
-            guardrail_err = None
-        except _PatchError as _ge:
-            guardrail_err = str(_ge)
-        except Exception:
-            guardrail_err = None
-        if guardrail_err:
-            last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
-            click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
-            stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                  on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+        run_id = run_id or str(uuid.uuid4())
+        selector_note = ""
+        if from_module or to_module:
+            parts = []
+            if from_module:
+                parts.append(f"from={from_module}")
+            if to_module:
+                parts.append(f"to={to_module}")
+            selector_note = "  [" + ", ".join(parts) + "]"
+        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
+        click.echo(
+            f"▶ {manifest.blueprint_id}  ({len(manifest.modules)} modules)"
+            f"  run={run_id}  engine={engine}  master={master_url}"
+            f"{selector_note}{exec_date_note}"
+        )
+
+        # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
+        eng = cfg.agent
+        bp_agent = manifest.agent
+        resolved_agent_provider = bp_agent.provider or eng.provider
+        resolved_agent_base_url = bp_agent.base_url or eng.base_url
+        resolved_agent_model = bp_agent.model or eng.model
+        resolved_agent_ollama_options = bp_agent.ollama_options or eng.ollama_options
+        resolved_agent_llm_timeout = bp_agent.llm_timeout or eng.llm_timeout
+        resolved_agent_llm_max_reprompts = bp_agent.llm_max_reprompts or eng.llm_max_reprompts
+        resolved_agent_engine_prompt_context = eng.prompt_context
+        resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
+
+        # ── Aggressive mode disclaimer ────────────────────────────────────────────
+        approval_mode = manifest.agent.approval_mode
+        max_patches = manifest.agent.aggressive_max_patches
+        if approval_mode == "aggressive":
             click.echo(
-                f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
+                f"⚠  approval_mode=aggressive — LLM will attempt up to {max_patches} patch(es). "
+                f"Each patch is validated in-memory before being written to Blueprint. "
+                f"Review patches/applied/ after the run.",
                 err=True,
             )
-            surveyor.record_healing_outcome(
-                run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                failure_category=patch.category, model=resolved_agent_model,
-                patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=False, run_success_after_patch=False,
-            )
-            break
 
-        patch_count += 1
+        # ── Surveyor — start ───────────────────────────────────────────────────────
+        surveyor = Surveyor(
+            manifest,
+            store_dir=resolved_store_dir,
+            webhook_config=resolved_webhook,
+            blueprint_path=Path(blueprint),
+            patches_dir=patches_dir,
+        )
+        surveyor.start(run_id)
 
-        if effective_mode == "human":
-            stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                  on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
-            pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
-                or patches_dir / "pending" / f"{patch.patch_id}.json"
-            rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
-            rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
-            click.echo(
-                f"  ✎ LLM patch staged → {rel_patch}\n"
-                f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
-                err=True,
-            )
-            surveyor.record_healing_outcome(
-                run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                failure_category=patch.category, model=resolved_agent_model,
-                patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=False, run_success_after_patch=False,
-            )
-            break
+        # ── Engine session ────────────────────────────────────────────────────────
+        merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+        if engine == "spark":
+            from aqueduct.executor.spark.session import make_spark_session
+            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
+        else:
+            raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
 
-        elif effective_mode == "ci":
-            _ci_url = resolved_agent_base_url or (cfg.agent.ci_webhook_url if hasattr(cfg.agent, "ci_webhook_url") else None)
-            if _ci_url:
-                try:
-                    import json as _json
-                    import httpx as _httpx
-                    _httpx.post(_ci_url, json={
-                        "patch": patch.model_dump(),
-                        "run_id": current_run_id,
-                        "blueprint_id": manifest.blueprint_id,
-                        "failed_module": failure_ctx.failed_module,
-                    }, timeout=10)
-                except Exception as _ce:
-                    click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
-            stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                  on_patch_pending_webhook=cfg.webhooks.on_ci_patch)
-            click.echo(
-                f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
-                err=True,
-            )
-            surveyor.record_healing_outcome(
-                run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                failure_category=patch.category, model=resolved_agent_model,
-                patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=False, run_success_after_patch=False,
-            )
-            break
+        import atexit
+        atexit.register(session.stop)
 
-        elif effective_mode == "auto":
-            new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
-            if new_manifest is None:
-                click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
-                break
+        # ── Self-healing run loop ─────────────────────────────────────────────────
+        patch_count = 0
+        failure_ctx = None
+        result = None
+        last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
+
+        while True:
+            current_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
+            execute_exc: ExecuteError | None = None
             try:
-                result2 = execute(
-                    new_manifest, session,
-                    run_id=str(uuid.uuid4()),
+                result = execute(
+                    manifest, session,
+                    run_id=current_run_id,
                     store_dir=resolved_store_dir,
                     surveyor=surveyor,
                     depot=depot,
+                    resume_run_id=resume_run_id if patch_count == 0 else None,
+                    from_module=from_module,
+                    to_module=to_module,
+                    block_full_actions=not cfg.danger.allow_full_probe_actions,
+                    parallel=parallel,
                 )
             except ExecuteError as exc:
-                result2 = ExecutionResult(
+                execute_exc = exc
+                result = ExecutionResult(
                     blueprint_id=manifest.blueprint_id,
-                    run_id=str(uuid.uuid4()),
+                    run_id=current_run_id,
                     status="error",
-                    module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                    module_results=(
+                        ModuleResult(module_id="_executor", status="error", error=str(exc)),
+                    ),
                 )
-            patch_success = result2.status == "success"
-            failure_ctx2 = surveyor.record(result2, patched=patch_success)
-            surveyor.record_healing_outcome(
-                run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                failure_category=patch.category, model=resolved_agent_model,
-                patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=True, run_success_after_patch=patch_success,
-            )
-            if patch_success:
-                _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
-                click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
-                result = result2
-                failure_ctx = failure_ctx2
-            else:
-                click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
-                _stage_failed_patch(
-                    manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                )
-                result = result2
-                failure_ctx = failure_ctx2
-            break
 
-        elif effective_mode == "aggressive":
-            new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
-            if new_manifest is None:
-                click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
-                last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
+            failure_ctx = surveyor.record(result, exc=execute_exc)
+
+            if result.status == "success":
+                break
+
+            # trigger_agent flag overrides approval_mode=disabled — escalate to human staging at minimum
+            effective_mode = approval_mode
+            if result.trigger_agent and effective_mode == "disabled":
+                effective_mode = "human"
+                click.echo(
+                    "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
+                    err=True,
+                )
+
+            if effective_mode == "disabled" or failure_ctx is None:
+                break
+
+            if patch_count >= max_patches:
+                click.echo(
+                    f"⚠  LLM: aggressive_max_patches={max_patches} reached, stopping self-healing loop",
+                    err=True,
+                )
+                break
+
+            # ── Generate patch ────────────────────────────────────────────────────
+            from aqueduct.surveyor.llm import archive_patch, generate_llm_patch, stage_patch_for_human
+            _attempt_display = (
+                f"{patch_count + 1}/{max_patches}"
+                if approval_mode == "aggressive"
+                else f"{patch_count + 1}"
+            )
+            click.echo(
+                f"  ↻ LLM self-healing ({_attempt_display})  "
+                f"failed_module={failure_ctx.failed_module}",
+                err=True,
+            )
+
+            # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
+            # arcades expanded — no need to re-parse or recurse into sub-blueprints).
+            try:
+                from aqueduct.doctor import check_blueprint_sources_from_manifest
+                from dataclasses import replace as _dc_replace
+                _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
+                _hints = tuple(
+                    f"{r.name} — {r.detail}"
+                    for r in _dr if r.status in ("warn", "fail")
+                )
+                if _hints:
+                    failure_ctx = _dc_replace(failure_ctx, doctor_hints=_hints)
+            except Exception:
+                pass  # doctor errors must never block self-healing
+
+            llm_result = generate_llm_patch(
+                failure_ctx,
+                model=resolved_agent_model,
+                patches_dir=patches_dir,
+                provider=resolved_agent_provider,
+                base_url=resolved_agent_base_url,
+                ollama_options=resolved_agent_ollama_options,
+                llm_timeout=resolved_agent_llm_timeout,
+                llm_max_reprompts=resolved_agent_llm_max_reprompts,
+                engine_prompt_context=resolved_agent_engine_prompt_context,
+                blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                last_apply_error=last_apply_error,
+            )
+            patch = llm_result.patch
+            if patch is None:
+                click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
+                on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
+                if on_hf == "stage":
+                    click.echo(
+                        "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in obs.db.",
+                        err=True,
+                    )
+                break
+
+            # ── Confidence escalation — low-confidence patches go to human ─────────
+            _conf_threshold = manifest.agent.confidence_threshold
+            if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
+                click.echo(
+                    f"  ↑ LLM patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
+                    err=True,
+                )
+                effective_mode = "human"
+
+            # ── Guardrail check (pre-staging) ─────────────────────────────────────
+            try:
+                from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
+                import yaml as _yaml
+                _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
+                _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
+                guardrail_err = None
+            except _PatchError as _ge:
+                guardrail_err = str(_ge)
+            except Exception:
+                guardrail_err = None
+            if guardrail_err:
+                last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
+                click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
+                stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                click.echo(
+                    f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
+                    err=True,
+                )
                 surveyor.record_healing_outcome(
                     run_id=current_run_id, failed_module=failure_ctx.failed_module,
                     failure_category=patch.category, model=resolved_agent_model,
@@ -903,101 +799,208 @@ def run(
                     patch_applied=False, run_success_after_patch=False,
                 )
                 break
-            try:
-                result2 = execute(
-                    new_manifest, session,
-                    run_id=str(uuid.uuid4()),
-                    store_dir=resolved_store_dir,
-                    surveyor=surveyor,
-                    depot=depot,
-                )
-            except ExecuteError as exc:
-                result2 = ExecutionResult(
-                    blueprint_id=manifest.blueprint_id,
-                    run_id=str(uuid.uuid4()),
-                    status="error",
-                    module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
-                )
-            patch_success = result2.status == "success"
-            failure_ctx2 = surveyor.record(result2, patched=patch_success)
-            surveyor.record_healing_outcome(
-                run_id=current_run_id, failed_module=failure_ctx.failed_module,
-                failure_category=patch.category, model=resolved_agent_model,
-                patch_id=patch.patch_id, confidence=patch.confidence,
-                patch_applied=True, run_success_after_patch=patch_success,
-            )
-            if patch_success:
-                _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+
+            patch_count += 1
+
+            if effective_mode == "human":
+                stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
+                    or patches_dir / "pending" / f"{patch.patch_id}.json"
+                rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
+                rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
-                    f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                    f"  ✎ LLM patch staged → {rel_patch}\n"
+                    f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
                     err=True,
                 )
-                result = result2
-                failure_ctx = failure_ctx2
+                surveyor.record_healing_outcome(
+                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    failure_category=patch.category, model=resolved_agent_model,
+                    patch_id=patch.patch_id, confidence=patch.confidence,
+                    patch_applied=False, run_success_after_patch=False,
+                )
                 break
-            else:
-                last_apply_error = (
-                    f"Patch {patch.patch_id!r} applied in-memory but re-run still failed: "
-                    + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
-                )
+
+            elif effective_mode == "ci":
+                _ci_url = resolved_agent_base_url or (cfg.agent.ci_webhook_url if hasattr(cfg.agent, "ci_webhook_url") else None)
+                if _ci_url:
+                    try:
+                        import json as _json
+                        import httpx as _httpx
+                        _httpx.post(_ci_url, json={
+                            "patch": patch.model_dump(),
+                            "run_id": current_run_id,
+                            "blueprint_id": manifest.blueprint_id,
+                            "failed_module": failure_ctx.failed_module,
+                        }, timeout=10)
+                    except Exception as _ce:
+                        click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
+                stage_patch_for_human(patch, patches_dir, failure_ctx,
+                                      on_patch_pending_webhook=cfg.webhooks.on_ci_patch)
                 click.echo(
-                    f"  ✗ LLM patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                    f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
+                    err=True,
                 )
-                _stage_failed_patch(
-                    manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                surveyor.record_healing_outcome(
+                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    failure_category=patch.category, model=resolved_agent_model,
+                    patch_id=patch.patch_id, confidence=patch.confidence,
+                    patch_applied=False, run_success_after_patch=False,
                 )
-                result = result2
-                failure_ctx = failure_ctx2
-                if manifest.agent.on_heal_failure == "abort":
+                break
+
+            elif effective_mode == "auto":
+                new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                if new_manifest is None:
+                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
                     break
-                # discard/stage: loop continues → try next patch
+                try:
+                    result2 = execute(
+                        new_manifest, session,
+                        run_id=str(uuid.uuid4()),
+                        store_dir=resolved_store_dir,
+                        surveyor=surveyor,
+                        depot=depot,
+                    )
+                except ExecuteError as exc:
+                    result2 = ExecutionResult(
+                        blueprint_id=manifest.blueprint_id,
+                        run_id=str(uuid.uuid4()),
+                        status="error",
+                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                    )
+                patch_success = result2.status == "success"
+                failure_ctx2 = surveyor.record(result2, patched=patch_success)
+                surveyor.record_healing_outcome(
+                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    failure_category=patch.category, model=resolved_agent_model,
+                    patch_id=patch.patch_id, confidence=patch.confidence,
+                    patch_applied=True, run_success_after_patch=patch_success,
+                )
+                if patch_success:
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
+                    result = result2
+                    failure_ctx = failure_ctx2
+                else:
+                    click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
+                    _stage_failed_patch(
+                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                    )
+                    result = result2
+                    failure_ctx = failure_ctx2
+                break
 
-    # ── Surveyor stop ─────────────────────────────────────────────────────────
-    surveyor.stop()
+            elif effective_mode == "aggressive":
+                new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                if new_manifest is None:
+                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
+                    last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=False, run_success_after_patch=False,
+                    )
+                    break
+                try:
+                    result2 = execute(
+                        new_manifest, session,
+                        run_id=str(uuid.uuid4()),
+                        store_dir=resolved_store_dir,
+                        surveyor=surveyor,
+                        depot=depot,
+                    )
+                except ExecuteError as exc:
+                    result2 = ExecutionResult(
+                        blueprint_id=manifest.blueprint_id,
+                        run_id=str(uuid.uuid4()),
+                        status="error",
+                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                    )
+                patch_success = result2.status == "success"
+                failure_ctx2 = surveyor.record(result2, patched=patch_success)
+                surveyor.record_healing_outcome(
+                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    failure_category=patch.category, model=resolved_agent_model,
+                    patch_id=patch.patch_id, confidence=patch.confidence,
+                    patch_applied=True, run_success_after_patch=patch_success,
+                )
+                if patch_success:
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    click.echo(
+                        f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                        err=True,
+                    )
+                    result = result2
+                    failure_ctx = failure_ctx2
+                    break
+                else:
+                    last_apply_error = (
+                        f"Patch {patch.patch_id!r} applied in-memory but re-run still failed: "
+                        + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
+                    )
+                    click.echo(
+                        f"  ✗ LLM patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                    )
+                    _stage_failed_patch(
+                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                    )
+                    result = result2
+                    failure_ctx = failure_ctx2
+                    if manifest.agent.on_heal_failure == "abort":
+                        break
+                    # discard/stage: loop continues → try next patch
 
-    # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
-    try:
-        depot.put("_last_run_id", result.run_id)
-    except Exception:
-        pass
-    depot.close()
+        # ── Surveyor stop ─────────────────────────────────────────────────────────
+        surveyor.stop()
 
-    # ── Report ────────────────────────────────────────────────────────────────
-    for mr in result.module_results:
-        icon = "✓" if mr.status == "success" else "✗"
-        line = f"  {icon} {mr.module_id}"
-        if mr.error:
-            line += f"  — {mr.error}"
-        click.echo(line)
+        # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
+        try:
+            depot.put("_last_run_id", result.run_id)
+        except Exception:
+            pass
+        depot.close()
 
-    if result.status not in ("success", "patched"):
-        if failure_ctx:
-            click.echo(
-                f"\n✗ blueprint failed  run_id={result.run_id}"
-                f"  failed_module={failure_ctx.failed_module}",
-                err=True,
+        # ── Report ────────────────────────────────────────────────────────────────
+        for mr in result.module_results:
+            icon = "✓" if mr.status == "success" else "✗"
+            line = f"  {icon} {mr.module_id}"
+            if mr.error:
+                line += f"  — {mr.error}"
+            click.echo(line)
+
+        if result.status not in ("success", "patched"):
+            if failure_ctx:
+                click.echo(
+                    f"\n✗ blueprint failed  run_id={result.run_id}"
+                    f"  failed_module={failure_ctx.failed_module}",
+                    err=True,
+                )
+            else:
+                click.echo(f"\n✗ blueprint failed  run_id={result.run_id}", err=True)
+            sys.exit(1)
+
+        # ── on_success webhook ────────────────────────────────────────────────────
+        if cfg.webhooks.on_success:
+            from aqueduct.surveyor.webhook import fire_webhook
+            success_payload = {
+                "run_id": result.run_id,
+                "blueprint_id": manifest.blueprint_id,
+                "blueprint_name": manifest.name,
+                "module_count": str(len(result.module_results)),
+            }
+            fire_webhook(
+                cfg.webhooks.on_success,
+                full_payload=success_payload,
+                template_vars=success_payload,
             )
-        else:
-            click.echo(f"\n✗ blueprint failed  run_id={result.run_id}", err=True)
-        sys.exit(1)
 
-    # ── on_success webhook ────────────────────────────────────────────────────
-    if cfg.webhooks.on_success:
-        from aqueduct.surveyor.webhook import fire_webhook
-        success_payload = {
-            "run_id": result.run_id,
-            "blueprint_id": manifest.blueprint_id,
-            "blueprint_name": manifest.name,
-            "module_count": str(len(result.module_results)),
-        }
-        fire_webhook(
-            cfg.webhooks.on_success,
-            full_payload=success_payload,
-            template_vars=success_payload,
-        )
-
-    status_label = "patched" if result.status == "patched" else "complete"
-    click.echo(f"\n✓ blueprint {status_label}  run_id={result.run_id}")
+        status_label = "patched" if result.status == "patched" else "complete"
+        click.echo(f"\n✓ blueprint {status_label}  run_id={result.run_id}")
+    finally:
+        os.chdir(_original_cwd)
 
 
 # ── patch helpers ────────────────────────────────────────────────────────────
