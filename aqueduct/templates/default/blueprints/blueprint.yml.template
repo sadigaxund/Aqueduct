@@ -226,6 +226,24 @@ modules: []
   #     spillway_condition: "amount IS NULL OR order_ts IS NULL"  # bad rows → spillway port
 
 
+  # ── CHANNEL — incremental processing (watermark-based) ───────────────────────
+  #
+  # Processes only new rows each run. The last MAX(watermark_column) is persisted
+  # in Depot and injected as ${ctx._watermark} at runtime.
+  # First run sentinel: '1900-01-01 00:00:00' (full scan). Use mode: append downstream.
+
+  # - id: new_orders
+  #   type: Channel
+  #   config:
+  #     op: sql
+  #     materialize: incremental
+  #     watermark_column: event_ts     # column whose MAX tracks progress
+  #     query: |
+  #       SELECT *
+  #       FROM source_orders
+  #       WHERE event_ts > CAST('${ctx._watermark}' AS TIMESTAMP)
+
+
   # ── CHANNEL — join syntax (alternative to raw SQL JOIN) ───────────────────────
 
   # - id: enrich_orders

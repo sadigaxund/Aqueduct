@@ -75,7 +75,7 @@ class TestSuiteResult:
         return self.failed == 0
 
 
-class TestError(Exception):
+class TestSchemaError(Exception):
     """Raised for test file schema errors, not assertion failures."""
 
 
@@ -217,7 +217,7 @@ def _execute_module(
     elif module.type == "Junction":
         from aqueduct.executor.spark.junction import execute_junction
         if len(input_dfs) != 1:
-            raise TestError(f"Junction {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
+            raise TestSchemaError(f"Junction {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
         df = next(iter(input_dfs.values()))
         return execute_junction(module, df)
 
@@ -228,13 +228,13 @@ def _execute_module(
     elif module.type == "Assert":
         from aqueduct.executor.spark.assert_ import execute_assert
         if len(input_dfs) != 1:
-            raise TestError(f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
+            raise TestSchemaError(f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
         df = next(iter(input_dfs.values()))
         passing_df, _ = execute_assert(module, df, spark, run_id="test", blueprint_id="test")
         return passing_df
 
     else:
-        raise TestError(
+        raise TestSchemaError(
             f"Module {module.id!r} has type {module.type!r}. "
             f"Only {sorted(_TESTABLE_TYPES)} can be tested in isolation."
         )
@@ -355,7 +355,7 @@ def run_test_file(
 
     raw = yaml.safe_load(test_file.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
-        raise TestError(f"Test file {test_file} is not a valid YAML mapping.")
+        raise TestSchemaError(f"Test file {test_file} is not a valid YAML mapping.")
 
     # Resolve blueprint path
     if blueprint_path_override:
@@ -363,11 +363,11 @@ def run_test_file(
     else:
         bp_rel = raw.get("blueprint")
         if not bp_rel:
-            raise TestError("Test file missing 'blueprint' field.")
+            raise TestSchemaError("Test file missing 'blueprint' field.")
         bp_path = (test_file.parent / bp_rel).resolve()
 
     if not bp_path.exists():
-        raise TestError(f"Blueprint not found: {bp_path}")
+        raise TestSchemaError(f"Blueprint not found: {bp_path}")
 
     # Parse blueprint (no compile — we only need module config, not @aq.* resolution)
     from aqueduct.parser.parser import parse

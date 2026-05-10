@@ -2,7 +2,29 @@
 
 ---
 
-## v1.0.0a1 — 2026-05-07
+## v1.0.0a1 — 2026-05-11
+
+### Phase 23B — Input Fingerprinting
+_2026-05-11_
+
+- `Manifest.inputs_fingerprint` — compile-time snapshot of each local Ingress module's file metadata (`path`, `size_bytes`, `last_modified` ISO-8601 UTC)
+- Built during compilation step 6.5 via `os.stat()` — zero runtime cost, no Spark action
+- Remote paths (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfs://`, `wasbs://`) and non-file formats (`jdbc`, `kafka`, `depot`, `dataframe`) store `null` for stat fields (key always present)
+- Included in `Manifest.to_dict()` and embedded in `FailureContext` sent to LLM — enables distinguishing data-drift bugs from code bugs during post-mortems
+
+---
+
+### Phase 23C — Incremental Channel (`materialize: incremental`)
+_2026-05-11_
+
+- New Channel config keys: `materialize: incremental` and `watermark_column: <col>`
+- On each run: last `MAX(watermark_column)` loaded from Depot under key `"{blueprint_id}:{module_id}:_watermark"`, substituted into query as `${ctx._watermark}` at runtime before Spark execution
+- First run sentinel: `'1900-01-01 00:00:00'` → full scan; subsequent runs process only new rows
+- After successful execution: new watermark written back to Depot; watermark not advanced on failure (safe re-processing)
+- Warns at startup if downstream Egress uses `mode: overwrite` (data loss risk)
+- `${ctx._watermark}` is a runtime substitution (not a Tier 0 context ref — not listed in `context:` block)
+
+---
 
 ### Phase 20 — Audit Cleanup + Production Readiness
 _2026-05-07_

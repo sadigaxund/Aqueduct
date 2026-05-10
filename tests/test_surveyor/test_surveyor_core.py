@@ -50,7 +50,7 @@ def test_surveyor_record_before_start_raises(manifest, tmp_path):
     surveyor = Surveyor(manifest, store_dir=tmp_path)
     result = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
     
-    with pytest.raises(RuntimeError, match="Surveyor.start\(\) must be called before record\(\)"):
+    with pytest.raises(RuntimeError, match=r"Surveyor.start\(\) must be called before record\(\)"):
         surveyor.record(result)
 
 

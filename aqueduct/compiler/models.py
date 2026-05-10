@@ -39,6 +39,7 @@ class Manifest:
     macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
     provenance_map: "ProvenanceMap | None" = None
+    inputs_fingerprint: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -99,4 +100,5 @@ class Manifest:
             "macros": self.macros,
             "checkpoint": self.checkpoint,
             "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
+            "inputs_fingerprint": self.inputs_fingerprint,
         }

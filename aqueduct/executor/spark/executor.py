@@ -765,9 +765,43 @@ def execute(
                 else:
                     mod_policy = _module_retry_policy(module, manifest.retry_policy)
                     _t0 = time.monotonic()
+
+                    # ── Incremental watermark injection ────────────────────────
+                    _incremental = module.config.get("materialize") == "incremental"
+                    _channel_module = module
+                    if _incremental:
+                        _watermark_col = module.config.get("watermark_column", "")
+                        _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
+                        _watermark_val = (
+                            depot.get(_depot_key, "") if depot else ""
+                        ) or "1900-01-01 00:00:00"
+                        _query = module.config.get("query", "")
+                        _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
+                        if _patched_query != _query:
+                            import dataclasses as _dc
+                            _channel_module = _dc.replace(
+                                module,
+                                config={**module.config, "query": _patched_query},
+                            )
+                        # Warn if downstream Egress uses mode=overwrite
+                        _downstream_ids = {
+                            e.to_id for e in manifest.edges if e.from_id == module.id
+                        }
+                        for _ds_m in manifest.modules:
+                            if (
+                                _ds_m.id in _downstream_ids
+                                and _ds_m.type == "Egress"
+                                and _ds_m.config.get("mode") == "overwrite"
+                            ):
+                                logger.warning(
+                                    "[%s] materialize=incremental → downstream Egress %r uses "
+                                    "mode=overwrite; incremental rows will replace prior data.",
+                                    module.id, _ds_m.id,
+                                )
+
                     try:
                         df = _with_retry(
-                            lambda: execute_sql_channel(module, upstream_dfs, spark),
+                            lambda: execute_sql_channel(_channel_module, upstream_dfs, spark),
                             mod_policy,
                             module.id,
                         )
@@ -814,6 +848,21 @@ def execute(
                         frame_store[f"{module.id}.spillway"] = df.filter("1=0")
                     else:
                         frame_store[module.id] = df
+
+                    # ── Incremental watermark update ───────────────────────────
+                    if _incremental and _watermark_col and depot:
+                        from pyspark.sql import functions as _F
+                        try:
+                            _new_wm = frame_store[module.id].agg(
+                                _F.max(_watermark_col)
+                            ).collect()[0][0]
+                            if _new_wm is not None:
+                                depot.put(_depot_key, str(_new_wm))
+                        except Exception as _wm_exc:
+                            logger.warning(
+                                "[%s] Failed to update incremental watermark: %s",
+                                module.id, _wm_exc,
+                            )
 
                     _write_stage_metrics(
                         module.id, run_id,

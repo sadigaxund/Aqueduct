@@ -257,6 +257,34 @@ edges:
     port: spillway          # null-amount rows with _aq_error_* columns
 ```
 
+### Incremental Channel (`materialize: incremental`)
+
+Process only new data each run — no streaming engine required. Aqueduct stores the high-water mark in Depot and injects it into your SQL at runtime:
+
+```yaml
+- id: new_orders
+  type: Channel
+  config:
+    op: sql
+    materialize: incremental
+    watermark_column: event_ts        # column whose MAX tracks progress
+    query: |
+      SELECT *
+      FROM source_orders
+      WHERE event_ts > CAST('${ctx._watermark}' AS TIMESTAMP)
+
+- id: append_sink
+  type: Egress
+  config:
+    format: parquet
+    path: "s3a://datalake/orders/incremental/"
+    mode: append   # use append, not overwrite
+```
+
+First run: `${ctx._watermark}` = `'1900-01-01 00:00:00'` → full scan. Each subsequent run: resolves to `MAX(event_ts)` from the previous run's output, automatically stored in Depot. Watermark is only advanced on success — a failed run re-processes the same window.
+
+> **Note:** `${ctx._watermark}` is a runtime substitution, not a Tier 0 context ref — it is not listed in the `context:` block and is not visible in the compiled Manifest's `context` field.
+
 ### Assert — Inline Data Quality Gates
 
 Enforce explicit business rules against the flowing DataFrame. Unlike Probe + Regulator (which evaluate signals from a prior run), Assert evaluates rules inline and can quarantine bad rows to a spillway:
