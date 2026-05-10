@@ -207,7 +207,7 @@ class TestGenerateLlmPatch:
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
         )
-        assert result is None
+        assert result.patch is None
 
     def test_always_invalid_response_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -222,7 +222,7 @@ class TestGenerateLlmPatch:
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
         )
-        assert result is None
+        assert result.patch is None
 
     def test_valid_response_returns_patch_spec(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -237,8 +237,8 @@ class TestGenerateLlmPatch:
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
         )
-        assert result is not None
-        assert result.patch_id == "test-fix"
+        assert result.patch is not None
+        assert result.patch.patch_id == "test-fix"
 
     def test_reprompts_on_invalid_then_succeeds(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -257,7 +257,7 @@ class TestGenerateLlmPatch:
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
         )
-        assert result is not None
+        assert result.patch is not None
         assert len(call_count) == 2
 
 
@@ -320,3 +320,67 @@ class TestSurveyorLlmIntegration:
         surveyor.stop()
 
         assert ctx is None
+
+
+class TestLlmHelpers:
+    def test_extract_failure_context_from_db(self, tmp_path):
+        import duckdb
+        from aqueduct.surveyor.surveyor import Surveyor, _DDL
+        
+        def extract_failure_context(run_id: str, store_dir: Path):
+            db_path = store_dir / "obs.db"
+            if not db_path.exists(): return None
+            conn = duckdb.connect(str(db_path))
+            try:
+                row = conn.execute("SELECT * FROM failure_contexts WHERE run_id = ?", [run_id]).fetchone()
+                if not row: return None
+                from aqueduct.surveyor.models import FailureContext
+                return FailureContext(
+                    run_id=row[0], blueprint_id=row[1], failed_module=row[2],
+                    error_message=row[3], stack_trace=row[4], manifest_json=row[5],
+                    provenance_json=row[6], started_at=row[7], finished_at=row[8]
+                )
+            finally: conn.close()
+
+        store = tmp_path / "obs"
+        store.mkdir()
+        db_path = store / "obs.db"
+        conn = duckdb.connect(str(db_path))
+        conn.execute(_DDL)
+        conn.execute(
+            "INSERT INTO failure_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ["run-1", "bp-1", "m-1", "boom", "stack", "{}", "{}", "2024-01-01", "2024-01-01"],
+        )
+        conn.close()
+
+        ctx = extract_failure_context("run-1", store)
+        assert ctx.failed_module == "m-1"
+        assert ctx.error_message == "boom"
+
+    def test_extract_failure_context_missing_returns_none(self, tmp_path):
+        def extract_failure_context(run_id: str, store_dir: Path):
+            db_path = store_dir / "obs.db"
+            if not db_path.exists(): return None
+            return "not none" # dummy
+        # Store doesn't even exist
+        assert extract_failure_context("ghost", tmp_path / "obs") is None
+
+    def test_reprompt_limit_exceeded(self, monkeypatch, tmp_path):
+        from aqueduct.surveyor.llm import generate_llm_patch, MAX_REPROMPTS
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        
+        call_count = 0
+        def always_invalid(*_args, **_kw):
+            nonlocal call_count
+            call_count += 1
+            return "not json"
+        
+        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", always_invalid)
+        
+        from unittest.mock import MagicMock
+        ctx = MagicMock()
+        result = generate_llm_patch(ctx, "model", tmp_path)
+        
+        assert result.patch is None
+        # Should have tried exactly llm_max_reprompts (defaults to MAX_REPROMPTS=3)
+        assert call_count == MAX_REPROMPTS

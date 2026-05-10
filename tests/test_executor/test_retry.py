@@ -240,3 +240,118 @@ def _make_module(mid: str, **kwargs):
     from aqueduct.parser.models import Module
 
     return Module(id=mid, type="Ingress", label=mid, config={}, **kwargs)
+
+
+class TestOnRetryExhausted:
+    """_on_retry_exhausted behavior — executor.py."""
+
+    def _make_policy(self, on_exhaustion: str):
+        from aqueduct.parser.models import RetryPolicy
+        return RetryPolicy(max_attempts=1, on_exhaustion=on_exhaustion)
+
+    def _make_module(self, mid: str = "m1"):
+        from aqueduct.parser.models import Module
+        return Module(id=mid, type="Ingress", label="L", config={})
+
+    def test_abort_returns_false_with_fail_result(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("abort")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("boom"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is False
+        assert fail_result is not None
+        assert fail_result.status == "error"
+        assert fail_result.trigger_agent is False
+
+    def test_alert_only_returns_true_with_none(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("alert_only")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("non-critical"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is True
+        assert fail_result is None
+
+    def test_trigger_agent_returns_false_with_trigger_agent_true(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("trigger_agent")
+        module = self._make_module()
+        results: list[ModuleResult] = []
+        gate_closed, fail_result = _on_retry_exhausted(
+            RuntimeError("agent needed"), policy, module, "pipe.id", "run-1", results
+        )
+        assert gate_closed is False
+        assert fail_result is not None
+        assert fail_result.trigger_agent is True
+
+    def test_abort_records_module_result_as_error(self):
+        from aqueduct.executor.spark.executor import _on_retry_exhausted
+        from aqueduct.executor.models import ModuleResult
+
+        policy = self._make_policy("abort")
+        module = self._make_module("failing_module")
+        results: list[ModuleResult] = []
+        _on_retry_exhausted(RuntimeError("boom"), policy, module, "pipe.id", "run-1", results)
+        assert len(results) == 1
+        assert results[0].module_id == "failing_module"
+        assert results[0].status == "error"
+
+
+class TestOnExhaustionAlertOnlyIntegration:
+    """alert_only: module fails but blueprint reports success (gate_closed path)."""
+
+    def test_alert_only_blueprint_continues(self, spark, tmp_path):
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.models import Edge, Module, RetryPolicy
+
+        # Non-existent path causes IngressError on module "bad_src"
+        # A second Ingress → Egress succeeds
+        good_path = str(tmp_path / "good.parquet")
+        out_path = str(tmp_path / "out.parquet")
+        spark.range(3).write.parquet(good_path)
+
+        policy = RetryPolicy(max_attempts=1, on_exhaustion="alert_only")
+
+        manifest = Manifest(
+            blueprint_id="test.alert_only",
+            retry_policy=policy,
+            modules=(
+                Module(
+                    id="bad_src", type="Ingress", label="Bad",
+                    config={"format": "parquet", "path": "/nonexistent/does_not_exist.parquet"},
+                ),
+                Module(
+                    id="good_src", type="Ingress", label="Good",
+                    config={"format": "parquet", "path": good_path},
+                ),
+                Module(
+                    id="sink", type="Egress", label="Sink",
+                    config={"format": "parquet", "path": out_path},
+                ),
+            ),
+            edges=(
+                Edge(from_id="good_src", to_id="sink", port="main"),
+            ),
+            context={},
+            spark_config={},
+        )
+
+        result = execute(manifest, spark)
+        # bad_src fails but alert_only propagates GATE_CLOSED — blueprint finishes
+        statuses = {r.module_id: r.status for r in result.module_results}
+        assert statuses.get("bad_src") == "error"
+        # The overall blueprint should not abort with status="error" due to alert_only
+        # bad_src has no downstream, so sink is still reachable and succeeds
+        assert statuses.get("sink") == "success"

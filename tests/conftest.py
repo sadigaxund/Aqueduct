@@ -64,14 +64,17 @@ def spark() -> SparkSession:
     if not _spark_is_healthy():
         pytest.skip("Spark Java gateway is unstable in this environment")
 
-    session = (
-        SparkSession.builder.master(_spark_master())
-        .appName("aqueduct-tests")
-        .config("spark.ui.enabled", "false")
-        .config("spark.sql.warehouse.dir", "/tmp/aqueduct_test_spark_warehouse")
-        .config("javax.jdo.option.ConnectionURL", "jdbc:derby:memory:aqueduct_test_metastore;create=true")
-        .config("derby.stream.error.file", "/tmp/aqueduct_test_derby.log")
-        .getOrCreate()
+    from aqueduct.executor.spark.session import make_spark_session
+    
+    session = make_spark_session(
+        blueprint_id="aqueduct-tests",
+        spark_config={
+            "spark.sql.warehouse.dir": "/tmp/aqueduct_test_spark_warehouse",
+            "javax.jdo.option.ConnectionURL": "jdbc:derby:memory:aqueduct_test_metastore;create=true",
+            "derby.stream.error.file": "/tmp/aqueduct_test_derby.log"
+        },
+        master_url=_spark_master(),
+        quiet=True
     )
     yield session
     session.stop()

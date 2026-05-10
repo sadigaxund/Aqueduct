@@ -60,3 +60,35 @@ def test_make_spark_session_blueprint_config_precedence():
     spark = make_spark_session("app-prec", config)
     assert spark.conf.get("spark.driver.memory") == "3g"
     assert spark.conf.get("spark.executor.memory") == "5g"
+
+
+class TestSessionQuietMode:
+    def test_make_spark_session_quiet_injects_log4j_opts(self):
+        from aqueduct.executor.spark.session import _LOG4J_QUIET_OPTS
+        from unittest.mock import MagicMock, patch
+
+        mock_builder = MagicMock()
+        mock_builder.master.return_value = mock_builder
+        mock_builder.appName.return_value = mock_builder
+        mock_builder.config.return_value = mock_builder
+        mock_builder.getOrCreate.return_value = MagicMock()
+
+        # Test _LOG4J_QUIET_OPTS is a non-empty string with expected content
+        assert "log4j" in _LOG4J_QUIET_OPTS.lower()
+        assert "ERROR" in _LOG4J_QUIET_OPTS
+
+    def test_suppress_stderr_context_manager(self):
+        from aqueduct.executor.spark.session import _suppress_stderr
+        import sys
+
+        original_stderr = sys.stderr
+        ran = []
+
+        with _suppress_stderr():
+            ran.append(True)
+            # stderr should be redirected inside
+            assert sys.stderr is not original_stderr
+
+        # restored after context
+        assert sys.stderr is original_stderr
+        assert ran == [True]

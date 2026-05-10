@@ -5,7 +5,7 @@ from pathlib import Path
 from click.testing import CliRunner
 from aqueduct.cli import cli
 
-FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 def test_validate_valid_blueprint():
     runner = CliRunner()

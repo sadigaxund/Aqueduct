@@ -23,7 +23,7 @@ from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.executor.spark.executor import execute
 from aqueduct.parser.parser import parse
 
-BLUEPRINTS = Path(__file__).parent / "fixtures" / "blueprints"
+BLUEPRINTS = Path(__file__).parent.parent / "fixtures" / "blueprints"
 
 
 def _run(blueprint_name: str, overrides: dict, spark: SparkSession, store_dir=None):

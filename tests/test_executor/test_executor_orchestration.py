@@ -1482,3 +1482,146 @@ def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
     quarantine_df = spark.read.parquet(spill_out)
     assert quarantine_df.count() == 2
     assert "_aq_error_module" in quarantine_df.columns
+
+
+class TestExecuteModuleDispatch:
+    """Tests for _execute_module dispatch — patched executor functions."""
+
+    def test_channel_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="ch", type="Channel", label="C", config={})
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.channel.execute_sql_channel", return_value=fake_df):
+            result = _execute_module(mod, {"src": MagicMock()}, MagicMock())
+        assert result is not None
+
+    def test_junction_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="jct", type="Junction", label="J", config={"op": "broadcast", "branches": []})
+        fake_result = {"b": MagicMock()}
+        with patch("aqueduct.executor.spark.junction.execute_junction", return_value=fake_result):
+            result = _execute_module(mod, {"src": MagicMock()}, MagicMock())
+        assert isinstance(result, dict)
+
+    def test_junction_too_many_inputs_raises(self):
+        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="jct", type="Junction", label="J", config={})
+        with pytest.raises(TestError, match="expects exactly 1 input"):
+            _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+
+    def test_funnel_dispatch(self):
+        from aqueduct.executor.spark.test_runner import _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock, patch
+        mod = Module(id="fn", type="Funnel", label="F", config={"mode": "union_all"})
+        fake_df = MagicMock()
+        with patch("aqueduct.executor.spark.funnel.execute_funnel", return_value=fake_df):
+            result = _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+        assert result is not None
+
+    def test_assert_too_many_inputs_raises(self):
+        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.parser.models import Module
+        from unittest.mock import MagicMock
+        mod = Module(id="ast", type="Assert", label="A", config={"rules": []})
+        with pytest.raises(TestError, match="expects exactly 1 input"):
+            _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
+
+
+class TestExecutionResultTriggerAgent:
+    """ExecutionResult.trigger_agent field — models.py."""
+
+    def test_trigger_agent_defaults_to_false(self):
+        from aqueduct.executor.models import ExecutionResult
+        result = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
+        assert result.trigger_agent is False
+
+    def test_trigger_agent_true_stored_and_returned(self):
+        from aqueduct.executor.models import ExecutionResult
+        result = ExecutionResult(
+            blueprint_id="p", run_id="r", status="error",
+            module_results=(), trigger_agent=True,
+        )
+        assert result.trigger_agent is True
+
+
+class TestGetExecutor:
+    """get_executor() factory — executor/__init__.py."""
+
+    def test_spark_engine_returns_callable(self):
+        from aqueduct.executor import get_executor
+        fn = get_executor("spark")
+        assert callable(fn)
+
+    def test_flink_engine_raises_not_implemented(self):
+        from aqueduct.executor import get_executor
+        with pytest.raises(NotImplementedError, match="Flink"):
+            get_executor("flink")
+
+    def test_unknown_engine_raises_value_error(self):
+        from aqueduct.executor import get_executor
+        with pytest.raises(ValueError, match="Unknown execution engine"):
+            get_executor("beam")
+
+
+class TestExecutorBlockFullActionsParam:
+    """execute() accepts block_full_actions kwarg."""
+
+    def test_execute_has_block_full_actions_param(self):
+        import inspect
+        from aqueduct.executor.spark.executor import execute
+
+        sig = inspect.signature(execute)
+        assert "block_full_actions" in sig.parameters
+        assert sig.parameters["block_full_actions"].default is False
+
+
+class TestRegulatorTriggerAgentPropagation:
+    """Regulator on_block=trigger_agent → ExecutionResult.trigger_agent=True."""
+
+    def test_regulator_trigger_agent_sets_flag(self, spark, tmp_path):
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.spark.executor import execute
+        from aqueduct.parser.models import Edge, Module
+
+        in_path = str(tmp_path / "in.parquet")
+        out_path = str(tmp_path / "out.parquet")
+        spark.range(5).write.parquet(in_path)
+
+        class _ClosedSurveyor:
+            def evaluate_regulator(self, module_id: str) -> bool:
+                return False
+
+        manifest = Manifest(
+            blueprint_id="test.reg_trigger_agent",
+            modules=(
+                Module(
+                    id="src", type="Ingress", label="Src",
+                    config={"format": "parquet", "path": in_path},
+                ),
+                Module(
+                    id="gate", type="Regulator", label="Gate",
+                    config={"on_block": "trigger_agent"},
+                ),
+                Module(
+                    id="sink", type="Egress", label="Sink",
+                    config={"format": "parquet", "path": out_path},
+                ),
+            ),
+            edges=(
+                Edge(from_id="src", to_id="gate", port="main"),
+                Edge(from_id="gate", to_id="sink", port="main"),
+            ),
+            context={},
+            spark_config={},
+        )
+
+        result = execute(manifest, spark, surveyor=_ClosedSurveyor())
+        assert result.status == "error"
+        assert result.trigger_agent is True

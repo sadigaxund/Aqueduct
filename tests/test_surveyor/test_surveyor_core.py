@@ -384,3 +384,27 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
 
     assert surveyor.evaluate_regulator("reg1") is True
 
+def test_surveyor_regulator_respects_overrides(tmp_path):
+    store_dir = tmp_path / "store"
+    store_dir.mkdir(parents=True)
+    import duckdb, json
+    conn = duckdb.connect(str(store_dir / "obs.db"))
+    # Probe says PASS (True)
+    conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
+    conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":True}), '2025-01-01T00:00:00Z'])
+    # Override says FAIL (False)
+    conn.execute("CREATE TABLE signal_overrides (signal_id VARCHAR, passed BOOLEAN, error_message VARCHAR, set_at TIMESTAMPTZ)")
+    conn.execute("INSERT INTO signal_overrides VALUES (?, ?, ?, ?)", ['probe1', False, 'Blocked', '2025-01-01T00:01:00Z'])
+    conn.close()
+    
+    from aqueduct.parser.models import Edge
+    from aqueduct.compiler.models import Manifest
+    manifest = Manifest(
+        blueprint_id="p1", modules=(),
+        edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
+        context={}, spark_config={}
+    )
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run1")
+    # Should be False because override takes priority
+    assert surveyor.evaluate_regulator("reg1") is False

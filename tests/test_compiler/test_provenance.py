@@ -99,3 +99,51 @@ def test_provenance_map_to_dict_serializable():
     assert d["modules"]["m1"]["module_id"] == "m1"
     assert d["modules"]["m1"]["config"]["k"]["source_type"] == "literal"
     assert d["modules"]["m1"]["config"]["k"]["resolved_value"] == 1
+
+def test_audit_05_provenance_map(monkeypatch):
+    """Verify deep provenance tracking for context, env, and arcade inheritance."""
+    from aqueduct.parser.parser import parse
+    from aqueduct.compiler.compiler import compile as aq_compile
+    from pathlib import Path
+
+    FIXTURES = Path(__file__).parent.parent / "fixtures"
+    monkeypatch.setenv("MY_VAR", "real_env_value")
+    main_path = FIXTURES / "audit" / "05-provenance-map" / "main_prov.yml"
+
+    # 1. Parse
+    blueprint = parse(main_path)
+
+    # 2. Compile
+    manifest = aq_compile(blueprint, blueprint_path=main_path, run_id="test-run-123")
+    prov = manifest.provenance_map
+    assert prov is not None
+
+    # Check Module m1
+    m1_prov = prov.for_module("m1").config
+
+    assert m1_prov["c1"].source_type == "context_ref"
+    assert m1_prov["c1"].context_key == "my_ctx"
+    assert m1_prov["c1"].original_expression == "${ctx.my_ctx}"
+
+    assert m1_prov["e1"].source_type == "context_ref"
+    assert m1_prov["e1"].context_key == "my_env"
+
+    assert m1_prov["t1"].source_type == "context_ref"
+    assert m1_prov["t1"].context_key == "my_tier1"
+
+    assert m1_prov["l1"].source_type == "literal"
+
+    # Check context provenance
+    assert prov.context["my_ctx"].source_type == "literal"
+    assert prov.context["my_env"].source_type == "env_ref"
+    assert prov.context["my_env"].env_var == "MY_VAR"
+    assert prov.context["my_tier1"].source_type == "tier1"
+
+    # Check Arcade Module arc__m_sub
+    sub_id = "arc__m_sub"
+    arc_prov = prov.for_module(sub_id).config
+
+    assert arc_prov["sub_key"].source_type == "arcade_inherited"
+    assert arc_prov["sub_key"].arcade_module_id == "arc"
+    assert arc_prov["sub_key"].original_expression == "${ctx.shared_val}"
+    assert arc_prov["sub_key"].resolved_value == "injected"
