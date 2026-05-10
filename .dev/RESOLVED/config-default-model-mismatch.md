@@ -12,7 +12,7 @@ E     + claude-3-5-sonnet-latest
 ```
 
 ## Relevant Context
-The source code in `aqueduct/config.py` defines the default model as `claude-3-5-sonnet-latest` (Line 137), but the test `test_config_defaults` in `tests/test_config.py` and the `TESTING.md` manifest both expect `claude-sonnet-4-6`.
+The source code in `aqueduct/config.py` defines the default model as `claude-3-5-sonnet-latest` (Line 137), but the test `test_config_defaults` in `tests/test_config.py` and the `TEST_MANIFEST.md` manifest both expect `claude-sonnet-4-6`.
 
 ## Proposed Fix
-Update `tests/test_config.py` and `.dev/TESTING.md` to expect `claude-3-5-sonnet-latest`, or revert the change in `aqueduct/config.py` if `claude-sonnet-4-6` was intended.
+Update `tests/test_config.py` and `tests/TEST_MANIFEST.md` to expect `claude-3-5-sonnet-latest`, or revert the change in `aqueduct/config.py` if `claude-sonnet-4-6` was intended.

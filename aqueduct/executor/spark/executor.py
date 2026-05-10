@@ -794,6 +794,7 @@ def execute(
                             df.filter(spillway_condition)
                               .withColumn("_aq_error_module", F.lit(module.id))
                               .withColumn("_aq_error_msg", F.lit("spillway_condition matched"))
+                              .withColumn("_aq_error_type", F.lit("SpillwayCondition"))
                               .withColumn("_aq_error_ts", F.current_timestamp())
                         )
                         frame_store[module.id] = good_df

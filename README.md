@@ -69,7 +69,7 @@ id: my.first.pipeline
 name: "Order Processing"
 
 context:
-  today: "@aq.date.today()"
+  today: "@aq.date.today()"   # resolved at compile time; reference as ${ctx.today} in config values
 
 modules:
   - id: raw_orders
@@ -143,6 +143,8 @@ stores:
 
 ### 3. Run
 
+Aqueduct auto-loads a `.env` file from the project root before executing — put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. No credential hardcoding required.
+
 ```bash
 aqueduct run pipeline.yml --config aqueduct.yml
 ```
@@ -174,8 +176,8 @@ The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens res
 | Type | Role |
 |---|---|
 | `Ingress` | Load data from any Spark-supported source |
-| `Egress` | Write data to any Spark-supported sink, or `format: depot` for KV state |
-| `Channel` | Transformation (SQL or 11 native ops); optional `spillway_condition` routes bad rows |
+| `Egress` | Write data to any Spark-supported sink, or `format: depot` for KV state; `collect: true` to pull results to driver; `register_as_table` to catalog the output |
+| `Channel` | Transformation (SQL or 12 native ops: deduplicate, filter, select, rename, cast, join, union, sort, repartition, coalesce, cache + sql); optional `spillway_condition` routes bad rows |
 | `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
 | `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
 | `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) — never halts pipeline |
@@ -436,11 +438,18 @@ aqueduct signal   <signal_id>                         # show current override st
 
 aqueduct heal     <run_id>                  # manually trigger LLM self-healing for a failed run
 aqueduct heal     <run_id> --module <id>   # scope healing to a specific module
+aqueduct heal     --scenario tests/schema_drift.aqscenario.yml  # test LLM healing without Spark
+                                            # .aqscenario.yml = simulated failure + expected patch assertions
+                                            # run aqueduct benchmark --scenarios tests/ to compare models
 
 aqueduct runs                               # list recent runs (all blueprints)
 aqueduct runs --blueprint blueprint.yml     # filter by blueprint
 aqueduct runs --failed                      # show only failed runs
 aqueduct runs --last 20                     # show last N runs
+
+aqueduct benchmark --scenarios scenarios/              # run all .aqscenario.yml files in a directory
+aqueduct benchmark --scenarios scenarios/ --model claude-sonnet-4-6 --model claude-opus-4-7  # compare models
+aqueduct benchmark --scenarios scenarios/ --workers 4  # parallel execution with N worker threads
 
 aqueduct doctor --blueprint blueprints/pipeline.yml  # check Ingress/Egress sources + format/extension mismatches
 
@@ -559,7 +568,11 @@ source ~/.bashrc && use_java17
 pytest tests/
 ```
 
-Tests include unit tests and blueprint integration tests that run real Spark (`local[*]`). Coverage target: 80%.
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, proposing features, and submitting pull requests.
 
 ---
 

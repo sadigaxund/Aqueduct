@@ -310,3 +310,14 @@ agent:
   #   mlock: true                            # lock weights in RAM (no swap)
   #   num_batch: 1024                        # prompt eval batch size
   #   num_predict: -1                        # -1 = no token limit
+
+# ── Danger settings ───────────────────────────────────────────────────────────
+# All default to false (safe production mode). Set to true only when needed.
+# Aqueduct prints a startup warning for any active danger setting.
+#
+# danger:
+#   allow_aggressive_patching: false  # if true, approval_mode: aggressive is allowed
+#                                     # (agent patches Blueprint without human review)
+#   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
+#                                     # (null_rates, value_distribution, distinct_count)
+#                                     # adds latency; leave false in production

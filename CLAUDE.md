@@ -53,20 +53,20 @@ The file `~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/TOD
 After completing each implementation phase, always update ALL of:
 1. `docs/specs.md` — add/update spec for new feature
 2. `README.md` — user-facing docs and examples
-3. `.dev/TESTING.md` — add test checklist items for the new feature
+3. `tests/TEST_MANIFEST.md` — add test checklist items for the new feature
 4. `aqueduct.template.yml` — add config examples
 5. `examples/comprehensive_demo/blueprint.yml` — add usage example
 
 ## Development Process Files (`.dev/`)
 These files live in the `.dev/` directory and are **shared via Git** (except `JOURNAL.md`).
 
-- **`.dev/TESTING.md`** – Master test checklist. **You (Claude) update this** when adding new features that require tests. The cheap model reads it to generate missing tests.
+- **`tests/TEST_MANIFEST.md`** – Master test manifest/checklist. **You (Claude) update this** when adding new features that require tests. The cheaper model reads it to generate missing tests.
 - **`.dev/ISSUES/`** – Active test tasks (one markdown file per missing test).
 - **`.dev/RESOLVED/`** – Archive of completed test tasks.
 - **`.dev/JOURNAL.md`** – Personal session log. **Not committed.** Read at session start, update at session end.
 
 ## Testing Workflow (Two-Model Split)
-- **You (Claude)** write core implementation. When you add a feature that needs testing, add a checklist item to `.dev/TESTING.md` and optionally create an issue file in `.dev/ISSUES/`.
+- **You (Claude)** write core implementation. When you add a feature that needs testing, add a checklist item to `tests/TEST_MANIFEST.md` and optionally create an issue file in `.dev/ISSUES/`.
 - **A cheaper model** handles test generation. It reads `.dev/TESTING.md` and `.dev/ISSUES/` to produce pytest functions and fill coverage gaps.
 - **Never suggest or run test commands yourself.** I handle all test execution separately.
 - I run tests locally. I'll only paste specific failures to you if I'm stuck.
