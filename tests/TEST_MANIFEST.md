@@ -1411,3 +1411,24 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ⏳ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
 - ⏳ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
 - ⏳ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
+
+## Phase 23B — Input Fingerprinting
+
+#### Compiler — `aqueduct/compiler/compiler.py`
+- ⏳ `compile()`: local Ingress path → `inputs_fingerprint[module_id]` has `size_bytes` int and ISO-8601 `last_modified`
+- ⏳ `compile()`: remote Ingress path (`s3a://...`) → `inputs_fingerprint[module_id]` has `size_bytes=None`, `last_modified=None`
+- ⏳ `compile()`: format=jdbc Ingress → fingerprint entry has `size_bytes=None` (skip stat)
+- ⏳ `compile()`: path does not exist (OSError) → fingerprint entry has `size_bytes=None`
+- ⏳ `compile()`: non-Ingress modules not in `inputs_fingerprint`
+- ⏳ `Manifest.to_dict()` includes `inputs_fingerprint` key
+
+## Phase 23C — Incremental Channel
+
+#### Executor — `aqueduct/executor/spark/executor.py`
+- ⏳ `execute()`: `materialize=incremental`, no prior watermark → query `${ctx._watermark}` replaced with sentinel `'1900-01-01 00:00:00'`
+- ⏳ `execute()`: `materialize=incremental`, prior watermark in Depot → query substituted with stored value
+- ⏳ `execute()`: `materialize=incremental`, success → new MAX(watermark_column) written to Depot
+- ⏳ `execute()`: `materialize=incremental`, Channel fails → watermark NOT updated in Depot
+- ⏳ `execute()`: `materialize=incremental`, downstream Egress has `mode=overwrite` → warning logged
+- ⏳ `execute()`: no `materialize` key → normal Channel execution, no watermark logic
+- ⏳ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash

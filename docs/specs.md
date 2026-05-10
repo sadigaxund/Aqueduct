@@ -264,6 +264,31 @@ For SQL-based transformations:
 |**allow\_missing\_columns**|Boolean (default `true`). Used by `union` — when `true`, missing columns are filled with `null` (`unionByName` semantics).|
 |**storage\_level**|Storage level for `op: cache`. Default: `MEMORY_AND_DISK`. Valid: `MEMORY_AND_DISK`, `MEMORY_AND_DISK_SER`, `MEMORY_ONLY`, `MEMORY_ONLY_SER`, `DISK_ONLY`, `DISK_ONLY_2`, `OFF_HEAP`.|
 |**spillway\_condition**|Optional SQL boolean expression. Rows matching the expression are routed to the spillway port (appended with `_aq_error_*` columns); non-matching rows flow to the main port. Requires a spillway edge — warns if set without one. When omitted and a spillway edge exists, the spillway DataFrame is empty.|
+|**materialize**|Optional. Set to `incremental` to enable watermark-based incremental processing. On each run the last watermark is loaded from Depot and substituted into the query as `${ctx._watermark}`. After successful execution the new watermark (MAX of `watermark_column`) is persisted back. First run uses sentinel `'1900-01-01 00:00:00'` so the full table is scanned. Only valid for `op: sql`. Warns if downstream Egress uses `mode: overwrite`.|
+|**watermark\_column**|Required when `materialize: incremental`. Column name used to track the high-water mark (typically a timestamp or monotonic integer). The executor runs `MAX(watermark_column)` on the output DataFrame after each successful run to advance the watermark.|
+
+**Incremental Channel (`materialize: incremental`):**
+
+Enables watermark-based incremental batch processing without a streaming engine. The watermark is stored in the Depot KV store under the key `"{blueprint_id}:{module_id}:_watermark"` and advanced after each successful run.
+
+```yaml
+- id: new_orders
+  type: Channel
+  config:
+    op: sql
+    materialize: incremental
+    watermark_column: event_ts
+    query: |
+      SELECT *
+      FROM source_orders
+      WHERE event_ts > CAST('${ctx._watermark}' AS TIMESTAMP)
+```
+
+- First run: `${ctx._watermark}` resolves to `'1900-01-01 00:00:00'` → full scan.
+- Subsequent runs: resolves to the `MAX(event_ts)` from the previous run's output.
+- `${ctx._watermark}` substitution happens at **runtime** (not compile time) — it is not a Tier 0 context ref.
+- Downstream Egress should use `mode: append`. Using `mode: overwrite` triggers a startup warning.
+- Watermark is not advanced if the Channel fails or an exception is raised.
 
 **Op reference — when to use which:**
 
@@ -1195,9 +1220,30 @@ The unpruned full manifest is always written to disk at `runs/<run_id>/failure_c
     { "attempt": 1, "error": "...", "duration_seconds": 34 }
   ],
   "previous_patches": [  /* all patches applied to this pipeline historically */ ],
-  "depot_state": {       /* relevant Depot keys read/written by this pipeline */ }
+  "depot_state": {       /* relevant Depot keys read/written by this pipeline */ },
+  "inputs_fingerprint": {
+    "read_orders": {
+      "path": "data/orders.parquet",
+      "size_bytes": 104857600,
+      "last_modified": "2025-05-11T08:00:00+00:00"
+    }
+  }
 }
 ```
+
+### Input Fingerprinting
+
+Every compiled Manifest includes an **`inputs_fingerprint`** — a compile-time snapshot of each local Ingress module's file metadata:
+
+| Field | Type | Description |
+|---|---|---|
+| `path` | string | Resolved file path as it appears in config |
+| `size_bytes` | int \| null | File size in bytes at compile time. `null` for remote paths or if stat fails. |
+| `last_modified` | ISO-8601 string \| null | File mtime in UTC at compile time. `null` for remote or unresolvable paths. |
+
+Fingerprinting is zero-cost (no Spark action — only a Python `os.stat()` call on the driver). Remote paths (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfs://`, `wasbs://`) and non-file formats (`jdbc`, `kafka`, `depot`, `dataframe`) produce `null` fields rather than being skipped, so the key is always present for each Ingress.
+
+**Use in post-mortems:** When the LLM receives a FailureContext, `inputs_fingerprint` allows distinguishing data-drift bugs (file grew or changed since last run) from code bugs (same file, different pipeline). The LLM prompt surfaces this as: *"Input file `data/orders.parquet` was 100 MB and last modified 08:00 UTC."*
 
 ## **8.5 Patch Grammar — PatchSpec Operations**
 The agent responds exclusively with a PatchSpec JSON object. Any response that is not a valid PatchSpec is rejected, and the agent is re-prompted with the validation error. The agent may include multiple operations in one PatchSpec — there is no limit on the number of operations per patch, enabling full pipeline restructuring.

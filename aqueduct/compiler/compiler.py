@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -172,6 +173,28 @@ def compile(  # noqa: A001
     # ── 6. Compile away passive Regulators ────────────────────────────────────
     modules, edges = compile_away_regulators(modules, edges)
 
+    # ── 6.5. Build inputs fingerprint ─────────────────────────────────────────
+    _REMOTE_SCHEMES = ("s3://", "s3a://", "gs://", "hdfs://", "abfs://", "wasbs://", "wasb://")
+    _SKIP_FORMATS = {"jdbc", "kafka", "depot", "dataframe"}
+    inputs_fingerprint: dict[str, dict[str, Any]] = {}
+    for m in modules:
+        if m.type != "Ingress":
+            continue
+        fmt = m.config.get("format", "")
+        path = m.config.get("path", "")
+        if not path or fmt in _SKIP_FORMATS or any(path.startswith(s) for s in _REMOTE_SCHEMES):
+            inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
+            continue
+        try:
+            st = Path(path).stat()
+            inputs_fingerprint[m.id] = {
+                "path": path,
+                "size_bytes": st.st_size,
+                "last_modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+            }
+        except OSError:
+            inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
+
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
     if blueprint.retry_policy.max_attempts > 1:
         for m in modules:
@@ -206,4 +229,5 @@ def compile(  # noqa: A001
         macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
         provenance_map=prov_map,
+        inputs_fingerprint=inputs_fingerprint,
     )
