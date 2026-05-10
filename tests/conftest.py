@@ -58,6 +58,14 @@ def _spark_is_healthy():
         return False
 
 
+@pytest.fixture(autouse=True)
+def restore_cwd():
+    """Restore CWD after each test — guards against aqueduct run's os.chdir()."""
+    original = os.getcwd()
+    yield
+    os.chdir(original)
+
+
 @pytest.fixture(scope="session")
 def spark() -> SparkSession:
     """Session-scoped SparkSession for fast testing, with health check."""

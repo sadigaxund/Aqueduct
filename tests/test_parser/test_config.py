@@ -71,6 +71,12 @@ def test_load_config_unknown_nested_key(tmp_path):
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
 
+def test_load_config_unknown_stores_key(tmp_path):
+    """unknown key in stores -> ConfigError"""
+    path = tmp_path / "stores_extra.yml"
+    path.write_text("stores:\n  observability: {path: ./obs.db}")
+    with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)
 
 def test_config_defaults():
     config = AqueductConfig()
