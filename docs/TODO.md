@@ -53,10 +53,9 @@ however we have a python module with that name, I very much liked something simi
 15. does aqueduct init not create .git (git init)? if not, should it?
 
 -----------------------
-16. Verify if these changes are correct and justified:
 
 17. Add example maybe: aqueduct's usage with python
 
-
+18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
 
 

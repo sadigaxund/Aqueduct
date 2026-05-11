@@ -59,3 +59,18 @@ def test_init_git_integration(empty_cwd, monkeypatch):
     assert any("init" in args for args in mock_calls)
     assert any("commit" in args for args in mock_calls)
 
+
+def test_init_git_not_installed(empty_cwd, monkeypatch):
+    def mock_run(args, **kwargs):
+        if args and args[0] == "git":
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'git'")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    
+    runner = CliRunner()
+    result = runner.invoke(cli, ["init"])
+    
+    assert result.exit_code == 0
+    assert "⚠ git not installed" in result.output
+    assert "✓ my-project ready" in result.output

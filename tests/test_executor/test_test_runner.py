@@ -67,22 +67,22 @@ class TestTestRunnerHelpers:
         assert "Egress" not in _TESTABLE_TYPES
 
     def test_run_test_file_missing_blueprint(self, tmp_path):
-        from aqueduct.executor.spark.test_runner import TestError, run_test_file
+        from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
         test_file = tmp_path / "t.yml"
         test_file.write_text("aqueduct_test: '1.0'\ntests: []\n", encoding="utf-8")
         from unittest.mock import MagicMock
-        with pytest.raises(TestError, match="blueprint"):
+        with pytest.raises(TestSchemaError, match="blueprint"):
             run_test_file(test_file, spark=MagicMock())
 
     def test_run_test_file_blueprint_not_found(self, tmp_path):
-        from aqueduct.executor.spark.test_runner import TestError, run_test_file
+        from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
         test_file = tmp_path / "t.yml"
         test_file.write_text(
             "aqueduct_test: '1.0'\nblueprint: nonexistent.yml\ntests: []\n",
             encoding="utf-8",
         )
         from unittest.mock import MagicMock
-        with pytest.raises(TestError, match="not found"):
+        with pytest.raises(TestSchemaError, match="not found"):
             run_test_file(test_file, spark=MagicMock())
 
     def test_run_test_file_no_tests_returns_empty_suite(self, tmp_path):

@@ -59,6 +59,8 @@ def test_execute_probe_schema_snapshot(spark: SparkSession, tmp_path: Path):
     # File written
     schema_file = store_dir / "snapshots" / "run-1" / "p1_schema.json"
     assert schema_file.exists()
+    assert not (store_dir / "signals" / "run-1" / "p1_schema.json").exists()
+    
     payload = json.loads(schema_file.read_text())
     assert "fields" in payload
     assert payload["fields"][0]["name"] == "id"

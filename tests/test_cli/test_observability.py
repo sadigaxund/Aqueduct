@@ -103,3 +103,72 @@ class TestSignalCommand:
         result = cli_runner.invoke(cli, ["signal", "my_probe", "--config", str(aq_config)])
         assert result.exit_code == 0
         assert "no persistent override" in result.output
+
+
+class TestRunsCommand:
+    def test_runs_no_db(self, cli_runner, tmp_path):
+        """aqueduct runs with no obs.db -> prints 'No runs found' without error."""
+        conf = tmp_path / "aq_no_db.yml"
+        conf.write_text("stores:\n  obs: { path: /tmp/ghost_obs.db }\n")
+        result = cli_runner.invoke(cli, ["runs", "--config", str(conf)])
+        assert result.exit_code == 0
+        assert "No runs found" in result.output
+
+    def test_runs_list_ordered(self, cli_runner, obs_db, aq_config):
+        """aqueduct runs lists recent runs ordered by started_at DESC."""
+        conn = duckdb.connect(str(obs_db))
+        conn.execute("INSERT INTO run_records VALUES ('r1', 'bp1', 'success', '2026-01-01 10:00:00', '2026-01-01 10:01:00', '[]')")
+        conn.execute("INSERT INTO run_records VALUES ('r2', 'bp1', 'success', '2026-01-01 11:00:00', '2026-01-01 11:01:00', '[]')")
+        conn.close()
+        result = cli_runner.invoke(cli, ["runs", "--config", str(aq_config)])
+        assert result.exit_code == 0
+        # r2 (11:00) should appear before r1 (10:00)
+        assert result.output.find("r2") < result.output.find("r1")
+
+    def test_runs_failed_filter(self, cli_runner, obs_db, aq_config):
+        """aqueduct runs --failed -> shows only runs with status='error'."""
+        conn = duckdb.connect(str(obs_db))
+        conn.execute("INSERT INTO run_records VALUES ('r_ok', 'bp1', 'success', '2026-01-01 10:00:00', '2026-01-01 10:01:00', '[]')")
+        conn.execute("INSERT INTO run_records VALUES ('r_err', 'bp1', 'error', '2026-01-01 11:00:00', '2026-01-01 11:01:00', '[]')")
+        conn.close()
+        result = cli_runner.invoke(cli, ["runs", "--failed", "--config", str(aq_config)])
+        assert result.exit_code == 0
+        assert "r_err" in result.output
+        assert "r_ok" not in result.output
+
+    def test_runs_blueprint_filter(self, cli_runner, obs_db, aq_config, tmp_path):
+        """aqueduct runs --blueprint blueprint.yml -> filters by blueprint_id from file."""
+        conn = duckdb.connect(str(obs_db))
+        conn.execute("INSERT INTO run_records VALUES ('r_target', 'target_bp', 'success', '2026-01-01 10:00:00', '2026-01-01 10:01:00', '[]')")
+        conn.execute("INSERT INTO run_records VALUES ('r_other', 'other_bp', 'success', '2026-01-01 11:00:00', '2026-01-01 11:01:00', '[]')")
+        conn.close()
+        
+        bp_file = tmp_path / "target.yml"
+        bp_file.write_text("aqueduct: '1.0'\nid: target_bp\nname: Target\nmodules: []\nedges: []\n")
+        
+        result = cli_runner.invoke(cli, ["runs", "--blueprint", str(bp_file), "--config", str(aq_config)])
+        assert result.exit_code == 0
+        assert "r_target" in result.output
+        assert "r_other" not in result.output
+
+    def test_runs_limit(self, cli_runner, obs_db, aq_config):
+        """aqueduct runs --last 1 -> shows at most 1 row."""
+        conn = duckdb.connect(str(obs_db))
+        conn.execute("INSERT INTO run_records VALUES ('r1', 'bp', 'success', '2026-01-01 10:00:00', '2026-01-01 10:01:00', '[]')")
+        conn.execute("INSERT INTO run_records VALUES ('r2', 'bp', 'success', '2026-01-01 11:00:00', '2026-01-01 11:01:00', '[]')")
+        conn.close()
+        result = cli_runner.invoke(cli, ["runs", "--last", "1", "--config", str(aq_config)])
+        assert "r2" in result.output
+        assert "r1" not in result.output
+
+    def test_runs_output_columns(self, cli_runner, obs_db, aq_config):
+        """default output has columns: run_id, blueprint_id, status, started_at, finished_at."""
+        conn = duckdb.connect(str(obs_db))
+        conn.execute("INSERT INTO run_records VALUES ('r1', 'bp1', 'success', '2026-01-01 10:00:00', '2026-01-01 10:01:00', '[]')")
+        conn.close()
+        result = cli_runner.invoke(cli, ["runs", "--config", str(aq_config)])
+        assert "run_id" in result.output
+        assert "blueprint" in result.output
+        assert "status" in result.output
+        assert "started" in result.output
+        assert "failed_module" in result.output

@@ -1,20 +1,15 @@
 # --- Aqueduct Project ---
 # Local testing, examples, and patches
 .aqueduct/
-archive/
 tmp/
 data/
 patches/
 
-*.parquet*
-examples/**/*.json
-examples/**/*.parquet
-examples/**/signals
-examples/**/*.crc
-examples/**/dead_letter/
-
-*.db
-
+gallery/**/*.json
+gallery/**/*.parquet
+gallery/**/signals
+gallery/**/*.crc
+gallery/**/dead_letter/
 
 
 # --- Spark / Hadoop / Data ---

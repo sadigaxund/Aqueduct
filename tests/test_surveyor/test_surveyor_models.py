@@ -87,3 +87,39 @@ def test_failure_context_to_json():
     data = json.loads(js)
     assert data["run_id"] == "r1"
     assert data["error_message"] == "oops"
+
+
+def test_failure_context_to_dict_includes_doctor_hints():
+    """FailureContext.to_dict() includes doctor_hints list."""
+    ctx = FailureContext(
+        run_id="r1",
+        blueprint_id="p1",
+        failed_module="m1",
+        error_message="oops",
+        stack_trace=None,
+        manifest_json="{}",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+        doctor_hints=("warn: bad path", "fail: missing schema"),
+    )
+    d = ctx.to_dict()
+    assert "doctor_hints" in d
+    assert d["doctor_hints"] == ["warn: bad path", "fail: missing schema"]
+
+
+def test_failure_context_doctor_hints_empty_by_default():
+    """FailureContext.doctor_hints defaults to empty tuple; to_dict() yields []."""
+    ctx = FailureContext(
+        run_id="r1",
+        blueprint_id="p1",
+        failed_module="m1",
+        error_message="oops",
+        stack_trace=None,
+        manifest_json="{}",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+    )
+    assert ctx.doctor_hints == ()
+    d = ctx.to_dict()
+    assert d["doctor_hints"] == []
+

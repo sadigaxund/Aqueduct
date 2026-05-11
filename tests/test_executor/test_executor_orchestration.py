@@ -1509,11 +1509,11 @@ class TestExecuteModuleDispatch:
         assert isinstance(result, dict)
 
     def test_junction_too_many_inputs_raises(self):
-        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.executor.spark.test_runner import TestSchemaError, _execute_module
         from aqueduct.parser.models import Module
         from unittest.mock import MagicMock
         mod = Module(id="jct", type="Junction", label="J", config={})
-        with pytest.raises(TestError, match="expects exactly 1 input"):
+        with pytest.raises(TestSchemaError, match="expects exactly 1 input"):
             _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
 
     def test_funnel_dispatch(self):
@@ -1527,11 +1527,11 @@ class TestExecuteModuleDispatch:
         assert result is not None
 
     def test_assert_too_many_inputs_raises(self):
-        from aqueduct.executor.spark.test_runner import TestError, _execute_module
+        from aqueduct.executor.spark.test_runner import TestSchemaError, _execute_module
         from aqueduct.parser.models import Module
         from unittest.mock import MagicMock
         mod = Module(id="ast", type="Assert", label="A", config={"rules": []})
-        with pytest.raises(TestError, match="expects exactly 1 input"):
+        with pytest.raises(TestSchemaError, match="expects exactly 1 input"):
             _execute_module(mod, {"a": MagicMock(), "b": MagicMock()}, MagicMock())
 
 

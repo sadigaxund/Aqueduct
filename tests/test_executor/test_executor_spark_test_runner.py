@@ -10,7 +10,7 @@ from pyspark.sql.types import TimestampType, DateType
 from datetime import datetime, date
 
 from aqueduct.executor.spark.test_runner import (
-    _create_df, _run_assertion, _execute_module, _run_test_case, run_test_file, TestError
+    _create_df, _run_assertion, _execute_module, _run_test_case, run_test_file, TestSchemaError
 )
 from aqueduct.parser.models import Module
 
@@ -113,7 +113,7 @@ def test_execute_module_dispatch(spark: SparkSession):
     
     # Ingress (TestError)
     m_ingress = Module(id="i1", type="Ingress", label="L", config={})
-    with pytest.raises(TestError, match="tested in isolation"):
+    with pytest.raises(TestSchemaError, match="tested in isolation"):
         _execute_module(m_ingress, {}, spark)
 
 def test_run_test_case_validation(spark: SparkSession):
@@ -172,6 +172,6 @@ def test_run_test_file_not_found(spark: SparkSession):
     
     # Test file with no blueprint
     (Path("test.yml")).write_text("tests: []", encoding="utf-8")
-    with pytest.raises(TestError, match="missing 'blueprint'"):
+    with pytest.raises(TestSchemaError, match="missing 'blueprint'"):
         run_test_file(Path("test.yml"), spark)
     Path("test.yml").unlink()

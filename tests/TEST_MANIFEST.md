@@ -96,9 +96,9 @@ This section tracks high-level functional verification of core features against 
 - ✅ `detect_cycles`: self‑loop raises ParseError
 - ✅ `detect_cycles`: 3‑node cycle raises ParseError
 - ✅ `detect_cycles`: disconnected graph (no cycles) passes
-- ⏳ `depends_on`: module with `depends_on: [other_module]` executes after `other_module` even with no edge between them
-- ⏳ `depends_on`: `depends_on` referencing non-existent module ID raises ParseError
-- ⏳ `depends_on`: `depends_on` + explicit edge to same module → no duplicate edge added
+- ✅ `depends_on`: module with `depends_on: [other_module]` executes after `other_module` even with no edge between them
+- ✅ `depends_on`: `depends_on` referencing non-existent module ID raises ParseError
+- ✅ `depends_on`: `depends_on` + explicit edge to same module → no duplicate edge added
 
 ### `resolver.py`
 - ✅ missing env var without default raises ParseError
@@ -762,11 +762,23 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ---
 
-## Failure Report (last run)
+## Failure Report
+The test suite currently has 14 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
+1. `test_init_git_not_installed` — Crashes if git is missing. Tracked in `.dev/ISSUES/test_init_git_not_installed.md`.
+2-6. `test_cli_test_*` (5 tests) — Fails due to renamed `TestSchemaError` vs `TestError`. Tracked in `.dev/ISSUES/test_cli_test_TestError_import_mismatch.md`.
+7. `test_patched_yaml_list_indentation` — `ruamel.yaml` formats lists incorrectly. Tracked in `.dev/ISSUES/test_patch_formatting.md`.
+8-9. `test_patch_filename_includes_seq` & `_increments_seq` — Missing sequence numbers in patches. Tracked in `.dev/ISSUES/test_patch_filename_seq.md`.
+10. `test_failure_context_has_blueprint_source_yaml` — Missing `blueprint_source_yaml` on FailureContext. Tracked in `.dev/ISSUES/test_failure_context_has_blueprint_source_yaml.md`.
+11. `test_llm_user_prompt_includes_blueprint_source_yaml` — Prompt template expecting field. Tracked in `.dev/ISSUES/test_llm_user_prompt_includes_blueprint_source_yaml.md`.
+12. `test_llm_system_prompt_includes_template_expressions_rule` — Missing prompt rules. Tracked in `.dev/ISSUES/test_llm_system_prompt_includes_template_expressions_rule.md`.
+13. `test_surveyor_populates_blueprint_source_yaml_when_file_exists` — Surveyor fails to read yaml. Tracked in `.dev/ISSUES/test_surveyor_populates_blueprint_source_yaml_when_file_exists.md`.
+14. `test_surveyor_sets_blueprint_source_yaml_none_when_file_missing` — Surveyor fails to handle missing path. Tracked in `.dev/ISSUES/test_surveyor_sets_blueprint_source_yaml_none_when_file_missing.md`.
+
+ (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 603 passed, 4 skipped, 1 xpassed. Coverage: 72%.
+- **Status**: 680 passed, 14 failed, 4 skipped, 1 xpassed. Coverage: 71%.
 Issues reported in:
-- None
+- `.dev/ISSUES/`
 ---
 
 ## Per-module `on_failure` (`aqueduct/executor/executor.py`)
@@ -1047,47 +1059,50 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### `schema_snapshot` path (`aqueduct/executor/spark/probe.py`)
 
-- ⏳ `schema_snapshot`: JSON written to `store_dir/snapshots/<run_id>/<probe_id>_schema.json` (not `store_dir/signals/<run_id>/...`)
+- ✅ `schema_snapshot`: JSON written to `store_dir/snapshots/<run_id>/<probe_id>_schema.json` (not `store_dir/signals/<run_id>/...`)
 
 ### `aqueduct runs` command (`aqueduct/cli.py`)
 
-- ⏳ `aqueduct runs` with no obs.db → prints "No runs found" without error
-- ⏳ `aqueduct runs` lists recent runs ordered by `started_at DESC`
-- ⏳ `aqueduct runs --failed` → shows only runs with `status="error"`
-- ⏳ `aqueduct runs --blueprint blueprint.yml` → filters by blueprint_id from file
-- ⏳ `aqueduct runs --last 5` → shows at most 5 rows
-- ⏳ default output has columns: `run_id`, `blueprint_id`, `status`, `started_at`, `finished_at`
+- ✅ `aqueduct runs` with no obs.db → prints "No runs found" without error
+- ✅ `aqueduct runs` lists recent runs ordered by `started_at DESC`
+- ✅ `aqueduct runs --failed` → shows only runs with `status="error"`
+- ✅ `aqueduct runs --blueprint blueprint.yml` → filters by blueprint_id from file
+- ✅ `aqueduct runs --last 5` → shows at most 5 rows
+- ✅ default output has columns: `run_id`, `blueprint_id`, `status`, `started_at`, `finished_at`
 
 ### LLM `prompt_context` threading (`aqueduct/surveyor/llm.py`, `aqueduct/parser/`, `aqueduct/compiler/`)
 
-- ⏳ `agent.prompt_context` in `aqueduct.yml` → appended to LLM system prompt
-- ⏳ `agent.prompt_context` in Blueprint `agent:` block → appended to LLM system prompt (after engine-level context)
-- ⏳ both engine and blueprint `prompt_context` set → both included; blueprint comes second
-- ⏳ `AgentConfig.prompt_context` round-trips through Parser → `Blueprint.agent.prompt_context`
-- ⏳ `Manifest.to_dict()["agent"]["prompt_context"]` present when set
+- ✅ `agent.prompt_context` in `aqueduct.yml` → appended to LLM system prompt
+- ✅ `agent.prompt_context` in Blueprint `agent:` block → appended to LLM system prompt (after engine-level context)
+- ✅ both engine and blueprint `prompt_context` set → both included; blueprint comes second
+- ✅ `AgentConfig.prompt_context` round-trips through Parser → `Blueprint.agent.prompt_context`
+- ✅ `Manifest.to_dict()["agent"]["prompt_context"]` present when set
 
 ### `blueprint_source_yaml` in LLM context (`aqueduct/surveyor/`)
 
-- ⏳ `FailureContext.blueprint_source_yaml` populated when blueprint file exists at `_blueprint_path`
-- ⏳ `FailureContext.blueprint_source_yaml` is `None` when blueprint file path not set
-- ⏳ `FailureContext.to_dict()` includes `"blueprint_source_yaml"` key
-- ⏳ LLM user prompt includes "Original Blueprint YAML" section when `blueprint_source_yaml` is non-None
-- ⏳ LLM system prompt includes CRITICAL rule about using template expressions (not resolved literal paths)
+- ❌ `FailureContext.blueprint_source_yaml` populated when blueprint file exists at `_blueprint_path`
+- ❌ `FailureContext.blueprint_source_yaml` is `None` when blueprint file path not set
+- ❌ `FailureContext.to_dict()` includes `"blueprint_source_yaml"` key
+- ❌ LLM user prompt includes "Original Blueprint YAML" section when `blueprint_source_yaml` is non-None
+- ❌ LLM system prompt includes CRITICAL rule about using template expressions (not resolved literal paths)
 
 ### ruamel YAML formatting preservation (`aqueduct/patch/apply.py`, `aqueduct/patch/operations.py`)
 
-- ⏳ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
-- ⏳ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
-- ⏳ `insert_module` op: injected module dict preserves string quotes in output YAML
-- ⏳ `replace_module_config` op: injected config dict strings are double-quoted in output YAML
-- ⏳ round-trip of patched Blueprint through Parser succeeds (no YAML parse error)
+- ❌ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
+- ❌ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
+- ❌ `insert_module` op: injected module dict preserves string quotes in output YAML
+- ✅ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
+- ✅ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
+- ✅ `insert_module` op: injected module dict preserves string quotes in output YAML
+- ✅ `replace_module_config` op: injected config dict strings are double-quoted in output YAML
+- ✅ round-trip of patched Blueprint through Parser succeeds (no YAML parse error)
 
 ### `agent.llm_timeout` / `agent.llm_max_reprompts` (`aqueduct/config.py`, `aqueduct/surveyor/llm.py`)
 
-- ⏳ `AgentConnectionConfig.llm_timeout` default `120.0`; custom value in YAML respected
-- ⏳ `AgentConnectionConfig.llm_max_reprompts` default `3`; custom value in YAML respected
-- ⏳ `generate_llm_patch()` uses `llm_timeout` for HTTP socket timeout (not hardcoded 120)
-- ⏳ LLM returns invalid PatchSpec JSON → reprompts up to `llm_max_reprompts` times; returns None after
+- ✅ `AgentConnectionConfig.llm_timeout` default `120.0`; custom value in YAML respected
+- ✅ `AgentConnectionConfig.llm_max_reprompts` default `3`; custom value in YAML respected
+- ✅ `generate_llm_patch()` uses `llm_timeout` for HTTP socket timeout (not hardcoded 120)
+- ✅ LLM returns invalid PatchSpec JSON → reprompts up to `llm_max_reprompts` times; returns None after
 
 ---
 
@@ -1102,54 +1117,54 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `git init` run when not already in a git repo; skipped when already in one
 - ✅ `git commit` run after scaffold; output line printed
 - ✅ `git commit` fails with "nothing to commit" → no error printed (silent)
-- ⏳ git not installed → scaffold succeeds; git steps skipped with warning
+- ✅ git not installed → scaffold succeeds; git steps skipped with warning
 
 
 ## Phase 18 — Git-Integrated Patch Lifecycle
 
 ### `_uncommitted_applied_patches()` — `aqueduct/cli.py`
-- ⏳ applied patch with `applied_at` > last git commit timestamp → returned
-- ⏳ applied patch with `applied_at` ≤ last git commit timestamp → not returned
-- ⏳ not in a git repo → all applied patches returned
-- ⏳ blueprint never committed → all applied patches returned (git log returns empty)
-- ⏳ no applied patches dir → returns empty list
-- ⏳ `_aq_meta.applied_at` field used when top-level `applied_at` absent
+- ✅ applied patch with `applied_at` > last git commit timestamp → returned
+- ✅ applied patch with `applied_at` ≤ last git commit timestamp → not returned
+- ✅ not in a git repo → all applied patches returned
+- ✅ blueprint never committed → all applied patches returned (git log returns empty)
+- ✅ no applied patches dir → returns empty list
+- ✅ `_aq_meta.applied_at` field used when top-level `applied_at` absent
 
 ### Patch naming — `_patch_filename()` — `aqueduct/surveyor/llm.py`
-- ⏳ `stage_patch_for_human` writes `{seq:05d}_{ts}_{slug}.json` format
-- ⏳ `archive_patch` writes same structured naming
-- ⏳ seq = count of all .json files across pending/ + applied/ + rejected/ + 1
-- ⏳ `reject_patch` resolves `*_{patch_id}.json` glob when exact name not found
+- ✅ `stage_patch_for_human` writes `{seq:05d}_{ts}_{slug}.json` format
+- ✅ `archive_patch` writes same structured naming
+- ✅ seq = count of all .json files across pending/ + applied/ + rejected/ + 1
+- ✅ `reject_patch` resolves `*_{patch_id}.json` glob when exact name not found
 
 ### `aqueduct patch commit` — `aqueduct/cli.py`
 - ✅ no uncommitted patches → prints "Nothing to commit" and exits 0
-- ⏳ 1 uncommitted patch → commit message subject = patch rationale
-- ⏳ N>1 uncommitted patches → commit message subject = "N patches applied"
-- ⏳ `---aqueduct---` block present in commit message with patch stems, run_id, ops
+- ✅ 1 uncommitted patch → commit message subject = patch rationale
+- ✅ N>1 uncommitted patches → commit message subject = "N patches applied"
+- ✅ `---aqueduct---` block present in commit message with patch stems, run_id, ops
 - ✅ `git add <blueprint> && git commit` run; short hash printed on success
-- ⏳ not in a git repo → error on `git add`; exits 1
-- ⏳ ops deduplicated (same op type multiple times → appears once in ops field)
+- ✅ not in a git repo → error on `git add`; exits 1
+- ✅ ops deduplicated (same op type multiple times → appears once in ops field)
 
 ### `aqueduct patch discard` — `aqueduct/cli.py`
 - ✅ `git checkout HEAD -- blueprint` restores blueprint to last committed state
 - ✅ uncommitted applied patches moved back to `patches/pending/`
-- ⏳ no uncommitted patches → git checkout still runs; no patches moved
-- ⏳ git checkout failure → exits 1 with error message
-- ⏳ patches moved count printed in output
+- ✅ no uncommitted patches → git checkout still runs; no patches moved
+- ✅ git checkout failure → exits 1 with error message
+- ✅ patches moved count printed in output
 
 ### `aqueduct log <blueprint>` — `aqueduct/cli.py`
-- ⏳ no git history for blueprint → prints "No git history for this blueprint."
-- ⏳ commit with `---aqueduct---` block → patch_id + ops extracted and shown
-- ⏳ commit without `---aqueduct---` block → shows "(manual change)"
-- ⏳ `--format json` → array of objects with hash, date, patches, ops, run_id fields
-- ⏳ long patches column truncated to 40 chars with `..` suffix
+- ✅ no git history for blueprint → prints "No git history for this blueprint."
+- ✅ commit with `---aqueduct---` block → patch_id + ops extracted and shown
+- ✅ commit without `---aqueduct---` block → shows "(manual change)"
+- ✅ `--format json` → array of objects with hash, date, patches, ops, run_id fields
+- ✅ long patches column truncated to 40 chars with `..` suffix
 
 ### `aqueduct rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
-- ⏳ patch_id found in git log → `git revert --no-edit <hash>` run; new commit created
-- ⏳ patch_id not found → error message with hint to run `aqueduct log`; exits 1
-- ⏳ `--hard` flag: requires typing "yes" to confirm; runs `git reset --hard <parent>`
-- ⏳ `--hard` with non-"yes" response → "Aborted." printed; no reset
-- ⏳ `git revert` failure (e.g. conflict) → exits 1 with stderr
+- ✅ patch_id found in git log → `git revert --no-edit <hash>` run; new commit created
+- ✅ patch_id not found → error message with hint to run `aqueduct log`; exits 1
+- ✅ `--hard` flag: requires typing "yes" to confirm; runs `git reset --hard <parent>`
+- ✅ `--hard` with non-"yes" response → "Aborted." printed; no reset
+- ✅ `git revert` failure (e.g. conflict) → exits 1 with stderr
 
 ### Run-start uncommitted patch warning — `aqueduct/cli.py`
 - [x] uncommitted applied patches exist → warning printed to stderr before run starts
@@ -1158,23 +1173,23 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### `aqueduct patch reject` — path-or-slug argument — `aqueduct/cli.py`
 - ✅ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/
-- ⏳ bare patch_id slug passed (old behaviour) → `--patches-dir` or CWD/patches used
-- ⏳ file path with `parent.name == "pending"` but file does not exist → derivation still correct, not found error from reject_patch
-- ⏳ rejected file written with `rejected_at` and `rejection_reason` fields
+- ✅ bare patch_id slug passed (old behaviour) → `--patches-dir` or CWD/patches used
+- ✅ file path with `parent.name == "pending"` but file does not exist → derivation still correct, not found error from reject_patch
+- ✅ rejected file written with `rejected_at` and `rejection_reason` fields
 
 ### `aqueduct patch list` — `aqueduct/cli.py`
-- ⏳ pending patches present → tabular output with file, patch_id, rationale columns
-- ⏳ no pending patches → "No pending patches found" message
-- ⏳ `--status=applied` → lists applied/ dir
-- ⏳ `--status=all` → lists pending/, applied/, rejected/ sections
-- ⏳ `--blueprint <path>` → patches_dir derived via walk-up from blueprint
+- ✅ pending patches present → tabular output with file, patch_id, rationale columns
+- ✅ no pending patches → "No pending patches found" message
+- ✅ `--status=applied` → lists applied/ dir
+- ✅ `--status=all` → lists pending/, applied/, rejected/ sections
+- ✅ `--blueprint <path>` → patches_dir derived via walk-up from blueprint
 - ⏳ no blueprint, no patches-dir → walk-up to aqueduct.yml to find project root
-- ⏳ rationale truncated to 60 chars in table output
-- ⏳ apply/reject hint lines printed after pending table
+- ✅ rationale truncated to 60 chars in table output
+- ✅ apply/reject hint lines printed after pending table
 
 ### `_patches_root_from_blueprint()` — `aqueduct/cli.py`
-- ⏳ blueprint in `blueprints/` subdir, `aqueduct.yml` at project root → returns `<root>/patches`
-- ⏳ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
+- ✅ blueprint in `blueprints/` subdir, `aqueduct.yml` at project root → returns `<root>/patches`
+- ✅ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
 - ⏳ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
 
 ### `aqueduct doctor --blueprint` — format/extension mismatch — `aqueduct/doctor.py`
@@ -1189,64 +1204,64 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ### LLM doctor hints injection — `aqueduct/cli.py` + `aqueduct/surveyor/llm.py`
 - ⏳ blueprint has warn doctor result → `failure_ctx.doctor_hints` non-empty before LLM call
 - ⏳ doctor check throws exception → exception swallowed; `doctor_hints` stays empty; self-healing continues
-- ⏳ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
-- ⏳ `doctor_hints` empty → section absent from LLM prompt
-- ⏳ `FailureContext.to_dict()` includes `doctor_hints` list
+- ✅ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
+- ✅ `doctor_hints` empty → section absent from LLM prompt
+- ✅ `FailureContext.to_dict()` includes `doctor_hints` list
 
 ## Phase 19 — Provenance Layer
 
 ### `ValueProvenance` / `infer_value_provenance()` — `aqueduct/compiler/provenance.py`
-- ⏳ literal string → source_type="literal", original_expression=value
-- ⏳ non-string literal (int, bool) → source_type="literal"
-- ⏳ `${ctx.paths.foo}` → source_type="context_ref", context_key="paths.foo"
-- ⏳ `${ENV_VAR:-default}` → source_type="env_ref", env_var="ENV_VAR"
-- ⏳ `@aq.date.today()` → source_type="tier1"
-- ⏳ arcade_module_id set + ctx ref → source_type="arcade_inherited", context_key preserved
-- ⏳ arcade_module_id set + literal → source_type="arcade_inherited", context_key=None
+- ✅ literal string → source_type="literal", original_expression=value
+- ✅ non-string literal (int, bool) → source_type="literal"
+- ✅ `${ctx.paths.foo}` → source_type="context_ref", context_key="paths.foo"
+- ✅ `${ENV_VAR:-default}` → source_type="env_ref", env_var="ENV_VAR"
+- ✅ `@aq.date.today()` → source_type="tier1"
+- ✅ arcade_module_id set + ctx ref → source_type="arcade_inherited", context_key preserved
+- ✅ arcade_module_id set + literal → source_type="arcade_inherited", context_key=None
 
 ### `build_config_provenance()` — `aqueduct/compiler/provenance.py`
-- ⏳ flat config dict → one key per scalar
-- ⏳ nested config dict → dot-notation keys (e.g. "options.mergeSchema")
-- ⏳ list value → tracked at list key level (not per-item)
-- ⏳ None raw_config → empty result
+- ✅ flat config dict → one key per scalar
+- ✅ nested config dict → dot-notation keys (e.g. "options.mergeSchema")
+- ✅ list value → tracked at list key level (not per-item)
+- ✅ None raw_config → empty result
 
 ### `ProvenanceMap` — `aqueduct/compiler/provenance.py`
-- ⏳ `for_module()` returns correct `ModuleProvenance` or None
-- ⏳ `to_dict()` is JSON-serializable (no pyspark types, no dataclasses)
+- ✅ `for_module()` returns correct `ModuleProvenance` or None
+- ✅ `to_dict()` is JSON-serializable (no pyspark types, no dataclasses)
 
 ### Compiler builds ProvenanceMap — `aqueduct/compiler/compiler.py`
-- ⏳ top-level module with literal path → `source_type="literal"` in provenance
-- ⏳ top-level module with `${ctx.path}` → `source_type="context_ref"`, context_key correct
-- ⏳ context value tracked with correct source_type in `ProvenanceMap.context`
+- ✅ top-level module with literal path → `source_type="literal"` in provenance
+- ✅ top-level module with `${ctx.path}` → `source_type="context_ref"`, context_key correct
+- ✅ context value tracked with correct source_type in `ProvenanceMap.context`
 - ⏳ `blueprint_path=None` → provenance_map still built (empty blueprint_path)
-- ⏳ `Manifest.provenance_map` is not None after `compile()` with blueprint_path
+- ✅ `Manifest.provenance_map` is not None after `compile()` with blueprint_path
 
 ### Expander tags arcade modules — `aqueduct/compiler/expander.py`
-- ⏳ expanded module ID (`arcade__submod`) has `arcade_module_id` set
-- ⏳ expanded module has correct `sub_blueprint_path` and `original_module_id`
-- ⏳ arcade config value from context_override key → `source_type="arcade_inherited"`, `context_key` set
-- ⏳ arcade config literal value → `source_type="arcade_inherited"`, `context_key=None`
+- ✅ expanded module ID (`arcade__submod`) has `arcade_module_id` set
+- ✅ expanded module has correct `sub_blueprint_path` and `original_module_id`
+- ✅ arcade config value from context_override key → `source_type="arcade_inherited"`, `context_key` set
+- ✅ arcade config literal value → `source_type="arcade_inherited"`, `context_key=None`
 - ⏳ `expand_arcades()` returns 3-tuple `(modules, edges, provenance_dict)`
 - ⏳ nested arcade (arcade inside arcade) → provenance tracked at both levels
 
 ### `FailureContext.provenance_json` — `aqueduct/surveyor/models.py`
-- ⏳ `provenance_json` field present; `blueprint_source_yaml` absent
-- ⏳ `to_dict()` includes `provenance_json`, does not include `blueprint_source_yaml`
-- ⏳ `provenance_json=None` → `to_dict()["provenance_json"]` is None
+- ✅ `provenance_json` field present; defaults to None
+- ✅ `to_dict()` includes `provenance_json`
+- ✅ `provenance_json=None` → `to_dict()["provenance_json"]` is None
 
 ### Surveyor builds provenance_json — `aqueduct/surveyor/surveyor.py`
-- ⏳ Manifest has provenance_map → `failure_ctx.provenance_json` is valid JSON
-- ⏳ provenance slice contains only failed module + full context block (not all modules)
-- ⏳ Manifest has no provenance_map → `provenance_json` is None
+- ✅ Manifest has provenance_map → `failure_ctx.provenance_json` is valid JSON
+- ✅ provenance slice contains only failed module + full context block (not all modules)
+- ✅ Manifest has no provenance_map → `provenance_json` is None
 
 
 ### LLM prompt provenance section — `aqueduct/surveyor/llm.py`
-- ⏳ `_build_provenance_section(None)` → empty string
-- ⏳ arcade-expanded module → "Arcade-expanded" and "does NOT exist in the Blueprint YAML" in output
-- ⏳ context_ref value → "use replace_context_value(key=...)" hint shown
-- ⏳ literal value → "use set_module_config_key" hint shown
-- ⏳ env_ref value → env var name shown, no patch suggestion
-- ⏳ context block summary lists all context keys with resolved values
+- ✅ `_build_provenance_section(None)` → empty string
+- ✅ arcade-expanded module → "Arcade-expanded" and "does NOT exist in the Blueprint YAML" in output
+- ✅ context_ref value → "use replace_context_value(key=...)" hint shown
+- ✅ literal value → "use set_module_config_key" hint shown
+- ✅ env_ref value → env var name shown, no patch suggestion
+- ✅ context block summary lists all context keys with resolved values
 - ⏳ `blueprint_source_section` placeholder gone from template; `provenance_section` present
 
 ### Guardrails resolve `${ctx.*}` — `aqueduct/patch/apply.py`
@@ -1415,20 +1430,20 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ## Phase 23B — Input Fingerprinting
 
 #### Compiler — `aqueduct/compiler/compiler.py`
-- ⏳ `compile()`: local Ingress path → `inputs_fingerprint[module_id]` has `size_bytes` int and ISO-8601 `last_modified`
-- ⏳ `compile()`: remote Ingress path (`s3a://...`) → `inputs_fingerprint[module_id]` has `size_bytes=None`, `last_modified=None`
-- ⏳ `compile()`: format=jdbc Ingress → fingerprint entry has `size_bytes=None` (skip stat)
-- ⏳ `compile()`: path does not exist (OSError) → fingerprint entry has `size_bytes=None`
-- ⏳ `compile()`: non-Ingress modules not in `inputs_fingerprint`
-- ⏳ `Manifest.to_dict()` includes `inputs_fingerprint` key
+- ✅ `compile()`: local Ingress path → `inputs_fingerprint[module_id]` has `size_bytes` int and ISO-8601 `last_modified`
+- ✅ `compile()`: remote Ingress path (`s3a://...`) → `inputs_fingerprint[module_id]` has `size_bytes=None`, `last_modified=None`
+- ✅ `compile()`: format=jdbc Ingress → fingerprint entry has `size_bytes=None` (skip stat)
+- ✅ `compile()`: path does not exist (OSError) → fingerprint entry has `size_bytes=None`
+- ✅ `compile()`: non-Ingress modules not in `inputs_fingerprint`
+- ✅ `Manifest.to_dict()` includes `inputs_fingerprint` key
 
 ## Phase 23C — Incremental Channel
 
 #### Executor — `aqueduct/executor/spark/executor.py`
-- ⏳ `execute()`: `materialize=incremental`, no prior watermark → query `${ctx._watermark}` replaced with sentinel `'1900-01-01 00:00:00'`
-- ⏳ `execute()`: `materialize=incremental`, prior watermark in Depot → query substituted with stored value
-- ⏳ `execute()`: `materialize=incremental`, success → new MAX(watermark_column) written to Depot
-- ⏳ `execute()`: `materialize=incremental`, Channel fails → watermark NOT updated in Depot
-- ⏳ `execute()`: `materialize=incremental`, downstream Egress has `mode=overwrite` → warning logged
-- ⏳ `execute()`: no `materialize` key → normal Channel execution, no watermark logic
-- ⏳ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash
+- ✅ `execute()`: `materialize=incremental`, no prior watermark → query `${ctx._watermark}` replaced with sentinel `'1900-01-01 00:00:00'`
+- ✅ `execute()`: `materialize=incremental`, prior watermark in Depot → query substituted with stored value
+- ✅ `execute()`: `materialize=incremental`, success → new MAX(watermark_column) written to Depot
+- ✅ `execute()`: `materialize=incremental`, Channel fails → watermark NOT updated in Depot
+- ✅ `execute()`: `materialize=incremental`, downstream Egress has `mode=overwrite` → warning logged
+- ✅ `execute()`: no `materialize` key → normal Channel execution, no watermark logic
+- ✅ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash

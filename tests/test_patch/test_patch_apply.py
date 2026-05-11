@@ -171,3 +171,125 @@ def test_reject_patch(tmp_path):
 def test_reject_patch_not_found(tmp_path):
     with pytest.raises(PatchError, match="Patch 'ghost' not found"):
         reject_patch("ghost", "Reason", patches_dir=tmp_path / "p")
+
+def test_reject_patch_resolves_glob(tmp_path):
+    patches_dir = tmp_path / "patches"
+    pending_dir = patches_dir / "pending"
+    pending_dir.mkdir(parents=True)
+    
+    # Create with sequence/timestamp prefix
+    patch_path = pending_dir / "00001_20260101_p1.json"
+    patch_data = {"patch_id": "p1", "rationale": "R", "operations": []}
+    patch_path.write_text(json.dumps(patch_data))
+    
+    # Reject using only the slug 'p1'
+    rejected_path = reject_patch("p1", "Too risky", patches_dir=patches_dir)
+    
+    assert rejected_path.exists()
+    assert rejected_path.name == "p1.json"
+    assert not patch_path.exists()
+
+
+
+class TestPatchFormatting:
+    def test_apply_patch_preserves_comments(self, tmp_path):
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(
+            "aqueduct: '1.0'\n"
+            "# A test comment\n"
+            "id: test.bp\n"
+            "name: Test Blueprint\n"
+            "modules:\n"
+            "  - id: in\n"
+            "    type: Ingress\n"
+            "    config:\n"
+            "      path: /tmp/data\n"
+            "edges: []\n"
+        )
+        patch_path = tmp_path / "patch.json"
+        patch_data = {
+            "patch_id": "p123",
+            "rationale": "Updating label",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "New Label"}]
+        }
+        patch_path.write_text(json.dumps(patch_data))
+        apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
+        patched_text = bp_path.read_text()
+        assert "# A test comment" in patched_text
+
+    def test_patched_yaml_list_indentation(self, tmp_path):
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(
+            "aqueduct: '1.0'\n"
+            "id: test.bp\n"
+            "name: Test Blueprint\n"
+            "modules:\n"
+            "  - id: in\n"
+            "    type: Ingress\n"
+            "    label: Source\n"
+            "    config:\n"
+            "      path: /tmp/data\n"
+            "edges: []\n"
+        )
+        patch_path = tmp_path / "patch.json"
+        patch_data = {
+            "patch_id": "p123",
+            "rationale": "Add module",
+            "operations": [{
+                "op": "insert_module",
+                "module": {"id": "m2", "type": "Channel", "label": "L", "config": {}}
+            }]
+        }
+        patch_path.write_text(json.dumps(patch_data))
+        apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
+        patched_text = bp_path.read_text()
+        # Verify the new list item has offset indent: '  - id: m2'
+        assert "\n  - id: m2\n" in patched_text
+
+    def test_injected_module_preserves_string_quotes(self, tmp_path):
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(
+            "aqueduct: '1.0'\nid: test.bp\nname: Test Blueprint\n"
+            "modules:\n  - id: m1\n    type: Ingress\n    label: Source\n    config: {}\nedges: []\n"
+        )
+        patch_path = tmp_path / "patch.json"
+        patch_data = {
+            "patch_id": "p123",
+            "rationale": "Add module",
+            "operations": [{
+                "op": "insert_module",
+                "module": {"id": "m2", "type": "Channel", "label": "Q", "config": {"q": '"value"'}}
+            }]
+        }
+        patch_path.write_text(json.dumps(patch_data))
+        apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
+        patched_text = bp_path.read_text()
+        # The value should have quotes explicitly represented, or parse back correctly.
+        assert 'value' in patched_text
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_path)
+        assert bp.modules[1].config["q"] == '"value"'
+
+    def test_replace_module_config_preserves_quotes(self, tmp_path):
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(
+            "aqueduct: '1.0'\nid: test.bp\nname: Test Blueprint\n"
+            "modules:\n  - id: m1\n    type: Ingress\n    label: Source\n    config: {}\nedges: []\n"
+        )
+        patch_path = tmp_path / "patch.json"
+        patch_data = {
+            "patch_id": "p123",
+            "rationale": "Update config",
+            "operations": [{
+                "op": "replace_module_config",
+                "module_id": "m1",
+                "config": {"sql": "SELECT 'x' as col"}
+            }]
+        }
+        patch_path.write_text(json.dumps(patch_data))
+        apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
+        patched_text = bp_path.read_text()
+        assert "SELECT 'x' as col" in patched_text
+        from aqueduct.parser.parser import parse
+        bp = parse(bp_path)
+        assert bp.modules[0].config["sql"] == "SELECT 'x' as col"

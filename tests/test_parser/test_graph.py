@@ -159,3 +159,53 @@ class TestParserGraphTopologicalSort:
         bad_edge = Edge(from_id="a", to_id="NOPE", port="main")
         with pytest.raises(ValueError, match="NOPE"):
             _build_adjacency([m1], [bad_edge])
+
+
+class TestDependsOn:
+    def test_depends_on_orders_execution(self, tmp_path):
+        """module with depends_on: [other_module] executes after other_module even with no edge between them"""
+        valid = tmp_path / "depends.yml"
+        valid.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\ncontext: {}\n"
+            "modules:\n"
+            "  - id: m1\n    type: Ingress\n    label: M1\n"
+            "  - id: m2\n    type: Egress\n    label: M2\n    depends_on: [m1]\n"
+            "edges: []\n"
+        )
+        bp = parse(valid)
+        from aqueduct.parser.graph import topological_order
+        order = topological_order(list(bp.modules), list(bp.edges))
+        assert order.index("m1") < order.index("m2")
+
+    def test_depends_on_unknown_module_raises(self, tmp_path):
+        """depends_on referencing non-existent module ID raises ParseError"""
+        bad = tmp_path / "depends_unknown.yml"
+        bad.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\ncontext: {}\n"
+            "modules:\n"
+            "  - id: m1\n    type: Ingress\n    label: M1\n    depends_on: [ghost]\n"
+            "edges: []\n"
+        )
+        with pytest.raises(ParseError, match="ghost"):
+            parse(bad)
+
+    def test_depends_on_duplicate_edge_ignored(self, tmp_path):
+        """depends_on + explicit edge to same module -> no duplicate edge added"""
+        valid = tmp_path / "depends_dup.yml"
+        valid.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\ncontext: {}\n"
+            "modules:\n"
+            "  - id: m1\n    type: Ingress\n    label: M1\n"
+            "  - id: m2\n    type: Egress\n    label: M2\n    depends_on: [m1]\n"
+            "edges:\n"
+            "  - from: m1\n    to: m2\n    port: main\n"
+        )
+        bp = parse(valid)
+        from aqueduct.parser.graph import topological_order
+        order = topological_order(list(bp.modules), list(bp.edges))
+        assert order.index("m1") < order.index("m2")
+        # edges list shouldn't have duplicate objects for the same connection
+        edges = [e for e in bp.edges if e.from_id == "m1" and e.to_id == "m2"]
+        # Wait, the parser doesn't add Edge objects for depends_on, it just adds them to the adjacency list in _build_adjacency.
+        # The edges list should only have 1 edge.
+        assert len(edges) == 1
