@@ -520,7 +520,7 @@ class TestFailureContextBlueprintSourceYaml:
             finished_at="2026-01-01T00:01:00Z",
             blueprint_source_yaml="id: my_blueprint\nname: Test"
         )
-        prompt = _build_user_prompt(ctx)
+        prompt = _build_user_prompt(ctx, patches_dir=Path("/tmp/patches"))
         assert "## Original Blueprint YAML" in prompt
         assert "id: my_blueprint" in prompt
 

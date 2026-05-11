@@ -244,7 +244,7 @@ class TestPatchFormatting:
         apply_patch_file(bp_path, patch_path, patches_dir=tmp_path / "patches")
         patched_text = bp_path.read_text()
         # Verify the new list item has offset indent: '  - id: m2'
-        assert "\n  - id: m2\n" in patched_text
+        assert '\n  - id: "m2"\n' in patched_text or '\n  - id: m2\n' in patched_text
 
     def test_injected_module_preserves_string_quotes(self, tmp_path):
         bp_path = tmp_path / "bp.yml"

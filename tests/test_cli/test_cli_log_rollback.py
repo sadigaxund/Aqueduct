@@ -128,6 +128,8 @@ class TestRollbackCmd:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
             if "rev-parse" in args and "--short" in args:
                 return subprocess.CompletedProcess(args, 0, stdout="def5678", stderr="")
+            if "diff-tree" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -163,6 +165,8 @@ class TestRollbackCmd:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
             if "rev-parse" in args and "~1" in " ".join(args):
                 return subprocess.CompletedProcess(args, 0, stdout="parent123", stderr="")
+            if "diff-tree" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -182,6 +186,8 @@ class TestRollbackCmd:
             calls.append(list(args))
             if "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
+            if "diff-tree" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
@@ -202,6 +208,8 @@ class TestRollbackCmd:
                 return subprocess.CompletedProcess(
                     args, 1, stdout="", stderr="error: conflict in blueprint.yml"
                 )
+            if "diff-tree" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
         monkeypatch.setattr(subprocess, "run", mock_run)
