@@ -1394,7 +1394,7 @@ Blueprint values win on conflict. `null` (unset) means inherit from engine.
 
 Query with: `SELECT * FROM healing_outcomes WHERE blueprint_id = '...' ORDER BY applied_at DESC;`
 
-**Patch file naming:** `{seq:05d}_{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `00001_20260502T143022_fix-green-path.json`. Sequence is monotonically increasing across all patches in the project. Enables chronological sort without reading file contents.
+**Patch file naming:** `{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `20260502T143022_fix-green-path.json`. Timestamp prefix enables chronological sort without reading file contents.
 
 **LLM template expression preservation:** The LLM receives both the compiled module config (with resolved values) and the raw Blueprint YAML source. The system prompt instructs it to write patches using template expressions from the raw YAML (e.g. `${ctx.paths.input}`) rather than hardcoded resolved values. Patches are applied to the raw Blueprint, not the compiled Manifest.
 

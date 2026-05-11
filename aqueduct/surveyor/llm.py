@@ -157,7 +157,7 @@ _USER_PROMPT_TEMPLATE = """\
 
 ## Full module list (for reference when writing patch IDs)
 {module_list}
-{provenance_section}{doctor_hints_section}
+{provenance_section}{blueprint_yaml_section}{doctor_hints_section}
 Produce the complete PatchSpec JSON now. Remember: the `operations` list is REQUIRED — a response without it is invalid.
 """
 
@@ -384,6 +384,17 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     else:
         doctor_hints_section = ""
 
+    # Original Blueprint YAML — gives LLM the authoring-level view (unresolved expressions)
+    blueprint_yaml_section = ""
+    raw_yaml = getattr(failure_ctx, "blueprint_source_yaml", None)
+    if raw_yaml:
+        blueprint_yaml_section = (
+            "\n## Original Blueprint YAML (unresolved — authoring view)\n"
+            "```yaml\n"
+            f"{raw_yaml.strip()}\n"
+            "```\n"
+        )
+
     return _USER_PROMPT_TEMPLATE.format(
         blueprint_name=blueprint_name,
         blueprint_description=f"> {blueprint_desc}" if blueprint_desc else "",
@@ -394,6 +405,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         stack_trace=_truncate_stack(failure_ctx.stack_trace),
         module_list=module_list,
         provenance_section=provenance_section,
+        blueprint_yaml_section=blueprint_yaml_section,
         doctor_hints_section=doctor_hints_section,
     )
 

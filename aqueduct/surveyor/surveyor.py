@@ -250,6 +250,13 @@ class Surveyor:
             }
             provenance_json = json.dumps(prov_slice, indent=2)
 
+        blueprint_source_yaml: str | None = None
+        if self._blueprint_path is not None:
+            try:
+                blueprint_source_yaml = self._blueprint_path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+
         ctx = FailureContext(
             run_id=result.run_id,
             blueprint_id=self._manifest.blueprint_id,
@@ -260,6 +267,7 @@ class Surveyor:
             started_at=_iso(self._started_at),  # type: ignore[arg-type]
             finished_at=_iso(finished_at),
             provenance_json=provenance_json,
+            blueprint_source_yaml=blueprint_source_yaml,
         )
 
         self._conn.execute(
