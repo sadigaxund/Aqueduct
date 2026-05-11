@@ -93,6 +93,7 @@ There are exactly TWO ops for changing module config. They are distinct:
 ### Path values
 - **ALWAYS use relative paths** (e.g. `data/yellow/*.parquet`). NEVER construct absolute paths even if the provenance section shows an absolute `blueprint_path`. The blueprint_path is shown for reference only — never use it to build a config value.
 - Preserve the original path format (relative stays relative, globs stay globs).
+- **When fixing a `context_ref` path, patch the context value using template expressions** (e.g. `replace_context_value` with key `paths.foo`). Do NOT hard-code the resolved literal path into a module config — using template expressions keeps the blueprint portable and context-driven.
 
 ### Other rules
 - Use only module IDs and field names that appear in the failure report.
