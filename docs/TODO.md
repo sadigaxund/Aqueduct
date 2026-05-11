@@ -59,3 +59,16 @@ however we have a python module with that name, I very much liked something simi
 18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
 
 
+1. TestError import mismatch - test_runner.py exports TestSchemaError
+but cli.py:1460 imports TestError. Crashes on import.
+2. blueprint_source_yaml missing - FailureContext has no
+such field.
+3. git not installed crash - No FileNotFoundError guard around git
+subprocess calls in init.
+4. template expressions rule missing - System prompt has no text
+matching "using template expressions" but test + TEST_MANIFEST.md require it.
+5. _build_failure_ctx in scenario.py:148 never populates
+blueprint_source_yaml on FailureContext (the field we just added). If you want
+scenarios to test the source YAML threading feature, that'll need a one-liner
+there: read blueprint_path.read_text() and pass it in.
+

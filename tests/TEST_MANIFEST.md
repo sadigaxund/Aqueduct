@@ -988,9 +988,9 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 `validate_patch` field removed. `aggressive` mode now always validates patch in-memory (compile + re-run) before writing to Blueprint. Non-configurable. Tests that covered old `validate_patch` field removed from `test_coverage_gaps.py`.
 
 #### CLI dispatch — `aqueduct/cli.py` (aggressive mode)
-- [x] `approval_mode: aggressive` + patch produces invalid Blueprint (compile fail) → Blueprint unchanged, loop stops
-- [x] `approval_mode: aggressive` + patch valid but re-run fails → `on_heal_failure` applied, loop continues
-- [x] `approval_mode: aggressive` + patch valid + re-run succeeds → Blueprint written to disk, loop stops
+- ❌ `approval_mode: aggressive` + patch produces invalid Blueprint (compile fail) → Blueprint unchanged, loop stops
+- ❌ `approval_mode: aggressive` + patch valid but re-run fails → `on_heal_failure` applied, loop continues
+- ❌ `approval_mode: aggressive` + patch valid + re-run succeeds → Blueprint written to disk, loop stops
 
 ---
 
@@ -1033,10 +1033,10 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### CLI trigger_agent override — `aqueduct/cli.py`
 
-- [x] `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
-- [x] `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
-- [x] `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
-- [x] `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
+- ❌ `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
+- ❌ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
+- ❌ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
+- ❌ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
 
 ---
 
@@ -1044,16 +1044,16 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### Store layout — `obs.db` merge (`aqueduct/config.py`, `surveyor/`, `executor/spark/`)
 
-- [x] `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
-- [x] `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
-- [x] `stores.depot.path` defaults to `".aqueduct/depot.db"`
-- [x] unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
+- ❌ `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
+- ❌ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
+- ❌ `stores.depot.path` defaults to `".aqueduct/depot.db"`
+- ❌ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
 - ✅ `Surveyor.start()` creates `obs.db` (not `runs.db`)
 - ✅ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
 - ✅ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
 - ✅ `execute_probe()`: writes `probe_signals` rows to `obs.db`
-- [x] `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
-- [x] `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
+- ❌ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
+- ❌ `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
 - ✅ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
 - ✅ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
 
@@ -1167,9 +1167,9 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `git revert` failure (e.g. conflict) → exits 1 with stderr
 
 ### Run-start uncommitted patch warning — `aqueduct/cli.py`
-- [x] uncommitted applied patches exist → warning printed to stderr before run starts
-- [x] no uncommitted patches → no warning
-- [x] warning text includes "aqueduct patch commit --blueprint <path>"
+- ❌ uncommitted applied patches exist → warning printed to stderr before run starts
+- ❌ no uncommitted patches → no warning
+- ❌ warning text includes "aqueduct patch commit --blueprint <path>"
 
 ### `aqueduct patch reject` — path-or-slug argument — `aqueduct/cli.py`
 - ✅ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/

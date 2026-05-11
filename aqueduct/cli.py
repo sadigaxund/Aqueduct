@@ -1457,7 +1457,7 @@ def test_cmd(
 
     from aqueduct.config import ConfigError, load_config
     from aqueduct.executor.spark.session import make_spark_session
-    from aqueduct.executor.spark.test_runner import TestError, run_test_file
+    from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
@@ -1481,7 +1481,7 @@ def test_cmd(
             spark=spark,
             blueprint_path_override=Path(blueprint_path) if blueprint_path else None,
         )
-    except TestError as exc:
+    except TestSchemaError as exc:
         click.echo(f"✗ test file error: {exc}", err=True)
         sys.exit(1)
     finally:
@@ -2528,31 +2528,34 @@ def init(name: str | None) -> None:
         click.echo(f"  skip    {f}  (already exists)")
 
     # Git
-    in_git = subprocess.run(
-        ["git", "rev-parse", "--git-dir"],
-        capture_output=True, cwd=cwd,
-    ).returncode == 0
+    try:
+        in_git = subprocess.run(
+            ["git", "rev-parse", "--git-dir"],
+            capture_output=True, cwd=cwd,
+        ).returncode == 0
 
-    if not in_git:
-        r = subprocess.run(["git", "init"], capture_output=True, text=True, cwd=cwd)
-        if r.returncode == 0:
-            click.echo("  git init")
-        else:
-            click.echo(f"  ⚠ git init failed: {r.stderr.strip()}")
+        if not in_git:
+            r = subprocess.run(["git", "init"], capture_output=True, text=True, cwd=cwd)
+            if r.returncode == 0:
+                click.echo("  git init")
+            else:
+                click.echo(f"  ⚠ git init failed: {r.stderr.strip()}")
 
-    # Initial commit
-    add = subprocess.run(["git", "add", "."], capture_output=True, cwd=cwd)
-    if add.returncode == 0:
-        commit = subprocess.run(
-            ["git", "commit", "-m", f"init: aqueduct project ({project_name})"],
-            capture_output=True, text=True, cwd=cwd,
-        )
-        if commit.returncode == 0:
-            click.echo("  git commit  init: aqueduct project")
-        elif "nothing to commit" in commit.stdout + commit.stderr:
-            pass  # already clean
-        else:
-            click.echo(f"  ⚠ git commit failed: {commit.stderr.strip()}")
+        # Initial commit
+        add = subprocess.run(["git", "add", "."], capture_output=True, cwd=cwd)
+        if add.returncode == 0:
+            commit = subprocess.run(
+                ["git", "commit", "-m", f"init: aqueduct project ({project_name})"],
+                capture_output=True, text=True, cwd=cwd,
+            )
+            if commit.returncode == 0:
+                click.echo("  git commit  init: aqueduct project")
+            elif "nothing to commit" in commit.stdout + commit.stderr:
+                pass  # already clean
+            else:
+                click.echo(f"  ⚠ git commit failed: {commit.stderr.strip()}")
+    except FileNotFoundError:
+        click.echo("  ⚠ git not found — skipping version control setup")
 
     click.echo(f"\n✓ {project_name} ready")
     click.echo("\nNext steps:")

@@ -51,6 +51,7 @@ class FailureContext:
     started_at: str             # ISO-8601 UTC
     finished_at: str            # ISO-8601 UTC
     provenance_json: str | None = None        # JSON-serialized ProvenanceMap slice for failed module + context
+    blueprint_source_yaml: str | None = None  # raw uncompiled YAML text of the blueprint file
     doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,6 +65,7 @@ class FailureContext:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "provenance_json": self.provenance_json,
+            "blueprint_source_yaml": self.blueprint_source_yaml,
             "doctor_hints": list(self.doctor_hints),
         }
 
