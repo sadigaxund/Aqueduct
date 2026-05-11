@@ -102,6 +102,18 @@ class ScenarioResult:
     root_cause_match: bool | None = None   # None = assertion not configured
     category_match: bool | None = None     # None = assertion not configured
 
+    @property
+    def diag_correct(self) -> bool | None:
+        """True if ANY diagnostic signal passed (root_cause OR category).
+
+        None when neither assertion was configured in the scenario — excluded
+        from diag-only rate calculations.
+        """
+        signals = [s for s in (self.root_cause_match, self.category_match) if s is not None]
+        if not signals:
+            return None
+        return any(signals)
+
 
 # ── Failure context builder ───────────────────────────────────────────────────
 
@@ -136,6 +148,7 @@ def _build_failure_ctx(scenario: AqScenario) -> "Any":  # FailureContext
         manifest_json=manifest_json,
         started_at=now,
         finished_at=now,
+        blueprint_source_yaml=blueprint_path.read_text(encoding="utf-8"),
     )
 
 
@@ -284,12 +297,13 @@ def _check_assertions(
                 )
 
         if "root_cause_contains" in assertion:
-            keyword = str(assertion["root_cause_contains"]).lower()
-            actual_rc = (patch.root_cause or "") if patch else ""
-            root_cause_match = keyword in actual_rc.lower()
+            raw = assertion["root_cause_contains"]
+            keywords = [k.lower() for k in raw] if isinstance(raw, list) else [str(raw).lower()]
+            actual_rc = (patch.root_cause or "").lower() if patch else ""
+            root_cause_match = any(kw in actual_rc for kw in keywords)
             if not root_cause_match:
                 failures.append(
-                    f"root_cause_contains: {keyword!r} not found in {actual_rc!r}"
+                    f"root_cause_contains: none of {keywords!r} found in {actual_rc!r}"
                 )
 
     return failures, patch_valid, patch_applies, root_cause_match, category_match
@@ -513,6 +527,10 @@ def format_benchmark_table(
         ("1-shot rate", lambda rs: (
             f"{sum(1 for r in rs if r.attempts_to_parse == 1) / max(1, sum(1 for r in rs if r.attempts_to_parse > 0)):.0%}"
             if any(r.attempts_to_parse > 0 for r in rs) else "—"
+        )),
+        ("Diag-only rate", lambda rs: (
+            f"{sum(1 for r in rs if r.diag_correct is True and not r.patch_applies) / max(1, sum(1 for r in rs if r.diag_correct is not None)):.0%}"
+            if any(r.diag_correct is not None for r in rs) else "—"
         )),
     ]:
         cells = []
