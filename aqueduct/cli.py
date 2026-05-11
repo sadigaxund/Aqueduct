@@ -1156,7 +1156,7 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
         resolved_patches_dir = ref_path.parent.parent
         patch_id = ref_path.stem
     else:
-        resolved_patches_dir = Path(patches_dir) if patches_dir else Path("patches")
+        resolved_patches_dir = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(Path.cwd() / "_sentinel")
         patch_id = patch_ref
 
     try:
