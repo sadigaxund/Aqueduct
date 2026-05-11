@@ -13,12 +13,13 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 - **Declarative YAML Blueprints** - No DAG wiring in code. Version-control your entire pipeline.
 - **Any Spark Connector** - Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
-- **LLM-First Observability** - Every failure ships with a complete `FailureContext` JSON, ready for an agent (or you) to diagnose without digging through logs.
+- **Self-Contained Failure Context** - Every failure ships a complete `FailureContext` JSON: failed module config, upstream lineage, Probe signals, retry history, and provenance metadata (where each value came from in the Blueprint). The LLM, or you, can diagnose without touching logs.
 - **Patch Grammar, Not Codegen** - The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
 - **Zero-Cost Observability** - Probes capture schema snapshots, null rates, value distributions, distinct counts, freshness, and sample rows using lazy Spark operations and sampling. No full scans in production mode (`block_full_actions_in_prod`).
+- **Inline Data Quality Gates** - `Assert` modules enforce schema, row counts, null rates, freshness, and custom SQL rules inline. Failing rows route to a spillway; the pipeline aborts, warns, fires a webhook, or triggers the LLM agent based on per-rule configuration.
 - **Spillway Error Routing** - Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
-- **Depot KV Store** - Cross-run pipeline state (watermarks, counters) backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress.
-- **Passive-by-Default Gates** - Regulators (data quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
+- **Depot KV Store** - Cross-run pipeline state backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress. Powers `materialize: incremental` on Channels - watermark-based incremental reads without a streaming engine.
+- **Passive-by-Default Gates** - Regulators (signal-driven quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
 
 ---
 
@@ -26,7 +27,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 **Aqueduct is Apache 2.0 licensed.**
 
-This repository contains the full, production-ready engine. There are no "pro" versions, no telemetry, and no proprietary lock-ins. You can run it locally, in CI, or on a production Spark cluster—free and open, forever.
+This repository contains the full, production-ready engine. There are no "pro" versions, no telemetry, and no proprietary lock-ins. You can run it locally, in CI, or on a production Spark cluster-free and open, forever.
 
 ---
 
@@ -143,7 +144,7 @@ stores:
 
 ### 3. Run
 
-Aqueduct auto-loads a `.env` file from the project root before executing — put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. No credential hardcoding required.
+Aqueduct auto-loads a `.env` file from the project root before executing - put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. No credential hardcoding required.
 
 ```bash
 aqueduct run pipeline.yml --config aqueduct.yml
@@ -180,7 +181,7 @@ The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens res
 | `Channel` | Transformation (SQL or 12 native ops: deduplicate, filter, select, rename, cast, join, union, sort, repartition, coalesce, cache + sql); optional `spillway_condition` routes bad rows |
 | `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
 | `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
-| `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) — never halts pipeline |
+| `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) - never halts pipeline |
 | `Regulator` | Data quality gate; evaluates Probe signals; blocks or skips downstream on failure |
 | `Assert` | Inline data quality rules (schema, row counts, null rates, freshness, SQL, custom); failing rows route to spillway |
 | `Arcade` | Reusable sub-Blueprint; namespaced and inlined at compile time |
@@ -199,7 +200,7 @@ key: "@aq.secret('MY_SECRET')"
 
 ### Channel `op: join`
 
-Higher-level join syntax — no raw SQL needed for common join patterns:
+Higher-level join syntax - no raw SQL needed for common join patterns:
 
 ```yaml
 - id: enrich_orders
@@ -217,7 +218,7 @@ For complex multi-table joins or window functions, use `op: sql` directly.
 
 ### SQL Macros
 
-Define reusable SQL fragments at compile time — resolved before Spark runs, no runtime overhead:
+Define reusable SQL fragments at compile time - resolved before Spark runs, no runtime overhead:
 
 ```yaml
 macros:
@@ -235,7 +236,7 @@ modules:
           AND {{ macros.trunc(period='day', col=event_ts) }} >= '2026-01-01'
 ```
 
-Macros are static — no loops, no conditionals. The Manifest always contains plain SQL.
+Macros are static - no loops, no conditionals. The Manifest always contains plain SQL.
 
 ### Spillway
 
@@ -259,7 +260,7 @@ edges:
 
 ### Incremental Channel (`materialize: incremental`)
 
-Process only new data each run — no streaming engine required. Aqueduct stores the high-water mark in Depot and injects it into your SQL at runtime:
+Process only new data each run - no streaming engine required. Aqueduct stores the high-water mark in Depot and injects it into your SQL at runtime:
 
 ```yaml
 - id: new_orders
@@ -281,11 +282,11 @@ Process only new data each run — no streaming engine required. Aqueduct stores
     mode: append   # use append, not overwrite
 ```
 
-First run: `${ctx._watermark}` = `'1900-01-01 00:00:00'` → full scan. Each subsequent run: resolves to `MAX(event_ts)` from the previous run's output, automatically stored in Depot. Watermark is only advanced on success — a failed run re-processes the same window.
+First run: `${ctx._watermark}` = `'1900-01-01 00:00:00'` → full scan. Each subsequent run: resolves to `MAX(event_ts)` from the previous run's output, automatically stored in Depot. Watermark is only advanced on success - a failed run re-processes the same window.
 
-> **Note:** `${ctx._watermark}` is a runtime substitution, not a Tier 0 context ref — it is not listed in the `context:` block and is not visible in the compiled Manifest's `context` field.
+> **Note:** `${ctx._watermark}` is a runtime substitution, not a Tier 0 context ref - it is not listed in the `context:` block and is not visible in the compiled Manifest's `context` field.
 
-### Assert — Inline Data Quality Gates
+### Assert - Inline Data Quality Gates
 
 Enforce explicit business rules against the flowing DataFrame. Unlike Probe + Regulator (which evaluate signals from a prior run), Assert evaluates rules inline and can quarantine bad rows to a spillway:
 
@@ -355,9 +356,9 @@ path: "s3a://data/from=@aq.depot.get('last_processed_date', '2020-01-01')/"
     value_expr: "MAX(order_date)"   # single Spark aggregate
 ```
 
-### `aqueduct test` — Isolated Module Testing
+### `aqueduct test` - Isolated Module Testing
 
-Test Channel, Junction, Funnel, and Assert modules against inline data — no real sources, no external I/O:
+Test Channel, Junction, Funnel, and Assert modules against inline data - no real sources, no external I/O:
 
 ```yaml
 # pipeline.aqtest.yml
@@ -397,7 +398,7 @@ aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
 
 ### Agent Guardrails
 
-Guardrails are **deterministically enforced at patch-apply time** — not prompt hints. The code rejects violations regardless of what the LLM generated.
+Guardrails are **deterministically enforced at patch-apply time** - not prompt hints. The code rejects violations regardless of what the LLM generated.
 
 ```yaml
 agent:
@@ -407,12 +408,12 @@ agent:
       - remove_module        # LLM can never delete modules autonomously
       - replace_retry_policy # retry config managed by humans only
     allowed_paths:
-      - "s3://company-data/*"   # fnmatch — LLM may only write paths matching these patterns
+      - "s3://company-data/*"   # fnmatch - LLM may only write paths matching these patterns
       - "data/raw/*"
 ```
 
-- `forbidden_ops` — list of PatchSpec operation names that are always blocked. Empty = all ops permitted.
-- `allowed_paths` — fnmatch patterns restricting `path`/`output_path` config values a patch may set. Empty = unrestricted.
+- `forbidden_ops` - list of PatchSpec operation names that are always blocked. Empty = all ops permitted.
+- `allowed_paths` - fnmatch patterns restricting `path`/`output_path` config values a patch may set. Empty = unrestricted.
 
 If a patch violates either rule, `apply_patch` raises an error before touching the Blueprint file.
 
@@ -435,21 +436,21 @@ aqueduct run      pipeline.yml \
   --run-id my-run-001 \
   --ctx env=prod
 aqueduct run      pipeline.yml --env-file secrets/.env   # explicit .env path
-aqueduct -v run   pipeline.yml              # verbose — prints LLM responses, resolver steps
+aqueduct -v run   pipeline.yml              # verbose - prints LLM responses, resolver steps
 
-# Sub-DAG execution — run only a slice of the pipeline
+# Sub-DAG execution - run only a slice of the pipeline
 aqueduct run pipeline.yml --from clean_orders              # from module onwards
 aqueduct run pipeline.yml --from clean_orders --to egress  # inclusive range
 aqueduct run pipeline.yml --to egress                      # up to and including module
 
-# Backfill / logical execution date — pins @aq.date.today() and @aq.runtime.timestamp()
+# Backfill / logical execution date - pins @aq.date.today() and @aq.runtime.timestamp()
 aqueduct run pipeline.yml --execution-date 2026-01-15
 
 aqueduct check-config                       # Validate aqueduct.yml schema; print resolved summary
 aqueduct check-config --config path/to/aqueduct.yml
 
 aqueduct doctor                             # Probe all resources end-to-end (config, stores, secrets, webhook, Spark, storage)
-aqueduct doctor --skip-spark               # Skip JVM startup — fast CI health check
+aqueduct doctor --skip-spark               # Skip JVM startup - fast CI health check
 aqueduct doctor --config path/to/aqueduct.yml
 
 aqueduct test     pipeline.aqtest.yml       # Run isolated module tests (no Spark I/O)
@@ -458,7 +459,7 @@ aqueduct test     pipeline.aqtest.yml --quiet
 aqueduct report   <run_id>                  # Flow Report for a completed run (--format table|json|csv)
 aqueduct lineage  <blueprint_id>             # Column lineage graph (--from <table>, --column <col>)
 
-# Persistent gate override — affects ALL future runs until cleared
+# Persistent gate override - affects ALL future runs until cleared
 aqueduct signal   <signal_id> --value false           # close gate (block downstream)
 aqueduct signal   <signal_id> --error "Stale source"  # close with reason
 aqueduct signal   <signal_id> --value true            # clear override (resume normal evaluation)
@@ -498,7 +499,7 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive 
 
 | Flag | Description |
 |---|---|
-| `-v`, `--verbose` | Enable DEBUG logging — prints LLM raw responses, SQL plans, and internal resolver steps |
+| `-v`, `--verbose` | Enable DEBUG logging - prints LLM raw responses, SQL plans, and internal resolver steps |
 
 ### Key `aqueduct run` flags
 
@@ -506,7 +507,7 @@ aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive 
 |---|---|
 | `--from <module_id>` | Start execution from this module (inclusive); skips all upstream modules |
 | `--to <module_id>` | Stop execution at this module (inclusive); skips all downstream modules |
-| `--execution-date YYYY-MM-DD` | Pin logical date for `@aq.date.*` and `@aq.runtime.timestamp()` — enables backfill idempotency |
+| `--execution-date YYYY-MM-DD` | Pin logical date for `@aq.date.*` and `@aq.runtime.timestamp()` - enables backfill idempotency |
 | `--resume <run_id>` | Resume from checkpoints written by a previous run with `checkpoint: true` |
 | `--run-id <uuid>` | Override auto-generated run UUID (useful for idempotent reruns) |
 | `--ctx key=value` | Override a Blueprint `context:` variable |
@@ -524,10 +525,10 @@ Aqueduct writes all observability data to DuckDB files under `.aqueduct/`:
 
 ```
 .aqueduct/
-  obs.db          — run records, probe signals, module metrics, signal overrides
-  lineage.db      — column-level lineage
-  depot.db        — depot KV store (@aq.depot.*)
-  snapshots/      — schema_snapshot JSON files (one per probe per run)
+  obs.db          - run records, probe signals, module metrics, signal overrides
+  lineage.db      - column-level lineage
+  depot.db        - depot KV store (@aq.depot.*)
+  snapshots/      - schema_snapshot JSON files (one per probe per run)
 ```
 
 ```bash
