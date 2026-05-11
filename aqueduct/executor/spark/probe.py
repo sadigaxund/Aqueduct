@@ -13,14 +13,18 @@ row_count_estimate   Two methods:
   method: spark_listener   No action; queries ``module_metrics`` table in
                            ``obs.db`` for the upstream module's stage count.
                            Returns ``estimate: null`` if no row exists yet.
-  method: sample           ``df.sample(fraction).count()`` on a fraction only.
-                           Blocked when ``block_full_actions=True``.
+  method: sample           ``df.sample(fraction).count()`` — FULL DATASET SCAN.
+                           sample() is a row-level filter, not a partition prune.
+                           All data is read; (1-fraction) of rows are discarded
+                           after I/O. Blocked when ``block_full_actions=True``.
 
 null_rates           ``df.sample(fraction)`` → per-column null rates.
+                     FULL DATASET SCAN — see row_count_estimate note above.
                      Blocked when ``block_full_actions=True``.
 
-sample_rows          ``df.take(n)`` — fetches at most ``n`` rows. Not blocked
-                     (take() fetches a bounded set, never a full scan).
+sample_rows          ``df.limit(n).collect()`` — fetches at most ``n`` rows.
+                     Spark can satisfy LIMIT from the first partition(s) without
+                     scanning the full dataset. Not blocked.
 
 value_distribution   Min / max / mean / stddev / configurable percentiles per
                      column, computed on a sample (default fraction=0.1).
@@ -235,9 +239,13 @@ def _sample_rows(
     df: DataFrame,
     signal_cfg: dict[str, Any],
 ) -> dict[str, Any]:
-    """Fetch at most n rows as JSON-serialisable dicts."""
+    """Fetch at most n rows as JSON-serialisable dicts.
+
+    Uses limit(n).collect() so Spark can satisfy the request from the first
+    partition(s) without scanning the full dataset.
+    """
     n = int(signal_cfg.get("n", 10))
-    rows = df.take(n)
+    rows = df.limit(n).collect()
     serialised = [row.asDict(recursive=True) for row in rows]
     return {"n": n, "rows": serialised}
 

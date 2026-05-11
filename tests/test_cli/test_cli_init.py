@@ -72,5 +72,5 @@ def test_init_git_not_installed(empty_cwd, monkeypatch):
     result = runner.invoke(cli, ["init"])
     
     assert result.exit_code == 0
-    assert "⚠ git not installed" in result.output
+    assert "⚠ git not found" in result.output
     assert "✓ my-project ready" in result.output
