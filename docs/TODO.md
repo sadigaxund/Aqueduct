@@ -57,3 +57,4 @@ however we have a python module with that name, I very much liked something simi
 17. Add example maybe: aqueduct's usage with python
 
 18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
+
