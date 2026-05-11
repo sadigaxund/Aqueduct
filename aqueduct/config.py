@@ -88,7 +88,7 @@ class MetricsConfig(BaseModel):
     """Reserved for future performance-degrading metric toggles.
 
     All flags must default to False (zero-cost production mode) and emit a
-    startup warning when enabled.  See .dev/SPARK_GUIDE.md rule 2.
+    startup warning when enabled.  See docs/SPARK_GUIDE.md — Implementation Rules §2.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
