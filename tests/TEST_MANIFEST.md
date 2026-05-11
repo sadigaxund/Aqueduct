@@ -131,6 +131,13 @@ This section tracks high-level functional verification of core features against 
 - ❌ Channel with `materialize: incremental` + Checkpoint upstream → no warning
 - ❌ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "SPARK_GUIDE.md#python-udf-performance"
 - ❌ UDF registry entry with `lang: java` → no warning
+- ❌ Egress with `format: delta` + `mode: append` + no `partition_by`/`repartition` → warns containing "small files"
+- ❌ Egress with `format: parquet` + `mode: append` + no partition hint → warns
+- ❌ Egress with `format: delta` + `mode: append` + `partition_by` present → no warning
+- ❌ Egress with `format: delta` + `mode: overwrite` (no append) → no warning
+- ❌ Channel with 2+ downstream consumers and no Checkpoint → warns containing "re-evaluate" and consumer count
+- ❌ Channel with 2+ downstream consumers where a Checkpoint exists upstream → no warning
+- ❌ Channel with single downstream consumer → no warning
 
 ---
 
