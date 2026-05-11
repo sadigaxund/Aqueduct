@@ -87,7 +87,10 @@ assertions:
   #   sql_column_not_found, type_mismatch, missing_context, permission_error, other
   # - expected_category: format_mismatch
 
-  # LLM's root_cause field must contain this keyword (case-insensitive substring).
+  # LLM's root_cause field must contain at least one keyword (case-insensitive substring).
+  # Accepts a single string or a list — any match passes.
   # Tests diagnostic quality, not just patch op correctness.
+  # Used together with expected_category for the "Diag-only rate" benchmark metric:
+  # scenarios where the LLM correctly identified the cause but generated a wrong op.
   # - root_cause_contains: "format"
-  # - root_cause_contains: "parquet"
+  # - root_cause_contains: ["format", "parquet", "schema"]  # any one match passes
