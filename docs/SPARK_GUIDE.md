@@ -231,6 +231,18 @@ Spillway uses `df.filter(spillway_condition)` + `withColumn(F.lit(...))` for
 `_aq_error_*` columns. Both are pure Spark SQL — vectorized, no Python boundary.
 Do not introduce Python-side row iteration into the spillway path.
 
+**Spillway cannot intercept UDF runtime exceptions.** The `spillway_condition` is
+evaluated *after* a row passes through the transformation. A UDF that raises an
+exception causes the Spark task (and therefore the pipeline) to abort — the row is
+never delivered to the spillway. Spark does not provide per-row exception routing at
+the task level.
+
+The correct pattern is to write **defensive UDFs** that never raise: catch all
+exceptions inside the UDF and return a sentinel value (e.g. a struct with a nullable
+`result` + `error` string field). The `spillway_condition` then routes rows where
+`error IS NOT NULL`. See the Blueprint Author note in `docs/specs.md` for a code
+example.
+
 **5. Validate `schema_hint` explicitly.**
 
 Spark's `nullable=false` is advisory only — not enforced at runtime. Ingress must
@@ -255,6 +267,8 @@ Never use positional `union()` — column order is not guaranteed across sources
 | `coalesce` can create skewed partitions | Prefer `repartition` for balanced output; document tradeoff when using `coalesce` |
 | Date parsing returns `null` on failure silently | `schema_hint` catches type mismatches; validate formats in SQL with `try_cast` |
 | Python UDFs cause memory contention under GC pressure | Discourage; use SQL built-ins or `pandas_udf` |
+| UDF throws exception → whole task fails, not just that row | Write defensive UDFs: catch internally, return sentinel struct; route via `spillway_condition: "struct.error IS NOT NULL"` |
+| `broadcast_side` hint overridden silently by AQE | Disable AQE for that join or rely on `autoBroadcastJoinThreshold` instead of hints |
 | Catalyst chooses suboptimal join strategy on small tables | Expose `spark_config` overrides (`spark.sql.autoBroadcastJoinThreshold`) — do not force hints in Aqueduct code |
 | `watermark_column` is a string type | `MAX()` is lexicographic on strings — warn at compile time (planned) |
 | Incremental `MAX()` rescans output | Instruct users to add Checkpoint or cache; tracked in `incremental-watermark-scan` warning |
@@ -304,6 +318,160 @@ spark_config:
 For backfill jobs (large date range, many partitions): increase
 `spark.sql.shuffle.partitions` (default 200 is often too low) and
 `spark.dynamicAllocation.maxExecutors` to match the data volume.
+
+#### Input partition sizing
+
+Two properties control how Spark splits input files into tasks:
+
+```yaml
+spark_config:
+  spark.sql.files.maxPartitionBytes: "134217728"   # 128 MB (default) — max bytes per task
+  spark.sql.files.openCostInBytes: "4194304"        # 4 MB (default) — file open overhead estimate
+```
+
+**Small files:** thousands of tiny Parquet files create thousands of tiny tasks, overwhelming the scheduler.
+Lower `openCostInBytes` or use `coalesce` / `repartition` after the Ingress read.
+
+**Large files:** a single 10 GB file may exceed executor memory per partition.
+Lower `maxPartitionBytes` (e.g. `"67108864"` for 64 MB) so Spark splits it into more tasks.
+
+`aqueduct doctor` warns when an Ingress path has many small files (planned — see Planned Future Checks).
+
+#### Python UDF memory overhead
+
+Python UDFs allocate memory outside the JVM heap (Py4J buffers, Arrow batch buffers).
+If this off-heap allocation exceeds `spark.executor.memoryOverhead`, YARN/K8s kills the container
+with exit code 137 (OOM killer) — the error looks like an executor loss, not an OOM.
+
+```yaml
+spark_config:
+  spark.executor.memoryOverhead: "1g"   # default is max(384MB, 10% of executor.memory)
+                                         # increase to 1–2 GB when using Python UDFs
+  spark.executor.extraJavaOptions: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+  spark.memory.offHeap.enabled: "true"
+  spark.memory.offHeap.size: "2g"        # for large shuffles or Arrow-backed operations
+```
+
+#### External Shuffle Service (required for dynamic allocation)
+
+Dynamic allocation can only release executors that hold no shuffle data. Without the External
+Shuffle Service, executors that wrote shuffle files cannot be released — defeating dynamic allocation.
+
+On YARN: `spark.shuffle.service.enabled: "true"` (YARN NodeManager must have the shuffle service JAR).
+On Kubernetes: deploy the Spark Shuffle Service as a DaemonSet; set `spark.shuffle.service.enabled: "true"`.
+
+Without the shuffle service, `dynamicAllocation.enabled: true` still works but executor release is
+severely limited. Do not run dynamic allocation in production without it.
+
+#### AQE sub-configurations
+
+Adaptive Query Execution (AQE) is on by default in Spark 3.2+. Key sub-configs to tune:
+
+```yaml
+spark_config:
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.adaptive.coalescePartitions.enabled: "true"
+  spark.sql.adaptive.advisoryPartitionSizeInBytes: "134217728"       # 128 MB target partition size
+  spark.sql.adaptive.skewJoin.skewedPartitionThresholdInBytes: "268435456"  # 256 MB skew threshold
+  spark.sql.adaptive.localShuffleReader.enabled: "true"              # reduces network for broadcast joins
+```
+
+**AQE and `broadcast_side` hints:** Blueprint `op: join` supports a `broadcast_side` hint.
+This is advisory — AQE may override it at runtime based on actual partition statistics.
+If the physical plan must use a specific join strategy (e.g. for correctness in skewed data),
+disable AQE for that join by setting `spark.sql.adaptive.enabled: "false"` in the Blueprint's
+`spark_config`. Document the reason — disabling AQE is a tradeoff (you lose partition coalescing
+and skew handling).
+
+#### S3A committers (cloud deployments)
+
+When writing to S3 via `s3a://`, Spark defaults to rename-based commit semantics.
+On S3, rename = copy + delete: **slow for large outputs and a data integrity risk on failure**.
+
+Use S3A committers instead:
+
+```yaml
+spark_config:
+  # Directory committer — safe, widely supported
+  spark.hadoop.fs.s3a.committer.name: "directory"
+  spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version: "2"
+
+  # Magic committer — fastest (no rename phase), requires S3 object consistency
+  # spark.hadoop.fs.s3a.committer.name: "magic"
+  # spark.hadoop.fs.s3a.committer.magic.enabled: "true"
+```
+
+The magic committer writes directly to the final S3 path during the task write phase — no
+rename step. Requires S3 (not S3-compatible) with strong consistency (all AWS regions since 2020).
+The directory committer is safer for non-AWS S3-compatible stores.
+
+#### Delta Lake MERGE optimization
+
+Delta MERGE operations can produce severe write skew when the merge key distribution is uneven.
+Enable pre-write repartitioning:
+
+```yaml
+spark_config:
+  spark.databricks.delta.merge.repartitionBeforeWrite.enabled: "true"
+```
+
+This repartitions the target DataFrame by the merge key before writing, distributing the output
+evenly. Adds one shuffle but eliminates small-file skew in the target table.
+
+### `DataFrame.observe()` and Whole-Stage Codegen
+
+Aqueduct uses `DataFrame.observe()` to collect per-stage metrics (row counts, byte sizes).
+This is generally safe, but `observe()` inserts a metric-collection node into the physical plan
+that can break whole-stage codegen boundaries.
+
+Whole-stage codegen fuses multiple operators into a single JVM function for maximum throughput.
+An observer node forces a stage boundary, potentially:
+
+- Disabling codegen for the stage containing the observed DataFrame
+- Adding serialization/deserialization overhead at the boundary
+
+For most workloads this overhead is negligible. For high-throughput pipelines (billions of rows,
+tight latency requirements), it can be a 5–15% throughput regression.
+
+**Mitigation:** Disable `observe()`-based metrics and rely solely on SparkListener:
+
+```yaml
+metrics:
+  use_observe: false   # fall back to SparkListener-only (zero observe() overhead)
+```
+
+When `use_observe: false`, per-module row counts come from SparkListener stage metrics only
+(subject to stage fusion caveats — see SparkListener Row Estimates section above).
+
+### `aqueduct test` and Spark Master
+
+`aqueduct test` creates a real SparkSession using the `spark_master` from `aqueduct.yml`.
+If `aqueduct.yml` configures a remote master (`spark://...`, `yarn`, `k8s://...`), the test
+session connects to that cluster — test runs are **not isolated** to the local machine.
+
+**Best practice:** Set `AQ_SPARK_MASTER=local[*]` in your test environment:
+
+```bash
+export AQ_SPARK_MASTER=local[*]
+aqueduct test
+```
+
+Or set `spark_master: local[*]` in a separate `aqueduct.test.yml` and pass it with `--config`.
+The `AQ_SPARK_MASTER` env var overrides `aqueduct.yml` without modifying the file.
+
+### Aqueduct Checkpoint vs. Spark `df.checkpoint()`
+
+These are different mechanisms — do not confuse them:
+
+| | **Aqueduct `checkpoint: true`** | **Spark `df.checkpoint()`** |
+|---|---|---|
+| **What it writes** | Parquet files + `_aq_done` marker to a local/NFS path | Shuffle files to HDFS/S3 set via `SparkContext.setCheckpointDir()` |
+| **Purpose** | Module-level resume: skip already-completed modules on `aqueduct run --resume` | Truncate Spark DAG lineage to avoid stack overflow on deep iterative jobs |
+| **Reliability** | Durable if `checkpoint_dir` points to durable storage (NFS, S3) | Durable on HDFS/S3; `localCheckpoint()` variant is NOT durable (lost on executor failure) |
+| **Aqueduct uses** | Yes — via `checkpoint_dir` in `aqueduct.yml` | Never — Aqueduct does not call `df.checkpoint()` |
+
+**K8s note:** If `checkpoint_dir` points to a path inside the driver pod (e.g. `/tmp/aq_checkpoints`),
+checkpoints are lost when the pod restarts. Use a PersistentVolume or an S3/GCS path for durable resume.
 
 ### SparkListener Queue Overhead
 

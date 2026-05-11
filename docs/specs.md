@@ -333,7 +333,7 @@ Enables watermark-based incremental batch processing without a streaming engine.
 |**right**|Module ID of the right-side DataFrame. Must be registered as a temp view.|
 |**join\_type**|Spark join type: inner, left, right, full, semi, anti, cross. Default: inner.|
 |**condition**|SQL join predicate string. Both sides accessible by their module IDs.|
-|**broadcast\_side**|Optional: left or right. Adds a `BROADCAST` hint to the smaller side to avoid shuffle.|
+|**broadcast\_side**|Optional: left or right. Adds a `BROADCAST` hint to the smaller side to avoid shuffle. **When to use:** Spark's `spark.sql.autoBroadcastJoinThreshold` (default 10 MiB) broadcasts small tables automatically — `broadcast_side` is only needed when the table exceeds the threshold but is known to be small enough to broadcast safely, or when AQE's runtime decision must be overridden. With AQE enabled, `broadcast_side` is advisory and may be overridden at runtime.|
 
 > **Note:** `op: join` is sugar over `op: sql`. It is translated to `SELECT * FROM left JOIN right ON condition` before reaching Spark. For complex multi-table joins, multi-way expressions, or window functions, use `op: sql` directly.
 
@@ -568,16 +568,17 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
       - type: partition_stats          # zero Spark action — always free
 ```
 
-|**Signal type**|**Spark cost**|**Implementation**|
-| :- | :- | :- |
-|**schema\_snapshot**|Zero — metadata only|`df.schema` is always available on a lazy DataFrame. Writes DuckDB row + JSON file.|
-|**row\_count\_estimate**|Zero (spark\_listener) or 1 action on fraction (sample)|`spark_listener`: reads `recordsWritten` from SparkListener stage metrics. `sample`: `df.sample(fraction).count()`.|
-|**null\_rates**|1 action on sample|`df.sample(fraction).agg(sum(isNull(c)) for each col)`. Never touches full DataFrame.|
-|**sample\_rows**|1 bounded action|`df.take(n)` — short-circuits after N rows. Not considered a full scan.|
-|**value\_distribution**|1 agg() + 1 approxQuantile per column on sample|`df.sample(fraction).agg(min, max, mean, stddev, count)`. Percentiles via `approxQuantile`. Numeric columns only by default.|
-|**distinct\_count**|1 agg() on sample|`df.sample(fraction).agg(approx_count_distinct(c) for each col)`. Approximate; error < 5%.|
-|**data\_freshness**|1 action (full scan by default)|`df.select(max(column)).collect()`. Set `allow_sample: true` to use a fraction instead (trades accuracy for speed in production).|
-|**partition\_stats**|Zero — no Spark action|`df.rdd.getNumPartitions()`. Purely a driver-side call.|
+|**Signal type**|**I/O Cost**|**Spark Actions**|**Implementation**|
+| :- | :- | :- | :- |
+|**schema\_snapshot**|Zero|0|`df.schema` is always available on a lazy DataFrame. Writes DuckDB row + JSON file.|
+|**row\_count\_estimate** (spark\_listener)|Zero|0|Reads `recordsWritten` from SparkListener stage metrics in `obs.db`. No Spark action.|
+|**row\_count\_estimate** (sample)|**Full dataset scan**|1|`df.sample(fraction).count()` — `sample()` is a row-level filter, not partition prune: all data is read.|
+|**null\_rates**|**Full dataset scan**|1|`df.sample(fraction).agg(...)` — despite the name, `sample()` reads 100% of the data before discarding rows. A 1% sample on a 10 TB table reads 10 TB.|
+|**sample\_rows**|First partition(s) only|1|`df.limit(n).collect()` — stops after N rows from the first partition(s).|
+|**value\_distribution**|**Full dataset scan**|1|`df.sample(fraction).agg(min, max, mean, stddev, count)`. Percentiles via `approxQuantile`. Numeric columns only by default.|
+|**distinct\_count**|**Full dataset scan**|1|`df.sample(fraction).agg(approx_count_distinct(c) for each col)`. Approximate; error < 5%.|
+|**data\_freshness**|**Full dataset scan**|1|`df.select(max(column)).collect()`. Set `allow_sample: true` to use a fraction instead (trades accuracy for speed in production).|
+|**partition\_stats**|Zero|0|`df.rdd.getNumPartitions()`. Purely a driver-side call.|
 
 |**Production guard:**  `row_count_estimate` (sample method), `null_rates`, `value_distribution`, and `distinct_count` are suppressed when `danger.allow_full_probe_actions: false` is set in `aqueduct.yml`. `data_freshness` is also suppressed unless `allow_sample: true`. `schema_snapshot`, `sample_rows`, and `partition_stats` are never suppressed.|
 | :- |
@@ -650,8 +651,33 @@ The spillway DataFrame received by write\_quarantine contains all original colum
 |**\_aq\_error\_type**|The exception class name (e.g. CastException).|
 |**\_aq\_error\_ts**|Timestamp when the error was recorded.|
 
-|**Implementation:**  Spillway routing uses SQL `filter()` on a `spillway_condition` expression — a pure Spark SQL operation, fully vectorized, no Python boundary. The `_aq_error_*` columns are appended via `withColumn(F.lit(...))` — also native. This is a single-pass operation; no separate Spark job or action is triggered. **Python UDFs used inside Channel SQL queries are inherently row-at-a-time** (a Spark limitation, not Aqueduct-specific) — the spillway mechanism does not make this worse, but it does not improve it either. The compiler warns when `lang: python` UDFs are registered. See [docs/SPARK_GUIDE.md#python-udf-performance](SPARK_GUIDE.md#python-udf-performance).|
+|**Implementation:**  Spillway routing uses SQL `filter()` on a `spillway_condition` expression — a pure Spark SQL operation, fully vectorized, no Python boundary. The `_aq_error_*` columns are appended via `withColumn(F.lit(...))` — also native. This is a single-pass operation; no separate Spark job or action is triggered.|
 | :- |
+
+> **Spillway cannot catch UDF runtime exceptions.** A Python (or Java) UDF that **raises an exception** causes the entire Spark task to abort — not the row to be routed to the spillway. Spark provides no mechanism to catch an exception inside a UDF and divert that row to an alternate output. The spillway `spillway_condition` is evaluated *after* the transformation succeeds; it cannot handle a transformation that throws.
+>
+> **Consequence:** Any pipeline where a Channel calls a UDF that may throw must handle errors *inside the UDF* before they propagate to Spark. The correct pattern:
+>
+> ```python
+> # Defensive UDF: never raises — returns None on error
+> @udf(returnType=StructType([
+>     StructField("result", DoubleType(), nullable=True),
+>     StructField("error",  StringType(), nullable=True),
+> ]))
+> def safe_parse_amount(raw):
+>     try:
+>         return (float(raw.replace(",", "")), None)
+>     except Exception as e:
+>         return (None, str(e))
+> ```
+>
+> Then route error rows via `spillway_condition`:
+>
+> ```yaml
+> spillway_condition: "safe_parse_amount_result.error IS NOT NULL"
+> ```
+>
+> This keeps Spark fully vectorized (the UDF is still row-at-a-time, but it never raises) and lets the spillway do its job.
 
 |**ARCADE**|**Encapsulated sub-pipeline — reusable Blueprint embedded as a single Module**|
 | :-: | :- |
