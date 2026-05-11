@@ -122,14 +122,14 @@ This section tracks high-level functional verification of core features against 
 - ✅ Arcade with missing required_context fails
 
 ### Performance diagnostic warnings — `compiler.py`
-- ❌ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "diagnostics.md#probe-sample-cost"
+- ❌ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "SPARK_GUIDE.md#probe-sample-cost"
 - ❌ Probe with `row_count_estimate` (sample method) → warns; `row_count_estimate` with `method: spark_listener` → no warning
 - ❌ Probe with `value_distribution` signal → warns
 - ❌ Probe with `distinct_count` signal → warns
 - ❌ Probe with `schema_snapshot` or `partition_stats` only → no warning emitted
-- ❌ Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "diagnostics.md#incremental-watermark-scan"
+- ❌ Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "SPARK_GUIDE.md#incremental-watermark-scan"
 - ❌ Channel with `materialize: incremental` + Checkpoint upstream → no warning
-- ❌ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "diagnostics.md#python-udf-performance"
+- ❌ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "SPARK_GUIDE.md#python-udf-performance"
 - ❌ UDF registry entry with `lang: java` → no warning
 
 ---

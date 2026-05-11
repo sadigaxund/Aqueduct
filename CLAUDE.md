@@ -31,7 +31,7 @@ When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `
 
 When adding an LLM provider: add `_call_<provider>()` in `surveyor/llm.py` using `httpx`. Wire in `_call_llm()` dispatch. No new dep needed.
 
-**Spark behavior reference**: read `.dev/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.
+**Spark behavior reference**: read `docs/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.
 
 ## TODOs Memory Rule
 `~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/TODOs.md` is the single source of truth for what's next, what's stubbed, and what's deferred.

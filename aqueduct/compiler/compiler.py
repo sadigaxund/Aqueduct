@@ -226,7 +226,7 @@ def compile(  # noqa: A001
                 "this is a FULL DATASET SCAN. sample() is a row-level filter, not a "
                 "partition prune: all data is read before rows are discarded. "
                 "Use method: spark_listener for zero-cost row counts. "
-                "See docs/diagnostics.md#probe-sample-cost.",
+                "See docs/SPARK_GUIDE.md#probe-sample-cost.",
                 stacklevel=2,
             )
 
@@ -246,7 +246,7 @@ def compile(  # noqa: A001
                 "After each run, Aqueduct computes MAX(watermark_column) on the output — "
                 "a second full scan if the DataFrame is not cached. "
                 "Add a Checkpoint upstream or accept the extra Spark action. "
-                "See docs/diagnostics.md#incremental-watermark-scan.",
+                "See docs/SPARK_GUIDE.md#incremental-watermark-scan.",
                 stacklevel=2,
             )
 
@@ -259,7 +259,7 @@ def compile(  # noqa: A001
                 "For high-volume channels, prefer native Spark SQL expressions or "
                 "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
                 "and unaffected, but the UDF body will not be vectorized. "
-                "See docs/diagnostics.md#python-udf-performance.",
+                "See docs/SPARK_GUIDE.md#python-udf-performance.",
                 stacklevel=2,
             )
 
