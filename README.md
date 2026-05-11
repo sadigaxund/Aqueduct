@@ -491,8 +491,7 @@ aqueduct patch discard --blueprint blueprints/pipeline.yml  # restore blueprint 
 
 aqueduct log blueprints/pipeline.yml                 # show git history of patch commits for this blueprint
 aqueduct log blueprints/pipeline.yml --format json
-aqueduct rollback blueprints/pipeline.yml --to <patch_id>   # git revert the commit that applied patch_id
-aqueduct rollback blueprints/pipeline.yml --to <patch_id> --hard  # destructive reset (requires "yes" confirmation)
+aqueduct rollback blueprints/pipeline.yml --to <patch_id>   # restore blueprint file(s) to pre-patch state; creates a new forward commit
 ```
 
 ### Global flags (before subcommand)
