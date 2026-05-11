@@ -528,7 +528,7 @@ class TestFailureContextBlueprintSourceYaml:
         from aqueduct.surveyor.llm import _build_system_prompt
         prompt = _build_system_prompt(patches_dir=tmp_path)
         assert "using template expressions" in prompt
-        assert "not resolved literal paths" in prompt
+        assert "Do NOT hard-code the resolved literal path" in prompt
 
 
 # ── doctor_hints LLM injection ─────────────────────────────────────────────────

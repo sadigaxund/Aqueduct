@@ -121,6 +121,17 @@ This section tracks high-level functional verification of core features against 
 - ✅ Arcade expansion namespaces IDs correctly
 - ✅ Arcade with missing required_context fails
 
+### Performance diagnostic warnings — `compiler.py`
+- ❌ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "diagnostics.md#probe-sample-cost"
+- ❌ Probe with `row_count_estimate` (sample method) → warns; `row_count_estimate` with `method: spark_listener` → no warning
+- ❌ Probe with `value_distribution` signal → warns
+- ❌ Probe with `distinct_count` signal → warns
+- ❌ Probe with `schema_snapshot` or `partition_stats` only → no warning emitted
+- ❌ Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "diagnostics.md#incremental-watermark-scan"
+- ❌ Channel with `materialize: incremental` + Checkpoint upstream → no warning
+- ❌ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "diagnostics.md#python-udf-performance"
+- ❌ UDF registry entry with `lang: java` → no warning
+
 ---
 
 ---
@@ -763,20 +774,22 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 ---
 
 ## Failure Report
-The test suite currently has 14 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
-1. `test_init_git_not_installed` — Crashes if git is missing. Tracked in `.dev/ISSUES/test_init_git_not_installed.md`.
-2-6. `test_cli_test_*` (5 tests) — Fails due to renamed `TestSchemaError` vs `TestError`. Tracked in `.dev/ISSUES/test_cli_test_TestError_import_mismatch.md`.
+The test suite currently has 8 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
 7. `test_patched_yaml_list_indentation` — `ruamel.yaml` formats lists incorrectly. Tracked in `.dev/ISSUES/test_patch_formatting.md`.
 8-9. `test_patch_filename_includes_seq` & `_increments_seq` — Missing sequence numbers in patches. Tracked in `.dev/ISSUES/test_patch_filename_seq.md`.
-10. `test_failure_context_has_blueprint_source_yaml` — Missing `blueprint_source_yaml` on FailureContext. Tracked in `.dev/ISSUES/test_failure_context_has_blueprint_source_yaml.md`.
 11. `test_llm_user_prompt_includes_blueprint_source_yaml` — Prompt template expecting field. Tracked in `.dev/ISSUES/test_llm_user_prompt_includes_blueprint_source_yaml.md`.
-12. `test_llm_system_prompt_includes_template_expressions_rule` — Missing prompt rules. Tracked in `.dev/ISSUES/test_llm_system_prompt_includes_template_expressions_rule.md`.
 13. `test_surveyor_populates_blueprint_source_yaml_when_file_exists` — Surveyor fails to read yaml. Tracked in `.dev/ISSUES/test_surveyor_populates_blueprint_source_yaml_when_file_exists.md`.
 14. `test_surveyor_sets_blueprint_source_yaml_none_when_file_missing` — Surveyor fails to handle missing path. Tracked in `.dev/ISSUES/test_surveyor_sets_blueprint_source_yaml_none_when_file_missing.md`.
 
+**Resolved (moved to `.dev/RESOLVED/`):**
+- `test_init_git_not_installed` — Fixed: `FileNotFoundError` guard added around git subprocess calls.
+- `test_cli_test_*` (5 tests) — Fixed: `TestError` → `TestSchemaError` in `cli.py`.
+- `test_failure_context_has_blueprint_source_yaml` — Fixed: `blueprint_source_yaml` field added to `FailureContext`.
+- `test_llm_system_prompt_includes_template_expressions_rule` — Fixed: rule added to `_SYSTEM_PROMPT_TEMPLATE`.
+
  (last run)
 <!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 680 passed, 14 failed, 4 skipped, 1 xpassed. Coverage: 71%.
+- **Status**: 686 passed, 8 failed, 4 skipped. Coverage: 71%.
 Issues reported in:
 - `.dev/ISSUES/`
 ---
@@ -1160,11 +1173,13 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ long patches column truncated to 40 chars with `..` suffix
 
 ### `aqueduct rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
-- ✅ patch_id found in git log → `git revert --no-edit <hash>` run; new commit created
-- ✅ patch_id not found → error message with hint to run `aqueduct log`; exits 1
-- ✅ `--hard` flag: requires typing "yes" to confirm; runs `git reset --hard <parent>`
-- ✅ `--hard` with non-"yes" response → "Aborted." printed; no reset
-- ✅ `git revert` failure (e.g. conflict) → exits 1 with stderr
+- ❌ patch_id found → checks out blueprint file(s) from parent commit; stages and commits; prints hash
+- ❌ patch_id found in arcade commit (multiple files) → all touched files restored and committed together
+- ❌ patch_id not found → error message with hint to run `aqueduct log`; exits 1
+- ❌ parent commit resolution fails (first-ever commit) → exits 1 with error
+- ❌ `git checkout <file>` failure → exits 1 with stderr; no commit created
+- ❌ `git commit` failure → exits 1 with stderr
+- ❌ `--hard` flag no longer accepted (removed; passing it produces click error)
 
 ### Run-start uncommitted patch warning — `aqueduct/cli.py`
 - ❌ uncommitted applied patches exist → warning printed to stderr before run starts

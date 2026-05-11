@@ -207,6 +207,62 @@ def compile(  # noqa: A001
                     stacklevel=2,
                 )
 
+    # ── 8. Performance diagnostics ────────────────────────────────────────────
+
+    # 8a. Probe sample() signals — full dataset scan despite the name
+    _SAMPLE_SCAN_SIGNALS = {"null_rates", "row_count_estimate", "value_distribution", "distinct_count"}
+    for m in modules:
+        if m.type != "Probe":
+            continue
+        for sig in m.config.get("signals", []):
+            sig_type = sig.get("type", "")
+            if sig_type not in _SAMPLE_SCAN_SIGNALS:
+                continue
+            # row_count_estimate with spark_listener method is zero-action
+            if sig_type == "row_count_estimate" and sig.get("method") == "spark_listener":
+                continue
+            warnings.warn(
+                f"Probe '{m.id}' signal '{sig_type}' uses df.sample() — "
+                "this is a FULL DATASET SCAN. sample() is a row-level filter, not a "
+                "partition prune: all data is read before rows are discarded. "
+                "Use method: spark_listener for zero-cost row counts. "
+                "See docs/diagnostics.md#probe-sample-cost.",
+                stacklevel=2,
+            )
+
+    # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
+    _channel_ids = {m.id for m in modules if m.type == "Channel"}
+    for m in modules:
+        if m.type != "Channel" or m.config.get("materialize") != "incremental":
+            continue
+        # Check if any upstream module in the edge list is a cache/checkpoint
+        upstream_ids = {e.from_id for e in edges if e.to_id == m.id}
+        upstream_types = {
+            um.type for um in modules if um.id in upstream_ids
+        }
+        if "Checkpoint" not in upstream_types:
+            warnings.warn(
+                f"Channel '{m.id}' uses materialize=incremental. "
+                "After each run, Aqueduct computes MAX(watermark_column) on the output — "
+                "a second full scan if the DataFrame is not cached. "
+                "Add a Checkpoint upstream or accept the extra Spark action. "
+                "See docs/diagnostics.md#incremental-watermark-scan.",
+                stacklevel=2,
+            )
+
+    # 8c. Python UDF registered — row-at-a-time execution warning
+    for udf_entry in blueprint.udf_registry:
+        if udf_entry.get("lang", "python") == "python":
+            warnings.warn(
+                f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
+                "Python UDFs execute row-at-a-time and bypass Arrow/vectorized execution. "
+                "For high-volume channels, prefer native Spark SQL expressions or "
+                "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
+                "and unaffected, but the UDF body will not be vectorized. "
+                "See docs/diagnostics.md#python-udf-performance.",
+                stacklevel=2,
+            )
+
     prov_map = ProvenanceMap(
         blueprint_id=blueprint.id,
         blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",
