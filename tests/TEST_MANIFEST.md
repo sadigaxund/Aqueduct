@@ -1100,18 +1100,17 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### `blueprint_source_yaml` in LLM context (`aqueduct/surveyor/`)
 
-- ❌ `FailureContext.blueprint_source_yaml` populated when blueprint file exists at `_blueprint_path`
-- ❌ `FailureContext.blueprint_source_yaml` is `None` when blueprint file path not set
-- ❌ `FailureContext.to_dict()` includes `"blueprint_source_yaml"` key
-- ❌ LLM user prompt includes "Original Blueprint YAML" section when `blueprint_source_yaml` is non-None
-- ❌ LLM system prompt includes CRITICAL rule about using template expressions (not resolved literal paths)
+- ✅ `FailureContext.blueprint_source_yaml` populated when blueprint file exists at `_blueprint_path`
+- ✅ `FailureContext.blueprint_source_yaml` is `None` when blueprint file path not set
+- ✅ `FailureContext.to_dict()` includes `"blueprint_source_yaml"` key
+- ✅ LLM user prompt includes "Original Blueprint YAML" section when `blueprint_source_yaml` is non-None
+- ✅ LLM system prompt includes CRITICAL rule about using template expressions (not resolved literal paths)
 
 ### ruamel YAML formatting preservation (`aqueduct/patch/apply.py`, `aqueduct/patch/operations.py`)
 
-- ❌ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
-- ❌ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
-- ❌ `insert_module` op: injected module dict preserves string quotes in output YAML
 - ✅ `apply_patch_to_dict()` uses round-trip copy (not `copy.deepcopy`) — input Blueprint comment metadata preserved
+- ✅ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
+- ✅ `insert_module` op: injected module dict preserves string quotes in output YAML
 - ✅ patched Blueprint YAML has list items at col+2 (`  - item`) not col 0 (`- item`)
 - ✅ `insert_module` op: injected module dict preserves string quotes in output YAML
 - ✅ `replace_module_config` op: injected config dict strings are double-quoted in output YAML
@@ -1205,27 +1204,27 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `--status=applied` → lists applied/ dir
 - ✅ `--status=all` → lists pending/, applied/, rejected/ sections
 - ✅ `--blueprint <path>` → patches_dir derived via walk-up from blueprint
-- ⏳ no blueprint, no patches-dir → walk-up to aqueduct.yml to find project root
+- ✅ no blueprint, no patches-dir → walk-up to aqueduct.yml to find project root
 - ✅ rationale truncated to 60 chars in table output
 - ✅ apply/reject hint lines printed after pending table
 
 ### `_patches_root_from_blueprint()` — `aqueduct/cli.py`
 - ✅ blueprint in `blueprints/` subdir, `aqueduct.yml` at project root → returns `<root>/patches`
 - ✅ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
-- ⏳ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
+- ❌ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
 
 ### `aqueduct doctor --blueprint` — format/extension mismatch — `aqueduct/doctor.py`
-- ⏳ `format=parquet` + path `*.parquet` → ok, no mismatch warning
-- ⏳ `format=csv` + path `*.parquet` → warn: "format='csv' but file extension suggests different format"
-- ⏳ `format=parquet` + path `*.csv` → warn
-- ⏳ `format=delta` → no mismatch check (delta dirs have no single extension)
-- ⏳ unknown format → no mismatch check
-- ⏳ glob with mixed extensions (some match, some don't) → warn on mismatch files
-- ⏳ non-glob path: single file checked for extension mismatch
+- ✅ `format=parquet` + path `*.parquet` → ok, no mismatch warning
+- ✅ `format=csv` + path `*.parquet` → warn: "format='csv' but file extension suggests different format"
+- ✅ `format=parquet` + path `*.csv` → warn
+- ✅ `format=delta` → no mismatch check (delta dirs have no single extension)
+- ✅ unknown format → no mismatch check
+- ✅ glob with mixed extensions (some match, some don't) → warn on mismatch files
+- ✅ non-glob path: single file checked for extension mismatch
 
 ### LLM doctor hints injection — `aqueduct/cli.py` + `aqueduct/surveyor/llm.py`
-- ⏳ blueprint has warn doctor result → `failure_ctx.doctor_hints` non-empty before LLM call
-- ⏳ doctor check throws exception → exception swallowed; `doctor_hints` stays empty; self-healing continues
+- ✅ blueprint has warn doctor result → `failure_ctx.doctor_hints` non-empty before LLM call
+- ✅ doctor check throws exception → exception swallowed; `doctor_hints` stays empty; self-healing continues
 - ✅ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
 - ✅ `doctor_hints` empty → section absent from LLM prompt
 - ✅ `FailureContext.to_dict()` includes `doctor_hints` list

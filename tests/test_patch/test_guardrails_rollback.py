@@ -105,6 +105,8 @@ edges: []
                 if "revert" in cmd:
                     env["bp_path"].write_text(env["backup_file"].read_text())
                     return MagicMock(returncode=0)
+                if "diff-tree" in cmd:
+                    return MagicMock(returncode=0, stdout="blueprint.yml\n")
                 return MagicMock(returncode=0)
             mock_run.side_effect = side_effect
             result = runner.invoke(cli, ["rollback", str(env["bp_path"]), "--to", "abc123"])
