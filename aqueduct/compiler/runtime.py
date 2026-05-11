@@ -93,8 +93,10 @@ class AqFunctions:
         val = os.environ.get(key)
         if val is None:
             raise RuntimeError(
-                f"@aq.secret: secret {key!r} not found. "
-                "Configure a secrets provider in aqueduct.yml or set the env var."
+                f"@aq.secret: environment variable {key!r} is not set. "
+                "@aq.secret() reads os.environ only — inject secrets via environment "
+                "before running aqueduct (e.g. Kubernetes Secrets, Vault agent sidecar, "
+                "or export in your shell)."
             )
         return val
 

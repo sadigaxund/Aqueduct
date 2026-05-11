@@ -33,7 +33,7 @@ These principles govern every design decision in the system. When two requiremen
 | :- | :- |
 |**P1 — LLM-first observability**|Every failure must carry enough structured context for an agent to diagnose and patch without additional queries. Observability is not optional.|
 |**P2 — Blueprint as truth**|The Blueprint is the single source of truth. Nothing about a pipeline exists outside the Blueprint and its derived Manifest. No hidden state.|
-|**P3 — Performance non-regression**|Aqueduct must not add Spark actions that were not in the original pipeline. Every observability feature has a defined cost model; zero-cost options are preferred.|
+|**P3 — Performance non-regression**|Aqueduct adds no hidden Spark actions. Any action beyond the pipeline's own Egress writes is the direct result of a user-configured Probe, Assert rule, or incremental watermark — each with its cost fully described in the signal cost model (§6.2). Zero-cost options are always preferred and are the default.|
 |**P4 — Static resolution first**|Any value that can be resolved at parse time must be. Runtime resolution is explicit, opt-in, and visually distinct in Blueprint syntax.|
 |**P5 — Patch grammar over codegen**|The LLM agent operates within a structured Patch grammar, not free-form code generation. Every patch is schema-valid, auditable, and reversible.|
 |**P6 — Passive-by-default gates**|Flow control constructs (Regulators, Spillways) do not exist in the execution path unless explicitly wired. Unwired gates compile away entirely.|
@@ -2265,7 +2265,28 @@ In production: rollback = revert the commit in git → CI/CD redeployment. Do no
 
 ---
 
-## **14.9 Production Readiness Checklist**
+## **14.9 Delta Lake Operational Notes**
+
+When using `format: delta` Egress modules in production, Aqueduct handles reads and writes but does **not** run Delta maintenance operations. These must be scheduled externally:
+
+| Operation | Why it matters | When to run |
+|---|---|---|
+| `OPTIMIZE` | Compacts small files written by incremental runs into larger files; dramatically improves read performance | After each incremental batch, or daily |
+| `VACUUM` | Removes old file versions no longer reachable by the current snapshot; controls storage growth | Daily or weekly (default retention: 7 days) |
+| `ZORDER BY (col)` | Co-locates related data within files for data-skipping on filter columns | Run with `OPTIMIZE` when query patterns are known |
+
+Example (run via `spark.sql()` in an external maintenance job or notebook):
+
+```sql
+OPTIMIZE delta.`s3://my-bucket/output/orders` ZORDER BY (event_date, region);
+VACUUM delta.`s3://my-bucket/output/orders` RETAIN 168 HOURS;
+```
+
+Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` will accumulate small files over time, degrading read performance significantly.
+
+---
+
+## **14.10 Production Readiness Checklist**
 
 Before promoting a Blueprint to production:
 
@@ -2274,11 +2295,12 @@ Before promoting a Blueprint to production:
 - [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
 - [ ] `agent.approval_mode: human` or `ci` (not `auto` or `aggressive`)
 - [ ] No `danger.*: true` in production `aqueduct.yml`
-- [ ] API keys injected via environment, not in YAML
+- [ ] API keys injected via environment (`@aq.secret()` reads `os.environ` only — no external provider)
 - [ ] `store_dir` points to a persistent path (PVC in K8s, persistent edge node in YARN)
 - [ ] `patches/pending/` and `patches/rejected/` in `.gitignore`
 - [ ] `patches/applied/` and `patches/rules.md` committed to git
 - [ ] `agent.webhooks.on_patch_pending` configured if using `approval_mode: human` in a team setting
+- [ ] If using `format: delta`: external OPTIMIZE / VACUUM jobs scheduled (see §14.9)
 
 ---
 

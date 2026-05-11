@@ -122,6 +122,47 @@ orchestrator-level retry handling.
 
 ---
 
+### SparkListener Row Estimates — Stage Fusion Caveat
+
+The `row_count_estimate` signal with `method: spark_listener` queries `module_metrics`
+in `obs.db` using the module's ID as the lookup key. This works correctly when each
+logical module maps to its own Spark stage.
+
+**Edge case — stage fusion:** Spark's Catalyst optimizer can fuse multiple logical
+modules (Channel → Egress, or multiple narrow transforms) into a single physical stage.
+When this happens, `recordsWritten` from the fused stage is attributed to one stage ID
+and the per-module breakdown may not be available or may reflect the combined output
+of multiple logical modules.
+
+**Consequence:** The row estimate for a Channel that was fused with its downstream
+Egress may show the Egress's written count, not the Channel's intermediate row count.
+The estimate is still useful for capacity planning but should not be treated as exact
+for per-module cost attribution.
+
+**No fix required** — this is a Spark optimizer behavior. The caveat is noted here
+so users understand why estimates occasionally differ from expected counts.
+
+---
+
+### `@aq.secret()` — Environment Variable Resolution Only
+
+`@aq.secret(KEY)` resolves exclusively via `os.environ.get(KEY)` at compile time
+(before SparkSession creation). There is no external secrets provider integration
+(no Vault, AWS Secrets Manager, or GCP Secret Manager client).
+
+**What this means:**
+- Secrets must be injected into the process environment before `aqueduct` is invoked
+- In Kubernetes: use `envFrom` with a Secret resource, or a Vault agent sidecar
+- In YARN/EMR: export variables in the driver bootstrap script
+- Secrets needed for SparkSession config (e.g. Databricks tokens, S3 credentials)
+  must also be in `os.environ` — they resolve at compile time and are embedded in
+  the Manifest's `spark_config` before the session is created
+
+**Error message:** If the variable is not set, Aqueduct raises immediately with a
+clear message — it does not fall back silently to an empty string.
+
+---
+
 ### Planned Future Checks
 
 Not yet implemented — planned for future compiler passes:
@@ -138,6 +179,9 @@ Not yet implemented — planned for future compiler passes:
   `MAX()` on strings is lexicographic, not temporal.
 - **Partition suggestion:** Based on source file count and size statistics, recommend
   `repartition(n)` value at compile time.
+- **Delta small-file advisory:** Warn when an Egress uses `format: delta` with
+  `mode: append` or `mode: merge` and no external OPTIMIZE job is referenced —
+  incremental Delta writes accumulate small files without OPTIMIZE.
 
 ---
 

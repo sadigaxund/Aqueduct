@@ -13,6 +13,10 @@ row_count_estimate   Two methods:
   method: spark_listener   No action; queries ``module_metrics`` table in
                            ``obs.db`` for the upstream module's stage count.
                            Returns ``estimate: null`` if no row exists yet.
+                           Note: Spark stage fusion can group multiple logical
+                           modules into one stage — the estimate reflects the
+                           fused stage's recordsWritten, not a per-module count.
+                           Treat as an approximation, not exact attribution.
   method: sample           ``df.sample(fraction).count()`` — FULL DATASET SCAN.
                            sample() is a row-level filter, not a partition prune.
                            All data is read; (1-fraction) of rows are discarded
