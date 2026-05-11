@@ -201,3 +201,34 @@ class TestCheckpointField:
         manifest = cc(bp, blueprint_path=bp_file)
         assert manifest.checkpoint is True
         assert manifest.to_dict()["checkpoint"] is True
+
+
+class TestPromptContext:
+    def test_agent_config_prompt_context_round_trips(self, tmp_path):
+        """AgentConfig.prompt_context round-trips through Parser -> Blueprint.agent.prompt_context"""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n  approval_mode: auto\n  prompt_context: 'Use PySpark version 3.5.'\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.agent.prompt_context == "Use PySpark version 3.5."
+
+    def test_manifest_to_dict_includes_prompt_context(self, tmp_path):
+        """Manifest.to_dict()['agent']['prompt_context'] present when set"""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n  approval_mode: auto\n  prompt_context: 'Contextual info'\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        from aqueduct.compiler.compiler import compile as cc
+        bp = parse(bp_file)
+        manifest = cc(bp, blueprint_path=bp_file)
+        m_dict = manifest.to_dict()
+        assert "agent" in m_dict
+        assert "prompt_context" in m_dict["agent"]
+        assert m_dict["agent"]["prompt_context"] == "Contextual info"

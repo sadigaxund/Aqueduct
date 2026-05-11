@@ -116,3 +116,50 @@ class TestEvaluateRegulatorSignalOverride:
         s = Surveyor(manifest, store_dir=store)
         s._run_id = "run-x"
         assert s.evaluate_regulator("reg1") is True
+
+
+class TestSurveyorBlueprintSourceYaml:
+    def test_surveyor_populates_blueprint_source_yaml_when_file_exists(self, tmp_path):
+        """Surveyor reads blueprint YAML and sets blueprint_source_yaml on FailureContext."""
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.models import ExecutionResult, ModuleResult
+
+        bp_path = tmp_path / "blueprint.yml"
+        bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
+
+        manifest = Manifest(blueprint_id="b1", context={}, modules=(), edges=(), spark_config={})
+        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path)
+        surveyor.start("r1")
+
+        result = ExecutionResult(
+            blueprint_id="b1",
+            run_id="r1",
+            status="error",
+            module_results=[ModuleResult(module_id="m1", status="error", error="err")],
+        )
+        ctx = surveyor.record(result)
+        assert ctx is not None
+        assert ctx.blueprint_source_yaml is not None
+        assert "my_blueprint" in ctx.blueprint_source_yaml
+
+    def test_surveyor_sets_blueprint_source_yaml_none_when_file_missing(self, tmp_path):
+        """Surveyor sets blueprint_source_yaml=None when blueprint_path is None."""
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.executor.models import ExecutionResult, ModuleResult
+
+        manifest = Manifest(blueprint_id="b1", context={}, modules=(), edges=(), spark_config={})
+        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None)
+        surveyor.start("r1")
+
+        result = ExecutionResult(
+            blueprint_id="b1",
+            run_id="r1",
+            status="error",
+            module_results=[ModuleResult(module_id="m1", status="error", error="err")],
+        )
+        ctx = surveyor.record(result)
+        assert ctx is not None
+        assert ctx.blueprint_source_yaml is None
+

@@ -150,6 +150,39 @@ class TestStageForHuman:
         result = stage_patch_for_human(spec, tmp_path / "patches", _failure_ctx())
         assert result is None
 
+class TestPatchFilename:
+    def test_patch_filename_includes_seq(self, tmp_path):
+        from aqueduct.surveyor.llm import _patch_filename
+        spec = _patch_spec(patch_id="test")
+        patches_dir = tmp_path / "patches"
+        # 0 files -> seq is 00001
+        filename = _patch_filename(spec, patches_dir)
+        assert filename.startswith("00001_")
+        assert "_test.json" in filename
+
+    def test_patch_filename_increments_seq(self, tmp_path):
+        from aqueduct.surveyor.llm import _patch_filename
+        spec = _patch_spec(patch_id="test")
+        patches_dir = tmp_path / "patches"
+        
+        pending_dir = patches_dir / "pending"
+        pending_dir.mkdir(parents=True)
+        (pending_dir / "00001_123_a.json").write_text("{}")
+        
+        applied_dir = patches_dir / "applied"
+        applied_dir.mkdir(parents=True)
+        (applied_dir / "00002_123_b.json").write_text("{}")
+        (applied_dir / "00003_123_c.json").write_text("{}")
+        
+        rejected_dir = patches_dir / "rejected"
+        rejected_dir.mkdir(parents=True)
+        (rejected_dir / "00004_123_d.json").write_text("{}")
+        
+        # 4 files total -> next seq is 00005
+        filename = _patch_filename(spec, patches_dir)
+        assert filename.startswith("00005_")
+
+
 
 # ── archive_patch ─────────────────────────────────────────────────────────────
 
@@ -385,3 +418,141 @@ class TestLlmHelpers:
         assert result.patch is None
         # Should have tried exactly llm_max_reprompts (defaults to MAX_REPROMPTS=3)
         assert call_count == MAX_REPROMPTS
+
+    def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
+        from aqueduct.surveyor.llm import generate_llm_patch
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        
+        call_count = 0
+        def always_invalid(*_args, **_kw):
+            nonlocal call_count
+            call_count += 1
+            return "not json"
+        
+        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", always_invalid)
+        
+        from unittest.mock import MagicMock
+        ctx = MagicMock()
+        result = generate_llm_patch(ctx, "model", tmp_path, llm_max_reprompts=5)
+        
+        assert result.patch is None
+        assert call_count == 5
+
+    def test_generate_llm_patch_uses_llm_timeout(self, monkeypatch, tmp_path):
+        from aqueduct.surveyor.llm import generate_llm_patch
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        
+        timeout_used = None
+        def mock_call_llm(*_args, **kwargs):
+            nonlocal timeout_used
+            timeout_used = kwargs.get("timeout")
+            return _valid_patch_json()
+        
+        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", mock_call_llm)
+        
+        from unittest.mock import MagicMock
+        ctx = MagicMock()
+        generate_llm_patch(ctx, "model", tmp_path, llm_timeout=600.0)
+        
+        assert timeout_used == 600.0
+
+
+
+class TestBuildSystemPrompt:
+    def test_engine_prompt_context_included(self, tmp_path):
+        from aqueduct.surveyor.llm import _build_system_prompt
+        prompt = _build_system_prompt(
+            patches_dir=tmp_path,
+            engine_prompt_context="Engine rule 1.",
+            blueprint_prompt_context=None
+        )
+        assert "Engine rule 1." in prompt
+
+    def test_blueprint_prompt_context_included(self, tmp_path):
+        from aqueduct.surveyor.llm import _build_system_prompt
+        prompt = _build_system_prompt(
+            patches_dir=tmp_path,
+            engine_prompt_context=None,
+            blueprint_prompt_context="Blueprint rule 2."
+        )
+        assert "Blueprint rule 2." in prompt
+
+    def test_both_contexts_included(self, tmp_path):
+        from aqueduct.surveyor.llm import _build_system_prompt
+        prompt = _build_system_prompt(
+            patches_dir=tmp_path,
+            engine_prompt_context="Engine rule 1.",
+            blueprint_prompt_context="Blueprint rule 2."
+        )
+        assert "Engine rule 1." in prompt
+        assert "Blueprint rule 2." in prompt
+        # Ensure blueprint comes after engine
+        assert prompt.index("Engine rule 1.") < prompt.index("Blueprint rule 2.")
+
+
+class TestFailureContextBlueprintSourceYaml:
+    def test_failure_context_has_blueprint_source_yaml(self):
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace=None,
+            manifest_json="{}",
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:01:00Z",
+            blueprint_source_yaml="id: test"
+        )
+        assert ctx.blueprint_source_yaml == "id: test"
+        assert ctx.to_dict()["blueprint_source_yaml"] == "id: test"
+    def test_llm_user_prompt_includes_blueprint_source_yaml(self):
+        from aqueduct.surveyor.llm import _build_user_prompt
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1",
+            blueprint_id="b1",
+            failed_module="m1",
+            error_message="err",
+            stack_trace=None,
+            manifest_json="{}",
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:01:00Z",
+            blueprint_source_yaml="id: my_blueprint\nname: Test"
+        )
+        prompt = _build_user_prompt(ctx)
+        assert "## Original Blueprint YAML" in prompt
+        assert "id: my_blueprint" in prompt
+
+    def test_llm_system_prompt_includes_template_expressions_rule(self, tmp_path):
+        from aqueduct.surveyor.llm import _build_system_prompt
+        prompt = _build_system_prompt(patches_dir=tmp_path)
+        assert "using template expressions" in prompt
+        assert "not resolved literal paths" in prompt
+
+
+# ── doctor_hints LLM injection ─────────────────────────────────────────────────
+
+class TestDoctorHintsInLLMPrompt:
+    def test_doctor_hints_non_empty_includes_section(self, tmp_path):
+        """doctor_hints non-empty → user prompt contains 'Blueprint issues detected' section."""
+        from aqueduct.surveyor.llm import _build_user_prompt
+
+        ctx = _failure_ctx(
+            doctor_hints=("warn: bad path /tmp/missing",),
+            manifest_json=json.dumps({"blueprint_id": "test.bp", "name": "Test", "modules": [], "edges": []}),
+        )
+        prompt = _build_user_prompt(ctx, patches_dir=tmp_path)
+        assert "Blueprint issues detected before run" in prompt
+        assert "warn: bad path /tmp/missing" in prompt
+
+    def test_doctor_hints_empty_section_absent(self, tmp_path):
+        """doctor_hints empty → 'Blueprint issues detected' section absent."""
+        from aqueduct.surveyor.llm import _build_user_prompt
+
+        ctx = _failure_ctx(
+            doctor_hints=(),
+            manifest_json=json.dumps({"blueprint_id": "test.bp", "name": "Test", "modules": [], "edges": []}),
+        )
+        prompt = _build_user_prompt(ctx, patches_dir=tmp_path)
+        assert "Blueprint issues detected" not in prompt

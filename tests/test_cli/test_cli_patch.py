@@ -94,6 +94,29 @@ def test_patch_reject_success(cli_setup):
     data = json.loads((project / "patches" / "rejected" / "P001.json").read_text())
     assert data["rejection_reason"] == "Too risky"
 
+def test_patch_reject_not_found_with_pending_parent(cli_setup):
+    project, bp_path, patch_file = cli_setup
+    runner = CliRunner()
+    
+    # Path with pending/ parent but file doesn't exist
+    ghost_path = project / "patches" / "pending" / "ghost.json"
+    result = runner.invoke(cli, ["patch", "reject", str(ghost_path), "--reason", "Test"])
+    
+    assert result.exit_code == 1
+    assert "✗ reject failed: Patch 'ghost' not found" in result.output
+
+def test_patch_reject_bare_slug(cli_setup):
+    project, bp_path, patch_file = cli_setup
+    runner = CliRunner()
+    
+    # Use just the patch ID, relies on --patches-dir or CWD logic
+    # Since we don't change CWD, we pass --patches-dir
+    patches_dir = project / "patches"
+    result = runner.invoke(cli, ["patch", "reject", "P001", "--patches-dir", str(patches_dir), "--reason", "Test slug"])
+    
+    assert result.exit_code == 0
+    assert (project / "patches" / "rejected" / "P001.json").exists()
+
 def test_patch_commit_mock_git(cli_setup, monkeypatch):
     project, bp_path, patch_file = cli_setup
     runner = CliRunner()
@@ -121,6 +144,86 @@ def test_patch_commit_mock_git(cli_setup, monkeypatch):
     cmds = [" ".join(c) if isinstance(c, list) else c for c in mock_run_calls]
     assert any("git add" in c for c in cmds)
     assert any("git commit" in c for c in cmds)
+
+def test_patch_commit_one_patch(cli_setup, monkeypatch):
+    project, bp_path, patch_file = cli_setup
+    runner = CliRunner()
+    
+    # Write a second patch file so we have 1 applied
+    patch_data = {"patch_id": "P001", "rationale": "Fixing the bug", "operations": [{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "new.csv"}]}
+    patch_file.write_text(json.dumps(patch_data))
+    apply_result = runner.invoke(cli, ["patch", "apply", str(patch_file), "--blueprint", str(bp_path)])
+    assert apply_result.exit_code == 0, apply_result.output
+    
+    captured_msg = ""
+    def mock_run(args, **kwargs):
+        nonlocal captured_msg
+        if "log" in args:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="fatal")
+        if "commit" in args and "-m" in args:
+            idx = args.index("-m")
+            captured_msg = args[idx+1]
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    result = runner.invoke(cli, ["patch", "commit", "--blueprint", str(bp_path)])
+    assert result.exit_code == 0
+    assert "Fixing the bug" in captured_msg
+    assert "---aqueduct---" in captured_msg
+    assert "P001" in captured_msg
+    assert "set_module_config_key" in captured_msg
+
+def test_patch_commit_multiple_patches(cli_setup, monkeypatch):
+    project, bp_path, patch_file = cli_setup
+    runner = CliRunner()
+    
+    # Apply first - use a valid op on 'src'
+    patch_data1 = {"patch_id": "P001", "rationale": "Fix 1", "operations": [{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "a.csv"}]}
+    patch_file.write_text(json.dumps(patch_data1))
+    apply_result1 = runner.invoke(cli, ["patch", "apply", str(patch_file), "--blueprint", str(bp_path)])
+    assert apply_result1.exit_code == 0, apply_result1.output
+    
+    # Apply second
+    patch_file2 = project / "patches" / "pending" / "P002.json"
+    patch_data2 = {"patch_id": "P002", "rationale": "Fix 2", "operations": [{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "b.csv"}]}
+    patch_file2.write_text(json.dumps(patch_data2))
+    apply_result2 = runner.invoke(cli, ["patch", "apply", str(patch_file2), "--blueprint", str(bp_path)])
+    assert apply_result2.exit_code == 0, apply_result2.output
+    
+    captured_msg = ""
+    def mock_run(args, **kwargs):
+        nonlocal captured_msg
+        if "log" in args:
+            return subprocess.CompletedProcess(args, 1, stdout="", stderr="fatal")
+        if "commit" in args and "-m" in args:
+            idx = args.index("-m")
+            captured_msg = args[idx+1]
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    result = runner.invoke(cli, ["patch", "commit", "--blueprint", str(bp_path)])
+    assert result.exit_code == 0
+    assert "2 patches applied" in captured_msg
+    assert "P001" in captured_msg
+    assert "P002" in captured_msg
+    assert "set_module_config_key" in captured_msg
+    # Check deduplication
+    assert captured_msg.count("set_module_config_key") == 1
+
+def test_patch_commit_not_in_git(cli_setup, monkeypatch):
+    project, bp_path, patch_file = cli_setup
+    runner = CliRunner()
+    runner.invoke(cli, ["patch", "apply", str(patch_file), "--blueprint", str(bp_path)])
+    
+    def mock_run(args, **kwargs):
+        if isinstance(args, list) and len(args) > 1 and args[1] == "add":
+            return subprocess.CompletedProcess(args, 128, stdout=b"", stderr=b"fatal: not a git repository")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+    
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    result = runner.invoke(cli, ["patch", "commit", "--blueprint", str(bp_path)])
+    assert result.exit_code == 1
+    assert "fatal: not a git repository" in result.output
 
 def test_patch_discard_mock_git(cli_setup, monkeypatch):
     project, bp_path, patch_file = cli_setup
