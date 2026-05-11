@@ -263,6 +263,41 @@ def compile(  # noqa: A001
                 stacklevel=2,
             )
 
+    # 8d. Delta append without partition hint — small-file accumulation risk
+    for m in modules:
+        if m.type != "Egress":
+            continue
+        if m.config.get("format") in ("delta", "parquet") and m.config.get("mode") == "append":
+            has_partition = bool(m.config.get("partition_by") or m.config.get("repartition"))
+            if not has_partition:
+                warnings.warn(
+                    f"Egress '{m.id}' uses format={m.config.get('format')!r} with mode=append "
+                    "but has no partition_by or repartition hint. "
+                    "Incremental appends without partitioning accumulate small files over time, "
+                    "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
+                    "See docs/SPARK_GUIDE.md#planned-future-checks.",
+                    stacklevel=2,
+                )
+
+    # 8e. Multi-consumer Channel without cache — DAG re-evaluated per consumer
+    consumer_counts: dict[str, int] = {}
+    for e in edges:
+        consumer_counts[e.from_id] = consumer_counts.get(e.from_id, 0) + 1
+
+    cached_ids = {m.id for m in modules if m.type == "Checkpoint"}
+    for m in modules:
+        if m.type != "Channel":
+            continue
+        if consumer_counts.get(m.id, 0) > 1 and m.id not in cached_ids:
+            warnings.warn(
+                f"Channel '{m.id}' has {consumer_counts[m.id]} downstream consumers "
+                "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "
+                "consumer branch — consider adding a Checkpoint or cache() boundary to "
+                "avoid redundant computation. "
+                "See docs/SPARK_GUIDE.md#caching-strategy.",
+                stacklevel=2,
+            )
+
     prov_map = ProvenanceMap(
         blueprint_id=blueprint.id,
         blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",

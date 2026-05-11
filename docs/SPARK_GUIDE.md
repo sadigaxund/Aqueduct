@@ -272,3 +272,50 @@ Never use positional `union()` — column order is not guaranteed across sources
 | `repartition` | Wide | Yes |
 | `sample` | Narrow | No (but reads all rows) |
 | `limit` + `collect` | Narrow | No (stops after first N rows from first partition(s)) |
+
+---
+
+### Resource Tuning for Production
+
+Aqueduct exposes the full `spark_config` block — any Spark property can be set there.
+Key settings for production and backfill jobs:
+
+```yaml
+spark_config:
+  # Dynamic allocation — scale executors with workload
+  spark.dynamicAllocation.enabled: "true"
+  spark.dynamicAllocation.minExecutors: "2"
+  spark.dynamicAllocation.maxExecutors: "20"
+  spark.dynamicAllocation.executorIdleTimeout: "60s"
+
+  # Task failure tolerance — default is 4; increase for flaky sources
+  spark.task.maxFailures: "8"
+
+  # Adaptive Query Execution — on by default in Spark 3.2+
+  # Handles skew joins, coalesces shuffle partitions automatically
+  spark.sql.adaptive.enabled: "true"
+  spark.sql.adaptive.skewJoin.enabled: "true"
+
+  # Executor decommissioning — graceful shutdown on spot/preemptible nodes
+  spark.decommission.enabled: "true"
+  spark.storage.decommission.enabled: "true"
+```
+
+For backfill jobs (large date range, many partitions): increase
+`spark.sql.shuffle.partitions` (default 200 is often too low) and
+`spark.dynamicAllocation.maxExecutors` to match the data volume.
+
+### SparkListener Queue Overhead
+
+Aqueduct's SparkListener collects stage metrics (recordsWritten, shuffleBytes,
+duration) after each stage completes. In normal workloads this overhead is negligible.
+
+In very high-throughput jobs with thousands of short-lived tasks per second, the
+listener event queue can become a bottleneck — Spark's internal event bus is
+synchronous and a slow listener blocks dispatch.
+
+**If you observe unexpected driver pauses:** check `spark.scheduler.listenerbus.eventqueue.capacity`
+(default 10000) and whether the listener queue is dropping events
+(`spark.scheduler.listenerbus.eventqueue.executorManagement.capacity`). Aqueduct
+does not register a heavy listener — all processing is deferred to after the run —
+so this is unlikely to be the bottleneck unless many other listeners are registered.
