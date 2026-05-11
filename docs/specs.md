@@ -1908,7 +1908,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |`aqueduct patch reject <ref>`|Reject a pending patch with a reason.|`--reason` (required), `--patches-dir`|
 |`aqueduct patch commit`|Commit applied patches to git.|`--blueprint` (required), `--patches-dir`|
 |`aqueduct patch discard`|Revert Blueprint to git HEAD.|`--blueprint` (required), `--patches-dir`|
-|`aqueduct rollback <blueprint>`|Revert commit containing a specific patch.|`--to <patch_id>`, `--hard` (destructive)|
+|`aqueduct rollback <blueprint>`|Restore blueprint file(s) to pre-patch state via a new forward commit.|`--to <patch_id>`|
 
 ## **11.5 System Integrity Commands**
 
@@ -2241,7 +2241,9 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 
 ### Git rollback
 
-`aqueduct rollback` (uses `git revert`) is a **development tool only**.
+`aqueduct rollback` is a **development tool only**.
+
+It restores only the blueprint file(s) touched by the target patch commit by checking out their pre-patch content from git history and creating a new forward commit. No history is rewritten; other files in the repository are never touched. Arcade blueprints that were part of the same patch commit are automatically included.
 
 In production: rollback = revert the commit in git → CI/CD redeployment. Do not run `git` commands on production driver nodes.
 

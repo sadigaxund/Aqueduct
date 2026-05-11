@@ -2383,28 +2383,23 @@ def log_cmd(blueprint: str, fmt: str) -> None:
 @cli.command("rollback")
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("--to", "patch_id", required=True, help="Revert the git commit containing this patch_id")
-@click.option(
-    "--hard",
-    is_flag=True,
-    default=False,
-    help="Destructive: git reset --hard to the commit BEFORE the patch (requires confirmation)",
-)
-def rollback_cmd(blueprint: str, patch_id: str, hard: bool) -> None:
-    """Revert a Blueprint to before a specific patch was applied.
+def rollback_cmd(blueprint: str, patch_id: str) -> None:
+    """Revert a Blueprint file to its state before a specific patch was applied.
 
-    Safe mode (default): runs git revert <commit> — adds a new revert commit.
-    Hard mode (--hard):  runs git reset --hard <commit~1> — rewrites history,
-    requires explicit confirmation.
+    Restores only the blueprint file (and any arcade blueprints touched in the
+    same commit) by checking out the pre-patch file content from git history,
+    then creates a new forward commit. Never rewrites history or touches other
+    files in the repository.
     """
-    import re
     import subprocess
 
     blueprint_path = Path(blueprint)
+    cwd = blueprint_path.parent or Path.cwd()
 
-    # Walk git log to find the commit containing patch_id in ---aqueduct--- block
+    # Walk git log scoped to this blueprint file to find the target commit
     result = subprocess.run(
         ["git", "log", "--follow", "--format=%H\x1f%B\x1eENDCOMMIT", "--", str(blueprint_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, cwd=cwd,
     )
     if result.returncode != 0:
         click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
@@ -2429,48 +2424,69 @@ def rollback_cmd(blueprint: str, patch_id: str, hard: bool) -> None:
         )
         sys.exit(1)
 
-    if hard:
-        click.echo(
-            f"WARNING: --hard will reset HEAD to the commit before {target_hash[:8]}.\n"
-            f"This rewrites git history and cannot be undone without a reflog.\n"
-            f"Blueprint: {blueprint}\n"
-        )
-        confirm = click.prompt("Type 'yes' to confirm", default="no")
-        if confirm.lower() != "yes":
-            click.echo("Aborted.")
-            return
+    # Resolve the commit immediately before the patch
+    parent = subprocess.run(
+        ["git", "rev-parse", f"{target_hash}~1"],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if parent.returncode != 0:
+        click.echo(f"✗ could not resolve parent commit: {parent.stderr.strip()}", err=True)
+        sys.exit(1)
+    parent_hash = parent.stdout.strip()
 
-        parent = subprocess.run(
-            ["git", "rev-parse", f"{target_hash}~1"],
-            capture_output=True, text=True,
-        )
-        if parent.returncode != 0:
-            click.echo(f"✗ could not resolve parent commit: {parent.stderr.strip()}", err=True)
-            sys.exit(1)
-        parent_hash = parent.stdout.strip()
+    # Discover all blueprint files touched by the patch commit (handles arcades)
+    diff_files = subprocess.run(
+        ["git", "diff-tree", "--no-commit-id", "-r", "--name-only", target_hash],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if diff_files.returncode != 0:
+        click.echo(f"✗ could not list files in commit: {diff_files.stderr.strip()}", err=True)
+        sys.exit(1)
 
-        reset = subprocess.run(
-            ["git", "reset", "--hard", parent_hash],
-            capture_output=True, text=True,
+    touched_files = [f.strip() for f in diff_files.stdout.splitlines() if f.strip()]
+    if not touched_files:
+        click.echo(f"✗ commit {target_hash[:8]} has no file changes", err=True)
+        sys.exit(1)
+
+    # Restore each file to its pre-patch state (file-scoped, non-destructive)
+    for rel_path in touched_files:
+        restore = subprocess.run(
+            ["git", "checkout", parent_hash, "--", rel_path],
+            capture_output=True, text=True, cwd=cwd,
         )
-        if reset.returncode != 0:
-            click.echo(f"✗ git reset --hard failed: {reset.stderr.strip()}", err=True)
+        if restore.returncode != 0:
+            click.echo(f"✗ git checkout {rel_path} failed: {restore.stderr.strip()}", err=True)
             sys.exit(1)
-        click.echo(f"✓ hard reset to {parent_hash[:8]}  (before patch {patch_id!r})")
-    else:
-        revert = subprocess.run(
-            ["git", "revert", "--no-edit", target_hash],
-            capture_output=True, text=True,
-        )
-        if revert.returncode != 0:
-            click.echo(f"✗ git revert failed: {revert.stderr.strip()}", err=True)
-            sys.exit(1)
-        short = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True,
-        ).stdout.strip()
-        click.echo(f"✓ reverted patch {patch_id!r}  [{short}]")
-        click.echo(f"  Blueprint restored to state before commit {target_hash[:8]}")
+
+    # Stage restored files and create a forward revert commit
+    add = subprocess.run(
+        ["git", "add", "--"] + touched_files,
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if add.returncode != 0:
+        click.echo(f"✗ git add failed: {add.stderr.strip()}", err=True)
+        sys.exit(1)
+
+    commit_msg = (
+        f"revert(aqueduct): roll back patch {patch_id!r}\n\n"
+        f"Restores {', '.join(touched_files)} to state before commit {target_hash[:8]}."
+    )
+    commit = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        capture_output=True, text=True, cwd=cwd,
+    )
+    if commit.returncode != 0:
+        click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
+        sys.exit(1)
+
+    short = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, cwd=cwd,
+    ).stdout.strip()
+
+    click.echo(f"✓ rolled back patch {patch_id!r}  [{short}]")
+    for f in touched_files:
+        click.echo(f"  restored  {f}  (from {parent_hash[:8]})")
 
 
 # ── aqueduct init ─────────────────────────────────────────────────────────────
