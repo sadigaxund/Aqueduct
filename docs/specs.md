@@ -566,6 +566,9 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
         # fraction: 0.1
 
       - type: partition_stats          # zero Spark action — always free
+
+      - type: threshold                 # evaluates a SQL aggregate; writes {"passed": bool}
+        expr: "MAX(amount) > 0"        # required — must resolve to a truthy/falsy scalar
 ```
 
 |**Signal type**|**I/O Cost**|**Spark Actions**|**Implementation**|
@@ -579,8 +582,9 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
 |**distinct\_count**|**Full dataset scan**|1|`df.sample(fraction).agg(approx_count_distinct(c) for each col)`. Approximate; error < 5%.|
 |**data\_freshness**|**Full dataset scan**|1|`df.select(max(column)).collect()`. Set `allow_sample: true` to use a fraction instead (trades accuracy for speed in production).|
 |**partition\_stats**|Zero|0|`df.rdd.getNumPartitions()`. Purely a driver-side call.|
+|**threshold**|Depends on expr|1|`df.selectExpr(expr).collect()[0][0]`. Evaluates any SQL aggregate expression. Writes `{"passed": bool, "value": <result>, "expr": "<expr>"}`. **This is the only signal type that produces a `passed` key** — required to close a Regulator gate based on data.|
 
-|**Production guard:**  `row_count_estimate` (sample method), `null_rates`, `value_distribution`, and `distinct_count` are suppressed when `danger.allow_full_probe_actions: false` is set in `aqueduct.yml`. `data_freshness` is also suppressed unless `allow_sample: true`. `schema_snapshot`, `sample_rows`, and `partition_stats` are never suppressed.|
+|**Production guard:**  `row_count_estimate` (sample method), `null_rates`, `value_distribution`, and `distinct_count` are suppressed when `danger.allow_full_probe_actions: false` is set in `aqueduct.yml`. `data_freshness` is also suppressed unless `allow_sample: true`. `schema_snapshot`, `sample_rows`, `partition_stats`, and `threshold` are never suppressed.|
 | :- |
 
 |**REGULATOR**|**Trigger gate — passive by default, blocks downstream on False or error signal**|
@@ -592,8 +596,7 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
   label: "Block downstream if dedup removed too many rows"
   config:
     on_block: skip                 # skip | abort | trigger_agent
-    timeout_seconds: 0             # 0 = no timeout (default)
-    on_timeout: proceed            # proceed | skip | abort
+    timeout_seconds: 0             # 0 = no timeout (default); polls every 2s until signal or timeout
 ```
 
 Wiring a Regulator — the gate is passive until something is connected to its input port:
@@ -619,7 +622,7 @@ edges:
 |**Signal = error type / exception**|Treated identically to False. Gate closes. on\_block applies.|
 |**Signal = None / null**|Treated as True. Gate opens. This preserves passive-by-default behaviour for Probes that do not emit a signal on a given run.|
 
-|**Implementation note:**  The Regulator is evaluated by the Surveyor, not by Spark. Signal values are read from the Observability Store after the upstream Probe completes. The Surveyor holds the downstream JobSpec in a pending state until the Regulator resolves. No Spark resources are held during this wait.|
+|**Implementation note:**  The Regulator is evaluated by the Surveyor by reading `probe_signals` from `obs.db`. It looks for a `passed` key in the signal payload — only the `threshold` signal type writes this key. All other Probe signal types (`schema_snapshot`, `null_rates`, etc.) write raw metrics and cannot directly close a gate. To wire a Probe to a Regulator, include at least one `threshold` signal. When `timeout_seconds > 0` and the gate is closed, the executor polls every 2s until the gate opens or the timeout expires; on timeout, `on_block` applies (same as if the gate had been closed immediately).|
 | :- |
 
 |**SPILLWAY**|**Error output port — present on every Module, routes row-level failures**|
