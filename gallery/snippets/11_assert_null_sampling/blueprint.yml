@@ -1,0 +1,47 @@
+# blueprint.yml
+# Data Quality Assertion: Null Rate Sampling
+
+aqueduct: "1.0"
+id: assert_null_demo
+name: "Null Rate Assertion Snippet"
+
+modules:
+  - id: raw_users
+    label: "Raw Users CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+        # Spark reads empty strings as NULL if nullValue is set
+        nullValue: ""
+
+  - id: check_quality
+    label: "Email Quality Gate"
+    type: Assert
+    config:
+      rules:
+        - id: email_null_check
+          type: null_rate
+          column: email
+          # Allow max 6% NULLs. We generated ~5%.
+          max: 0.01
+          # Evaluate on a 10% sample of the data for performance.
+          fraction: 0.1
+          on_fail: abort
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_users
+    to: check_quality
+  - from: check_quality
+    to: output_save

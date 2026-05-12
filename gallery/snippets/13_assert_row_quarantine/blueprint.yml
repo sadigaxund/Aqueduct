@@ -1,0 +1,56 @@
+# blueprint.yml
+# Data Quality: Row-Level Quarantine
+
+aqueduct: "1.0"
+id: row_quarantine_demo
+name: "Row Quarantine Assertion Snippet"
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: validate_orders
+    label: "Order Validator"
+    type: Assert
+    config:
+      rules:
+        - id: valid_amount
+          type: sql_row
+          # Expr must be TRUE for rows to pass.
+          expr: "amount IS NOT NULL AND amount > 0"
+          # Failed rows are automatically routed to the spillway port.
+          on_fail: quarantine
+
+  - id: clean_orders
+    label: "Save Clean Records"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/clean_orders.parquet
+      mode: overwrite
+
+  - id: rejected_orders
+    label: "Save Quarantined Records"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/quarantined_orders.csv
+      options: {header: "true"}
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: validate_orders
+  - from: validate_orders
+    to: clean_orders
+    # Port defaults to 'main'
+  - from: validate_orders
+    to: rejected_orders
+    port: spillway

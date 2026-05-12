@@ -1,0 +1,60 @@
+# blueprint.yml
+# Native Hybrid Freshness: Global check + Automatic Quarantine
+
+aqueduct: "1.0"
+id: assert_freshness_demo
+name: "Native Freshness Snippet"
+
+modules:
+  - id: raw_events
+    label: "Raw Events CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/events.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: check_freshness
+    label: "Freshness Gate"
+    type: Assert
+    config:
+      rules:
+        # Now supporting native quarantine!
+        # This rule now acts as BOTH a global health warning 
+        # AND a row-level filter for the spillway.
+        - id: freshness_check
+          type: freshness
+          column: processed_at
+          max_age_hours: 12
+          on_fail: quarantine
+
+  - id: clean_output
+    label: "Fresh Results"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/fresh_events.parquet
+      mode: overwrite
+
+  - id: spillway_output
+    label: "Stale Results"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/stale_events.csv
+      options: {header: "true"}
+      mode: overwrite
+
+edges:
+  - from: raw_events
+    to: check_freshness
+
+  - from: check_freshness
+    to: clean_output
+    port: main
+
+  - from: check_freshness
+    to: spillway_output
+    port: spillway
