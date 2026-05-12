@@ -696,12 +696,21 @@ def run(
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                click.echo(
-                    "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
-                    err=True,
-                )
+                if resolved_agent_model is not None:
+                    click.echo(
+                        "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
+                        err=True,
+                    )
 
             if effective_mode == "disabled" or failure_ctx is None:
+                break
+
+            if resolved_agent_model is None:
+                click.echo(
+                    "  ⚠  no LLM model configured — skipping self-healing. "
+                    "Set agent.model in aqueduct.yml to enable.",
+                    err=True,
+                )
                 break
 
             if patch_count >= max_patches:
