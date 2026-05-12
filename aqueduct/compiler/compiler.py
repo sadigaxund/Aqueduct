@@ -231,16 +231,15 @@ def compile(  # noqa: A001
             )
 
     # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
-    _channel_ids = {m.id for m in modules if m.type == "Channel"}
     for m in modules:
         if m.type != "Channel" or m.config.get("materialize") != "incremental":
             continue
         # Check if any upstream module in the edge list is a cache/checkpoint
         upstream_ids = {e.from_id for e in edges if e.to_id == m.id}
-        upstream_types = {
-            um.type for um in modules if um.id in upstream_ids
-        }
-        if "Checkpoint" not in upstream_types:
+        upstream_checkpointed = any(
+            um.checkpoint for um in modules if um.id in upstream_ids
+        )
+        if not upstream_checkpointed:
             warnings.warn(
                 f"Channel '{m.id}' uses materialize=incremental. "
                 "After each run, Aqueduct computes MAX(watermark_column) on the output — "
@@ -284,11 +283,11 @@ def compile(  # noqa: A001
     for e in edges:
         consumer_counts[e.from_id] = consumer_counts.get(e.from_id, 0) + 1
 
-    cached_ids = {m.id for m in modules if m.type == "Checkpoint"}
+    checkpointed_ids = {m.id for m in modules if m.checkpoint}
     for m in modules:
         if m.type != "Channel":
             continue
-        if consumer_counts.get(m.id, 0) > 1 and m.id not in cached_ids:
+        if consumer_counts.get(m.id, 0) > 1 and m.id not in checkpointed_ids:
             warnings.warn(
                 f"Channel '{m.id}' has {consumer_counts[m.id]} downstream consumers "
                 "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "

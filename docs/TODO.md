@@ -2,31 +2,6 @@
 
 ---
 
-7. do nyc demo, test spark master connectivity, and maybe go fix ScrapeTL and train Gemma
-
-8. When at Phase where we do LLM vector DB thing, also discuss possibility of editing custom prompts to the LLM. 
-
-9. Update SPARK_GUIDE.md with notes from book.
-
-10. regarding nyc example, was last trying to make llm work, couldnt because of above.
-
-11. Prove that this claim stands true: "What context_override does: at expansion time, the compiler merges the parent's context with the arcade's context_override. So ${ctx.input_table} inside the arcade resolves to whatever the parent passed - not a global. Each use of the same Arcade in the same Blueprint gets its own context values.
-
-
----
-### Might or Might nots
-
-16. build a benchmark where there are bunch of faulty blueprints, and we try to fix them using LLM, and see how well it does. make it as realistic as possible. try to make blueprints with various different types of errors.
-
-17. aqueduct docs
-
-18. Flink Engine:
-- Add `aqueduct/executor/flink/` subpackage from scratch (no code reuse from Spark executor - different execution model, different module semantics).
-- Extend `pyproject.toml`: `flink = ["apache-flink>=1.18"]` extra.
-- `get_executor("flink")` in `executor/__init__.py` already raises `NotImplementedError` as a placeholder.
-- Module types that need re-evaluation for Flink: Junction (→ KeyedStream?), Funnel, Regulator (streaming watermarks), Egress mode (no overwrite concept for streaming sinks).
-- Blueprint/Manifest schema is engine-agnostic; Flink-specific config goes in `deployment:` or per-module `flink_config:` block - do NOT add Spark-isms to the shared schema.
-- Config: `deployment.engine: flink`, `deployment.master_url: "flink://<SPARK_MASTER>"` (or jobmanager address).
 
 ---
 
@@ -36,10 +11,13 @@
 
 19. Streaming, Machine Learning / MLOps
 
-20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
-however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
-
-21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
+20. Flink Engine:
+- Add `aqueduct/executor/flink/` subpackage from scratch (no code reuse from Spark executor - different execution model, different module semantics).
+- Extend `pyproject.toml`: `flink = ["apache-flink>=1.18"]` extra.
+- `get_executor("flink")` in `executor/__init__.py` already raises `NotImplementedError` as a placeholder.
+- Module types that need re-evaluation for Flink: Junction (→ KeyedStream?), Funnel, Regulator (streaming watermarks), Egress mode (no overwrite concept for streaming sinks).
+- Blueprint/Manifest schema is engine-agnostic; Flink-specific config goes in `deployment:` or per-module `flink_config:` block - do NOT add Spark-isms to the shared schema.
+- Config: `deployment.engine: flink`, `deployment.master_url: "flink://<SPARK_MASTER>"` (or jobmanager address).
 
 ---
 
@@ -52,9 +30,14 @@ however we have a python module with that name, I very much liked something simi
 
 15. does aqueduct init not create .git (git init)? if not, should it?
 
------------------------
 
 17. Add example maybe: aqueduct's usage with python
 
 18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
 
+19. standardize the warnings and spark best practices
+
+20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
+however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
+
+21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
