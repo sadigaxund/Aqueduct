@@ -1,0 +1,51 @@
+# blueprint.yml
+# Pattern for "keep last record per ID" using Window functions.
+
+aqueduct: "1.0"
+id: deduplicate_demo
+name: "Deduplication Snippet"
+
+modules:
+  - id: raw_users
+    label: "Raw Users with Dupes"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: deduplicated_users
+    label: "Keep Latest Record"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        WITH ranked_rows AS (
+          SELECT 
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY user_id 
+              ORDER BY updated_at DESC, created_at DESC
+            ) as _row_num
+          FROM raw_users
+        )
+        SELECT 
+          user_id, updated_at, created_at, data
+        FROM ranked_rows
+        WHERE _row_num = 1
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_users
+    to: deduplicated_users
+  - from: deduplicated_users
+    to: output_save

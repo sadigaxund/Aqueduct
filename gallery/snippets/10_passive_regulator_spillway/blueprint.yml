@@ -1,0 +1,51 @@
+# blueprint.yml
+# Passive Regulator: Data validation and error routing (Spillway).
+
+aqueduct: "1.0"
+id: spillway_demo
+name: "Spillway & Passive Regulator Snippet"
+
+modules:
+  - id: raw_scores
+    label: "Raw Scores Ingress"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/scores.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: validate_scores
+    label: "Score Validator"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT * FROM raw_scores"
+      # The spillway_condition handles the actual splitting logic
+      spillway_condition: "CAST(score AS DOUBLE) IS NULL OR score < 0 OR score > 100"
+    checkpoint: true
+
+  - id: good_output
+    label: "Save Valid Records"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/valid_scores.parquet
+      mode: overwrite
+
+  - id: bad_output
+    label: "Save Rejected Records"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/rejected_scores.csv
+      options: {header: "true"}
+      mode: overwrite
+
+edges:
+  - from: raw_scores
+    to: validate_scores
+  - from: validate_scores
+    to: good_output
+  - from: validate_scores
+    to: bad_output
+    port: spillway

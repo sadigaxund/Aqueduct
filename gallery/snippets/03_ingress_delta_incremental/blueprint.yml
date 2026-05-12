@@ -1,0 +1,42 @@
+# blueprint.yml
+# Using versioning/time-travel in Delta Lake.
+
+aqueduct: "1.0"
+id: delta_ingress_demo
+name: "Delta Lake Ingress Snippet"
+
+spark_config:
+  spark.jars.packages: "io.delta:delta-spark_2.12:3.1.0"
+  spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+  spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
+modules:
+  - id: user_history_delta
+    label: "User History Delta Ingress"
+    type: Ingress
+    config:
+      # Change to 'parquet' for local testing if you don't have delta-spark installed
+      format: delta
+      # Defaults to local data/input/ directory
+      path: "${DATA_PATH:-data/input/}"
+      options:
+        # Read a specific snapshot version of the Delta table.
+        versionAsOf: "2"
+        # Or use a timestamp:
+        # timestampAsOf: "2024-01-01 12:00:00"
+        
+        # Delta-specific optimization hints
+        ignoreChanges: "true"
+        ignoreDeletes: "true"
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: user_history_delta
+    to: output_save

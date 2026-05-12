@@ -1,0 +1,57 @@
+# blueprint.yml
+# Join variants: Inner, Left, Anti, and Semi joins.
+
+aqueduct: "1.0"
+id: join_variants_demo
+name: "Join Variants Snippet"
+
+modules:
+  - id: orders
+    label: "Orders CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: users
+    label: "Users CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: enriched_orders
+    label: "Enriched Orders (Left Join)"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT 
+          o.order_id,
+          o.user_id,
+          o.amount,
+          u.name as user_name
+        FROM orders o
+        LEFT JOIN users u ON o.user_id = u.user_id
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: orders
+    to: enriched_orders
+  - from: users
+    to: enriched_orders
+  - from: enriched_orders
+    to: output_save
