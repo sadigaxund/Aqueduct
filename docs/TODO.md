@@ -23,21 +23,14 @@
 
 ### Running Thoughts/Notes
 
-
-13. Test if the patch/commit/apply and rollback works as expected.
-
-14. maybe implement a syntactic sugor for cli commands like interactive lineage/ report or whatever
-
-15. does aqueduct init not create .git (git init)? if not, should it?
-
-
 17. Add example maybe: aqueduct's usage with python
-
-18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
-
-19. standardize the warnings and spark best practices
 
 20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
 however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
 
 21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
+
+
+18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
+19. standardize the warnings and spark best practices
+20. generate scenarios from Stackoverflow with the most commong bugs/issues vs specific cases
