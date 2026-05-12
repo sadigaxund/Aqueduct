@@ -676,6 +676,25 @@ def _parse_patch_spec(text: str) -> PatchSpec:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def build_prompt(
+    failure_ctx: FailureContext,
+    patches_dir: Path,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
+) -> dict[str, str]:
+    """Return the system and user prompts without calling the LLM.
+
+    Useful for debugging, prompt tuning, or cost estimation.
+
+    Returns:
+        {"system": <system prompt>, "user": <user prompt>}
+    """
+    return {
+        "system": _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context),
+        "user": _build_user_prompt(failure_ctx, patches_dir),
+    }
+
+
 def generate_llm_patch(
     failure_ctx: FailureContext,
     model: str,

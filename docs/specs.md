@@ -1484,6 +1484,19 @@ aqueduct heal blueprints/pipeline.yml
 ```
 Generates a patch for the most recent failed run. Useful when `approval_mode: disabled` but you want to try the LLM on demand. The patch is always staged to `patches/pending/` — never auto-applied by `heal`.
 
+**Step 6b — Inspect the prompt before calling the LLM**
+```bash
+# Human-readable (system block then user block)
+aqueduct heal <run_id> --print-prompt
+
+# Machine-readable JSON {"system": "...", "user": "..."}
+aqueduct heal <run_id> --print-prompt --print-prompt-format json
+
+# Works with scenarios too
+aqueduct heal --scenario path/to/scenario.aqscenario.yml --print-prompt
+```
+Prints the exact system and user prompt that would be sent, then exits without calling the model. Does not require `agent.model` to be configured. Useful for debugging prompt construction, estimating token cost, or comparing prompt changes across scenarios.
+
 **Step 7 — Inspect the patch**
 ```bash
 aqueduct patch list --blueprint blueprints/pipeline.yml --status pending

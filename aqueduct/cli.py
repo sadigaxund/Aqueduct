@@ -1938,6 +1938,18 @@ def signal(
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
 
+def _print_prompt(prompt: dict, fmt: str) -> None:
+    """Print system+user prompt to stdout in the requested format."""
+    if fmt == "json":
+        click.echo(json.dumps(prompt, indent=2))
+    else:
+        sep = "─" * 72
+        click.echo(f"## SYSTEM PROMPT\n{sep}")
+        click.echo(prompt["system"])
+        click.echo(f"\n## USER PROMPT\n{sep}")
+        click.echo(prompt["user"])
+
+
 @cli.command()
 @click.argument("run_id", required=False, default=None)
 @click.option(
@@ -1970,6 +1982,21 @@ def signal(
     show_default=True,
     help="Root directory for patch lifecycle subdirs",
 )
+@click.option(
+    "--print-prompt",
+    "print_prompt",
+    is_flag=True,
+    default=False,
+    help="Print the LLM prompt that would be sent and exit without calling the model.",
+)
+@click.option(
+    "--print-prompt-format",
+    "print_prompt_format",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format for --print-prompt.",
+)
 def heal(
     run_id: str | None,
     scenario_path: str | None,
@@ -1977,6 +2004,8 @@ def heal(
     store_dir: str | None,
     config_path: str | None,
     patches_dir: str,
+    print_prompt: bool,
+    print_prompt_format: str,
 ) -> None:
     """Manually trigger LLM self-healing for a failed run or scenario.
 
@@ -1991,7 +2020,7 @@ def heal(
     (no Spark required) and validates the LLM response against expected assertions.
     """
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.surveyor.llm import generate_llm_patch, stage_patch_for_human
+    from aqueduct.surveyor.llm import build_prompt, generate_llm_patch, stage_patch_for_human
 
     if not run_id and not scenario_path:
         click.echo(
@@ -2015,7 +2044,7 @@ def heal(
     resolved_llm_max_reprompts = eng.llm_max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
-    if resolved_model is None:
+    if resolved_model is None and not print_prompt:
         click.echo(
             "✗ no LLM agent configured — set agent.model in aqueduct.yml",
             err=True,
@@ -2026,13 +2055,23 @@ def heal(
 
     # ── Scenario mode ─────────────────────────────────────────────────────────
     if scenario_path:
-        from aqueduct.surveyor.scenario import load_scenario, run_scenario
+        from aqueduct.surveyor.scenario import load_scenario, run_scenario, _build_failure_ctx
 
         try:
             scenario = load_scenario(Path(scenario_path))
         except Exception as exc:
             click.echo(f"✗ failed to load scenario: {exc}", err=True)
             sys.exit(1)
+
+        if print_prompt:
+            try:
+                failure_ctx = _build_failure_ctx(scenario)
+            except Exception as exc:
+                click.echo(f"✗ failed to build failure context from scenario: {exc}", err=True)
+                sys.exit(1)
+            prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context)
+            _print_prompt(prompt, print_prompt_format)
+            return
 
         click.echo(
             f"↻ heal scenario  id={scenario.id}  "
@@ -2117,6 +2156,11 @@ def heal(
         started_at=started_at,
         finished_at=finished_at,
     )
+
+    if print_prompt:
+        prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context)
+        _print_prompt(prompt, print_prompt_format)
+        return
 
     click.echo(
         f"↻ heal  run={run_id}  module={target_module}  "
