@@ -170,6 +170,35 @@ def compile(  # noqa: A001
     except WireError as exc:
         raise CompileError(f"Wiring validation failed: {exc}") from exc
 
+    # ── 5.5. Validate Assert rule / on_fail combinations ─────────────────────
+    _AGG_NO_QUARANTINE = {"min_rows", "max_rows", "sql", "null_rate"}
+    _assert_spillway_ids = {
+        e.from_id for e in edges if e.port == "spillway"
+    }
+    for m in modules:
+        if m.type != "Assert":
+            continue
+        for rule in m.config.get("rules", []):
+            rtype = rule.get("type", "")
+            on_fail = rule.get("on_fail", "abort")
+            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
+            if action == "quarantine":
+                if rtype in _AGG_NO_QUARANTINE:
+                    raise CompileError(
+                        f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
+                        "but quarantine requires a per-row predicate. "
+                        f"{rtype!r} is an aggregate rule with no derivable row filter. "
+                        "Use on_fail=abort or on_fail=warn instead. "
+                        "Row-level quarantine is supported by: sql_row, custom, freshness."
+                    )
+                if rtype in ("freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
+                    raise CompileError(
+                        f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine "
+                        "but no spillway edge is connected to this Assert module. "
+                        "Quarantine rows would be silently discarded. "
+                        "Add an edge with port: spillway from this Assert, or change on_fail to abort/warn."
+                    )
+
     # ── 6. Compile away passive Regulators ────────────────────────────────────
     modules, edges = compile_away_regulators(modules, edges)
 

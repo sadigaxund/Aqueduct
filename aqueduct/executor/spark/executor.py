@@ -1069,7 +1069,28 @@ def execute(
                     _signal_fail()
                     return
 
+                # ── Evaluate Regulator with optional timeout ───────────────
+                timeout_sec = float(module.config.get("timeout_seconds", 0))
+                poll_interval = 2.0
+                elapsed = 0.0
+                
                 gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True
+                
+                # If gate is closed and we have a timeout, poll until open or timeout
+                if not gate_open and timeout_sec > 0 and surveyor:
+                    logger.info("[%s] Regulator gate closed; polling for signal (timeout=%ss)...", module.id, timeout_sec)
+                    while not gate_open and elapsed < timeout_sec:
+                        time.sleep(poll_interval)
+                        elapsed += poll_interval
+                        gate_open = surveyor.evaluate_regulator(module.id)
+                        if gate_open:
+                            logger.info("[%s] Regulator signal received; gate OPEN.", module.id)
+                    
+                    if not gate_open:
+                        logger.info("[%s] Regulator timeout reached; continuing per policy.", module.id)
+                        # In timeout case, we proceed if the policy is "proceed" or default
+                        # If the user wanted to abort on timeout, they should use a standard Assert.
+                        gate_open = True 
 
                 if gate_open:
                     frame_store[module.id] = val

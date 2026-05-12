@@ -557,6 +557,27 @@ aqueduct test
 Or set `spark_master: local[*]` in a separate `aqueduct.test.yml` and pass it with `--config`.
 The `AQ_SPARK_MASTER` env var overrides `aqueduct.yml` without modifying the file.
 
+### Caching Strategy — Multi-Consumer Channels {#caching-strategy}
+
+When a Channel has two or more downstream consumers (edges leaving it), Spark re-evaluates its full DAG independently for each consumer branch. Adding `checkpoint: true` on the Channel materialises the DataFrame once and serves all consumers from disk.
+
+**When to add `checkpoint: true`:**
+- Channel is deterministic (no `rand()`, `uuid()`, `current_timestamp()` in query)
+- Computation is expensive (join, window, UDF) and repeating it is wasteful
+- Upstream source is a stable file (Parquet, Delta, CSV)
+
+**When NOT to cache or checkpoint:**
+
+| Situation | Reason |
+|---|---|
+| Source is Kafka / streaming | Each read is a new micro-batch; caching freezes stale data for second consumer |
+| Query uses `rand()`, `uuid()`, or `current_timestamp()` | Cache fixes one value; second consumer gets same frozen value — usually wrong |
+| DataFrame is too large for cluster memory | Cache spills to disk under memory pressure, may evict other cached DFs and cause cascade re-computation — net cost higher than re-running |
+| Second "consumer" is a Probe (tap mode) | Probe attaches as a side-tap and does not force a second full DAG re-execution; warning fires but cost is lower than implied |
+
+**`checkpoint: true` vs `cache()`:**
+Aqueduct's `checkpoint: true` writes Parquet to `checkpoint_dir` and breaks DAG lineage. This is stronger than Spark's in-memory `cache()` — it survives driver restarts and works for DataFrames too large to fit in memory. Use it when computation is expensive and the pipeline may be resumed. For lightweight DataFrames that fit in memory, in-memory caching (not currently exposed as a Blueprint flag) is faster but non-durable.
+
 ### Aqueduct Checkpoint vs. Spark `df.checkpoint()`
 
 These are different mechanisms — do not confuse them:

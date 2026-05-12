@@ -116,6 +116,21 @@ def execute_assert(
             passing_df, q_df = _apply_row_rule(module.id, passing_df, rule, spark)
             if q_df is not None:
                 quarantine_parts.append(q_df)
+        elif rtype == "freshness":
+            on_fail = rule.get("on_fail", "abort")
+            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
+            if action == "quarantine":
+                col = rule.get("column")
+                max_age_hours = float(rule.get("max_age_hours", 24))
+                if col:
+                    from pyspark.sql import functions as F
+                    hours_int = int(max_age_hours)
+                    minutes_int = round((max_age_hours - hours_int) * 60)
+                    interval = f"INTERVAL {hours_int} HOURS {minutes_int} MINUTES" if minutes_int else f"INTERVAL {hours_int} HOURS"
+                    fresh_expr = F.col(col) >= (F.current_timestamp() - F.expr(interval))
+                    q_df = passing_df.filter(~fresh_expr)
+                    passing_df = passing_df.filter(fresh_expr)
+                    quarantine_parts.append(q_df)
 
     quarantine_df: DataFrame | None = None
     if quarantine_parts:
