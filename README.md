@@ -9,6 +9,16 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 ---
 
+## Documentation
+
+| Document | Description |
+|---|---|
+| [Blueprint & Engine Spec](docs/specs.md) | Full specification — module types, config fields, compiler, executor, LLM agent, patch grammar |
+| [Spark Guide](docs/SPARK_GUIDE.md) | Compiler warnings, probe cost model, contributor rules, resource tuning, S3A committers, AQE |
+| [CLI Reference](docs/CLI_REFERENCE.md) | All commands, flags, exit codes, `aqueduct run` / `patch` / `doctor` / `heal` reference |
+
+---
+
 ## What Makes Aqueduct Different?
 
 - **Declarative YAML Blueprints** - No DAG wiring in code. Version-control your entire pipeline.
@@ -23,11 +33,25 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 ---
 
-## License & Philosophy
+## How It Works
 
-**Aqueduct is Apache 2.0 licensed.**
+```mermaid
+flowchart TD
+    BP("📄 Your Pipeline\nBlueprint YAML")
 
-This repository contains the full, production-ready engine. There are no "pro" versions, no telemetry, and no proprietary lock-ins. You can run it locally, in CI, or on a production Spark cluster-free and open, forever.
+    BP --> PA["🔍 Parser\nReads your YAML, checks for\nerrors, resolves variables"]
+    PA --> CO["⚙️ Compiler\nExpands reusable components,\nbuilds the execution plan"]
+    CO --> EX["⚡ Executor\nRuns on Apache Spark —\nprocesses your data"]
+    EX --> SU["📊 Surveyor\nRecords what happened,\nfires alerts on failure"]
+
+    CO -. "reads shared state" .-> DP[("🗄️ Depot\nPipeline State")]
+    EX -- "writes output" --> DP
+    EX & SU -- "stores metrics\n& data lineage" --> DB[("📦 Observability\nobs.db · lineage.db")]
+
+    SU -. "something broke" .-> LLM["🤖 AI Agent\nDiagnoses the failure,\ngenerates a fix"]
+    LLM -. "apply fix →\nre-compile → retry" .-> CO
+    LLM -. "save fix to disk\n(aggressive mode only)" .-> BP
+```
 
 ---
 
@@ -54,9 +78,10 @@ Requires Python 3.11+ and Java 17 (for local Spark). **Spark 3.3+ recommended** 
 
 ```bash
 mkdir my-pipeline && cd my-pipeline
+
+# 1. Creates: blueprints/example.yml, aqueduct.yml, .gitignore, patches/, arcades/
+# 2. Runs git init + initial commit automatically
 aqueduct init --name my-pipeline
-# Creates: blueprints/example.yml, aqueduct.yml, .gitignore, patches/, arcades/
-# Runs git init + initial commit automatically
 ```
 
 Or manually:
@@ -417,104 +442,6 @@ agent:
 
 If a patch violates either rule, `apply_patch` raises an error before touching the Blueprint file.
 
----
-
-## CLI Reference
-
-```bash
-aqueduct init                               # Scaffold new project in current directory
-aqueduct init --name my-pipeline           # Set project name (used for blueprint ID)
-
-aqueduct validate pipeline.yml              # Parse and validate only
-aqueduct compile  pipeline.yml              # Output resolved Manifest JSON
-aqueduct compile  pipeline.yml --execution-date 2026-01-15  # backfill: pin @aq.date.* to date
-
-aqueduct run      pipeline.yml              # Compile and execute (auto-loads .env if present)
-aqueduct run      pipeline.yml \
-  --config aqueduct.yml \
-  --store-dir .aqueduct \
-  --run-id my-run-001 \
-  --ctx env=prod
-aqueduct run      pipeline.yml --env-file secrets/.env   # explicit .env path
-aqueduct -v run   pipeline.yml              # verbose - prints LLM responses, resolver steps
-
-# Sub-DAG execution - run only a slice of the pipeline
-aqueduct run pipeline.yml --from clean_orders              # from module onwards
-aqueduct run pipeline.yml --from clean_orders --to egress  # inclusive range
-aqueduct run pipeline.yml --to egress                      # up to and including module
-
-# Backfill / logical execution date - pins @aq.date.today() and @aq.runtime.timestamp()
-aqueduct run pipeline.yml --execution-date 2026-01-15
-
-aqueduct check-config                       # Validate aqueduct.yml schema; print resolved summary
-aqueduct check-config --config path/to/aqueduct.yml
-
-aqueduct doctor                             # Probe all resources end-to-end (config, stores, secrets, webhook, Spark, storage)
-aqueduct doctor --skip-spark               # Skip JVM startup - fast CI health check
-aqueduct doctor --config path/to/aqueduct.yml
-
-aqueduct test     pipeline.aqtest.yml       # Run isolated module tests (no Spark I/O)
-aqueduct test     pipeline.aqtest.yml --quiet
-
-aqueduct report   <run_id>                  # Flow Report for a completed run (--format table|json|csv)
-aqueduct lineage  <blueprint_id>             # Column lineage graph (--from <table>, --column <col>)
-
-# Persistent gate override - affects ALL future runs until cleared
-aqueduct signal   <signal_id> --value false           # close gate (block downstream)
-aqueduct signal   <signal_id> --error "Stale source"  # close with reason
-aqueduct signal   <signal_id> --value true            # clear override (resume normal evaluation)
-aqueduct signal   <signal_id>                         # show current override status
-
-aqueduct heal     <run_id>                  # manually trigger LLM self-healing for a failed run
-aqueduct heal     <run_id> --module <id>   # scope healing to a specific module
-aqueduct heal     --scenario tests/schema_drift.aqscenario.yml  # test LLM healing without Spark
-                                            # .aqscenario.yml = simulated failure + expected patch assertions
-                                            # run aqueduct benchmark --scenarios tests/ to compare models
-
-aqueduct runs                               # list recent runs (all blueprints)
-aqueduct runs --blueprint blueprint.yml     # filter by blueprint
-aqueduct runs --failed                      # show only failed runs
-aqueduct runs --last 20                     # show last N runs
-
-aqueduct benchmark --scenarios scenarios/              # run all .aqscenario.yml files in a directory
-aqueduct benchmark --scenarios scenarios/ --model claude-sonnet-4-6 --model claude-opus-4-7  # compare models
-aqueduct benchmark --scenarios scenarios/ --workers 4  # parallel execution with N worker threads
-
-aqueduct doctor --blueprint blueprints/pipeline.yml  # check Ingress/Egress sources + format/extension mismatches
-
-aqueduct patch list                                   # show pending patches (walks up to project root)
-aqueduct patch list --blueprint blueprints/pipeline.yml --status all  # pending + applied + rejected
-aqueduct patch apply patches/pending/00001_*.json --blueprint blueprints/pipeline.yml
-aqueduct patch reject patches/pending/00001_*.json --reason "Incorrect column name"  # accepts file path or slug
-aqueduct patch commit --blueprint blueprints/pipeline.yml   # git commit applied patches
-aqueduct patch discard --blueprint blueprints/pipeline.yml  # restore blueprint to HEAD; move patches back to pending
-
-aqueduct log blueprints/pipeline.yml                 # show git history of patch commits for this blueprint
-aqueduct log blueprints/pipeline.yml --format json
-aqueduct rollback blueprints/pipeline.yml --to <patch_id>   # restore blueprint file(s) to pre-patch state; creates a new forward commit
-```
-
-### Global flags (before subcommand)
-
-| Flag | Description |
-|---|---|
-| `-v`, `--verbose` | Enable DEBUG logging - prints LLM raw responses, SQL plans, and internal resolver steps |
-
-### Key `aqueduct run` flags
-
-| Flag | Description |
-|---|---|
-| `--from <module_id>` | Start execution from this module (inclusive); skips all upstream modules |
-| `--to <module_id>` | Stop execution at this module (inclusive); skips all downstream modules |
-| `--execution-date YYYY-MM-DD` | Pin logical date for `@aq.date.*` and `@aq.runtime.timestamp()` - enables backfill idempotency |
-| `--resume <run_id>` | Resume from checkpoints written by a previous run with `checkpoint: true` |
-| `--run-id <uuid>` | Override auto-generated run UUID (useful for idempotent reruns) |
-| `--ctx key=value` | Override a Blueprint `context:` variable |
-| `--profile <name>` | Activate a `context_profiles:` entry |
-| `--allow-aggressive` | Allow `approval_mode: aggressive` for this run without setting `danger.allow_aggressive_patching: true` in config |
-| `--env-file <path>` | Load a `.env` file into the environment before running. If omitted, Aqueduct auto-discovers `.env` in the project root (directory containing `aqueduct.yml`). |
-| `--no-env-file` | Disable `.env` auto-discovery entirely |
-| `--parallel` | Run independent DAG branches concurrently. Aqueduct identifies fully-independent source trees (Union-Find) and executes each in a separate thread. Only useful when a Blueprint has multiple independent Ingress→Egress chains with no shared ancestors. |
 
 ---
 
@@ -556,54 +483,27 @@ aqueduct lineage <blueprint_id>      # column lineage graph
 
 ---
 
-## Architecture
-
-```
-Blueprint (YAML)
-    │
-    ▼
-┌─────────┐
-│ Parser  │  Validate schema, resolve ${ctx.*}, detect cycles
-└────┬────┘
-     │ Blueprint AST
-     ▼
-┌──────────┐
-│ Compiler │  Resolve @aq.* tokens, expand Arcades, compile-away passive Regulators
-└────┬─────┘
-     │ Manifest (JSON)
-     ▼
-┌──────────┐
-│ Executor │  Topo-sort → frame_store → Spark actions
-└────┬─────┘
-     │ ExecutionResult
-     ▼
-┌──────────┐
-│ Surveyor │  Write run record, FailureContext, fire webhooks
-└──────────┘
-```
-
----
-
-## Development
+## Development & Contributing
 
 ```bash
+# Clone and install in editable mode with all dev dependencies
 git clone https://github.com/sadigaxund/aqueduct
 cd aqueduct
 pip install -e ".[spark,dev]"
 
-# Run tests (requires Java 17)
+# Switch to Java 17 (required for local Spark) then run the test suite
 source ~/.bashrc && use_java17
 pytest tests/
 ```
 
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting bugs, proposing features, and submitting pull requests.
+- **Bug reports & feature requests** — open an issue. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **Pull requests** — check [CONTRIBUTING.md](CONTRIBUTING.md) before submitting.
+- **Changelog** — all releases and phase completions tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## License
+## License & Philosophy
 
-Apache 2.0. See [LICENSE](LICENSE).
+**Aqueduct is Apache 2.0 licensed.** See [LICENSE](LICENSE).
+
+This repository contains the full, production-ready engine. No "pro" tier, no telemetry, no lock-in. Run it locally, in CI, or on a production cluster — free and open, forever.
