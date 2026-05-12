@@ -1,0 +1,37 @@
+# blueprint.yml
+# Reading from a relational database using JDBC.
+
+aqueduct: "1.0"
+id: postgres_ingress_demo
+name: "PostgreSQL Ingress Snippet"
+
+spark_config:
+  spark.jars.packages: "org.postgresql:postgresql:42.5.0,org.xerial:sqlite-jdbc:3.36.0.3"
+
+modules:
+  - id: inventory_db
+    label: "Inventory DB Ingress"
+    type: Ingress
+    config:
+      format: jdbc
+      
+      options:
+        url: "${JDBC_URL}"
+        user: "${JDBC_USER}"
+        password: "${JDBC_PASSWORD}"
+        driver: "org.postgresql.Driver"
+        # Spark JDBC uses 'dbtable'
+        dbtable: "inventory"
+        fetchsize: "1000"
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: inventory_db
+    to: output_save

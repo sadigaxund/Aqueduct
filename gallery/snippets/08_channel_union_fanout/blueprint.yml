@@ -1,0 +1,55 @@
+# blueprint.yml
+# Combining sources (Union) and splitting logic (Fan-out).
+
+aqueduct: "1.0"
+id: union_fanout_demo
+name: "Union & Fan-out Snippet"
+
+modules:
+  - id: source_a
+    label: "Source A CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/data_a.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: source_b
+    label: "Source B CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/data_b.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: combined_data
+    label: "Union All Sources"
+    type: Channel
+    config:
+      op: union
+      allow_missing_columns: true
+
+  - id: high_values
+    label: "High Values Filter"
+    type: Channel
+    config:
+      op: filter
+      condition: "val > 15"
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: source_a
+    to: combined_data
+  - from: source_b
+    to: combined_data
+  - from: combined_data
+    to: high_values
+  - from: high_values
+    to: output_save

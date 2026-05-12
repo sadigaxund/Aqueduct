@@ -1,0 +1,46 @@
+# blueprint.yml
+# Performance tuning: Repartitioning and Caching.
+
+aqueduct: "1.0"
+id: performance_tuning_demo
+name: "Repartition & Cache Snippet"
+
+modules:
+  - id: raw_data
+    label: "Raw CSV Ingress"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/sample_data.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: balanced_data
+    label: "Repartition for Parallelism"
+    type: Channel
+    config:
+      op: repartition
+      num_partitions: 10
+      # partition_by: [VendorID]  # Optional: partition by specific columns
+
+  - id: cached_data
+    label: "Cache Intermediate Result"
+    type: Channel
+    config:
+      op: cache
+      # storage_level: MEMORY_AND_DISK  # Optional: defaults to MEMORY_AND_DISK
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_data
+    to: balanced_data
+  - from: balanced_data
+    to: cached_data
+  - from: cached_data
+    to: output_save

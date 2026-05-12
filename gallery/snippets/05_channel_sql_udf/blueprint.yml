@@ -1,0 +1,49 @@
+# blueprint.yml
+# Registering and calling a Python UDF in SQL.
+
+aqueduct: "1.0"
+id: udf_demo
+name: "SQL UDF Snippet"
+
+udf_registry:
+  - id: mask_sensitive
+    label: "Email Masking UDF"
+    lang: python
+    module: logic
+    entry: mask_email
+    return_type: string
+
+modules:
+  - id: raw_users
+    label: "Raw Users CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options:
+        header: "true"
+
+  - id: masked_users
+    label: "Masked Users Channel"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT 
+          name,
+          mask_sensitive(email) as email_masked
+        FROM raw_users
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_users
+    to: masked_users
+  - from: masked_users
+    to: output_save

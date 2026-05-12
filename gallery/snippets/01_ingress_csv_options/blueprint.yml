@@ -1,0 +1,29 @@
+# blueprint.yml
+# Showing header, inferSchema, and custom delimiters for CSV sources.
+
+aqueduct: "1.0"
+id: csv_ingress_demo
+name: "CSV Ingress Snippet"
+
+modules:
+  - id: yellow_taxi_csv
+    label: "Yellow Taxi CSV Ingress"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/sample_data.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: yellow_taxi_csv
+    to: output_save

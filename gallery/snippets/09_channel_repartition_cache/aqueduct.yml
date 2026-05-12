@@ -1,0 +1,10 @@
+# aqueduct.yml
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  obs:
+    backend: duckdb
+    path: .aqueduct/obs.db
