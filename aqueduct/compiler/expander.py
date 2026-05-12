@@ -182,7 +182,7 @@ def expand_arcades(
         (expanded_modules, rewired_edges, arcade_provenance_map)
         arcade_provenance_map: dict[manifest_module_id → ModuleProvenance]
     """
-    return _expand_recursive(modules, edges, base_dir, depth=0)
+    return _expand_recursive(list(modules), list(edges), base_dir, depth=0)
 
 
 def _expand_recursive(

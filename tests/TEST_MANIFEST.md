@@ -782,27 +782,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report
 
-- **Compiler Checkpoint Check Logic (`aqueduct/compiler/compiler.py`)**: 
-  The compiler uses `m.type == "Checkpoint"` to verify if an upstream module caches the dataset. However, Aqueduct modules use a boolean flag (`checkpoint: true`) rather than a dedicated "Checkpoint" module type. As a result, warnings for incremental scanning and multi-consumer channels trigger improperly even when `checkpoint: true` is set, and the `test_incremental_channel_no_checkpoint_warns` test fails to match the `pytest.warns` regex due to `re.DOTALL` newline issues or the regex being slightly off.
 
-The test suite currently has 13 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
-7. `test_patched_yaml_list_indentation` — `ruamel.yaml` formats lists incorrectly. Tracked in `.dev/ISSUES/test_patch_formatting.md`.
-8-9. `test_patch_filename_includes_seq` & `_increments_seq` — Missing sequence numbers in patches. Tracked in `.dev/ISSUES/test_patch_filename_seq.md`.
-11. `test_llm_user_prompt_includes_blueprint_source_yaml` — Prompt template expecting field. Tracked in `.dev/ISSUES/test_llm_user_prompt_includes_blueprint_source_yaml.md`.
-13. `test_surveyor_populates_blueprint_source_yaml_when_file_exists` — Surveyor fails to read yaml. Tracked in `.dev/ISSUES/test_surveyor_populates_blueprint_source_yaml_when_file_exists.md`.
-14. `test_surveyor_sets_blueprint_source_yaml_none_when_file_missing` — Surveyor fails to handle missing path. Tracked in `.dev/ISSUES/test_surveyor_sets_blueprint_source_yaml_none_when_file_missing.md`.
-
-**Resolved (moved to `.dev/RESOLVED/`):**
-- `test_init_git_not_installed` — Fixed: `FileNotFoundError` guard added around git subprocess calls.
-- `test_cli_test_*` (5 tests) — Fixed: `TestError` → `TestSchemaError` in `cli.py`.
-- `test_failure_context_has_blueprint_source_yaml` — Fixed: `blueprint_source_yaml` field added to `FailureContext`.
-- `test_llm_system_prompt_includes_template_expressions_rule` — Fixed: rule added to `_SYSTEM_PROMPT_TEMPLATE`.
-
- (last run)
-<!-- Auto‑populated by the cheap model after test run -->
-- **Status**: 686 passed, 8 failed, 4 skipped. Coverage: 71%.
-Issues reported in:
-- `.dev/ISSUES/`
 ---
 
 ## Per-module `on_failure` (`aqueduct/executor/executor.py`)
@@ -1266,8 +1246,8 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ expanded module has correct `sub_blueprint_path` and `original_module_id`
 - ✅ arcade config value from context_override key → `source_type="arcade_inherited"`, `context_key` set
 - ✅ arcade config literal value → `source_type="arcade_inherited"`, `context_key=None`
-- ⏳ `expand_arcades()` returns 3-tuple `(modules, edges, provenance_dict)`
-- ⏳ nested arcade (arcade inside arcade) → provenance tracked at both levels
+- ✅ `expand_arcades()` returns 3-tuple `(modules, edges, provenance_dict)`
+- ✅ nested arcade (arcade inside arcade) → provenance tracked at both levels
 
 ### `FailureContext.provenance_json` — `aqueduct/surveyor/models.py`
 - ✅ `provenance_json` field present; defaults to None
@@ -1287,21 +1267,21 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ literal value → "use set_module_config_key" hint shown
 - ✅ env_ref value → env var name shown, no patch suggestion
 - ✅ context block summary lists all context keys with resolved values
-- ⏳ `blueprint_source_section` placeholder gone from template; `provenance_section` present
+- ✅ `blueprint_source_section` placeholder gone from template; `provenance_section` present
 
 ### Guardrails resolve `${ctx.*}` — `aqueduct/patch/apply.py`
-- ⏳ `set_module_config_key` with `path="${ctx.paths.foo}"` + provenance_map with resolved value → matches `allowed_paths`
-- ⏳ `set_module_config_key` with literal path → matches normally without provenance_map
-- ⏳ `replace_context_value` op is never path-checked
-- ⏳ `apply_patch_file()` accepts optional `provenance_map` kwarg
+- ✅ `set_module_config_key` with `path="${ctx.paths.foo}"` + provenance_map with resolved value → matches `allowed_paths`
+- ✅ `set_module_config_key` with literal path → matches normally without provenance_map
+- ✅ `replace_context_value` op is never path-checked
+- ✅ `apply_patch_file()` accepts optional `provenance_map` kwarg
 
 ### `check_blueprint_sources_from_manifest()` — `aqueduct/doctor.py`
-- ⏳ arcade-expanded Ingress modules included (no recursion needed)
-- ⏳ path values are fully resolved strings (no `${ctx.*}` refs)
-- ⏳ format mismatch detected on resolved path
-- ⏳ JDBC module checked by host:port
-- ⏳ cloud URI → skip result
-- ⏳ project root derived from `provenance_map.blueprint_path`
+- ✅ arcade-expanded Ingress modules included (no recursion needed)
+- ✅ path values are fully resolved strings (no `${ctx.*}` refs)
+- ✅ format mismatch detected on resolved path
+- ✅ JDBC module checked by host:port
+- ✅ cloud URI → skip result
+- ✅ project root derived from `provenance_map.blueprint_path`
 
 ### Parallel branch execution — `aqueduct/executor/spark/executor.py`
 - ✅ `_find_connected_components`: single module → one component
@@ -1316,7 +1296,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `parallel=True`, both components succeed → `ExecutionResult(status="success")` with all module results merged
 - ✅ Verified on Python 3.14 (with `pyspark.cloudpickle` patch active in `session.py`)
 
-- ⏳ unexpected thread exception (not ChannelError etc) → cancel_event set, error logged, run returns error
+- ✅ unexpected thread exception (not ChannelError etc) → cancel_event set, error logged, run returns error
 
 ### Channel op completion — `aqueduct/executor/spark/channel.py`
 
@@ -1444,13 +1424,13 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `archive_patch`: _aq_meta includes prompt_version
 
 #### CLI — `aqueduct/cli.py`
-- ⏳ `heal --scenario <path>`: loads scenario, runs against configured model, prints PASS/FAIL
-- ⏳ `heal --scenario <path>`: scenario fails → sys.exit(1)
-- ⏳ `heal <run_id>`: still works (existing flow unbroken)
-- ⏳ `heal` with no args: error message prompting for run_id or --scenario
-- ⏳ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
-- ⏳ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
-- ⏳ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
+- ✅ `heal --scenario <path>`: loads scenario, runs against configured model, prints PASS/FAIL
+- ✅ `heal --scenario <path>`: scenario fails → sys.exit(1)
+- ✅ `heal <run_id>`: still works (existing flow unbroken)
+- ✅ `heal` with no args: error message prompting for run_id or --scenario
+- ✅ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
+- ✅ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
+- ✅ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
 
 ## Phase 23B — Input Fingerprinting
 
