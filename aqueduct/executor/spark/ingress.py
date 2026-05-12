@@ -58,9 +58,12 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     if not fmt:
         raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
+    # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
+    _PATHLESS_FORMATS = {"jdbc", "kafka", "depot", "dataframe"}
+
     path: str | None = cfg.get("path")
-    if not path:
-        raise IngressError(f"[{module.id}] 'path' is required in Ingress config")
+    if not path and fmt not in _PATHLESS_FORMATS:
+        raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 
     reader = spark.read.format(fmt)
 
@@ -73,12 +76,13 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         reader = reader.option(str(key), str(value))
 
     try:
-        df: DataFrame = reader.load(path)
+        df: DataFrame = reader.load(path) if path else reader.load()
     except IngressError:
         raise
     except Exception as exc:
+        loc = f"at {path!r}" if path else f"(format={fmt!r})"
         raise IngressError(
-            f"[{module.id}] source not found or unreadable at {path!r}: {exc}"
+            f"[{module.id}] source not found or unreadable {loc}: {exc}"
         ) from exc
 
     # schema_hint check — uses df.schema (metadata only, not an action)
