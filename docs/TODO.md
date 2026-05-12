@@ -34,3 +34,6 @@ however we have a python module with that name, I very much liked something simi
 18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
 19. standardize the warnings and spark best practices
 20. generate scenarios from Stackoverflow with the most commong bugs/issues vs specific cases
+21. Maybe ready prefab modules, where some of the common SQL operations are standardized into just config (e.g. dedupe, mask_email, pivot/unpivot)
+
+
