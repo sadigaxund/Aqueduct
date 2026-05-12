@@ -811,10 +811,40 @@ Use this whenever you have `sql_row` or `custom` quarantine rules to prevent the
 | `abort` | Raises `AssertError`; pipeline stops and enters Surveyor failure handling. |
 | `warn` | Logs a warning; pipeline continues. |
 | `webhook` | POSTs an alert to the configured URL; pipeline continues. Combined as `{action: webhook, url: ...}`. |
-| `quarantine` | Row-level rules only — failing rows are collected into `quarantine_df` and routed to the module's spillway port. |
+| `quarantine` | Failing rows routed to the module's spillway port. Valid for `sql_row`, `custom`, and `freshness` rules only — see note below. |
 | `trigger_agent` | Raises `AssertError(trigger_agent=True)`; Surveyor invokes the LLM self-healing loop. |
 
-**Implementation note:** Assert is executed by `aqueduct.executor.spark.assert_.execute_assert()`. It returns `(passing_df, quarantine_df | None)`. The executor wires `quarantine_df` into `frame_store["{module_id}.spillway"]` if a spillway edge exists; otherwise logs a warning and discards quarantine rows.
+**`on_fail: quarantine` validity:**
+
+`quarantine` requires a per-row predicate. Only rule types that can derive one support it:
+
+| Rule type | Quarantine supported | Row predicate |
+|---|---|---|
+| `sql_row` | Yes | The rule's `expr` directly |
+| `custom` | Yes | Callable returns `quarantine_df` |
+| `freshness` | Yes | `column >= now() - INTERVAL max_age_hours HOURS` (auto-derived) |
+| `min_rows`, `max_rows`, `sql`, `null_rate` | **No — compile error** | No derivable per-row predicate |
+
+Using `on_fail: quarantine` on `min_rows`, `max_rows`, `sql`, or `null_rate` raises a `CompileError`. Previously these silently degraded to warn (and passed bad data through) — this was removed as a footgun.
+
+**`freshness` + `quarantine` pattern** — eliminates the need for a paired `sql_row` rule:
+```yaml
+rules:
+  # Abort if entire table is dead (no data within 24h)
+  - type: freshness
+    column: event_time
+    max_age_hours: 24
+    on_fail: abort
+
+  # Quarantine individual stale rows (>12h) — predicate auto-derived
+  - type: freshness
+    column: event_time
+    max_age_hours: 12
+    on_fail: quarantine
+```
+A spillway edge must be present when `freshness` uses `on_fail: quarantine` — the compiler raises `CompileError` if not, to prevent silent row discard.
+
+**Implementation note:** Assert is executed by `aqueduct.executor.spark.assert_.execute_assert()`. It returns `(passing_df, quarantine_df | None)`. The executor wires `quarantine_df` into `frame_store["{module_id}.spillway"]` if a spillway edge exists. Using `on_fail: quarantine` without a connected spillway edge is a `CompileError` — the compiler catches this before any Spark job runs.
 
 
 # **5. Context Registry**
