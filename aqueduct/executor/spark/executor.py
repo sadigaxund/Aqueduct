@@ -1078,19 +1078,22 @@ def execute(
                 
                 # If gate is closed and we have a timeout, poll until open or timeout
                 if not gate_open and timeout_sec > 0 and surveyor:
-                    logger.info("[%s] Regulator gate closed; polling for signal (timeout=%ss)...", module.id, timeout_sec)
+                    logger.info(
+                        "[%s] Regulator gate closed; polling for signal (timeout=%ss)...",
+                        module.id, timeout_sec,
+                    )
                     while not gate_open and elapsed < timeout_sec:
                         time.sleep(poll_interval)
                         elapsed += poll_interval
                         gate_open = surveyor.evaluate_regulator(module.id)
                         if gate_open:
                             logger.info("[%s] Regulator signal received; gate OPEN.", module.id)
-                    
+
                     if not gate_open:
-                        logger.info("[%s] Regulator timeout reached; continuing per policy.", module.id)
-                        # In timeout case, we proceed if the policy is "proceed" or default
-                        # If the user wanted to abort on timeout, they should use a standard Assert.
-                        gate_open = True 
+                        logger.info(
+                            "[%s] Regulator timeout_seconds=%s reached; gate still closed — applying on_block.",
+                            module.id, timeout_sec,
+                        )
 
                 if gate_open:
                     frame_store[module.id] = val

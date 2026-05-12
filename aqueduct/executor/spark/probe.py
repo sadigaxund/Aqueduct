@@ -85,6 +85,13 @@ config:
 
     - type: partition_stats
       # no config keys — always zero Spark action
+
+    - type: threshold
+      expr: "MAX(amount) > 0"       # SQL aggregate expression; must evaluate to boolean
+      # Writes {"passed": true/false, "value": <result>, "expr": "<expr>"} to probe_signals.
+      # This is the ONLY signal type that produces a "passed" key — required for Regulator
+      # gate evaluation. All other signal types write raw metrics only.
+      # One Spark action (df.agg(expr).collect()).
 """
 
 from __future__ import annotations
@@ -375,6 +382,27 @@ def _partition_stats(df: DataFrame) -> dict[str, Any]:
     return {"num_partitions": df.rdd.getNumPartitions()}
 
 
+def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
+    """Evaluate a SQL aggregate expression and write a boolean 'passed' verdict.
+
+    This is the only signal type that produces {"passed": bool} — the key that
+    evaluate_regulator() looks for when deciding whether to open a Regulator gate.
+
+    One Spark action: df.selectExpr(expr).collect()[0][0].
+    The expression must evaluate to a truthy/falsy scalar (e.g. "MAX(amount) > 0",
+    "COUNT(*) >= 1000", "SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) > 0").
+    """
+    from pyspark.sql import functions as F
+
+    expr_str = sig_cfg.get("expr", "")
+    if not expr_str:
+        raise ValueError("threshold signal requires an 'expr' field")
+
+    result = df.selectExpr(expr_str).collect()[0][0]
+    passed = bool(result) if result is not None else False
+    return {"passed": passed, "value": result, "expr": expr_str}
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def execute_probe(
@@ -441,6 +469,8 @@ def execute_probe(
                         payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions)
                     elif sig_type == "partition_stats":
                         payload = _partition_stats(df)
+                    elif sig_type == "threshold":
+                        payload = _threshold(df, sig_cfg)
                     else:
                         logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
                         continue
