@@ -297,6 +297,27 @@ def compile(  # noqa: A001
                 stacklevel=2,
             )
 
+    # 8f. Hadoop filesystem keys in Ingress options — must be in spark_config instead
+    _HADOOP_FS_PREFIXES = ("fs.s3a.", "fs.gs.", "fs.azure.", "fs.hdfs.", "fs.abfs.")
+    for m in modules:
+        if m.type != "Ingress":
+            continue
+        bad_keys = [
+            k for k in m.config.get("options", {})
+            if any(str(k).startswith(p) for p in _HADOOP_FS_PREFIXES)
+        ]
+        if bad_keys:
+            warnings.warn(
+                f"Ingress '{m.id}' has Hadoop filesystem keys in 'options': "
+                f"{bad_keys}. DataFrameReader.option() does NOT propagate these to "
+                "Spark's HadoopConfiguration — the S3A/GCS/Azure FileSystem will not "
+                "see them and authentication will fail. Move these to spark_config with "
+                "the 'spark.hadoop.' prefix instead: e.g. "
+                "'spark.hadoop.fs.s3a.access.key'. "
+                "See docs/SPARK_GUIDE.md#jdbc-ingress-parallelism.",
+                stacklevel=2,
+            )
+
     prov_map = ProvenanceMap(
         blueprint_id=blueprint.id,
         blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",
