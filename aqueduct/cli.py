@@ -42,6 +42,20 @@ def _check_guardrails(patch: Any, agent: Any) -> str | None:
 
 # ── Self-healing helpers ──────────────────────────────────────────────────────
 
+def _llm_usable(provider: str, base_url: str | None) -> bool:
+    """Return True if the LLM provider appears reachable without making a network call.
+
+    anthropic:     requires ANTHROPIC_API_KEY in os.environ
+    openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY
+    """
+    import os as _os
+    if provider == "anthropic":
+        return bool(_os.environ.get("ANTHROPIC_API_KEY"))
+    if provider == "openai_compat":
+        return bool(base_url or _os.environ.get("OPENAI_API_KEY"))
+    return False
+
+
 def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
@@ -696,7 +710,7 @@ def run(
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                if resolved_agent_model is not None:
+                if _llm_usable(resolved_agent_provider, resolved_agent_base_url):
                     click.echo(
                         "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
@@ -705,10 +719,10 @@ def run(
             if effective_mode == "disabled" or failure_ctx is None:
                 break
 
-            if resolved_agent_model is None:
+            if not _llm_usable(resolved_agent_provider, resolved_agent_base_url):
                 click.echo(
-                    "  ⚠  no LLM model configured — skipping self-healing. "
-                    "Set agent.model in aqueduct.yml to enable.",
+                    f"  ⚠  LLM not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
+                    "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
                     err=True,
                 )
                 break
