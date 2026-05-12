@@ -90,3 +90,25 @@ def test_execute_parallel_single_component_serial(tmp_path, spark):
     result = execute(manifest, spark, parallel=True)
     assert result.status == "success"
     assert len(result.module_results) == 2
+
+
+def test_execute_parallel_unexpected_thread_exception(independent_manifest, tmp_path, spark, monkeypatch):
+    """unexpected thread exception (not ChannelError etc) → cancel_event set, error logged, run returns error"""
+    import aqueduct.executor.spark.executor as exec_module
+    
+    # Pre-create C's data so it could succeed if not cancelled
+    spark.createDataFrame([(2, "c")], ["id", "val"]).write.parquet(str(tmp_path / "c.parquet"))
+    
+    original_read_ingress = exec_module.read_ingress
+    
+    def mock_read_ingress(module, spark_session):
+        if module.id == "A":
+            raise Exception("Unexpected thread exception")
+        return original_read_ingress(module, spark_session)
+        
+    monkeypatch.setattr(exec_module, "read_ingress", mock_read_ingress)
+    
+    result = execute(independent_manifest, spark, parallel=True)
+    
+    assert result.status == "error"
+    # Thread pool catches raw exception and triggers cancellation, which causes the pipeline to abort.

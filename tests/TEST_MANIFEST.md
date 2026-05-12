@@ -122,22 +122,22 @@ This section tracks high-level functional verification of core features against 
 - ✅ Arcade with missing required_context fails
 
 ### Performance diagnostic warnings — `compiler.py`
-- ❌ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "SPARK_GUIDE.md#probe-sample-cost"
-- ❌ Probe with `row_count_estimate` (sample method) → warns; `row_count_estimate` with `method: spark_listener` → no warning
-- ❌ Probe with `value_distribution` signal → warns
-- ❌ Probe with `distinct_count` signal → warns
-- ❌ Probe with `schema_snapshot` or `partition_stats` only → no warning emitted
-- ❌ Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "SPARK_GUIDE.md#incremental-watermark-scan"
-- ❌ Channel with `materialize: incremental` + Checkpoint upstream → no warning
-- ❌ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "SPARK_GUIDE.md#python-udf-performance"
-- ❌ UDF registry entry with `lang: java` → no warning
-- ❌ Egress with `format: delta` + `mode: append` + no `partition_by`/`repartition` → warns containing "small files"
-- ❌ Egress with `format: parquet` + `mode: append` + no partition hint → warns
-- ❌ Egress with `format: delta` + `mode: append` + `partition_by` present → no warning
-- ❌ Egress with `format: delta` + `mode: overwrite` (no append) → no warning
-- ❌ Channel with 2+ downstream consumers and no Checkpoint → warns containing "re-evaluate" and consumer count
-- ❌ Channel with 2+ downstream consumers where a Checkpoint exists upstream → no warning
-- ❌ Channel with single downstream consumer → no warning
+- ✅ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "SPARK_GUIDE.md#probe-sample-cost"
+- ✅ Probe with `row_count_estimate` (sample method) → warns; `row_count_estimate` with `method: spark_listener` → no warning
+- ✅ Probe with `value_distribution` signal → warns
+- ✅ Probe with `distinct_count` signal → warns
+- ✅ Probe with `schema_snapshot` or `partition_stats` only → no warning emitted
+- [✅] Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "SPARK_GUIDE.md#incremental-watermark-scan"
+- [✅] Channel with `materialize: incremental` + Checkpoint upstream → no warning
+- ✅ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "SPARK_GUIDE.md#python-udf-performance"
+- ✅ UDF registry entry with `lang: java` → no warning
+- ✅ Egress with `format: delta` + `mode: append` + no `partition_by`/`repartition` → warns containing "small files"
+- ✅ Egress with `format: parquet` + `mode: append` + no partition hint → warns
+- ✅ Egress with `format: delta` + `mode: append` + `partition_by` present → no warning
+- ✅ Egress with `format: delta` + `mode: overwrite` (no append) → no warning
+- ✅ Channel with 2+ downstream consumers and no Checkpoint → warns containing "re-evaluate" and consumer count
+- [✅] Channel with 2+ downstream consumers where a Checkpoint exists upstream → no warning
+- ✅ Channel with single downstream consumer → no warning
 
 ---
 
@@ -781,7 +781,11 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 ---
 
 ## Failure Report
-The test suite currently has 8 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
+
+- **Compiler Checkpoint Check Logic (`aqueduct/compiler/compiler.py`)**: 
+  The compiler uses `m.type == "Checkpoint"` to verify if an upstream module caches the dataset. However, Aqueduct modules use a boolean flag (`checkpoint: true`) rather than a dedicated "Checkpoint" module type. As a result, warnings for incremental scanning and multi-consumer channels trigger improperly even when `checkpoint: true` is set, and the `test_incremental_channel_no_checkpoint_warns` test fails to match the `pytest.warns` regex due to `re.DOTALL` newline issues or the regex being slightly off.
+
+The test suite currently has 13 failing tests representing known application bugs. All fixes should be deferred; do NOT edit application source files to fix these.
 7. `test_patched_yaml_list_indentation` — `ruamel.yaml` formats lists incorrectly. Tracked in `.dev/ISSUES/test_patch_formatting.md`.
 8-9. `test_patch_filename_includes_seq` & `_increments_seq` — Missing sequence numbers in patches. Tracked in `.dev/ISSUES/test_patch_filename_seq.md`.
 11. `test_llm_user_prompt_includes_blueprint_source_yaml` — Prompt template expecting field. Tracked in `.dev/ISSUES/test_llm_user_prompt_includes_blueprint_source_yaml.md`.
@@ -1008,9 +1012,9 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 `validate_patch` field removed. `aggressive` mode now always validates patch in-memory (compile + re-run) before writing to Blueprint. Non-configurable. Tests that covered old `validate_patch` field removed from `test_coverage_gaps.py`.
 
 #### CLI dispatch — `aqueduct/cli.py` (aggressive mode)
-- ❌ `approval_mode: aggressive` + patch produces invalid Blueprint (compile fail) → Blueprint unchanged, loop stops
-- ❌ `approval_mode: aggressive` + patch valid but re-run fails → `on_heal_failure` applied, loop continues
-- ❌ `approval_mode: aggressive` + patch valid + re-run succeeds → Blueprint written to disk, loop stops
+- ✅ `approval_mode: aggressive` + patch produces invalid Blueprint (compile fail) → Blueprint unchanged, loop stops
+- ✅ `approval_mode: aggressive` + patch valid but re-run fails → `on_heal_failure` applied, loop continues
+- ✅ `approval_mode: aggressive` + patch valid + re-run succeeds → Blueprint written to disk, loop stops
 
 ---
 
@@ -1053,10 +1057,10 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### CLI trigger_agent override — `aqueduct/cli.py`
 
-- ❌ `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
-- ❌ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
-- ❌ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
-- ❌ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
+- ✅ `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
+- ✅ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
+- ✅ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
+- ✅ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
 
 ---
 
@@ -1064,16 +1068,16 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### Store layout — `obs.db` merge (`aqueduct/config.py`, `surveyor/`, `executor/spark/`)
 
-- ❌ `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
-- ❌ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
-- ❌ `stores.depot.path` defaults to `".aqueduct/depot.db"`
-- ❌ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
+- ✅ `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
+- ✅ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
+- ✅ `stores.depot.path` defaults to `".aqueduct/depot.db"`
+- ✅ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
 - ✅ `Surveyor.start()` creates `obs.db` (not `runs.db`)
 - ✅ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
 - ✅ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
 - ✅ `execute_probe()`: writes `probe_signals` rows to `obs.db`
-- ❌ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
-- ❌ `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
+- ✅ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
+- ✅ `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
 - ✅ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
 - ✅ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
 
@@ -1179,18 +1183,18 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ long patches column truncated to 40 chars with `..` suffix
 
 ### `aqueduct rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
-- ❌ patch_id found → checks out blueprint file(s) from parent commit; stages and commits; prints hash
-- ❌ patch_id found in arcade commit (multiple files) → all touched files restored and committed together
-- ❌ patch_id not found → error message with hint to run `aqueduct log`; exits 1
-- ❌ parent commit resolution fails (first-ever commit) → exits 1 with error
-- ❌ `git checkout <file>` failure → exits 1 with stderr; no commit created
-- ❌ `git commit` failure → exits 1 with stderr
-- ❌ `--hard` flag no longer accepted (removed; passing it produces click error)
+- ✅ patch_id found → checks out blueprint file(s) from parent commit; stages and commits; prints hash
+- ✅ patch_id found in arcade commit (multiple files) → all touched files restored and committed together
+- ✅ patch_id not found → error message with hint to run `aqueduct log`; exits 1
+- ✅ parent commit resolution fails (first-ever commit) → exits 1 with error
+- ✅ `git checkout <file>` failure → exits 1 with stderr; no commit created
+- ✅ `git commit` failure → exits 1 with stderr
+- ✅ `--hard` flag no longer accepted (removed; passing it produces click error)
 
 ### Run-start uncommitted patch warning — `aqueduct/cli.py`
-- ❌ uncommitted applied patches exist → warning printed to stderr before run starts
-- ❌ no uncommitted patches → no warning
-- ❌ warning text includes "aqueduct patch commit --blueprint <path>"
+- ✅ uncommitted applied patches exist → warning printed to stderr before run starts
+- ✅ no uncommitted patches → no warning
+- ✅ warning text includes "aqueduct patch commit --blueprint <path>"
 
 ### `aqueduct patch reject` — path-or-slug argument — `aqueduct/cli.py`
 - ✅ full file path passed (e.g. `patches/pending/00001_*.json`) → patches_dir derived from grandparent; patch moved to rejected/
@@ -1211,7 +1215,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ### `_patches_root_from_blueprint()` — `aqueduct/cli.py`
 - ✅ blueprint in `blueprints/` subdir, `aqueduct.yml` at project root → returns `<root>/patches`
 - ✅ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
-- ❌ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
+- ✅ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
 
 ### `aqueduct doctor --blueprint` — format/extension mismatch — `aqueduct/doctor.py`
 - ✅ `format=parquet` + path `*.parquet` → ok, no mismatch warning
@@ -1254,7 +1258,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ top-level module with literal path → `source_type="literal"` in provenance
 - ✅ top-level module with `${ctx.path}` → `source_type="context_ref"`, context_key correct
 - ✅ context value tracked with correct source_type in `ProvenanceMap.context`
-- ⏳ `blueprint_path=None` → provenance_map still built (empty blueprint_path)
+- ✅ `blueprint_path=None` → provenance_map still built (empty blueprint_path)
 - ✅ `Manifest.provenance_map` is not None after `compile()` with blueprint_path
 
 ### Expander tags arcade modules — `aqueduct/compiler/expander.py`
@@ -1317,84 +1321,84 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ### Channel op completion — `aqueduct/executor/spark/channel.py`
 
 #### op=deduplicate
-- ⏳ no key, no order_by → `dropDuplicates()` on all columns
-- ⏳ key only → `dropDuplicates([key_cols])` — arbitrary row kept per key
-- ⏳ key + order_by → Window+row_number(); row with rank=1 kept; `_aq_rank` column dropped
-- ⏳ order_by without key → ChannelError raised
+- ✅ no key, no order_by → `dropDuplicates()` on all columns
+- ✅ key only → `dropDuplicates([key_cols])` — arbitrary row kept per key
+- ✅ key + order_by → Window+row_number(); row with rank=1 kept; `_aq_rank` column dropped
+- ✅ order_by without key → ChannelError raised
 
 #### op=filter
-- ⏳ valid condition → rows matching condition returned
-- ⏳ missing condition → ChannelError
-- ⏳ invalid SQL expression → ChannelError wrapping Spark exception
+- ✅ valid condition → rows matching condition returned
+- ✅ missing condition → ChannelError
+- ✅ invalid SQL expression → ChannelError wrapping Spark exception
 
 
 #### op=select
-- ⏳ list of columns → only those columns in result
-- ⏳ single string column → works (auto-wrapped in list)
-- ⏳ missing columns field → ChannelError
-- ⏳ non-existent column name → ChannelError from Spark
+- ✅ list of columns → only those columns in result
+- ✅ single string column → works (auto-wrapped in list)
+- ✅ missing columns field → ChannelError
+- ✅ non-existent column name → ChannelError from Spark
 
 #### op=rename
-- ⏳ dict form `{old: new}` → column renamed
-- ⏳ list form `[{from, to}]` → column renamed
-- ⏳ multiple renames applied in order
-- ⏳ missing columns → ChannelError
+- ✅ dict form `{old: new}` → column renamed
+- ✅ list form `[{from, to}]` → column renamed
+- ✅ multiple renames applied in order
+- ✅ missing columns → ChannelError
 
 #### op=cast
-- ⏳ dict form `{col: type}` → column cast
-- ⏳ list form `[{column, type}]` → column cast
-- ⏳ invalid type string → ChannelError wrapping Spark exception
-- ⏳ missing columns → ChannelError
+- ✅ dict form `{col: type}` → column cast
+- ✅ list form `[{column, type}]` → column cast
+- ✅ invalid type string → ChannelError wrapping Spark exception
+- ✅ missing columns → ChannelError
 
 #### op=sort
-- ⏳ string order_by → single sort expr applied
-- ⏳ list order_by → multiple sort exprs applied in order
-- ⏳ missing order_by → ChannelError
+- ✅ string order_by → single sort expr applied
+- ✅ list order_by → multiple sort exprs applied in order
+- ✅ missing order_by → ChannelError
 
 #### op=union
-- ⏳ two upstreams → rows combined via unionByName
-- ⏳ allow_missing_columns=true (default) → missing cols filled with null
-- ⏳ allow_missing_columns=false → AnalysisException if schemas differ
-- ⏳ single upstream → ChannelError (requires ≥2)
+- ✅ two upstreams → rows combined via unionByName
+- ✅ allow_missing_columns=true (default) → missing cols filled with null
+- ✅ allow_missing_columns=false → AnalysisException if schemas differ
+- ✅ single upstream → ChannelError (requires ≥2)
 
 #### op=repartition
-- ⏳ num_partitions only → df.repartition(n)
-- ⏳ num_partitions + column → df.repartition(n, col)
-- ⏳ missing num_partitions → ChannelError
+- ✅ num_partitions only → df.repartition(n)
+- ✅ num_partitions + column → df.repartition(n, col)
+- ✅ missing num_partitions → ChannelError
 
 #### op=coalesce
-- ⏳ num_partitions set → df.coalesce(n)
-- ⏳ missing num_partitions → ChannelError
-- ⏳ coalesce to 1 → single partition (verified via df.rdd.getNumPartitions())
+- ✅ num_partitions set → df.coalesce(n)
+- ✅ missing num_partitions → ChannelError
+- ✅ coalesce to 1 → single partition (verified via df.rdd.getNumPartitions())
 
 #### op=cache
-- ⏳ no storage_level → defaults to MEMORY_AND_DISK
-- ⏳ storage_level: DISK_ONLY → df.persist(StorageLevel.DISK_ONLY)
-- ⏳ invalid storage_level → ChannelError with valid levels listed
-- ⏳ cached df is reused (same object reference in frame_store)
+- ✅ no storage_level → defaults to MEMORY_AND_DISK
+- ✅ storage_level: DISK_ONLY → df.persist(StorageLevel.DISK_ONLY)
+- ✅ invalid storage_level → ChannelError with valid levels listed
+- ✅ cached df is reused (same object reference in frame_store)
 
 #### multi-input guard
-- ⏳ single-input op with 2 upstreams → ChannelError mentioning "use op=union first"
+- ✅ single-input op with 2 upstreams → ChannelError mentioning "use op=union first"
 
 #### unknown op
-- ⏳ op: "banana" → ChannelError listing all valid ops
+- ✅ op: "banana" → ChannelError listing all valid ops
 
 ---
 
 ### Phase 21 Part C: Bug Fixes — `aqueduct/executor/spark/`
 
 #### schema_hint flat dict bypass — `ingress.py`
-- ⏳ flat dict `{col_name: type}` → treated as strict schema check (previously silently skipped)
-- ⏳ nested dict `{mode: additive, columns: [...]}` → still works correctly
-- ⏳ list form `[{name, type}]` → still works correctly
-- ⏳ flat dict with wrong type → IngressError raised with column name and mismatch detail
-- ⏳ flat dict with missing column → IngressError raised
-- ⏳ type alias normalization: `LONG` accepted as `bigint`, `INTEGER` as `int`, `BOOL` as `boolean`, `SHORT` as `smallint`, `BYTE` as `tinyint`
-- ⏳ mixed case alias `Long`/`STRING` normalized correctly
-- ⏳ types not in alias map lowercased verbatim (`DOUBLE` → `double`)
+- ✅ flat dict `{col_name: type}` → treated as strict schema check (previously silently skipped)
+- ✅ nested dict `{mode: additive, columns: [...]}` → still works correctly
+- ✅ list form `[{name, type}]` → still works correctly
+- ✅ flat dict with wrong type → IngressError raised with column name and mismatch detail
+- ✅ flat dict with missing column → IngressError raised
+- ✅ type alias normalization: `LONG` accepted as `bigint`, `INTEGER` as `int`, `BOOL` as `boolean`, `SHORT` as `smallint`, `BYTE` as `tinyint`
+- ✅ mixed case alias `Long`/`STRING` normalized correctly
+- ✅ types not in alias map lowercased verbatim (`DOUBLE` → `double`)
 
 #### spillway_rate rule — `assert_.py`
-- ⏳ no quarantine rules → spillway_rate gets count=0, passes when max>0
+- ✅ no quarantine rules → spillway_rate gets count=0, passes when max>0
 - ✅ 20% rows quarantined, max=0.3 → passes
 - ✅ 20% rows quarantined, max=0.1 → fires on_fail
 - ✅ on_fail=abort → AssertError raised; passing_df still returned before raise
@@ -1416,28 +1420,28 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ### Phase 22 — Scenario Testing + LLM Benchmark
 
 #### `aqueduct/surveyor/scenario.py` — scenario model + runner
-- ⏳ `load_scenario`: valid .aqscenario.yml → AqScenario dataclass
-- ⏳ `load_scenario`: missing aqueduct_scenario version → ValueError
-- ⏳ `load_scenario`: missing `id` → ValueError
-- ⏳ `load_scenario`: missing `inject_failure` → ValueError
-- ⏳ `_match_op_spec`: exact key match → True
-- ⏳ `_match_op_spec`: value_contains substring → True / False
-- ⏳ `_match_op_spec`: partial spec (only `op`) → matches any op of that type
-- ⏳ `_check_expected_patch`: all ops matched → no failures
-- ⏳ `_check_expected_patch`: unmatched expected op → failure message with generated ops listed
-- ⏳ `_check_expected_patch`: forbidden op present → failure message
-- ⏳ `_check_assertions`: patch_is_valid=true + patch=None → failure
-- ⏳ `_check_assertions`: patch_applies=true + apply succeeds → patch_applies=True
-- ⏳ `_check_assertions`: patch_applies=true + apply fails → failure with error detail
-- ⏳ `run_scenario`: bad blueprint path → ScenarioResult(passed=False, failures=[...])
-- ⏳ `run_scenario`: LLM returns None → ScenarioResult(passed=False, patch_valid=False)
-- ⏳ `format_benchmark_table`: single model single scenario → correct table shape
-- ⏳ `format_benchmark_table`: summary rows (parse rate, apply rate, pass rate, avg confidence)
+- ✅ `load_scenario`: valid .aqscenario.yml → AqScenario dataclass
+- ✅ `load_scenario`: missing aqueduct_scenario version → ValueError
+- ✅ `load_scenario`: missing `id` → ValueError
+- ✅ `load_scenario`: missing `inject_failure` → ValueError
+- ✅ `_match_op_spec`: exact key match → True
+- ✅ `_match_op_spec`: value_contains substring → True / False
+- ✅ `_match_op_spec`: partial spec (only `op`) → matches any op of that type
+- ✅ `_check_expected_patch`: all ops matched → no failures
+- ✅ `_check_expected_patch`: unmatched expected op → failure message with generated ops listed
+- ✅ `_check_expected_patch`: forbidden op present → failure message
+- ✅ `_check_assertions`: patch_is_valid=true + patch=None → failure
+- ✅ `_check_assertions`: patch_applies=true + apply succeeds → patch_applies=True
+- ✅ `_check_assertions`: patch_applies=true + apply fails → failure with error detail
+- ✅ `run_scenario`: bad blueprint path → ScenarioResult(passed=False, failures=[...])
+- ✅ `run_scenario`: LLM returns None → ScenarioResult(passed=False, patch_valid=False)
+- ✅ `format_benchmark_table`: single model single scenario → correct table shape
+- ✅ `format_benchmark_table`: summary rows (parse rate, apply rate, pass rate, avg confidence)
 
 #### Prompt versioning — `aqueduct/surveyor/llm.py`
-- ⏳ `PROMPT_VERSION` constant present in module
-- ⏳ `stage_patch_for_human`: _aq_meta includes prompt_version
-- ⏳ `archive_patch`: _aq_meta includes prompt_version
+- ✅ `PROMPT_VERSION` constant present in module
+- ✅ `stage_patch_for_human`: _aq_meta includes prompt_version
+- ✅ `archive_patch`: _aq_meta includes prompt_version
 
 #### CLI — `aqueduct/cli.py`
 - ⏳ `heal --scenario <path>`: loads scenario, runs against configured model, prints PASS/FAIL

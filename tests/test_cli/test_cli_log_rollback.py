@@ -118,15 +118,15 @@ GIT_LOG_FOR_ROLLBACK = (
 
 
 class TestRollbackCmd:
-    def test_patch_id_found_runs_git_revert(self, bp_file, monkeypatch):
-        """patch_id in git log → git revert --no-edit run; new commit created."""
+    def test_patch_id_found_runs_git_checkout(self, bp_file, monkeypatch):
+        """patch_id in git log → git checkout run; new commit created."""
         calls = []
 
         def mock_run(args, **kwargs):
             calls.append(list(args))
             if "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
-            if "rev-parse" in args and "--short" in args:
+            if "rev-parse" in args and "~1" in " ".join(args):
                 return subprocess.CompletedProcess(args, 0, stdout="def5678", stderr="")
             if "diff-tree" in args:
                 return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
@@ -138,7 +138,8 @@ class TestRollbackCmd:
 
         assert result.exit_code == 0
         cmds = [" ".join(c) for c in calls]
-        assert any("git revert --no-edit" in c for c in cmds)
+        assert any("git checkout def5678" in c for c in cmds)
+        assert any("git commit" in c for c in cmds)
 
     def test_patch_id_not_found_exits_1_with_hint(self, bp_file, monkeypatch):
         """patch_id not in git log → error with hint to run aqueduct log; exits 1."""
@@ -155,58 +156,24 @@ class TestRollbackCmd:
         assert "GHOST_PATCH" in result.output
         assert "aqueduct log" in result.output
 
-    def test_hard_flag_requires_yes_confirmation(self, bp_file, monkeypatch):
-        """--hard flag with 'yes' confirmation → runs git reset --hard."""
-        calls = []
-
-        def mock_run(args, **kwargs):
-            calls.append(list(args))
-            if "log" in args:
-                return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
-            if "rev-parse" in args and "~1" in " ".join(args):
-                return subprocess.CompletedProcess(args, 0, stdout="parent123", stderr="")
-            if "diff-tree" in args:
-                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
+    def test_hard_flag_no_longer_accepted(self, bp_file):
+        """--hard flag is removed and passing it produces a click error."""
         runner = CliRunner()
-        # Simulate user typing "yes"
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001", "--hard"], input="yes\n")
+        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001", "--hard"])
 
-        assert result.exit_code == 0
-        cmds = [" ".join(c) for c in calls]
-        assert any("git reset --hard" in c for c in cmds)
+        assert result.exit_code == 2
+        assert "No such option: --hard" in result.output
 
-    def test_hard_flag_with_non_yes_aborts(self, bp_file, monkeypatch):
-        """--hard with non-'yes' response → 'Aborted.' printed; no reset."""
-        calls = []
-
-        def mock_run(args, **kwargs):
-            calls.append(list(args))
-            if "log" in args:
-                return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
-            if "diff-tree" in args:
-                return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
-            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
-
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        runner = CliRunner()
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001", "--hard"], input="no\n")
-
-        assert result.exit_code == 0
-        assert "Aborted." in result.output
-        cmds = [" ".join(c) for c in calls]
-        assert not any("git reset --hard" in c for c in cmds)
-
-    def test_git_revert_failure_exits_1(self, bp_file, monkeypatch):
-        """git revert fails → exits 1 with stderr content."""
+    def test_git_checkout_failure_exits_1(self, bp_file, monkeypatch):
+        """git checkout fails → exits 1 with stderr content."""
         def mock_run(args, **kwargs):
             if "log" in args:
                 return subprocess.CompletedProcess(args, 0, stdout=GIT_LOG_FOR_ROLLBACK, stderr="")
-            if "revert" in args:
+            if "rev-parse" in args:
+                return subprocess.CompletedProcess(args, 0, stdout="def5678", stderr="")
+            if "checkout" in args:
                 return subprocess.CompletedProcess(
-                    args, 1, stdout="", stderr="error: conflict in blueprint.yml"
+                    args, 1, stdout="", stderr="error: pathspec 'blueprint.yml' did not match any file(s)"
                 )
             if "diff-tree" in args:
                 return subprocess.CompletedProcess(args, 0, stdout="blueprint.yml\n", stderr="")
@@ -217,4 +184,4 @@ class TestRollbackCmd:
         result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001"])
 
         assert result.exit_code == 1
-        assert "conflict" in result.output
+        assert "error: pathspec" in result.output

@@ -121,3 +121,41 @@ class TestRegulatorCompileAway:
         manifest = _parse_and_compile("valid_with_regulator.yml")
         edge_pairs = {(e.from_id, e.to_id) for e in manifest.edges}
         assert ("quality_gate", "sink") in edge_pairs
+
+    def test_expand_arcades_returns_3_tuple(self):
+        from aqueduct.compiler.expander import expand_arcades
+        path = FIXTURES / "valid_with_arcade.yml"
+        bp = parse(path)
+        result = expand_arcades(bp.modules, bp.edges, path.parent)
+        assert len(result) == 3
+        mods, edges, prov = result
+        assert isinstance(mods, list)
+        assert isinstance(edges, list)
+        assert isinstance(prov, dict)
+
+    def test_nested_arcade_provenance_tracked(self, tmp_path):
+        from aqueduct.compiler.expander import expand_arcades
+        nested_file = tmp_path / "nested.yml"
+        nested_file.write_text(
+            "aqueduct: '1.0'\nid: nested\nname: Nested\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n    config: {}\n"
+            "edges: []\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: parent\nname: Parent\n"
+            f"modules:\n  - id: arc1\n    type: Arcade\n    label: A1\n    ref: '{nested_file.name}'\n"
+            f"edges: []\n"
+        )
+        root_file = tmp_path / "root.yml"
+        root_file.write_text(
+            f"aqueduct: '1.0'\nid: root\nname: Root\n"
+            f"modules:\n  - id: arc0\n    type: Arcade\n    label: A0\n    ref: '{parent_file.name}'\n"
+            f"edges: []\n"
+        )
+        bp = parse(root_file)
+        mods, edges, prov = expand_arcades(bp.modules, bp.edges, tmp_path)
+        assert "arc0__arc1__m" in prov
+        # Provenance tracked at both levels? The dictionary maps module id to provenance information.
+        # Actually just making sure it doesn't crash and the nested module is in the provenance.
+        assert len(prov) > 0

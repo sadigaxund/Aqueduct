@@ -142,3 +142,23 @@ modules:
     d = manifest.to_dict()
     assert "inputs_fingerprint" in d
     assert d["inputs_fingerprint"]["m1"]["path"] == "data.parquet"
+
+def test_compile_blueprint_path_none_builds_provenance_map(tmp_path):
+    yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config:
+      format: parquet
+      path: data.parquet
+    """
+    bp_path = tmp_path / "bp.yml"
+    bp_path.write_text(yaml_str)
+    bp = parse(str(bp_path))
+    manifest = compiler_compile(bp, blueprint_path=None)
+    assert manifest.provenance_map is not None
+    assert manifest.provenance_map.blueprint_path == ""

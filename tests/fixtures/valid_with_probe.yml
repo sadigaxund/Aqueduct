@@ -19,7 +19,7 @@ modules:
     attach_to: read_input
     config:
       signals:
-        - schema_snapshot
+        - type: schema_snapshot
 
   - id: write_output
     type: Egress
