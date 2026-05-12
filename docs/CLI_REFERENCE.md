@@ -86,6 +86,8 @@ Gate overrides are persistent across runs until explicitly cleared.
 | `aqueduct heal <run_id>` | Trigger LLM patch generation for a failed run |
 | `aqueduct heal <run_id> --module <id>` | Scope healing to one module |
 | `aqueduct heal --scenario <file.aqscenario.yml>` | Simulated failure — no Spark required; tests LLM diagnosis against expected assertions |
+| `aqueduct heal <run_id> --print-prompt` | Print the system + user prompt that would be sent to the LLM, then exit (no LLM call) |
+| `aqueduct heal <run_id> --print-prompt --print-prompt-format json` | Same, but output as `{"system": "...", "user": "..."}` JSON |
 | `aqueduct benchmark --scenarios <dir>` | Run all `.aqscenario.yml` files and print accuracy table |
 | `aqueduct benchmark --scenarios <dir> --model <id>` | Benchmark a specific model (repeatable for multi-model comparison) |
 | `aqueduct benchmark --scenarios <dir> --workers <n>` | Parallel execution |
