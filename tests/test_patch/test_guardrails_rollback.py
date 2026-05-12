@@ -102,7 +102,7 @@ edges: []
             mock_log = MagicMock(returncode=0, stdout=f"h1\x1fSubject line\nBody with abc123\x1eENDCOMMIT")
             def side_effect(cmd, **kw):
                 if "log" in cmd: return mock_log
-                if "revert" in cmd:
+                if "checkout" in cmd:
                     env["bp_path"].write_text(env["backup_file"].read_text())
                     return MagicMock(returncode=0)
                 if "diff-tree" in cmd:

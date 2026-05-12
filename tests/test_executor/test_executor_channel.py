@@ -108,3 +108,374 @@ def test_channel_result_is_lazy(spark: SparkSession):
     res = execute_sql_channel(module, {"in": df_in}, spark)
     assert isinstance(res, DataFrame)
     # If it was an action, it would return a list/int/etc. or take time.
+
+
+# ── deduplicate ────────────────────────────────────────────────────────────────
+
+def test_deduplicate_no_key(spark: SparkSession):
+    """No key, no order_by → dropDuplicates() on all columns."""
+    df = spark.createDataFrame([(1, "a"), (1, "a"), (2, "b")], ["id", "val"])
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "deduplicate"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.count() == 2
+
+
+def test_deduplicate_key_only(spark: SparkSession):
+    """key only → dropDuplicates([key_col]), arbitrary row kept per key."""
+    df = spark.createDataFrame([(1, "a"), (1, "b"), (2, "c")], ["id", "val"])
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "deduplicate", "key": "id"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.count() == 2
+    assert set(r["id"] for r in result.collect()) == {1, 2}
+
+
+def test_deduplicate_key_and_order_by(spark: SparkSession):
+    """key + order_by → Window row_number; _aq_rank column dropped from result."""
+    df = spark.createDataFrame([(1, 10), (1, 20), (2, 5)], ["id", "score"])
+    # order_by "score DESC" → row with highest score gets rank=1, so score=20 should survive for id=1
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "deduplicate", "key": "id", "order_by": "score DESC"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.count() == 2
+    assert "_aq_rank" not in result.columns
+    # Both id=1 and id=2 should appear exactly once
+    rows = {r["id"]: r["score"] for r in result.collect()}
+    assert 1 in rows
+    assert 2 in rows
+    assert rows[2] == 5
+
+
+def test_deduplicate_order_by_without_key_raises(spark: SparkSession):
+    """order_by without key → ChannelError."""
+    df = spark.createDataFrame([(1, "a")], ["id", "val"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "deduplicate", "order_by": "id"})
+    with pytest.raises(ChannelError, match="requires 'key'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── filter ────────────────────────────────────────────────────────────────────
+
+def test_filter_valid_condition(spark: SparkSession):
+    """valid condition → rows matching condition returned."""
+    df = spark.createDataFrame([(1,), (2,), (3,)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "filter", "condition": "n > 1"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.count() == 2
+
+
+def test_filter_missing_condition_raises(spark: SparkSession):
+    """missing condition → ChannelError."""
+    df = spark.range(3)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "filter"})
+    with pytest.raises(ChannelError, match="requires 'condition'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+def test_filter_invalid_sql_raises(spark: SparkSession):
+    """invalid SQL expression → ChannelError wrapping Spark exception."""
+    df = spark.range(3)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "filter", "condition": "BROKEN %%% SQL"})
+    with pytest.raises(ChannelError, match="op=filter failed"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── select ────────────────────────────────────────────────────────────────────
+
+def test_select_list_of_columns(spark: SparkSession):
+    """list of columns → only those columns in result."""
+    df = spark.createDataFrame([(1, "a", True)], ["id", "name", "flag"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "select", "columns": ["id", "name"]})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.columns == ["id", "name"]
+
+
+def test_select_single_string_column(spark: SparkSession):
+    """single string column (not in list) → auto-wrapped, works."""
+    df = spark.createDataFrame([(1, "a")], ["id", "name"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "select", "columns": "id"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.columns == ["id"]
+
+
+def test_select_missing_columns_raises(spark: SparkSession):
+    """missing columns field → ChannelError."""
+    df = spark.range(3)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "select"})
+    with pytest.raises(ChannelError, match="requires 'columns'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+def test_select_nonexistent_column_raises(spark: SparkSession):
+    """non-existent column name → ChannelError from Spark."""
+    df = spark.createDataFrame([(1,)], ["id"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "select", "columns": ["ghost"]})
+    with pytest.raises(ChannelError, match="op=select failed"):
+        # Trigger action to materialise the error
+        execute_sql_channel(mod, {"up": df}, spark).collect()
+
+
+# ── rename ────────────────────────────────────────────────────────────────────
+
+def test_rename_dict_form(spark: SparkSession):
+    """dict form {old: new} → column renamed."""
+    df = spark.createDataFrame([(1,)], ["old_name"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "rename", "columns": {"old_name": "new_name"}})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert "new_name" in result.columns
+    assert "old_name" not in result.columns
+
+
+def test_rename_list_form(spark: SparkSession):
+    """list form [{from, to}] → column renamed."""
+    df = spark.createDataFrame([(1,)], ["col_a"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "rename", "columns": [{"from": "col_a", "to": "col_b"}]})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert "col_b" in result.columns
+    assert "col_a" not in result.columns
+
+
+def test_rename_multiple_in_order(spark: SparkSession):
+    """multiple renames applied in order."""
+    df = spark.createDataFrame([(1, 2)], ["a", "b"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "rename", "columns": {"a": "x", "b": "y"}})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert set(result.columns) == {"x", "y"}
+
+
+def test_rename_missing_columns_raises(spark: SparkSession):
+    """missing columns → ChannelError."""
+    df = spark.range(1)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "rename"})
+    with pytest.raises(ChannelError, match="requires 'columns'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── cast ──────────────────────────────────────────────────────────────────────
+
+def test_cast_dict_form(spark: SparkSession):
+    """dict form {col: type} → column cast."""
+    df = spark.createDataFrame([(1,)], ["n"])  # bigint
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cast", "columns": {"n": "string"}})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert dict(result.dtypes)["n"] == "string"
+
+
+def test_cast_list_form(spark: SparkSession):
+    """list form [{column, type}] → column cast."""
+    df = spark.createDataFrame([(1,)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cast", "columns": [{"column": "n", "type": "double"}]})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert dict(result.dtypes)["n"] == "double"
+
+
+def test_cast_invalid_type_raises(spark: SparkSession):
+    """invalid type string → ChannelError wrapping Spark exception."""
+    df = spark.createDataFrame([(1,)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cast", "columns": {"n": "notarealtype"}})
+    with pytest.raises(ChannelError, match="op=cast failed"):
+        execute_sql_channel(mod, {"up": df}, spark).collect()
+
+
+def test_cast_missing_columns_raises(spark: SparkSession):
+    """missing columns → ChannelError."""
+    df = spark.range(1)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "cast"})
+    with pytest.raises(ChannelError, match="requires 'columns'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── sort ──────────────────────────────────────────────────────────────────────
+
+def test_sort_string_order_by(spark: SparkSession):
+    """string order_by → single sort expr applied."""
+    df = spark.createDataFrame([(3,), (1,), (2,)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "sort", "order_by": "n"})
+    rows = [r["n"] for r in execute_sql_channel(mod, {"up": df}, spark).collect()]
+    assert rows == [1, 2, 3]
+
+
+def test_sort_list_order_by(spark: SparkSession):
+    """list order_by → multiple sort exprs applied in order."""
+    df = spark.createDataFrame([(1, "b"), (1, "a"), (2, "c")], ["id", "val"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "sort", "order_by": ["id", "val"]})
+    rows = [(r["id"], r["val"]) for r in execute_sql_channel(mod, {"up": df}, spark).collect()]
+    assert rows == [(1, "a"), (1, "b"), (2, "c")]
+
+
+def test_sort_missing_order_by_raises(spark: SparkSession):
+    """missing order_by → ChannelError."""
+    df = spark.range(3)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "sort"})
+    with pytest.raises(ChannelError, match="requires 'order_by'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── union ─────────────────────────────────────────────────────────────────────
+
+def test_union_two_upstreams(spark: SparkSession):
+    """two upstreams → rows combined via unionByName."""
+    df1 = spark.createDataFrame([(1,), (2,)], ["n"])
+    df2 = spark.createDataFrame([(3,), (4,)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "union"})
+    result = execute_sql_channel(mod, {"a": df1, "b": df2}, spark)
+    assert result.count() == 4
+
+
+def test_union_allow_missing_columns_default(spark: SparkSession):
+    """allow_missing_columns=true (default) → missing cols filled with null."""
+    df1 = spark.createDataFrame([(1,)], ["a"])
+    df2 = spark.createDataFrame([(2, "x")], ["a", "b"])
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "union"})
+    result = execute_sql_channel(mod, {"x": df1, "y": df2}, spark)
+    assert result.count() == 2
+    assert "b" in result.columns
+
+
+def test_union_allow_missing_columns_false_raises(spark: SparkSession):
+    """allow_missing_columns=false → error if schemas differ."""
+    df1 = spark.createDataFrame([(1,)], ["a"])
+    df2 = spark.createDataFrame([(2, "x")], ["a", "b"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "union", "allow_missing_columns": False})
+    with pytest.raises(ChannelError, match="op=union failed"):
+        execute_sql_channel(mod, {"x": df1, "y": df2}, spark).collect()
+
+
+def test_union_single_upstream_raises(spark: SparkSession):
+    """single upstream → ChannelError (requires ≥2)."""
+    df = spark.range(3)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "union"})
+    with pytest.raises(ChannelError, match="requires at least 2"):
+        execute_sql_channel(mod, {"only": df}, spark)
+
+
+# ── repartition ───────────────────────────────────────────────────────────────
+
+def test_repartition_num_only(spark: SparkSession):
+    """num_partitions only → df.repartition(n)."""
+    df = spark.range(100)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "repartition", "num_partitions": 4})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.rdd.getNumPartitions() == 4
+
+
+def test_repartition_num_and_column(spark: SparkSession):
+    """num_partitions + column → df.repartition(n, col)."""
+    df = spark.createDataFrame([(i % 3, i) for i in range(30)], ["key", "val"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "repartition", "num_partitions": 3, "column": "key"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.rdd.getNumPartitions() == 3
+
+
+def test_repartition_missing_num_raises(spark: SparkSession):
+    """missing num_partitions → ChannelError."""
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "repartition"})
+    with pytest.raises(ChannelError, match="requires 'num_partitions'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── coalesce ──────────────────────────────────────────────────────────────────
+
+def test_coalesce_reduces_partitions(spark: SparkSession):
+    """num_partitions set → df.coalesce(n)."""
+    df = spark.range(100).repartition(8)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "coalesce", "num_partitions": 2})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.rdd.getNumPartitions() == 2
+
+
+def test_coalesce_missing_num_raises(spark: SparkSession):
+    """missing num_partitions → ChannelError."""
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "coalesce"})
+    with pytest.raises(ChannelError, match="requires 'num_partitions'"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+def test_coalesce_to_one(spark: SparkSession):
+    """coalesce to 1 → single partition."""
+    df = spark.range(100).repartition(8)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "coalesce", "num_partitions": 1})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.rdd.getNumPartitions() == 1
+
+
+# ── cache ─────────────────────────────────────────────────────────────────────
+
+def test_cache_default_storage_level(spark: SparkSession):
+    """no storage_level → defaults to MEMORY_AND_DISK."""
+    from pyspark import StorageLevel
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "cache"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    # persist returns the df; storageLevel attribute set
+    assert result.storageLevel == StorageLevel.MEMORY_AND_DISK
+    result.unpersist()
+
+
+def test_cache_disk_only_storage_level(spark: SparkSession):
+    """storage_level: DISK_ONLY → df.persist(StorageLevel.DISK_ONLY)."""
+    from pyspark import StorageLevel
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cache", "storage_level": "DISK_ONLY"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    assert result.storageLevel == StorageLevel.DISK_ONLY
+    result.unpersist()
+
+
+def test_cache_invalid_storage_level_raises(spark: SparkSession):
+    """invalid storage_level → ChannelError with valid levels listed."""
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cache", "storage_level": "GALACTIC_RAM"})
+    with pytest.raises(ChannelError, match="unknown storage_level"):
+        execute_sql_channel(mod, {"up": df}, spark)
+
+
+def test_cache_df_reused_in_frame_store(spark: SparkSession):
+    """cached df is reused (same object reference returned)."""
+    df = spark.range(10)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "cache"})
+    result = execute_sql_channel(mod, {"up": df}, spark)
+    # The result IS the persisted df; calling persist again returns same object
+    assert result is result.persist()
+    result.unpersist()
+
+
+# ── multi-input guard ─────────────────────────────────────────────────────────
+
+def test_single_input_op_with_two_upstreams_raises(spark: SparkSession):
+    """single-input op with 2 upstreams → ChannelError mentioning 'op=union first'."""
+    df = spark.range(5)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "filter", "condition": "id > 1"})
+    with pytest.raises(ChannelError, match="op=union first"):
+        execute_sql_channel(mod, {"a": df, "b": df}, spark)
+
+
+# ── unknown op ────────────────────────────────────────────────────────────────
+
+def test_unknown_op_lists_valid_ops(spark: SparkSession):
+    """op: 'banana' → ChannelError listing all valid ops."""
+    df = spark.range(5)
+    mod = Module(id="ch", type="Channel", label="C", config={"op": "banana"})
+    with pytest.raises(ChannelError, match="unsupported Channel op 'banana'"):
+        execute_sql_channel(mod, {"up": df}, spark)

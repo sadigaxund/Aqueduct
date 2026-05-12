@@ -323,3 +323,68 @@ class TestAssertTriggerAgentPropagation:
         with pytest.raises(AssertError) as exc:
             execute_assert(module, df, spark, "run-1", "pipe.1")
         assert exc.value.trigger_agent is True
+
+
+# ── spillway_rate ──────────────────────────────────────────────────────────────
+
+def test_spillway_rate_no_quarantine_rules_passes(spark: SparkSession):
+    """no quarantine rules → spillway_rate gets count=0, passes when max>0."""
+    df = spark.range(10)
+    # Only a spillway_rate rule, no sql_row rules — quarantine_df will be None
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [
+            {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
+        ]}
+    )
+    # quarantine_count=0, total=10, rate=0.0 → 0.0 <= 0.3 → passes
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert quarantine is None
+
+
+def test_spillway_rate_passes_within_threshold(spark: SparkSession):
+    """20% rows quarantined, max=0.3 → passes."""
+    # 10 rows; id >= 8 is quarantined (2 rows = 20%)
+    df = spark.range(10)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [
+            {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
+            {"type": "spillway_rate", "max": 0.3, "on_fail": "abort"},
+        ]}
+    )
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert quarantine is not None
+    assert quarantine.count() == 2  # id=8 and id=9
+
+
+def test_spillway_rate_fires_on_fail_when_exceeded(spark: SparkSession):
+    """20% rows quarantined, max=0.1 → fires on_fail=abort."""
+    # 10 rows; id >= 8 quarantined (2 rows = 20%)
+    df = spark.range(10)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [
+            {"type": "sql_row", "expr": "id < 8", "on_fail": "quarantine"},
+            {"type": "spillway_rate", "max": 0.1, "on_fail": "abort"},
+        ]}
+    )
+    with pytest.raises(AssertError, match=r"spillway_rate:.*quarantined"):
+        execute_assert(module, df, spark, "run-1", "blueprint-1")
+
+
+def test_spillway_rate_evaluated_after_row_level_rules(spark: SparkSession):
+    """spillway_rate always evaluated after row-level rules (Phase 4 ordering)."""
+    # Confirm row-level result feeds into spillway_rate
+    df = spark.range(10)  # rows 0-9
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [
+            # quarantine rows where id >= 5 (5 rows)
+            {"type": "sql_row", "expr": "id < 5", "on_fail": "quarantine"},
+            # spillway_rate max=0.4 — 5/10=50% > 40% → should abort
+            {"type": "spillway_rate", "max": 0.4, "on_fail": "abort"},
+        ]}
+    )
+    with pytest.raises(AssertError, match=r"spillway_rate"):
+        execute_assert(module, df, spark, "run-1", "blueprint-1")

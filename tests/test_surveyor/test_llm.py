@@ -12,6 +12,7 @@ pytestmark = pytest.mark.unit
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.llm import (
     MAX_REPROMPTS,
+    PROMPT_VERSION,
     _parse_patch_spec,
     archive_patch,
     generate_llm_patch,
@@ -145,22 +146,32 @@ class TestStageForHuman:
         assert data["_aq_meta"]["run_id"] == "run-456"
         assert data["_aq_meta"]["blueprint_id"] == "my.pipe"
 
+    def test_pending_file_contains_prompt_version(self, tmp_path):
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec()
+        ctx = _failure_ctx()
+        stage_patch_for_human(spec, patches_dir, ctx)
+        matches = list((patches_dir / "pending").glob("*_test-fix.json"))
+        data = json.loads(matches[0].read_text())
+        assert "_aq_meta" in data
+        assert data["_aq_meta"]["prompt_version"] == PROMPT_VERSION
+
     def test_returns_none(self, tmp_path):
         spec = _patch_spec()
         result = stage_patch_for_human(spec, tmp_path / "patches", _failure_ctx())
         assert result is None
 
 class TestPatchFilename:
-    def test_patch_filename_includes_seq(self, tmp_path):
+    def test_patch_filename_includes_timestamp(self, tmp_path):
         from aqueduct.surveyor.llm import _patch_filename
         spec = _patch_spec(patch_id="test")
         patches_dir = tmp_path / "patches"
-        # 0 files -> seq is 00001
         filename = _patch_filename(spec, patches_dir)
-        assert filename.startswith("00001_")
+        import re
+        assert re.match(r"^\d{8}T\d{6}_test\.json$", filename)
         assert "_test.json" in filename
 
-    def test_patch_filename_increments_seq(self, tmp_path):
+    def test_patch_filename_ignores_seq_logic(self, tmp_path):
         from aqueduct.surveyor.llm import _patch_filename
         spec = _patch_spec(patch_id="test")
         patches_dir = tmp_path / "patches"
@@ -178,9 +189,11 @@ class TestPatchFilename:
         rejected_dir.mkdir(parents=True)
         (rejected_dir / "00004_123_d.json").write_text("{}")
         
-        # 4 files total -> next seq is 00005
+        # It should just use timestamp now, disregarding existing sequence numbers
         filename = _patch_filename(spec, patches_dir)
-        assert filename.startswith("00005_")
+        assert not filename.startswith("00005_")
+        import re
+        assert re.match(r"^\d{8}T\d{6}_test\.json$", filename)
 
 
 
@@ -207,6 +220,16 @@ class TestArchivePatch:
         assert data["_aq_meta"]["run_id"] == "run-789"
         assert data["_aq_meta"]["approval_mode"] == "auto"
         assert "applied_at" in data["_aq_meta"]
+
+    def test_applied_file_contains_prompt_version(self, tmp_path):
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec(patch_id="archive-me")
+        ctx = _failure_ctx()
+        archive_patch(spec, patches_dir, ctx, mode="auto")
+        matches = list((patches_dir / "applied").glob("*_archive-me.json"))
+        data = json.loads(matches[0].read_text())
+        assert "_aq_meta" in data
+        assert data["_aq_meta"]["prompt_version"] == PROMPT_VERSION
 
     def test_apply_patch_file_modifies_blueprint(self, tmp_path):
         from aqueduct.patch.apply import apply_patch_file
