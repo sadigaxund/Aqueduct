@@ -163,6 +163,82 @@ clear message — it does not fall back silently to an empty string.
 
 ---
 
+### Read and Write Mode Defaults
+
+**Read mode** (controls behavior on malformed records):
+
+| Mode | Behavior | Default? |
+|---|---|---|
+| `permissive` | Sets all fields to `null`; places corrupt raw string in `_corrupt_record` | **Yes** |
+| `dropMalformed` | Silently drops the row | No |
+| `failFast` | Raises immediately on first corrupt record | No |
+
+**The permissive default is silent.** A bad CSV row becomes a null row in your DataFrame with no warning. Always use `mode: FAILFAST` in production Ingress configs or add an Assert rule checking for unexpected nulls after Ingress.
+
+**Write mode** (controls behavior when destination already has data):
+
+| Mode | Behavior | Default? |
+|---|---|---|
+| `errorIfExists` | Raises immediately if data exists at path | **Yes** |
+| `overwrite` | Replaces all existing data | No |
+| `append` | Adds to existing data | No |
+| `ignore` | Skips write silently if data exists | No |
+
+The `errorIfExists` default means re-running a pipeline without changing the output path will fail immediately. Aqueduct Egress config should always set `mode` explicitly — never rely on defaults.
+
+---
+
+### Parquet and JSON Output: One File Per Partition
+
+When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition** into a folder at the output path — not a single file. A pipeline writing 200 partitions produces 200 part files in a directory.
+
+**Implications:**
+- `coalesce(1)` before Egress produces a single file but forces all data through one task — avoid on large datasets
+- Too many partitions = too many small files = slow downstream reads (S3 list overhead, Parquet metadata overhead)
+- Default shuffle partitions (`spark.sql.shuffle.partitions: 200`) after a wide transform often produces 200 tiny files
+
+**Rule of thumb:** target 128–512 MB per output file. Use `coalesce` (no shuffle) when reducing from many balanced partitions; use `repartition` when redistribution is needed.
+
+**Parquet version incompatibility:** Parquet files written by older Spark versions (< 2.x) may be unreadable by newer Spark or vice versa. If reading files written by an older cluster, set `spark.sql.parquet.enableVectorizedReader: "false"` as a fallback.
+
+---
+
+### JDBC Ingress: Parallelism Requires Explicit Partition Config
+
+`numPartitions` alone on a JDBC Ingress does **not** create multiple parallel read tasks. Spark opens a single connection and reads the full table unless you also provide:
+
+```yaml
+config:
+  format: jdbc
+  url: "jdbc:postgresql://host/db"
+  dbtable: "orders"
+  numPartitions: 10
+  partitionColumn: "order_id"   # must be numeric
+  lowerBound: 1
+  upperBound: 10000000
+```
+
+Without `partitionColumn` + `lowerBound` + `upperBound`, the result is 1 partition regardless of `numPartitions`. With them, Spark opens `numPartitions` concurrent connections, each fetching a range — **all rows are returned** (lowerBound/upperBound determine stride, not a filter).
+
+**Predicate pushdown via raw SQL:** When Spark cannot translate a DataFrame operation into pushdown SQL (complex UDFs, unsupported functions), pass a full SQL query as `dbtable` to force the database to do the work:
+
+```yaml
+config:
+  format: jdbc
+  dbtable: "(SELECT id, amount FROM orders WHERE status = 'completed' AND date > '2024-01-01') AS q"
+```
+
+The database runs the query; Spark reads only the result set. Use this when:
+- The filter expression uses database-specific functions
+- The table is huge and only a small slice is needed
+- Spark's auto-pushdown is not confirmed in `df.explain()`
+
+**Warning:** Setting `numPartitions` too high overwhelms the database with concurrent connections — each partition opens a separate JDBC connection. Match `numPartitions` to the database's max connection pool size, not the Spark cluster's core count.
+
+**Non-disjoint predicates produce duplicate rows.** If using the `predicates` list API, ensure predicates are mutually exclusive; overlapping predicates cause the same row to appear in multiple partitions.
+
+---
+
 ### Planned Future Checks
 
 Not yet implemented — planned for future compiler passes:
@@ -175,6 +251,7 @@ Not yet implemented — planned for future compiler passes:
   downstream readers trigger schema inference (full scan).
 - **High-fanout Junction:** Warn when a Junction has many inputs without a broadcast
   hint, suggesting potential shuffle overhead.
+- **Ingress read mode advisory:** Warn when `format: csv` or `format: json` Ingress omits `mode` — the `permissive` default silently converts corrupt records to null rows with no error or log entry. Suggest `mode: FAILFAST` for production.
 - **Watermark column type:** Warn when `watermark_column` is a string type —
   `MAX()` on strings is lexicographic, not temporal.
 - **Partition suggestion:** Based on source file count and size statistics, recommend
@@ -265,13 +342,23 @@ Never use positional `union()` — column order is not guaranteed across sources
 |---|---|
 | `sample()` looks cheap but reads all data | Document as full scan; gate behind `block_full_actions` |
 | `coalesce` can create skewed partitions | Prefer `repartition` for balanced output; document tradeoff when using `coalesce` |
+| `coalesce` when reducing >10× from skewed data | Full shuffle via `repartition` is better — coalesce just merges adjacent partitions, preserving the skew |
 | Date parsing returns `null` on failure silently | `schema_hint` catches type mismatches; validate formats in SQL with `try_cast` |
+| `to_date` / `to_timestamp` returns `null` on parse failure, not an exception | Add an Assert `null_rate` rule on date columns after Ingress |
+| `TimestampType` only has second-level precision | Milliseconds/microseconds are silently truncated. Store sub-second values as `long` (epoch ms) and cast in SQL |
 | Python UDFs cause memory contention under GC pressure | Discourage; use SQL built-ins or `pandas_udf` |
+| UDF return type mismatch → `null`, not exception | If the UDF return value doesn't match the declared return type, Spark silently returns `null`. Always declare and test return types. |
 | UDF throws exception → whole task fails, not just that row | Write defensive UDFs: catch internally, return sentinel struct; route via `spillway_condition: "struct.error IS NOT NULL"` |
 | `broadcast_side` hint overridden silently by AQE | Disable AQE for that join or rely on `autoBroadcastJoinThreshold` instead of hints |
+| Broadcast table too large → driver OOM | `broadcast()` hint triggers a `collect()` on the driver. If the "small" table exceeds driver memory, the driver crashes. Check table size before broadcasting; rely on `autoBroadcastJoinThreshold` for automatic safe broadcast. |
 | Catalyst chooses suboptimal join strategy on small tables | Expose `spark_config` overrides (`spark.sql.autoBroadcastJoinThreshold`) — do not force hints in Aqueduct code |
+| `COUNT(*)` counts null rows; `COUNT(col)` does not | `SELECT COUNT(*) FROM t` includes rows where all columns are null. `SELECT COUNT(col) FROM t` skips rows where `col` is null. Assert `min_rows` rules use `COUNT(*)` — be aware if the DataFrame has all-null rows. |
+| Grouping sets / cube / rollup with nulls produce wrong results | Null values in grouping columns are used as aggregation-level markers. Pre-filter nulls from grouping columns before any `GROUPING SETS`, `ROLLUP`, or `CUBE` operation. |
+| `nullable=false` in schema is not enforced by Spark | Spark treats `nullable=false` as a Catalyst optimizer hint, not a constraint. Nulls can still appear. Aqueduct's `schema_hint` validation is the enforcement layer — do not rely on schema alone. |
 | `watermark_column` is a string type | `MAX()` is lexicographic on strings — warn at compile time (planned) |
 | Incremental `MAX()` rescans output | Instruct users to add Checkpoint or cache; tracked in `incremental-watermark-scan` warning |
+| Join produces duplicate column names | When both DataFrames have a column with the same name (beyond the join key), the result has two columns with the same name — ambiguous to reference. Fix by: (1) using string join key (auto-deduplicates), (2) dropping the duplicate after join, or (3) renaming before join. |
+| Natural join uses implicit column matching | `NATURAL JOIN` matches on all columns with the same name — silently produces wrong results if shared column names are coincidental. Never use natural joins in Channel SQL. |
 
 ### Transformation Reference
 
@@ -286,6 +373,17 @@ Never use positional `union()` — column order is not guaranteed across sources
 | `repartition` | Wide | Yes |
 | `sample` | Narrow | No (but reads all rows) |
 | `limit` + `collect` | Narrow | No (stops after first N rows from first partition(s)) |
+| `sortWithinPartitions` | Narrow | No — sorts each partition locally without a full sort exchange |
+
+**`sortWithinPartitions` optimization:** When a wide transform (join, groupBy) follows a sort, sorting within each partition first can reduce the shuffle exchange cost significantly — the merge phase is cheaper when input partitions are already locally sorted. Prefer over a global `orderBy` before wide transforms:
+
+```python
+# Instead of:
+df.orderBy("event_ts").groupBy("user_id").agg(...)
+
+# Better:
+df.sortWithinPartitions("event_ts").groupBy("user_id").agg(...)
+```
 
 ---
 
