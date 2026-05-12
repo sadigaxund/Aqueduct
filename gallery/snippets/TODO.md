@@ -1,28 +1,30 @@
-# Atomic Module Samples To Implement
+# Aqueduct Gallery: Atomic Module Samples
 
-These samples are minimal, focused YAML snippets designed for copy-pasting into real blueprints.
+Minimal, focused snippets designed for learning and copy-pasting into production blueprints.
 
 ## Ingress Variants
-- [x] `01_ingress_csv_options/blueprint.yml`: Showing header, inferSchema, and custom delimiters.
-- [x] `02_ingress_parquet_s3/blueprint.yml`: Reading from S3 with explicit schema hints.
-- [x] `03_ingress_delta_incremental/blueprint.yml`: Using versioning/time-travel in Delta Lake.
-- [x] `04_ingress_jdbc_postgres/blueprint.yml`: Standard JDBC options for relational sources.
+- [x] `01_ingress_csv_options`: Header, inferSchema, and custom delimiters.
+- [x] `02_ingress_parquet_s3`: S3 connectivity and schema hints.
+- [x] `03_ingress_delta_incremental`: Time-travel and versioning in Delta Lake.
+- [x] `04_ingress_jdbc_postgres`: Relational source configuration.
 
 ## Channel Operations
-- [x] `05_channel_sql_udf/blueprint.yml`: Registering and calling a Python UDF in SQL.
-- [ ] `06_channel_deduplicate/blueprint.yml`: Pattern for "keep last record per ID".
-- [ ] `07_channel_join_variants/blueprint.yml`: Showcase Left, Anti, and Cross joins with broadcast hints.
-- [ ] `08_channel_cache_strategy/blueprint.yml`: Using MEMORY_AND_DISK vs MEMORY_ONLY.
+- [x] `05_channel_sql_udf`: Registering and calling Python UDFs.
+- [x] `06_channel_deduplicate`: "Keep last record per ID" patterns.
+- [x] `07_channel_join_variants`: Left, Anti, and Cross joins with broadcast hints.
+- [x] `08_channel_union_fanout`: Merging and splitting streams.
+- [x] `09_channel_repartition_cache`: Performance tuning with repartitioning and caching.
 
-## Assertion Rules
-- [ ] `09_assert_null_sampling/blueprint.yml`: Checking null rates on a 10% sample for performance.
-- [ ] `10_assert_freshness/blueprint.yml`: Validating that the latest timestamp is within N hours.
-- [ ] `11_assert_row_quarantine/blueprint.yml`: Using `sql_row` to route bad data to a spillway.
+## Data Quality & Assertions
+- [x] `10_passive_regulator_spillway`: Manual routing of invalid data.
+- [x] `11_assert_null_sampling`: Statistical null rate checks on large datasets.
+- [x] `12_assert_freshness`: SLA-bound freshness validation.
+- [x] `13_assert_row_quarantine`: Record-level diversion using `sql_row`.
 
-## Junction & Funnel
-- [ ] `12_junction_conditional_else/blueprint.yml`: Routing with a "catch-all" branch.
-- [ ] `13_funnel_coalesce_fallback/blueprint.yml`: Merging primary and secondary sources to fill gaps.
+## Advanced Routing & Merging
+- [x] `14_junction_conditional_else`: Switch/Case style routing with catch-all.
+- [x] `15_funnel_coalesce_fallback`: Multi-source gap filling (primary/secondary).
 
-## Observability (Probes & Regulators)
-- [ ] `14_probe_value_dist/blueprint.yml`: Capturing percentiles and distributions for numeric columns.
-- [ ] `15_regulator_timeout/blueprint.yml`: A gate that proceeds automatically if a signal doesn't arrive.
+## Observability & Control
+- [x] `16_probe_value_dist`: Statistical distributions and percentiles via DuckDB.
+- [x] `17_regulator_timeout`: Time-bound polling gates for async approvals.

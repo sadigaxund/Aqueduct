@@ -1,0 +1,54 @@
+# blueprint.yml
+# Routing Logic: Junction with Else Branch
+
+aqueduct: "1.0"
+id: junction_else_demo
+name: "Conditional Junction Snippet"
+
+modules:
+  - id: raw_tickets
+    label: "Raw Tickets"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/tickets.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: route_tickets
+    label: "Ticket Router"
+    type: Junction
+    config:
+      mode: conditional
+      branches:
+        - id: active
+          condition: "status IN ('NEW', 'PENDING')"
+        - id: other
+          condition: "_else_"
+
+  - id: save_active
+    label: "Save Active"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/active_tickets.parquet
+      mode: overwrite
+
+  - id: save_other
+    label: "Save Other"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/other_tickets.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_tickets
+    to: route_tickets
+  
+  - from: route_tickets
+    to: save_active
+    port: active
+  
+  - from: route_tickets
+    to: save_other
+    port: other

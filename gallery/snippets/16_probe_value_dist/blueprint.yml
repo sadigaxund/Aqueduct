@@ -1,0 +1,39 @@
+# blueprint.yml
+# Observability: Value Distribution Probing
+
+aqueduct: "1.0"
+id: probe_dist_demo
+name: "Value Distribution Probe Snippet"
+
+modules:
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: price_probe
+    label: "Price Distribution Probe"
+    type: Probe
+    attach_to: raw_products
+    config:
+      signals:
+        - type: value_distribution
+          columns: [price]
+          # Compute on a 20% sample for accuracy
+          fraction: 0.2
+          percentiles: [0.25, 0.5, 0.75, 0.95]
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_products
+    to: output_save

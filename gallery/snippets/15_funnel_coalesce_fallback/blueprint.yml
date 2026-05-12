@@ -1,0 +1,50 @@
+# blueprint.yml
+# Data Merging: Funnel Coalesce (Fallback Pattern)
+
+aqueduct: "1.0"
+id: funnel_coalesce_demo
+name: "Funnel Coalesce Snippet"
+
+modules:
+  - id: ingress_primary
+    label: "Primary Source"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/primary.csv
+      options: {header: "true", inferSchema: "true", nullValue: ""}
+
+  - id: ingress_fallback
+    label: "Fallback Source"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/fallback.csv
+      options: {header: "true", inferSchema: "true", nullValue: ""}
+
+  - id: merge_sources
+    label: "Coalesce Merger"
+    type: Funnel
+    config:
+      mode: coalesce
+      # The first input in the list is the "primary" (preferred).
+      # If a column is NULL in primary, it takes the value from the next input.
+      inputs:
+        - ingress_primary
+        - ingress_fallback
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: ingress_primary
+    to: merge_sources
+  - from: ingress_fallback
+    to: merge_sources
+  - from: merge_sources
+    to: output_save

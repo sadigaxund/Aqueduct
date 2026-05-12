@@ -1,0 +1,55 @@
+# blueprint.yml
+# Human-in-the-loop: Regulator with Timeout
+
+aqueduct: "1.0"
+id: regulator_timeout_demo
+name: "Regulator Timeout Snippet"
+
+modules:
+  - id: raw_data
+    label: "Raw Data Ingress"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/data.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: check_approval
+    label: "Approval Signal"
+    type: Probe
+    attach_to: raw_data
+    config:
+      signals:
+        - type: sql
+          # This signal is always False, which closes the gate.
+          # In a real system, this would be a check for a manual approval record.
+          expr: "1 = 2"
+          id: approval_gate
+
+  - id: gatekeeper
+    label: "Gatekeeper"
+    type: Regulator
+    config:
+      # If the signal is False, wait for 10 seconds for an override.
+      # If no override arrives, proceed anyway (timeout).
+      timeout_seconds: 10
+      on_block: skip # Only used if timeout is not set or reached
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_data
+    to: gatekeeper
+  
+  - from: check_approval
+    to: gatekeeper
+    port: signal
+
+  - from: gatekeeper
+    to: output_save
