@@ -2,7 +2,7 @@
 
 ---
 
-## v1.0.0a1 — 2026-05-11
+## v1.0.0a2 — 2026-05-12
 
 ### Phase 23B — Input Fingerprinting
 _2026-05-11_
@@ -23,6 +23,12 @@ _2026-05-11_
 - After successful execution: new watermark written back to Depot; watermark not advanced on failure (safe re-processing)
 - Warns at startup if downstream Egress uses `mode: overwrite` (data loss risk)
 - `${ctx._watermark}` is a runtime substitution (not a Tier 0 context ref — not listed in `context:` block)
+
+---
+
+## v1.0.0a1 — 2026-05-12
+
+
 
 ---
 
@@ -167,6 +173,14 @@ _2026-05-01_
 
 ---
 
+## v1.0.0a0 — 2026-04-27
+
+Alpha release for PyPI (`aqueduct-core`). Phases 1–9.
+
+- Project Journal consolidated into root CHANGELOG.md
+- Build configuration optimized for PyPI distribution (tests and examples excluded)
+- Package metadata updated with author and contact information
+
 ### Phase 9 — Sub-DAG Execution, LLM Guardrails & Patch Rollback
 _2026-04-28 – 2026-05-01_
 
@@ -179,15 +193,7 @@ _2026-04-28 – 2026-05-01_
 
 ---
 
-## v1.0.0a0 — 2026-04-27
-
-Alpha release for PyPI (`aqueduct-core`).
-
-- Project Journal consolidated into root CHANGELOG.md
-- Build configuration optimized for PyPI distribution (tests and examples excluded)
-- Package metadata updated with author and contact information
-
-### Phase 8b — Doctor, Assert, SparkListener, Executor Isolation
+### Phase 8B — Doctor, Assert, SparkListener, Executor Isolation
 _2026-04-20 – 2026-04-24_
 
 - `aqueduct doctor` — 7 independent checks (config, depot, observability, lineage, LLM reachability, Spark version, blueprint sources); `--blueprint` flag adds Ingress/Egress path checks and format/extension mismatch detection
@@ -202,11 +208,7 @@ _2026-04-20 – 2026-04-24_
 
 ---
 
-## v0.1.0 — 2026-04-20
-
-Initial release. Declarative Spark blueprint engine with LLM-driven self-healing.
-
-### Phase 8 — Resilience, Lineage & LLM Self-Healing
+### Phase 8A — Resilience, Lineage & LLM Self-Healing
 _2026-04-19_
 
 - `RetryPolicy` execution: `_with_retry()` wraps all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress); exponential / linear / fixed backoff + jitter + `deadline_seconds`
@@ -233,14 +235,14 @@ _2026-04-18 – 2026-04-19_
 
 ---
 
-### Phase 6.9 — Comprehensive End-to-End Example
+### Phase 6E — Comprehensive End-to-End Example
 _2026-04-18_
 
 - `examples/comprehensive_demo/` — 9-module blueprint exercising all module types, S3A/MinIO config, date-partitioned output; `generate_data.py` script with intentional data quality issues
 
 ---
 
-### Phase 6.7 — Probe Executor
+### Phase 6D — Probe Executor
 _2026-04-17_
 
 - `aqueduct/executor/probe.py` — `execute_probe()`; signal types: `schema_snapshot`, `row_count_estimate` (sample + spark_listener stub), `null_rates`, `sample_rows`
@@ -248,7 +250,7 @@ _2026-04-17_
 
 ---
 
-### Phase 6.6 — Junction + Funnel Executor
+### Phase 6C — Junction + Funnel Executor
 _2026-04-17_
 
 - Junction — `conditional` (filter + `_else_` NOT), `broadcast` (same plan to all branches), `partition` (partition_key = value filter)
@@ -257,7 +259,7 @@ _2026-04-17_
 
 ---
 
-### Phase 6.5 — Configuration Loading + Remote Spark
+### Phase 6B — Configuration Loading + Remote Spark
 _2026-04-17_
 
 - `aqueduct/config.py` — Pydantic v2 `AqueductConfig`; implicit lookup (no error on missing), explicit path (error on missing)
@@ -266,7 +268,7 @@ _2026-04-17_
 
 ---
 
-### Phase 6 — Patch Grammar (Manual)
+### Phase 6A — Patch Grammar (Manual)
 _2026-04-16_
 
 - `PatchSpec` — Pydantic v2 discriminated union on `op`; 10 operation types; `extra="forbid"`; `model_json_schema()` ready for LLM context
