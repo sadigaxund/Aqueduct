@@ -19,6 +19,13 @@ Supported ops:
   DataFrame API — multi-upstream:
     union        — df.unionByName(*others, allowMissingColumns=True)
 
+Config modifiers (apply to any op):
+  metrics_boundary: true  — inserts df.repartition(current_partitions) after the op result,
+                            forcing Spark to cut a stage boundary. Gives accurate per-module
+                            recordsWritten metrics from SparkListener. Without this, stage
+                            fusion groups multiple logical modules into one physical stage,
+                            making per-module metric attribution inaccurate.
+
 Context tokens (${ctx.*}) are already resolved by the Compiler before the
 Manifest reaches the Executor; all config values are used verbatim.
 """
@@ -307,6 +314,22 @@ def _execute_union(
     return result
 
 
+# ── Metrics boundary ─────────────────────────────────────────────────────────
+
+def _apply_metrics_boundary(df: "DataFrame", cfg: dict) -> "DataFrame":
+    """If metrics_boundary: true, insert a repartition to force a Spark stage cut.
+
+    df.rdd.getNumPartitions() reads the planned partition count from the query
+    plan — no Spark action triggered. The repartition(n) on top forces the
+    optimizer to materialise a shuffle boundary, giving SparkListener accurate
+    per-stage recordsWritten metrics for this Channel's output.
+    """
+    if not cfg.get("metrics_boundary"):
+        return df
+    n = df.rdd.getNumPartitions()
+    return df.repartition(n if n > 0 else 1)
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def execute_channel(
@@ -353,11 +376,13 @@ def execute_channel(
                 raise ChannelError(
                     f"[{module.id}] op=sql requires a non-empty 'query'"
                 )
-        return _run_sql(module.id, query, upstream_dfs, spark)
+        result = _run_sql(module.id, query, upstream_dfs, spark)
+        return _apply_metrics_boundary(result, cfg)
 
     # ── Multi-upstream ops ────────────────────────────────────────────────────
     if op in _MULTI_INPUT_OPS:
-        return _execute_union(module.id, list(upstream_dfs.values()), cfg)
+        result = _execute_union(module.id, list(upstream_dfs.values()), cfg)
+        return _apply_metrics_boundary(result, cfg)
 
     # ── Single-upstream ops ───────────────────────────────────────────────────
     if len(upstream_dfs) > 1:
@@ -368,26 +393,28 @@ def execute_channel(
     df = next(iter(upstream_dfs.values()))
 
     if op == "deduplicate":
-        return _execute_deduplicate(module.id, df, cfg)
-    if op == "filter":
-        return _execute_filter(module.id, df, cfg)
-    if op == "select":
-        return _execute_select(module.id, df, cfg)
-    if op == "rename":
-        return _execute_rename(module.id, df, cfg)
-    if op == "cast":
-        return _execute_cast(module.id, df, cfg)
-    if op == "sort":
-        return _execute_sort(module.id, df, cfg)
-    if op == "repartition":
-        return _execute_repartition(module.id, df, cfg)
-    if op == "coalesce":
-        return _execute_coalesce(module.id, df, cfg)
-    if op == "cache":
-        return _execute_cache(module.id, df, cfg)
+        result = _execute_deduplicate(module.id, df, cfg)
+    elif op == "filter":
+        result = _execute_filter(module.id, df, cfg)
+    elif op == "select":
+        result = _execute_select(module.id, df, cfg)
+    elif op == "rename":
+        result = _execute_rename(module.id, df, cfg)
+    elif op == "cast":
+        result = _execute_cast(module.id, df, cfg)
+    elif op == "sort":
+        result = _execute_sort(module.id, df, cfg)
+    elif op == "repartition":
+        result = _execute_repartition(module.id, df, cfg)
+    elif op == "coalesce":
+        result = _execute_coalesce(module.id, df, cfg)
+    elif op == "cache":
+        result = _execute_cache(module.id, df, cfg)
+    else:
+        # unreachable — _ALL_OPS guard above catches unknowns
+        raise ChannelError(f"[{module.id}] unhandled op {op!r}")
 
-    # unreachable — _ALL_OPS guard above catches unknowns
-    raise ChannelError(f"[{module.id}] unhandled op {op!r}")
+    return _apply_metrics_boundary(result, cfg)
 
 
 # Backwards-compatible alias — executor.py imports this name

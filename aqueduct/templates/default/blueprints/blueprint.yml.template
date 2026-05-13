@@ -239,6 +239,10 @@ modules: []
   #         AND {{ macros.active }}
   #         AND {{ macros.trunc(period='day', col=order_ts) }} >= '2026-01-01'
   #     spillway_condition: "amount IS NULL OR order_ts IS NULL"  # bad rows → spillway port
+  #     # metrics_boundary: true      # force Spark stage cut → accurate per-module recordsWritten metrics
+  #     #   Without this, stage fusion groups logical modules into one physical stage, making
+  #     #   SparkListener attribution inaccurate. Enable when per-module metrics matter (e.g.
+  #     #   LLM self-healing uses recordsWritten to detect empty-output failures).
 
 
   # ── CHANNEL — incremental processing (watermark-based) ───────────────────────
