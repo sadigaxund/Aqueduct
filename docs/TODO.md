@@ -41,3 +41,11 @@ however we have a python module with that name, I very much liked something simi
 24. see if obs logs are written directly into '.aqueduct/' or '.aqueduct/<BLUEPRINT_ID>'
 
 
+feat(Phase 24b): metrics_boundary flag on Channel
+
+New opt-in config key `metrics_boundary: true` on any Channel module.
+When set, wraps the op's output DataFrame with repartition(n) — where
+n = df.rdd.getNumPartitions() (driver-side, no Spark action) — forcing
+a physical stage boundary. Gives accurate per-module recordsWritten
+metrics from SparkListener; without it, stage fusion merges consecutive
+modules into one physical stage, making attribution inaccurate.

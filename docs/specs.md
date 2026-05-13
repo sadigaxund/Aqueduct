@@ -265,12 +265,12 @@ For SQL-based transformations:
 |**storage\_level**|Storage level for `op: cache`. Default: `MEMORY_AND_DISK`. Valid: `MEMORY_AND_DISK`, `MEMORY_AND_DISK_SER`, `MEMORY_ONLY`, `MEMORY_ONLY_SER`, `DISK_ONLY`, `DISK_ONLY_2`, `OFF_HEAP`.|
 |**spillway\_condition**|Optional SQL boolean expression. Rows matching the expression are routed to the spillway port (appended with `_aq_error_*` columns); non-matching rows flow to the main port. Requires a spillway edge — warns if set without one. When omitted and a spillway edge exists, the spillway DataFrame is empty.|
 |**metrics\_boundary**|Optional boolean (default `false`). When `true`, appends `df.repartition(n)` after the op result to force a Spark stage cut. Gives accurate per-module `recordsWritten` metrics from SparkListener — without this, Spark's stage fusion groups consecutive logical modules into one physical stage, making per-module attribution inaccurate. `n` is the current planned partition count (`df.rdd.getNumPartitions()`, driver-side — no Spark action). Pairs well with LLM self-healing, which uses `recordsWritten` to detect empty-output failures.|
-|**materialize**|Optional. Set to `incremental` to enable watermark-based incremental processing. On each run the last watermark is loaded from Depot and substituted into the query as `${ctx._watermark}`. After successful execution the new watermark (MAX of `watermark_column`) is persisted back. First run uses sentinel `'1900-01-01 00:00:00'` so the full table is scanned. Only valid for `op: sql`. Warns if downstream Egress uses `mode: overwrite`.|
-|**watermark\_column**|Required when `materialize: incremental`. Column name used to track the high-water mark (typically a timestamp or monotonic integer). The executor runs `MAX(watermark_column)` on the output DataFrame after each successful run to advance the watermark. **Cost:** this is an extra Spark action — if the output DataFrame is not cached, Spark re-executes the full DAG to compute the max (a second scan of the output data). Add a Checkpoint upstream or cache the Channel output to avoid the double scan. See [docs/SPARK_GUIDE.md#incremental-watermark-scan](SPARK_GUIDE.md#incremental-watermark-scan).|
+|**materialize**|Optional. Set to `incremental` to enable watermark-based incremental processing. On each run the last watermark is loaded from the sidecar file (or Depot as fallback) and substituted into the query as `${ctx._watermark}`. After the downstream Egress writes successfully, the new watermark (MAX of `watermark_column`) is computed from the written output and persisted to a sidecar file. First run uses sentinel `'1900-01-01 00:00:00'` so the full table is scanned. Only valid for `op: sql`. Warns if downstream Egress uses `mode: overwrite`.|
+|**watermark\_column**|Required when `materialize: incremental`. Column name used to track the high-water mark (typically a timestamp or monotonic integer). After the downstream Egress write, the executor reads `MAX(watermark_column)` from the already-written output files (not the lazy Channel DataFrame), eliminating the double-scan of the upstream DAG. For `format: delta`, Spark can often satisfy MAX using Delta transaction log statistics (metadata-only). The new watermark is stored in `{store_dir}/watermarks/{blueprint_id}__{channel_id}.json`.|
 
 **Incremental Channel (`materialize: incremental`):**
 
-Enables watermark-based incremental batch processing without a streaming engine. The watermark is stored in the Depot KV store under the key `"{blueprint_id}:{module_id}:_watermark"` and advanced after each successful run.
+Enables watermark-based incremental batch processing without a streaming engine. The watermark is stored in a local sidecar file (`{store_dir}/watermarks/{blueprint_id}__{channel_id}.json`) and advanced after each successful Egress write. Depot is updated as well for backwards compatibility.
 
 ```yaml
 - id: new_orders
@@ -286,10 +286,11 @@ Enables watermark-based incremental batch processing without a streaming engine.
 ```
 
 - First run: `${ctx._watermark}` resolves to `'1900-01-01 00:00:00'` → full scan.
-- Subsequent runs: resolves to the `MAX(event_ts)` from the previous run's output.
+- Subsequent runs: resolves to the `MAX(event_ts)` from the previous run's Egress output.
 - `${ctx._watermark}` substitution happens at **runtime** (not compile time) — it is not a Tier 0 context ref.
 - Downstream Egress should use `mode: append`. Using `mode: overwrite` triggers a startup warning.
-- Watermark is not advanced if the Channel fails or an exception is raised.
+- Watermark is not advanced if the Channel or Egress fails.
+- **No double-scan:** watermark is computed from the already-written Egress output, not from re-executing the Channel's lazy DataFrame. For Delta, `SELECT MAX(col) FROM delta.\`path\`` uses transaction log stats. Sidecar is written atomically (tmp file → rename).
 
 **Op reference — when to use which:**
 
