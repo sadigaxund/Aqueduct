@@ -341,3 +341,63 @@ modules:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             _compile_yaml(yaml_str, tmp_path)
+
+
+class TestMaintenanceOptimizeWarning:
+    """Warning 8g — maintenance.optimize on non-Delta Egress."""
+
+    def test_optimize_true_parquet_warns(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: data
+      maintenance:
+        optimize: true
+        """
+        with pytest.warns(UserWarning, match="OPTIMIZE is a Delta Lake operation"):
+            _compile_yaml(yaml_str, tmp_path)
+
+    def test_optimize_true_delta_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: delta
+      path: data
+      maintenance:
+        optimize: true
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _compile_yaml(yaml_str, tmp_path)
+
+    def test_vacuum_only_parquet_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: data
+      maintenance:
+        vacuum: 168
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _compile_yaml(yaml_str, tmp_path)

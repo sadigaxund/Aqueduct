@@ -409,3 +409,71 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
     surveyor.start("run1")
     # Should be False because override takes priority
     assert surveyor.evaluate_regulator("reg1") is False
+
+
+# ── error_type propagation to FailureContext ──────────────────────────────────
+
+def test_error_type_propagates_to_failure_context(manifest, tmp_path):
+    """error_type on AssertError → ModuleResult.error_type → FailureContext.error_type."""
+    store_dir = tmp_path / "store_et"
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    run_id = "run-et"
+    surveyor.start(run_id)
+
+    result = ExecutionResult(
+        blueprint_id=manifest.blueprint_id,
+        run_id=run_id,
+        status="error",
+        module_results=(
+            ModuleResult(module_id="m1", status="success"),
+            ModuleResult(module_id="m2", status="error", error="data empty", error_type="EmptyDataset"),
+        ),
+    )
+    ctx = surveyor.record(result)
+    assert ctx is not None
+    assert ctx.error_type == "EmptyDataset"
+    surveyor.stop()
+
+
+def test_error_type_none_for_infra_errors(manifest, tmp_path):
+    """Rule without error_type → FailureContext.error_type is None."""
+    store_dir = tmp_path / "store_none"
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    run_id = "run-none"
+    surveyor.start(run_id)
+
+    result = ExecutionResult(
+        blueprint_id=manifest.blueprint_id,
+        run_id=run_id,
+        status="error",
+        module_results=(
+            ModuleResult(module_id="m1", status="error", error="infra failure"),
+        ),
+    )
+    ctx = surveyor.record(result)
+    assert ctx is not None
+    assert ctx.error_type is None
+    surveyor.stop()
+
+
+def test_multiple_rules_first_failing_error_type(manifest, tmp_path):
+    """Multiple rules with different error_type → first failing rule's type in FailureContext."""
+    store_dir = tmp_path / "store_multi"
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    run_id = "run-multi"
+    surveyor.start(run_id)
+
+    result = ExecutionResult(
+        blueprint_id=manifest.blueprint_id,
+        run_id=run_id,
+        status="error",
+        module_results=(
+            ModuleResult(module_id="m1", status="success"),
+            ModuleResult(module_id="m2", status="error", error="quality fail", error_type="FirstError"),
+            ModuleResult(module_id="m3", status="error", error="cascade fail", error_type="SecondError"),
+        ),
+    )
+    ctx = surveyor.record(result)
+    assert ctx is not None
+    assert ctx.error_type == "FirstError"
+    surveyor.stop()

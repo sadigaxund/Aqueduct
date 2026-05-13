@@ -388,3 +388,33 @@ def test_spillway_rate_evaluated_after_row_level_rules(spark: SparkSession):
     )
     with pytest.raises(AssertError, match=r"spillway_rate"):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
+
+
+# ── error_type propagation ────────────────────────────────────────────────────
+
+def test_error_type_set_on_assert_error(spark):
+    """error_type from rule propagates to AssertError.error_type."""
+    df = spark.range(0)  # empty → min_rows fails
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{
+            "type": "min_rows", "min": 1,
+            "on_fail": "abort",
+            "error_type": "EmptyDataset",
+        }]}
+    )
+    with pytest.raises(AssertError) as exc_info:
+        execute_assert(module, df, spark, "run-1", "bp1")
+    assert exc_info.value.error_type == "EmptyDataset"
+
+
+def test_error_type_none_when_not_set(spark):
+    """Rule without error_type → AssertError.error_type is None."""
+    df = spark.range(0)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "min_rows", "min": 1, "on_fail": "abort"}]}
+    )
+    with pytest.raises(AssertError) as exc_info:
+        execute_assert(module, df, spark, "run-1", "bp1")
+    assert exc_info.value.error_type is None

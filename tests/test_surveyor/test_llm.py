@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 import pytest
 pytestmark = pytest.mark.unit
@@ -579,3 +579,120 @@ class TestDoctorHintsInLLMPrompt:
         )
         prompt = _build_user_prompt(ctx, patches_dir=tmp_path)
         assert "Blueprint issues detected" not in prompt
+
+
+# ── provider_options dispatch (_call_openai_compat) ───────────────────────────
+
+class TestProviderOptionsDispatch:
+    """Tests for provider_options key routing in _call_openai_compat."""
+
+    def _make_mock_response(self, content="test"):
+        import json as _json
+        mock = MagicMock()
+        mock.json.return_value = {"choices": [{"message": {"content": content}}]}
+        mock.raise_for_status = MagicMock()
+        return mock
+
+    def test_ollama_prefix_stripped_into_options(self):
+        from aqueduct.surveyor.llm import _call_openai_compat
+        from unittest.mock import MagicMock
+        import httpx
+
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured["payload"] = json
+            return self._make_mock_response()
+
+        with patch("httpx.post", side_effect=fake_post):
+            _call_openai_compat(
+                messages=[{"role": "user", "content": "hi"}],
+                model="llama3",
+                max_tokens=100,
+                base_url="http://localhost:11434/v1",
+                system_prompt="sys",
+                provider_options={"ollama_num_thread": 8},
+            )
+
+        assert "options" in captured["payload"]
+        assert captured["payload"]["options"]["num_thread"] == 8
+        assert "ollama_num_thread" not in captured["payload"]
+
+    def test_generic_key_merged_top_level(self):
+        from aqueduct.surveyor.llm import _call_openai_compat
+        from unittest.mock import MagicMock
+
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured["payload"] = json
+            return self._make_mock_response()
+
+        with patch("httpx.post", side_effect=fake_post):
+            _call_openai_compat(
+                messages=[],
+                model="gpt-4",
+                max_tokens=100,
+                base_url="http://localhost:11434/v1",
+                system_prompt="sys",
+                provider_options={"temperature": 0.5},
+            )
+
+        assert captured["payload"]["temperature"] == 0.5
+        assert "options" not in captured["payload"]
+
+    def test_mixed_ollama_and_generic_both_dispatched(self):
+        from aqueduct.surveyor.llm import _call_openai_compat
+        from unittest.mock import MagicMock
+
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured["payload"] = json
+            return self._make_mock_response()
+
+        with patch("httpx.post", side_effect=fake_post):
+            _call_openai_compat(
+                messages=[],
+                model="llama3",
+                max_tokens=100,
+                base_url="http://localhost:11434/v1",
+                system_prompt="sys",
+                provider_options={"ollama_num_thread": 4, "temperature": 0.7},
+            )
+
+        payload = captured["payload"]
+        assert payload["options"]["num_thread"] == 4
+        assert payload["temperature"] == 0.7
+
+    def test_provider_options_none_payload_unchanged(self):
+        from aqueduct.surveyor.llm import _call_openai_compat
+        from unittest.mock import MagicMock
+
+        captured = {}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            captured["payload"] = json
+            return self._make_mock_response()
+
+        with patch("httpx.post", side_effect=fake_post):
+            _call_openai_compat(
+                messages=[],
+                model="llama3",
+                max_tokens=100,
+                base_url="http://localhost:11434/v1",
+                system_prompt="sys",
+                provider_options=None,
+            )
+
+        assert "options" not in captured["payload"]
+        assert "temperature" not in captured["payload"]
+
+    def test_ollama_options_key_rejected_at_parse(self):
+        """Old ollama_options key rejected — schema has extra=forbid on AgentSchema."""
+        import yaml
+        from pydantic import ValidationError
+        from aqueduct.parser.schema import AgentSchema
+
+        with pytest.raises(ValidationError):
+            AgentSchema(**{"approval_mode": "disabled", "ollama_options": {"num_thread": 4}})
