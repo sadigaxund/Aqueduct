@@ -170,12 +170,28 @@ probes:
   max_sample_rows: 100
   default_sample_fraction: 0.01
 
-  # block_full_actions_in_prod: when true, suppresses Probe signals that trigger
-  # a Spark action on a sample (row_count_estimate/sample, null_rates,
-  # value_distribution, distinct_count). Signals that are zero-cost
-  # (schema_snapshot, partition_stats) and bounded (sample_rows) still run.
+  # Probe signals that trigger a Spark action on a sample
+  # (row_count_estimate/sample, null_rates, value_distribution, distinct_count)
+  # are GATED by `danger.allow_full_probe_actions` — default false. Zero-cost
+  # signals (schema_snapshot, partition_stats, sample_rows) always run.
   # data_freshness is also suppressed unless allow_sample: true is set per-signal.
-  block_full_actions_in_prod: true
+
+
+# ── Metrics ───────────────────────────────────────────────────────────────────
+#
+# Per-module observability tuning. Aqueduct uses Spark `DataFrame.observe()` to
+# collect accurate per-module row counts; SparkListener stage metrics are also
+# collected unconditionally.
+
+metrics:
+  # When true (default), wrap each Ingress read / Egress write with
+  # `DataFrame.observe()` for accurate per-module records_read / records_written.
+  # When false, fall back to SparkListener stage metrics only — slightly less
+  # accurate (stage fusion blurs attribution) but avoids a ~5–15% throughput
+  # regression on high-throughput pipelines where `observe()` can break
+  # whole-stage codegen. See docs/SPARK_GUIDE.md ("DataFrame.observe() and
+  # Whole-Stage Codegen") for the tradeoff.
+  use_observe: true
 
 
 # ── Secrets ───────────────────────────────────────────────────────────────────

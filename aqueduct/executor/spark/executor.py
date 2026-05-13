@@ -674,6 +674,7 @@ def execute(
     to_module: str | None = None,
     block_full_actions: bool = False,
     parallel: bool = False,
+    use_observe: bool = True,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -857,7 +858,7 @@ def execute(
                         continue
                     _signal_fail(trigger_agent=getattr(fail_result, "trigger_agent", False))
                     return
-                _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read")
+                _obs_df, _obs = observe_df(df, f"{module.id}_read", "records_read", enabled=use_observe)
                 local_ingress_obs[module.id] = _obs
                 _write_stage_metrics(
                     module.id, run_id,
@@ -1288,7 +1289,7 @@ def execute(
                     return
 
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
-                _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written")
+                _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written", enabled=use_observe)
                 _t0 = time.monotonic()
                 try:
                     _with_retry(

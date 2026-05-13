@@ -146,6 +146,62 @@ def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
     return working
 
 
+_CTX_REF_RE = __import__("re").compile(r"^\$\{ctx\.([a-zA-Z0-9_.]+)\}$")
+
+
+def _resolve_path_for_guardrail(value: Any, provenance_map: "Any | None") -> str:
+    """Resolve a ${ctx.*} template path to its runtime value via ProvenanceMap.
+
+    Non-template values pass through unchanged. Used so allowed_paths fnmatch
+    patterns are evaluated against actual runtime paths, not template strings.
+    """
+    text = str(value or "")
+    ctx_match = _CTX_REF_RE.match(text)
+    if ctx_match and provenance_map is not None:
+        ctx_key = ctx_match.group(1)
+        ctx_prov = provenance_map.context.get(ctx_key)
+        if ctx_prov is not None and ctx_prov.resolved_value is not None:
+            return str(ctx_prov.resolved_value)
+    return text
+
+
+def _check_path_against_allowlist(
+    path_value: Any,
+    allowed_paths: list[str],
+    op_name: str,
+    module_id: str,
+    provenance_map: "Any | None",
+    key_hint: str = "path",
+) -> None:
+    """Raise PatchError if a resolved path doesn't match any allowed_paths pattern."""
+    resolved = _resolve_path_for_guardrail(path_value, provenance_map)
+    if not resolved:
+        return
+    if not any(fnmatch.fnmatch(resolved, pat) for pat in allowed_paths):
+        raise PatchError(
+            f"Path value {resolved!r} (key={key_hint!r}) in op {op_name!r} "
+            f"(module {module_id!r}) does not match any "
+            f"agent.guardrails.allowed_paths pattern: {allowed_paths}"
+        )
+
+
+def _check_config_dict_paths(
+    config: Any,
+    allowed_paths: list[str],
+    op_name: str,
+    module_id: str,
+    provenance_map: "Any | None",
+) -> None:
+    """Check path/output_path keys inside a module config dict (full or partial)."""
+    if not isinstance(config, dict):
+        return
+    for key in ("path", "output_path"):
+        if key in config:
+            _check_path_against_allowlist(
+                config[key], allowed_paths, op_name, module_id, provenance_map, key_hint=key,
+            )
+
+
 def _check_guardrails(
     patch_spec: PatchSpec,
     bp_raw: dict,
@@ -155,9 +211,16 @@ def _check_guardrails(
 
     Raises PatchError if any operation violates:
       - forbidden_ops: op type is in the blocklist
-      - allowed_paths: set_module_config_key targeting a path/output_path key whose
-                       resolved value doesn't match any allowed_paths fnmatch pattern.
-                       ${ctx.*} values are resolved via provenance_map before matching.
+      - allowed_paths: any op that writes a `path` or `output_path` value to a
+                       module config — whether via set_module_config_key,
+                       replace_module_config, insert_module, add_probe, or
+                       add_arcade_ref — must resolve to a value matching at least
+                       one fnmatch pattern. ${ctx.*} values are resolved via
+                       provenance_map before matching.
+
+    Arcade-expanded modules (id contains `__`) are skipped for path checks —
+    those IDs do not exist in the Blueprint YAML and the apply step will raise
+    a clearer "Module not found" error.
     """
     guardrails = (bp_raw.get("agent") or {}).get("guardrails") or {}
     forbidden_ops: list[str] = guardrails.get("forbidden_ops") or []
@@ -172,29 +235,42 @@ def _check_guardrails(
                 f"Blocked ops: {forbidden_ops}"
             )
 
-        if allowed_paths and op_name == "set_module_config_key":
+        if not allowed_paths:
+            continue
+
+        # set_module_config_key — single dotted key inside an existing module config
+        if op_name == "set_module_config_key":
             module_id = getattr(op, "module_id", "") or ""
-            # Arcade-expanded modules (ID contains __) don't exist in Blueprint YAML.
-            # Skip path guardrail — the apply step will raise a clear "Module not found" error.
             if "__" in module_id:
                 continue
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
-                value = str(getattr(op, "value", "") or "")
-                # ${ctx.*} refs are unresolved template expressions — resolve via ProvenanceMap
-                # so guardrails check the actual runtime path, not the template string.
-                import re as _re
-                ctx_match = _re.match(r"^\$\{ctx\.([a-zA-Z0-9_.]+)\}$", value)
-                if ctx_match and provenance_map is not None:
-                    ctx_key = ctx_match.group(1)
-                    ctx_prov = provenance_map.context.get(ctx_key)
-                    if ctx_prov is not None and ctx_prov.resolved_value is not None:
-                        value = str(ctx_prov.resolved_value)
-                if not any(fnmatch.fnmatch(value, pat) for pat in allowed_paths):
-                    raise PatchError(
-                        f"Path value {value!r} in op {op_name!r} (module {getattr(op, 'module_id', '?')!r}) "
-                        f"does not match any agent.guardrails.allowed_paths pattern: {allowed_paths}"
-                    )
+                _check_path_against_allowlist(
+                    getattr(op, "value", None), allowed_paths,
+                    op_name, module_id, provenance_map, key_hint=str(key),
+                )
+
+        # replace_module_config — full config dict replacement on an existing module
+        elif op_name == "replace_module_config":
+            module_id = getattr(op, "module_id", "") or ""
+            if "__" in module_id:
+                continue
+            _check_config_dict_paths(
+                getattr(op, "config", None), allowed_paths,
+                op_name, module_id, provenance_map,
+            )
+
+        # insert_module / add_probe / add_arcade_ref — new module definitions carry full config
+        elif op_name in ("insert_module", "add_probe", "add_arcade_ref"):
+            module_dict = getattr(op, "module", None) or {}
+            module_id = (module_dict.get("id") or "") if isinstance(module_dict, dict) else ""
+            if "__" in module_id:
+                continue
+            cfg = module_dict.get("config") if isinstance(module_dict, dict) else None
+            _check_config_dict_paths(
+                cfg, allowed_paths,
+                op_name, module_id, provenance_map,
+            )
 
 
 def apply_patch_file(

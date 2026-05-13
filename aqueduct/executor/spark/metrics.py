@@ -25,6 +25,7 @@ def observe_df(
     df: "DataFrame",
     obs_name: str,
     alias: str = "records_written",
+    enabled: bool = True,
 ) -> "tuple[DataFrame, Any]":
     """Wrap df with an Observation for row counting during the next action.
 
@@ -32,11 +33,17 @@ def observe_df(
         df:       DataFrame to observe.
         obs_name: Unique name for the Observation (scoped to a SparkSession).
         alias:    Metric name in the Observation result dict.
+        enabled:  When False, short-circuit and return (df, None) without
+                  inserting an Observation node. Used to honour
+                  `metrics.use_observe: false` for high-throughput pipelines
+                  where the codegen-break overhead is not worth the accuracy.
 
     Returns:
-        (observed_df, observation) on Spark 3.3+.
-        (df, None)                 on Spark < 3.3 or any import failure.
+        (observed_df, observation) on Spark 3.3+ with enabled=True.
+        (df, None)                 when disabled, on Spark < 3.3, or any failure.
     """
+    if not enabled:
+        return df, None
     try:
         from pyspark.sql import Observation
         from pyspark.sql.functions import count, lit

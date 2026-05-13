@@ -31,31 +31,9 @@ def _compile_with_warnings(compile_fn, *args, **kwargs):
     return result
 
 
-# ── Guardrail validation ──────────────────────────────────────────────────────
-
-def _check_guardrails(patch: Any, agent: Any) -> str | None:
-    """Return error message if patch violates agent guardrail policy, else None."""
-    import fnmatch
-
-    for op_dict in getattr(patch, "operations", []):
-        op_name = op_dict.get("op", "") if isinstance(op_dict, dict) else ""
-
-        if agent.guardrails.forbidden_ops and op_name in agent.guardrails.forbidden_ops:
-            return f"Operation {op_name!r} blocked by agent.guardrails.forbidden_ops"
-
-        if agent.guardrails.allowed_paths:
-            config = (op_dict.get("config") or {}) if isinstance(op_dict, dict) else {}
-            path_val = config.get("path") if isinstance(config, dict) else None
-            # Skip check for unresolved context refs — they're validated at runtime
-            if path_val and not str(path_val).startswith("${ctx.") and not any(
-                fnmatch.fnmatch(str(path_val), pat) for pat in agent.guardrails.allowed_paths
-            ):
-                return f"Path {path_val!r} not in agent.guardrails.allowed_paths whitelist"
-
-    return None
-
-
 # ── Self-healing helpers ──────────────────────────────────────────────────────
+# Deterministic guardrail enforcement lives in aqueduct.patch.apply._check_guardrails.
+# That is the single authoritative implementation; do not reintroduce a CLI-side copy.
 
 def _extract_stack_class(stack_trace: str | None) -> str | None:
     """Extract the exception class name from the last line of a stack trace.
@@ -769,6 +747,7 @@ def run(
                     to_module=to_module,
                     block_full_actions=not cfg.danger.allow_full_probe_actions,
                     parallel=parallel,
+                    use_observe=cfg.metrics.use_observe,
                 )
             except ExecuteError as exc:
                 execute_exc = exc
