@@ -123,16 +123,36 @@ def execute_assert(
             action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
             if action == "quarantine":
                 col = rule.get("column")
+                if not col:
+                    raise AssertError(
+                        f"[{module.id}] freshness rule requires 'column'",
+                        rule_id="freshness",
+                    )
                 max_age_hours = float(rule.get("max_age_hours", 24))
-                if col:
-                    from pyspark.sql import functions as F
-                    hours_int = int(max_age_hours)
-                    minutes_int = round((max_age_hours - hours_int) * 60)
-                    interval = f"INTERVAL {hours_int} HOURS {minutes_int} MINUTES" if minutes_int else f"INTERVAL {hours_int} HOURS"
-                    fresh_expr = F.col(col) >= (F.current_timestamp() - F.expr(interval))
-                    q_df = passing_df.filter(~fresh_expr)
-                    passing_df = passing_df.filter(fresh_expr)
-                    quarantine_parts.append(q_df)
+                from pyspark.sql import functions as F
+                from pyspark.sql.types import LongType, DoubleType, FloatType, IntegerType, ShortType
+                hours_int = int(max_age_hours)
+                minutes_int = round((max_age_hours - hours_int) * 60)
+                interval = f"INTERVAL {hours_int} HOURS {minutes_int} MINUTES" if minutes_int else f"INTERVAL {hours_int} HOURS"
+                cutoff = F.current_timestamp() - F.expr(interval)
+                col_type = passing_df.schema[col].dataType
+                if isinstance(col_type, (LongType, DoubleType, FloatType, IntegerType, ShortType)):
+                    col_expr = F.to_timestamp(F.col(col).cast("long"))
+                else:
+                    col_expr = F.col(col)
+                fresh_expr = col_expr >= cutoff
+                is_null = F.col(col).isNull()
+                # NULLs fail freshness — route to quarantine (ISSUE-015)
+                passing_filter = fresh_expr & ~is_null
+                q_df = (
+                    passing_df.filter(~passing_filter)
+                    .withColumn("_aq_error_module", F.lit(module.id))
+                    .withColumn("_aq_error_rule", F.lit("freshness"))
+                    .withColumn("_aq_error_msg", F.lit(f"column {col!r} failed freshness check"))
+                    .withColumn("_aq_error_ts", F.current_timestamp())
+                )
+                passing_df = passing_df.filter(passing_filter)
+                quarantine_parts.append(q_df)
 
     quarantine_df: DataFrame | None = None
     if quarantine_parts:

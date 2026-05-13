@@ -1400,6 +1400,15 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 #### unknown op
 - ✅ op: "banana" → ChannelError listing all valid ops
 
+#### metrics_boundary
+- ⏳ `metrics_boundary: false` (default) → result df returned unchanged, no repartition applied
+- ⏳ `metrics_boundary: true` on `op: sql` → result df wrapped with `repartition(n)` where `n = df.rdd.getNumPartitions()`
+- ⏳ `metrics_boundary: true` on `op: filter` → boundary applied
+- ⏳ `metrics_boundary: true` on `op: union` → boundary applied
+- ⏳ `metrics_boundary: true` with 0-partition df → `repartition(1)` used (not `repartition(0)`)
+- ⏳ `metrics_boundary: true` on `op: repartition` → boundary applied after user's repartition (accepted; user opted in)
+- ⏳ `metrics_boundary` absent from config → no repartition (falsy default)
+
 ---
 
 ### Phase 21 Part C: Bug Fixes — `aqueduct/executor/spark/`
@@ -1494,6 +1503,22 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `execute()`: no `materialize` key → normal Channel execution, no watermark logic
 - ✅ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash
 
+#### Phase 24c — Sidecar Watermark
+- ⏳ `_read_watermark_sidecar()`: sidecar absent → returns None
+- ⏳ `_read_watermark_sidecar()`: valid sidecar → returns watermark string
+- ⏳ `_read_watermark_sidecar()`: corrupt JSON → returns None (non-fatal)
+- ⏳ `_write_watermark_sidecar()`: writes atomic rename (`*.json.tmp` → `*.json`)
+- ⏳ `_write_watermark_sidecar()`: `store_dir=None` → no-op, no crash
+- ⏳ `_compute_watermark_from_output()`: parquet format → `spark.read.parquet.agg(MAX).collect()`
+- ⏳ `_compute_watermark_from_output()`: delta format → `SELECT MAX() FROM delta.\`path\``
+- ⏳ `_compute_watermark_from_output()`: path doesn't exist → returns None (non-fatal)
+- ⏳ `execute()`: incremental Channel → sidecar read takes priority over Depot value
+- ⏳ `execute()`: incremental Channel + Egress succeeds → sidecar written at `store_dir/watermarks/`
+- ⏳ `execute()`: incremental Channel + Egress fails → sidecar NOT written, watermark NOT advanced
+- ⏳ `execute()`: incremental Channel, depot=None → sidecar still written after Egress write
+- ⏳ `execute()`: `_pending_watermarks` NOT populated for non-incremental Channel
+- ⏳ `execute()`: `agg(MAX).collect()` on lazy Channel df NO LONGER called before Egress write (no double-scan)
+
 ## Compiler Warning — Hadoop FS Keys in Ingress Options (ISSUE-001)
 
 #### Compiler — `aqueduct/compiler/compiler.py`
@@ -1511,3 +1536,36 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ Kafka/depot/dataframe Ingress with no `path` → no `IngressError`
 - ✅ Parquet Ingress with no `path` → `IngressError` with `format='parquet'` in message
 - ✅ CSV Ingress with no `path` → `IngressError` raised (path required for file formats)
+
+## Phase 25a — Post-Egress Maintenance Hooks
+
+#### Egress — `aqueduct/executor/spark/egress.py`
+- ⏳ `run_maintenance`: `optimize: true` → `OPTIMIZE delta.\`path\`` SQL executed
+- ⏳ `run_maintenance`: `zorder_by: [col]` → `ZORDER BY (col)` appended to OPTIMIZE SQL
+- ⏳ `run_maintenance`: `zorder_by` omitted → no ZORDER clause
+- ⏳ `run_maintenance`: `vacuum: 168` → `VACUUM delta.\`path\` RETAIN 168 HOURS` executed
+- ⏳ `run_maintenance`: OPTIMIZE failure → warning logged, returns `optimize_ms=None`, pipeline continues
+- ⏳ `run_maintenance`: VACUUM failure → warning logged, returns `vacuum_ms=None`, pipeline continues
+- ⏳ `run_maintenance`: both `optimize` and `vacuum` absent → no SQL executed, returns `{optimize_ms: None, vacuum_ms: None}`
+- ⏳ `run_maintenance`: `zorder_by` as string (not list) → treated as single column
+
+#### Executor — `aqueduct/executor/spark/executor.py`
+- ⏳ Egress with `maintenance:` block → `run_maintenance` called after successful write
+- ⏳ Egress with no `maintenance:` block → `run_maintenance` NOT called
+- ⏳ Maintenance timing written to `maintenance_metrics` table in `obs.db`
+- ⏳ Maintenance write failure → debug log only, pipeline continues
+
+#### Compiler — `aqueduct/compiler/compiler.py`
+- ⏳ Egress with `maintenance.optimize: true` + `format: parquet` → warning 8g emitted
+- ⏳ Egress with `maintenance.optimize: true` + `format: delta` → no warning
+- ⏳ Egress with `maintenance.vacuum: 168` only (no optimize) + `format: parquet` → no warning
+
+## Phase 25b — `partition_filters` on Ingress
+
+#### Executor — `aqueduct/executor/spark/ingress.py`
+- ⏳ `partition_filters` set → `.where(expr)` applied to df after `reader.load()`; returned df is filtered
+- ⏳ `partition_filters` absent → no `.where()` call; df unchanged
+- ⏳ `partition_filters` with context variable (e.g. `event_date >= '2024-01-01'`) → filter applied correctly
+- ⏳ `partition_filters` with invalid SQL expr → `IngressError` raised with filter expression in message
+- ⏳ `partition_filters` applied before `schema_hint` check (filter does not affect schema metadata)
+- ⏳ `partition_filters` on JDBC Ingress (no path) → filter still applied after `reader.load()`
