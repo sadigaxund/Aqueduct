@@ -64,6 +64,11 @@ pip install aqueduct-core
 # With Spark execution (required for aqueduct run)
 pip install aqueduct-core[spark]
 
+# With secrets provider backends
+pip install aqueduct-core[aws]    # AWS Secrets Manager (boto3)
+pip install aqueduct-core[gcp]    # GCP Secret Manager
+pip install aqueduct-core[azure]  # Azure Key Vault
+
 # Everything
 pip install aqueduct-core[all]
 ```
@@ -183,6 +188,57 @@ aqueduct run pipeline.yml --config aqueduct.yml
   ✓ error_output
 
 ✓ pipeline complete  run_id=abc123
+```
+
+---
+
+## Secrets Management
+
+`@aq.secret('KEY')` resolves a secret at compile time. By default (`provider: env`) it reads `os.environ`. For cloud deployments, configure a backend provider in `aqueduct.yml`:
+
+```yaml
+secrets:
+  provider: aws        # env | aws | gcp | azure | custom
+  region: us-east-1   # AWS only; GCP/Azure use env-var-based config
+```
+
+| Provider | Backend | Install |
+|---|---|---|
+| `env` (default) | `os.environ` / `.env` file | built-in |
+| `aws` | AWS Secrets Manager via `boto3` | `pip install aqueduct-core[aws]` |
+| `gcp` | GCP Secret Manager via `google-cloud-secret-manager` | `pip install aqueduct-core[gcp]` |
+| `azure` | Azure Key Vault via `azure-keyvault-secrets` | `pip install aqueduct-core[azure]` |
+| `custom` | Any callable `(key: str) -> str \| None` | built-in |
+
+All backends cache the resolved value into `os.environ` after the first fetch — subsequent calls within the same run are free.
+
+**Custom provider** — point to any Python callable:
+
+```yaml
+secrets:
+  provider: custom
+  resolver: my_org.vault.fetch_secret  # importlib path; fn(key: str) -> str | None
+```
+
+**Note:** `aqueduct.yml` itself is loaded before the secrets provider is live, so secrets in `aqueduct.yml` always use `${VAR}` env-var syntax. Use `@aq.secret()` in Blueprint files.
+
+`aqueduct doctor` validates provider-specific SDK availability and configuration before any run.
+
+---
+
+## LLM Provider Options
+
+`provider_options` passes extra parameters to the configured LLM provider. Keys prefixed with `ollama_` route to Ollama's `options` payload; unprefixed keys merge to the top-level request body:
+
+```yaml
+agent:
+  provider: openai_compat
+  base_url: "http://localhost:11434/v1"
+  model: "llama3.1:70b"
+  provider_options:
+    ollama_num_thread: 8    # → payload["options"]["num_thread"]
+    ollama_num_gpu: 1       # → payload["options"]["num_gpu"]
+    temperature: 0.1        # → payload["temperature"]
 ```
 
 ---

@@ -4,6 +4,19 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 26b — Secrets Provider Backends
+_2026-05-13_
+
+- New `aqueduct/secrets.py` module: `resolve_secret(key, provider, region, resolver) -> str` — unified secrets resolution with `os.environ` fast-path before any remote call
+- **`provider: aws`** — fetches from AWS Secrets Manager via `boto3`; JSON blobs auto-unwrapped (key treated as JSON object key inside secret value); result cached into `os.environ`
+- **`provider: gcp`** — fetches from GCP Secret Manager via `google-cloud-secret-manager`; short secret names expanded using `GCP_PROJECT` env var; result cached into `os.environ`
+- **`provider: azure`** — fetches from Azure Key Vault via `azure-keyvault-secrets` + `DefaultAzureCredential`; vault URL from `AZURE_KEYVAULT_URL` env var; result cached into `os.environ`
+- **`provider: custom`** — importlib-loaded callable `(key: str) -> str | None`; no shell/subprocess; path set via `secrets.resolver` in `aqueduct.yml`
+- `SecretsConfig`: new fields `region`, `resolver` wired to `AqFunctions.secret()` and `compile()` signature
+- `provider_options` rename: `ollama_options` renamed to `provider_options` across `config.py`, `parser/`, `surveyor/llm.py`, `cli.py`, `scenario.py`; `ollama_*` prefixed keys in `provider_options` route to `payload["options"]`; unprefixed keys merge to payload top-level
+- `aqueduct doctor`: `check_secrets()` validates provider-specific SDK is importable; clear install hint per provider; custom resolver validated via importlib
+- Optional extras in `pyproject.toml`: `aws = ["boto3"]`, `gcp = ["google-cloud-secret-manager"]`, `azure = ["azure-keyvault-secrets", "azure-identity"]`
+
 ### Phase 26a — Cluster/Cloud Hardening
 _2026-05-13_
 

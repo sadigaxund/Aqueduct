@@ -49,10 +49,16 @@ class AqFunctions:
         run_id: str | None = None,
         depot: Any = None,
         execution_date: date | None = None,
+        secrets_provider: str = "env",
+        secrets_region: str | None = None,
+        secrets_resolver: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
         self._depot = depot
         self._execution_date = execution_date  # None = use system clock
+        self._secrets_provider = secrets_provider
+        self._secrets_region = secrets_region
+        self._secrets_resolver = secrets_resolver
 
     def _base_date(self) -> date:
         return self._execution_date if self._execution_date is not None else date.today()
@@ -90,15 +96,16 @@ class AqFunctions:
     # ── secret / env ──────────────────────────────────────────────────────────
 
     def secret(self, key: str) -> str:
-        val = os.environ.get(key)
-        if val is None:
-            raise RuntimeError(
-                f"@aq.secret: environment variable {key!r} is not set. "
-                "@aq.secret() reads os.environ only — inject secrets via environment "
-                "before running aqueduct (e.g. Kubernetes Secrets, Vault agent sidecar, "
-                "or export in your shell)."
+        from aqueduct.secrets import SecretsError, resolve_secret
+        try:
+            return resolve_secret(
+                key,
+                provider=self._secrets_provider,
+                region=self._secrets_region,
+                resolver=self._secrets_resolver,
             )
-        return val
+        except SecretsError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def env(self, var: str) -> str:
         val = os.environ.get(var)

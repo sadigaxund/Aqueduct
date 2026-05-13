@@ -48,7 +48,7 @@ class AgentConfig:
     provider: str | None = None
     base_url: str | None = None
     model: str | None = None
-    ollama_options: dict | None = None
+    provider_options: dict | None = None
     llm_timeout: float | None = None
     llm_max_reprompts: int | None = None
     # Guardrail policy — deterministically enforced in apply_patch

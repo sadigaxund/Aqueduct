@@ -466,7 +466,7 @@ def _call_llm(
     provider: str,
     base_url: str | None,
     patches_dir: Path,
-    ollama_options: dict[str, Any] | None = None,
+    provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
@@ -476,7 +476,7 @@ def _call_llm(
     system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context, last_apply_error)
 
     if provider == "openai_compat":
-        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, ollama_options, timeout=timeout)
+        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, provider_options, timeout=timeout)
     else:
         return _call_anthropic(messages, model, max_tokens, system_prompt, timeout=timeout)
 
@@ -522,7 +522,7 @@ def _call_openai_compat(
     max_tokens: int,
     base_url: str | None,
     system_prompt: str,
-    ollama_options: dict[str, Any] | None = None,
+    provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
 ) -> str:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
@@ -542,8 +542,14 @@ def _call_openai_compat(
         "max_tokens": max_tokens,
         "messages": [{"role": "system", "content": system_prompt}] + messages,
     }
-    if ollama_options:
-        payload["options"] = ollama_options
+    if provider_options:
+        # ollama_* keys → stripped and nested under payload["options"] (Ollama-specific field)
+        # all other keys → merged into payload top-level (standard OpenAI params)
+        ollama_opts = {k[len("ollama_"):]: v for k, v in provider_options.items() if k.startswith("ollama_")}
+        generic_opts = {k: v for k, v in provider_options.items() if not k.startswith("ollama_")}
+        if ollama_opts:
+            payload["options"] = ollama_opts
+        payload.update(generic_opts)
 
     response = httpx.post(
         url,
@@ -702,7 +708,7 @@ def generate_llm_patch(
     provider: str = "anthropic",
     base_url: str | None = None,
     max_tokens: int = 4096,
-    ollama_options: dict[str, Any] | None = None,
+    provider_options: dict[str, Any] | None = None,
     llm_timeout: float = 120.0,
     llm_max_reprompts: int = MAX_REPROMPTS,
     engine_prompt_context: str | None = None,
@@ -731,7 +737,7 @@ def generate_llm_patch(
     for attempt in range(llm_max_reprompts):
         attempts_made = attempt + 1
         try:
-            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, ollama_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
+            raw = _call_llm(messages, model, max_tokens, provider, base_url, patches_dir, provider_options, timeout=llm_timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
         except Exception as exc:
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s", attempt + 1, llm_max_reprompts, exc
