@@ -81,20 +81,45 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
     return None if t.is_alive() else result[0]
 
 
+def _hadoop_fs_bytes(path_str: str) -> "int | None":
+    """Query Hadoop FileSystem via py4j for remote/HDFS/cloud path size.
+
+    Requires an active SparkSession with the matching FileSystem jars on the
+    classpath (S3A, GCS, ABFS, etc.).  Returns None on any failure so callers
+    can fall back gracefully.
+    """
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            return None
+        jvm = spark._jvm
+        conf = spark._jsc.hadoopConfiguration()
+        uri = jvm.java.net.URI(path_str)
+        fs = jvm.org.apache.hadoop.fs.FileSystem.get(uri, conf)
+        summary = fs.getContentSummary(jvm.org.apache.hadoop.fs.Path(path_str))
+        return int(summary.getLength())
+    except Exception:
+        return None
+
+
 def dir_bytes(path_str: str) -> "int | None":
-    """Return total byte size of a local path (file, directory, or glob pattern).
+    """Return total byte size of a path — local or remote.
+
+    For local paths: uses os.stat() directly.
+    For cloud/HDFS paths (s3a://, gs://, hdfs://, etc.): queries Hadoop
+    FileSystem via py4j (requires active SparkSession with matching jars).
 
     Returns:
         int   — measured size in bytes (0 = path exists but is empty).
-        None  — size could not be determined: cloud path, missing path, or OS error.
-                Callers should store None as NULL rather than 0 to preserve the
-                distinction between "empty" and "unknown".
+        None  — size could not be determined: missing path, no active session,
+                missing jars, or OS error. Stored as NULL, not 0.
     """
     if not path_str:
         return None
     for scheme in _CLOUD_SCHEMES:
         if path_str.startswith(scheme):
-            return None  # cloud — no local filesystem access; size unknown
+            return _hadoop_fs_bytes(path_str)
     try:
         import glob as _glob
         p = Path(path_str)

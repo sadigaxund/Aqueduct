@@ -752,6 +752,29 @@ def run_doctor(
     except ConfigError:
         return results  # already recorded above
 
+    # Cluster-mode store path validation
+    if cfg.deployment.env in ("cluster", "cloud"):
+        _store_paths = {
+            "obs": cfg.stores.obs.path,
+            "lineage": cfg.stores.lineage.path,
+            "depot": cfg.stores.depot.path,
+        }
+        _bad = [
+            name for name, p in _store_paths.items()
+            if not p or p.startswith(".") or not Path(p).is_absolute()
+        ]
+        if _bad:
+            results.append(CheckResult(
+                "cluster-stores", "error",
+                f"deployment.env={cfg.deployment.env!r} but store paths are relative/local: "
+                f"{_bad}. On YARN/K8s the driver CWD is ephemeral — stores will be lost on "
+                "restart. Set absolute paths on shared FS (NFS/EFS/PVC) in aqueduct.yml.",
+            ))
+        else:
+            results.append(CheckResult("cluster-stores", "ok", "store paths are absolute"))
+    else:
+        results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check"))
+
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
 

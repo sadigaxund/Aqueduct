@@ -38,6 +38,13 @@ deployment:
   # master_url: "k8s://https://k8s-apiserver:443"  # Kubernetes
   # master_url: "sc://databricks-host:443"         # Databricks Connect
 
+  # env: deployment environment tier.
+  # local (default) — dev machine, no cluster validation.
+  # cluster — standalone/YARN/K8s; doctor errors on relative store paths.
+  # cloud   — managed cloud (Databricks/EMR/Dataproc); same validation as cluster.
+  env: local
+  # env: cluster
+
 
 # ── Spark Configuration ───────────────────────────────────────────────────────
 #
@@ -113,6 +120,44 @@ stores:
     backend: duckdb
     path: ".aqueduct/depot.db"
     # path: "s3://my-bucket/aqueduct/depot.db"
+
+
+# ── Cluster / Cloud deployment example ───────────────────────────────────────
+#
+# For YARN, Kubernetes, Spark Standalone, or Databricks/EMR/Dataproc:
+#
+#   1. Set deployment.env: cluster (triggers doctor validation of store paths)
+#   2. Set master_url to your cluster endpoint
+#   3. Set all store paths to absolute paths on shared FS (NFS/EFS/PVC)
+#      — driver CWD is ephemeral on YARN/K8s; relative paths lose data on restart
+#   4. Move all hadoop FS credentials into spark_config (not Ingress options)
+#
+# Example (Spark Standalone + NFS shared store + S3A data):
+#
+# deployment:
+#   target: standalone
+#   master_url: "spark://spark-master.internal:7077"
+#   env: cluster
+#
+# stores:
+#   obs:
+#     backend: duckdb
+#     path: "/mnt/nfs/aqueduct/obs.db"
+#   lineage:
+#     backend: duckdb
+#     path: "/mnt/nfs/aqueduct/lineage.db"
+#   depot:
+#     backend: duckdb
+#     path: "/mnt/nfs/aqueduct/depot.db"
+#
+# spark_config:
+#   spark.executor.memory: "8g"
+#   spark.executor.cores: "4"
+#   spark.executor.instances: "20"
+#   spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4,io.delta:delta-spark_2.12:3.2.0"
+#   spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+#   spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+#   spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
 
 
 # ── Probes ────────────────────────────────────────────────────────────────────

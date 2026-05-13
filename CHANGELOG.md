@@ -4,6 +4,16 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 26a — Cluster/Cloud Hardening
+_2026-05-13_
+
+- `dir_bytes()` now queries Hadoop FileSystem API via py4j for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) — restores `bytes_written`/`bytes_read` metrics on any cluster; local paths unchanged
+- `aqueduct doctor`: `deployment.env: cluster|cloud` + relative store paths → error (not warn); absolute paths → ok
+- `aqueduct run`: warns on stderr when `env: cluster|cloud` but `store_dir` is not an absolute path — flags ephemeral CWD risk before Spark session starts
+- `aqueduct.yml.template`: added `deployment.env` field documentation + full cluster deployment example (Standalone + NFS stores + S3A)
+
+
+
 ### Phase 25b — `partition_filters` on Ingress
 _2026-05-13_
 
