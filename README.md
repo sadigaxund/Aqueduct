@@ -324,10 +324,12 @@ Enforce explicit business rules against the flowing DataFrame. Unlike Probe + Re
       - type: schema_match
         expected: {order_id: long, amount: double}
         on_fail: abort
+        error_type: SchemaError        # typed label for guardrail matching
 
       - type: min_rows
         min: 1000
         on_fail: abort
+        error_type: EmptyDataset
 
       - type: null_rate
         column: order_id
@@ -361,6 +363,8 @@ edges:
 ```
 
 **Performance:** All aggregate rules (`min_rows`, `freshness`, `sql`) batch into one `df.agg()`. All `null_rate` rules share one `df.sample().agg()`. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters. **At most 2 Spark actions** per Assert module.
+
+**`error_type` field:** Each rule accepts an optional `error_type:` string. When the rule fires, the label propagates through `ModuleResult` → `FailureContext` and is available to the LLM guardrail system (see below).
 
 **vs Spillway:** Spillway catches UDF runtime exceptions (bad rows discovered during execution). Assert enforces explicit business rules you declare up front. They solve different problems and compose naturally.
 
@@ -423,7 +427,9 @@ aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
 
 ### Agent Guardrails
 
-Guardrails are **deterministically enforced at patch-apply time** - not prompt hints. The code rejects violations regardless of what the LLM generated.
+Two tiers of guardrails, both deterministic — not prompt hints:
+
+**Post-generation guards** (enforced at patch-apply time — reject bad patches):
 
 ```yaml
 agent:
@@ -437,10 +443,33 @@ agent:
       - "data/raw/*"
 ```
 
-- `forbidden_ops` - list of PatchSpec operation names that are always blocked. Empty = all ops permitted.
-- `allowed_paths` - fnmatch patterns restricting `path`/`output_path` config values a patch may set. Empty = unrestricted.
+- `forbidden_ops` — PatchSpec operation names always blocked. Empty = all ops permitted.
+- `allowed_paths` — fnmatch patterns restricting `path`/`output_path` config values. Empty = unrestricted.
 
-If a patch violates either rule, `apply_patch` raises an error before touching the Blueprint file.
+**Pre-trigger guards** (block or whitelist LLM before it even fires):
+
+```yaml
+agent:
+  guardrails:
+    # Whitelist: LLM only fires when the failure matches one of these labels.
+    # Labels come from Assert rules' error_type field, or from the exception
+    # class name in the stack trace (e.g. "SparkException", "AnalysisException").
+    heal_on_errors:
+      - DataQualityViolation
+      - SchemaError
+
+    # Blacklist: LLM never fires on these. Takes priority over heal_on_errors.
+    never_heal_errors:
+      - SLABreach            # ops team handles SLA violations manually
+      - EmptyDataset         # upstream data missing — LLM can't fix that
+```
+
+- `heal_on_errors` — if non-empty, LLM only triggers when the failure's `error_type` (or stack trace exception class) matches. Empty = no restriction.
+- `never_heal_errors` — LLM never fires when failure matches. Takes priority over `heal_on_errors`.
+
+`aqueduct doctor` warns if a guardrail entry doesn't match any `error_type` declared in the blueprint's Assert rules (catches typos before they silently have no effect).
+
+If a patch violates `forbidden_ops` or `allowed_paths`, `apply_patch` raises an error before touching the Blueprint file.
 
 
 ---
