@@ -347,6 +347,20 @@ def compile(  # noqa: A001
                 stacklevel=2,
             )
 
+    # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only
+    for m in modules:
+        if m.type != "Egress":
+            continue
+        maint = m.config.get("maintenance", {})
+        if maint and maint.get("optimize") and m.config.get("format", "").lower() != "delta":
+            warnings.warn(
+                f"Egress '{m.id}' has maintenance.optimize=true but format="
+                f"{m.config.get('format')!r}. OPTIMIZE is a Delta Lake operation and "
+                "will fail at runtime on non-Delta tables. Set format: delta or remove "
+                "the maintenance block.",
+                stacklevel=2,
+            )
+
     prov_map = ProvenanceMap(
         blueprint_id=blueprint.id,
         blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",

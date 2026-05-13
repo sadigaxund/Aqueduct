@@ -85,6 +85,16 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
             f"[{module.id}] source not found or unreadable {loc}: {exc}"
         ) from exc
 
+    # partition_filters — lazy .where() for manual predicate pushdown
+    partition_filters: str | None = cfg.get("partition_filters")
+    if partition_filters:
+        try:
+            df = df.where(partition_filters)
+        except Exception as exc:
+            raise IngressError(
+                f"[{module.id}] partition_filters {partition_filters!r} is invalid: {exc}"
+            ) from exc
+
     # schema_hint check — uses df.schema (metadata only, not an action)
     schema_hint_raw = cfg.get("schema_hint")
     schema_hint_mode = "strict"  # default

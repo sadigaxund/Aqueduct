@@ -70,7 +70,7 @@ from aqueduct.config import WebhookEndpointConfig
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
-from aqueduct.executor.spark.egress import EgressError, write_egress
+from aqueduct.executor.spark.egress import EgressError, run_maintenance, write_egress
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
@@ -243,6 +243,51 @@ CREATE TABLE IF NOT EXISTS module_metrics (
 CREATE INDEX IF NOT EXISTS idx_module_metrics_module
     ON module_metrics (module_id);
 """
+
+_MAINTENANCE_METRICS_DDL = """
+CREATE TABLE IF NOT EXISTS maintenance_metrics (
+    run_id        VARCHAR     NOT NULL,
+    module_id     VARCHAR     NOT NULL,
+    optimize_ms   BIGINT,
+    vacuum_ms     BIGINT,
+    captured_at   TIMESTAMPTZ NOT NULL
+);
+"""
+
+
+def _write_maintenance_metrics(
+    module_id: str,
+    run_id: str,
+    timing: "dict[str, Any]",
+    store_dir: "Path | None",
+) -> None:
+    if store_dir is None:
+        return
+    try:
+        import duckdb
+        from datetime import datetime, timezone
+
+        db_path = store_dir / "obs.db"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(db_path))
+        try:
+            conn.execute(_MAINTENANCE_METRICS_DDL)
+            conn.execute(
+                "INSERT INTO maintenance_metrics "
+                "(run_id, module_id, optimize_ms, vacuum_ms, captured_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    run_id,
+                    module_id,
+                    timing.get("optimize_ms"),
+                    timing.get("vacuum_ms"),
+                    datetime.now(tz=timezone.utc).isoformat(),
+                ],
+            )
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Maintenance metrics write failed for %r: %s", module_id, exc)
 
 
 def _write_stage_metrics(
@@ -1268,6 +1313,18 @@ def execute(
                     store_dir,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
+
+                # ── Post-write maintenance (Delta OPTIMIZE / VACUUM) ──────────
+                _maintenance_cfg = module.config.get("maintenance")
+                if _maintenance_cfg and isinstance(_maintenance_cfg, dict):
+                    _maint_path = module.config.get("path", "")
+                    if _maint_path:
+                        _maint_timing = run_maintenance(
+                            spark, module.id, _maint_path, _maintenance_cfg
+                        )
+                        _write_maintenance_metrics(
+                            module.id, run_id, _maint_timing, store_dir
+                        )
 
                 # ── Sidecar watermark update ───────────────────────────────────
                 if module.id in _pending_watermarks:

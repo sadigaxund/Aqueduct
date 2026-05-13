@@ -468,6 +468,10 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
     merge_key: [order_id]          # for mode: merge (Delta MERGE INTO)
     options:
       overwriteSchema: true
+    maintenance:
+      optimize: true             # runs OPTIMIZE after write (Delta only)
+      zorder_by: [event_date]    # optional ZORDER columns
+      vacuum: 168                # retain hours; omit to skip VACUUM
 ```
 
 |**Config field**|**Description**|
@@ -479,6 +483,7 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
 |**merge\_key**|List of columns forming the merge condition for mode: merge.|
 |**collect**|Boolean. If true, collects result to driver (small datasets only). Outputs to RunRecord as collected\_result. Not for production large datasets.|
 |**register\_as\_table**|Optional string. After writing, registers the output path as an external table with this name in the active Spark catalog. Non-fatal: registration failure logs a warning but does not fail the pipeline.|
+|**maintenance**|Optional dict. Post-write Delta Lake maintenance block. Keys: `optimize` (bool — run OPTIMIZE), `zorder_by` (str or list — ZORDER columns), `vacuum` (int — retain hours for VACUUM). Both ops are non-fatal: failures log as warnings. Timing written to `obs.db` `maintenance_metrics` table. Compiler emits warning 8g if `optimize: true` with non-delta format.|
 
 |**JUNCTION**|**Fan-out — splits one flow into multiple downstream branches**|
 | :-: | :- |
