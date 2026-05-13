@@ -199,6 +199,7 @@ Every Module regardless of type shares these fields:
   config:
     format: parquet              # parquet | delta | csv | json | jdbc | kafka | custom
     path: ${ctx.tables.orders_raw}
+    partition_filters: "event_date >= '${ctx.start_date}'"   # optional predicate pushdown
     schema_hint:                 # optional — enforced at read time
       order_id: STRING
       amount: DECIMAL(18,2)
@@ -212,6 +213,7 @@ Every Module regardless of type shares these fields:
 | :- | :- |
 |**format**|Spark data source format string. Standard formats: parquet, delta, csv, json, orc, avro, jdbc, kafka. Custom formats use the fully qualified DataSource class name. Special Aqueduct-only format: `dataframe` — used inside Arcade sub-blueprints to read a DataFrame from the parent pipeline by Module ID (set `ref` to the parent Module id); not valid in standalone Blueprints.|
 |**path**|Source path or URL. Context Registry references allowed. For JDBC: the full connection URL.|
+|**partition\_filters**|Optional SQL predicate string. Injected as a `.where()` clause immediately after `reader.load()`. Enables manual partition pruning when Spark's automatic pushdown doesn't trigger (e.g. when paths are resolved at runtime via Context variables). Context variable references (`${ctx.*}`) are resolved before the filter is applied. Invalid expressions raise IngressError at startup.|
 |**schema\_hint**|Optional. Flat dict `{col: type}` checks all listed columns with strict matching. Nested form `{mode: strict\|additive\|subset, columns: [{name, type}]}` selects check mode: strict (all must match), additive (extra upstream cols allowed), subset (missing cols allowed). Common type aliases accepted: `STRING`→`string`, `LONG`→`bigint`, `INTEGER`→`int`, `BOOL`→`boolean`, `SHORT`→`smallint`, `BYTE`→`tinyint`. Mismatch raises IngressError.|
 |**options**|Passed directly to Spark DataFrameReader.option(k,v). Aqueduct does not validate these — Spark handles unknown options.|
 |**credentials**|Optional. Reference to a Depot key or @aq.secret() call resolving to a credentials map. Injected as Spark config before session creation.|
