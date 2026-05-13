@@ -7,15 +7,22 @@ writes a key-value pair to the Depot DuckDB store instead of a Spark path.
 The .save() call is the sanctioned Spark action in this layer.  Per the
 zero-cost observability rule, no count()/show()/collect() is invoked (except
 for ``depot`` Egress with ``value_expr``, which opts-in to a single agg).
+
+Post-write maintenance (Delta only):
+  OPTIMIZE   — compacts small files; optional ZORDER BY columns
+  VACUUM     — removes files older than retention_hours from the Delta log
+Both run synchronously after the write action and are non-fatal (logged as
+warnings on failure so the pipeline does not abort on a maintenance error).
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+    from pyspark.sql import DataFrame, SparkSession
 
 from aqueduct.parser.models import Module
 
@@ -171,6 +178,56 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
         spark.catalog.dropTempView(view_name)
 
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
+
+
+def run_maintenance(
+    spark: "SparkSession",
+    module_id: str,
+    path: str,
+    maintenance_cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Run post-write maintenance operations on a Delta table.
+
+    Runs synchronously after the Egress write action.  Both OPTIMIZE and VACUUM
+    are non-fatal — failures are logged as warnings and the pipeline continues.
+
+    Args:
+        spark:           Active SparkSession.
+        module_id:       Egress module ID (used in log messages).
+        path:            Delta table path (must already exist on disk).
+        maintenance_cfg: The ``maintenance:`` dict from module.config.
+
+    Returns:
+        Timing dict: {"optimize_ms": int | None, "vacuum_ms": int | None}
+    """
+    result: dict[str, Any] = {"optimize_ms": None, "vacuum_ms": None}
+
+    if maintenance_cfg.get("optimize"):
+        zorder = maintenance_cfg.get("zorder_by", [])
+        if isinstance(zorder, str):
+            zorder = [zorder]
+        zorder_clause = f" ZORDER BY ({', '.join(str(c) for c in zorder)})" if zorder else ""
+        sql = f"OPTIMIZE delta.`{path}`{zorder_clause}"
+        t0 = time.monotonic()
+        try:
+            spark.sql(sql)
+            result["optimize_ms"] = int((time.monotonic() - t0) * 1000)
+            logger.info("[%s] OPTIMIZE completed in %dms", module_id, result["optimize_ms"])
+        except Exception as exc:
+            logger.warning("[%s] OPTIMIZE failed (non-fatal): %s", module_id, exc)
+
+    vacuum_hours = maintenance_cfg.get("vacuum")
+    if vacuum_hours is not None:
+        sql = f"VACUUM delta.`{path}` RETAIN {int(vacuum_hours)} HOURS"
+        t0 = time.monotonic()
+        try:
+            spark.sql(sql)
+            result["vacuum_ms"] = int((time.monotonic() - t0) * 1000)
+            logger.info("[%s] VACUUM completed in %dms", module_id, result["vacuum_ms"])
+        except Exception as exc:
+            logger.warning("[%s] VACUUM failed (non-fatal): %s", module_id, exc)
+
+    return result
 
 
 def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:

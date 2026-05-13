@@ -425,6 +425,18 @@ modules: []
   #     partition_by: [region]
   #     options: {}
 
+  # - id: delta_output
+  #   type: Egress
+  #   label: "Write Delta with post-write maintenance"
+  #   config:
+  #     format: delta
+  #     path: "s3a://bucket/orders_delta/"
+  #     mode: overwrite
+  #     maintenance:
+  #       optimize: true            # runs OPTIMIZE after write (Delta only)
+  #       zorder_by: [event_date]   # optional ZORDER columns
+  #       vacuum: 168               # retain hours; omit to skip VACUUM
+
   # - id: error_output
   #   type: Egress
   #   label: "Write rejected rows (spillway)"

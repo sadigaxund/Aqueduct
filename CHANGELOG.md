@@ -2,6 +2,54 @@
 
 ---
 
+## v1.0.0a4 — 2026-05-13
+
+### Phase 25a — Post-Egress Maintenance Hooks
+_2026-05-13_
+
+- Optional `maintenance:` block on any Egress module runs Delta Lake OPTIMIZE and/or VACUUM synchronously after the write action
+- `maintenance.optimize: true` → `OPTIMIZE delta.\`path\`` (with optional `ZORDER BY` via `zorder_by`)
+- `maintenance.vacuum: N` → `VACUUM delta.\`path\` RETAIN N HOURS`
+- Both ops are non-fatal: failures log as `WARNING`, pipeline continues
+- Timing (`optimize_ms`, `vacuum_ms`) written to `maintenance_metrics` table in `obs.db`
+- Compiler warning 8g: `maintenance.optimize: true` on non-delta Egress → emits warning at compile time
+
+---
+
+## v1.0.0a3 — 2026-05-13
+
+### Phase 24a — `error_type` Guardrail System
+_2026-05-13_
+
+- Assert rules now accept optional `error_type: <label>` — user-defined typed category for the failure (e.g. `DataQualityViolation`, `SLABreach`)
+- `error_type` propagates: `AssertError.error_type` → `ModuleResult.error_type` → `FailureContext.error_type`
+- Two new pre-trigger LLM guardrails in `agent.guardrails`:
+  - `heal_on_errors: [Label]` — LLM only fires when failure `error_type` matches; empty = no restriction
+  - `never_heal_errors: [Label]` — LLM never fires on matching `error_type`; takes priority over `heal_on_errors`
+- Matching uses `error_type` label (Assert) OR exception class name from stack trace last line (infrastructure errors)
+- `aqueduct doctor` warns when a guardrail entry doesn't match any `error_type` in the blueprint's Assert rules (typo guard)
+- `never_heal_errors` takes priority over `heal_on_errors` when both match
+
+### Phase 24b — `metrics_boundary` on Channel
+_2026-05-13_
+
+- New opt-in config key `metrics_boundary: true` on any Channel module
+- When set, appends `df.repartition(n)` (where `n = df.rdd.getNumPartitions()`, driver-side, no Spark action) to force a Spark stage cut before the Channel's output
+- Gives accurate per-module `recordsWritten` metrics from SparkListener — without this, stage fusion groups logical modules into one physical stage, making attribution inaccurate
+- LLM self-healing uses `recordsWritten` to detect empty-output failures
+
+### Phase 24c — Sidecar Watermark File
+_2026-05-13_
+
+- Eliminates double-scan of upstream DAG for incremental Channels
+- **Before**: `MAX(watermark_col).collect()` on the lazy Channel DataFrame → full DAG re-executed before Egress write, then again during Egress write
+- **After**: watermark computed from already-written Egress output (`spark.read.<fmt>(path).agg(MAX(col))`) — reads materialized files, not the upstream DAG. For `format: delta`, uses `SELECT MAX(col) FROM delta.\`path\`` which Spark can satisfy via Delta transaction log statistics (metadata-only in many cases)
+- Watermark stored in `{store_dir}/watermarks/{blueprint_id}__{channel_id}.json` (atomic rename), Depot also updated for backwards compatibility
+- Next run reads sidecar first, falls back to Depot, falls back to `'1900-01-01 00:00:00'` sentinel
+- Watermark not advanced if Channel or Egress fails
+
+---
+
 ## v1.0.0a2 — 2026-05-12
 
 ### Phase 23B — Input Fingerprinting
