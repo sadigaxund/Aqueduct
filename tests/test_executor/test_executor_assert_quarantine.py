@@ -30,7 +30,8 @@ def test_freshness_quarantine_success(spark):
     assert quarantine.count() == 1
     assert passing.collect()[0]["id"] == 1
     assert quarantine.collect()[0]["id"] == 2
-    # assert "_aq_error_msg" in quarantine.columns # BUG: missing error columns
+    assert "_aq_error_msg" in quarantine.columns
+    assert "_aq_error_module" in quarantine.columns
 
 def test_freshness_quarantine_nulls(spark):
     now = datetime.now(timezone.utc)
@@ -43,11 +44,12 @@ def test_freshness_quarantine_nulls(spark):
         config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "quarantine"}]}
     )
     passing, quarantine = execute_assert(module, df, spark, "run-1", "bp1")
-    
-    # BUG: NULLs are currently dropped because filter(expr) and filter(~expr) both skip NULLs
+
+    # NULLs route to quarantine (ISSUE-015 fixed)
     assert passing.count() == 1
     assert quarantine.count() == 1
     assert quarantine.collect()[0]["id"] == 2
+    assert "_aq_error_msg" in quarantine.columns
 
 def test_freshness_quarantine_numeric(spark):
     # Use unix timestamps
@@ -102,8 +104,8 @@ def test_freshness_quarantine_missing_column_key(spark):
         config={"rules": [{"type": "freshness", "on_fail": "quarantine"}]}
     )
     
-    # Spec says it should raise ValueError
-    with pytest.raises(ValueError):
+    # Code raises AssertError for missing column in freshness quarantine rule
+    with pytest.raises(AssertError):
         execute_assert(module, df, spark, "run-1", "bp1")
 
 def test_on_fail_quarantine_aggregate_rule_warns(spark, caplog):

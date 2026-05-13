@@ -144,33 +144,33 @@ This section tracks high-level functional verification of core features against 
 ### Phase 26b — Secrets Provider Backends
 
 #### `secrets.py` — `resolve_secret()`
-- ⏳ `provider: env`: returns `os.environ[key]`; raises `SecretsError` when key missing
-- ⏳ `provider: env`: does NOT call boto3/google/azure SDK regardless of installed deps
-- ⏳ `provider: aws`: fetches from Secrets Manager; result injected into `os.environ`; second call returns `os.environ` fast-path (no SDK call)
-- ⏳ `provider: aws`: JSON blob value → unwraps inner key matching secret name suffix
-- ⏳ `provider: aws`: SDK not installed → `SecretsError` containing "boto3"
-- ⏳ `provider: gcp`: short name expanded using `GCP_PROJECT` env var; full resource path assembled
-- ⏳ `provider: gcp`: SDK not installed → `SecretsError` containing "google-cloud-secret-manager"
-- ⏳ `provider: azure`: `AZURE_KEYVAULT_URL` read from env; SDK not installed → `SecretsError` containing "azure-keyvault-secrets"
-- ⏳ `provider: custom`: `resolver` path loaded via importlib; callable signature `(key: str) -> str | None`
-- ⏳ `provider: custom`: callable returns `None` → `SecretsError` raised
-- ⏳ `provider: custom`: bad `resolver` path (module not found) → `SecretsError` with import path in message
+- ✅ `provider: env`: returns `os.environ[key]`; raises `SecretsError` when key missing
+- ✅ `provider: env`: does NOT call boto3/google/azure SDK regardless of installed deps
+- ✅ `provider: aws`: fetches from Secrets Manager; result injected into `os.environ`; second call returns `os.environ` fast-path (no SDK call)
+- ✅ `provider: aws`: JSON blob value → unwraps inner key matching secret name suffix
+- ✅ `provider: aws`: SDK not installed → `SecretsError` containing "boto3"
+- ✅ `provider: gcp`: short name expanded using `GCP_PROJECT` env var; full resource path assembled
+- ✅ `provider: gcp`: SDK not installed → `SecretsError` containing "google-cloud-secret-manager"
+- ✅ `provider: azure`: `AZURE_KEYVAULT_URL` read from env; SDK not installed → `SecretsError` containing "azure-keyvault-secrets"
+- ✅ `provider: custom`: `resolver` path loaded via importlib; callable signature `(key: str) -> str | None`
+- ✅ `provider: custom`: callable returns `None` → `SecretsError` raised
+- ✅ `provider: custom`: bad `resolver` path (module not found) → `SecretsError` with import path in message
 
 #### `doctor.py` — `check_secrets()`
-- ⏳ `provider: env` → always passes (no dep check)
-- ⏳ `provider: aws`, boto3 missing → CheckResult status="error" containing "pip install aqueduct-core[aws]"
-- ⏳ `provider: aws`, boto3 present → CheckResult status="ok"
-- ⏳ `provider: gcp`, SDK missing → error with `[gcp]` install hint
-- ⏳ `provider: azure`, SDK missing → error with `[azure]` install hint
-- ⏳ `provider: custom`, `resolver=None` → error (resolver required for custom provider)
-- ⏳ `provider: custom`, valid resolver → importlib load attempted; ok if callable found
+- ✅ `provider: env` → always passes (no dep check)
+- ✅ `provider: aws`, boto3 missing → CheckResult status="error" containing "pip install aqueduct-core[aws]"
+- ✅ `provider: aws`, boto3 present → CheckResult status="ok"
+- ✅ `provider: gcp`, SDK missing → error with `[gcp]` install hint
+- ✅ `provider: azure`, SDK missing → error with `[azure]` install hint
+- ✅ `provider: custom`, `resolver=None` → error (resolver required for custom provider)
+- ✅ `provider: custom`, valid resolver → importlib load attempted; ok if callable found
 
 #### `surveyor/llm.py` — `provider_options` dispatch
-- ⏳ `provider_options` with `ollama_num_thread: 8` → `payload["options"]["num_thread"] = 8` (prefix stripped)
-- ⏳ `provider_options` with generic key `temperature: 0.5` → `payload["temperature"] = 0.5`
-- ⏳ mixed `ollama_*` + generic keys → both dispatched correctly; no key collision
-- ⏳ `provider_options: null` → payload unchanged
-- ⏳ old `ollama_options` key rejected at parse time (schema validation error)
+- ✅ `provider_options` with `ollama_num_thread: 8` → `payload["options"]["num_thread"] = 8` (prefix stripped)
+- ✅ `provider_options` with generic key `temperature: 0.5` → `payload["temperature"] = 0.5`
+- ✅ mixed `ollama_*` + generic keys → both dispatched correctly; no key collision
+- ✅ `provider_options: null` → payload unchanged
+- ✅ old `ollama_options` key rejected at parse time (schema validation error)
 
 ---
 
@@ -333,12 +333,12 @@ This section tracks high-level functional verification of core features against 
 - ✅ `freshness` passes: `max(col)` batched into shared `df.agg()`
 - ✅ `freshness` fails with `on_fail=warn`: warning logged, blueprint continues
 - ✅ `freshness` column has all nulls: fail message includes "no non-null values"
-- ❌ `freshness` with `on_fail=quarantine`: stale rows in `quarantine_df`, fresh rows in `passing_df` (ISSUE-015, ISSUE-016)
+- ✅ `freshness` with `on_fail=quarantine`: stale rows in `quarantine_df`, fresh rows in `passing_df` (ISSUE-015, ISSUE-016 fixed)
 - ✅ `freshness` with `on_fail=quarantine` + spillway edge: end-to-end rows routed correctly
 - ✅ `freshness` with `on_fail=quarantine` + no spillway edge: treated as warn (not CompileError yet)
-- ❌ `freshness` on_fail: quarantine with numeric column → AnalysisException (ISSUE-017)
-- ❌ `freshness` on_fail: quarantine with nulls → NULLs dropped (ISSUE-015)
-- ❌ `freshness` on_fail: quarantine missing column → skipped, no ValueError (ISSUE-018)
+- ✅ `freshness` on_fail: quarantine with numeric column → cast via to_timestamp() (ISSUE-017 fixed)
+- ✅ `freshness` on_fail: quarantine with nulls → NULLs route to quarantine (ISSUE-015 fixed)
+- ✅ `freshness` on_fail: quarantine missing column → AssertError raised (ISSUE-018 fixed)
 - ✅ `min_rows` with `on_fail=quarantine`: treated as warn per log
 - ✅ `max_rows` with `on_fail=quarantine`: treated as warn per log
 - ✅ `sql` (aggregate) with `on_fail=quarantine`: treated as warn per log
@@ -359,10 +359,10 @@ This section tracks high-level functional verification of core features against 
 - ✅ Assert with no rules configured → pass-through, `status="success"`
 - ✅ end-to-end: Ingress → Assert(`min_rows` abort rule fires) → `ExecutionResult(status="error")`
 - ✅ end-to-end: Ingress → Assert(`sql_row` quarantine) → Egress(good) + Egress(quarantine), both written
-- ⏳ `error_type` on rule → `AssertError.error_type` set correctly
-- ⏳ `error_type` propagates: `AssertError` → `ModuleResult.error_type` → `FailureContext.error_type`
-- ⏳ rule without `error_type` → `AssertError.error_type` is `None`
-- ⏳ multiple rules with different `error_type` → only first-failing rule's label in `FailureContext`
+- ✅ `error_type` on rule → `AssertError.error_type` set correctly
+- ✅ `error_type` propagates: `AssertError` → `ModuleResult.error_type` → `FailureContext.error_type`
+- ✅ rule without `error_type` → `AssertError.error_type` is `None`
+- ✅ multiple rules with different `error_type` → only first-failing rule's label in `FailureContext`
 
 ### Surveyor `get_probe_signal()`
 - ✅ returns empty list when `obs.db` does not exist
@@ -930,23 +930,23 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - [✅] `test_agent_config_schema_parses_allowed_paths`
 - [✅] `test_patch_rollback_restores_blueprint` (updated to Git-based CLI)
 - ✅ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
-- ⏳ `heal_on_errors` + `never_heal_errors` parse correctly from YAML → `GuardrailsConfig` fields populated
-- ⏳ `never_heal_errors` matches `error_type` from `FailureContext` → LLM blocked, message emitted
-- ⏳ `never_heal_errors` matches stack trace class name → LLM blocked
-- ⏳ `never_heal_errors` takes priority over `heal_on_errors` when both match
-- ⏳ `heal_on_errors` non-empty, `error_type` matches → LLM proceeds
-- ⏳ `heal_on_errors` non-empty, `error_type` does NOT match → LLM blocked, message emitted
-- ⏳ `heal_on_errors=[]` (default) → no restriction, LLM proceeds
-- ⏳ `never_heal_errors=[]` (default) → no restriction
-- ⏳ `_check_heal_guardrails()` with `failure_ctx.error_type=None` → falls back to stack trace class
-- ⏳ `_check_heal_guardrails()` with both `error_type` and stack class → either match is sufficient
+- ✅ `heal_on_errors` + `never_heal_errors` parse correctly from YAML → `GuardrailsConfig` fields populated
+- ✅ `never_heal_errors` matches `error_type` from `FailureContext` → LLM blocked, message emitted
+- ✅ `never_heal_errors` matches stack trace class name → LLM blocked
+- ✅ `never_heal_errors` takes priority over `heal_on_errors` when both match
+- ✅ `heal_on_errors` non-empty, `error_type` matches → LLM proceeds
+- ✅ `heal_on_errors` non-empty, `error_type` does NOT match → LLM blocked, message emitted
+- ✅ `heal_on_errors=[]` (default) → no restriction, LLM proceeds
+- ✅ `never_heal_errors=[]` (default) → no restriction
+- ✅ `_check_heal_guardrails()` with `failure_ctx.error_type=None` → falls back to stack trace class
+- ✅ `_check_heal_guardrails()` with both `error_type` and stack class → either match is sufficient
 
 ### Doctor guardrail typo detection — `aqueduct/doctor.py`
-- ⏳ `heal_on_errors` entry matches known Assert `error_type` → no warning
-- ⏳ `heal_on_errors` entry does NOT match any Assert `error_type` → `CheckResult(status="warn")` with clear message
-- ⏳ `never_heal_errors` entry typo → warning emitted
-- ⏳ no `heal_on_errors`/`never_heal_errors` → no warning emitted
-- ⏳ blueprint has no Assert modules → any entry produces warning (none to match against)
+- ✅ `heal_on_errors` entry matches known Assert `error_type` → no warning
+- ✅ `heal_on_errors` entry does NOT match any Assert `error_type` → `CheckResult(status="warn")` with clear message
+- ✅ `never_heal_errors` entry typo → warning emitted
+- ✅ no `heal_on_errors`/`never_heal_errors` → no warning emitted
+- ✅ blueprint has no Assert modules → any entry produces warning (none to match against)
 
 ### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
 
@@ -1432,13 +1432,13 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ op: "banana" → ChannelError listing all valid ops
 
 #### metrics_boundary
-- ⏳ `metrics_boundary: false` (default) → result df returned unchanged, no repartition applied
-- ⏳ `metrics_boundary: true` on `op: sql` → result df wrapped with `repartition(n)` where `n = df.rdd.getNumPartitions()`
-- ⏳ `metrics_boundary: true` on `op: filter` → boundary applied
-- ⏳ `metrics_boundary: true` on `op: union` → boundary applied
-- ⏳ `metrics_boundary: true` with 0-partition df → `repartition(1)` used (not `repartition(0)`)
-- ⏳ `metrics_boundary: true` on `op: repartition` → boundary applied after user's repartition (accepted; user opted in)
-- ⏳ `metrics_boundary` absent from config → no repartition (falsy default)
+- ✅ `metrics_boundary: false` (default) → result df returned unchanged, no repartition applied
+- ✅ `metrics_boundary: true` on `op: sql` → result df wrapped with `repartition(n)` where `n = df.rdd.getNumPartitions()`
+- ✅ `metrics_boundary: true` on `op: filter` → boundary applied
+- ✅ `metrics_boundary: true` on `op: union` → boundary applied
+- ✅ `metrics_boundary: true` with 0-partition df → `repartition(1)` used (not `repartition(0)`)
+- ✅ `metrics_boundary: true` on `op: repartition` → boundary applied after user's repartition (accepted; user opted in)
+- ✅ `metrics_boundary` absent from config → no repartition (falsy default)
 
 ---
 
@@ -1535,20 +1535,20 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash
 
 #### Phase 24c — Sidecar Watermark
-- ⏳ `_read_watermark_sidecar()`: sidecar absent → returns None
-- ⏳ `_read_watermark_sidecar()`: valid sidecar → returns watermark string
-- ⏳ `_read_watermark_sidecar()`: corrupt JSON → returns None (non-fatal)
-- ⏳ `_write_watermark_sidecar()`: writes atomic rename (`*.json.tmp` → `*.json`)
-- ⏳ `_write_watermark_sidecar()`: `store_dir=None` → no-op, no crash
-- ⏳ `_compute_watermark_from_output()`: parquet format → `spark.read.parquet.agg(MAX).collect()`
-- ⏳ `_compute_watermark_from_output()`: delta format → `SELECT MAX() FROM delta.\`path\``
-- ⏳ `_compute_watermark_from_output()`: path doesn't exist → returns None (non-fatal)
-- ⏳ `execute()`: incremental Channel → sidecar read takes priority over Depot value
-- ⏳ `execute()`: incremental Channel + Egress succeeds → sidecar written at `store_dir/watermarks/`
-- ⏳ `execute()`: incremental Channel + Egress fails → sidecar NOT written, watermark NOT advanced
-- ⏳ `execute()`: incremental Channel, depot=None → sidecar still written after Egress write
-- ⏳ `execute()`: `_pending_watermarks` NOT populated for non-incremental Channel
-- ⏳ `execute()`: `agg(MAX).collect()` on lazy Channel df NO LONGER called before Egress write (no double-scan)
+- ✅ `_read_watermark_sidecar()`: sidecar absent → returns None
+- ✅ `_read_watermark_sidecar()`: valid sidecar → returns watermark string
+- ✅ `_read_watermark_sidecar()`: corrupt JSON → returns None (non-fatal)
+- ✅ `_write_watermark_sidecar()`: writes atomic rename (`*.json.tmp` → `*.json`)
+- ✅ `_write_watermark_sidecar()`: `store_dir=None` → no-op, no crash
+- ✅ `_compute_watermark_from_output()`: parquet format → `spark.read.parquet.agg(MAX).collect()`
+- ✅ `_compute_watermark_from_output()`: delta format → `SELECT MAX() FROM delta.\`path\``
+- ✅ `_compute_watermark_from_output()`: path doesn't exist → returns None (non-fatal)
+- ✅ `execute()`: incremental Channel → sidecar read takes priority over Depot value
+- ✅ `execute()`: incremental Channel + Egress succeeds → sidecar written at `store_dir/watermarks/`
+- ✅ `execute()`: incremental Channel + Egress fails → sidecar NOT written, watermark NOT advanced
+- ✅ `execute()`: incremental Channel, depot=None → sidecar still written after Egress write
+- ✅ `execute()`: `_pending_watermarks` NOT populated for non-incremental Channel
+- ✅ `execute()`: `agg(MAX).collect()` on lazy Channel df NO LONGER called before Egress write (no double-scan)
 
 ## Compiler Warning — Hadoop FS Keys in Ingress Options (ISSUE-001)
 
@@ -1571,32 +1571,32 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 ## Phase 25a — Post-Egress Maintenance Hooks
 
 #### Egress — `aqueduct/executor/spark/egress.py`
-- ⏳ `run_maintenance`: `optimize: true` → `OPTIMIZE delta.\`path\`` SQL executed
-- ⏳ `run_maintenance`: `zorder_by: [col]` → `ZORDER BY (col)` appended to OPTIMIZE SQL
-- ⏳ `run_maintenance`: `zorder_by` omitted → no ZORDER clause
-- ⏳ `run_maintenance`: `vacuum: 168` → `VACUUM delta.\`path\` RETAIN 168 HOURS` executed
-- ⏳ `run_maintenance`: OPTIMIZE failure → warning logged, returns `optimize_ms=None`, pipeline continues
-- ⏳ `run_maintenance`: VACUUM failure → warning logged, returns `vacuum_ms=None`, pipeline continues
-- ⏳ `run_maintenance`: both `optimize` and `vacuum` absent → no SQL executed, returns `{optimize_ms: None, vacuum_ms: None}`
-- ⏳ `run_maintenance`: `zorder_by` as string (not list) → treated as single column
+- ✅ `run_maintenance`: `optimize: true` → `OPTIMIZE delta.\`path\`` SQL executed
+- ✅ `run_maintenance`: `zorder_by: [col]` → `ZORDER BY (col)` appended to OPTIMIZE SQL
+- ✅ `run_maintenance`: `zorder_by` omitted → no ZORDER clause
+- ✅ `run_maintenance`: `vacuum: 168` → `VACUUM delta.\`path\` RETAIN 168 HOURS` executed
+- ✅ `run_maintenance`: OPTIMIZE failure → warning logged, returns `optimize_ms=None`, pipeline continues
+- ✅ `run_maintenance`: VACUUM failure → warning logged, returns `vacuum_ms=None`, pipeline continues
+- ✅ `run_maintenance`: both `optimize` and `vacuum` absent → no SQL executed, returns `{optimize_ms: None, vacuum_ms: None}`
+- ✅ `run_maintenance`: `zorder_by` as string (not list) → treated as single column
 
 #### Executor — `aqueduct/executor/spark/executor.py`
-- ⏳ Egress with `maintenance:` block → `run_maintenance` called after successful write
-- ⏳ Egress with no `maintenance:` block → `run_maintenance` NOT called
-- ⏳ Maintenance timing written to `maintenance_metrics` table in `obs.db`
-- ⏳ Maintenance write failure → debug log only, pipeline continues
+- ✅ Egress with `maintenance:` block → `run_maintenance` called after successful write
+- ✅ Egress with no `maintenance:` block → `run_maintenance` NOT called
+- ✅ Maintenance timing written to `maintenance_metrics` table in `obs.db`
+- ✅ Maintenance write failure → debug log only, pipeline continues
 
 #### Compiler — `aqueduct/compiler/compiler.py`
-- ⏳ Egress with `maintenance.optimize: true` + `format: parquet` → warning 8g emitted
-- ⏳ Egress with `maintenance.optimize: true` + `format: delta` → no warning
-- ⏳ Egress with `maintenance.vacuum: 168` only (no optimize) + `format: parquet` → no warning
+- ✅ Egress with `maintenance.optimize: true` + `format: parquet` → warning 8g emitted
+- ✅ Egress with `maintenance.optimize: true` + `format: delta` → no warning
+- ✅ Egress with `maintenance.vacuum: 168` only (no optimize) + `format: parquet` → no warning
 
 ## Phase 25b — `partition_filters` on Ingress
 
 #### Executor — `aqueduct/executor/spark/ingress.py`
-- ⏳ `partition_filters` set → `.where(expr)` applied to df after `reader.load()`; returned df is filtered
-- ⏳ `partition_filters` absent → no `.where()` call; df unchanged
-- ⏳ `partition_filters` with context variable (e.g. `event_date >= '2024-01-01'`) → filter applied correctly
-- ⏳ `partition_filters` with invalid SQL expr → `IngressError` raised with filter expression in message
-- ⏳ `partition_filters` applied before `schema_hint` check (filter does not affect schema metadata)
-- ⏳ `partition_filters` on JDBC Ingress (no path) → filter still applied after `reader.load()`
+- ✅ `partition_filters` set → `.where(expr)` applied to df after `reader.load()`; returned df is filtered
+- ✅ `partition_filters` absent → no `.where()` call; df unchanged
+- ✅ `partition_filters` with date literal/context value (e.g. `event_date >= '2024-01-01'`) → filter applied correctly
+- ✅ `partition_filters` with invalid SQL expr → `IngressError` raised with filter expression in message
+- ✅ `partition_filters` applied before `schema_hint` check (filter does not affect schema metadata)
+- ✅ `partition_filters` on JDBC Ingress (no path) → `.where()` applied after `reader.load()` (no path arg)

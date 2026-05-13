@@ -479,3 +479,93 @@ def test_unknown_op_lists_valid_ops(spark: SparkSession):
     mod = Module(id="ch", type="Channel", label="C", config={"op": "banana"})
     with pytest.raises(ChannelError, match="unsupported Channel op 'banana'"):
         execute_sql_channel(mod, {"up": df}, spark)
+
+
+# ── metrics_boundary ──────────────────────────────────────────────────────────
+
+def test_metrics_boundary_false_no_repartition(spark: SparkSession):
+    """metrics_boundary: false (default) → result df unchanged, no repartition applied."""
+    df_in = spark.range(10)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "sql",
+        "query": "SELECT * FROM m_input",
+        "metrics_boundary": False,
+    })
+    result = execute_sql_channel(module, {"m_input": df_in}, spark)
+    # No repartition wrapping — plan should be simpler (no shuffle stage for repartition)
+    assert result is not None
+    assert result.count() == 10
+
+
+def test_metrics_boundary_absent_no_repartition(spark: SparkSession):
+    """metrics_boundary absent from config → no repartition (falsy default)."""
+    df_in = spark.range(5)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "filter",
+        "condition": "id >= 0",
+    })
+    result = execute_sql_channel(module, {"m_input": df_in}, spark)
+    assert result.count() == 5
+
+
+def test_metrics_boundary_true_sql_op(spark: SparkSession):
+    """metrics_boundary: true on op=sql → df.repartition(n) applied."""
+    df_in = spark.range(10)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "sql",
+        "query": "SELECT * FROM m_input",
+        "metrics_boundary": True,
+    })
+    result = execute_sql_channel(module, {"m_input": df_in}, spark)
+    # Should succeed and return data
+    assert result.count() == 10
+    # rdd.getNumPartitions() must be >= 1
+    assert result.rdd.getNumPartitions() >= 1
+
+
+def test_metrics_boundary_true_filter_op(spark: SparkSession):
+    """metrics_boundary: true on op=filter → boundary applied."""
+    df_in = spark.range(10)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "filter",
+        "condition": "id >= 5",
+        "metrics_boundary": True,
+    })
+    result = execute_sql_channel(module, {"m_input": df_in}, spark)
+    assert result.count() == 5
+
+
+def test_metrics_boundary_true_zero_partition_uses_one(spark: SparkSession):
+    """metrics_boundary: true with 0-partition df → repartition(1) used."""
+    from aqueduct.executor.spark.channel import _apply_metrics_boundary
+
+    # Create an empty df that may end up with 0 partitions in theory
+    df = spark.createDataFrame([], spark.range(1).schema)
+    result = _apply_metrics_boundary(df, {"metrics_boundary": True})
+    assert result.rdd.getNumPartitions() >= 1
+
+
+def test_metrics_boundary_true_union_op(spark: SparkSession):
+    """metrics_boundary: true on op=union → boundary applied after union."""
+    df1 = spark.range(5)
+    df2 = spark.range(5, 10)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "union",
+        "metrics_boundary": True,
+    })
+    result = execute_sql_channel(module, {"a": df1, "b": df2}, spark)
+    assert result.count() == 10
+    assert result.rdd.getNumPartitions() >= 1
+
+
+def test_metrics_boundary_true_repartition_op(spark: SparkSession):
+    """metrics_boundary: true on op=repartition → boundary applied after user repartition."""
+    df_in = spark.range(10)
+    module = Module(id="m1", type="Channel", label="M1", config={
+        "op": "repartition",
+        "num_partitions": 2,
+        "metrics_boundary": True,
+    })
+    result = execute_sql_channel(module, {"m_input": df_in}, spark)
+    assert result.count() == 10
+    assert result.rdd.getNumPartitions() >= 1

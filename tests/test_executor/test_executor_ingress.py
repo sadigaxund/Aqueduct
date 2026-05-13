@@ -287,3 +287,115 @@ def test_type_not_in_alias_map_lowercased(spark: SparkSession, tmp_path):
     })
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["v"] == "double"
+
+
+# ── partition_filters ─────────────────────────────────────────────────────────
+
+def test_partition_filters_applied_as_where(spark: SparkSession, tmp_path):
+    """partition_filters set → .where(expr) applied; returned df is filtered."""
+    path = str(tmp_path / "pf_data.parquet")
+    spark.range(10).write.parquet(path)
+    module = Module(
+        id="m1", type="Ingress", label="M1",
+        config={"format": "parquet", "path": path, "partition_filters": "id >= 5"}
+    )
+    df = read_ingress(module, spark)
+    assert df.count() == 5
+
+
+def test_partition_filters_absent_no_where(spark: SparkSession, tmp_path):
+    """partition_filters absent → no .where() call; df unchanged."""
+    path = str(tmp_path / "pf_all.parquet")
+    spark.range(10).write.parquet(path)
+    module = Module(id="m1", type="Ingress", label="M1", config={"format": "parquet", "path": path})
+    df = read_ingress(module, spark)
+    assert df.count() == 10
+
+
+def test_partition_filters_invalid_sql_raises(spark: SparkSession, tmp_path):
+    """partition_filters with invalid SQL expr → IngressError with filter in message."""
+    path = str(tmp_path / "pf_bad.parquet")
+    spark.range(5).write.parquet(path)
+    bad_filter = "id === INVALID_SYNTAX %%%"
+    module = Module(
+        id="m1", type="Ingress", label="M1",
+        config={"format": "parquet", "path": path, "partition_filters": bad_filter}
+    )
+    with pytest.raises(IngressError, match=r"partition_filters"):
+        read_ingress(module, spark)
+
+
+def test_partition_filters_applied_before_schema_hint(spark: SparkSession, tmp_path):
+    """partition_filters applied; schema_hint check still works on filtered result."""
+    path = str(tmp_path / "pf_schema.parquet")
+    spark.range(10).write.parquet(path)
+    module = Module(
+        id="m1", type="Ingress", label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "partition_filters": "id < 5",
+            "schema_hint": {"id": "bigint"},
+        }
+    )
+    df = read_ingress(module, spark)
+    assert df.count() == 5
+    assert "id" in df.columns
+
+
+def test_partition_filters_with_date_comparison(spark: SparkSession, tmp_path):
+    """partition_filters with date literal expr → rows outside range excluded."""
+    from pyspark.sql import Row
+    from datetime import date
+
+    path = str(tmp_path / "pf_date.parquet")
+    spark.createDataFrame([
+        Row(id=1, event_date=date(2024, 1, 1)),
+        Row(id=2, event_date=date(2024, 6, 15)),
+        Row(id=3, event_date=date(2023, 12, 31)),
+    ]).write.parquet(path)
+
+    module = Module(
+        id="m1", type="Ingress", label="M1",
+        config={
+            "format": "parquet",
+            "path": path,
+            "partition_filters": "event_date >= '2024-01-01'",
+        }
+    )
+    df = read_ingress(module, spark)
+    ids = sorted(r["id"] for r in df.collect())
+    assert ids == [1, 2]
+
+
+def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession):
+    """partition_filters on JDBC (no path) → .where() applied after reader.load()."""
+    from unittest.mock import MagicMock, patch
+
+    # Real df to be "returned" by the mocked JDBC reader
+    real_df = spark.range(10)
+
+    mock_reader = MagicMock()
+    mock_reader.format.return_value = mock_reader
+    mock_reader.option.return_value = mock_reader
+    mock_reader.load.return_value = real_df
+
+    module = Module(
+        id="jdbc_in", type="Ingress", label="JDBC",
+        config={
+            "format": "jdbc",
+            "options": {
+                "url": "jdbc:postgresql://localhost/db",
+                "dbtable": "users",
+            },
+            "partition_filters": "id >= 5",
+        }
+    )
+
+    with patch.object(spark, "read", mock_reader):
+        df = read_ingress(module, spark)
+
+    # load() called without a path argument (JDBC is pathless)
+    mock_reader.load.assert_called_once_with()
+    # filter was applied — only rows with id >= 5 survive
+    assert df.count() == 5
