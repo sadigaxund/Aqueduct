@@ -15,10 +15,37 @@ def test_ingress_unsupported_format(spark: SparkSession):
         read_ingress(module, spark)
 
 
-def test_ingress_missing_path(spark: SparkSession):
+def test_ingress_missing_path_parquet(spark: SparkSession):
     module = Module(id="m1", type="Ingress", label="M1", config={"format": "parquet"})
-    with pytest.raises(IngressError, match="'path' is required"):
+    with pytest.raises(IngressError, match="'path' is required in Ingress config for format='parquet'"):
         read_ingress(module, spark)
+
+
+def test_ingress_missing_path_csv(spark: SparkSession):
+    module = Module(id="m1", type="Ingress", label="M1", config={"format": "csv"})
+    with pytest.raises(IngressError, match="'path' is required in Ingress config for format='csv'"):
+        read_ingress(module, spark)
+
+
+def test_ingress_pathless_formats_no_error(spark: SparkSession):
+    for fmt in ["jdbc", "kafka", "depot", "dataframe"]:
+        module = Module(id="m1", type="Ingress", label="M1", config={"format": fmt, "options": {"dbtable": "t"}})
+        try:
+            read_ingress(module, spark)
+        except IngressError as exc:
+            assert "'path' is required" not in str(exc)
+        except Exception:
+            pass
+
+
+def test_ingress_jdbc_with_path(spark: SparkSession, tmp_path):
+    module = Module(id="m1", type="Ingress", label="M1", config={"format": "jdbc", "path": "jdbc:sqlite::memory:", "options": {"dbtable": "t"}})
+    try:
+        read_ingress(module, spark)
+    except IngressError as exc:
+        assert "'path' is required" not in str(exc)
+    except Exception:
+        pass
 
 
 def test_ingress_schema_hint_missing_col(spark: SparkSession, tmp_path):

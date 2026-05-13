@@ -12,6 +12,7 @@ class ModuleResult:
     module_id: str
     status: str          # "success" | "error" | "skipped"
     error: str | None = None
+    error_type: str | None = None  # user-defined label from Assert rule's error_type field
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class ExecutionResult:
                     "module_id": r.module_id,
                     "status": r.status,
                     "error": r.error,
+                    "error_type": r.error_type,
                 }
                 for r in self.module_results
             ],

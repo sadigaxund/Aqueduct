@@ -178,6 +178,8 @@ def parse(
         guardrails=GuardrailsConfig(
             forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
             allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
+            heal_on_errors=tuple(validated.agent.guardrails.heal_on_errors),
+            never_heal_errors=tuple(validated.agent.guardrails.never_heal_errors),
         ),
         prompt_context=validated.agent.prompt_context,
         llm_timeout=validated.agent.llm_timeout,

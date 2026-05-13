@@ -109,6 +109,14 @@ def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
     return "unknown error"
 
 
+def _first_error_type(result: ExecutionResult) -> str | None:
+    """Return the error_type of the first failing module, or None for infra errors."""
+    for mr in result.module_results:
+        if mr.status == "error":
+            return getattr(mr, "error_type", None)
+    return None
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 class Surveyor:
@@ -268,6 +276,7 @@ class Surveyor:
             finished_at=_iso(finished_at),
             provenance_json=provenance_json,
             blueprint_source_yaml=blueprint_source_yaml,
+            error_type=_first_error_type(result),
         )
 
         self._conn.execute(

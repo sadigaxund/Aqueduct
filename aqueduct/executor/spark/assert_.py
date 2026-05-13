@@ -59,10 +59,12 @@ class AssertError(Exception):
         message: str,
         rule_id: str | None = None,
         trigger_agent: bool = False,
+        error_type: str | None = None,
     ) -> None:
         super().__init__(message)
         self.rule_id = rule_id
         self.trigger_agent = trigger_agent
+        self.error_type = error_type
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -154,6 +156,7 @@ def _handle_fail(
     message: str,
     blueprint_id: str = "",
     run_id: str = "",
+    error_type: str | None = None,
 ) -> None:
     """Dispatch on_fail action.  Raises AssertError for abort/trigger_agent."""
     if isinstance(on_fail, str):
@@ -164,9 +167,9 @@ def _handle_fail(
         webhook_url = on_fail.get("url")
 
     if action == "abort":
-        raise AssertError(message, rule_id=rule_type)
+        raise AssertError(message, rule_id=rule_type, error_type=error_type)
     elif action == "trigger_agent":
-        raise AssertError(message, rule_id=rule_type, trigger_agent=True)
+        raise AssertError(message, rule_id=rule_type, trigger_agent=True, error_type=error_type)
     elif action == "warn":
         logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
     elif action == "webhook":
@@ -209,12 +212,13 @@ def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -
         if name in actual_fields and actual_fields[name] != etype
     ]
 
+    error_type = rule.get("error_type")
     if missing:
         msg = f"schema_match: missing columns {missing}"
-        _handle_fail(on_fail, module_id, "schema_match", msg)
+        _handle_fail(on_fail, module_id, "schema_match", msg, error_type=error_type)
     if type_mismatches:
         msg = f"schema_match: type mismatches {type_mismatches}"
-        _handle_fail(on_fail, module_id, "schema_match", msg)
+        _handle_fail(on_fail, module_id, "schema_match", msg, error_type=error_type)
 
 
 # ── Phase 2: aggregate rules (batched) ───────────────────────────────────────
@@ -269,7 +273,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "min_rows",
                         f"min_rows: got {count}, expected >= {min_val}",
-                        blueprint_id, run_id,
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
             elif rtype == "max_rows" and f"_cnt_{i}" in agg_cols:
@@ -279,7 +283,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "max_rows",
                         f"max_rows: got {count}, expected <= {max_val}",
-                        blueprint_id, run_id,
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
             elif rtype == "freshness" and f"_max_{i}" in agg_cols:
@@ -289,7 +293,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "freshness",
                         "freshness: column has no non-null values",
-                        blueprint_id, run_id,
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
                 else:
                     if hasattr(max_ts, "timestamp"):
@@ -301,7 +305,7 @@ def _batch_aggregate_rules(
                         _handle_fail(
                             on_fail, module_id, "freshness",
                             f"freshness: data is {age_hours:.1f}h old, max allowed {max_age_hours}h",
-                            blueprint_id, run_id,
+                            blueprint_id, run_id, error_type=rule.get("error_type"),
                         )
 
             elif rtype == "sql" and f"_sql_{i}" in agg_cols:
@@ -311,7 +315,7 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, "sql",
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
-                        blueprint_id, run_id,
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
     # ── Null rate rules — one shared sample.agg() ─────────────────────────────
@@ -344,7 +348,7 @@ def _batch_aggregate_rules(
                     on_fail, module_id, "null_rate",
                     f"null_rate[{col}]: {rate:.4%} > allowed {max_rate:.4%} "
                     f"(sample_size={total}, fraction={fraction})",
-                    blueprint_id, run_id,
+                    blueprint_id, run_id, error_type=rule.get("error_type"),
                 )
 
 
@@ -374,7 +378,7 @@ def _check_spillway_rate(
                 on_fail, module_id, "spillway_rate",
                 f"spillway_rate: {actual_rate:.4%} of rows quarantined "
                 f"({quarantine_count}/{total}), max allowed {max_rate:.4%}",
-                blueprint_id, run_id,
+                blueprint_id, run_id, error_type=rule.get("error_type"),
             )
 
 
@@ -430,7 +434,7 @@ def _apply_row_rule(
         # non-quarantine on_fail for sql_row — evaluate lazily using count when needed
         # For abort/warn/webhook we'd need to detect if any rows fail; use lazy approach:
         # register failing as a view and check count only if non-quarantine action needed
-        _handle_fail_if_any(module_id, failing, on_fail, "sql_row", f"failed: {expr_str}")
+        _handle_fail_if_any(module_id, failing, on_fail, "sql_row", f"failed: {expr_str}", error_type=rule.get("error_type"))
         return passing, None
 
     elif rtype == "custom":
@@ -464,7 +468,7 @@ def _apply_row_rule(
                 # For simplicity, trust fn to return the right quarantine_df
                 return df, q_df
             else:
-                _handle_fail(on_fail, module_id, "custom", msg)
+                _handle_fail(on_fail, module_id, "custom", msg, error_type=rule.get("error_type"))
 
     return df, None
 
@@ -475,11 +479,12 @@ def _handle_fail_if_any(
     on_fail: Any,
     rule_type: str,
     message: str,
+    error_type: str | None = None,
 ) -> None:
     """Fire on_fail if failing_df has any rows.  Triggers one Spark action."""
     count = failing_df.count()
     if count > 0:
-        _handle_fail(on_fail, module_id, rule_type, f"{message} ({count} rows)")
+        _handle_fail(on_fail, module_id, rule_type, f"{message} ({count} rows)", error_type=error_type)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

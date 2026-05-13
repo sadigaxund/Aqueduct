@@ -53,6 +53,7 @@ class FailureContext:
     provenance_json: str | None = None        # JSON-serialized ProvenanceMap slice for failed module + context
     blueprint_source_yaml: str | None = None  # raw uncompiled YAML text of the blueprint file
     doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
+    error_type: str | None = None             # user-defined label from Assert rule's error_type field; None for infra errors
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -67,6 +68,7 @@ class FailureContext:
             "provenance_json": self.provenance_json,
             "blueprint_source_yaml": self.blueprint_source_yaml,
             "doctor_hints": list(self.doctor_hints),
+            "error_type": self.error_type,
         }
 
     def to_json(self) -> str:

@@ -37,3 +37,7 @@ however we have a python module with that name, I very much liked something simi
 21. Maybe ready prefab modules, where some of the common SQL operations are standardized into just config (e.g. dedupe, mask_email, pivot/unpivot)
 22. a kind of UDF, that is specifically designed for aqueduct syntax. In other words, a possibility of passing its parameter through context, config entries or even at udf_registry level. Allows adjustability of a UDF to multiple different blueprints and environments if need be, also would look cool when frontend can render such module.
 
+23. verify this from readme: 'aqueduct init --name my-pipeline' does it take name flag, what for?
+24. see if obs logs are written directly into '.aqueduct/' or '.aqueduct/<BLUEPRINT_ID>'
+
+

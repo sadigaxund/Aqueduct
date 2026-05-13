@@ -35,6 +35,8 @@ class RetryPolicy:
 class GuardrailsConfig:
     forbidden_ops: tuple[str, ...] = ()   # PatchSpec op names blocked from auto-apply
     allowed_paths: tuple[str, ...] = ()   # fnmatch patterns for config path values; empty = unrestricted
+    heal_on_errors: tuple[str, ...] = ()  # LLM only fires when error_type matches; empty = no restriction
+    never_heal_errors: tuple[str, ...] = ()  # LLM never fires when error_type matches; takes priority
 
 
 @dataclass(frozen=True)

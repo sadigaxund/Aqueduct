@@ -47,6 +47,10 @@ class GuardrailsSchema(BaseModel):
     forbidden_ops: list[str] = Field(default_factory=list)
     # fnmatch patterns for config `path` values LLM may write; empty = unrestricted
     allowed_paths: list[str] = Field(default_factory=list)
+    # Pre-trigger guards: LLM only fires when error_type matches (empty = no restriction)
+    heal_on_errors: list[str] = Field(default_factory=list)
+    # Pre-trigger guards: LLM never fires when error_type matches (takes priority over heal_on_errors)
+    never_heal_errors: list[str] = Field(default_factory=list)
 
 
 class AgentSchema(BaseModel):

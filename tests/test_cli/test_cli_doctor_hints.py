@@ -36,6 +36,7 @@ def test_doctor_warn_adds_hints_before_llm(
 ):
     """blueprint has warn doctor result -> failure_ctx.doctor_hints non-empty before LLM call."""
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
@@ -88,6 +89,7 @@ def test_doctor_exception_swallowed_hints_empty(
 ):
     """doctor check throws exception -> exception swallowed; doctor_hints stays empty; self-healing continues."""
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
