@@ -484,6 +484,97 @@ def _reachable_backward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
     return visited
 
 
+# ── Watermark sidecar helpers ─────────────────────────────────────────────────
+
+def _watermark_sidecar_path(store_dir: "Path | None", blueprint_id: str, channel_id: str) -> "Path | None":
+    if store_dir is None:
+        return None
+    return store_dir / "watermarks" / f"{blueprint_id}__{channel_id}.json"
+
+
+def _read_watermark_sidecar(store_dir: "Path | None", blueprint_id: str, channel_id: str) -> str | None:
+    """Read watermark value from local sidecar. Returns None if absent or unreadable."""
+    path = _watermark_sidecar_path(store_dir, blueprint_id, channel_id)
+    if path is None or not path.exists():
+        return None
+    try:
+        import json as _json
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        return data.get("watermark") or None
+    except Exception:
+        return None
+
+
+def _write_watermark_sidecar(
+    store_dir: "Path | None",
+    blueprint_id: str,
+    channel_id: str,
+    watermark_value: str,
+    watermark_column: str,
+    run_id: str,
+) -> None:
+    """Atomically write watermark sidecar JSON to store_dir/watermarks/."""
+    path = _watermark_sidecar_path(store_dir, blueprint_id, channel_id)
+    if path is None:
+        return
+    from datetime import datetime, timezone
+    import json as _json
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
+    payload = {
+        "watermark": watermark_value,
+        "watermark_column": watermark_column,
+        "blueprint_id": blueprint_id,
+        "channel_id": channel_id,
+        "run_id": run_id,
+        "written_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+    tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    tmp.replace(path)  # atomic rename
+
+
+def _compute_watermark_from_output(
+    spark: "SparkSession",
+    path: str,
+    fmt: str,
+    watermark_col: str,
+) -> str | None:
+    """Compute MAX(watermark_col) from already-written Egress output.
+
+    For delta: uses `SELECT MAX() FROM delta.\`path\`` which Spark can satisfy
+    using Delta's transaction log statistics — often a metadata-only operation.
+    For other formats: reads the materialized output files (not the upstream DAG).
+    Returns None on any failure.
+    """
+    try:
+        from pyspark.sql import functions as _F
+        if fmt == "delta":
+            result = spark.sql(
+                f"SELECT MAX(`{watermark_col}`) AS wm FROM delta.`{path}`"
+            ).collect()[0][0]
+        else:
+            result = (
+                spark.read.format(fmt).load(path)
+                .agg(_F.max(watermark_col))
+                .collect()[0][0]
+            )
+        return str(result) if result is not None else None
+    except Exception:
+        return None
+
+
+def _find_downstream_egress_ids(
+    channel_id: str,
+    manifest: "Manifest",
+) -> list[str]:
+    """Return IDs of all Egress modules reachable (any depth) downstream of channel_id."""
+    reachable = _reachable_forward(channel_id, manifest.edges)
+    return [
+        m.id for m in manifest.modules
+        if m.id in reachable and m.id != channel_id and m.type == "Egress"
+    ]
+
+
 def _selector_included(
     modules: tuple[Module, ...],
     edges: tuple[Edge, ...],
@@ -647,6 +738,8 @@ def execute(
         """
         local_results: list[ModuleResult] = []
         local_ingress_obs: dict[str, Any] = {}
+        # Maps egress_id → (channel_id, watermark_col, depot_key) for sidecar write after Egress success
+        _pending_watermarks: dict[str, tuple[str, str, str]] = {}
 
         def _merge() -> None:
             with _merge_lock:
@@ -772,9 +865,12 @@ def execute(
                     if _incremental:
                         _watermark_col = module.config.get("watermark_column", "")
                         _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
+                        # Sidecar takes priority over depot (eliminates re-scan of Egress output)
                         _watermark_val = (
-                            depot.get(_depot_key, "") if depot else ""
-                        ) or "1900-01-01 00:00:00"
+                            _read_watermark_sidecar(store_dir, manifest.blueprint_id, module.id)
+                            or (depot.get(_depot_key, "") if depot else "")
+                            or "1900-01-01 00:00:00"
+                        )
                         _query = module.config.get("query", "")
                         _patched_query = _query.replace("${ctx._watermark}", f"'{_watermark_val}'")
                         if _patched_query != _query:
@@ -849,20 +945,13 @@ def execute(
                     else:
                         frame_store[module.id] = df
 
-                    # ── Incremental watermark update ───────────────────────────
-                    if _incremental and _watermark_col and depot:
-                        from pyspark.sql import functions as _F
-                        try:
-                            _new_wm = frame_store[module.id].agg(
-                                _F.max(_watermark_col)
-                            ).collect()[0][0]
-                            if _new_wm is not None:
-                                depot.put(_depot_key, str(_new_wm))
-                        except Exception as _wm_exc:
-                            logger.warning(
-                                "[%s] Failed to update incremental watermark: %s",
-                                module.id, _wm_exc,
-                            )
+                    # ── Incremental watermark — defer update to post-Egress ────
+                    # Register pending watermark for each downstream Egress. The
+                    # actual MAX computation happens after the Egress write, reading
+                    # from the materialized output instead of re-executing the DAG.
+                    if _incremental and _watermark_col:
+                        for _eg_id in _find_downstream_egress_ids(module.id, manifest):
+                            _pending_watermarks[_eg_id] = (module.id, _watermark_col, _depot_key)
 
                     _write_stage_metrics(
                         module.id, run_id,
@@ -1179,6 +1268,32 @@ def execute(
                     store_dir,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
+
+                # ── Sidecar watermark update ───────────────────────────────────
+                if module.id in _pending_watermarks:
+                    _ch_id, _wm_col, _wm_depot_key = _pending_watermarks.pop(module.id)
+                    _eg_path = module.config.get("path", "")
+                    _eg_fmt = module.config.get("format", "parquet")
+                    if _eg_path and _eg_fmt not in ("depot",):
+                        _new_wm = _compute_watermark_from_output(spark, _eg_path, _eg_fmt, _wm_col)
+                        if _new_wm is not None:
+                            _write_watermark_sidecar(
+                                store_dir, manifest.blueprint_id, _ch_id,
+                                _new_wm, _wm_col, run_id,
+                            )
+                            if depot:
+                                depot.put(_wm_depot_key, _new_wm)
+                            logger.debug(
+                                "[%s] Watermark sidecar written: %s=%s",
+                                module.id, _wm_col, _new_wm,
+                            )
+                        else:
+                            logger.warning(
+                                "[%s] Could not compute watermark from output path %r; "
+                                "next run will use depot fallback.",
+                                module.id, _eg_path,
+                            )
+
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Probe ─────────────────────────────────────────────────────────
