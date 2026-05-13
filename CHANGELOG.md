@@ -2,7 +2,16 @@
 
 ---
 
-## v1.0.0a4 — 2026-05-13
+## v1.0.0a2 — 2026-05-12
+
+### Phase 25b — `partition_filters` on Ingress
+_2026-05-13_
+
+- New optional `partition_filters` config key on Ingress modules
+- Value is a SQL predicate string; injected as `.where()` immediately after `reader.load()`
+- Enables manual partition pruning when Spark's automatic pushdown doesn't trigger (e.g. runtime-resolved paths via Context variables)
+- Invalid expressions raise `IngressError` at startup before any data flows
+- Applied before `schema_hint` check; does not affect schema metadata
 
 ### Phase 25a — Post-Egress Maintenance Hooks
 _2026-05-13_
@@ -13,10 +22,6 @@ _2026-05-13_
 - Both ops are non-fatal: failures log as `WARNING`, pipeline continues
 - Timing (`optimize_ms`, `vacuum_ms`) written to `maintenance_metrics` table in `obs.db`
 - Compiler warning 8g: `maintenance.optimize: true` on non-delta Egress → emits warning at compile time
-
----
-
-## v1.0.0a3 — 2026-05-13
 
 ### Phase 24a — `error_type` Guardrail System
 _2026-05-13_
@@ -47,10 +52,6 @@ _2026-05-13_
 - Watermark stored in `{store_dir}/watermarks/{blueprint_id}__{channel_id}.json` (atomic rename), Depot also updated for backwards compatibility
 - Next run reads sidecar first, falls back to Depot, falls back to `'1900-01-01 00:00:00'` sentinel
 - Watermark not advanced if Channel or Egress fails
-
----
-
-## v1.0.0a2 — 2026-05-12
 
 ### Phase 23B — Input Fingerprinting
 _2026-05-11_
