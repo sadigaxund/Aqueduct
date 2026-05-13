@@ -13,7 +13,22 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import warnings
+
 import click
+
+
+def _compile_with_warnings(compile_fn, *args, **kwargs):
+    """Call compile_fn, intercept UserWarnings, reprint as clean CLI output."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = compile_fn(*args, **kwargs)
+    for w in caught:
+        if issubclass(w.category, UserWarning):
+            click.echo(f"WARNING: {w.message}", err=True)
+        else:
+            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+    return result
 
 
 # ── Guardrail validation ──────────────────────────────────────────────────────
@@ -382,7 +397,9 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
         sys.exit(1)
 
     try:
-        manifest = compiler_compile(bp, blueprint_path=Path(blueprint), execution_date=execution_date)
+        manifest = _compile_with_warnings(
+            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date
+        )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)
         sys.exit(1)
@@ -601,7 +618,8 @@ def run(
 
         # ── Compile ────────────────────────────────────────────────────────────────
         try:
-            manifest = compiler_compile(
+            manifest = _compile_with_warnings(
+                compiler_compile,
                 bp,
                 blueprint_path=Path(blueprint),
                 depot=depot,
