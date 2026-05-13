@@ -616,6 +616,19 @@ def run(
             resolved_store_dir = Path(f".aqueduct/obs/{manifest.blueprint_id}")
             resolved_store_dir.mkdir(parents=True, exist_ok=True)
 
+        # ── Cluster-mode store path warning ───────────────────────────────────────
+        if cfg.deployment.env in ("cluster", "cloud"):
+            _abs = resolved_store_dir.is_absolute()
+            if not _abs:
+                click.echo(
+                    f"WARNING: deployment.env={cfg.deployment.env!r} but store dir "
+                    f"{str(resolved_store_dir)!r} is not an absolute path. "
+                    "On YARN/K8s the driver CWD is ephemeral — obs.db, watermarks, "
+                    "and checkpoints will be lost on driver restart. "
+                    "Set stores.obs.path to an absolute shared FS path in aqueduct.yml.",
+                    err=True,
+                )
+
         # ── Aggressive mode danger gate ────────────────────────────────────────────
         if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:
             if not cfg.danger.allow_aggressive_patching:
