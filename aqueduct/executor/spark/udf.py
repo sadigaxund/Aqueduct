@@ -44,7 +44,7 @@ def _ensure_project_root_on_path() -> None:
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-
+# FIXME: this is a TEMPORARY hack until new Spark release supports newer python version
 def _patch_pyspark_cloudpickle() -> None:
     """Replace pyspark's bundled cloudpickle 2.x with system cloudpickle 3.x.
 

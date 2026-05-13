@@ -42,6 +42,52 @@ def _check_guardrails(patch: Any, agent: Any) -> str | None:
 
 # ── Self-healing helpers ──────────────────────────────────────────────────────
 
+def _extract_stack_class(stack_trace: str | None) -> str | None:
+    """Extract the exception class name from the last line of a stack trace.
+
+    e.g. 'pyspark.errors.exceptions.SparkException: ...' → 'SparkException'
+    """
+    if not stack_trace:
+        return None
+    last_line = stack_trace.strip().splitlines()[-1]
+    class_part = last_line.split(":")[0].strip()
+    return class_part.split(".")[-1] if class_part else None
+
+
+def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str]:
+    """Pre-trigger guardrail check.
+
+    Returns (should_heal, reason_if_blocked).
+    never_heal_errors takes priority over heal_on_errors.
+    Matching uses error_type from FailureContext (Assert label) or the
+    exception class name extracted from the stack trace (infra errors).
+    """
+    error_type: str | None = getattr(failure_ctx, "error_type", None)
+    stack_class: str | None = _extract_stack_class(getattr(failure_ctx, "stack_trace", None))
+
+    candidates: set[str] = set()
+    if error_type:
+        candidates.add(error_type)
+    if stack_class:
+        candidates.add(stack_class)
+
+    never_heal: tuple = tuple(getattr(guardrails, "never_heal_errors", ()))
+    heal_on: tuple = tuple(getattr(guardrails, "heal_on_errors", ()))
+
+    for et in never_heal:
+        if et in candidates:
+            return False, f"error_type {et!r} matched never_heal_errors"
+
+    if heal_on:
+        for et in heal_on:
+            if et in candidates:
+                return True, ""
+        matched = f"error_type={error_type!r}" if error_type else f"stack_class={stack_class!r}"
+        return False, f"{matched} not in heal_on_errors whitelist"
+
+    return True, ""
+
+
 def _llm_usable(provider: str, base_url: str | None) -> bool:
     """Return True if the LLM provider appears reachable without making a network call.
 
@@ -730,6 +776,17 @@ def run(
             if patch_count >= max_patches:
                 click.echo(
                     f"⚠  LLM: aggressive_max_patches={max_patches} reached, stopping self-healing loop",
+                    err=True,
+                )
+                break
+
+            # ── Pre-trigger guardrail check ────────────────────────────────────────
+            _should_heal, _no_heal_reason = _check_heal_guardrails(
+                failure_ctx, manifest.agent.guardrails
+            )
+            if not _should_heal:
+                click.echo(
+                    f"  ⊘  LLM guardrail blocked healing: {_no_heal_reason}",
                     err=True,
                 )
                 break

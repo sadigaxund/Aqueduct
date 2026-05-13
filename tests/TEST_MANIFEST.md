@@ -257,6 +257,13 @@ This section tracks high-level functional verification of core features against 
 - ✅ `data_freshness` `block_full_actions=True` + `allow_sample=true` → executes on sample; `sampled=True` in payload
 - ✅ `partition_stats`: payload has `num_partitions` key; integer ≥ 1; zero Spark action
 - ✅ `partition_stats` `block_full_actions=True` → still executes (not a Spark action)
+- ✅ `threshold` with `expr: "COUNT(*) > 0"` on non-empty DF → payload `{"passed": true, "value": ..., "expr": ...}`
+- ✅ `threshold` with `expr: "COUNT(*) > 0"` on empty DF → payload `{"passed": false, ...}`
+- ✅ `threshold` missing `expr` → signal fails with ValueError, other signals still captured
+- ✅ `threshold` signal written to `probe_signals` → `evaluate_regulator()` returns `True` when passed
+- ✅ `threshold` signal with `passed=false` → `evaluate_regulator()` returns `False`, Regulator closes gate
+- ✅ Regulator `timeout_seconds=5`: gate closed initially, signal inserted mid-poll → gate opens, downstream runs
+- ✅ Regulator `timeout_seconds=1`: gate stays closed past timeout → `on_block` applies (not forced-open)
 
 ### Executor integration (`executor.py`)
 - ✅ Probe appended after non-Probe modules in execution order (runs last)
@@ -292,10 +299,19 @@ This section tracks high-level functional verification of core features against 
 - ✅ `max_rows` fails with `on_fail=warn`: warning logged, blueprint continues
 - ✅ `null_rate` passes: shared `df.sample().agg()` used
 - ✅ `null_rate` fails with `on_fail=abort`: `AssertError` raised
-- ✅ `null_rate` on aggregate rule with `on_fail=quarantine`: treated as warn (quarantine is row-level only)
 - ✅ `freshness` passes: `max(col)` batched into shared `df.agg()`
 - ✅ `freshness` fails with `on_fail=warn`: warning logged, blueprint continues
 - ✅ `freshness` column has all nulls: fail message includes "no non-null values"
+- ❌ `freshness` with `on_fail=quarantine`: stale rows in `quarantine_df`, fresh rows in `passing_df` (ISSUE-015, ISSUE-016)
+- ✅ `freshness` with `on_fail=quarantine` + spillway edge: end-to-end rows routed correctly
+- ✅ `freshness` with `on_fail=quarantine` + no spillway edge: treated as warn (not CompileError yet)
+- ❌ `freshness` on_fail: quarantine with numeric column → AnalysisException (ISSUE-017)
+- ❌ `freshness` on_fail: quarantine with nulls → NULLs dropped (ISSUE-015)
+- ❌ `freshness` on_fail: quarantine missing column → skipped, no ValueError (ISSUE-018)
+- ✅ `min_rows` with `on_fail=quarantine`: treated as warn per log
+- ✅ `max_rows` with `on_fail=quarantine`: treated as warn per log
+- ✅ `sql` (aggregate) with `on_fail=quarantine`: treated as warn per log
+- ✅ `null_rate` with `on_fail=quarantine`: treated as warn per log
 - ✅ `sql` rule passes: custom aggregate expr evaluated in batched `agg()`
 - ✅ `sql` rule fails with `on_fail=webhook`: `fire_webhook` called; blueprint continues
 - ✅ `sql_row` rule: passing rows on main port, failing rows in `quarantine_df`
@@ -308,10 +324,14 @@ This section tracks high-level functional verification of core features against 
 - ✅ mixed aggregate + null_rate → at most 2 Spark actions
 - ✅ `on_fail=trigger_agent`: `AssertError.trigger_agent=True`
 - ✅ gate closed upstream → Assert `status="skipped"`, sentinel propagated downstream
-- ✅ no spillway edge + quarantine rows produced → warning logged, rows discarded
+- ✅ `sql_row`/`custom`/`freshness` with `on_fail=quarantine` + no spillway edge → treated as warn/log (previously: silent runtime discard)
 - ✅ Assert with no rules configured → pass-through, `status="success"`
 - ✅ end-to-end: Ingress → Assert(`min_rows` abort rule fires) → `ExecutionResult(status="error")`
 - ✅ end-to-end: Ingress → Assert(`sql_row` quarantine) → Egress(good) + Egress(quarantine), both written
+- ⏳ `error_type` on rule → `AssertError.error_type` set correctly
+- ⏳ `error_type` propagates: `AssertError` → `ModuleResult.error_type` → `FailureContext.error_type`
+- ⏳ rule without `error_type` → `AssertError.error_type` is `None`
+- ⏳ multiple rules with different `error_type` → only first-failing rule's label in `FailureContext`
 
 ### Surveyor `get_probe_signal()`
 - ✅ returns empty list when `obs.db` does not exist
@@ -879,6 +899,23 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - [✅] `test_agent_config_schema_parses_allowed_paths`
 - [✅] `test_patch_rollback_restores_blueprint` (updated to Git-based CLI)
 - ✅ old flat `allowed_paths`/`forbidden_ops` directly under `agent:` → schema validation error (extra="forbid")
+- ⏳ `heal_on_errors` + `never_heal_errors` parse correctly from YAML → `GuardrailsConfig` fields populated
+- ⏳ `never_heal_errors` matches `error_type` from `FailureContext` → LLM blocked, message emitted
+- ⏳ `never_heal_errors` matches stack trace class name → LLM blocked
+- ⏳ `never_heal_errors` takes priority over `heal_on_errors` when both match
+- ⏳ `heal_on_errors` non-empty, `error_type` matches → LLM proceeds
+- ⏳ `heal_on_errors` non-empty, `error_type` does NOT match → LLM blocked, message emitted
+- ⏳ `heal_on_errors=[]` (default) → no restriction, LLM proceeds
+- ⏳ `never_heal_errors=[]` (default) → no restriction
+- ⏳ `_check_heal_guardrails()` with `failure_ctx.error_type=None` → falls back to stack trace class
+- ⏳ `_check_heal_guardrails()` with both `error_type` and stack class → either match is sufficient
+
+### Doctor guardrail typo detection — `aqueduct/doctor.py`
+- ⏳ `heal_on_errors` entry matches known Assert `error_type` → no warning
+- ⏳ `heal_on_errors` entry does NOT match any Assert `error_type` → `CheckResult(status="warn")` with clear message
+- ⏳ `never_heal_errors` entry typo → warning emitted
+- ⏳ no `heal_on_errors`/`never_heal_errors` → no warning emitted
+- ⏳ blueprint has no Assert modules → any entry produces warning (none to match against)
 
 ### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
 
@@ -1428,6 +1465,10 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `heal --scenario <path>`: scenario fails → sys.exit(1)
 - ✅ `heal <run_id>`: still works (existing flow unbroken)
 - ✅ `heal` with no args: error message prompting for run_id or --scenario
+- ✅ `heal <run_id> --print-prompt`: prints system block + user block to stdout, exits 0, no LLM called
+- ✅ `heal <run_id> --print-prompt --print-prompt-format json`: output is valid JSON with "system" and "user" keys
+- ✅ `heal --scenario <path> --print-prompt`: builds FailureContext from scenario, prints prompt, exits 0
+- ✅ `heal --print-prompt` with no agent.model configured: succeeds (model guard skipped)
 - ✅ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
 - ✅ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
 - ✅ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
@@ -1452,3 +1493,21 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `execute()`: `materialize=incremental`, downstream Egress has `mode=overwrite` → warning logged
 - ✅ `execute()`: no `materialize` key → normal Channel execution, no watermark logic
 - ✅ `execute()`: `materialize=incremental`, depot=None → query uses sentinel, no crash
+
+## Compiler Warning — Hadoop FS Keys in Ingress Options (ISSUE-001)
+
+#### Compiler — `aqueduct/compiler/compiler.py`
+- ✅ Ingress with `options: {fs.s3a.access.key: ...}` → `warnings.warn` containing "spark_config"
+- ✅ Ingress with `options: {fs.gs.project.id: ...}` → warning emitted
+- ✅ Ingress with `options: {fs.azure.account.key: ...}` → warning emitted
+- ✅ Ingress with `options: {header: true}` (non-Hadoop key) → no warning
+- ✅ Non-Ingress module with `options` containing `fs.s3a.*` → no warning (only Ingress checked)
+
+## JDBC Ingress Path Not Required (ISSUE-002)
+
+#### Executor — `aqueduct/executor/spark/ingress.py`
+- ✅ JDBC Ingress with no `path` field → no `IngressError` raised; `reader.load()` called without args
+- ✅ JDBC Ingress with `path` present → `path` passed to `reader.load(path)` as before
+- ✅ Kafka/depot/dataframe Ingress with no `path` → no `IngressError`
+- ✅ Parquet Ingress with no `path` → `IngressError` with `format='parquet'` in message
+- ✅ CSV Ingress with no `path` → `IngressError` raised (path required for file formats)

@@ -403,6 +403,55 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                     ),
                 ))
 
+    results.extend(_check_heal_guardrail_typos(manifest))
+    return results
+
+
+def _check_heal_guardrail_typos(manifest: Any) -> "list[CheckResult]":
+    """Warn if heal_on_errors / never_heal_errors entries don't match any known error_type
+    in the blueprint's Assert rules and aren't a recognised exception class name pattern.
+
+    Mismatches are almost always typos — the label will never match and the guardrail
+    silently has no effect.
+    """
+    results: list[CheckResult] = []
+
+    agent = getattr(manifest, "agent", None)
+    if agent is None:
+        return results
+    guardrails = getattr(agent, "guardrails", None)
+    if guardrails is None:
+        return results
+
+    heal_on = tuple(getattr(guardrails, "heal_on_errors", ()))
+    never_heal = tuple(getattr(guardrails, "never_heal_errors", ()))
+    if not heal_on and not never_heal:
+        return results
+
+    # Collect all error_type labels declared in Assert rules
+    known_error_types: set[str] = set()
+    for module in getattr(manifest, "modules", []):
+        if getattr(module, "type", "") != "Assert":
+            continue
+        for rule in (module.config or {}).get("rules", []):
+            et = rule.get("error_type")
+            if et:
+                known_error_types.add(et)
+
+    all_guardrail_entries = set(heal_on) | set(never_heal)
+    for entry in sorted(all_guardrail_entries):
+        if entry not in known_error_types:
+            results.append(CheckResult(
+                name="guardrail_typo",
+                status="warn",
+                detail=(
+                    f"agent.guardrails entry {entry!r} does not match any Assert rule error_type "
+                    f"in this blueprint. Known error_types: {sorted(known_error_types) or ['(none)']}. "
+                    "If this is an infrastructure exception class (e.g. 'SparkException'), this warning "
+                    "can be ignored — it will be matched against the stack trace at runtime."
+                ),
+            ))
+
     return results
 
 

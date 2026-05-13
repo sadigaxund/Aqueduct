@@ -830,6 +830,26 @@ Use this whenever you have `sql_row` or `custom` quarantine rules to prevent the
 
 Using `on_fail: quarantine` on `min_rows`, `max_rows`, `sql`, or `null_rate` raises a `CompileError`. Previously these silently degraded to warn (and passed bad data through) — this was removed as a footgun.
 
+**`error_type` field (typed label for guardrail matching):**
+
+Every rule accepts an optional `error_type:` string. When the rule fires with `on_fail: abort` or `on_fail: trigger_agent`, the label is attached to the `AssertError` and propagated through `ModuleResult.error_type` → `FailureContext.error_type`. The LLM pre-trigger guardrails (`heal_on_errors`, `never_heal_errors`) match against this label.
+
+```yaml
+rules:
+  - type: min_rows
+    min: 1000
+    on_fail: abort
+    error_type: EmptyDataset        # matched by never_heal_errors: [EmptyDataset]
+
+  - type: null_rate
+    column: order_id
+    max: 0.0
+    on_fail: trigger_agent
+    error_type: DataQualityViolation   # LLM fires only for this class of error
+```
+
+Infrastructure errors (Spark exceptions, network errors) that are not raised by Assert rules have `error_type: null`. The guardrail check falls back to matching the exception class name from the stack trace (e.g. `SparkException`, `AnalysisException`).
+
 **`freshness` + `quarantine` pattern** — eliminates the need for a paired `sql_row` rule:
 ```yaml
 rules:
@@ -1373,8 +1393,16 @@ agent:
 | :- | :- | :- |
 | `guardrails.allowed_paths` | list[str] | fnmatch patterns. Any `path`/`output_path` config value in a `set_module_config_key` op must match at least one pattern. Empty list = unrestricted. |
 | `guardrails.forbidden_ops` | list[str] | PatchSpec operation names that are always blocked. Empty list = all ops permitted. |
+| `guardrails.heal_on_errors` | list[str] | **Pre-trigger guard.** LLM only fires when the failure's `error_type` matches. Empty list = no restriction (LLM fires on any error). |
+| `guardrails.never_heal_errors` | list[str] | **Pre-trigger guard.** LLM never fires when the failure's `error_type` matches. Takes priority over `heal_on_errors`. |
 
-If a patch violates either guardrail, `apply_patch` raises `PatchError` — the Blueprint is never written. A clear error message is emitted. This is enforced before any Blueprint mutation occurs.
+`heal_on_errors` / `never_heal_errors` match against two sources:
+- **Assert rule label** — the `error_type:` field on an Assert rule that fired (e.g. `SLABreach`, `DataQualityViolation`).
+- **Infrastructure exception class** — the Python exception class name extracted from the stack trace last line (e.g. `SparkException`, `AnalysisException`).
+
+`aqueduct doctor` warns if a guardrail entry does not match any `error_type` declared in the blueprint's Assert rules (potential typo).
+
+If a patch violates `allowed_paths` or `forbidden_ops`, `apply_patch` raises `PatchError` — the Blueprint is never written. A clear error message is emitted. This is enforced before any Blueprint mutation occurs.
 
 **Recommended guardrail policy for production:**
 

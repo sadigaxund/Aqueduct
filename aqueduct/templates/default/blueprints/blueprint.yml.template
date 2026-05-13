@@ -134,6 +134,21 @@ agent:
   #   - remove_module
   #   - replace_retry_policy
 
+  # heal_on_errors: LLM only triggers when the failure matches one of these labels.
+  #   Labels come from Assert rules' error_type field, or infrastructure exception class
+  #   names extracted from the stack trace (e.g. "SparkException", "AnalysisException").
+  #   Empty (default) = LLM triggers on all errors.
+  # heal_on_errors:
+  #   - DataQualityViolation
+  #   - SchemaError
+
+  # never_heal_errors: LLM never triggers when the failure matches one of these labels.
+  #   Takes priority over heal_on_errors. Useful to block LLM on known-unrecoverable errors.
+  #   Empty (default) = no restriction.
+  # never_heal_errors:
+  #   - SLABreach
+  #   - OutOfDiskSpaceError
+
   # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
@@ -352,10 +367,12 @@ modules: []
   #       - type: schema_match
   #         expected: {order_id: long, amount: double}
   #         on_fail: abort            # abort | warn | webhook | trigger_agent
+  #         error_type: SchemaError   # optional typed label for guardrail matching
 
   #       - type: min_rows
   #         min: 1000
   #         on_fail: abort
+  #         error_type: EmptyDataset  # optional; matched by heal_on_errors / never_heal_errors
 
   #       - type: max_rows
   #         max: 10000000

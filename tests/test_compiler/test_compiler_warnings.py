@@ -284,3 +284,60 @@ edges:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             _compile_yaml(yaml_str, tmp_path)
+
+    def test_ingress_hadoop_options_warn(self, tmp_path):
+        for opt_key in ["fs.s3a.access.key", "fs.gs.project.id", "fs.azure.account.key"]:
+            yaml_str = f"""
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config:
+      format: parquet
+      path: data
+      options:
+        {opt_key}: "secret"
+            """
+            with pytest.warns(UserWarning, match="Hadoop filesystem keys in 'options'"):
+                _compile_yaml(yaml_str, tmp_path)
+
+    def test_ingress_non_hadoop_options_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config:
+      format: csv
+      path: data
+      options:
+        header: "true"
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _compile_yaml(yaml_str, tmp_path)
+
+    def test_non_ingress_hadoop_options_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: data
+      options:
+        fs.s3a.access.key: "secret"
+        """
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _compile_yaml(yaml_str, tmp_path)

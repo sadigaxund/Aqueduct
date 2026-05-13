@@ -1027,7 +1027,7 @@ def execute(
                     )
                 except AssertError as exc:
                     local_results.append(
-                        ModuleResult(module_id=module.id, status="error", error=str(exc))
+                        ModuleResult(module_id=module.id, status="error", error=str(exc), error_type=exc.error_type)
                     )
                     _signal_fail(trigger_agent=exc.trigger_agent)
                     return

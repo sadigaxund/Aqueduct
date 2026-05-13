@@ -56,6 +56,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     Scenario: aggressive mode + patch produces invalid Blueprint (compile fail) -> loop stops.
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -89,6 +90,7 @@ def test_aggressive_mode_fails_then_continues(
     Scenario: aggressive mode + patch valid but re-run fails -> on_heal_failure applied (staged), loop continues.
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -141,6 +143,7 @@ def test_aggressive_mode_succeeds_stops_loop(
     Scenario: aggressive mode + patch valid + re-run succeeds -> Blueprint written to disk, loop stops.
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -172,6 +175,7 @@ def test_trigger_agent_escalation(
     Scenario: result.trigger_agent=True + approval_mode=disabled -> effective_mode set to "human".
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -204,6 +208,7 @@ def test_trigger_agent_false_disabled_breaks(
     Scenario: result.trigger_agent=False + approval_mode=disabled -> loop breaks immediately.
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -226,6 +231,7 @@ def test_block_full_actions_propagation(
     Scenario: cfg.danger.allow_full_probe_actions=False -> block_full_actions=True passed to execute().
     """
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -261,6 +267,7 @@ def test_trigger_agent_stays_human(
 ):
     """trigger_agent=True + approval_mode=human -> stays human (no override message)"""
     runner = CliRunner()
+    patch("aqueduct.cli._llm_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
