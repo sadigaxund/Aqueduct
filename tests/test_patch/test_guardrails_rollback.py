@@ -8,48 +8,146 @@ import pytest
 pytestmark = pytest.mark.unit
 from click.testing import CliRunner
 
-from aqueduct.cli import _check_guardrails, cli
-from aqueduct.parser.models import AgentConfig, GuardrailsConfig
-from aqueduct.surveyor.llm import LLMPatchResult
+from aqueduct.cli import cli
+from aqueduct.patch.apply import PatchError, _check_guardrails
 from aqueduct.patch.grammar import PatchSpec
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
 
 
-def _make_agent(allowed_paths=(), forbidden_ops=()):
-    return AgentConfig(guardrails=GuardrailsConfig(allowed_paths=allowed_paths, forbidden_ops=forbidden_ops))
+def _bp_with_guardrails(allowed_paths=(), forbidden_ops=()):
+    return {
+        "agent": {
+            "guardrails": {
+                "allowed_paths": list(allowed_paths),
+                "forbidden_ops": list(forbidden_ops),
+            }
+        }
+    }
 
 
-def _make_patch(*ops):
-    patch = MagicMock()
-    patch.operations = list(ops)
-    return patch
+def _patch(*ops):
+    return PatchSpec.model_validate({
+        "patch_id": "test-patch",
+        "rationale": "test",
+        "operations": list(ops),
+    })
 
 
 class TestGuardrails:
-    def test_guardrails_no_restrictions_always_pass(self):
-        agent = _make_agent()
-        patch = _make_patch({"op": "remove_module", "module_id": "x"})
-        assert _check_guardrails(patch, agent) is None
+    def test_no_restrictions_always_pass(self):
+        bp = _bp_with_guardrails()
+        spec = _patch({"op": "remove_module", "module_id": "x"})
+        _check_guardrails(spec, bp)  # no raise
 
-    def test_guardrails_forbidden_op_blocks(self):
-        agent = _make_agent(forbidden_ops=("remove_module",))
-        patch = _make_patch({"op": "remove_module", "module_id": "x"})
-        err = _check_guardrails(patch, agent)
-        assert err is not None
-        assert "remove_module" in err
+    def test_forbidden_op_blocks(self):
+        bp = _bp_with_guardrails(forbidden_ops=("remove_module",))
+        spec = _patch({"op": "remove_module", "module_id": "x"})
+        with pytest.raises(PatchError, match="remove_module"):
+            _check_guardrails(spec, bp)
 
-    def test_guardrails_allowed_paths_pass_matching(self):
-        agent = _make_agent(allowed_paths=("s3a://prod/*",))
-        patch = _make_patch({"op": "replace_module_config", "module_id": "x", "config": {"path": "s3a://prod/orders/"}})
-        assert _check_guardrails(patch, agent) is None
+    # ── set_module_config_key path enforcement ────────────────────────────────
+    def test_set_key_path_matching_passes(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "set_module_config_key", "module_id": "x",
+            "key": "path", "value": "s3a://prod/orders/",
+        })
+        _check_guardrails(spec, bp)
 
-    def test_guardrails_allowed_paths_block_non_matching(self):
-        agent = _make_agent(allowed_paths=("s3a://prod/*",))
-        patch = _make_patch({"op": "replace_module_config", "module_id": "x", "config": {"path": "s3a://staging/orders/"}})
-        err = _check_guardrails(patch, agent)
-        assert err is not None
-        assert "s3a://staging/orders/" in err
+    def test_set_key_path_non_matching_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "set_module_config_key", "module_id": "x",
+            "key": "path", "value": "s3a://staging/orders/",
+        })
+        with pytest.raises(PatchError, match="s3a://staging/orders/"):
+            _check_guardrails(spec, bp)
+
+    def test_set_key_non_path_key_ignored(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "set_module_config_key", "module_id": "x",
+            "key": "format", "value": "/etc/passwd",
+        })
+        _check_guardrails(spec, bp)  # no raise — only path/output_path checked
+
+    def test_set_key_arcade_expanded_id_skipped(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "set_module_config_key", "module_id": "arcade__ingress",
+            "key": "path", "value": "s3a://staging/anywhere/",
+        })
+        _check_guardrails(spec, bp)  # skipped — apply step gives clearer error
+
+    # ── replace_module_config path enforcement (regression for bypass bug) ────
+    def test_replace_config_path_matching_passes(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "replace_module_config", "module_id": "x",
+            "config": {"format": "parquet", "path": "s3a://prod/orders/"},
+        })
+        _check_guardrails(spec, bp)
+
+    def test_replace_config_path_non_matching_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "replace_module_config", "module_id": "x",
+            "config": {"format": "parquet", "path": "/etc/passwd"},
+        })
+        with pytest.raises(PatchError, match="/etc/passwd"):
+            _check_guardrails(spec, bp)
+
+    def test_replace_config_output_path_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "replace_module_config", "module_id": "x",
+            "config": {"format": "parquet", "output_path": "/tmp/leak"},
+        })
+        with pytest.raises(PatchError, match="/tmp/leak"):
+            _check_guardrails(spec, bp)
+
+    # ── insert_module / add_probe / add_arcade_ref carry full module dicts ────
+    def test_insert_module_path_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "insert_module",
+            "module": {
+                "id": "new_ingress", "type": "Ingress", "label": "x",
+                "config": {"format": "parquet", "path": "s3a://attacker/data/"},
+            },
+            "edges_to_add": [], "edges_to_remove": [],
+        })
+        with pytest.raises(PatchError, match="s3a://attacker/data/"):
+            _check_guardrails(spec, bp)
+
+    def test_add_probe_path_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "add_probe",
+            "module": {
+                "id": "p", "type": "Probe", "label": "p",
+                "attach_to": "x",
+                "config": {"path": "/etc/secret", "signals": []},
+            },
+            "edges_to_add": [],
+        })
+        with pytest.raises(PatchError, match="/etc/secret"):
+            _check_guardrails(spec, bp)
+
+    def test_add_arcade_ref_path_blocks(self):
+        bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
+        spec = _patch({
+            "op": "add_arcade_ref",
+            "module": {
+                "id": "arc", "type": "Arcade", "label": "a",
+                "ref": "arcades/x.yml",
+                "config": {"output_path": "/var/leak"},
+            },
+            "edges_to_add": [], "edges_to_remove": [],
+        })
+        with pytest.raises(PatchError, match="/var/leak"):
+            _check_guardrails(spec, bp)
 
 
 class TestRollback:

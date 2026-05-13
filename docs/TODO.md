@@ -40,3 +40,6 @@ however we have a python module with that name, I very much liked something simi
 23. verify this from readme: 'aqueduct init --name my-pipeline' does it take name flag, what for?
 24. see if obs logs are written directly into '.aqueduct/' or '.aqueduct/<BLUEPRINT_ID>'
 
+
+
+Pick next 4 when ready, or push back on anything above.

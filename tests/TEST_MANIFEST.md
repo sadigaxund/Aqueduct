@@ -1092,7 +1092,13 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ Assert rule with `on_fail: trigger_agent` → `AssertError.trigger_agent=True` → `ExecutionResult.trigger_agent=True`
 - ✅ Assert rule with `on_fail: abort` → `ExecutionResult.trigger_agent=False`
 
-### `probes.block_full_actions_in_prod` — `executor/spark/probe.py`
+### `danger.allow_full_probe_actions` — `executor/spark/probe.py`
+
+The legacy `probes.block_full_actions_in_prod` flag was removed in v1.0.0a3. The
+active gate is `danger.allow_full_probe_actions` (inverted polarity: when false,
+costly Probe sample-scan signals are skipped). `cli.py` derives the
+`block_full_actions` argument passed into `execute_probe()` from
+`not cfg.danger.allow_full_probe_actions`.
 
 **`execute_probe(…, block_full_actions=False)`**, **`_row_count_estimate(…, block_full_actions=False)`**, **`_null_rates(…, block_full_actions=False)`**.
 
@@ -1108,7 +1114,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ `result.trigger_agent=True` + `approval_mode=disabled` → `effective_mode` set to `"human"`, message printed to stderr
 - ✅ `result.trigger_agent=False` + `approval_mode=disabled` → loop breaks immediately (no LLM)
 - ✅ `result.trigger_agent=True` + `approval_mode=human` → `effective_mode` stays `"human"` (already correct; no override message printed)
-- ✅ `cfg.probes.block_full_actions_in_prod` passed to `execute()` as `block_full_actions`
+- ✅ `not cfg.danger.allow_full_probe_actions` passed to `execute()` as `block_full_actions`
 
 ---
 

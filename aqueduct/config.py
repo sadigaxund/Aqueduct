@@ -85,12 +85,25 @@ class StoresConfig(BaseModel):
 
 
 class MetricsConfig(BaseModel):
-    """Reserved for future performance-degrading metric toggles.
+    """Per-module observability tuning.
 
-    All flags must default to False (zero-cost production mode) and emit a
-    startup warning when enabled.  See docs/SPARK_GUIDE.md — Implementation Rules §2.
+    See docs/SPARK_GUIDE.md ("DataFrame.observe() and Whole-Stage Codegen") for
+    the tradeoff between accurate per-module attribution and codegen overhead.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    use_observe: bool = Field(
+        default=True,
+        description=(
+            "When true (default), wrap each Ingress read / Egress write with "
+            "DataFrame.observe() for accurate per-module records_read / "
+            "records_written counts. When false, rely on SparkListener stage "
+            "metrics only — avoids a ~5–15% throughput regression on "
+            "high-throughput pipelines where observe() can break whole-stage "
+            "codegen, at the cost of less accurate per-module attribution "
+            "(stage fusion groups consecutive modules into one stage)."
+        ),
+    )
 
 
 class ProbesConfig(BaseModel):
@@ -98,7 +111,8 @@ class ProbesConfig(BaseModel):
 
     max_sample_rows: int = 100
     default_sample_fraction: float = 0.01
-    block_full_actions_in_prod: bool = True
+    # Note: the legacy `block_full_actions_in_prod` flag was removed in v1.0.0a3.
+    # The active gate is `danger.allow_full_probe_actions` (inverted polarity).
 
 
 class DangerConfig(BaseModel):
