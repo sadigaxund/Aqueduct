@@ -606,6 +606,9 @@ def run(
                 blueprint_path=Path(blueprint),
                 depot=depot,
                 execution_date=execution_date,
+                secrets_provider=cfg.secrets.provider,
+                secrets_region=cfg.secrets.region,
+                secrets_resolver=cfg.secrets.resolver,
             )
         except CompileError as exc:
             click.echo(f"✗ compile error: {exc}", err=True)
@@ -689,7 +692,7 @@ def run(
         resolved_agent_provider = bp_agent.provider or eng.provider
         resolved_agent_base_url = bp_agent.base_url or eng.base_url
         resolved_agent_model = bp_agent.model or eng.model
-        resolved_agent_ollama_options = bp_agent.ollama_options or eng.ollama_options
+        resolved_agent_provider_options = bp_agent.provider_options or eng.provider_options
         resolved_agent_llm_timeout = bp_agent.llm_timeout or eng.llm_timeout
         resolved_agent_llm_max_reprompts = bp_agent.llm_max_reprompts or eng.llm_max_reprompts
         resolved_agent_engine_prompt_context = eng.prompt_context
@@ -838,7 +841,7 @@ def run(
                 patches_dir=patches_dir,
                 provider=resolved_agent_provider,
                 base_url=resolved_agent_base_url,
-                ollama_options=resolved_agent_ollama_options,
+                provider_options=resolved_agent_provider_options,
                 llm_timeout=resolved_agent_llm_timeout,
                 llm_max_reprompts=resolved_agent_llm_max_reprompts,
                 engine_prompt_context=resolved_agent_engine_prompt_context,
@@ -2132,7 +2135,7 @@ def heal(
     resolved_provider = eng.provider
     resolved_base_url = eng.base_url
     resolved_model = eng.model
-    resolved_ollama_options = eng.ollama_options
+    resolved_provider_options = eng.provider_options
     resolved_llm_timeout = eng.llm_timeout
     resolved_llm_max_reprompts = eng.llm_max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
@@ -2177,7 +2180,7 @@ def heal(
             patches_dir=patches_path,
             provider=resolved_provider or "anthropic",
             base_url=resolved_base_url,
-            ollama_options=resolved_ollama_options,
+            provider_options=resolved_provider_options,
             llm_timeout=resolved_llm_timeout,
             llm_max_reprompts=resolved_llm_max_reprompts,
             engine_prompt_context=resolved_engine_prompt_context,
@@ -2266,7 +2269,7 @@ def heal(
         patches_dir=patches_path,
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
-        ollama_options=resolved_ollama_options,
+        provider_options=resolved_provider_options,
         llm_timeout=resolved_llm_timeout,
         llm_max_reprompts=resolved_llm_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
@@ -2360,7 +2363,7 @@ def benchmark(
     resolved_provider = eng.provider
     resolved_base_url = eng.base_url
     resolved_model = eng.model
-    resolved_ollama_options = eng.ollama_options
+    resolved_provider_options = eng.provider_options
     resolved_llm_timeout = eng.llm_timeout
     resolved_llm_max_reprompts = eng.llm_max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
@@ -2384,7 +2387,7 @@ def benchmark(
         patches_dir=Path(patches_dir),
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
-        ollama_options=resolved_ollama_options,
+        provider_options=resolved_provider_options,
         llm_timeout=resolved_llm_timeout,
         llm_max_reprompts=resolved_llm_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,

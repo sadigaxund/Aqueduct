@@ -4,7 +4,7 @@ aqueduct.yml is separate from Blueprint YAML files.  It configures the engine
 itself: deployment target, store backends, probe limits, secrets provider, and
 webhook endpoints.  It is NOT the blueprint definition.
 
-LLM agent connection config (provider, base_url, model, ollama_options) lives
+LLM agent connection config (provider, base_url, model, provider_options) lives
 here as engine-level defaults.  Per-blueprint policy (approval_mode,
 on_pending_patches, aggressive_max_patches) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
@@ -119,7 +119,17 @@ class SecretsConfig(BaseModel):
 
     provider: str = Field(
         default="env",
-        description="Secrets provider: env | aws | gcp | azure | vault",
+        description="Secrets provider: env | aws | gcp | azure | custom",
+    )
+    region: str | None = Field(
+        default=None,
+        description="Cloud region for aws/gcp/azure providers (e.g. 'us-east-1').",
+    )
+    resolver: str | None = Field(
+        default=None,
+        description="Dotted import path for custom provider: 'mypackage.secrets.fetch'. "
+                    "Callable signature: (key: str) -> str | None. "
+                    "Return None to fall back to os.environ.",
     )
 
 
@@ -135,7 +145,7 @@ class AgentConnectionConfig(BaseModel):
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
     model: str = "claude-3-5-sonnet-latest"
-    ollama_options: dict[str, Any] | None = None
+    provider_options: dict[str, Any] | None = None
     llm_timeout: float = Field(
         default=120.0,
         description="HTTP socket timeout in seconds for LLM API calls. Increase for slow local models (e.g. 600.0).",

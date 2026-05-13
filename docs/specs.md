@@ -1465,7 +1465,7 @@ All connection fields in the Blueprint `agent:` block override the engine defaul
 | `provider` | `agent.provider` | `"anthropic"` or `"openai_compat"` |
 | `model` | `agent.model` | Model name string |
 | `base_url` | `agent.base_url` | Endpoint URL |
-| `ollama_options` | `agent.ollama_options` | Ollama-specific options dict |
+| `provider_options` | `agent.provider_options` | Provider-specific options dict. `ollama_*` prefixed keys stripped and nested under `payload["options"]` (Ollama-only field). Unprefixed keys merged into payload top-level (standard OpenAI params: `temperature`, `top_p`, etc.). |
 | `llm_timeout` | `agent.llm_timeout` | HTTP timeout in seconds (default 120) |
 | `llm_max_reprompts` | `agent.llm_max_reprompts` | Reprompt retries on invalid PatchSpec (default 3) |
 | `confidence_threshold` | — (blueprint-only) | Minimum confidence to auto-apply patch (default 0.7; below → human review) |
@@ -1746,9 +1746,9 @@ danger:
   allow_full_probe_actions: false  # if true, Probes may run full Spark actions (adds latency)
   allow_aggressive_patching: false # if true, approval_mode: aggressive is allowed
 secrets:
-  provider: env                    # env | aws | gcp | azure | vault
-                                   # Controls @aq.secret() resolution inside Blueprints.
-                                   # Only "env" (os.environ) is fully implemented today.
+  provider: env          # env | aws | gcp | azure | custom
+  # region: "us-east-1" # required for aws/gcp/azure
+  # resolver: "mypackage.secrets.fetch"  # custom provider callable
 
 # Simple form — plain URL, sends full context JSON via POST
 webhooks:

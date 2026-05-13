@@ -174,7 +174,7 @@ def parse(
         aggressive_max_patches=validated.agent.aggressive_max_patches,
         provider=validated.agent.provider,
         base_url=validated.agent.base_url,
-        ollama_options=validated.agent.ollama_options,
+        provider_options=validated.agent.provider_options,
         guardrails=GuardrailsConfig(
             forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
             allowed_paths=tuple(validated.agent.guardrails.allowed_paths),

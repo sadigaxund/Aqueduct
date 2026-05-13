@@ -141,6 +141,37 @@ This section tracks high-level functional verification of core features against 
 
 ---
 
+### Phase 26b — Secrets Provider Backends
+
+#### `secrets.py` — `resolve_secret()`
+- ⏳ `provider: env`: returns `os.environ[key]`; raises `SecretsError` when key missing
+- ⏳ `provider: env`: does NOT call boto3/google/azure SDK regardless of installed deps
+- ⏳ `provider: aws`: fetches from Secrets Manager; result injected into `os.environ`; second call returns `os.environ` fast-path (no SDK call)
+- ⏳ `provider: aws`: JSON blob value → unwraps inner key matching secret name suffix
+- ⏳ `provider: aws`: SDK not installed → `SecretsError` containing "boto3"
+- ⏳ `provider: gcp`: short name expanded using `GCP_PROJECT` env var; full resource path assembled
+- ⏳ `provider: gcp`: SDK not installed → `SecretsError` containing "google-cloud-secret-manager"
+- ⏳ `provider: azure`: `AZURE_KEYVAULT_URL` read from env; SDK not installed → `SecretsError` containing "azure-keyvault-secrets"
+- ⏳ `provider: custom`: `resolver` path loaded via importlib; callable signature `(key: str) -> str | None`
+- ⏳ `provider: custom`: callable returns `None` → `SecretsError` raised
+- ⏳ `provider: custom`: bad `resolver` path (module not found) → `SecretsError` with import path in message
+
+#### `doctor.py` — `check_secrets()`
+- ⏳ `provider: env` → always passes (no dep check)
+- ⏳ `provider: aws`, boto3 missing → CheckResult status="error" containing "pip install aqueduct-core[aws]"
+- ⏳ `provider: aws`, boto3 present → CheckResult status="ok"
+- ⏳ `provider: gcp`, SDK missing → error with `[gcp]` install hint
+- ⏳ `provider: azure`, SDK missing → error with `[azure]` install hint
+- ⏳ `provider: custom`, `resolver=None` → error (resolver required for custom provider)
+- ⏳ `provider: custom`, valid resolver → importlib load attempted; ok if callable found
+
+#### `surveyor/llm.py` — `provider_options` dispatch
+- ⏳ `provider_options` with `ollama_num_thread: 8` → `payload["options"]["num_thread"] = 8` (prefix stripped)
+- ⏳ `provider_options` with generic key `temperature: 0.5` → `payload["temperature"] = 0.5`
+- ⏳ mixed `ollama_*` + generic keys → both dispatched correctly; no key collision
+- ⏳ `provider_options: null` → payload unchanged
+- ⏳ old `ollama_options` key rejected at parse time (schema validation error)
+
 ---
 
 ## Executor (`aqueduct/executor/`)

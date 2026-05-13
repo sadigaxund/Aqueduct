@@ -213,21 +213,48 @@ def check_llm(
         return CheckResult("llm", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
 
 
-def check_secrets(provider: str) -> CheckResult:
-    """Report secrets provider status.  Env provider is always available."""
+def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
+    """Report secrets provider status and verify required deps are installed."""
     t = time.monotonic()
     if provider == "env":
-        return CheckResult(
-            "secrets", "ok",
-            "provider=env  (@aq.secret() reads os.environ)",
-            _ms(t),
-        )
-    # Non-env providers are stubs — warn, don't fail
-    return CheckResult(
-        "secrets", "warn",
-        f"provider={provider} not yet implemented — @aq.secret() will fall back to env",
-        _ms(t),
-    )
+        return CheckResult("secrets", "ok", "provider=env  (@aq.secret() reads os.environ)", _ms(t))
+
+    _PROVIDER_DEPS = {
+        "aws":   ("boto3", "pip install aqueduct-core[aws]"),
+        "gcp":   ("google.cloud.secretmanager", "pip install aqueduct-core[gcp]"),
+        "azure": ("azure.keyvault.secrets", "pip install aqueduct-core[azure]"),
+    }
+
+    if provider in _PROVIDER_DEPS:
+        import importlib as _il
+        pkg, install_hint = _PROVIDER_DEPS[provider]
+        try:
+            _il.import_module(pkg)
+            return CheckResult("secrets", "ok", f"provider={provider}  ({pkg} installed)", _ms(t))
+        except ImportError:
+            return CheckResult(
+                "secrets", "error",
+                f"provider={provider} requires {pkg} which is not installed. {install_hint}",
+                _ms(t),
+            )
+
+    if provider == "custom":
+        if not resolver:
+            return CheckResult(
+                "secrets", "error",
+                "provider=custom requires secrets.resolver to be set in aqueduct.yml",
+                _ms(t),
+            )
+        import importlib as _il
+        try:
+            module_path, fn_name = resolver.rsplit(".", 1)
+            mod = _il.import_module(module_path)
+            getattr(mod, fn_name)
+            return CheckResult("secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t))
+        except Exception as exc:
+            return CheckResult("secrets", "error", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
+
+    return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
 
 
 def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
@@ -785,7 +812,7 @@ def run_doctor(
     results.append(check_observability(Path(cfg.stores.obs.path)))
 
     # Secrets
-    results.append(check_secrets(cfg.secrets.provider))
+    results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))
 
     # LLM connectivity
     results.append(check_llm(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
