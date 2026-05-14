@@ -106,6 +106,31 @@ GROUP BY model
 ORDER BY attempts DESC;
 ```
 
+### `patch_simulation`
+
+**Source:** `aqueduct/surveyor/surveyor.py:_DDL` (added Phase 29a). One row per Gate-2 or Gate-3 evaluation — `aqueduct patch preview` and the auto/aggressive self-healing loop both write here.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR PRIMARY KEY | UUID per evaluation |
+| `run_id` | VARCHAR | Failing run that triggered healing (null for direct `patch preview`) |
+| `blueprint_id` | VARCHAR | |
+| `patch_id` | VARCHAR NOT NULL | Matches `patches/applied/{id}.json` |
+| `gate` | VARCHAR NOT NULL | `gate2` (lineage) or `gate3` (sandbox replay) |
+| `status` | VARCHAR NOT NULL | `pass` / `fail` / `warn` / `skip` |
+| `detail` | VARCHAR | Free-text — failing rule, missing column, executor error |
+| `sample_rows` | BIGINT | Per-Ingress LIMIT used by Gate 3 (NULL for Gate 2) |
+| `duration_ms` | BIGINT | Wall-clock for the gate |
+| `recorded_at` | VARCHAR | ISO-8601 UTC |
+
+```sql
+-- Were recent patches blocked by Gate 3 sandboxes?
+SELECT patch_id, status, detail, recorded_at
+FROM patch_simulation
+WHERE gate = 'gate3' AND status = 'fail'
+ORDER BY recorded_at DESC LIMIT 20;
+```
+
 ### `signal_overrides`
 
 **Source:** `aqueduct/surveyor/surveyor.py:77` — written by `aqueduct signal <signal_id> --value ...`. Persistent across runs until explicitly cleared.

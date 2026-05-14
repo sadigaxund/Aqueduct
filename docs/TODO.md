@@ -38,37 +38,9 @@ however we have a python module with that name, I very much liked something simi
 22. a kind of UDF, that is specifically designed for aqueduct syntax. In other words, a possibility of passing its parameter through context, config entries or even at udf_registry level. Allows adjustability of a UDF to multiple different blueprints and environments if need be, also would look cool when frontend can render such module.
 
 23. verify this from readme: 'aqueduct init --name my-pipeline' does it take name flag, what for?
-24. see if obs logs are written directly into '.aqueduct/' or '.aqueduct/<BLUEPRINT_ID>'
 25. maybe rename '- llm' to either '- agent' or '- healing' within doctor command.
-26. do we have test that checks obs, lineage and depot are working as expected?
 
 
-
-HOST_IP=10.0.0.39 MINIO_SECRET_KEY=minioadmin MINIO_ACCESS_KEY=minioadmin aqueduct doctor
-Running connectivity checks (Spark may take 10–15s for JVM startup)...
-:: loading settings :: url = jar:file:/home/sakhund/.local/lib/python3.14/site-packages/pyspark/jars/ivy-2.5.1.jar!/org/apache/ivy/core/settings/ivysettings.xml
-✓ configaqueduct.yml (CWD) or defaultsengine=sparktarget=local[1ms]
-Traceback (most recent call last):
-File "/home/sakhund/.local/bin/aqueduct", line 6, in <module>
-sys.exit(cli())
- ~~~^^
-File "/usr/lib/python3.14/site-packages/click/core.py", line 1514, in __call__
-return self.main(*args, **kwargs)
- ~~~~~~~~~^^^^^^^^^^^^^^^^^
-File "/usr/lib/python3.14/site-packages/click/core.py", line 1435, in main
-rv = self.invoke(ctx)
-File "/usr/lib/python3.14/site-packages/click/core.py", line 1902, in invoke
-return _process_result(sub_ctx.command.invoke(sub_ctx))
- ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
-File "/usr/lib/python3.14/site-packages/click/core.py", line 1298, in invoke
-return ctx.invoke(self.callback, **ctx.params)
- ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-File "/usr/lib/python3.14/site-packages/click/core.py", line 853, in invoke
-return callback(*args, **kwargs)
-File "/home/sakhund/Personal/Projects/Aqueduct/aqueduct/cli.py", line 312, in doctor
-icon = _STATUS_ICON[r.status]
- ~~~~~~~~~~~~^^^^^^^^^^
-KeyError: 'error'
 
 
 

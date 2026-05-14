@@ -400,6 +400,24 @@ agent:
   #   All column names follow snake_case convention.
   #   Never reference local filesystem paths in config.path values.
 
+  # ── Patch validation pyramid (Phase 29a) ───────────────────────────────────
+  # patch_validation controls how rigorously auto/aggressive validates a
+  # generated patch before writing it to the Blueprint on disk:
+  #
+  #   full_run (default, safest)
+  #     Gate 2 (live sqlglot lineage diff) + Gate 3 (sandbox replay against
+  #     `--sample 1000` rows with Egress skipped) + full Spark run against the
+  #     real Blueprint. Patch is written only when the full run succeeds.
+  #
+  #   sandbox
+  #     Gate 2 + Gate 3 only. Patch is written on sandbox pass without paying
+  #     for a full real-data run. Fast unattended healing loop; lower
+  #     confidence that the patch holds at production scale. Use only on
+  #     pipelines whose data shape is well represented by the first 1000 rows.
+  #
+  # Per-blueprint override available via the Blueprint agent: block.
+  # patch_validation: full_run
+
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
   # Surveyor counts rows written to obs.db `healing_outcomes` within the last
   # 60 minutes for the running blueprint. When the count is reached, the next

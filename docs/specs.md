@@ -1494,6 +1494,7 @@ All connection fields in the Blueprint `agent:` block override the engine defaul
 | `on_heal_failure` | — (blueprint-only) | `stage` \| `discard` \| `abort` — what to do when patch fails to fix pipeline (default `stage`) |
 | `prompt_context` | `agent.prompt_context` | Extra text appended to LLM system prompt (blueprint appended after engine) |
 | `max_heal_attempts_per_hour` | `agent.max_heal_attempts_per_hour` | Spend-cap. When set (integer ≥ 0), the Surveyor counts rows in `healing_outcomes` within the last 60 minutes for this blueprint and skips the next LLM HTTP call once the count is reached. Default `null` = unlimited. Per-blueprint override wins when both are set. |
+| `patch_validation` | `agent.patch_validation` | Phase 29a — validation level for auto / aggressive. `full_run` (default): Gate 2 (lineage) + Gate 3 (sandbox replay) + full Spark run; Blueprint written only if the full run succeeds. `sandbox`: Gate 2 + Gate 3 only; Blueprint written on sandbox pass without a full run. Blueprint value wins over the engine default. |
 
 Blueprint values win on conflict. `null` (unset) means inherit from engine.
 
@@ -1770,6 +1771,7 @@ agent:
   prompt_context: |                # optional: appended to LLM system prompt for all blueprints
     This cluster runs Databricks. All paths use s3a:// or dbfs://.
   aggressive_max_patches: 5
+  # patch_validation: full_run     # full_run (default) | sandbox — see §8.7 / Phase 29a
   # max_heal_attempts_per_hour: 10 # optional spend-cap; counts rows in healing_outcomes
                                    # within last 60 minutes per blueprint. Default null = unlimited.
                                    # Per-blueprint override available via Blueprint agent: block.

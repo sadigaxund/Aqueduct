@@ -72,6 +72,19 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     run_success_after_patch BOOLEAN,
     applied_at   VARCHAR
 );
+
+CREATE TABLE IF NOT EXISTS patch_simulation (
+    id           VARCHAR PRIMARY KEY,
+    run_id       VARCHAR,
+    blueprint_id VARCHAR,
+    patch_id     VARCHAR NOT NULL,
+    gate         VARCHAR NOT NULL,
+    status       VARCHAR NOT NULL,
+    detail       VARCHAR,
+    sample_rows  BIGINT,
+    duration_ms  BIGINT,
+    recorded_at  VARCHAR NOT NULL
+);
 """
 
 _SIGNAL_OVERRIDES_DDL = """
@@ -371,6 +384,61 @@ class Surveyor:
                     str(_uuid.uuid4()),
                     run_id, failed_module, failure_category, model, patch_id, confidence,
                     patch_applied, run_success_after_patch,
+                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                ],
+            )
+
+    def record_patch_simulation(
+        self,
+        *,
+        patch_id: str,
+        gate: str,
+        status: str,
+        detail: str | None = None,
+        sample_rows: int | None = None,
+        duration_ms: int | None = None,
+        run_id: str | None = None,
+        blueprint_id: str | None = None,
+    ) -> None:
+        """Append one row to `obs.patch_simulation`.
+
+        Called by Phase 29a `aqueduct patch preview` and by the auto/aggressive
+        self-healing loop after each Gate 2 (lineage diff) and Gate 3 (sandbox
+        replay) evaluation. The table is the audit trail for "why we accepted
+        or rejected this patch without running the full pipeline."
+
+        Args:
+            patch_id:     PatchSpec identifier — matches `patches/applied/{id}.json`.
+            gate:         `"gate2"` (lineage) or `"gate3"` (sandbox replay).
+            status:       `"pass"` | `"fail"` | `"warn"` | `"skip"`.
+            detail:       Free-text reason — failing rule, missing column, etc.
+            sample_rows:  Rows processed in the sandbox replay (NULL for gate2).
+            duration_ms:  Wall-clock for the gate evaluation.
+            run_id:       Originating failed run if invoked from the healing loop.
+            blueprint_id: Blueprint identifier; defaults to the Surveyor's manifest id.
+        """
+        if self._obs is None:
+            return
+        import datetime as _dt
+        import uuid as _uuid
+        with self._obs.connect() as cur:
+            cur.execute(
+                """
+                INSERT INTO patch_simulation
+                  (id, run_id, blueprint_id, patch_id, gate, status, detail,
+                   sample_rows, duration_ms, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    str(_uuid.uuid4()),
+                    run_id,
+                    blueprint_id or getattr(self._manifest, "blueprint_id", None),
+                    patch_id,
+                    gate,
+                    status,
+                    detail,
+                    sample_rows,
+                    duration_ms,
                     _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 ],
             )

@@ -115,6 +115,7 @@ All `patch` commands derive the `patches/` root by walking up from the blueprint
 |---|---|
 | `aqueduct patch list` | Show pending patches (walk-up from CWD) |
 | `aqueduct patch list --status all` | Show pending + applied + rejected |
+| `aqueduct patch preview <file> --blueprint <path>` | Phase 29a — render unified diff + Gate 2 lineage impact. Add `--sandbox` to also run Gate 3 sandbox replay (`--sample N`, default 1000; `--sample 0` = unbounded). `--format json` for machine-readable report. |
 | `aqueduct patch apply <file> --blueprint <path>` | Validate and apply patch to Blueprint; archive to `applied/` |
 | `aqueduct patch reject <file\|slug> --reason <text>` | Move patch to `rejected/`; record reason |
 | `aqueduct patch commit --blueprint <path>` | `git add` + `git commit` for all applied patches since last commit |

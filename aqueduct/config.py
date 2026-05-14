@@ -251,6 +251,16 @@ class AgentConnectionConfig(BaseModel):
             "None (unlimited). Per-blueprint override: agent.max_heal_attempts_per_hour."
         ),
     )
+    patch_validation: Literal["full_run", "sandbox"] = Field(
+        default="full_run",
+        description=(
+            "Phase 29a — engine-wide validation level for LLM-generated patches in "
+            "auto/aggressive modes. `full_run` (default, safest): sandbox replay "
+            "first, then a real Spark run against the patched Blueprint, write "
+            "only if both pass. `sandbox`: sandbox replay only; write on sandbox "
+            "pass. Per-blueprint override: agent.patch_validation."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):

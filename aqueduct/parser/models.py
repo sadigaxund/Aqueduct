@@ -62,6 +62,10 @@ class AgentConfig:
     # Spend-cap: max LLM healing attempts per rolling 60-minute window for this blueprint.
     # None = unlimited. When exceeded, Surveyor blocks the LLM call.
     max_heal_attempts_per_hour: int | None = None
+    # Phase 29a: "full_run" | "sandbox" | None (= inherit from engine default).
+    # Controls whether auto/aggressive validates a generated patch by a full
+    # Spark run after the sandbox replay, or by sandbox replay alone.
+    patch_validation: str | None = None
 
 
 @dataclass(frozen=True)
