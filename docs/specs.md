@@ -2133,16 +2133,18 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 ## **14.1 Deployment Environments**
 
-Aqueduct supports three deployment environments, declared in `aqueduct.yml`:
+Aqueduct supports three deployment environments, declared under the `deployment:` block in `aqueduct.yml`:
 
 ```yaml
-deployment_env: local        # default — relative paths, local Spark, local DuckDB
-# deployment_env: cluster    # Spark standalone / YARN — shared FS, driver is persistent
-# deployment_env: cloud      # K8s / EMR / Dataproc — ephemeral driver, object storage
+deployment:
+  env: local        # default — relative paths, local Spark, local DuckDB
+  # env: cluster    # Spark standalone / YARN — shared FS, driver is persistent
+  # env: cloud      # K8s / EMR / Dataproc — ephemeral driver, object storage
 ```
 
 The value affects:
-- Path validation in `aqueduct doctor` (warns on local paths in `cluster`/`cloud` mode)
+- Path validation in `aqueduct doctor` (errors on relative store paths in `cluster`/`cloud` mode)
+- Path validation in `aqueduct run` (warns on stderr when `env: cluster|cloud` but `store_dir` is not absolute)
 - Self-healing patch lifecycle guidance
 - Observability state persistence guidance
 
@@ -2150,38 +2152,36 @@ The value affects:
 
 ## **14.2 Spark Cluster Configuration**
 
-Aqueduct creates a `SparkSession` on the driver. Cluster connection is fully controlled via environment variables and config — no code changes required.
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
 
-**Environment variables:**
-
-| Variable | Purpose | Example |
-|---|---|---|
-| `AQ_SPARK_MASTER` | Spark master URL | `yarn`, `spark://host:7077`, `k8s://https://...` |
-| `AQ_SPARK_EXECUTOR_CORES` | Cores per executor | `4` |
-| `AQ_SPARK_EXECUTOR_MEMORY` | Memory per executor | `8g` |
-| `AQ_SPARK_DRIVER_MEMORY` | Driver memory | `4g` |
-
-**`aqueduct.yml` Spark config block:**
+**`aqueduct.yml` example:**
 ```yaml
-spark:
-  master: "${AQ_SPARK_MASTER}"
-  config:
-    spark.sql.shuffle.partitions: "200"
-    spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
-    spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+deployment:
+  env: cluster
+  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  master_url: "spark://master:7077"    # consumed by SparkSession.builder.master()
+
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+  spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
 ```
 
-**Running on a cluster:**
+`spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict (per §10.3).
+
+**Environment variable substitution:** any `${VAR}` token inside `aqueduct.yml` is expanded from `os.environ` before YAML parsing (see §10.1), so cluster URLs and credentials can be injected from the surrounding shell or `.env` file:
+
+```yaml
+deployment:
+  master_url: "${SPARK_MASTER_URL:-local[*]}"   # falls back to local if unset
+```
+
+**Running on a cluster — config-driven:**
 ```bash
-# YARN client mode (driver on edge node)
-AQ_SPARK_MASTER=yarn aqueduct run pipeline.yml
-
-# Spark standalone
-AQ_SPARK_MASTER=spark://master:7077 aqueduct run pipeline.yml
-
-# Kubernetes — driver runs as a pod
-AQ_SPARK_MASTER="k8s://https://cluster-endpoint" aqueduct run pipeline.yml
+aqueduct run pipeline.yml --config aqueduct.cluster.yml
 ```
+
+**Running on a cluster — single-flag override:** any field can be overridden by editing `aqueduct.yml`; there is no separate set of `AQ_SPARK_*` environment variables. The supported deployment overrides are the `--config <path>` and `--store-dir <path>` CLI flags.
 
 In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observability state and patch history survive pod restarts.
 
@@ -2221,7 +2221,7 @@ agent:
       - insert_module
 ```
 
-In `cluster` or `cloud` deployment environments, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
+In `cluster` or `cloud` `deployment.env`, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
 ---
 
@@ -2236,11 +2236,20 @@ In `cluster` or `cloud` deployment environments, `aqueduct doctor` warns when a 
 | Spark standalone | Permanent (driver host) | None |
 | Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
 
-**`store_dir` config:**
+**Store paths config:** there is no top-level `store_dir:` field in `aqueduct.yml`. Each store (`obs`, `lineage`, `depot`) has its own path under the `stores:` block. In ephemeral environments, point all three at a persistent mount:
+
 ```yaml
-# aqueduct.yml
-store_dir: "/mnt/aqueduct-state"   # PVC mount in K8s, or shared NFS path
+# aqueduct.yml — persist all observability state on a PVC mount
+stores:
+  obs:
+    path: "/mnt/aqueduct-state/obs.db"
+  lineage:
+    path: "/mnt/aqueduct-state/lineage.db"
+  depot:
+    path: "/mnt/aqueduct-state/depot.db"
 ```
+
+The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
 ---
 
@@ -2400,7 +2409,7 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 Before promoting a Blueprint to production:
 
 - [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
-- [ ] `aqueduct doctor --blueprint pipeline.yml` passes with no errors in `cluster`/`cloud` deployment_env
+- [ ] `aqueduct doctor --blueprint pipeline.yml` passes with no errors when `deployment.env: cluster` or `cloud`
 - [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
 - [ ] `agent.approval_mode: human` or `ci` (not `auto` or `aggressive`)
 - [ ] No `danger.*: true` in production `aqueduct.yml`

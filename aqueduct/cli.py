@@ -190,8 +190,15 @@ def _load_env_file(env_path: "Path") -> int:
     return loaded
 
 
+from aqueduct import __version__ as _aqueduct_version
+
+
 @click.group()
-@click.version_option(package_name="aqueduct")
+@click.version_option(
+    version=_aqueduct_version,
+    prog_name="aqueduct",
+    message="%(prog)s %(version)s",
+)
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool) -> None:
