@@ -155,6 +155,73 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         return None
 
 
+def _run_patch_gates_inline(
+    *,
+    patch,
+    blueprint_path,
+    bundle,
+    surveyor,
+    failed_module,
+    current_run_id: str,
+    blueprint_id: str,
+    sample_rows: int = 1000,
+):
+    """Phase 29a — execute Gate 2 (lineage) and Gate 3 (sandbox) for a generated patch.
+
+    Returns (gate2_result, gate3_result_or_None, gate3_passed). gate3_passed is True
+    when Gate 3 either passes outright or is skipped (Spark unavailable / no patch
+    impact). False only when the sandbox actually surfaced a failing module.
+    """
+    from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
+    from aqueduct.patch.preview import run_gate2_lineage, run_gate3_sandbox
+
+    bp_raw = _yaml_load(blueprint_path)
+    try:
+        bp_after = apply_patch_to_dict(bp_raw, patch)
+    except Exception:
+        return None, None, False
+
+    gate2 = run_gate2_lineage(bp_raw, bp_after, patch)
+    try:
+        surveyor.record_patch_simulation(
+            patch_id=patch.patch_id,
+            gate="gate2",
+            status=gate2.status,
+            detail="; ".join(w.detail for w in gate2.warnings) or None,
+            duration_ms=gate2.duration_ms,
+            run_id=current_run_id,
+            blueprint_id=blueprint_id,
+        )
+    except Exception:
+        pass  # patch_simulation insert must never block the healing loop
+
+    gate3 = run_gate3_sandbox(
+        bp_after,
+        blueprint_path=blueprint_path,
+        patch_id=patch.patch_id,
+        failed_module=failed_module,
+        sample_rows=int(sample_rows),
+        obs_store=bundle.obs,
+        lineage_store=bundle.lineage,
+    )
+    try:
+        surveyor.record_patch_simulation(
+            patch_id=patch.patch_id,
+            gate="gate3",
+            status=gate3.status,
+            detail=gate3.detail,
+            sample_rows=gate3.sample_rows,
+            duration_ms=gate3.duration_ms,
+            run_id=current_run_id,
+            blueprint_id=blueprint_id,
+        )
+    except Exception:
+        pass
+
+    gate3_passed = gate3.status in ("pass", "skip")
+    return gate2, gate3, gate3_passed
+
+
 def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
@@ -1190,6 +1257,53 @@ def run(
                 break
 
             elif effective_mode == "auto":
+                # Phase 29a — Gate 2 (lineage) + Gate 3 (sandbox) pre-filter.
+                _g2, _g3, _g3_passed = _run_patch_gates_inline(
+                    patch=patch,
+                    blueprint_path=Path(blueprint),
+                    bundle=bundle,
+                    surveyor=surveyor,
+                    failed_module=failure_ctx.failed_module,
+                    current_run_id=current_run_id,
+                    blueprint_id=manifest.blueprint_id,
+                )
+                if _g3 is not None and not _g3_passed:
+                    click.echo(
+                        f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=False, run_success_after_patch=False,
+                    )
+                    _stage_failed_patch(
+                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                    )
+                    break
+
+                # Resolve patch_validation (blueprint override → engine default)
+                _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
+
+                if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
+                    # Sandbox-only validation: write the patched Blueprint without
+                    # running the full pipeline. The next regular `aqueduct run`
+                    # will execute it against real data and real Egress sinks.
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    click.echo(
+                        f"  ✓ LLM patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
+                        f"→ {blueprint}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=True, run_success_after_patch=True,
+                    )
+                    break
+
                 new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
                     click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
@@ -1232,6 +1346,46 @@ def run(
                 break
 
             elif effective_mode == "aggressive":
+                # Phase 29a — Gate 2 + Gate 3 pre-filter for aggressive too
+                _g2, _g3, _g3_passed = _run_patch_gates_inline(
+                    patch=patch,
+                    blueprint_path=Path(blueprint),
+                    bundle=bundle,
+                    surveyor=surveyor,
+                    failed_module=failure_ctx.failed_module,
+                    current_run_id=current_run_id,
+                    blueprint_id=manifest.blueprint_id,
+                )
+                if _g3 is not None and not _g3_passed:
+                    click.echo(
+                        f"  ✗ aggressive: sandbox rejected patch — {_g3.detail}",
+                        err=True,
+                    )
+                    last_apply_error = f"Patch {patch.patch_id!r} rejected by sandbox: {_g3.detail}"
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=False, run_success_after_patch=False,
+                    )
+                    continue  # try next patch iteration
+
+                _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
+
+                if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    click.echo(
+                        f"  ✓ aggressive: sandbox-only validated → {blueprint}",
+                        err=True,
+                    )
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=True, run_success_after_patch=True,
+                    )
+                    break
+
                 new_manifest = _apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
                     click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
@@ -1420,6 +1574,188 @@ def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
 @cli.group()
 def patch() -> None:
     """Manage Blueprint patches."""
+
+
+@patch.command("preview")
+@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--blueprint",
+    "blueprint_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML the patch will be applied to.",
+)
+@click.option(
+    "--sandbox",
+    is_flag=True,
+    default=False,
+    help="Also run Gate 3 — replay the patched Blueprint on a sampled DataFrame.",
+)
+@click.option(
+    "--sample",
+    "sample_rows",
+    type=int,
+    default=1000,
+    show_default=True,
+    help="Per-Ingress row limit during Gate 3. 0 = unbounded (full data).",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--format",
+    "out_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Output format. `text` (default) renders diff + Gate findings. `json` emits a machine-readable report.",
+)
+def patch_preview(
+    patch_file: str,
+    blueprint_path: str,
+    sandbox: bool,
+    sample_rows: int,
+    config_path: str | None,
+    out_format: str,
+) -> None:
+    """Validation pyramid preview for a pending patch.
+
+    Always runs Gate 1 (schema + post-apply Parser re-check) and Gate 2
+    (live lineage impact). With `--sandbox`, also runs Gate 3 (replay the
+    patched Blueprint on a per-Ingress LIMIT N, Egress modules skipped and
+    listed in the report).
+    """
+    import json as _json
+    from pathlib import Path as _Path
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.patch.apply import (
+        PatchError,
+        _check_guardrails,
+        _yaml_load,
+        apply_patch_to_dict,
+        load_patch_spec,
+    )
+    from aqueduct.patch.preview import (
+        render_unified_diff,
+        run_gate2_lineage,
+        run_gate3_sandbox,
+    )
+
+    bp_raw = _yaml_load(_Path(blueprint_path))
+    try:
+        spec = load_patch_spec(_Path(patch_file))
+    except PatchError as exc:
+        click.echo(f"✗ patch schema error: {exc}", err=True)
+        sys.exit(2)
+
+    # Gate 1 — guardrails (deterministic). Identical enforcement used by
+    # `patch apply`; surfaced here so reviewers see violations up front.
+    try:
+        _check_guardrails(spec, bp_raw, provenance_map=None)
+    except PatchError as exc:
+        click.echo(f"✗ Gate 1 (guardrails) blocked: {exc}", err=True)
+        sys.exit(2)
+
+    try:
+        bp_after = apply_patch_to_dict(bp_raw, spec)
+    except PatchError as exc:
+        click.echo(f"✗ patch could not be applied in memory: {exc}", err=True)
+        sys.exit(2)
+
+    diff = render_unified_diff(bp_raw, bp_after)
+    gate2 = run_gate2_lineage(bp_raw, bp_after, spec)
+
+    gate3 = None
+    if sandbox:
+        cfg = None
+        try:
+            cfg = load_config(_Path(config_path) if config_path else None)
+        except ConfigError as exc:
+            click.echo(f"✗ config error (needed for sandbox): {exc}", err=True)
+            sys.exit(1)
+        from aqueduct.stores import get_stores
+        bundle = get_stores(cfg)
+        failed_module = None
+        # patch_id is used both for run-tagging and tempfile naming
+        gate3 = run_gate3_sandbox(
+            bp_after,
+            blueprint_path=_Path(blueprint_path),
+            patch_id=spec.patch_id,
+            failed_module=failed_module,
+            sample_rows=int(sample_rows),
+            obs_store=bundle.obs,
+            lineage_store=bundle.lineage,
+        )
+
+    if out_format.lower() == "json":
+        report = {
+            "patch_id": spec.patch_id,
+            "blueprint_path": str(blueprint_path),
+            "diff": diff,
+            "gate2": {
+                "status": gate2.status,
+                "touched_modules": gate2.touched_modules,
+                "warnings": [w.__dict__ for w in gate2.warnings],
+                "duration_ms": gate2.duration_ms,
+            },
+        }
+        if gate3 is not None:
+            report["gate3"] = {
+                "status": gate3.status,
+                "detail": gate3.detail,
+                "sample_rows": gate3.sample_rows,
+                "duration_ms": gate3.duration_ms,
+                "egress_targets": gate3.egress_targets,
+            }
+        click.echo(_json.dumps(report, indent=2))
+        sys.exit(0 if gate2.status != "fail" and (gate3 is None or gate3.status == "pass" or gate3.status == "skip") else 2)
+
+    # Text report
+    click.echo(f"Patch {spec.patch_id}")
+    click.echo(f"  rationale: {spec.rationale}")
+    if spec.confidence is not None:
+        click.echo(f"  confidence: {spec.confidence:.0%}")
+    click.echo()
+    click.echo("── Blueprint diff ────────────────────────────────────────────")
+    click.echo(diff if diff.strip() else "  (no textual change)")
+
+    click.echo()
+    click.echo("── Gate 2: lineage impact (live sqlglot) ─────────────────────")
+    click.echo(f"  status:          {gate2.status}")
+    click.echo(f"  touched modules: {', '.join(gate2.touched_modules) or '(none)'}")
+    if gate2.warnings:
+        for w in gate2.warnings:
+            click.echo(f"  ⚠ {w.detail}")
+    else:
+        click.echo("  no downstream column-consumption regressions detected")
+    click.echo(f"  duration:        {gate2.duration_ms} ms")
+
+    if gate3 is not None:
+        click.echo()
+        click.echo("── Gate 3: sandbox replay ────────────────────────────────────")
+        click.echo(f"  status:      {gate3.status}")
+        click.echo(f"  detail:      {gate3.detail}")
+        if gate3.sample_rows is not None:
+            click.echo(f"  sample_rows: {gate3.sample_rows}")
+        click.echo(f"  duration:    {gate3.duration_ms} ms")
+        if gate3.egress_targets:
+            click.echo("  Egress operations (sandbox skipped):")
+            for t in gate3.egress_targets:
+                click.echo(
+                    f"    {t.get('id')}  → {t.get('format')}  {t.get('path')}"
+                    + (f"  (mode={t.get('mode')})" if t.get("mode") else "")
+                )
+
+    exit_code = 0
+    if gate2.status == "fail":
+        exit_code = 2
+    if gate3 is not None and gate3.status == "fail":
+        exit_code = 2
+    sys.exit(exit_code)
 
 
 @patch.command("apply")
@@ -2976,14 +3312,13 @@ def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:
 
 
 @cli.command("init")
-@click.option("--name", default=None, help="Project name (defaults to current directory name)")
-def init(name: str | None) -> None:
+def init() -> None:
     """Scaffold a new Aqueduct project in the current directory."""
     import importlib.resources
     import subprocess
 
     cwd = Path.cwd()
-    project_name = name or cwd.name
+    project_name = cwd.name
 
     created: list[str] = []
     skipped: list[str] = []

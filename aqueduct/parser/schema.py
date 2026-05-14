@@ -77,6 +77,12 @@ class AgentSchema(BaseModel):
     # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.
     # None (default) = unlimited. When exceeded, Surveyor records skip outcome and run ends.
     max_heal_attempts_per_hour: int | None = None
+    # Phase 29a — patch validation pyramid. Default `full_run` keeps existing
+    # behaviour: a generated patch is sandbox-checked AND then validated by a
+    # full Spark run before the Blueprint is written to disk. `sandbox` skips
+    # the full-run step — fastest, lowest confidence, lets aggressive mode
+    # close patch loops in seconds rather than minutes.
+    patch_validation: Literal["full_run", "sandbox"] | None = None
 
 
 class ModuleSchema(BaseModel):

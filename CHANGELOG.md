@@ -4,6 +4,63 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 29a — Patch Validation Pyramid (Gates 2 & 3)
+_2026-05-14_
+
+Catch broken patches before they touch real data. Builds two new gates on top
+of the existing patch lifecycle (Gate 1 schema + post-apply Parser re-check,
+plus the deterministic guardrails from Audit Batch 1).
+
+- **`aqueduct patch preview <file> --blueprint <bp>`:** unified diff of the
+  Blueprint YAML + Gate 1 (guardrails re-check) + Gate 2 (live sqlglot
+  lineage impact). With `--sandbox`, also runs Gate 3 (compile patched
+  manifest, drop all Egress modules, inject per-Ingress `LIMIT N`, replay
+  through the real executor). `--sample N` controls the limit; `--sample 0`
+  = unbounded. `--format json` for machine-readable output.
+
+- **Gate 2 — live lineage impact** (`aqueduct/patch/preview.py`): re-runs
+  `sqlglot._extract_sql_lineage` over the patched Blueprint, compares output
+  columns of touched modules against the pre-patch downstream consumers, and
+  surfaces missing-column warnings. No dependency on a prior successful run
+  — works on brand-new pipelines.
+
+- **Gate 3 — sandbox replay**: compiles the patched Blueprint, captures and
+  drops every Egress, optionally rewrites Ingress configs with a new
+  `sandbox_limit` marker (consumed by `aqueduct/executor/spark/ingress.py`).
+  Real SparkSession; real lazy plan; no sinks written. Egress targets are
+  surfaced in the report so reviewers see exactly which writes were skipped.
+
+- **`agent.patch_validation` config knob** (engine + per-blueprint):
+  `full_run` (default) keeps the existing behaviour — Gate 2 + Gate 3 +
+  full Spark run, Blueprint written only on full-run success. `sandbox`
+  short-circuits the full run when Gate 3 passes; Blueprint is written
+  immediately. Lets `aggressive` mode close patch loops in seconds rather
+  than minutes when the operator accepts sample-based confidence.
+
+- **Auto/aggressive integration**: both modes run Gate 2 + Gate 3 as a
+  pre-filter before the in-memory full re-run. A sandbox failure stages the
+  patch for human review (auto) or kicks the aggressive loop into a new
+  iteration. `patch_validation: sandbox` makes Gate 3 the only validation
+  step.
+
+- **`obs.patch_simulation` table**: every gate evaluation is appended with
+  patch_id, gate, status, detail, sample_rows, duration_ms — audit trail
+  for "why we accepted/rejected this patch without running the full
+  pipeline." Phase 28 store backends carry it automatically.
+
+- **`ingress.py` `sandbox_limit` hook**: when the executor's Ingress sees
+  this key in the module config, it wraps `reader.load()` in `.limit(N)`.
+  Never set by user-authored Blueprints — only by `run_gate3_sandbox`'s
+  in-memory manifest rewrite.
+
+- **Templates, spec §8.7, CLI_REFERENCE, ALL_TABLES.md** updated with the
+  new `patch_validation` knob and the `patch_simulation` table schema.
+
+Phase 29b (post-patch `explain()` regression check) is **deferred** — see
+`TODOs.md` for scope.
+
+---
+
 ### Phase 28 — Pluggable Store Backends
 _2026-05-14_
 

@@ -95,6 +95,15 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
                 f"[{module.id}] partition_filters {partition_filters!r} is invalid: {exc}"
             ) from exc
 
+    # sandbox_limit — Phase 29a Gate 3 hook. When the patch-preview sandbox
+    # injects this marker into a copy of the manifest, the Ingress wraps its
+    # output in `.limit(N)` so the downstream DAG sees at most N rows. Marker
+    # is never set by user-authored Blueprints; it is consumed only by
+    # `aqueduct.patch.preview.run_gate3_sandbox`.
+    sandbox_limit = cfg.get("sandbox_limit")
+    if isinstance(sandbox_limit, int) and sandbox_limit > 0:
+        df = df.limit(int(sandbox_limit))
+
     # schema_hint check — uses df.schema (metadata only, not an action)
     schema_hint_raw = cfg.get("schema_hint")
     schema_hint_mode = "strict"  # default
