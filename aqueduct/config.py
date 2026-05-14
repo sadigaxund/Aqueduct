@@ -160,7 +160,7 @@ class AgentConnectionConfig(BaseModel):
 
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
-    model: str = "claude-3-5-sonnet-latest"
+    model: str = "claude-sonnet-4-6"
     provider_options: dict[str, Any] | None = None
     llm_timeout: float = Field(
         default=120.0,
@@ -178,6 +178,15 @@ class AgentConnectionConfig(BaseModel):
         default=None,
         description="Webhook URL for approval_mode: ci. POST target for external CI to create PR.",
     )
+    max_heal_attempts_per_hour: int | None = Field(
+        default=None,
+        description=(
+            "Engine-wide spend-cap on LLM self-healing. When set, every blueprint's "
+            "Surveyor counts rows in `healing_outcomes` within the last 60 minutes "
+            "and skips further LLM calls when the count is reached. Defaults to "
+            "None (unlimited). Per-blueprint override: agent.max_heal_attempts_per_hour."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):
@@ -194,7 +203,8 @@ class WebhookEndpointConfig(BaseModel):
       ${error_message}   Error description string
       ${error_type}      Exception class name
       ${started_at}      ISO-8601 run start timestamp
-      ${attempt}         Attempt number (1-based)
+      ${attempt}         Number of failed modules in this run (on_failure scope).
+                         The naming is historical — it is not a retry counter.
 
     In header values, ${VAR} resolves to os.environ[VAR] as a fallback.
     """

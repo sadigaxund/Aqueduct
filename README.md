@@ -7,6 +7,16 @@
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
+> ### ⚠ The LLM can edit your Blueprints
+>
+> Self-healing is opt-in. The agent only modifies your Blueprint file when `agent.approval_mode` is set to `auto` or `aggressive`. **The default is `disabled`** — no LLM call, no Blueprint mutation, no Spark hidden cost.
+>
+> For production, prefer:
+> - `human` — patch is staged to `patches/pending/` for an engineer to apply via `aqueduct patch apply`.
+> - `ci` — patch is `POST`ed to a configured webhook (`agent.ci_webhook_url`) so your CI system can open a PR.
+>
+> `aggressive` mode additionally requires `danger.allow_aggressive_patching: true` in `aqueduct.yml`. Patches always pass through deterministic guardrails (`agent.guardrails.allowed_paths`, `forbidden_ops`, `heal_on_errors`, `never_heal_errors`) — the LLM cannot bypass them by hallucination, because enforcement happens at patch-apply time in code, not at prompt time.
+
 ---
 
 ## Documentation
@@ -16,6 +26,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 | [Blueprint & Engine Spec](docs/specs.md) | Full specification — module types, config fields, compiler, executor, LLM agent, patch grammar |
 | [Spark Guide](docs/SPARK_GUIDE.md) | Compiler warnings, probe cost model, contributor rules, resource tuning, S3A committers, AQE |
 | [CLI Reference](docs/CLI_REFERENCE.md) | All commands, flags, exit codes, `aqueduct run` / `patch` / `doctor` / `heal` reference |
+| [All Tables Reference](docs/ALL_TABLES.md) | Schema + example queries for every DuckDB table Aqueduct writes (obs.db, lineage.db, depot.db) |
 
 ---
 
@@ -25,7 +36,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 - **Any Spark Connector** - Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
 - **Self-Contained Failure Context** - Every failure ships a complete `FailureContext` JSON: failed module config, upstream lineage, Probe signals, retry history, and provenance metadata (where each value came from in the Blueprint). The LLM, or you, can diagnose without touching logs.
 - **Patch Grammar, Not Codegen** - The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
-- **Zero-Cost Observability** - Probes capture schema snapshots, null rates, value distributions, distinct counts, freshness, and sample rows using lazy Spark operations and sampling. No full scans in production mode (`block_full_actions_in_prod`).
+- **Zero-Cost Observability** - Probes capture schema snapshots, null rates, value distributions, distinct counts, freshness, and sample rows using lazy Spark operations and sampling. Costly sample-scan signals are gated behind `danger.allow_full_probe_actions` (default `false`) so production runs are zero-extra-action by default.
 - **Inline Data Quality Gates** - `Assert` modules enforce schema, row counts, null rates, freshness, and custom SQL rules inline. Failing rows route to a spillway; the pipeline aborts, warns, fires a webhook, or triggers the LLM agent based on per-rule configuration.
 - **Spillway Error Routing** - Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
 - **Depot KV Store** - Cross-run pipeline state backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress. Powers `materialize: incremental` on Channels - watermark-based incremental reads without a streaming engine.
@@ -566,6 +577,21 @@ aqueduct runs --failed --last 10     # last 10 failed runs
 aqueduct report <run_id>             # detailed flow report
 aqueduct lineage <blueprint_id>      # column lineage graph
 ```
+
+---
+
+## Scope — What Aqueduct Is and Is Not
+
+| What it is | What it isn't (use these instead) |
+|---|---|
+| A **batch processing engine** for Apache Spark — each run is finite, starts, processes a bounded dataset, completes. | Streaming (Spark Structured Streaming / Kafka) — deferred to spec v1.1; use Spark Structured Streaming or Flink directly. |
+| A **declarative control plane** — engineers describe *what*, not *how* Spark executes. | A visual graph editor / drag-and-drop UI — Blueprint YAML is the source of truth. A UI would be a separate product layer. |
+| A **data preparation layer** producing validated DataFrames in storage. | An ML training orchestrator — use MLflow Pipelines, Vertex AI Pipelines, or Kubeflow. Aqueduct prepares the data they consume. |
+| An **LLM-integrated operations tool** — self-healing, patch lifecycle, FailureContext, deterministic guardrails. | An LLM autonomous infrastructure agent — Aqueduct's LLM scope is bounded to PatchSpec operations on the Blueprint. It cannot run shell, modify infra, or call arbitrary APIs. |
+| A **CLI invoked by an orchestrator** (cron, Airflow, Prefect, Dagster, K8s CronJob). | A scheduler — `aqueduct run` is a one-shot command, not a daemon. |
+| A **Spark execution engine** (Flink is a stub for v1.1). | A multi-engine federated query layer — use Trino / Starburst / Athena for that. |
+
+See [§13 of the spec](docs/specs.md) for the full scope statement and roadmap (Flink, MLOps inference op, MCP server, multi-pipeline orchestration).
 
 ---
 
