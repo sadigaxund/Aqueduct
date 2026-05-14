@@ -22,7 +22,7 @@ Spark artifacts are isolated to `/tmp/`:
 
 ---
 
-## Engine Feature Sanity (Audit)
+## Engine Feature Sanity 
 This section tracks high-level functional verification of core features against the Technical Specifications.
 
 ### Phase A: Core Engine (Structure & Data Flow)
@@ -924,6 +924,13 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ patch `set_module_config_key` with `key=path`, value matching an `allowed_paths` pattern → no violation
 - ✅ patch `set_module_config_key` with `key=path`, value NOT matching any `allowed_paths` → `PatchError` raised
 - ✅ patch with non-path key (e.g. `key=format`) → no path violation even if `allowed_paths` set
+- ⏳ patch `replace_module_config` with `config.path` matching `allowed_paths` → no violation. closes the bypass where full-config replacements were unchecked.
+- ⏳ patch `replace_module_config` with `config.path` NOT matching `allowed_paths` → `PatchError` raised
+- ⏳ patch `replace_module_config` with `config.output_path` NOT matching → `PatchError` raised
+- ⏳ patch `insert_module` whose `module.config.path` does not match → `PatchError` raised (inserted module would write outside allowlist)
+- ⏳ patch `add_probe` whose `module.config.path` does not match → `PatchError` raised
+- ⏳ patch `add_arcade_ref` whose `module.config.output_path` does not match → `PatchError` raised
+- ⏳ patch `set_module_config_key` with `module_id` containing `__` (arcade-expanded) → guardrail skipped, apply step raises clearer "Module not found" error. Confirms the carve-out remains.
 - ✅ no `agent.guardrails` in Blueprint → unrestricted (no error)
 - ✅ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
 - ✅ `GuardrailsConfig` round-trips through schema → parser → model (empty defaults)
@@ -1528,6 +1535,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `compile()`: path does not exist (OSError) → fingerprint entry has `size_bytes=None`
 - ✅ `compile()`: non-Ingress modules not in `inputs_fingerprint`
 - ✅ `Manifest.to_dict()` includes `inputs_fingerprint` key
+- ⏳ `compile()`: Arcade-expanded Ingress (sub-blueprint Ingress namespaced as `{arcade_id}__{child_id}`) with a local path → fingerprint entry exists keyed by the expanded ID with stat fields populated. confirms `inputs_fingerprint` walks the post-expansion module list, not pre-expansion.
+- ⏳ `compile()`: Arcade-expanded Ingress with remote path → fingerprint entry exists keyed by expanded ID with `size_bytes=None`, `last_modified=None`. Mirrors the top-level remote-path case.
 
 ## Phase 23C — Incremental Channel
 
@@ -1606,3 +1615,54 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `partition_filters` with invalid SQL expr → `IngressError` raised with filter expression in message
 - ✅ `partition_filters` applied before `schema_hint` check (filter does not affect schema metadata)
 - ✅ `partition_filters` on JDBC Ingress (no path) → `.where()` applied after `reader.load()` (no path arg)
+
+---
+
+### `MetricsConfig.use_observe` — `aqueduct/config.py` + `aqueduct/executor/spark/metrics.py`
+
+- ⏳ `MetricsConfig` parses `use_observe: true` and `use_observe: false` without error
+- ⏳ `MetricsConfig` rejects extra keys (e.g. `use_observe: true` plus `unknown: 1` → `extra="forbid"` raises `ValidationError`)
+- ⏳ `observe_df(df, name, alias, enabled=False)` returns `(df, None)` without inserting an `Observation` node — verifiable via `df.explain()` not containing `CollectMetrics`
+- ⏳ `observe_df(df, name, alias, enabled=True)` returns a wrapped df with a usable `Observation` (Spark 3.3+)
+- ⏳ `execute(use_observe=False)` path completes a full Ingress→Channel→Egress run; resulting `module_metrics.records_written` is `NULL` (not collected) but the pipeline succeeds
+- ⏳ `cli.py:run` reads `cfg.metrics.use_observe` and forwards it to `execute()`; default `true` reproduces pre-audit behaviour
+
+### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
+
+- ⏳ `aqueduct --version` exits 0 and prints `aqueduct <version>` with the version sourced from `importlib.metadata.version("aqueduct-core")`
+- ⏳ `aqueduct.__version__` falls back to `"0.0.0+unknown"` when `importlib.metadata.version("aqueduct-core")` raises `PackageNotFoundError` (simulate with monkeypatch)
+- ⏳ `aqueduct --help` lists `--version` in its options block
+
+### `DeploymentConfig` Literal validation — `aqueduct/config.py`
+
+- ⏳ `DeploymentConfig(target="local")` accepts every documented value (`local`, `standalone`, `yarn`, `kubernetes`, `databricks`, `emr`, `dataproc`)
+- ⏳ `DeploymentConfig(target="bogus")` raises `pydantic.ValidationError` mentioning the full list of accepted literals
+- ⏳ `DeploymentConfig(engine="spark")` and `DeploymentConfig(engine="flink")` both validate; `engine="duckdb"` raises `ValidationError`
+- ⏳ `load_config(path)` propagates the Literal validation error wrapped in `ConfigError` with the user-friendly formatter
+
+### `[secrets]` extra + early SDK check — `pyproject.toml` + `aqueduct/config.py`
+
+- ⏳ `pyproject.toml` exposes `secrets` extra that aggregates `aws`, `gcp`, `azure`
+- ⏳ `pyproject.toml`: `all` extra pulls in `spark` and `secrets`
+- ⏳ `load_config()` with `secrets.provider=env` does not import any cloud SDK
+- ⏳ `load_config()` with `secrets.provider=aws` and `boto3` importable → returns `AqueductConfig` without error
+- ⏳ `load_config()` with `secrets.provider=aws` and `boto3` NOT importable (monkeypatch `importlib.util.find_spec` to return None) → raises `ConfigError` containing both `pip install aqueduct-core[aws]` and `pip install aqueduct-core[secrets]`
+- ⏳ Same as above for `provider=gcp` and `provider=azure`
+- ⏳ `load_config()` with `secrets.provider=custom` does not run the SDK check (no `ConfigError` even when no SDK is present)
+- ⏳ `aqueduct doctor:check_secrets` still produces a structured `CheckResult` for the same misconfiguration (does not break when `load_config` already raised)
+
+### `aqueduct/templates/default/aqueduct.yml.template` — fields documented
+
+- ⏳ Template no longer contains `block_full_actions_in_prod`
+- ⏳ Template contains a commented `metrics:` block describing `use_observe`
+- ⏳ Generating a project via `aqueduct init` produces an `aqueduct.yml` that parses without error against the current `AqueductConfig` schema
+
+### cloudpickle patch fragility (`aqueduct/doctor.py`)
+
+- ⏳ `check_cloudpickle()` on a Python version + pyspark combination where `pyspark.cloudpickle` does not exist (simulate with monkeypatch) → returns `CheckResult(status="skip")` rather than raising
+- ⏳ `check_cloudpickle()` on Python 3.13+ with system `cloudpickle>=3.0` installed → reports `ok` with patched version
+- ⏳ `check_cloudpickle()` on Python 3.13+ with no system `cloudpickle` → reports `warn` with install hint
+
+### doctor `pyspark` import discipline
+
+- ⏳ `import aqueduct.doctor` from a fresh interpreter (no pyspark installed) does NOT raise `ImportError`. Verifies the three pyspark imports remain inside function bodies, not at module top. Regression for the documented "doctor.py is the spark-isolation exception" rule in `CLAUDE.md`.

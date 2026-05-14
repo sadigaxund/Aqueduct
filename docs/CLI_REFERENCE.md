@@ -17,6 +17,8 @@ Global flag: `-v` / `--verbose` — DEBUG logging (LLM responses, SQL plans, res
 | `aqueduct doctor` | End-to-end probe: config, stores, LLM reachability, Spark version, blueprint sources |
 | `aqueduct doctor --skip-spark` | Skip JVM startup — fast CI health check |
 | `aqueduct doctor --blueprint <path>` | Also checks Ingress/Egress paths and format/extension mismatches |
+| `aqueduct doctor --aqtest <path>` | Schema pre-flight on a `.aqtest.yml` file (blueprint ref + module IDs) |
+| `aqueduct doctor --aqscenario <path>` | Schema pre-flight on a `.aqscenario.yml` file (blueprint ref + `inject_failure.module`) |
 
 ---
 
@@ -26,6 +28,7 @@ Global flag: `-v` / `--verbose` — DEBUG logging (LLM responses, SQL plans, res
 |---|---|
 | `aqueduct validate <blueprint>` | Parse and validate Blueprint YAML only — no Spark |
 | `aqueduct compile <blueprint>` | Output fully-resolved Manifest JSON to stdout |
+| `aqueduct compile <blueprint> --show {manifest\|provenance\|inputs\|all}` | Select which slice of the compiled artefact to emit. Default `manifest` = current JSON output. `provenance` and `inputs` render readable tables for debugging. |
 | `aqueduct run <blueprint>` | Compile and execute the full pipeline |
 | `aqueduct test <file.aqtest.yml>` | Run isolated module tests against inline DataFrames — no Spark I/O |
 
@@ -67,9 +70,9 @@ aqueduct -v run pipeline.yml                                    # verbose
 | `aqueduct runs --last <n>` | Limit to last N runs |
 | `aqueduct report <run_id>` | Flow Report for a completed run |
 | `aqueduct report <run_id> --format json` | Machine-readable output (`table` \| `json` \| `csv`) |
-| `aqueduct lineage <blueprint_id>` | Column-level lineage graph |
-| `aqueduct lineage <id> --from <table>` | Filter lineage to a source table |
-| `aqueduct lineage <id> --column <col>` | Trace a single column |
+| `aqueduct lineage <blueprint>` | Column-level lineage graph. `<blueprint>` is the Blueprint **file path** (not a bare ID) — `aqueduct lineage` looks up the blueprint_id from the parsed file. |
+| `aqueduct lineage <blueprint> --from <table>` | Filter lineage to a source table |
+| `aqueduct lineage <blueprint> --column <col>` | Trace a single column |
 | `aqueduct signal <signal_id>` | Show current gate override status |
 | `aqueduct signal <signal_id> --value false` | Close gate (block downstream) |
 | `aqueduct signal <signal_id> --error "reason"` | Close gate with reason string |
@@ -144,8 +147,10 @@ All `patch` commands derive the `patches/` root by walking up from the blueprint
 | Lineage | `lineage.db` accessible |
 | LLM reachability | HTTP GET to configured `base_url` succeeds |
 | Spark version | JVM starts; PySpark version reported |
-| Blueprint sources | Ingress/Egress paths exist; format/extension mismatches flagged |
-| Arcade sub-blueprints | Recursive source check with full context injection |
+| Blueprint sources (`--blueprint`) | Ingress/Egress paths exist; format/extension mismatches flagged |
+| Arcade sub-blueprints (`--blueprint`) | Recursive source check with full context injection |
+| `.aqtest.yml` schema (`--aqtest`) | aqueduct_test version, blueprint reference resolves, every test case's `module` exists in the referenced blueprint, assertions declared |
+| `.aqscenario.yml` schema (`--aqscenario`) | aqueduct_scenario version, blueprint reference resolves, `inject_failure.module` names a real module |
 
 ---
 

@@ -256,7 +256,10 @@ def _load_previous_patches(patches_dir: Path, limit: int = _PATCH_HISTORY_MAX) -
                 "ops": [op.get("op", "?") for op in data.get("operations", [])],
             })
         except Exception:
-            pass
+            # Skip unreadable / malformed patch history files — they should not
+            # block prompt construction. Log at DEBUG so `-v` users can diagnose
+            # missing patches in the prompt section.
+            logger.debug("Skipping unreadable patch history file %s", p, exc_info=True)
     return patches
 
 
@@ -443,7 +446,9 @@ def _build_system_prompt(
             if rules_content:
                 ctx_parts.append(rules_content)
         except Exception:
-            pass
+            # rules.md is operator-managed; a read failure must not block the
+            # LLM call. Log at DEBUG for `-v` users.
+            logger.debug("Could not read patches/rules.md at %s", rules_file, exc_info=True)
 
     if ctx_parts:
         custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(ctx_parts)
