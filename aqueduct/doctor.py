@@ -6,6 +6,13 @@ inspect prior results.
 
 Spark check note: SparkSession startup involves JVM initialisation — expect
 5–15 seconds on first run.  Use skip_spark=True to skip in fast CI contexts.
+
+Layer-boundary note: this module is the documented exception to the
+"pyspark is imported only inside aqueduct/executor/spark/" rule. All three
+pyspark imports here (`check_spark`, `check_storage`, `check_cloudpickle`)
+are deferred inside function bodies — top-level `import doctor` does NOT
+pull in pyspark, so the doctor module is safe to import in `--skip-spark`
+contexts and in test environments without the `[spark]` extra installed.
 """
 
 from __future__ import annotations
@@ -750,10 +757,192 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
+def check_aqtest(aqtest_path: Path) -> list[CheckResult]:
+    """Schema pre-flight on a .aqtest.yml file.
+
+    Returns a list of CheckResult: one for the file itself plus one per test case
+    when cross-referencing module IDs against the referenced blueprint. Performs
+    NO Spark execution — that is `aqueduct test`'s job. Doctor's job is to
+    surface bad references and missing modules before the user invokes `test`.
+    """
+    import yaml
+    t = time.monotonic()
+    results: list[CheckResult] = []
+
+    if not aqtest_path.exists():
+        return [CheckResult("aqtest", "fail", f"file not found: {aqtest_path}", _ms(t))]
+
+    try:
+        raw = yaml.safe_load(aqtest_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        return [CheckResult("aqtest", "fail", f"invalid YAML in {aqtest_path}: {exc}", _ms(t))]
+
+    if not isinstance(raw, dict):
+        return [CheckResult("aqtest", "fail", f"{aqtest_path}: top-level must be a YAML mapping", _ms(t))]
+
+    version = raw.get("aqueduct_test")
+    if version not in ("1.0", 1, "1"):
+        return [CheckResult(
+            "aqtest", "fail",
+            f"{aqtest_path}: missing or unsupported aqueduct_test version: {version!r}",
+            _ms(t),
+        )]
+
+    bp_ref = raw.get("blueprint")
+    if not bp_ref:
+        results.append(CheckResult("aqtest", "fail", f"{aqtest_path}: missing 'blueprint' field", _ms(t)))
+        return results
+
+    bp_path = (aqtest_path.parent / bp_ref).resolve()
+    if not bp_path.exists():
+        results.append(CheckResult(
+            "aqtest", "fail",
+            f"{aqtest_path}: blueprint reference {bp_ref!r} does not resolve to an existing file ({bp_path})",
+            _ms(t),
+        ))
+        return results
+
+    tests = raw.get("tests") or []
+    if not tests:
+        results.append(CheckResult("aqtest", "warn", f"{aqtest_path}: no test cases declared", _ms(t)))
+        return results
+
+    # Cross-reference module IDs against the parsed blueprint
+    try:
+        from aqueduct.parser.parser import parse as _parse_bp
+        bp = _parse_bp(str(bp_path))
+        bp_module_ids = {m.id for m in bp.modules}
+    except Exception as exc:
+        results.append(CheckResult(
+            "aqtest", "fail",
+            f"{aqtest_path}: referenced blueprint {bp_path} failed to parse: {exc}",
+            _ms(t),
+        ))
+        return results
+
+    bad_cases: list[str] = []
+    for tc in tests:
+        if not isinstance(tc, dict):
+            bad_cases.append(f"<non-dict test case: {tc!r}>")
+            continue
+        tid = tc.get("id", "<unnamed>")
+        mod = tc.get("module")
+        if not mod:
+            bad_cases.append(f"{tid}: missing 'module'")
+            continue
+        if mod not in bp_module_ids:
+            bad_cases.append(
+                f"{tid}: module={mod!r} not in blueprint "
+                f"(available: {sorted(bp_module_ids)[:5]}{'…' if len(bp_module_ids) > 5 else ''})"
+            )
+        if not tc.get("assertions"):
+            bad_cases.append(f"{tid}: no assertions declared")
+
+    if bad_cases:
+        results.append(CheckResult(
+            "aqtest", "fail",
+            f"{aqtest_path}: {len(bad_cases)} test case issue(s): " + "; ".join(bad_cases),
+            _ms(t),
+        ))
+    else:
+        results.append(CheckResult(
+            "aqtest", "ok",
+            f"{aqtest_path}: {len(tests)} test case(s), blueprint={bp_ref}",
+            _ms(t),
+        ))
+    return results
+
+
+def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
+    """Schema pre-flight on a .aqscenario.yml file.
+
+    Loads via the same parser used by `aqueduct heal --scenario` and
+    `aqueduct benchmark`, then verifies the referenced blueprint exists and
+    that `inject_failure.module` names an actual module in that blueprint.
+    No LLM call is made.
+    """
+    t = time.monotonic()
+    results: list[CheckResult] = []
+
+    if not aqscenario_path.exists():
+        return [CheckResult("aqscenario", "fail", f"file not found: {aqscenario_path}", _ms(t))]
+
+    try:
+        from aqueduct.surveyor.scenario import load_scenario
+        sc = load_scenario(aqscenario_path)
+    except ValueError as exc:
+        return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: {exc}", _ms(t))]
+    except Exception as exc:
+        return [CheckResult("aqscenario", "fail", f"{aqscenario_path}: load failed: {exc}", _ms(t))]
+
+    if not sc.blueprint:
+        results.append(CheckResult(
+            "aqscenario", "fail",
+            f"{aqscenario_path}: missing 'blueprint' reference",
+            _ms(t),
+        ))
+        return results
+
+    bp_path = (aqscenario_path.parent / sc.blueprint).resolve()
+    if not bp_path.exists():
+        results.append(CheckResult(
+            "aqscenario", "fail",
+            f"{aqscenario_path}: blueprint {sc.blueprint!r} does not resolve to an existing file ({bp_path})",
+            _ms(t),
+        ))
+        return results
+
+    inj_module = sc.inject_failure.get("module") if isinstance(sc.inject_failure, dict) else None
+    if not inj_module:
+        results.append(CheckResult(
+            "aqscenario", "fail",
+            f"{aqscenario_path}: inject_failure.module is required",
+            _ms(t),
+        ))
+        return results
+
+    try:
+        from aqueduct.parser.parser import parse as _parse_bp
+        bp = _parse_bp(str(bp_path))
+        bp_module_ids = {m.id for m in bp.modules}
+    except Exception as exc:
+        results.append(CheckResult(
+            "aqscenario", "fail",
+            f"{aqscenario_path}: referenced blueprint {bp_path} failed to parse: {exc}",
+            _ms(t),
+        ))
+        return results
+
+    if inj_module not in bp_module_ids:
+        results.append(CheckResult(
+            "aqscenario", "fail",
+            f"{aqscenario_path}: inject_failure.module={inj_module!r} not in blueprint "
+            f"(available: {sorted(bp_module_ids)[:5]}{'…' if len(bp_module_ids) > 5 else ''})",
+            _ms(t),
+        ))
+        return results
+
+    expected = sc.expected_patch or {}
+    note = ""
+    if isinstance(expected, dict):
+        ops_count = len(expected.get("ops") or [])
+        forbidden = len(expected.get("forbidden_ops") or [])
+        note = f"  expected_ops={ops_count}  forbidden_ops={forbidden}"
+
+    results.append(CheckResult(
+        "aqscenario", "ok",
+        f"{aqscenario_path}: id={sc.id!r}  failed_module={inj_module!r}{note}",
+        _ms(t),
+    ))
+    return results
+
+
 def run_doctor(
     config_path: Path | None = None,
     skip_spark: bool = False,
     blueprint_path: Path | None = None,
+    aqtest_path: Path | None = None,
+    aqscenario_path: Path | None = None,
 ) -> list[CheckResult]:
     """Run all checks and return results in order."""
     from aqueduct.config import load_config, ConfigError
@@ -836,6 +1025,10 @@ def run_doctor(
         results.append(check_storage(cfg.spark_config, spark_ok=False))
         if blueprint_path is not None:
             results.extend(check_blueprint_sources(blueprint_path))
+        if aqtest_path is not None:
+            results.extend(check_aqtest(aqtest_path))
+        if aqscenario_path is not None:
+            results.extend(check_aqscenario(aqscenario_path))
         return results
 
     spark_result, storage_result = check_spark(cfg.deployment.master_url, cfg.spark_config)
@@ -844,5 +1037,9 @@ def run_doctor(
 
     if blueprint_path is not None:
         results.extend(check_blueprint_sources(blueprint_path))
+    if aqtest_path is not None:
+        results.extend(check_aqtest(aqtest_path))
+    if aqscenario_path is not None:
+        results.extend(check_aqscenario(aqscenario_path))
 
     return results

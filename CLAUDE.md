@@ -29,6 +29,8 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 
 When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `pyspark` in `parser`, `compiler`, `surveyor`, `patch`, or `depot`.
 
+**Documented exception:** `aqueduct/doctor.py` lazily imports `pyspark` inside three check functions (`check_spark`, `check_storage`, `check_cloudpickle`). Top-level `import doctor` must never pull `pyspark` — keep these imports inside function bodies so `--skip-spark` and the `[spark]`-less install path stay viable.
+
 When adding an LLM provider: add `_call_<provider>()` in `surveyor/llm.py` using `httpx`. Wire in `_call_llm()` dispatch. No new dep needed.
 
 **Spark behavior reference**: read `docs/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.

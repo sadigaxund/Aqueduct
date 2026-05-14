@@ -4,6 +4,26 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Audit Batch 4 — Doctor per-file flags, compile --show selector, Manifest rationale, cleanup
+_2026-05-14_
+
+- **`aqueduct doctor --aqtest <file>` and `aqueduct doctor --aqscenario <file>`:** schema pre-flight on `.aqtest.yml` and `.aqscenario.yml` files. Validates the file's own schema, resolves the `blueprint:` reference, and cross-checks every `tests[].module` / `inject_failure.module` against the referenced blueprint's module IDs. No Spark or LLM call. Reuses `aqueduct.surveyor.scenario.load_scenario` for the scenario path and a lightweight inline parser for aqtest. Flags are additive: any combination of `--blueprint`, `--aqtest`, `--aqscenario` runs in one doctor pass.
+- **`aqueduct compile --show {manifest,provenance,inputs,all}`:** selectable output for the compile command. `manifest` (default) preserves the original full-JSON behaviour. `provenance` renders the ProvenanceMap as a per-module table (`key | source_type | original_expression | resolved_value`) and a `# Context` section. `inputs` renders the `inputs_fingerprint` as a per-Ingress table (`module_id | path | size | last_modified`). `all` emits the full JSON followed by both tables. Helpful for debugging "where did this resolved path come from?" without grepping a 2 k-line Manifest JSON.
+- **Specs §4.1.1 — "Why a Manifest? Why not run the YAML directly?":** new spec subsection answering a common reviewer question. Tabulates, for each Blueprint construct that needs compile-time resolution (`${ctx.*}`, `@aq.date.*`, `@aq.secret`, `@aq.depot.get`, Arcade refs, macros, passive Regulators, `--execution-date`), why deferred resolution would either break determinism or create a runtime dependency surface that does not belong inside Spark. Also documents that ProvenanceMap and `inputs_fingerprint` exist primarily for the LLM, not the Executor.
+- **CLI_REFERENCE.md** clarified — `aqueduct lineage <blueprint>` argument is the Blueprint **file path**, not a bare ID; added rows for the new `doctor --aqtest`, `doctor --aqscenario`, and `compile --show` flags; extended the doctor check table to cover the two new schema pre-flight checks.
+- **`surveyor/llm.py` silent `except: pass` sites replaced with `logger.debug(..., exc_info=True)`** — patch-history file load and `patches/rules.md` read. Default runs see nothing; `aqueduct -v` users can now diagnose why a prompt section silently dropped a file.
+
+---
+
+### Audit Batch 3 — Layer-boundary docs + missing test inventory
+_2026-05-14_
+
+- **Layer-boundary policy clarified for `aqueduct/doctor.py`:** all three `pyspark` imports in `doctor.py` (`check_spark`, `check_storage`, `check_cloudpickle`) were already inside function bodies — `import aqueduct.doctor` from a pyspark-less interpreter does not raise. The module is now documented as the single intentional exception to the "spark imports stay inside `executor/spark/`" rule, both in `doctor.py`'s module docstring and in `CLAUDE.md`. No runtime behaviour change.
+- **Confirmed `aqueduct doctor` and `aqueduct run` share the same config foundation:** both paths call `aqueduct.config.load_config()`. The early secrets-SDK check added in Audit Batch 2 fires in both, so a misconfigured `secrets.provider` surfaces identically (doctor wraps it in `CheckResult("config", "fail")`, run raises). The existing `doctor:check_secrets` SDK branch is now technically unreachable from `run_doctor` (load_config already raised) but is retained as a defensive check for direct callers.
+- **Test manifest backlog:** `tests/TEST_MANIFEST.md` gained a new "Audit Cleanup — 2026-05-14" section plus `[ ] **NEW**` checkboxes inline next to each pre-existing topic that the audit identified as missing coverage. Covers: guardrail-bypass regressions on `replace_module_config` / `insert_module` / `add_probe` / `add_arcade_ref` (Batch 1 §3.1), arcade-expanded `inputs_fingerprint` (§3.7), `MetricsConfig.use_observe` end-to-end (Batch 1), `aqueduct --version` (Batch 2), `DeploymentConfig` Literal validation (Batch 2), `[secrets]` extra + load-time SDK check (Batch 2), template hygiene, and cloudpickle patch fragility (§3.10). Tests still to be written by the test-generation pass.
+
+---
+
 ### Audit Batch 2 — Config tightening, version flag, secrets packaging, spec sync
 _2026-05-14_
 

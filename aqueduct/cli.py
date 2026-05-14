@@ -285,14 +285,36 @@ def check_config(config_path: str | None) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="Also probe all Ingress/Egress paths and JDBC endpoints declared in this Blueprint.",
 )
-def doctor(config_path: str | None, skip_spark: bool, blueprint_path: str | None) -> None:
+@click.option(
+    "--aqtest",
+    "aqtest_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Schema pre-flight on a .aqtest.yml file (verifies blueprint ref + module IDs).",
+)
+@click.option(
+    "--aqscenario",
+    "aqscenario_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
+)
+def doctor(
+    config_path: str | None,
+    skip_spark: bool,
+    blueprint_path: str | None,
+    aqtest_path: str | None,
+    aqscenario_path: str | None,
+) -> None:
     """Probe all configured resources: config, stores, Spark, webhook, secrets, storage.
 
     Each check is independent. Spark check requires pyspark and may take 10-15s
     for JVM startup. Use --skip-spark to skip it in fast CI contexts.
 
-    With --blueprint: additionally checks all Ingress/Egress sources — local path
-    existence, cloud auth probes, and TCP connectivity for JDBC endpoints.
+    Per-file flags (all additive — pass any combination):
+      --blueprint   Probe Ingress/Egress sources, JDBC endpoints, recurse into Arcades.
+      --aqtest      Schema pre-flight on a .aqtest.yml file (blueprint ref + module IDs).
+      --aqscenario  Schema pre-flight on a .aqscenario.yml file (blueprint ref + inject_failure.module).
 
     Exit codes: 0 = all ok/warn/skip, 1 = any check failed.
     """
@@ -311,6 +333,8 @@ def doctor(config_path: str | None, skip_spark: bool, blueprint_path: str | None
         config_path=Path(config_path) if config_path else None,
         skip_spark=skip_spark,
         blueprint_path=Path(blueprint_path) if blueprint_path else None,
+        aqtest_path=Path(aqtest_path) if aqtest_path else None,
+        aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
     )
 
     col_w = max(len(r.name) for r in results) + 2
@@ -350,8 +374,33 @@ def doctor(config_path: str | None, skip_spark: bool, blueprint_path: str | None
     metavar="YYYY-MM-DD",
     help="Logical execution date for @aq.date.* functions",
 )
-def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ...], execution_date_str: str | None) -> None:
-    """Parse and compile a Blueprint to a fully-resolved Manifest JSON."""
+@click.option(
+    "--show",
+    "show",
+    type=click.Choice(["manifest", "provenance", "inputs", "all"], case_sensitive=False),
+    default="manifest",
+    show_default=True,
+    help=(
+        "Which section of the compiled artefact to emit. "
+        "manifest=full Manifest JSON (current default); provenance=just the "
+        "ProvenanceMap as a readable table; inputs=just the inputs_fingerprint; "
+        "all=the full Manifest plus the rendered provenance + inputs tables."
+    ),
+)
+def compile(
+    blueprint: str,
+    output: str,
+    profile: str | None,
+    ctx: tuple[str, ...],
+    execution_date_str: str | None,
+    show: str,
+) -> None:
+    """Parse and compile a Blueprint to a fully-resolved Manifest JSON.
+
+    Use --show provenance to inspect where every config value came from
+    (literal vs ${ctx.*} vs @aq.* vs arcade context_override) — useful when
+    debugging which Blueprint expression resolved to which runtime value.
+    """
     from pathlib import Path
 
     from aqueduct.compiler.compiler import CompileError
@@ -389,13 +438,117 @@ def compile(blueprint: str, output: str, profile: str | None, ctx: tuple[str, ..
         click.echo(f"✗ {exc}", err=True)
         sys.exit(1)
 
-    manifest_json = json.dumps(manifest.to_dict(), indent=2)
+    rendered = _render_compile_show(manifest, show.lower())
 
     if output == "-":
-        click.echo(manifest_json)
+        click.echo(rendered)
     else:
-        Path(output).write_text(manifest_json, encoding="utf-8")
-        click.echo(f"Manifest written → {output}")
+        Path(output).write_text(rendered, encoding="utf-8")
+        click.echo(f"Compile artefact written → {output}  (--show={show})")
+
+
+def _render_compile_show(manifest: Any, show: str) -> str:
+    """Render the compile output for the chosen --show selector."""
+    manifest_dict = manifest.to_dict()
+
+    if show == "manifest":
+        return json.dumps(manifest_dict, indent=2)
+
+    if show == "inputs":
+        return _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {})
+
+    if show == "provenance":
+        return _format_provenance_table(manifest_dict.get("provenance_map") or {})
+
+    # "all" — full manifest + readable tables appended
+    return "\n".join([
+        json.dumps(manifest_dict, indent=2),
+        "",
+        "── Provenance ────────────────────────────────────────────────────────",
+        _format_provenance_table(manifest_dict.get("provenance_map") or {}),
+        "",
+        "── Inputs fingerprint ────────────────────────────────────────────────",
+        _format_inputs_fingerprint(manifest_dict.get("inputs_fingerprint") or {}),
+    ])
+
+
+def _format_inputs_fingerprint(fingerprint: dict) -> str:
+    """Render inputs_fingerprint as a per-module table."""
+    if not fingerprint:
+        return "(no Ingress modules; inputs_fingerprint is empty)"
+    rows: list[tuple[str, str, str, str]] = []
+    for module_id, entry in fingerprint.items():
+        path = str(entry.get("path") or "")
+        size_b = entry.get("size_bytes")
+        mtime = entry.get("last_modified") or "—"
+        size = f"{size_b:,} B" if isinstance(size_b, int) else "—"
+        rows.append((module_id, path, size, str(mtime)))
+    widths = [max(len(r[c]) for r in rows + [("module_id", "path", "size", "last_modified")]) for c in range(4)]
+    header = (
+        "module_id".ljust(widths[0]) + "  "
+        + "path".ljust(widths[1]) + "  "
+        + "size".ljust(widths[2]) + "  "
+        + "last_modified"
+    )
+    sep = "  ".join("-" * w for w in widths)
+    body = "\n".join(
+        r[0].ljust(widths[0]) + "  "
+        + r[1].ljust(widths[1]) + "  "
+        + r[2].ljust(widths[2]) + "  "
+        + r[3]
+        for r in rows
+    )
+    return "\n".join([header, sep, body])
+
+
+def _format_provenance_table(provenance_map: dict) -> str:
+    """Render ProvenanceMap as a readable per-module / per-context table."""
+    out: list[str] = []
+
+    context_section = provenance_map.get("context") or {}
+    if context_section:
+        out.append("# Context")
+        out.append(_format_provenance_rows(
+            (key, prov) for key, prov in context_section.items()
+        ))
+        out.append("")
+
+    modules_section = provenance_map.get("modules") or {}
+    for module_id, module_prov in modules_section.items():
+        out.append(f"# Module: {module_id}")
+        cfg_prov = (module_prov or {}).get("config") or {}
+        if not cfg_prov:
+            out.append("  (no config entries — module had empty config block)")
+            out.append("")
+            continue
+        out.append(_format_provenance_rows(
+            (key, prov) for key, prov in cfg_prov.items()
+        ))
+        out.append("")
+    if not out:
+        return "(provenance_map is empty — compile from source first)"
+    return "\n".join(out).rstrip()
+
+
+def _format_provenance_rows(pairs) -> str:
+    """Helper: render an iterable of (key, ValueProvenance-dict) into aligned rows."""
+    rows: list[tuple[str, str, str, str]] = []
+    for key, prov in pairs:
+        src_type = str((prov or {}).get("source_type") or "?")
+        original = str((prov or {}).get("original_expression") or "")
+        resolved = (prov or {}).get("resolved_value")
+        rows.append((str(key), src_type, original, "" if resolved is None else str(resolved)))
+    if not rows:
+        return "  (empty)"
+    headers = ("key", "source_type", "original_expression", "resolved_value")
+    widths = [max(len(r[c]) for r in [headers] + rows) for c in range(4)]
+    header = "  " + "  ".join(h.ljust(widths[i]) for i, h in enumerate(headers))
+    sep = "  " + "  ".join("-" * w for w in widths)
+    body = "\n".join(
+        "  " + "  ".join(r[i].ljust(widths[i]) for i in range(4))
+        for r in rows
+    )
+    return "\n".join([header, sep, body])
 
 @cli.command()
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))

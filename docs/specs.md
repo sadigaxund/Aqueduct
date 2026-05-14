@@ -116,6 +116,28 @@ Internally, Aqueduct maintains two representations: the YAML Blueprint (human-au
 |**Dual-format contract:**  The Manifest is always complete and self-contained. The LLM agent must never need to fetch external state to understand what ran. Every resolved value, every expanded Arcade, every wired Spillway appears explicitly in the Manifest.|
 | :- |
 
+### **4.1.1 Why a Manifest? Why not run the YAML directly?**
+
+The compile step is not cosmetic — the Executor consumes the Manifest, never the raw YAML. The reason is that several Blueprint constructs cannot be resolved at execution time without paying for them every run, breaking determinism, or creating a runtime dependency surface that does not belong inside Spark:
+
+| Blueprint construct | Why resolve at compile, not run |
+| :- | :- |
+| `${ctx.foo}` Tier 0 context refs | Substitution must happen before any module sees its config, otherwise downstream modules that copy values around (e.g. join keys passed across Channels) see different strings for the same source. |
+| `@aq.date.today()`, `@aq.runtime.timestamp()` Tier 1 calls | Resolving in the Executor would tie the *value* to the moment each module ran. Two modules calling `today()` at different stages of a 4-hour pipeline could see different dates — corrupting partition keys. The Manifest captures one value per run. |
+| `@aq.secret('KEY')` | One network round-trip per run at compile time, not one per module per worker thread. Also: secrets never end up in worker-side closures. |
+| `@aq.depot.get('watermark')` | A single DuckDB read at compile time. Without it, every read would race against runtime writes from this same pipeline — the stale-read footgun in §5.4 would become unmanageable. |
+| Arcade `ref: arcades/foo.yml` | Sub-Blueprints are expanded inline so the executor sees a single flat module list. Resolving at execution time would force the Planner to rebuild its topological order mid-run when an arcade is reached. |
+| Macros `{{ macros.* }}` | Spark SQL cannot parse `{{ }}` placeholders. Expansion has to happen before Spark sees the query string. |
+| Passive Regulators | Regulators with no wired signal input are compiled away entirely so the Executor never spawns a no-op gate. |
+| `--execution-date` for backfills | Idempotent backfills require that `@aq.date.*` be pinned to a logical date and frozen into the Manifest. Re-running the same `--execution-date` must produce a byte-identical Manifest. |
+
+The Manifest also carries two artefacts that exist *for the LLM*, not for the Executor:
+
+- **ProvenanceMap** — for every resolved config value, records its `source_type` (`literal | context_ref | env_ref | tier1 | arcade_inherited`), `original_expression` (the YAML expression before substitution), and `resolved_value`. The LLM uses provenance to write patches against the Blueprint *expression* rather than the *resolved literal* — keeping pipelines portable across environments. Inspect it with `aqueduct compile <blueprint> --show provenance`.
+- **`inputs_fingerprint`** — for every local-path Ingress, a compile-time snapshot of `path`, `size_bytes`, `last_modified`. Lets the LLM distinguish data-drift bugs (file changed) from code bugs (file unchanged) when reading a `FailureContext`. Inspect it with `aqueduct compile <blueprint> --show inputs`.
+
+`aqueduct compile` always emits the full Manifest JSON by default; the `--show` selector switches between `manifest`, `provenance`, `inputs`, and `all` for human-readable diagnostics.
+
 ## **4.2 Top-Level Structure**
 ```yaml
 aqueduct: "1.0"                        # schema version — required
