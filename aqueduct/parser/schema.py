@@ -74,6 +74,9 @@ class AgentSchema(BaseModel):
     on_heal_failure: Literal["stage", "discard", "abort"] = "stage"
     # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
     prompt_context: str | None = None
+    # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.
+    # None (default) = unlimited. When exceeded, Surveyor records skip outcome and run ends.
+    max_heal_attempts_per_hour: int | None = None
 
 
 class ModuleSchema(BaseModel):

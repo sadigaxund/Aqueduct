@@ -48,39 +48,105 @@ def _ensure_project_root_on_path() -> None:
 def _patch_pyspark_cloudpickle() -> None:
     """Replace pyspark's bundled cloudpickle 2.x with system cloudpickle 3.x.
 
-    pyspark.serializers does `from pyspark import cloudpickle` then calls
-    `cloudpickle.dumps(obj)` — it holds the module object, so replacing attributes
-    on that module affects all subsequent calls in the same process.
+    pyspark.serializers does ``from pyspark import cloudpickle`` then calls
+    ``cloudpickle.dumps(obj)`` — it holds the module object, so replacing
+    attributes on that module affects all subsequent calls in the same process.
 
     Needed on Python 3.13+ where cloudpickle 2.2.1 (bundled with PySpark 3.5)
-    segfaults during function serialization. Install cloudpickle>=3.0 to enable.
+    segfaults during function serialization. Install ``cloudpickle>=3.0`` to
+    enable. The patch is **defensive** — every failure mode emits a clear
+    warning rather than silently leaving UDFs to crash with cryptic recursion
+    errors at runtime.
+
+    Failure modes that the warning covers:
+
+    * Python 3.13+ but ``cloudpickle`` not installed system-wide.
+    * PySpark version changed the cloudpickle module path (renamed to
+      ``cloudpickle_fast``, moved under ``pyspark._cloudpickle``, removed).
+    * Bundled module exists but is missing the expected attributes
+      (``dumps`` / ``loads`` / ``CloudPickler``) — future PySpark may
+      restructure internals.
     """
     if sys.version_info < (3, 13):
         return
+
+    py_label = f"Python {sys.version_info.major}.{sys.version_info.minor}"
+
     try:
         import cloudpickle as system_cp  # system-installed (pip install cloudpickle)
-        import pyspark.cloudpickle as bundled_cp
-
-        system_ver = tuple(int(x) for x in system_cp.__version__.split(".")[:2])
-        bundled_ver = tuple(int(x) for x in bundled_cp.__version__.split(".")[:2])
-        if system_ver <= bundled_ver:
-            return  # bundled is already newer, no patch needed
-
-        # Replace key symbols on the module object — serializers.py holds a reference
-        # to the module itself so attribute-level replacement propagates to all callers.
-        bundled_cp.dumps = system_cp.dumps
-        bundled_cp.loads = system_cp.loads
-        bundled_cp.CloudPickler = system_cp.CloudPickler
-        logger.info(
-            "Patched pyspark.cloudpickle %s.%s → system cloudpickle %s.%s",
-            *bundled_ver, *system_ver,
-        )
     except ImportError:
         logger.warning(
-            "Python %d.%d detected but system cloudpickle not installed. "
-            "Python UDFs will likely fail. Run: pip install cloudpickle",
-            sys.version_info.major, sys.version_info.minor,
+            "%s detected but system cloudpickle is not installed. "
+            "Python UDFs will fail with infinite recursion / segfault during "
+            "serialization. Fix: `pip install cloudpickle` (or run on Python ≤ 3.12).",
+            py_label,
         )
+        return
+
+    # Locate the bundled module — PySpark has moved this around historically;
+    # try every known import path before giving up.
+    bundled_cp = None
+    bundled_path: str | None = None
+    for candidate in ("pyspark.cloudpickle", "pyspark.cloudpickle_fast", "pyspark._cloudpickle"):
+        try:
+            bundled_cp = importlib.import_module(candidate)
+            bundled_path = candidate
+            break
+        except ImportError:
+            continue
+
+    if bundled_cp is None or bundled_path is None:
+        logger.warning(
+            "%s detected and `pyspark.cloudpickle` is not importable under any "
+            "known path (tried: pyspark.cloudpickle, pyspark.cloudpickle_fast, "
+            "pyspark._cloudpickle). Skipping the cloudpickle compatibility "
+            "patch — Python UDFs may fail with cryptic recursion errors. "
+            "Pin pyspark to a version that bundles cloudpickle at the expected "
+            "path, or run on Python ≤ 3.12.",
+            py_label,
+        )
+        return
+
+    # Verify the module has the attributes we need to patch. If PySpark
+    # restructures internals (e.g. renames `dumps` to `cp_dumps`), do not
+    # silently no-op — surface the mismatch so it can be diagnosed.
+    required_attrs = ("dumps", "loads", "CloudPickler")
+    missing = [a for a in required_attrs if not hasattr(bundled_cp, a)]
+    if missing:
+        logger.warning(
+            "%s detected; `%s` was imported but lacks expected attributes %s. "
+            "Aqueduct cannot patch cloudpickle — Python UDFs may fail with "
+            "recursion errors. Likely a future PySpark restructured the "
+            "module; report this with the installed pyspark version.",
+            py_label, bundled_path, missing,
+        )
+        return
+
+    try:
+        system_ver = tuple(int(x) for x in system_cp.__version__.split(".")[:2])
+        bundled_ver_str = getattr(bundled_cp, "__version__", "0.0")
+        bundled_ver = tuple(int(x) for x in str(bundled_ver_str).split(".")[:2])
+    except (AttributeError, ValueError) as exc:
+        logger.warning(
+            "%s detected; could not compare cloudpickle versions "
+            "(system=%r, bundled=%r): %s. Skipping patch.",
+            py_label, getattr(system_cp, "__version__", "?"),
+            getattr(bundled_cp, "__version__", "?"), exc,
+        )
+        return
+
+    if system_ver <= bundled_ver:
+        return  # bundled is already newer or equal, no patch needed
+
+    # Replace key symbols on the module object — serializers.py holds a reference
+    # to the module itself so attribute-level replacement propagates to all callers.
+    bundled_cp.dumps = system_cp.dumps
+    bundled_cp.loads = system_cp.loads
+    bundled_cp.CloudPickler = system_cp.CloudPickler
+    logger.info(
+        "Patched %s %s.%s → system cloudpickle %s.%s",
+        bundled_path, *bundled_ver, *system_ver,
+    )
 
 
 class UDFError(Exception):

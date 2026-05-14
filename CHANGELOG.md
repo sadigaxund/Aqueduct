@@ -4,6 +4,29 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Audit Batch 6 — Spec sync (final), default model bump, cloudpickle hardening, JSON logs
+_2026-05-14_
+
+- **Spec §10.1 — `stores:` block reconciled with code.** Previously listed `stores.observability.path: ".aqueduct"` and `stores.lineage.path: ".aqueduct"` (root-dir style); reality is per-store full file paths under `stores.obs.path` / `stores.lineage.path` / `stores.depot.path`. Spec block rewritten to match `AqueductConfig.stores` (`StoresConfig.obs|lineage|depot`). Closes the final `obs` vs `observability` drift item from audit §2.1. Footnote added flagging `s3 | gcs | adls` backends as deferred per `TODOs.md` Phase 28.
+- **Default `agent.model` bumped to `claude-sonnet-4-6`** in `AgentConnectionConfig` (was `claude-3-5-sonnet-latest`). Matches README, spec, and shipped template. Closes audit §2.1 row 9.
+- **Cloudpickle patch hardened (`aqueduct/executor/spark/udf.py:_patch_pyspark_cloudpickle`)** — defensive rewrite. Tries every known PySpark cloudpickle import path (`pyspark.cloudpickle`, `pyspark.cloudpickle_fast`, `pyspark._cloudpickle`); verifies the bundled module actually exposes `dumps` / `loads` / `CloudPickler` before patching; emits an explicit, actionable WARNING for each failure mode (system cloudpickle missing / no importable bundled module / module shape changed / version-parse failure). Previous behaviour: silently no-op on any failure → users hit cryptic infinite-recursion UDF crashes at runtime. Now every silent failure mode is surfaced. Closes audit §3.10.
+- **Global `--log-format {text,json}` flag** on the CLI root group. `text` (default) preserves the current human-readable output. `json` swaps in a minimal one-record-per-line JSON formatter (`{ts, level, logger, msg}` + `exc` when an exception was logged). Targeted at ops teams shipping logs to Loki / Splunk / Datadog. Implementation: new `_AqueductJsonLogFormatter` duck-type in `cli.py`, applied via `logging.getLogger().handlers.clear() + addHandler(...)` so it overrides any `basicConfig` defaults idempotently. Closes the structured-log item from audit §7.3.
+
+---
+
+### Audit Batch 5 — README scope, LLM rate-limit, ALL_TABLES reference, robustness cleanup
+_2026-05-14_
+
+- **README LLM-autonomy callout (top of file):** new ⚠ block surfacing that the LLM only edits Blueprints when `agent.approval_mode` is `auto` or `aggressive`, that the default is `disabled`, that production should prefer `human` / `ci`, and that `aggressive` additionally requires `danger.allow_aggressive_patching: true`. Restates that guardrails are deterministic at patch-apply time, not prompt-time. Adopted reviewer scans the autonomy guarantees in the first paragraphs instead of having to find §8 of the spec.
+- **README "Scope — What Aqueduct Is and Is Not" section:** pulls the boundary statement from spec §13 into a two-column table on the README. Makes it clear up-front that Aqueduct is batch (not streaming), data prep (not ML training), CLI (not scheduler), and LLM-scoped-to-PatchSpec (not autonomous infra agent). Also fixes a stale README mention of the removed `block_full_actions_in_prod` flag.
+- **LLM rate-limit / spend-cap (`agent.max_heal_attempts_per_hour`):** new optional integer field on both `AgentSchema` (per-blueprint) and `AgentConnectionConfig` (engine default), with blueprint override winning. When set, the self-healing loop counts rows in `healing_outcomes` within the last 60 minutes and skips further LLM HTTP calls once the cap is reached — emitting a clear `⊘ LLM rate-limit reached` line. Default `None` = unlimited; no behaviour change for existing configs. Implementation reuses the existing `obs.db` (no schema change) via the new `Surveyor.count_recent_heal_attempts()` helper.
+- **New `docs/ALL_TABLES.md` reference:** single document inventorying every DuckDB table Aqueduct writes — `run_records`, `failure_contexts`, `healing_outcomes`, `signal_overrides`, `probe_signals`, `module_metrics`, `maintenance_metrics`, `column_lineage`, `depot_kv` — with column types, the Python file that owns each DDL, and example SQL queries. Linked from the README documentation table. Closes audit §2.4.
+- **Robustness cleanup:**
+  - `aqueduct/compiler/compiler.py` `inputs_fingerprint`: widen the `os.stat()` exception handler from `OSError` to `(OSError, ValueError)` so malformed paths (embedded null bytes, oversized components, URI-shaped strings the remote-scheme list does not catch) record `size_bytes=None` like other unfingerprintable paths instead of bubbling up as a hard compile error.
+  - `aqueduct/config.py` `WebhookEndpointConfig` docstring: clarify that `${attempt}` is the *number of failed modules* in the current run (`on_failure` scope), not a 1-based retry counter. The implementation has always populated it that way; the docstring now matches.
+
+---
+
 ### Audit Batch 4 — Doctor per-file flags, compile --show selector, Manifest rationale, cleanup
 _2026-05-14_
 

@@ -231,7 +231,11 @@ def compile(  # noqa: A001
                 "size_bytes": st.st_size,
                 "last_modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
             }
-        except OSError:
+        except (OSError, ValueError):
+            # OSError: file missing / permission denied.
+            # ValueError: malformed path (embedded null byte, oversized component,
+            # URI-shaped string not caught by _REMOTE_SCHEMES). In either case the
+            # fingerprint is "not collected" rather than a hard failure.
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
 
     # ── 7. Delivery semantics warning ─────────────────────────────────────────

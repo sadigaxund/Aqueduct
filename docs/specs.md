@@ -1740,19 +1740,21 @@ deployment:
   env: local                       # local | cluster | cloud  — doctor warns on local paths in cluster/cloud
   master_url: "local[*]"           # overridden per target type
 stores:
-  # Root store directory. All runtime DB files are created inside it:
-  #   obs.db      — run records, failure contexts, probe signals, module metrics, signal overrides
+  # Per-store DuckDB file paths. The runtime artefacts under each parent dir are:
+  #   obs.db      — run records, failure contexts, probe signals, module metrics, signal overrides, healing_outcomes
   #   lineage.db  — column-level lineage
-  #   snapshots/  — schema_snapshot JSON files (one file per probe per run)
-  observability:
-    backend: duckdb                # duckdb (default) | s3 | gcs | adls
-    path: ".aqueduct"              # root dir; obs.db created here
+  #   depot.db    — cross-run KV state (@aq.depot.*)
+  #   snapshots/  — schema_snapshot JSON files (one file per probe per run, alongside obs.db)
+  #   watermarks/ — sidecar JSON files for incremental Channels (alongside obs.db)
+  obs:
+    backend: duckdb                # duckdb (default); s3 | gcs | adls are deferred (see TODOs.md / Phase 27)
+    path: ".aqueduct/obs.db"       # full file path
   lineage:
     backend: duckdb
-    path: ".aqueduct"              # must match observability.path; lineage.db created here
+    path: ".aqueduct/lineage.db"   # full file path; must sit alongside obs.db for runtime joins
   depot:
     backend: duckdb
-    path: ".aqueduct/depot.db"     # single DuckDB file for KV state
+    path: ".aqueduct/depot.db"     # full file path
 agent:
   provider: "anthropic"            # "anthropic" | "openai_compat"
   model: "claude-sonnet-4-6"

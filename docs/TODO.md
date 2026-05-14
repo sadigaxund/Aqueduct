@@ -71,3 +71,40 @@ KeyError: 'error'
 
 
 
+feat(doctor,compile,docs): per-file pre-flight, --show selector, Manifest rationale
+
+- doctor: add --aqtest <file> and --aqscenario <file> flags. Both run as
+schema pre-flights: validate the file's top-level version key, resolve the
+blueprint: reference, parse that blueprint, and cross-check every
+tests[].module / inject_failure.module against the actual module IDs.
+Reuses aqueduct.surveyor.scenario.load_scenario; aqtest uses a light
+inline parser to avoid importing the Spark test runner. All three
+per-file flags (--blueprint, --aqtest, --aqscenario) are additive in a
+single doctor pass.
+
+- compile: add --show {manifest,provenance,inputs,all}. Default
+'manifest' preserves the previous full-JSON behaviour. 'provenance'
+emits a readable per-module table (key, source_type,
+original_expression, resolved_value) plus a # Context section.
+'inputs' emits the inputs_fingerprint as a per-Ingress table.
+'all' prints the full Manifest JSON followed by both tables. Helpers
+_render_compile_show / _format_provenance_table / _format_inputs_fingerprint
+live in cli.py.
+
+- docs/specs.md: new §4.1.1 'Why a Manifest? Why not run the YAML
+directly?'. Tabulates, per Blueprint construct, why compile-time
+resolution is required (${ctx.*}, @aq.date.*, @aq.secret,
+@aq.depot.get, arcade refs, macros, passive regulators,
+--execution-date). Documents that ProvenanceMap and inputs_fingerprint
+exist primarily for the LLM, not the Executor, and points at the new
+--show selectors for inspection.
+
+- docs/CLI_REFERENCE.md: clarify that aqueduct lineage takes a Blueprint
+file path, not a bare ID. Add rows for doctor --aqtest /
+--aqscenario and compile --show. Extend the doctor check table to
+cover the two new schema pre-flight checks.
+
+- surveyor/llm.py: replace the two silent `except: pass` blocks
+(patch-history file load, patches/rules.md read) with
+`logger.debug(..., exc_info=True)`. Default runs see nothing; -v
+users can now diagnose why a prompt section silently dropped a file.

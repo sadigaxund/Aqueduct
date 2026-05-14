@@ -59,6 +59,9 @@ class AgentConfig:
     on_heal_failure: str = "stage"
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
     prompt_context: str | None = None
+    # Spend-cap: max LLM healing attempts per rolling 60-minute window for this blueprint.
+    # None = unlimited. When exceeded, Surveyor blocks the LLM call.
+    max_heal_attempts_per_hour: int | None = None
 
 
 @dataclass(frozen=True)

@@ -193,6 +193,34 @@ def _load_env_file(env_path: "Path") -> int:
 from aqueduct import __version__ as _aqueduct_version
 
 
+class _AqueductJsonLogFormatter:
+    """Minimal JSON log formatter for `--log-format json`.
+
+    Emits one line of JSON per record with the canonical fields ops teams need
+    when shipping to Loki / Splunk / Datadog: timestamp (ISO-8601 UTC), level,
+    logger name, message (already %-formatted), plus exc_info when present.
+
+    Implemented as a class with a `format` method (duck-typed to the stdlib
+    Formatter interface) rather than subclassing `logging.Formatter` so we
+    avoid pulling logging into the CLI import path unnecessarily.
+    """
+
+    def format(self, record) -> str:  # noqa: D401
+        import json as _json
+        import logging as _logging
+        from datetime import datetime as _dt, timezone as _tz
+
+        payload = {
+            "ts": _dt.fromtimestamp(record.created, tz=_tz.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = _logging.Formatter().formatException(record.exc_info)
+        return _json.dumps(payload, default=str)
+
+
 @click.group()
 @click.version_option(
     version=_aqueduct_version,
@@ -200,14 +228,35 @@ from aqueduct import __version__ as _aqueduct_version
     message="%(prog)s %(version)s",
 )
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Enable DEBUG logging.")
+@click.option(
+    "--log-format",
+    "log_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help=(
+        "Logging output format. text=human-readable single line (default). "
+        "json=one JSON object per record with ts/level/logger/msg fields — "
+        "use when shipping logs to Loki / Splunk / Datadog."
+    ),
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool) -> None:
+def cli(ctx: click.Context, verbose: bool, log_format: str) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
     import logging
-    if verbose:
-        logging.basicConfig(level=logging.DEBUG, format="%(levelname)s %(name)s: %(message)s")
+    level = logging.DEBUG if verbose else logging.WARNING
+
+    if log_format.lower() == "json":
+        handler = logging.StreamHandler()
+        handler.setFormatter(_AqueductJsonLogFormatter())  # type: ignore[arg-type]
+        # Replace any handlers basicConfig may have installed; idempotent.
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.addHandler(handler)
+        root.setLevel(level)
     else:
-        logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
+        fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
+        logging.basicConfig(level=level, format=fmt)
 
 
 @cli.command()
@@ -963,6 +1012,21 @@ def run(
                     err=True,
                 )
                 break
+
+            # ── Spend-cap: max_heal_attempts_per_hour (blueprint override > engine default) ─
+            _heal_cap = manifest.agent.max_heal_attempts_per_hour
+            if _heal_cap is None:
+                _heal_cap = getattr(cfg.agent, "max_heal_attempts_per_hour", None)
+            if _heal_cap is not None and _heal_cap >= 0:
+                _recent = surveyor.count_recent_heal_attempts(within_minutes=60)
+                if _recent >= _heal_cap:
+                    click.echo(
+                        f"  ⊘  LLM rate-limit reached: {_recent} healing attempt(s) "
+                        f"in the last 60 minutes (max_heal_attempts_per_hour={_heal_cap}). "
+                        "Run ends without further LLM calls. Inspect healing_outcomes in obs.db.",
+                        err=True,
+                    )
+                    break
 
             # ── Generate patch ────────────────────────────────────────────────────
             from aqueduct.surveyor.llm import archive_patch, generate_llm_patch, stage_patch_for_human

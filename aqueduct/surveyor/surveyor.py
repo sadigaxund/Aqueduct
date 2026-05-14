@@ -347,6 +347,32 @@ class Surveyor:
             ],
         )
 
+    def count_recent_heal_attempts(self, within_minutes: int = 60) -> int:
+        """Return the number of LLM healing attempts recorded in this blueprint's
+        `healing_outcomes` table within the last ``within_minutes`` minutes.
+
+        Used by the CLI self-healing loop to enforce a configurable spend-cap
+        (``agent.max_heal_attempts_per_hour``). Each blueprint has its own
+        `obs.db`, so the count is implicitly scoped to this blueprint without
+        a JOIN against `run_records`.
+
+        Returns 0 when the connection is not open (e.g. before `start()`).
+        applied_at is ISO-8601 UTC which sorts lexicographically — direct
+        string comparison is safe.
+        """
+        if self._conn is None:
+            return 0
+        import datetime as _dt
+        threshold = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=within_minutes)).isoformat()
+        try:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM healing_outcomes WHERE applied_at >= ?",
+                [threshold],
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
     def evaluate_regulator(self, regulator_id: str) -> bool:
         """Evaluate whether a Regulator's gate is open (True) or closed (False).
 
