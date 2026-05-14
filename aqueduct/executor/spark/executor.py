@@ -255,24 +255,36 @@ CREATE TABLE IF NOT EXISTS maintenance_metrics (
 """
 
 
+def _resolve_obs_store(store_dir: "Path | None", obs_store: Any) -> Any:
+    """Return the supplied obs-store backend or build a default DuckDB one.
+
+    Internal helper so probe/metric writers can stay backend-agnostic without
+    every call site duplicating the construction logic.
+    """
+    if obs_store is not None:
+        return obs_store
+    if store_dir is None:
+        return None
+    from aqueduct.stores.duckdb_ import DuckDBObsStore
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return DuckDBObsStore(store_dir / "obs.db")
+
+
 def _write_maintenance_metrics(
     module_id: str,
     run_id: str,
     timing: "dict[str, Any]",
     store_dir: "Path | None",
+    obs_store: Any = None,
 ) -> None:
-    if store_dir is None:
+    obs = _resolve_obs_store(store_dir, obs_store)
+    if obs is None:
         return
     try:
-        import duckdb
         from datetime import datetime, timezone
-
-        db_path = store_dir / "obs.db"
-        store_dir.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(str(db_path))
-        try:
-            conn.execute(_MAINTENANCE_METRICS_DDL)
-            conn.execute(
+        with obs.connect() as cur:
+            cur.execute(_MAINTENANCE_METRICS_DDL)
+            cur.execute(
                 "INSERT INTO maintenance_metrics "
                 "(run_id, module_id, optimize_ms, vacuum_ms, captured_at) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -284,8 +296,6 @@ def _write_maintenance_metrics(
                     datetime.now(tz=timezone.utc).isoformat(),
                 ],
             )
-        finally:
-            conn.close()
     except Exception as exc:
         logger.debug("Maintenance metrics write failed for %r: %s", module_id, exc)
 
@@ -295,20 +305,17 @@ def _write_stage_metrics(
     run_id: str,
     metrics: "dict[str, Any]",
     store_dir: "Path | None",
+    obs_store: Any = None,
 ) -> None:
-    """Persist SparkListener stage metrics to obs.db (non-fatal)."""
-    if store_dir is None:
+    """Persist SparkListener stage metrics to the configured obs store (non-fatal)."""
+    obs = _resolve_obs_store(store_dir, obs_store)
+    if obs is None:
         return
     try:
-        import duckdb
         from datetime import datetime, timezone
-
-        db_path = store_dir / "obs.db"
-        store_dir.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(str(db_path))
-        try:
-            conn.execute(_MODULE_METRICS_DDL)
-            conn.execute(
+        with obs.connect() as cur:
+            cur.execute(_MODULE_METRICS_DDL)
+            cur.execute(
                 """
                 INSERT INTO module_metrics
                     (run_id, module_id, records_read, bytes_read,
@@ -326,25 +333,28 @@ def _write_stage_metrics(
                     datetime.now(tz=timezone.utc).isoformat(),
                 ],
             )
-        finally:
-            conn.close()
     except Exception as exc:
         logger.debug("Stage metrics write failed for %r: %s", module_id, exc)
 
 
-def _update_metric(store_dir: "Path", run_id: str, module_id: str, column: str, value: "int | None") -> None:
+def _update_metric(
+    store_dir: "Path",
+    run_id: str,
+    module_id: str,
+    column: str,
+    value: "int | None",
+    obs_store: Any = None,
+) -> None:
     """UPDATE a single column in an existing module_metrics row (non-fatal)."""
+    obs = _resolve_obs_store(store_dir, obs_store)
+    if obs is None:
+        return
     try:
-        import duckdb
-        db_path = store_dir / "obs.db"
-        conn = duckdb.connect(str(db_path))
-        try:
-            conn.execute(
+        with obs.connect() as cur:
+            cur.execute(
                 f"UPDATE module_metrics SET {column} = ? WHERE run_id = ? AND module_id = ?",
                 [value, run_id, module_id],
             )
-        finally:
-            conn.close()
     except Exception as exc:
         logger.debug("Metric update failed for %r.%s: %s", module_id, column, exc)
 
@@ -675,6 +685,8 @@ def execute(
     block_full_actions: bool = False,
     parallel: bool = False,
     use_observe: bool = True,
+    obs_store: Any = None,
+    lineage_store: Any = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -866,6 +878,7 @@ def execute(
                      "bytes_read": dir_bytes(module.config.get("path", "")),
                      "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
+                    obs_store=obs_store,
                 )
                 frame_store[module.id] = _obs_df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1003,6 +1016,7 @@ def execute(
                         module.id, run_id,
                         {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                         store_dir,
+                        obs_store=obs_store,
                     )
                     _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
                     local_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -1060,6 +1074,7 @@ def execute(
                     module.id, run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
+                    obs_store=obs_store,
                 )
                 for branch_id, branch_df in branch_dfs.items():
                     frame_store[f"{module.id}.{branch_id}"] = branch_df
@@ -1122,6 +1137,7 @@ def execute(
                     module.id, run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
+                    obs_store=obs_store,
                 )
                 frame_store[module.id] = df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1312,6 +1328,7 @@ def execute(
                      "bytes_written": dir_bytes(module.config.get("path", "")),
                      "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
+                    obs_store=obs_store,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
 
@@ -1324,7 +1341,8 @@ def execute(
                             spark, module.id, _maint_path, _maintenance_cfg
                         )
                         _write_maintenance_metrics(
-                            module.id, run_id, _maint_timing, store_dir
+                            module.id, run_id, _maint_timing, store_dir,
+                            obs_store=obs_store,
                         )
 
                 # ── Sidecar watermark update ───────────────────────────────────
@@ -1366,7 +1384,7 @@ def execute(
                     )
                 elif store_dir is not None:
                     try:
-                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions)
+                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, obs_store=obs_store)
                     except Exception as exc:
                         logger.warning("Probe %r failed: %s", module.id, exc)
 
@@ -1421,7 +1439,7 @@ def execute(
             try:
                 _rr = get_observation(_obs, "records_read")
                 if _rr is not None:
-                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr)
+                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr, obs_store=obs_store)
             except Exception as exc:
                 logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 
@@ -1429,7 +1447,7 @@ def execute(
     if store_dir is not None:
         try:
             from aqueduct.compiler.lineage import write_lineage
-            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, store_dir)
+            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, store_dir, lineage_store=lineage_store)
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
 

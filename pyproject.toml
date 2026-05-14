@@ -47,9 +47,16 @@ secrets = [
     "aqueduct-core[gcp]",
     "aqueduct-core[azure]",
 ]
+# Phase 28 — networked store backends. Each replaces DuckDB's single-writer
+# constraint for obs / lineage / depot. Postgres serves all three stores;
+# Redis is depot-only.
+postgres = ["psycopg2-binary>=2.9"]
+redis = ["redis>=5.0"]
 all = [
     "aqueduct-core[spark]",
     "aqueduct-core[secrets]",
+    "aqueduct-core[postgres]",
+    "aqueduct-core[redis]",
 ]
 dev = [
     "pytest>=8.0.0",

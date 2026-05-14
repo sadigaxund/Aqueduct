@@ -174,35 +174,42 @@ def _row_count_estimate(
     run_id: str = "",
     store_dir: "Path | None" = None,
     block_full_actions: bool = False,
+    obs_store: Any = None,
 ) -> dict[str, Any]:
-    """Estimate row count. sample method only triggers on a fraction."""
+    """Estimate row count. sample method only triggers on a fraction.
+
+    `obs_store` is the Phase 28 obs-store backend (DuckDB / Postgres). When
+    None, a default DuckDB store is built from `store_dir/obs.db`.
+    """
     method = signal_cfg.get("method", "sample")
 
     if method == "spark_listener":
-        # Query the module_metrics row written by the executor for this module's upstream.
-        # The attach_to module_id is the same as probe_id's attach_to — passed via store_dir.
         attach_to = signal_cfg.get("attach_to") or probe_id
-        if store_dir:
+        if obs_store is None and store_dir is not None:
             try:
-                import duckdb
+                from aqueduct.stores.duckdb_ import DuckDBObsStore
                 db_path = store_dir / "obs.db"
-                if db_path.exists():
-                    conn = duckdb.connect(str(db_path))
-                    try:
-                        row = conn.execute(
-                            """
-                            SELECT records_written, records_read
-                            FROM module_metrics
-                            WHERE run_id = ? AND module_id = ?
-                            ORDER BY captured_at DESC LIMIT 1
-                            """,
-                            [run_id, attach_to],
-                        ).fetchone()
-                    finally:
-                        conn.close()
-                    if row:
-                        count = row[0] or row[1]
-                        return {"method": "spark_listener", "estimate": count}
+                if not db_path.exists():
+                    return {"method": "spark_listener", "estimate": None}
+                obs_store = DuckDBObsStore(db_path)
+            except Exception as exc:
+                logger.debug("spark_listener row_count_estimate setup failed: %s", exc)
+                return {"method": "spark_listener", "estimate": None}
+        if obs_store is not None:
+            try:
+                with obs_store.connect() as cur:
+                    row = cur.execute(
+                        """
+                        SELECT records_written, records_read
+                        FROM module_metrics
+                        WHERE run_id = ? AND module_id = ?
+                        ORDER BY captured_at DESC LIMIT 1
+                        """,
+                        [run_id, attach_to],
+                    ).fetchone()
+                if row:
+                    count = row[0] or row[1]
+                    return {"method": "spark_listener", "estimate": count}
             except Exception as exc:
                 logger.debug("spark_listener row_count_estimate query failed: %s", exc)
         return {"method": "spark_listener", "estimate": None}
@@ -412,37 +419,44 @@ def execute_probe(
     run_id: str,
     store_dir: Path,
     block_full_actions: bool = False,
+    obs_store: Any = None,
 ) -> None:
     """Capture observability signals for a single Probe module.
 
-    Writes one DuckDB row per signal to ``store_dir/obs.db``.
-    For ``schema_snapshot``, also writes a JSON file.
+    Writes one row per signal to the configured obs store
+    (``store_dir/obs.db`` for DuckDB by default; Postgres `obs.probe_signals`
+    when wired through Phase 28's `StoreBundle`).
+    For ``schema_snapshot``, also writes a JSON file under ``snapshots/``.
 
     Args:
         module:    The Probe Module from the compiled Manifest.
         df:        Lazy DataFrame produced by the module this Probe taps.
         spark:     Active SparkSession (reserved for SparkListener extension).
         run_id:    Run identifier from the Executor.
-        store_dir: Root observability store directory.
+        store_dir: Root observability store directory (used for snapshots/
+                   and for the DuckDB fallback path).
+        block_full_actions: Forward to per-signal helpers.
+        obs_store: Optional Phase 28 obs-store backend. When None, a default
+                   DuckDB store at ``store_dir/obs.db`` is constructed.
 
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
         never halt the blueprint.
     """
     try:
-        import duckdb
-
         signals: list[dict[str, Any]] = module.config.get("signals", [])
         if not signals:
             logger.debug("Probe %r has no signals configured; skipping.", module.id)
             return
 
         store_dir.mkdir(parents=True, exist_ok=True)
-        db_path = store_dir / "obs.db"
 
-        conn = duckdb.connect(str(db_path))
-        try:
-            conn.execute(_DDL)
+        if obs_store is None:
+            from aqueduct.stores.duckdb_ import DuckDBObsStore
+            obs_store = DuckDBObsStore(store_dir / "obs.db")
+
+        with obs_store.connect() as cur:
+            cur.execute(_DDL)
 
             for sig_cfg in signals:
                 sig_type = sig_cfg.get("type")
@@ -456,6 +470,7 @@ def execute_probe(
                             run_id=run_id,
                             store_dir=store_dir,
                             block_full_actions=block_full_actions,
+                            obs_store=obs_store,
                         )
                     elif sig_type == "null_rates":
                         payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)
@@ -475,7 +490,7 @@ def execute_probe(
                         logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
                         continue
 
-                    conn.execute(
+                    cur.execute(
                         """
                         INSERT INTO probe_signals
                             (run_id, probe_id, signal_type, payload, captured_at)
@@ -487,7 +502,5 @@ def execute_probe(
                     logger.warning(
                         "Probe %r signal %r failed: %s", module.id, sig_type, exc
                     )
-        finally:
-            conn.close()
     except Exception as exc:
         logger.warning("execute_probe %r: unexpected error: %s", module.id, exc)
