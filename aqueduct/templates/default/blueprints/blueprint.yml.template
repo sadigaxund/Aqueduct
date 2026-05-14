@@ -109,6 +109,12 @@ agent:
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
 
+  # max_heal_attempts_per_hour: optional spend-cap. Surveyor refuses the next
+  # LLM call once this many healing attempts have been recorded in obs.db
+  # within the last 60 minutes for this blueprint. Default null = unlimited.
+  # Overrides the engine-level agent.max_heal_attempts_per_hour in aqueduct.yml.
+  # max_heal_attempts_per_hour: 10
+
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
 
@@ -152,7 +158,7 @@ agent:
   # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
-  # model: "claude-3-5-sonnet-latest"
+  # model: "claude-sonnet-4-6"
   # llm_timeout: 300.0            # seconds; increase for slow local models
   # llm_max_reprompts: 5          # max conversation turns when LLM returns invalid PatchSpec
 

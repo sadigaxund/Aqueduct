@@ -367,7 +367,7 @@ webhooks:
 agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────
   provider: "anthropic"              # "anthropic" | "openai_compat"
-  model: "claude-3-5-sonnet-latest"
+  model: "claude-sonnet-4-6"
   # ANTHROPIC_API_KEY env var required at runtime
 
   # ── Timeouts and retries ──────────────────────────────────────────────────
@@ -381,6 +381,14 @@ agent:
   #   This cluster runs Databricks. Use Delta Lake paths (dbfs:// or s3a://).
   #   All column names follow snake_case convention.
   #   Never reference local filesystem paths in config.path values.
+
+  # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
+  # Surveyor counts rows written to obs.db `healing_outcomes` within the last
+  # 60 minutes for the running blueprint. When the count is reached, the next
+  # LLM HTTP call is skipped and the run ends with a clear stderr message.
+  # Default null = unlimited. Per-blueprint override available via the
+  # Blueprint agent: block (Blueprint value wins).
+  # max_heal_attempts_per_hour: 10
 
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"

@@ -1493,6 +1493,7 @@ All connection fields in the Blueprint `agent:` block override the engine defaul
 | `confidence_threshold` | — (blueprint-only) | Minimum confidence to auto-apply patch (default 0.7; below → human review) |
 | `on_heal_failure` | — (blueprint-only) | `stage` \| `discard` \| `abort` — what to do when patch fails to fix pipeline (default `stage`) |
 | `prompt_context` | `agent.prompt_context` | Extra text appended to LLM system prompt (blueprint appended after engine) |
+| `max_heal_attempts_per_hour` | `agent.max_heal_attempts_per_hour` | Spend-cap. When set (integer ≥ 0), the Surveyor counts rows in `healing_outcomes` within the last 60 minutes for this blueprint and skips the next LLM HTTP call once the count is reached. Default `null` = unlimited. Per-blueprint override wins when both are set. |
 
 Blueprint values win on conflict. `null` (unset) means inherit from engine.
 
@@ -1763,9 +1764,17 @@ agent:
   prompt_context: |                # optional: appended to LLM system prompt for all blueprints
     This cluster runs Databricks. All paths use s3a:// or dbfs://.
   aggressive_max_patches: 5
+  # max_heal_attempts_per_hour: 10 # optional spend-cap; counts rows in healing_outcomes
+                                   # within last 60 minutes per blueprint. Default null = unlimited.
+                                   # Per-blueprint override available via Blueprint agent: block.
 probes:
   max_sample_rows: 100
   default_sample_fraction: 0.01
+metrics:
+  use_observe: true                # default true. Set false in high-throughput pipelines to skip
+                                   # DataFrame.observe() and avoid the codegen-break overhead;
+                                   # per-module records_read/records_written then come from
+                                   # SparkListener stage metrics only.
 danger:
   allow_full_probe_actions: false  # if true, Probes may run full Spark actions (adds latency)
   allow_aggressive_patching: false # if true, approval_mode: aggressive is allowed
