@@ -97,29 +97,47 @@ spark_config: {}
 
 # ── Stores ────────────────────────────────────────────────────────────────────
 #
-# All stores are DuckDB files. Default layout under .aqueduct/:
-#   obs.db      — run records, failure contexts, signal overrides, probe signals, module metrics
+# Phase 28: each store is pluggable. Default DuckDB layout under .aqueduct/:
+#   obs.db      — run records, failure contexts, signal overrides, probe
+#                 signals, module + maintenance metrics, healing outcomes
 #   lineage.db  — column-level lineage
 #   depot.db    — depot KV store (@aq.depot.*)
 #   snapshots/  — schema_snapshot JSON files (one file per probe per run)
 #
-# Each path is a full file path (not a directory).
+# Supported backends:
+#   duckdb    — embedded; single-writer file. Suits local / dev / NFS.
+#               Accepted by obs / lineage / depot.
+#   postgres  — networked DSN; MVCC concurrent writers. Accepted by all
+#               three stores. With a shared DSN the engine creates `obs`,
+#               `lineage`, `depot` schemas inside the target database.
+#   redis     — depot-only KV; rejected at config-load for obs / lineage.
+#
+# `aqueduct stores info` prints the resolved backend per store.
+# `aqueduct stores migrate --from-duckdb <old.db>` copies depot KV rows.
 
 stores:
 
   obs:
     backend: duckdb
     path: ".aqueduct/obs.db"
-    # path: "s3://my-bucket/aqueduct/obs.db"   # remote path for future backends
+    # Postgres example (uncomment + install `aqueduct-core[postgres]`):
+    # backend: postgres
+    # path: "postgresql://aq@host:5432/aqueduct_db"
 
   lineage:
     backend: duckdb
     path: ".aqueduct/lineage.db"
+    # backend: postgres
+    # path: "postgresql://aq@host:5432/aqueduct_db"
 
   depot:
     backend: duckdb
     path: ".aqueduct/depot.db"
-    # path: "s3://my-bucket/aqueduct/depot.db"
+    # backend: postgres
+    # path: "postgresql://aq@host:5432/aqueduct_db"
+    # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
+    # backend: redis
+    # path: "redis://host:6379/0"
 
 
 # ── Cluster / Cloud deployment example ───────────────────────────────────────

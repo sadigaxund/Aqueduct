@@ -62,27 +62,91 @@ class DeploymentConfig(BaseModel):
     )
 
 
-class StoreBackendConfig(BaseModel):
+RelationalBackend = Literal["duckdb", "postgres"]
+KVBackend = Literal["duckdb", "postgres", "redis"]
+
+
+class RelationalStoreConfig(BaseModel):
+    """Backend config for stores that need SQL semantics (obs, lineage).
+
+    `redis` is rejected at parse time via the `RelationalBackend` Literal —
+    redis is KV-only and cannot satisfy joins/aggregates that the obs /
+    lineage queries rely on.
+    """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    backend: str = Field(default="duckdb", description="Storage backend: duckdb | s3 | gcs | adls")
-    path: str = Field(..., description="Local path or remote URI for the store")
+    backend: RelationalBackend = Field(
+        default="duckdb",
+        description=(
+            "Relational backend for this store. `duckdb` (default) is the "
+            "embedded single-writer file format. `postgres` is a networked "
+            "DSN — supports concurrent writers across multiple driver "
+            "processes. `s3 | gcs | adls` are deferred (TODOs.md Phase 28+)."
+        ),
+    )
+    path: str = Field(
+        ...,
+        description=(
+            "DuckDB: local file path. Postgres: libpq DSN such as "
+            "`postgresql://user:pass@host/aqueduct_db`."
+        ),
+    )
+
+
+class KVStoreConfig(BaseModel):
+    """Backend config for the depot — accepts relational or pure KV backends."""
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: KVBackend = Field(
+        default="duckdb",
+        description=(
+            "Depot backend. `duckdb` (default) or `postgres` for relational; "
+            "`redis` for high-QPS KV-only depot reads (watermarks, atomic "
+            "counters). `redis` is depot-only; choosing it for obs or "
+            "lineage is rejected at config load."
+        ),
+    )
+    path: str = Field(
+        ...,
+        description=(
+            "DuckDB: local file path. Postgres: libpq DSN. "
+            "Redis: `redis://host:port/db` URL."
+        ),
+    )
+
+
+# Backwards-compatible alias for code that still imports the old name.
+# The two new classes have identical shapes for the relational path; the
+# alias maps to `RelationalStoreConfig` so static typing keeps working.
+StoreBackendConfig = RelationalStoreConfig
 
 
 class StoresConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    obs: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/obs.db"),
-        description="Observability DB — full file path. Contains run records, probe signals, module metrics, and signal overrides. snapshots/ dir is created alongside it.",
+    obs: RelationalStoreConfig = Field(
+        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/obs.db"),
+        description=(
+            "Observability store. Contains run records, failure contexts, "
+            "healing outcomes, signal overrides, probe signals, module + "
+            "maintenance metrics. With postgres backend, tables live in the "
+            "`obs` schema of the target DB."
+        ),
     )
-    lineage: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/lineage.db"),
-        description="Column-level lineage DB — full file path. Must be in same directory as obs.db.",
+    lineage: RelationalStoreConfig = Field(
+        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/lineage.db"),
+        description=(
+            "Column-level lineage store. With postgres backend, tables live "
+            "in the `lineage` schema of the target DB."
+        ),
     )
-    depot: StoreBackendConfig = Field(
-        default_factory=lambda: StoreBackendConfig(path=".aqueduct/depot.db"),
-        description="Depot KV store (blueprint state, @aq.depot.*) — full file path.",
+    depot: KVStoreConfig = Field(
+        default_factory=lambda: KVStoreConfig(path=".aqueduct/depot.db"),
+        description=(
+            "Depot KV store (`@aq.depot.*`). With postgres backend, the "
+            "`depot_kv` table lives in the `depot` schema. With redis "
+            "backend, keys live directly in the configured Redis database."
+        ),
     )
 
 
@@ -297,6 +361,48 @@ _SECRETS_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
 }
 
 
+# Store backend → (probe module, install hint). Mirrors the secrets pattern.
+# `duckdb` is always available (it is a hard dependency of aqueduct-core).
+_STORE_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
+    "postgres": ("psycopg2", "pip install aqueduct-core[postgres]"),
+    "redis":    ("redis",    "pip install aqueduct-core[redis]"),
+}
+
+
+def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
+    """Fail fast at config-load if a store's backend SDK is missing.
+
+    Mirrors `_validate_secrets_backend()`. The `RelationalBackend` /
+    `KVBackend` Literal split already prevents `redis` from being chosen
+    for obs/lineage, so this function only needs to check driver
+    availability — it does not need to re-enforce the legal-combination
+    matrix.
+    """
+    import importlib.util as _import_util
+
+    seen: set[str] = set()
+    for store_label, backend in (
+        ("obs",     stores_cfg.obs.backend),
+        ("lineage", stores_cfg.lineage.backend),
+        ("depot",   stores_cfg.depot.backend),
+    ):
+        if backend == "duckdb":
+            continue
+        if backend in seen:
+            continue
+        seen.add(backend)
+        if backend not in _STORE_BACKEND_REQUIREMENTS:
+            continue  # Unknown backend — Literal validation will have caught it.
+        module_name, install_hint = _STORE_BACKEND_REQUIREMENTS[backend]
+        root_pkg = module_name.split(".")[0]
+        if _import_util.find_spec(root_pkg) is None:
+            raise ConfigError(
+                f"stores.*.backend={backend!r} (used by stores.{store_label}) "
+                f"requires the {root_pkg!r} package, which is not installed.\n"
+                f"Install it with:  {install_hint}"
+            )
+
+
 def _validate_secrets_backend(secrets_cfg: "SecretsConfig") -> None:
     """Fail fast at config-load if the configured secrets provider's SDK is missing.
 
@@ -431,5 +537,8 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # Fail fast on missing secrets-backend SDKs so the failure surface is
     # `aqueduct.yml` validation, not a generic ImportError mid-compile.
     _validate_secrets_backend(cfg.secrets)
+    # Same pattern for store backends — fail at config load instead of
+    # mid-run when the first DuckDB / Postgres / Redis connect() fires.
+    _validate_store_backends(cfg.stores)
 
     return cfg

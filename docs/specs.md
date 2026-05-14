@@ -1741,21 +1741,27 @@ deployment:
   env: local                       # local | cluster | cloud  — doctor warns on local paths in cluster/cloud
   master_url: "local[*]"           # overridden per target type
 stores:
-  # Per-store DuckDB file paths. The runtime artefacts under each parent dir are:
-  #   obs.db      — run records, failure contexts, probe signals, module metrics, signal overrides, healing_outcomes
+  # Phase 28 — pluggable store backends.
+  # Per-store backend dispatch. Accepted backends per store:
+  #   obs     : duckdb | postgres
+  #   lineage : duckdb | postgres
+  #   depot   : duckdb | postgres | redis    (KV — redis allowed here only)
+  #
+  # Runtime artefacts under each parent directory (DuckDB layout shown):
+  #   obs.db      — run records, failure contexts, probe signals, module/maintenance metrics, signal overrides, healing_outcomes
   #   lineage.db  — column-level lineage
   #   depot.db    — cross-run KV state (@aq.depot.*)
   #   snapshots/  — schema_snapshot JSON files (one file per probe per run, alongside obs.db)
   #   watermarks/ — sidecar JSON files for incremental Channels (alongside obs.db)
   obs:
-    backend: duckdb                # duckdb (default); s3 | gcs | adls are deferred (see TODOs.md / Phase 27)
-    path: ".aqueduct/obs.db"       # full file path
+    backend: duckdb                # duckdb | postgres
+    path: ".aqueduct/obs.db"       # DuckDB file path; for postgres pass a libpq DSN
   lineage:
-    backend: duckdb
-    path: ".aqueduct/lineage.db"   # full file path; must sit alongside obs.db for runtime joins
+    backend: duckdb                # duckdb | postgres
+    path: ".aqueduct/lineage.db"
   depot:
-    backend: duckdb
-    path: ".aqueduct/depot.db"     # full file path
+    backend: duckdb                # duckdb | postgres | redis
+    path: ".aqueduct/depot.db"     # for redis pass `redis://host:port/db`
 agent:
   provider: "anthropic"            # "anthropic" | "openai_compat"
   model: "claude-sonnet-4-6"

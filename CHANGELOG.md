@@ -4,6 +4,23 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 28 — Pluggable Store Backends
+_2026-05-14_
+
+Replace DuckDB's single-writer file constraint with a backend abstraction so multiple `aqueduct run` invocations can share observability / lineage / depot state. Default behaviour is unchanged (DuckDB everywhere).
+
+- **`aqueduct/stores/` package** — `ObsStore`, `LineageStore`, `DepotStore` ABCs plus three concrete adapters (`duckdb_`, `postgres`, `redis_`). All adapters share a `RelationalCursor` wrapper that rewrites DuckDB-style `?` placeholders to driver-native `%s` for Postgres on the way in, so call-site SQL stays portable.
+- **Config layer split:** `RelationalBackend = Literal["duckdb", "postgres"]` for `obs` / `lineage`; `KVBackend = Literal["duckdb", "postgres", "redis"]` for `depot`. Redis-as-obs / redis-as-lineage is rejected by Pydantic at config-load. SDK-availability check at `load_config()` errors with install hints when `psycopg2` / `redis-py` are missing.
+- **Postgres backend:** single database, three schemas (`obs`, `lineage`, `depot`), auto-created idempotently on first connect. Shared DSNs are pool-deduplicated — three matching DSNs in `aqueduct.yml` open one pool.
+- **Redis backend (depot-only):** in-memory KV for high-QPS watermark reads. `BackendUnsupportedError` on attempts to use `connect()` for relational queries (defense-in-depth; the Literal split already prevents the misconfiguration upstream).
+- **Wired call sites:** `Surveyor.start/record/record_healing_outcome/count_recent_heal_attempts/evaluate_regulator/get_probe_signal/stop`, `aqueduct signal`, `DepotStore`, `compiler/lineage.write_lineage`, `executor/spark/probe.execute_probe`, `executor/spark/executor` `_write_stage_metrics` / `_write_maintenance_metrics` / `_update_metric` all dispatch through `aqueduct.stores.get_stores(cfg)`. Each function retains a default-DuckDB fallback so existing tests and direct programmatic callers keep working.
+- **`aqueduct stores` CLI group:** `stores info` prints each store's resolved backend + location label (DSN passwords redacted). `stores migrate --from-duckdb <old.db>` copies depot KV rows into the configured target backend; obs/lineage row migration is deferred to a follow-up (manual route documented in CLI help).
+- **`aqueduct doctor`:** new per-store reachability probes via `check_store_backend()` — DuckDB connect + `SELECT 1`, Postgres connect + `SELECT 1`, Redis `PING`. Replaces the legacy `check_depot` / `check_observability` calls.
+- **`pyproject.toml`:** new `[postgres]` and `[redis]` extras (`psycopg2-binary>=2.9`, `redis>=5.0`); `[all]` now pulls both.
+- **Templates and docs:** `aqueduct.yml.template` + spec §10.1 + `docs/ALL_TABLES.md` updated with the backend matrix and Postgres schema layout.
+
+---
+
 ### Phase 27 — Audit Cleanup
 _2026-05-14_
 

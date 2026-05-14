@@ -22,68 +22,51 @@ Usage in Blueprint YAML:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-_DDL = """
-CREATE TABLE IF NOT EXISTS depot_kv (
-    key        VARCHAR PRIMARY KEY,
-    value      VARCHAR NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL
-);
-"""
+if TYPE_CHECKING:
+    from aqueduct.stores import DepotStore as _DepotStoreBackend
 
 
 class DepotStore:
-    """Thread-safe-ish DuckDB-backed KV store for blueprint state.
+    """Façade over the Phase 28 store-abstraction depot backend.
 
-    Designed for driver-side use only (workers cannot write here).
+    Historically `DepotStore` opened a DuckDB connection per call. Phase 28
+    moved that logic behind `aqueduct.stores.DepotStore` (the ABC) so the
+    depot can be backed by DuckDB, Postgres, or Redis without touching
+    call sites. This class keeps the legacy `.get()` / `.put()` /
+    `.close()` API and delegates to whichever backend is configured.
+
+    Construct either with a backend object (`DepotStore(backend=...)`,
+    the path used by the CLI Phase 28 wiring) or with a legacy file path
+    (`DepotStore(db_path=...)`, which preserves the pre-Phase-28 DuckDB
+    behaviour for direct programmatic callers).
     """
 
-    def __init__(self, db_path: Path) -> None:
-        self._path = db_path
+    def __init__(
+        self,
+        db_path: Path | None = None,
+        *,
+        backend: "_DepotStoreBackend | None" = None,
+    ) -> None:
+        if backend is not None:
+            self._backend = backend
+        elif db_path is not None:
+            from aqueduct.stores.duckdb_ import DuckDBDepotStore
+            self._backend = DuckDBDepotStore(db_path)
+        else:
+            raise TypeError("DepotStore requires either db_path or backend")
 
     def get(self, key: str, default: str = "") -> str:
-        """Return stored value for *key*, or *default* if absent/DB missing."""
-        import duckdb
-
-        if not self._path.exists():
-            return default
-        try:
-            conn = duckdb.connect(str(self._path), read_only=True)
-            try:
-                row = conn.execute(
-                    "SELECT value FROM depot_kv WHERE key = ?", [key]
-                ).fetchone()
-                return row[0] if row else default
-            finally:
-                conn.close()
-        except Exception as exc:
-            logger.warning("DepotStore.get(%r): %s — returning default", key, exc)
-            return default
+        """Return stored value for *key*, or *default* if absent."""
+        return self._backend.kv_get(key, default)
 
     def put(self, key: str, value: str) -> None:
-        """Upsert *key* → *value* with current UTC timestamp."""
-        import duckdb
-
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(str(self._path))
-        try:
-            conn.execute(_DDL)
-            conn.execute(
-                """
-                INSERT INTO depot_kv (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT (key) DO UPDATE
-                    SET value = excluded.value,
-                        updated_at = excluded.updated_at
-                """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
-            )
-        finally:
-            conn.close()
+        """Upsert *key* → *value* with current UTC timestamp (when supported)."""
+        self._backend.kv_put(key, value)
 
     def close(self) -> None:
-        """No-op — connections are opened/closed per-call."""
+        """No-op — connections are managed by the underlying store backend."""

@@ -792,9 +792,12 @@ def run(
                 click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
                 sys.exit(1)
 
-        # ── Depot — open before compile so @aq.depot.get() resolves ──────────────
-        depot_path = Path(cfg.stores.depot.path)
-        depot = DepotStore(depot_path)
+        # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
+        # Depot must be ready before compile() so @aq.depot.get() in the
+        # Blueprint can resolve.
+        from aqueduct.stores import get_stores
+        bundle = get_stores(cfg, store_dir_override=store_dir_abs)
+        depot = DepotStore(backend=bundle.depot)
 
         # ── Parse ──────────────────────────────────────────────────────────────────
         try:
@@ -915,12 +918,29 @@ def run(
             )
 
         # ── Surveyor — start ───────────────────────────────────────────────────────
+        # For DuckDB defaults the bundle's obs store points at `.aqueduct/obs.db`;
+        # rebuild with the per-pipeline resolved_store_dir so the obs store lives
+        # under `.aqueduct/obs/<blueprint_id>/` like before Phase 28.
+        if cfg.stores.obs.backend == "duckdb":
+            from aqueduct.stores.duckdb_ import (
+                DuckDBDepotStore,
+                DuckDBLineageStore,
+                DuckDBObsStore,
+            )
+            from aqueduct.stores import StoreBundle
+            bundle = StoreBundle(
+                obs=DuckDBObsStore(resolved_store_dir / "obs.db"),
+                lineage=DuckDBLineageStore(resolved_store_dir / "lineage.db"),
+                depot=bundle.depot,  # depot path stays user-configured
+            )
+            depot = DepotStore(backend=bundle.depot)
         surveyor = Surveyor(
             manifest,
             store_dir=resolved_store_dir,
             webhook_config=resolved_webhook,
             blueprint_path=Path(blueprint),
             patches_dir=patches_dir,
+            stores=bundle,
         )
         surveyor.start(run_id)
 
@@ -957,6 +977,8 @@ def run(
                     block_full_actions=not cfg.danger.allow_full_probe_actions,
                     parallel=parallel,
                     use_observe=cfg.metrics.use_observe,
+                    obs_store=bundle.obs,
+                    lineage_store=bundle.lineage,
                 )
             except ExecuteError as exc:
                 execute_exc = exc
@@ -2173,29 +2195,26 @@ def signal(
     """
     from datetime import datetime, timezone
 
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
+    from aqueduct.stores import get_stores
     from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
 
     if value_str is None and error_msg is None:
         # Show current override status
-        try:
-            cfg = load_config(Path(config_path) if config_path else None)
-        except ConfigError as exc:
-            click.echo(f"✗ config error: {exc}", err=True)
-            sys.exit(1)
-        resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
-        obs_db = resolved / "obs.db"
-        conn = _duckdb.connect(str(obs_db))
-        try:
-            conn.execute(_SIGNAL_OVERRIDES_DDL)
-            row = conn.execute(
+        with bundle.obs.connect() as cur:
+            cur.execute(_SIGNAL_OVERRIDES_DDL)
+            row = cur.execute(
                 "SELECT passed, error_message, CAST(set_at AS VARCHAR) FROM signal_overrides WHERE signal_id = ?",
                 [signal_id],
             ).fetchone()
-        finally:
-            conn.close()
         if row is None:
             click.echo(f"  {signal_id}: no persistent override (evaluates from Probe data)")
         else:
@@ -2210,31 +2229,17 @@ def signal(
         sys.exit(1)
 
     # Resolve passed value
-    if value_str == "true":
-        passed = True
-    else:
-        passed = False  # explicit false OR error_msg provided
-
-    try:
-        cfg = load_config(Path(config_path) if config_path else None)
-    except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
-
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
-    resolved.mkdir(parents=True, exist_ok=True)
-    obs_db = resolved / "obs.db"
+    passed = value_str == "true"
 
     now = datetime.now(tz=timezone.utc).isoformat()
-    conn = _duckdb.connect(str(obs_db))
-    try:
-        conn.execute(_SIGNAL_OVERRIDES_DDL)
+    with bundle.obs.connect() as cur:
+        cur.execute(_SIGNAL_OVERRIDES_DDL)
         if passed:
             # Clear override — delete row entirely
-            conn.execute("DELETE FROM signal_overrides WHERE signal_id = ?", [signal_id])
+            cur.execute("DELETE FROM signal_overrides WHERE signal_id = ?", [signal_id])
             click.echo(f"✓ signal {signal_id!r}: override cleared — gate resumes normal Probe evaluation")
         else:
-            conn.execute(
+            cur.execute(
                 """
                 INSERT INTO signal_overrides (signal_id, passed, error_message, set_at)
                 VALUES (?, ?, ?, ?)
@@ -2249,8 +2254,6 @@ def signal(
             click.echo(f"✓ signal {signal_id!r}: gate CLOSED — all future runs blocked at this Regulator")
             if msg_note:
                 click.echo(msg_note)
-    finally:
-        conn.close()
 
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
@@ -2848,6 +2851,125 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     click.echo(f"✓ rolled back patch {patch_id!r}  [{short}]")
     for f in touched_files:
         click.echo(f"  restored  {f}  (from {parent_hash[:8]})")
+
+
+# ── aqueduct stores ──────────────────────────────────────────────────────────
+
+
+@cli.group("stores")
+def stores_group() -> None:
+    """Inspect and migrate the configured store backends (Phase 28)."""
+
+
+@stores_group.command("info")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml",
+)
+def stores_info(config_path: str | None) -> None:
+    """Print each store's resolved backend + location label."""
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.stores import get_stores
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    bundle = get_stores(cfg)
+    rows = [
+        ("obs",     bundle.obs.backend,     bundle.obs.location_label),
+        ("lineage", bundle.lineage.backend, bundle.lineage.location_label),
+        ("depot",   bundle.depot.backend,   bundle.depot.location_label),
+    ]
+    w0 = max(len(r[0]) for r in rows)
+    w1 = max(len(r[1]) for r in rows)
+    click.echo(f"  {'store'.ljust(w0)}  {'backend'.ljust(w1)}  location")
+    click.echo(f"  {'-' * w0}  {'-' * w1}  --------")
+    for store, backend, loc in rows:
+        click.echo(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}")
+
+
+@stores_group.command("migrate")
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Path to aqueduct.yml (the TARGET config — backend must already be set to postgres/redis)",
+)
+@click.option(
+    "--from-duckdb",
+    "from_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the source DuckDB file (typically `.aqueduct/depot.db`)",
+)
+@click.option(
+    "--store",
+    type=click.Choice(["depot"], case_sensitive=False),
+    default="depot",
+    show_default=True,
+    help=(
+        "Which store to migrate. v1 ships depot migration only; obs/lineage "
+        "migration requires schema-aware row copying and is tracked in TODOs.md "
+        "for a follow-up phase. Document the manual route: COPY each DuckDB "
+        "table to Parquet, then `\\copy obs.<table> FROM 'file.parquet'` on PG."
+    ),
+)
+def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:
+    """Copy KV rows from a DuckDB file into the configured target backend.
+
+    Useful when promoting an existing DuckDB-backed project to Postgres or Redis
+    without losing depot watermarks and counters. Idempotent: re-running upserts
+    the same keys with the same values.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.stores import get_stores
+
+    if store.lower() != "depot":
+        click.echo(f"✗ unsupported --store: {store}", err=True)
+        sys.exit(1)
+
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(1)
+
+    bundle = get_stores(cfg)
+    target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
+    if bundle.depot.backend == "duckdb" and Path(bundle.depot.location_label) == Path(from_path).resolve():
+        click.echo("✗ source and target depot are the same DuckDB file; nothing to migrate", err=True)
+        sys.exit(1)
+
+    try:
+        import duckdb as _duckdb
+    except ImportError as exc:
+        click.echo(f"✗ duckdb not installed: {exc}", err=True)
+        sys.exit(1)
+
+    conn = _duckdb.connect(str(Path(from_path).resolve()), read_only=True)
+    try:
+        rows = conn.execute("SELECT key, value FROM depot_kv").fetchall()
+    except Exception as exc:
+        click.echo(f"✗ could not read depot_kv from {from_path}: {exc}", err=True)
+        sys.exit(1)
+    finally:
+        conn.close()
+
+    if not rows:
+        click.echo(f"  source depot has 0 rows — nothing to copy ({from_path})")
+        return
+
+    for key, value in rows:
+        bundle.depot.kv_put(str(key), str(value))
+
+    click.echo(f"✓ migrated {len(rows)} depot key(s)  source={from_path}  target={target_label}")
 
 
 # ── aqueduct init ─────────────────────────────────────────────────────────────

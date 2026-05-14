@@ -937,6 +937,96 @@ def check_aqscenario(aqscenario_path: Path) -> list[CheckResult]:
     return results
 
 
+def check_store_backend(
+    label: str,
+    store_cfg: Any,
+    *,
+    is_kv_only: bool = False,
+) -> CheckResult:
+    """Probe a single configured store backend for reachability.
+
+    Args:
+        label:       Display label — `obs`, `lineage`, or `depot`.
+        store_cfg:   Pydantic store config (`RelationalStoreConfig` or
+                     `KVStoreConfig`). Has `.backend` and `.path` attributes.
+        is_kv_only:  When True, treats redis as a valid backend (depot only).
+
+    Returns:
+        `CheckResult` with status `ok | fail | warn`. Failures include the
+        connection error message.
+    """
+    t = time.monotonic()
+    backend = store_cfg.backend
+    path_or_dsn = store_cfg.path
+
+    if backend == "duckdb":
+        try:
+            import duckdb as _duckdb
+            from pathlib import Path as _Path
+            p = _Path(path_or_dsn)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            conn = _duckdb.connect(str(p))
+            try:
+                conn.execute("SELECT 1").fetchone()
+            finally:
+                conn.close()
+            return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}", _ms(t))
+        except Exception as exc:
+            return CheckResult(label, "fail", f"backend=duckdb  path={path_or_dsn}  error={exc}", _ms(t))
+
+    if backend == "postgres":
+        try:
+            import psycopg2  # type: ignore[import-not-found]
+        except ImportError:
+            return CheckResult(
+                label, "fail",
+                f"backend=postgres but psycopg2 not installed — "
+                "`pip install aqueduct-core[postgres]`",
+                _ms(t),
+            )
+        try:
+            conn = psycopg2.connect(path_or_dsn, connect_timeout=5)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+            finally:
+                conn.close()
+            # Redact DSN for log line — password lives inside path_or_dsn
+            from aqueduct.stores.postgres import _PostgresRelational
+            redacted = _PostgresRelational.__dict__["location_label"].fget(
+                type("S", (), {"_dsn": path_or_dsn})()
+            )
+            return CheckResult(label, "ok", f"backend=postgres  dsn={redacted}", _ms(t))
+        except Exception as exc:
+            return CheckResult(label, "fail", f"backend=postgres  error={exc}", _ms(t))
+
+    if backend == "redis":
+        if not is_kv_only:
+            return CheckResult(
+                label, "fail",
+                "backend=redis is depot-only; obs and lineage need duckdb or postgres",
+                _ms(t),
+            )
+        try:
+            import redis as _redis  # type: ignore[import-not-found]
+        except ImportError:
+            return CheckResult(
+                label, "fail",
+                "backend=redis but redis-py not installed — "
+                "`pip install aqueduct-core[redis]`",
+                _ms(t),
+            )
+        try:
+            client = _redis.Redis.from_url(path_or_dsn, socket_connect_timeout=5)
+            client.ping()
+            return CheckResult(label, "ok", f"backend=redis  url={path_or_dsn}", _ms(t))
+        except Exception as exc:
+            return CheckResult(label, "fail", f"backend=redis  error={exc}", _ms(t))
+
+    return CheckResult(label, "warn", f"backend={backend!r} unknown", _ms(t))
+
+
 def run_doctor(
     config_path: Path | None = None,
     skip_spark: bool = False,
@@ -994,11 +1084,12 @@ def run_doctor(
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
 
-    # Depot
-    results.append(check_depot(Path(cfg.stores.depot.path)))
-
-    # Observability
-    results.append(check_observability(Path(cfg.stores.obs.path)))
+    # Per-store backend reachability — replaces the legacy obs.db/depot.db
+    # file probes when a non-DuckDB backend is configured. For DuckDB
+    # backends both probes still run and report the same OK signal.
+    results.append(check_store_backend("obs",     cfg.stores.obs))
+    results.append(check_store_backend("lineage", cfg.stores.lineage))
+    results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True))
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))

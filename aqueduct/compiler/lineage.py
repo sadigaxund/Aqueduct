@@ -132,20 +132,24 @@ def write_lineage(
     modules: tuple[Any, ...],
     edges: tuple[Any, ...],
     store_dir: Path,
+    lineage_store: Any = None,
 ) -> None:
     """Extract and persist column-level lineage for all Channel modules.
 
     Args:
-        blueprint_id: Blueprint ID (from Manifest).
-        run_id:      Run UUID.
-        modules:     Compiled module list (flat, post-expansion).
-        edges:       Compiled edge list.
-        store_dir:   Root observability store directory.
+        blueprint_id:  Blueprint ID (from Manifest).
+        run_id:        Run UUID.
+        modules:       Compiled module list (flat, post-expansion).
+        edges:         Compiled edge list.
+        store_dir:     Root observability store directory (used to derive a
+                       DuckDB lineage path when no `lineage_store` is supplied).
+        lineage_store: Optional Phase 28 `LineageStore` backend. When None,
+                       falls back to a DuckDB file at ``store_dir/lineage.db``
+                       for backwards-compatible direct callers.
 
     No exception propagates — lineage failure must never block compilation.
     """
     try:
-        import duckdb
         from datetime import datetime, timezone
 
         channel_modules = [m for m in modules if m.type == "Channel" and m.config.get("op") == "sql"]
@@ -170,14 +174,16 @@ def write_lineage(
         if not all_rows:
             return
 
-        store_dir.mkdir(parents=True, exist_ok=True)
-        db_path = store_dir / "lineage.db"
+        if lineage_store is None:
+            from aqueduct.stores.duckdb_ import DuckDBLineageStore
+            store_dir.mkdir(parents=True, exist_ok=True)
+            lineage_store = DuckDBLineageStore(store_dir / "lineage.db")
+
         now = datetime.now(tz=timezone.utc).isoformat()
 
-        conn = duckdb.connect(str(db_path))
-        try:
-            conn.execute(_DDL)
-            conn.executemany(
+        with lineage_store.connect() as cur:
+            cur.execute(_DDL)
+            cur.executemany(
                 """
                 INSERT INTO column_lineage
                     (blueprint_id, run_id, channel_id, output_column, source_table, source_column, captured_at)
@@ -196,8 +202,6 @@ def write_lineage(
                     for r in all_rows
                 ],
             )
-        finally:
-            conn.close()
 
         logger.debug(
             "Lineage: wrote %d rows for blueprint %r run %r",

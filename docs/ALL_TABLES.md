@@ -1,7 +1,8 @@
 # Aqueduct Observability — All Tables Reference
 
-Aqueduct writes runtime state into three DuckDB files under the configured
-`stores.*.path`. Default layout (per-blueprint):
+Aqueduct writes runtime state into three logical stores: **observability**,
+**lineage**, and **depot**. Phase 28 introduced pluggable backends for each.
+Default DuckDB layout (per-blueprint):
 
 ```
 .aqueduct/
@@ -13,8 +14,16 @@ Aqueduct writes runtime state into three DuckDB files under the configured
   checkpoints/    ← Parquet checkpoint dirs per --resume run_id
 ```
 
+When `backend: postgres` is configured for a store, the tables documented
+below live in a per-store schema (`obs.*`, `lineage.*`, `depot.*`) inside
+a single Postgres database. When `backend: redis` is configured for the
+depot, the `depot_kv` keys live directly in the configured Redis database
+without a relational table. SQL examples below run against DuckDB and
+Postgres unchanged — the engine uses standard ANSI SQL and rewrites
+`?` placeholders to `%s` for Postgres internally.
+
 Every CREATE TABLE statement listed below uses `IF NOT EXISTS`, so attaching to
-an existing DuckDB file is non-destructive. Aqueduct also performs additive
+an existing store is non-destructive. Aqueduct also performs additive
 schema migrations on startup (see `aqueduct/surveyor/surveyor.py:_DDL`).
 
 ---
