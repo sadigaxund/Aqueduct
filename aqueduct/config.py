@@ -42,11 +42,13 @@ class ConfigError(Exception):
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    engine: str = Field(
+    engine: Literal["spark", "flink"] = Field(
         default="spark",
         description="Execution engine.  Currently supported: spark.  Planned: flink.",
     )
-    target: str = Field(
+    target: Literal[
+        "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
+    ] = Field(
         default="local",
         description="Deployment target: local | standalone | yarn | kubernetes | databricks | emr | dataproc",
     )
@@ -275,6 +277,42 @@ class AqueductConfig(BaseModel):
 
 _DEFAULT_FILENAME = "aqueduct.yml"
 
+
+# Provider → (probe module, install hint). Keep in sync with secrets.py and
+# pyproject.toml [project.optional-dependencies].
+_SECRETS_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
+    "aws":   ("boto3",                           "pip install aqueduct-core[aws]"),
+    "gcp":   ("google.cloud.secretmanager",      "pip install aqueduct-core[gcp]"),
+    "azure": ("azure.keyvault.secrets",          "pip install aqueduct-core[azure]"),
+}
+
+
+def _validate_secrets_backend(secrets_cfg: "SecretsConfig") -> None:
+    """Fail fast at config-load if the configured secrets provider's SDK is missing.
+
+    Mirrors the check `aqueduct doctor:check_secrets()` performs, but earlier in
+    the lifecycle so `aqueduct run` doesn't error mid-compile with a generic
+    ImportError. `provider: env` and `provider: custom` require no SDK.
+    """
+    provider = secrets_cfg.provider
+    if provider in ("env", "custom"):
+        return
+    if provider not in _SECRETS_BACKEND_REQUIREMENTS:
+        return  # Unknown provider — let the resolver raise its own clear error.
+    import importlib.util as _import_util
+
+    module_name, install_hint = _SECRETS_BACKEND_REQUIREMENTS[provider]
+    # find_spec walks the top-level package; nested attribute paths are tolerated
+    # by checking only the first segment we can actually resolve.
+    root_pkg = module_name.split(".")[0]
+    if _import_util.find_spec(root_pkg) is None:
+        raise ConfigError(
+            f"secrets.provider={provider!r} requires the {root_pkg!r} package, "
+            f"which is not installed.\n"
+            f"Install it with:  {install_hint}\n"
+            f"Or install all secret backends:  pip install aqueduct-core[secrets]"
+        )
+
 _ENV_VAR_RE = re.compile(r'\$\{([^}:]+)(?::[-]?(.*?))?\}')
 # Matches: "@aq.secret('KEY')" or "@aq.secret(\"KEY\")" with optional surrounding YAML quotes
 _AQ_SECRET_RE = re.compile(r"""["']?@aq\.secret\(['"]([^'"]+)['"]\)["']?""")
@@ -376,6 +414,12 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
     try:
-        return AqueductConfig.model_validate(data)
+        cfg = AqueductConfig.model_validate(data)
     except ValidationError as exc:
         raise ConfigError(_format_config_error(resolved, exc)) from exc
+
+    # Fail fast on missing secrets-backend SDKs so the failure surface is
+    # `aqueduct.yml` validation, not a generic ImportError mid-compile.
+    _validate_secrets_backend(cfg.secrets)
+
+    return cfg

@@ -4,6 +4,27 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Audit Batch 2 — Config tightening, version flag, secrets packaging, spec sync
+_2026-05-14_
+
+- **`aqueduct --version` flag:** wires `click.version_option` to `aqueduct.__version__`, which is now sourced from installed package metadata (`importlib.metadata.version("aqueduct-core")`). No more hardcoded literal drifting from `pyproject.toml`. Falls back to `0.0.0+unknown` when run from a source checkout without an editable install.
+- **`DeploymentConfig.engine` and `target` typed as `Literal[...]`:** typos in `aqueduct.yml` (e.g. `target: kubernetss`) now fail at config validation instead of at session-creation time. Accepted `engine` values: `spark`, `flink`. Accepted `target` values: `local | standalone | yarn | kubernetes | databricks | emr | dataproc`.
+- **Spec §14.1 / §14.2 / §14.4 / §14.10 reconciled with code:** spec previously documented a top-level `deployment_env:` key, a nested `spark.master/config:` block, and a non-existent `store_dir:` field. Real schema is `deployment.env`, `deployment.master_url`, top-level `spark_config:`, and per-store `stores.{obs,lineage,depot}.path`. Spec now matches what the Pydantic model actually accepts. Invented `AQ_SPARK_EXECUTOR_CORES` / `_MEMORY` / `_DRIVER_MEMORY` env vars (never read by code) removed from §14.2.
+- **New `[secrets]` extra (`pip install aqueduct-core[secrets]`):** aggregates the existing `[aws]`, `[gcp]`, `[azure]` extras so users who haven't decided on a backend can install all three at once. `[all]` now also includes `[secrets]`.
+- **Early secrets-backend SDK check at `load_config()`:** if `secrets.provider` is `aws | gcp | azure` but the matching SDK package isn't importable, `ConfigError` is raised immediately with both granular and aggregate install hints. Previously this surfaced as a generic `ImportError` mid-compile when the first `@aq.secret()` resolved. `aqueduct doctor:check_secrets` retains the same check for offline diagnostics.
+
+---
+
+### Audit Batch 1 — Security + Config Hygiene
+_2026-05-14_
+
+- **Patch guardrail fix (security):** `agent.guardrails.allowed_paths` now enforces against every patch op that can write a `path`/`output_path` config value — `set_module_config_key`, `replace_module_config`, `insert_module`, `add_probe`, and `add_arcade_ref`. Previously only `set_module_config_key` was checked, so an LLM-generated `replace_module_config` could carry a path outside the fnmatch whitelist and bypass the guard. Provenance-based `${ctx.*}` resolution is preserved for all ops. New regression tests in `tests/test_patch/test_guardrails_rollback.py`.
+- **Removed dead `_check_guardrails` shadow in `aqueduct/cli.py`** — the real enforcement is in `aqueduct/patch/apply.py`. The CLI-side copy was never reachable from production code paths (the `run` command imports the apply.py version). Existing tests that referenced the dead function were rewritten against the authoritative implementation.
+- **Removed dead `probes.block_full_actions_in_prod` flag** — superseded by `danger.allow_full_probe_actions` (inverted polarity) in Phase 20 but the field remained in `ProbesConfig` and the shipped `aqueduct.yml.template`. Users following the template configured a no-op. Field removed; template comment block rewritten to point at the active gate. Existing `aqueduct.yml` files that still set the flag will fail with `extra inputs are not permitted` — delete the key.
+- **New `metrics.use_observe` toggle (default `true`):** wraps each Ingress read / Egress write with `DataFrame.observe()` for accurate per-module `records_read` / `records_written`. Set `false` in high-throughput production blueprints to skip the observe() node and avoid the ~5–15% throughput hit from broken whole-stage codegen — SparkListener stage metrics still collected (stage-fusion caveat applies). Wired through `aqueduct.executor.spark.executor.execute(use_observe=...)` and `aqueduct.executor.spark.metrics.observe_df(enabled=...)`.
+
+---
+
 ### Phase 26b — Secrets Provider Backends
 _2026-05-13_
 

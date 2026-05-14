@@ -65,11 +65,12 @@ pip install aqueduct-core
 pip install aqueduct-core[spark]
 
 # With secrets provider backends
-pip install aqueduct-core[aws]    # AWS Secrets Manager (boto3)
-pip install aqueduct-core[gcp]    # GCP Secret Manager
-pip install aqueduct-core[azure]  # Azure Key Vault
+pip install aqueduct-core[aws]      # AWS Secrets Manager (boto3)
+pip install aqueduct-core[gcp]      # GCP Secret Manager
+pip install aqueduct-core[azure]    # Azure Key Vault
+pip install aqueduct-core[secrets]  # All three secrets backends at once
 
-# Everything
+# Everything (Spark + every secrets backend)
 pip install aqueduct-core[all]
 ```
 
