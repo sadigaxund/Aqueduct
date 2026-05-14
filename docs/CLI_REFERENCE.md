@@ -3,7 +3,13 @@
 Commands grouped by workflow. All commands accept `--config <path>` to point at a
 non-default `aqueduct.yml`; Aqueduct also walks up from the CWD automatically.
 
-Global flag: `-v` / `--verbose` — DEBUG logging (LLM responses, SQL plans, resolver steps).
+**Global flags** (placed before the subcommand):
+
+| Flag | Description |
+|---|---|
+| `--version` | Print the installed `aqueduct-core` version (sourced from `importlib.metadata`) and exit. |
+| `-v`, `--verbose` | DEBUG logging — LLM responses, SQL plans, resolver steps. |
+| `--log-format text\|json` | `text` (default) is the human-readable formatter. `json` emits one JSON object per record (`ts`, `level`, `logger`, `msg`, plus `exc` when an exception was logged) for shipping to Loki / Splunk / Datadog. |
 
 ---
 

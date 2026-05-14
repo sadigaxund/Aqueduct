@@ -1666,3 +1666,71 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 ### doctor `pyspark` import discipline
 
 - ⏳ `import aqueduct.doctor` from a fresh interpreter (no pyspark installed) does NOT raise `ImportError`. Verifies the three pyspark imports remain inside function bodies, not at module top. Regression for the documented "doctor.py is the spark-isolation exception" rule in `CLAUDE.md`.
+
+---
+
+## Audit Cleanup (Batches 4–6) — 2026-05-14
+
+### `doctor --aqtest` / `doctor --aqscenario` — `aqueduct/doctor.py:check_aqtest()` / `check_aqscenario()`
+
+- [ ] **NEW** `check_aqtest(path)`: missing file → single `CheckResult(status="fail", detail contains "file not found")`
+- [ ] **NEW** `check_aqtest(path)`: malformed YAML → `fail` with `invalid YAML` in detail
+- [ ] **NEW** `check_aqtest(path)`: top-level non-mapping → `fail`
+- [ ] **NEW** `check_aqtest(path)`: missing or wrong `aqueduct_test` version → `fail`
+- [ ] **NEW** `check_aqtest(path)`: missing `blueprint:` field → `fail`
+- [ ] **NEW** `check_aqtest(path)`: blueprint reference does not resolve → `fail` with resolved path in message
+- [ ] **NEW** `check_aqtest(path)`: empty `tests:` list → single `warn` result
+- [ ] **NEW** `check_aqtest(path)`: test case `module` does not exist in referenced blueprint → `fail` listing available module IDs
+- [ ] **NEW** `check_aqtest(path)`: test case missing `assertions` → reported under "test case issues"
+- [ ] **NEW** `check_aqtest(path)`: all module IDs resolve + assertions present → `ok`
+- [ ] **NEW** `check_aqscenario(path)`: reuses `aqueduct.surveyor.scenario.load_scenario` so the same version/key checks apply
+- [ ] **NEW** `check_aqscenario(path)`: `inject_failure.module` not in referenced blueprint → `fail`
+- [ ] **NEW** `check_aqscenario(path)`: blueprint reference points at non-existent file → `fail`
+- [ ] **NEW** `check_aqscenario(path)`: valid scenario → `ok` with `id` and `failed_module` echoed
+- [ ] **NEW** `aqueduct doctor --aqtest <path>` runs only the aqtest check + the standard config / store / secrets checks
+- [ ] **NEW** `aqueduct doctor --aqtest <path> --aqscenario <path2>` runs both file pre-flights in one pass
+- [ ] **NEW** `aqueduct doctor --blueprint <path> --aqtest <path>` runs all per-file checks (additive flags)
+- [ ] **NEW** Any failed `aqtest` / `aqscenario` check sets process exit code 1
+
+### `compile --show {manifest|provenance|inputs|all}` — `aqueduct/cli.py:_render_compile_show()`
+
+- [ ] **NEW** `--show manifest` (default) → byte-identical JSON to pre-flag behaviour
+- [ ] **NEW** `--show provenance` → emits the `# Context` section first, then a `# Module: <id>` section per module, each with a `key | source_type | original_expression | resolved_value` table
+- [ ] **NEW** `--show provenance` on a blueprint with no `context:` block → still emits per-module tables; context section omitted
+- [ ] **NEW** `--show inputs` → emits `module_id | path | size | last_modified` table; remote paths render `—` for size + last_modified
+- [ ] **NEW** `--show inputs` on a blueprint with no Ingress modules → "(no Ingress modules; inputs_fingerprint is empty)"
+- [ ] **NEW** `--show all` → full manifest JSON + both rendered tables, separated by `── Provenance ──` and `── Inputs fingerprint ──` headers
+- [ ] **NEW** `--show provenance` rendered table uses `original_expression` (not `origin_expression`) for the column header — guards against the field-rename regression
+- [ ] **NEW** Invalid value (e.g. `--show foo`) → click reports allowed choices and exits non-zero
+
+### LLM spend-cap — `agent.max_heal_attempts_per_hour`
+
+- [ ] **NEW** `AgentSchema` accepts integer values and `null` for `max_heal_attempts_per_hour` (frozen at `extra="forbid"`)
+- [ ] **NEW** `AgentConnectionConfig` accepts integer values and `null` for `max_heal_attempts_per_hour`
+- [ ] **NEW** Blueprint value of `max_heal_attempts_per_hour` wins over engine value when both are set
+- [ ] **NEW** `Surveyor.count_recent_heal_attempts(within_minutes=60)` returns 0 when `start()` has not been called (no connection)
+- [ ] **NEW** `Surveyor.count_recent_heal_attempts(within_minutes=60)` counts rows whose `applied_at >= now - 60min`; rows outside the window are excluded
+- [ ] **NEW** `Surveyor.count_recent_heal_attempts(...)` swallows DB errors and returns 0 (defensive)
+- [ ] **NEW** CLI loop: with `max_heal_attempts_per_hour=2` and 2 prior healing rows in `obs.db`, the next failure emits the `⊘ LLM rate-limit reached` line and breaks the loop without calling `generate_llm_patch`
+- [ ] **NEW** CLI loop: with `max_heal_attempts_per_hour=None` (default) the rate-limit check is skipped entirely
+
+### Cloudpickle hardening — `aqueduct/executor/spark/udf.py:_patch_pyspark_cloudpickle()`
+
+- [ ] **NEW** Python ≤ 3.12 → function returns immediately, no warning logged
+- [ ] **NEW** Python 3.13+, system `cloudpickle` not installed → `logger.warning` with `pip install cloudpickle` hint
+- [ ] **NEW** Python 3.13+, `pyspark.cloudpickle` import succeeds → patch applied, `logger.info` confirmation
+- [ ] **NEW** Python 3.13+, `pyspark.cloudpickle` raises ImportError but `pyspark.cloudpickle_fast` succeeds → patch applied, log includes `cloudpickle_fast` as the path
+- [ ] **NEW** Python 3.13+, none of `pyspark.cloudpickle` / `cloudpickle_fast` / `_cloudpickle` importable → `logger.warning` ("not importable under any known path") + skip
+- [ ] **NEW** Python 3.13+, bundled module imported but missing `dumps` / `loads` / `CloudPickler` → `logger.warning` listing the missing attrs + skip (no AttributeError)
+- [ ] **NEW** Python 3.13+, version-parse failure on `__version__` strings → `logger.warning` mentioning parse failure + skip
+- [ ] **NEW** Python 3.13+, system cloudpickle version ≤ bundled version → no patch, no warning
+
+### `--log-format json` — `aqueduct/cli.py:_AqueductJsonLogFormatter`
+
+- [ ] **NEW** `_AqueductJsonLogFormatter.format(record)` returns a valid JSON object string with `ts` / `level` / `logger` / `msg` keys
+- [ ] **NEW** `ts` is ISO-8601 UTC parsed from `record.created`
+- [ ] **NEW** Records with `exc_info` set get an additional `exc` field containing the formatted traceback string
+- [ ] **NEW** Records with non-serialisable arguments fall back to `str()` via `default=str` (no `TypeError`)
+- [ ] **NEW** `aqueduct -v --log-format json validate <blueprint>` emits JSON lines for every log record (no `INFO foo:` formatted lines mixed in)
+- [ ] **NEW** `aqueduct --log-format text` (default) produces the same output as `aqueduct` without the flag — regression guard
+- [ ] **NEW** Invalid value (e.g. `--log-format xml`) → click reports allowed choices and exits non-zero

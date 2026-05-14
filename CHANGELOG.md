@@ -4,8 +4,12 @@
 
 ## v1.0.0a2 — 2026-05-12
 
-### Audit Batch 6 — Spec sync (final), default model bump, cloudpickle hardening, JSON logs
+### Phase 27 — Audit Cleanup
 _2026-05-14_
+
+Six sequential audit batches reconciling spec ↔ code drift, tightening config validation, hardening security guardrails, and surfacing previously silent failure modes. Each batch shipped independently same day.
+
+#### Audit Batch 6 — Spec sync (final), default model bump, cloudpickle hardening, JSON logs
 
 - **Spec §10.1 — `stores:` block reconciled with code.** Previously listed `stores.observability.path: ".aqueduct"` and `stores.lineage.path: ".aqueduct"` (root-dir style); reality is per-store full file paths under `stores.obs.path` / `stores.lineage.path` / `stores.depot.path`. Spec block rewritten to match `AqueductConfig.stores` (`StoresConfig.obs|lineage|depot`). Closes the final `obs` vs `observability` drift item from audit §2.1. Footnote added flagging `s3 | gcs | adls` backends as deferred per `TODOs.md` Phase 28.
 - **Default `agent.model` bumped to `claude-sonnet-4-6`** in `AgentConnectionConfig` (was `claude-3-5-sonnet-latest`). Matches README, spec, and shipped template. Closes audit §2.1 row 9.
@@ -14,8 +18,7 @@ _2026-05-14_
 
 ---
 
-### Audit Batch 5 — README scope, LLM rate-limit, ALL_TABLES reference, robustness cleanup
-_2026-05-14_
+#### Audit Batch 5 — README scope, LLM rate-limit, ALL_TABLES reference, robustness cleanup
 
 - **README LLM-autonomy callout (top of file):** new ⚠ block surfacing that the LLM only edits Blueprints when `agent.approval_mode` is `auto` or `aggressive`, that the default is `disabled`, that production should prefer `human` / `ci`, and that `aggressive` additionally requires `danger.allow_aggressive_patching: true`. Restates that guardrails are deterministic at patch-apply time, not prompt-time. Adopted reviewer scans the autonomy guarantees in the first paragraphs instead of having to find §8 of the spec.
 - **README "Scope — What Aqueduct Is and Is Not" section:** pulls the boundary statement from spec §13 into a two-column table on the README. Makes it clear up-front that Aqueduct is batch (not streaming), data prep (not ML training), CLI (not scheduler), and LLM-scoped-to-PatchSpec (not autonomous infra agent). Also fixes a stale README mention of the removed `block_full_actions_in_prod` flag.
@@ -27,8 +30,7 @@ _2026-05-14_
 
 ---
 
-### Audit Batch 4 — Doctor per-file flags, compile --show selector, Manifest rationale, cleanup
-_2026-05-14_
+#### Audit Batch 4 — Doctor per-file flags, compile --show selector, Manifest rationale, cleanup
 
 - **`aqueduct doctor --aqtest <file>` and `aqueduct doctor --aqscenario <file>`:** schema pre-flight on `.aqtest.yml` and `.aqscenario.yml` files. Validates the file's own schema, resolves the `blueprint:` reference, and cross-checks every `tests[].module` / `inject_failure.module` against the referenced blueprint's module IDs. No Spark or LLM call. Reuses `aqueduct.surveyor.scenario.load_scenario` for the scenario path and a lightweight inline parser for aqtest. Flags are additive: any combination of `--blueprint`, `--aqtest`, `--aqscenario` runs in one doctor pass.
 - **`aqueduct compile --show {manifest,provenance,inputs,all}`:** selectable output for the compile command. `manifest` (default) preserves the original full-JSON behaviour. `provenance` renders the ProvenanceMap as a per-module table (`key | source_type | original_expression | resolved_value`) and a `# Context` section. `inputs` renders the `inputs_fingerprint` as a per-Ingress table (`module_id | path | size | last_modified`). `all` emits the full JSON followed by both tables. Helpful for debugging "where did this resolved path come from?" without grepping a 2 k-line Manifest JSON.
@@ -38,8 +40,7 @@ _2026-05-14_
 
 ---
 
-### Audit Batch 3 — Layer-boundary docs + missing test inventory
-_2026-05-14_
+#### Audit Batch 3 — Layer-boundary docs + missing test inventory
 
 - **Layer-boundary policy clarified for `aqueduct/doctor.py`:** all three `pyspark` imports in `doctor.py` (`check_spark`, `check_storage`, `check_cloudpickle`) were already inside function bodies — `import aqueduct.doctor` from a pyspark-less interpreter does not raise. The module is now documented as the single intentional exception to the "spark imports stay inside `executor/spark/`" rule, both in `doctor.py`'s module docstring and in `CLAUDE.md`. No runtime behaviour change.
 - **Confirmed `aqueduct doctor` and `aqueduct run` share the same config foundation:** both paths call `aqueduct.config.load_config()`. The early secrets-SDK check added in Audit Batch 2 fires in both, so a misconfigured `secrets.provider` surfaces identically (doctor wraps it in `CheckResult("config", "fail")`, run raises). The existing `doctor:check_secrets` SDK branch is now technically unreachable from `run_doctor` (load_config already raised) but is retained as a defensive check for direct callers.
@@ -47,8 +48,7 @@ _2026-05-14_
 
 ---
 
-### Audit Batch 2 — Config tightening, version flag, secrets packaging, spec sync
-_2026-05-14_
+#### Audit Batch 2 — Config tightening, version flag, secrets packaging, spec sync
 
 - **`aqueduct --version` flag:** wires `click.version_option` to `aqueduct.__version__`, which is now sourced from installed package metadata (`importlib.metadata.version("aqueduct-core")`). No more hardcoded literal drifting from `pyproject.toml`. Falls back to `0.0.0+unknown` when run from a source checkout without an editable install.
 - **`DeploymentConfig.engine` and `target` typed as `Literal[...]`:** typos in `aqueduct.yml` (e.g. `target: kubernetss`) now fail at config validation instead of at session-creation time. Accepted `engine` values: `spark`, `flink`. Accepted `target` values: `local | standalone | yarn | kubernetes | databricks | emr | dataproc`.
@@ -58,8 +58,7 @@ _2026-05-14_
 
 ---
 
-### Audit Batch 1 — Security + Config Hygiene
-_2026-05-14_
+#### Audit Batch 1 — Security + Config Hygiene
 
 - **Patch guardrail fix (security):** `agent.guardrails.allowed_paths` now enforces against every patch op that can write a `path`/`output_path` config value — `set_module_config_key`, `replace_module_config`, `insert_module`, `add_probe`, and `add_arcade_ref`. Previously only `set_module_config_key` was checked, so an LLM-generated `replace_module_config` could carry a path outside the fnmatch whitelist and bypass the guard. Provenance-based `${ctx.*}` resolution is preserved for all ops. New regression tests in `tests/test_patch/test_guardrails_rollback.py`.
 - **Removed dead `_check_guardrails` shadow in `aqueduct/cli.py`** — the real enforcement is in `aqueduct/patch/apply.py`. The CLI-side copy was never reachable from production code paths (the `run` command imports the apply.py version). Existing tests that referenced the dead function were rewritten against the authoritative implementation.
