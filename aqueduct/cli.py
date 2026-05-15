@@ -430,6 +430,59 @@ def validate(blueprint: str) -> None:
         sys.exit(1)
 
 
+@cli.command("schema")
+@click.option(
+    "--target",
+    type=click.Choice(["blueprint", "config", "patch"], case_sensitive=False),
+    default="blueprint",
+    show_default=True,
+    help="Which Pydantic model to emit the JSON Schema for.",
+)
+@click.option(
+    "-o", "--output",
+    type=click.Path(dir_okay=False, writable=True),
+    default="-",
+    show_default=True,
+    help="Output file path. `-` writes to stdout.",
+)
+def schema(target: str, output: str) -> None:
+    """Emit Pydantic-derived JSON Schema (Phase 30b — v1.0 stability contract).
+
+    Targets:
+      blueprint  Blueprint YAML schema (enables IDE autocomplete + CI gate)
+      config     aqueduct.yml engine config
+      patch      PatchSpec grammar (LLM-generated patches)
+    """
+    import json as _json
+
+    target = target.lower()
+    if target == "blueprint":
+        from aqueduct.parser.schema import BlueprintSchema
+        model = BlueprintSchema
+    elif target == "config":
+        from aqueduct.config import AqueductConfig
+        model = AqueductConfig
+    elif target == "patch":
+        from aqueduct.patch.grammar import PatchSpec
+        model = PatchSpec
+    else:  # pragma: no cover — Click already validates
+        click.echo(f"✗ unknown target: {target}", err=True)
+        sys.exit(5)
+
+    try:
+        js = model.model_json_schema()
+    except Exception as exc:
+        click.echo(f"✗ schema generation failed: {exc}", err=True)
+        sys.exit(2)
+
+    text = _json.dumps(js, indent=2, sort_keys=True)
+    if output == "-":
+        click.echo(text)
+    else:
+        Path(output).write_text(text + "\n", encoding="utf-8")
+        click.echo(f"✓ wrote {target} schema → {output}", err=True)
+
+
 @cli.command("check-config")
 @click.option(
     "--config",
@@ -2179,7 +2232,13 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     show_default=True,
     help="Which lifecycle directory to list",
 )
-def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: str) -> None:
+@click.option(
+    "--format", "out_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text", show_default=True,
+    help="Output format. `json` for machine-readable consumption (Phase 30b).",
+)
+def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str) -> None:
     """List patches, showing metadata for each.
 
     Defaults to showing pending patches. Use --status=applied/rejected/all for other dirs.
@@ -2203,6 +2262,25 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
         d = patches_root / filter_status
         if d.exists():
             dirs_to_show.append((filter_status, d))
+
+    if out_format.lower() == "json":
+        payload: list[dict] = []
+        for status_label, d in dirs_to_show:
+            for f in sorted(d.glob("*.json"), key=lambda x: x.name):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+                payload.append({
+                    "status": status_label,
+                    "file": str(f),
+                    "patch_id": data.get("patch_id", f.stem),
+                    "rationale": data.get("rationale"),
+                    "confidence": data.get("confidence"),
+                    "category": data.get("category"),
+                })
+        click.echo(json.dumps(payload, indent=2))
+        return
 
     total = 0
     for status_label, d in dirs_to_show:
@@ -2460,7 +2538,20 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
 @click.option("--last", "limit", default=20, show_default=True, help="Max rows to show")
 @click.option("--store-dir", default=None, help="Store directory (default: .aqueduct)")
 @click.option("--config", "config_path", default=None, metavar="PATH", help="Path to aqueduct.yml")
-def runs(blueprint: str | None, failed: bool, limit: int, store_dir: str | None, config_path: str | None) -> None:
+@click.option(
+    "--format", "out_format",
+    type=click.Choice(["text", "json"], case_sensitive=False),
+    default="text", show_default=True,
+    help="Output format. `json` for machine-readable consumption (Phase 30b).",
+)
+def runs(
+    blueprint: str | None,
+    failed: bool,
+    limit: int,
+    store_dir: str | None,
+    config_path: str | None,
+    out_format: str,
+) -> None:
     """List recent blueprint runs."""
     import duckdb as _duckdb
     from aqueduct.config import load_config
@@ -2511,6 +2602,22 @@ def runs(blueprint: str | None, failed: bool, limit: int, store_dir: str | None,
         ).fetchall()
     finally:
         conn.close()
+
+    if out_format.lower() == "json":
+        import json as _json
+        payload = [
+            {
+                "run_id": rv,
+                "blueprint_id": bp,
+                "status": st,
+                "started_at": str(sa) if sa else None,
+                "finished_at": str(fa) if fa else None,
+                "first_failed_module": ff,
+            }
+            for rv, bp, st, sa, fa, ff in rows
+        ]
+        click.echo(_json.dumps(payload, indent=2))
+        return
 
     if not rows:
         click.echo("No runs found.")

@@ -2107,3 +2107,48 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ `WarningsConfig(silence_all=True)` validates
 - ⏳ Extra unknown keys → `pydantic.ValidationError` (`extra="forbid"`)
 - ⏳ `AqueductConfig().warnings` exists with default `WarningsConfig`
+
+---
+
+## Phase 30b — Stability Contract for v1.0
+
+### `aqueduct/exit_codes.py`
+- ⏳ Constants `SUCCESS=0`, `CONFIG_ERROR=1`, `DATA_OR_RUNTIME=2`, `HEAL_PENDING=3`, `VALIDATION_GATE=4`, `USAGE_ERROR=5` exposed at module level
+- ⏳ `__all__` includes all six names
+- ⏳ Importable from top-level: `from aqueduct import exit_codes`
+
+### `aqueduct schema` command
+- ⏳ `aqueduct schema --target blueprint` emits JSON Schema with `$defs` and `properties`
+- ⏳ `aqueduct schema --target config` emits AqueductConfig schema
+- ⏳ `aqueduct schema --target patch` emits PatchSpec schema
+- ⏳ `aqueduct schema --target bogus` rejected by Click before execution
+- ⏳ `-o file.json` writes the schema to disk, prints confirmation to stderr; stdout silent
+- ⏳ Default `-o -` writes JSON to stdout
+- ⏳ Output parses as valid JSON (`json.loads` round-trip)
+- ⏳ Generation failure exits with code 2
+
+### `aqueduct runs --format json`
+- ⏳ Returns list of `{run_id, blueprint_id, status, started_at, finished_at, first_failed_module}` objects
+- ⏳ Empty store → returns `[]` (not `"No runs found."`), exit 0
+- ⏳ `--failed --format json` filters to status=error rows only
+- ⏳ `--blueprint <id> --format json` filters to that blueprint
+- ⏳ Output parses as valid JSON
+
+### `aqueduct patch list --format json`
+- ⏳ Returns list of `{status, file, patch_id, rationale, confidence, category}` objects
+- ⏳ Empty patches dir → returns `[]`, exit 0
+- ⏳ `--status all --format json` includes pending + applied + rejected with `status` field set
+- ⏳ Output parses as valid JSON
+- ⏳ Each entry includes `status` matching the lifecycle dir
+
+### Public API surface — `aqueduct/__init__.py`
+- ⏳ `from aqueduct import parse, ParseError, AqueductWarning, __version__` succeeds
+- ⏳ `__all__` contains exactly: `__version__`, `parse`, `ParseError`, `AqueductWarning`
+- ⏳ `from aqueduct import exit_codes` succeeds
+- ⏳ Subpackage internals (`aqueduct.compiler`, `aqueduct.executor.spark`, etc.) still importable but not in `__all__`
+
+### README — Versioning & Stability section
+- ⏳ Section "Versioning & Stability" present between Development and License
+- ⏳ Exit code table includes all six codes with constant names + meanings
+- ⏳ Deprecation policy paragraph present
+- ⏳ Stable surface list mentions `parse`, `ParseError`, `AqueductWarning`, `exit_codes`
