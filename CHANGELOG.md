@@ -4,6 +4,43 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### CLI cleanup — unified env resolution + validate/doctor by header
+_2026-05-15_
+
+Pre-release consistency pass. No new behaviour — same checks, coherent
+surface.
+
+- **`.env` resolution unified.** One helper drives `run` / `doctor` /
+  `validate`: first existing of `--env-file` → `<input-file dir>/.env`
+  → `<cwd>/.env`, first file wins (no stacking), existing env vars never
+  overwritten. The "loaded N variable(s)" line is now `aqueduct -v`
+  (DEBUG) only — was default-verbosity noise, and `validate` /
+  `check-config` previously did not load `.env` at all (false-negative
+  on configs `run` accepted).
+- **`check-config` removed; folded into `validate`.** `aqueduct
+  validate <file>...` detects each file by its version header
+  (`aqueduct:` → Blueprint, `aqueduct_config:` → engine config),
+  accepts multiple files, and validates each accordingly. No argument →
+  validates `./aqueduct.yml`.
+- **`doctor` takes a positional file, not flags.** `--config` /
+  `--blueprint` dropped; `aqueduct doctor <file>` sniffs the header
+  (config / blueprint / aqtest / aqscenario). No argument → checks
+  `./aqueduct.yml`, announced explicitly (no silent magic).
+- Two-tier model documented in CLI_REFERENCE: `validate` = static /
+  offline / CI gate; `doctor` = live / online / pre-deploy.
+- **Agent prompt:** soft macro-preservation hint. When the failing
+  Blueprint defines `macros:`, the prompt now lists them and nudges the
+  model to keep `{{ macros.NAME }}` references instead of inlining
+  expanded SQL (macros are one-way compile-time substitution — no
+  provenance links expanded SQL back to source). Best-effort, not
+  enforced.
+
+BREAKING: `aqueduct check-config` removed (use `aqueduct validate`);
+`aqueduct doctor --config` / `--blueprint` removed (pass the file
+positionally).
+
+---
+
 ### Rename — `llm` → `agent` across user-facing + internal surface
 _2026-05-15_
 

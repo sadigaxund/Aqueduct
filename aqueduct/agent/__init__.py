@@ -397,6 +397,28 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
             f"{raw_yaml.strip()}\n"
             "```\n"
         )
+        # Soft macro-preservation hint. Macros are one-way compile-time text
+        # substitution — no provenance links expanded SQL back to its
+        # `{{ macros.X }}` source. If the patched query originally used a
+        # macro, inlining concrete SQL silently erodes the abstraction.
+        # Nudge the model to keep the reference; cannot be enforced.
+        macros_defined: list[str] = []
+        try:
+            import yaml as _yaml
+            _doc = _yaml.safe_load(raw_yaml) or {}
+            _mac = _doc.get("macros") if isinstance(_doc, dict) else None
+            if isinstance(_mac, dict):
+                macros_defined = [str(k) for k in _mac]
+        except Exception:
+            pass
+        if macros_defined:
+            blueprint_yaml_section += (
+                "\n**Macros in scope:** "
+                + ", ".join(f"`{{{{ macros.{m} }}}}`" for m in macros_defined)
+                + ". When editing a query that used a macro, keep the "
+                "`{{ macros.NAME }}` reference instead of inlining the "
+                "expanded SQL — the engine re-expands it at compile time.\n"
+            )
 
     return _USER_PROMPT_TEMPLATE.format(
         blueprint_name=blueprint_name,

@@ -13,18 +13,37 @@ non-default `aqueduct.yml`; Aqueduct also walks up from the CWD automatically.
 
 ---
 
+## Validate vs Doctor — two-tier model
+
+- **`aqueduct validate`** — static. Parse + schema only, no side effects, fast.
+  Use in CI / pre-commit. "Is it well-formed?"
+- **`aqueduct doctor`** — live. Actually connects: Spark, stores, agent
+  endpoint, secrets SDK, blueprint sources. Use before first deploy.
+  "Will it actually run here?"
+
+Both detect file kind by the version header — `aqueduct: "1.0"` is a
+Blueprint, `aqueduct_config: "1.0"` is engine config — so no `--config` /
+`--blueprint` flag is needed; just pass the file (or nothing, to use
+`./aqueduct.yml`).
+
+**`.env` resolution** (shared by `run` / `doctor` / `validate`): first
+existing of `--env-file` → `<input-file dir>/.env` → `<cwd>/.env`. Existing
+environment variables are never overwritten. The "loaded N variable(s)"
+line is `aqueduct -v` (DEBUG) only — silent at default verbosity.
+
+---
+
 ## 1. Project Setup
 
 | Command | Description |
 |---|---|
-| `aqueduct init` | Scaffold project in CWD: `aqueduct.yml`, `blueprints/`, `arcades/`, `tests/`, `patches/`, `.gitignore`; runs `git init` if needed |
-| `aqueduct init --name <name>` | Set project name (becomes blueprint ID prefix) |
-| `aqueduct check-config` | Validate `aqueduct.yml` schema and print resolved summary |
-| `aqueduct doctor` | End-to-end probe: config, stores, LLM reachability, Spark version, blueprint sources |
+| `aqueduct init` | Scaffold project in CWD: `aqueduct.yml.template`, `blueprints/`, `arcades/`, `tests/`, `benchmarks/`, `patches/{pending,rejected}/`; runs `git init` + first commit |
+| `aqueduct doctor` | Live connectivity probe: config, stores, agent reachability, Spark version, blueprint sources. No argument → checks `aqueduct.yml` in CWD |
+| `aqueduct doctor <file>` | File type detected by version header (`aqueduct_config:` → config probe; `aqueduct:` → also probes Ingress/Egress paths + JDBC) |
 | `aqueduct doctor --skip-spark` | Skip JVM startup — fast CI health check |
-| `aqueduct doctor --blueprint <path>` | Also checks Ingress/Egress paths and format/extension mismatches |
 | `aqueduct doctor --aqtest <path>` | Schema pre-flight on a `.aqtest.yml` file (blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <path>` | Schema pre-flight on a `.aqscenario.yml` file (blueprint ref + `inject_failure.module`) |
+| `aqueduct doctor --env-file <path>` / `--no-env-file` | Override / disable `.env` discovery |
 
 ---
 
@@ -32,7 +51,8 @@ non-default `aqueduct.yml`; Aqueduct also walks up from the CWD automatically.
 
 | Command | Description |
 |---|---|
-| `aqueduct validate <blueprint>` | Parse and validate Blueprint YAML only — no Spark |
+| `aqueduct validate <file>...` | Static parse + schema check, no side effects. File type auto-detected by version header (`aqueduct:` → Blueprint, `aqueduct_config:` → engine config). Accepts multiple files. No argument → validates `aqueduct.yml` in CWD. Subsumes the old `check-config`. |
+| `aqueduct validate --env-file <path>` / `--no-env-file` | Override / disable `.env` discovery before validation (so `${VAR}` placeholders resolve) |
 | `aqueduct compile <blueprint>` | Output fully-resolved Manifest JSON to stdout |
 | `aqueduct compile <blueprint> --show {manifest\|provenance\|inputs\|all}` | Select which slice of the compiled artefact to emit. Default `manifest` = current JSON output. `provenance` and `inputs` render readable tables for debugging. |
 | `aqueduct run <blueprint>` | Compile and execute the full pipeline |
