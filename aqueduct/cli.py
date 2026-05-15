@@ -311,6 +311,74 @@ def _load_env_file(env_path: "Path") -> int:
     return loaded
 
 
+# ── Unified .env resolution ───────────────────────────────────────────────────
+# Single discovery order used by every command (run / doctor / validate):
+#   1. explicit --env-file
+#   2. <input-file's directory>/.env   (blueprint or aqueduct.yml dir)
+#   3. <cwd>/.env
+# The "loaded N" line is DEBUG-only (visible with `aqueduct -v`) — routine,
+# not worth default-verbosity noise.
+
+def _resolve_and_load_env(
+    explicit: "str | None",
+    anchor: "Path | None",
+    disabled: bool = False,
+) -> None:
+    """Resolve and load a .env file. No-op when `disabled`.
+
+    `anchor` is the input file (blueprint / aqueduct.yml) whose directory is
+    searched before falling back to cwd. Passing None skips step 2.
+    """
+    import logging as _logging
+    if disabled:
+        return
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit).resolve())
+    if anchor is not None:
+        candidates.append(Path(anchor).resolve().parent / ".env")
+    candidates.append(Path.cwd() / ".env")
+
+    seen: set[Path] = set()
+    for cand in candidates:
+        if cand in seen or not cand.exists():
+            seen.add(cand)
+            continue
+        n = _load_env_file(cand)
+        _logging.getLogger("aqueduct.cli").debug(
+            "Loaded %d variable(s) from %s", n, cand
+        )
+        return  # first existing file wins — do not stack multiple .env files
+
+
+def _sniff_file_kind(path: "Path") -> "str | None":
+    """Identify an Aqueduct YAML by its version header (no full parse).
+
+    Returns one of: "blueprint", "config", "aqtest", "aqscenario", or None
+    when no recognised top-level key is found in the first ~40 lines.
+
+    Header keys:
+      aqueduct:           → blueprint
+      aqueduct_config:    → engine config (aqueduct.yml)
+      aqueduct_test:      → .aqtest.yml
+      aqueduct_scenario:  → .aqscenario.yml
+    """
+    import re as _re
+    try:
+        head = "\n".join(path.read_text(encoding="utf-8").splitlines()[:40])
+    except Exception:
+        return None
+    for key, kind in (
+        (r"^aqueduct_config\s*:", "config"),
+        (r"^aqueduct_test\s*:", "aqtest"),
+        (r"^aqueduct_scenario\s*:", "aqscenario"),
+        (r"^aqueduct\s*:", "blueprint"),
+    ):
+        if _re.search(key, head, _re.MULTILINE):
+            return kind
+    return None
+
+
 from aqueduct import __version__ as _aqueduct_version
 
 
@@ -416,19 +484,84 @@ def cli(
 
 
 @cli.command()
-@click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
-def validate(blueprint: str) -> None:
-    """Parse and validate a Blueprint. Exit 0 = valid, 1 = invalid."""
-    from aqueduct.parser.parser import ParseError, parse
+@click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--env-file", "env_file", default=None, type=click.Path(dir_okay=False),
+    help="Load a .env file before validation (so ${VAR} placeholders resolve).",
+)
+@click.option(
+    "--no-env-file", "no_env_file", is_flag=True, default=False,
+    help="Disable automatic .env discovery.",
+)
+def validate(files: tuple[str, ...], env_file: str | None, no_env_file: bool) -> None:
+    """Static validation — parse + schema check, no side effects.
 
-    try:
-        bp = parse(blueprint)
-        click.echo(
-            f"✓ {bp.id}  ({len(bp.modules)} modules, {len(bp.edges)} edges)"
-        )
-    except ParseError as exc:
-        click.echo(f"✗ {exc}", err=True)
-        sys.exit(1)
+    File type is detected by its version header, no flag needed:
+      `aqueduct: "1.0"`         → Blueprint
+      `aqueduct_config: "1.0"`  → engine config (aqueduct.yml)
+
+    Pass any number of files. With no argument, validates `aqueduct.yml`
+    in the current directory if present. Exit 0 = all valid, 1 = any invalid.
+    """
+    import json
+    from pathlib import Path
+    from aqueduct.parser.parser import ParseError, parse
+    from aqueduct.config import ConfigError, load_config
+
+    targets = [Path(f) for f in files]
+    if not targets:
+        default_cfg = Path.cwd() / "aqueduct.yml"
+        if default_cfg.exists():
+            click.echo(f"(no file given → validating {default_cfg.name})", err=True)
+            targets = [default_cfg]
+        else:
+            click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
+            sys.exit(1)
+
+    any_fail = False
+    for path in targets:
+        _resolve_and_load_env(env_file, path, disabled=no_env_file)
+        kind = _sniff_file_kind(path)
+
+        if kind == "config":
+            try:
+                cfg = load_config(path)
+                _apply_warnings_from_cfg(cfg)
+            except ConfigError as exc:
+                click.echo(f"✗ {path}: {exc}", err=True)
+                any_fail = True
+                continue
+            click.echo(f"✓ {path}  [engine config]")
+            click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
+            click.echo(f"  stores:  observability={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
+            click.echo(f"  secrets: provider={cfg.secrets.provider}")
+            wh_lines = []
+            if cfg.webhooks.on_failure:
+                wh_lines.append(f"on_failure={cfg.webhooks.on_failure.method} {cfg.webhooks.on_failure.url}")
+            if cfg.webhooks.on_success:
+                wh_lines.append(f"on_success={cfg.webhooks.on_success.method} {cfg.webhooks.on_success.url}")
+            click.echo(f"  webhooks: {', '.join(wh_lines) if wh_lines else '(not configured)'}")
+            if cfg.spark_config:
+                click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
+
+        elif kind == "blueprint" or kind is None:
+            # Unknown header → attempt blueprint parse (most common case);
+            # the parser emits a precise error if it is not a blueprint.
+            try:
+                bp = parse(str(path))
+                click.echo(f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]")
+            except ParseError as exc:
+                click.echo(f"✗ {path}: {exc}", err=True)
+                any_fail = True
+
+        else:  # aqtest / aqscenario — schema pre-flight lives in `doctor`
+            click.echo(
+                f"- {path}: {kind} file — use `aqueduct doctor --{kind} {path}` "
+                "for schema pre-flight",
+                err=True,
+            )
+
+    sys.exit(1 if any_fail else 0)
 
 
 @cli.command("schema")
@@ -484,65 +617,14 @@ def schema(target: str, output: str) -> None:
         click.echo(f"✓ wrote {target} schema → {output}", err=True)
 
 
-@cli.command("check-config")
-@click.option(
-    "--config",
-    "config_path",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
-)
-def check_config(config_path: str | None) -> None:
-    """Validate aqueduct.yml without running a blueprint. Exit 0 = valid, 1 = invalid."""
-    import json
-    from pathlib import Path
-
-    from aqueduct.config import ConfigError, load_config
-
-    try:
-        cfg = load_config(Path(config_path) if config_path else None)
-        _apply_warnings_from_cfg(cfg)
-    except ConfigError as exc:
-        click.echo(f"✗ {exc}", err=True)
-        sys.exit(1)
-
-    source = config_path or "aqueduct.yml (CWD) or defaults"
-    click.echo(f"✓ config valid  [{source}]")
-    click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-    click.echo(f"  stores:  obs={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
-    click.echo(f"  secrets: provider={cfg.secrets.provider}")
-    wh_lines = []
-    if cfg.webhooks.on_failure:
-        wh = cfg.webhooks.on_failure
-        wh_lines.append(f"on_failure={wh.method} {wh.url}")
-    if cfg.webhooks.on_success:
-        wh = cfg.webhooks.on_success
-        wh_lines.append(f"on_success={wh.method} {wh.url}")
-    click.echo(f"  webhooks: {', '.join(wh_lines) if wh_lines else '(not configured)'}")
-    if cfg.spark_config:
-        click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
-
 
 @cli.command()
-@click.option(
-    "--config",
-    "config_path",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Path to aqueduct.yml (default: aqueduct.yml in CWD)",
-)
+@click.argument("target", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--skip-spark",
     is_flag=True,
     default=False,
     help="Skip Spark connectivity check (fast mode — avoids JVM startup).",
-)
-@click.option(
-    "--blueprint",
-    "blueprint_path",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Also probe all Ingress/Egress paths and JDBC endpoints declared in this Blueprint.",
 )
 @click.option(
     "--aqtest",
@@ -563,7 +645,7 @@ def check_config(config_path: str | None) -> None:
     "env_file",
     default=None,
     type=click.Path(dir_okay=False),
-    help="Load environment variables from a .env file (auto-discovers .env next to --config if omitted).",
+    help="Load a .env file before checks (so ${VAR} placeholders resolve).",
 )
 @click.option(
     "--no-env-file",
@@ -573,41 +655,62 @@ def check_config(config_path: str | None) -> None:
     help="Disable automatic .env discovery.",
 )
 def doctor(
-    config_path: str | None,
+    target: str | None,
     skip_spark: bool,
-    blueprint_path: str | None,
     aqtest_path: str | None,
     aqscenario_path: str | None,
     env_file: str | None,
     no_env_file: bool,
 ) -> None:
-    """Probe all configured resources: config, stores, Spark, webhook, secrets, storage.
+    """Live connectivity checks: config, stores, Spark, webhook, secrets, storage.
 
-    Each check is independent. Spark check requires pyspark and may take 10-15s
-    for JVM startup. Use --skip-spark to skip it in fast CI contexts.
+    Pass a file — its type is detected by the version header, no flag needed:
+      `aqueduct_config: "1.0"`  → engine config (also the default when no arg)
+      `aqueduct: "1.0"`         → Blueprint (also probes Ingress/Egress/JDBC)
 
-    Per-file flags (all additive — pass any combination):
-      --blueprint   Probe Ingress/Egress sources, JDBC endpoints, recurse into Arcades.
-      --aqtest      Schema pre-flight on a .aqtest.yml file (blueprint ref + module IDs).
-      --aqscenario  Schema pre-flight on a .aqscenario.yml file (blueprint ref + inject_failure.module).
+    With no argument, checks `aqueduct.yml` in the current directory.
 
+    `--aqtest` / `--aqscenario` add a schema pre-flight on those file kinds
+    (additive — combine with a config/blueprint target).
+
+    Each check is independent. Spark check requires pyspark and may take
+    10-15s for JVM startup; use --skip-spark in fast CI contexts.
     Exit codes: 0 = all ok/warn/skip, 1 = any check failed.
     """
     from pathlib import Path
     from aqueduct.doctor import run_doctor
 
-    # ── .env loading (so ${VAR} placeholders in aqueduct.yml resolve) ───────────
-    if not no_env_file:
-        if env_file:
-            _env_path = Path(env_file).resolve()
-        elif config_path:
-            _env_path = Path(config_path).resolve().parent / ".env"
+    config_path: Path | None = None
+    blueprint_path: Path | None = None
+
+    if target is not None:
+        tpath = Path(target)
+        kind = _sniff_file_kind(tpath)
+        if kind == "config":
+            config_path = tpath
+        elif kind == "blueprint":
+            blueprint_path = tpath
+        elif kind == "aqtest":
+            aqtest_path = aqtest_path or str(tpath)
+        elif kind == "aqscenario":
+            aqscenario_path = aqscenario_path or str(tpath)
         else:
-            _env_path = Path.cwd() / ".env"
-        if _env_path.exists():
-            _n = _load_env_file(_env_path)
-            if _n:
-                click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
+            click.echo(
+                f"✗ {tpath}: unrecognised Aqueduct file "
+                "(no aqueduct / aqueduct_config / aqueduct_test / "
+                "aqueduct_scenario header)",
+                err=True,
+            )
+            sys.exit(1)
+    else:
+        default_cfg = Path.cwd() / "aqueduct.yml"
+        if default_cfg.exists():
+            click.echo(f"(no file given → checking {default_cfg.name})", err=True)
+            config_path = default_cfg
+
+    # Anchor .env discovery to the resolved input file's directory.
+    _anchor = config_path or blueprint_path
+    _resolve_and_load_env(env_file, _anchor, disabled=no_env_file)
 
     _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
     _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
@@ -618,9 +721,9 @@ def doctor(
         click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
 
     results = run_doctor(
-        config_path=Path(config_path) if config_path else None,
+        config_path=config_path,
         skip_spark=skip_spark,
-        blueprint_path=Path(blueprint_path) if blueprint_path else None,
+        blueprint_path=blueprint_path,
         aqtest_path=Path(aqtest_path) if aqtest_path else None,
         aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
     )
@@ -966,13 +1069,11 @@ def run(
     _original_cwd = os.getcwd()
     os.chdir(_project_root)
     try:
-        # ── .env loading (after project root, before config so vars are available) ─
-        if not no_env_file:
-            _env_path = Path(env_file).resolve() if env_file else _project_root / ".env"
-            if _env_path.exists():
-                _n = _load_env_file(_env_path)
-                if _n:
-                    click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
+        # ── .env loading (after project root, before config so vars resolve) ──
+        # cwd is already _project_root here, so anchor=None → the helper's
+        # cwd/.env step resolves to <project_root>/.env (preserves prior
+        # behaviour) while unifying format + DEBUG-only verbosity.
+        _resolve_and_load_env(env_file, None, disabled=no_env_file)
         # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
         blueprint = str(blueprint_abs)
 

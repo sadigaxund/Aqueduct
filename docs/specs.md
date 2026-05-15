@@ -1548,7 +1548,7 @@ Shows recent failed runs with `run_id`, `failed_module`, and `started_at`. Pick 
 
 **Step 2 — Check sources and config**
 ```bash
-aqueduct doctor --blueprint blueprints/pipeline.yml
+aqueduct doctor blueprints/pipeline.yml
 ```
 Checks Ingress/Egress paths exist, formats match file extensions, LLM is reachable, Spark is healthy. Warnings here often explain the failure.
 
@@ -2030,7 +2030,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
 |`aqueduct init <name>`|Scaffold a new project in the current directory.|`--name`|
-|`aqueduct validate <blueprint.yml>`|Validate Blueprint schema and logic.|(none)|
+|`aqueduct validate <file>...`|Static parse + schema (header-detected: blueprint or config). Subsumes `check-config`.|`--env-file`/`--no-env-file`|(none)|
 |`aqueduct compile <blueprint.yml>`|Compile to a resolved Manifest JSON.|`-p/--profile`, `--ctx`, `--execution-date`, `-o/--output`|
 |`aqueduct run <blueprint.yml>`|Execute a Blueprint on Spark.|(see Run Flags below)|
 |`aqueduct test <test_file.yml>`|Run isolated module tests.|`--blueprint`, `--config`, `--quiet`|
@@ -2068,7 +2068,6 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct check-config`|Validate `aqueduct.yml` schema.|`--config`|
 |`aqueduct doctor`|Probe all resources (Spark, DBs, Cloud).|`--config`, `--skip-spark`, `--blueprint`|
 
 ## **11.6 Key Flags for `aqueduct run`**
@@ -2451,7 +2450,7 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 Before promoting a Blueprint to production:
 
 - [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
-- [ ] `aqueduct doctor --blueprint pipeline.yml` passes with no errors when `deployment.env: cluster` or `cloud`
+- [ ] `aqueduct doctor pipeline.yml` passes with no errors when `deployment.env: cluster` or `cloud`
 - [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
 - [ ] `agent.approval_mode: human` or `ci` (not `auto` or `aggressive`)
 - [ ] No `danger.*: true` in production `aqueduct.yml`

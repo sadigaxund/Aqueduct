@@ -14,7 +14,7 @@
 # Usage:
 #   aqueduct run blueprint.yml                       # auto-discovers aqueduct.yml in CWD
 #   aqueduct run blueprint.yml --config aqueduct.yml
-#   aqueduct check-config                           # validate without running a blueprint
+#   aqueduct validate aqueduct.yml                  # static check (no run)
 
 aqueduct_config: "1.0"
 
