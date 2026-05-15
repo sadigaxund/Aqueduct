@@ -4,6 +4,17 @@
 
 
 ---
+### Deferred
+
+21. Maybe ready prefab modules, where some of the common SQL operations are standardized into just config (e.g. dedupe, mask_email, pivot/unpivot)
+22. a kind of UDF, that is specifically designed for aqueduct syntax. In other words, a possibility of passing its parameter through context, config entries or even at udf_registry level. Allows adjustability of a UDF to multiple different blueprints and environments if need be, also would look cool when frontend can render such module.
+
+
+17. Add example maybe: aqueduct's usage with python
+
+20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
+however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
+---
 
 ### Definite Future Work
 
@@ -23,22 +34,10 @@
 
 ### Running Thoughts/Notes
 
-17. Add example maybe: aqueduct's usage with python
-
-20. rename doctor command with something that fits overall theme terminilogy like "Surveyor"
-however we have a python module with that name, I very much liked something similar to pre-flight to dry-run.
-
-21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
-
-
-18. make sure that some commands like doctor works in all modes (specifically the one that checks file type)
-19. standardize the warnings and spark best practices
 20. generate scenarios from Stackoverflow with the most commong bugs/issues vs specific cases
-21. Maybe ready prefab modules, where some of the common SQL operations are standardized into just config (e.g. dedupe, mask_email, pivot/unpivot)
-22. a kind of UDF, that is specifically designed for aqueduct syntax. In other words, a possibility of passing its parameter through context, config entries or even at udf_registry level. Allows adjustability of a UDF to multiple different blueprints and environments if need be, also would look cool when frontend can render such module.
 
-23. verify this from readme: 'aqueduct init --name my-pipeline' does it take name flag, what for?
-25. maybe rename '- llm' to either '- agent' or '- healing' within doctor command.
+25.TODO: maybe rename '- llm' to either '- agent' or '- healing' within doctor command.
+    21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
 
 
 

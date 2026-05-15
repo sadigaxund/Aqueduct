@@ -96,6 +96,20 @@ CREATE TABLE IF NOT EXISTS signal_overrides (
 );
 """
 
+_EXPLAIN_SNAPSHOT_DDL = """
+CREATE TABLE IF NOT EXISTS explain_snapshot (
+    blueprint_id     VARCHAR NOT NULL,
+    run_id           VARCHAR NOT NULL,
+    module_id        VARCHAR NOT NULL,
+    captured_at      VARCHAR NOT NULL,
+    exchange_count   INTEGER NOT NULL,
+    python_udf_count INTEGER NOT NULL,
+    broadcast_count  INTEGER NOT NULL,
+    plan_text        VARCHAR NOT NULL,
+    PRIMARY KEY (blueprint_id, run_id, module_id)
+);
+"""
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _utcnow() -> datetime:
@@ -222,6 +236,7 @@ class Surveyor:
                 pass
 
             cur.execute(_SIGNAL_OVERRIDES_DDL)
+            cur.execute(_EXPLAIN_SNAPSHOT_DDL)
 
             cur.execute(
                 """
@@ -442,6 +457,119 @@ class Surveyor:
                     _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 ],
             )
+
+    def record_explain_snapshot(
+        self,
+        *,
+        run_id: str,
+        module_id: str,
+        exchange_count: int,
+        python_udf_count: int,
+        broadcast_count: int,
+        plan_text: str,
+        blueprint_id: str | None = None,
+        keep_last_n: int = 5,
+    ) -> None:
+        """Append one row to `obs.explain_snapshot` for Gate 4 baseline.
+
+        Phase 29b — physical-plan regression check. Captured per-module after
+        each successful module execution. Rolling baseline: keeps the most
+        recent `keep_last_n` runs per (blueprint_id, module_id), older rows
+        are pruned to bound storage.
+
+        Args:
+            run_id:          Originating run.
+            module_id:       Module the plan belongs to.
+            exchange_count:  Count of `Exchange` nodes (shuffle proxy).
+            python_udf_count:Count of `BatchEvalPython` nodes.
+            broadcast_count: Count of `BroadcastExchange` nodes.
+            plan_text:       Full `explain(mode="formatted")` text for debugging.
+            blueprint_id:    Override Surveyor's manifest id.
+            keep_last_n:     Pruning bound per (blueprint_id, module_id).
+        """
+        if self._obs is None:
+            return
+        import datetime as _dt
+        bp_id = blueprint_id or getattr(self._manifest, "blueprint_id", None)
+        if not bp_id:
+            return
+        with self._obs.connect() as cur:
+            cur.execute(
+                """
+                INSERT OR REPLACE INTO explain_snapshot
+                  (blueprint_id, run_id, module_id, captured_at,
+                   exchange_count, python_udf_count, broadcast_count, plan_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    bp_id, run_id, module_id,
+                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    exchange_count, python_udf_count, broadcast_count, plan_text,
+                ],
+            )
+            # Rolling prune — keep last N run_ids per (blueprint_id, module_id)
+            try:
+                rows = cur.execute(
+                    """
+                    SELECT run_id FROM explain_snapshot
+                    WHERE blueprint_id = ? AND module_id = ?
+                    ORDER BY captured_at DESC
+                    """,
+                    [bp_id, module_id],
+                ).fetchall()
+                if len(rows) > keep_last_n:
+                    stale = [r[0] for r in rows[keep_last_n:]]
+                    for rid in stale:
+                        cur.execute(
+                            "DELETE FROM explain_snapshot WHERE blueprint_id=? AND module_id=? AND run_id=?",
+                            [bp_id, module_id, rid],
+                        )
+            except Exception:
+                pass
+
+    def latest_explain_snapshots(
+        self,
+        *,
+        blueprint_id: str | None = None,
+    ) -> dict[str, dict]:
+        """Return most-recent per-module snapshot for the blueprint.
+
+        Returns mapping `module_id` → `{exchange_count, python_udf_count,
+        broadcast_count, plan_text, run_id, captured_at}`. Used by Gate 4
+        as the pre-patch baseline.
+        """
+        if self._obs is None:
+            return {}
+        bp_id = blueprint_id or getattr(self._manifest, "blueprint_id", None)
+        if not bp_id:
+            return {}
+        out: dict[str, dict] = {}
+        with self._obs.connect() as cur:
+            rows = cur.execute(
+                """
+                SELECT module_id, run_id, captured_at, exchange_count,
+                       python_udf_count, broadcast_count, plan_text
+                FROM explain_snapshot
+                WHERE blueprint_id = ?
+                ORDER BY module_id, captured_at DESC
+                """,
+                [bp_id],
+            ).fetchall()
+        seen: set[str] = set()
+        for r in rows:
+            mid = r[0]
+            if mid in seen:
+                continue
+            seen.add(mid)
+            out[mid] = {
+                "run_id": r[1],
+                "captured_at": r[2],
+                "exchange_count": r[3],
+                "python_udf_count": r[4],
+                "broadcast_count": r[5],
+                "plan_text": r[6],
+            }
+        return out
 
     def count_recent_heal_attempts(self, within_minutes: int = 60) -> int:
         """Return the number of LLM healing attempts recorded in this blueprint's

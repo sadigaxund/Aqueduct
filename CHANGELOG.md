@@ -4,6 +4,60 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 29b — Gate 4: Post-Patch `explain()` Regression Check
+_2026-05-15_
+
+Sits on top of Phase 29a — same surfaces (`aqueduct patch preview`,
+auto/aggressive in-flight gates). Compares per-module physical-plan node
+counts in the patched Manifest against the most recent baseline, warns on
+regression. Warn-only by default; aggressive mode can opt in to blocking.
+
+- **`aqueduct/patch/explain_gate.py`** new module. `capture_plan_snapshot(df)`
+  pulls `df._jdf.queryExecution().explainString(ExplainMode.FormattedMode())`
+  via py4j (same pattern as `metrics.py:_hadoop_fs_bytes`), counts
+  `Exchange` / `BatchEvalPython` / `BroadcastExchange` nodes.
+  `run_gate4_explain(baseline, after, touched_modules=...)` diffs per
+  module — any increase in shuffles / Python UDF nodes or decrease in
+  broadcast hints becomes an `ExplainRegression` warning.
+
+- **`obs.explain_snapshot`** new table — rolling per-module baseline. Captured
+  by the executor after every successful module run (non-Egress). Surveyor
+  prunes to the most recent `keep_last_n` (default 5) rows per
+  `(blueprint_id, module_id)` so storage is bounded. Cleanly survives
+  brand-new pipelines: Gate 4 returns `status="skip"` when no baseline rows
+  exist yet.
+
+- **`agent.block_on_explain_regression: bool = false`** new config knob on
+  `AgentConnectionConfig` (engine default) and `AgentSchema` (blueprint
+  override). Default `false` preserves current behaviour — Gate 4 prints
+  warnings, never blocks. `true` in aggressive mode rejects any patch with
+  a regression and lets the agent retry with a new patch.
+
+- **Executor wiring** — `execute(..., explain_capture: dict | None = None)`
+  fills the dict during sandbox runs without persisting (no `obs.db` write);
+  real runs persist via `Surveyor.record_explain_snapshot()`. Same capture
+  loop drives both sinks. Egress modules are skipped (no DataFrame in the
+  frame_store).
+
+- **`_run_patch_gates_inline` returns Gate 4 alongside Gate 2/3** —
+  `obs.patch_simulation` audit table now records `gate="gate4"` rows. Auto
+  mode prints regressions; aggressive mode prints + (optionally) blocks
+  per `block_on_explain_regression`.
+
+- **Parser fix** — `patch_validation`, `max_heal_attempts_per_hour`, and the
+  new `block_on_explain_regression` were not being wired from the Pydantic
+  schema into the `AgentConfig` dataclass. Phase 29a's `patch_validation`
+  fell back to engine default in all blueprint overrides; now respected.
+
+- **Spec §8.7 agent matrix, ALL_TABLES `explain_snapshot` + `patch_simulation`
+  gate enum**, both templates, CHANGELOG, TEST_MANIFEST updated.
+
+Phase 29b unblocked by Phase 29a (same surfaces, same gate registry).
+Catalyst tree walk for plan extraction stays Deferred — formatted-string
+parsing is plenty for v1.0.
+
+---
+
 ### Phase 29a — Patch Validation Pyramid (Gates 2 & 3)
 _2026-05-14_
 

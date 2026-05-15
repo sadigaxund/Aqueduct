@@ -108,7 +108,7 @@ ORDER BY attempts DESC;
 
 ### `patch_simulation`
 
-**Source:** `aqueduct/surveyor/surveyor.py:_DDL` (added Phase 29a). One row per Gate-2 or Gate-3 evaluation — `aqueduct patch preview` and the auto/aggressive self-healing loop both write here.
+**Source:** `aqueduct/surveyor/surveyor.py:_DDL` (added Phase 29a, extended Phase 29b). One row per Gate-2, Gate-3, or Gate-4 evaluation — `aqueduct patch preview` and the auto/aggressive self-healing loop both write here.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -116,10 +116,10 @@ ORDER BY attempts DESC;
 | `run_id` | VARCHAR | Failing run that triggered healing (null for direct `patch preview`) |
 | `blueprint_id` | VARCHAR | |
 | `patch_id` | VARCHAR NOT NULL | Matches `patches/applied/{id}.json` |
-| `gate` | VARCHAR NOT NULL | `gate2` (lineage) or `gate3` (sandbox replay) |
+| `gate` | VARCHAR NOT NULL | `gate2` (lineage), `gate3` (sandbox replay), `gate4` (explain regression) |
 | `status` | VARCHAR NOT NULL | `pass` / `fail` / `warn` / `skip` |
-| `detail` | VARCHAR | Free-text — failing rule, missing column, executor error |
-| `sample_rows` | BIGINT | Per-Ingress LIMIT used by Gate 3 (NULL for Gate 2) |
+| `detail` | VARCHAR | Free-text — failing rule, missing column, executor error, plan regression list |
+| `sample_rows` | BIGINT | Per-Ingress LIMIT used by Gate 3 (NULL for Gate 2 / Gate 4) |
 | `duration_ms` | BIGINT | Wall-clock for the gate |
 | `recorded_at` | VARCHAR | ISO-8601 UTC |
 
@@ -129,6 +129,33 @@ SELECT patch_id, status, detail, recorded_at
 FROM patch_simulation
 WHERE gate = 'gate3' AND status = 'fail'
 ORDER BY recorded_at DESC LIMIT 20;
+```
+
+### `explain_snapshot`
+
+**Source:** `aqueduct/surveyor/surveyor.py:_EXPLAIN_SNAPSHOT_DDL` (added Phase 29b). Rolling per-module physical-plan baseline. Written by the executor after every successful module run (non-Egress). Read by Gate 4 (`aqueduct/patch/explain_gate.py`) as the pre-patch baseline. Surveyor prunes to the most recent `keep_last_n` (default 5) rows per `(blueprint_id, module_id)`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `blueprint_id` | VARCHAR NOT NULL | PK with `run_id`, `module_id` |
+| `run_id` | VARCHAR NOT NULL | |
+| `module_id` | VARCHAR NOT NULL | Non-Egress module whose DataFrame plan was captured |
+| `captured_at` | VARCHAR NOT NULL | ISO-8601 UTC |
+| `exchange_count` | INTEGER NOT NULL | Count of `Exchange` nodes (shuffle proxy) |
+| `python_udf_count` | INTEGER NOT NULL | Count of `BatchEvalPython` nodes |
+| `broadcast_count` | INTEGER NOT NULL | Count of `BroadcastExchange` nodes |
+| `plan_text` | VARCHAR NOT NULL | Full `df.explain(mode='formatted')` text — kept for debugging |
+
+```sql
+-- Latest baseline counts per module
+SELECT blueprint_id, module_id,
+       exchange_count, python_udf_count, broadcast_count, captured_at
+FROM explain_snapshot
+WHERE (blueprint_id, module_id, captured_at) IN (
+  SELECT blueprint_id, module_id, MAX(captured_at)
+  FROM explain_snapshot
+  GROUP BY 1, 2
+);
 ```
 
 ### `signal_overrides`

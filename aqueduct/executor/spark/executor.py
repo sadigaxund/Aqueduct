@@ -687,6 +687,7 @@ def execute(
     use_observe: bool = True,
     obs_store: Any = None,
     lineage_store: Any = None,
+    explain_capture: dict[str, dict] | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -1450,6 +1451,38 @@ def execute(
             write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, store_dir, lineage_store=lineage_store)
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
+
+    # ── Phase 29b: capture explain() snapshots for Gate 4 ─────────────────────
+    # Two sinks: `surveyor.record_explain_snapshot()` (real runs → persists into
+    # `obs.explain_snapshot`) and the in-memory `explain_capture` dict (sandbox
+    # runs in Gate 3 → no persistence, used by Gate 4 in-process).
+    if surveyor is not None or explain_capture is not None:
+        try:
+            from aqueduct.patch.explain_gate import capture_plan_snapshot
+            _succeeded = {r.module_id for r in module_results if r.status == "success"}
+            for _mod in manifest.modules:
+                if _mod.id not in _succeeded or _mod.type == "Egress":
+                    continue
+                _df = frame_store.get(_mod.id)
+                if _df is None:
+                    continue
+                try:
+                    _snap = capture_plan_snapshot(_df)
+                    if explain_capture is not None:
+                        explain_capture[_mod.id] = _snap
+                    if surveyor is not None:
+                        surveyor.record_explain_snapshot(
+                            run_id=run_id,
+                            module_id=_mod.id,
+                            exchange_count=_snap["exchange_count"],
+                            python_udf_count=_snap["python_udf_count"],
+                            broadcast_count=_snap["broadcast_count"],
+                            plan_text=_snap["plan_text"],
+                        )
+                except Exception as _exc:
+                    logger.debug("explain snapshot failed for %r: %s", _mod.id, _exc)
+        except Exception as exc:
+            logger.debug("Phase 29b explain capture skipped: %s", exc)
 
     return ExecutionResult(
         blueprint_id=manifest.blueprint_id,

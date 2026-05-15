@@ -261,6 +261,16 @@ class AgentConnectionConfig(BaseModel):
             "pass. Per-blueprint override: agent.patch_validation."
         ),
     )
+    block_on_explain_regression: bool = Field(
+        default=False,
+        description=(
+            "Phase 29b — when True, Gate 4 (post-patch `explain()` regression "
+            "check) is treated as blocking in aggressive mode: a patch that "
+            "adds shuffles / Python UDF nodes or drops broadcast hints is "
+            "rejected instead of merely warned. Default False — Gate 4 is "
+            "warn-only across all healing modes, preserving current behaviour."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):

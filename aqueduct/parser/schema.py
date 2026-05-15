@@ -83,6 +83,10 @@ class AgentSchema(BaseModel):
     # the full-run step — fastest, lowest confidence, lets aggressive mode
     # close patch loops in seconds rather than minutes.
     patch_validation: Literal["full_run", "sandbox"] | None = None
+    # Phase 29b — when True (aggressive mode only), Gate 4 (post-patch
+    # `explain()` regression check) is treated as blocking. Default None
+    # inherits engine `agent.block_on_explain_regression` (= False).
+    block_on_explain_regression: bool | None = None
 
 
 class ModuleSchema(BaseModel):

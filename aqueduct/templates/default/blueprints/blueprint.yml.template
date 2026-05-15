@@ -121,6 +121,12 @@ agent:
   # Leave unset to inherit aqueduct.yml agent.patch_validation.
   # patch_validation: full_run
 
+  # block_on_explain_regression: Phase 29b — when true, Gate 4 (post-patch
+  # `explain()` regression check) rejects patches in aggressive mode that add
+  # shuffles / Python UDF nodes or drop broadcast hints. Default false →
+  # Gate 4 is warn-only. Leave unset to inherit aqueduct.yml.
+  # block_on_explain_regression: false
+
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
 
