@@ -390,7 +390,10 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
     # Original Blueprint YAML — gives LLM the authoring-level view (unresolved expressions)
     blueprint_yaml_section = ""
     raw_yaml = getattr(failure_ctx, "blueprint_source_yaml", None)
-    if raw_yaml:
+    # Typed str | None on FailureContext. Anything else (e.g. a Mock in tests,
+    # or a malformed ctx) is treated as absent — never fed to yaml.safe_load,
+    # which would spin forever on a non-string stream.
+    if isinstance(raw_yaml, str) and raw_yaml.strip():
         blueprint_yaml_section = (
             "\n## Original Blueprint YAML (unresolved — authoring view)\n"
             "```yaml\n"
