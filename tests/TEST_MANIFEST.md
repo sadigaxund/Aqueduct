@@ -14,11 +14,50 @@ When adding a new feature, add a task under the relevant module with the exact f
 | `AQ_SPARK_MASTER` | `local[1]` | Spark master URL used by the `spark` session fixture. Set to `spark://host:7077` or `yarn` to run tests against a remote cluster. |
 | `AQ_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL. LLM integration tests (`test_llm_integration.py`) skip automatically when unreachable. |
 | `AQ_OLLAMA_MODEL` | `gemma3:12b` | Model name sent to Ollama in integration tests. |
+| `AQ_PG_DSN` | _(unset)_ | Postgres DSN for store integration tests. If unset, Postgres params skip. Example: `postgresql://aq:aq@localhost:5432/aq_test`. |
+| `AQ_REDIS_URL` | `redis://localhost:6379/15` | Redis URL for store integration tests. Skips when unreachable. |
 
 Spark artifacts are isolated to `/tmp/`:
 - warehouse → `/tmp/aqueduct_test_spark_warehouse`
 - metastore → in-memory Derby (`jdbc:derby:memory:aqueduct_test_metastore`)
 - Derby log → `/tmp/aqueduct_test_derby.log`
+
+---
+
+## Test markers & execution modes
+
+| Marker | Default | Needs |
+|---|---|---|
+| _(none)_ | runs | nothing — pure unit tests, deterministic |
+| `integration` | **skipped** | live Postgres + Redis (see env vars) |
+| `llm` | **skipped** | reachable Ollama at `AQ_OLLAMA_URL` |
+| `scenario` | **skipped** | scenario runner (`aqueduct scenario run`) — non-deterministic eval, not regression |
+
+Commands:
+```bash
+pytest                                   # default: unit only
+pytest -m integration                    # store integration (PG + Redis)
+pytest -m llm                            # Ollama-backed LLM checks
+pytest -m "integration or llm"           # full local fat suite
+aqueduct scenario run                    # non-deterministic LLM eval (separate runner)
+```
+
+### LLM testing policy
+
+**Default `pytest` MUST be deterministic. No live LLM calls.** Surveyor / patch /
+healing-loop tests cover code paths via mocked `_call_llm()` or `httpx.MockTransport`
+with canned JSON responses. Assertions target structural properties (patch JSON
+shape, retry count, prompt-section presence, guardrail rejection reason) — never
+exact LLM output strings.
+
+Non-deterministic LLM evaluation belongs to **scenarios** (`.aqscenario.yml`),
+not pytest. Scenarios run via `aqueduct scenario run`, optionally against
+Ollama (local, free) or cloud LLMs (manual, token-burning). Scenarios are
+benchmark/eval, not pass/fail unit gates.
+
+Tests that hit a real LLM endpoint in default `pytest` are bugs — must be
+either rewritten with a mock or moved behind `@pytest.mark.llm` /
+`@pytest.mark.scenario`.
 
 ---
 
@@ -833,6 +872,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 ## Failure Report
 
+- [✅] `tests/test_cli/test_cli_aggressive.py::test_aggressive_mode_invalid_patch_stops_loop`: RESOLVED. Autonomous fix-and-verify loop verified end-to-end.
 
 ---
 
@@ -924,13 +964,13 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ patch `set_module_config_key` with `key=path`, value matching an `allowed_paths` pattern → no violation
 - ✅ patch `set_module_config_key` with `key=path`, value NOT matching any `allowed_paths` → `PatchError` raised
 - ✅ patch with non-path key (e.g. `key=format`) → no path violation even if `allowed_paths` set
-- ⏳ patch `replace_module_config` with `config.path` matching `allowed_paths` → no violation. closes the bypass where full-config replacements were unchecked.
-- ⏳ patch `replace_module_config` with `config.path` NOT matching `allowed_paths` → `PatchError` raised
-- ⏳ patch `replace_module_config` with `config.output_path` NOT matching → `PatchError` raised
-- ⏳ patch `insert_module` whose `module.config.path` does not match → `PatchError` raised (inserted module would write outside allowlist)
-- ⏳ patch `add_probe` whose `module.config.path` does not match → `PatchError` raised
-- ⏳ patch `add_arcade_ref` whose `module.config.output_path` does not match → `PatchError` raised
-- ⏳ patch `set_module_config_key` with `module_id` containing `__` (arcade-expanded) → guardrail skipped, apply step raises clearer "Module not found" error. Confirms the carve-out remains.
+- ✅ patch `replace_module_config` with `config.path` matching `allowed_paths` → no violation. closes the bypass where full-config replacements were unchecked.
+- ✅ patch `replace_module_config` with `config.path` NOT matching `allowed_paths` → `PatchError` raised
+- ✅ patch `replace_module_config` with `config.output_path` NOT matching → `PatchError` raised
+- ✅ patch `insert_module` whose `module.config.path` does not match → `PatchError` raised (inserted module would write outside allowlist)
+- ✅ patch `add_probe` whose `module.config.path` does not match → `PatchError` raised
+- ✅ patch `add_arcade_ref` whose `module.config.output_path` does not match → `PatchError` raised
+- ✅ patch `set_module_config_key` with `module_id` containing `__` (arcade-expanded) → guardrail skipped, apply step raises clearer "Module not found" error. Confirms the carve-out remains.
 - ✅ no `agent.guardrails` in Blueprint → unrestricted (no error)
 - ✅ guardrail violation during auto-apply loop → `PatchError` raised; blueprint run ends with status="error"
 - ✅ `GuardrailsConfig` round-trips through schema → parser → model (empty defaults)
@@ -1140,7 +1180,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
 - ✅ `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
 - ✅ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
-- ✅ `aqueduct doctor` observability check: opens `obs.db` file (not directory probe)
+- ✅ `aqueduct doctor` obs check: opens `obs.db` file (not directory probe)
 
 ### `schema_snapshot` path (`aqueduct/executor/spark/probe.py`)
 
@@ -1195,8 +1235,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 ### `init` command (`aqueduct/cli.py`)
 
 - ✅ `aqueduct init` in empty dir: creates `blueprints/`, `aqueduct.yml.template`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`, `benchmarks/`
-- ✅ `aqueduct init --name foo-bar`: project name = `foo-bar` in output
-- ✅ `aqueduct init` with no `--name`: uses `cwd.name` as project name
+- ✅ `aqueduct init`: project name derived from `cwd.name` (no `--name` flag; dropped 2026-05-15)
 - ✅ `aqueduct init` when files already exist: existing files skipped (not overwritten), new dirs still created
 - ✅ `git init` run when not already in a git repo; skipped when already in one
 - ✅ `git commit` run after scaffold; output line printed
@@ -1739,69 +1778,234 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ## Phase 28 — Pluggable Store Backends
 
+> **Note:** Backend-agnostic store interface tests have been migrated to `tests/test_stores/`.
+
 ### `aqueduct/stores/base.py`
 
-- ⏳ `RelationalCursor.execute(sql, params)` with `paramstyle="qmark"` passes SQL through unchanged
-- ⏳ `RelationalCursor.execute(sql, params)` with `paramstyle="format"` rewrites `?` → `%s` before calling the underlying cursor
-- ⏳ `RelationalCursor.executemany(...)` performs the same rewrite once per call
-- ⏳ `BackendUnsupportedError` raised on `RedisDepotStore.connect()`
-- ⏳ `get_stores(cfg)` returns a `StoreBundle` with the expected concrete adapter classes for each backend combination (duckdb/duckdb/duckdb; duckdb/duckdb/redis; postgres×3)
+- ✅ `RelationalCursor.execute(sql, params)` with `paramstyle="qmark"` passes SQL through unchanged
+- ✅ `RelationalCursor.execute(sql, params)` with `paramstyle="format"` rewrites `?` → `%s` before calling the underlying cursor
+- ✅ `RelationalCursor.executemany(...)` performs the same rewrite once per call
+- ✅ `BackendUnsupportedError` raised on `RedisDepotStore.connect()`
+- ✅ `get_stores(cfg)` returns a `StoreBundle` with the expected concrete adapter classes for each backend combination (duckdb/duckdb/duckdb; duckdb/duckdb/redis; postgres×3) — `tests/test_stores/test_base.py`
 
 ### `aqueduct/stores/duckdb_.py`
 
-- ⏳ `DuckDBObsStore.connect()` opens / closes a real DuckDB connection per call
-- ⏳ `DuckDBObsStore.connect()` creates parent directories when the path's parent does not yet exist
-- ⏳ `DuckDBDepotStore.kv_get(missing_key, default="x")` returns `"x"` without raising
-- ⏳ `DuckDBDepotStore.kv_put / kv_get / kv_delete` round-trip
-- ⏳ Equivalent behavior verified for `DuckDBLineageStore`
+- ✅ `DuckDBObsStore.connect()` opens / closes a real DuckDB connection per call
+- ✅ `DuckDBObsStore.connect()` creates parent directories when the path's parent does not yet exist — `tests/test_stores/test_obs_store.py::test_duckdb_creates_parent_dirs`
+- ✅ `DuckDBDepotStore.kv_get(missing_key, default="x")` returns `"x"` without raising
+- ✅ `DuckDBDepotStore.kv_put / kv_get / kv_delete` round-trip
+- ✅ Equivalent behavior verified for `DuckDBLineageStore`
 
 ### `aqueduct/stores/postgres.py`
 
-- ⏳ `_get_pool` caches the pool per DSN (two `connect()` calls against the same DSN do not create two pools)
-- ⏳ `_ensure_schema(dsn, "obs")` is idempotent — calling it twice does not raise
-- ⏳ `PostgresObsStore.connect()` sets `search_path` to `"obs"` so unqualified `SELECT … FROM run_records` resolves correctly
-- ⏳ `PostgresObsStore.location_label` redacts password from DSN (`postgresql://user:secret@host/db` → `postgresql://user@host/db`)
-- ⏳ `PostgresDepotStore.kv_put / kv_get / kv_delete` round-trip against a real PG instance (integration test, marker `integration`)
-- ⏳ `psycopg2` missing → `ImportError` with the documented install hint at first `_get_pool()` call
+- ✅ `_get_pool` caches the pool per DSN (two `connect()` calls against the same DSN do not create two pools) — `tests/test_stores/test_postgres.py`
+- ✅ `_ensure_schema(dsn, "obs")` is idempotent — calling it twice does not raise
+- ✅ `PostgresObsStore.connect()` sets `search_path` to `"obs"` so unqualified `SELECT … FROM run_records` resolves correctly
+- ✅ `PostgresObsStore.location_label` redacts password from DSN (`postgresql://user:secret@host/db` → `postgresql://user@host/db`)
+- ✅ `PostgresDepotStore.kv_put / kv_get / kv_delete` round-trip against a real PG instance (integration test, marker `integration`)
+- ✅ `psycopg2` missing → `ImportError` with the documented install hint at first `_get_pool()` call — `tests/test_stores/test_postgres.py`
 
 ### `aqueduct/stores/redis_.py`
 
-- ⏳ `_get_client` caches the client per URL
-- ⏳ `RedisDepotStore.kv_get(missing_key, default="x")` returns `"x"`
-- ⏳ `RedisDepotStore.kv_put / kv_get / kv_delete` round-trip (integration test with `redis` running on localhost)
-- ⏳ `RedisDepotStore.location_label` strips the password component from a URL
-- ⏳ `redis-py` missing → `ImportError` with the install hint
+- ✅ `_get_client` caches the client per URL — `tests/test_stores/test_redis.py`
+- ✅ `RedisDepotStore.kv_get(missing_key, default="x")` returns `"x"`
+- ✅ `RedisDepotStore.kv_put / kv_get / kv_delete` round-trip (integration test with `redis` running on localhost)
+- ✅ `RedisDepotStore.location_label` strips the password component from a URL
+- ✅ `redis-py` missing → `ImportError` with the install hint — `tests/test_stores/test_redis.py`
 
 ### `aqueduct/config.py`
 
-- ⏳ `RelationalStoreConfig(backend="redis", path="x")` raises `pydantic.ValidationError`
-- ⏳ `KVStoreConfig(backend="redis", path="redis://h/0")` validates
-- ⏳ `RelationalStoreConfig(backend="duckdb"|"postgres", ...)` both validate
-- ⏳ `KVStoreConfig(backend="duckdb"|"postgres"|"redis", ...)` all three validate
-- ⏳ `load_config(...)` raises `ConfigError` when `stores.obs.backend == "postgres"` and `psycopg2` is not importable (monkeypatch `importlib.util.find_spec`)
-- ⏳ `load_config(...)` raises `ConfigError` when `stores.depot.backend == "redis"` and `redis` is not importable
-- ⏳ `load_config(...)` with all backends `duckdb` does not import psycopg2 or redis
+- ✅ `RelationalStoreConfig(backend="redis", path="x")` raises `pydantic.ValidationError`
+- ✅ `KVStoreConfig(backend="redis", path="redis://h/0")` validates
+- ✅ `RelationalStoreConfig(backend="duckdb"|"postgres", ...)` both validate
+- ✅ `KVStoreConfig(backend="duckdb"|"postgres"|"redis", ...)` all three validate
+- ✅ `load_config(...)` raises `ConfigError` when `stores.obs.backend == "postgres"` and `psycopg2` is not importable (monkeypatch `importlib.util.find_spec`) — `tests/test_parser/test_config.py::test_load_config_postgres_missing_driver`
+- ✅ `load_config(...)` raises `ConfigError` when `stores.depot.backend == "redis"` and `redis` is not importable — `tests/test_parser/test_config.py::test_load_config_redis_missing_driver`
+- ✅ `load_config(...)` with all backends `duckdb` does not import psycopg2 or redis — `tests/test_parser/test_config.py`
 
 ### Wired call sites
 
-- ⏳ `Surveyor(stores=bundle)` honours the supplied bundle — `record_healing_outcome()` writes against `bundle.obs`
-- ⏳ `Surveyor()` without `stores=` falls back to a `DuckDBObsStore` at `store_dir/obs.db`
-- ⏳ `DepotStore(backend=Redis...)` round-trips a watermark via `.put()` / `.get()`
-- ⏳ `write_lineage(..., lineage_store=postgres_store)` writes rows into the `lineage.column_lineage` table of the configured Postgres instance
-- ⏳ `execute(..., obs_store=postgres_store, lineage_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres
-- ⏳ `aqueduct signal <id>` with the Postgres backend reads/writes the `obs.signal_overrides` schema-qualified table
+- ✅ `Surveyor(stores=bundle)` honours the supplied bundle — `record_healing_outcome()` writes against `bundle.obs` — `tests/test_surveyor/test_surveyor.py::test_surveyor_uses_injected_stores`
+- ✅ `Surveyor()` without `stores=` falls back to a `DuckDBObsStore` at `store_dir/obs.db` — `tests/test_surveyor/test_surveyor.py::test_surveyor_default_store`
+- ⏳ `DepotStore(backend=Redis...)` round-trips a watermark via `.put()` / `.get()` [integration — needs `AQ_REDIS_URL`]
+- ⏳ `write_lineage(..., lineage_store=postgres_store)` writes rows into the `lineage.column_lineage` table of the configured Postgres instance [integration — needs `AQ_PG_DSN`]
+- ⏳ `execute(..., obs_store=postgres_store, lineage_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres [integration]
+- ⏳ `aqueduct signal <id>` with the Postgres backend reads/writes the `obs.signal_overrides` schema-qualified table [integration]
 
 ### `aqueduct stores` CLI
 
-- ⏳ `aqueduct stores info` prints three rows (obs / lineage / depot) with the configured backend + location label
-- ⏳ `aqueduct stores migrate --from-duckdb <empty.db>` reports zero rows migrated without error
-- ⏳ `aqueduct stores migrate --from-duckdb <populated.db>` copies all rows into the target backend, idempotent on re-run
-- ⏳ `aqueduct stores migrate` refuses when source and target depot resolve to the same DuckDB file
-- ⏳ `aqueduct stores migrate --store obs` exits non-zero with a "not yet supported" error (v1 ships depot only)
+- ✅ `aqueduct stores info` prints three rows (obs / lineage / depot) with the configured backend + location label — `tests/test_cli/test_cli_stores.py`
+- ✅ `aqueduct stores migrate --from-duckdb <empty.db>` reports zero rows migrated without error — `tests/test_cli/test_cli_stores.py`
+- ✅ `aqueduct stores migrate --from-duckdb <populated.db>` copies all rows into the target backend, idempotent on re-run — `tests/test_cli/test_cli_stores.py`
+- ✅ `aqueduct stores migrate` refuses when source and target depot resolve to the same DuckDB file — `tests/test_cli/test_cli_stores.py`
+- ✅ `aqueduct stores migrate --store obs` exits non-zero with a "not yet supported" error (v1 ships depot only) — `tests/test_cli/test_cli_stores.py`
 
 ### `aqueduct doctor`
 
-- ⏳ `check_store_backend("obs", cfg, is_kv_only=False)` returns `ok` for a reachable DuckDB
-- ⏳ `check_store_backend("obs", cfg, ...)` returns `fail` with `redis` because Literal split prevents the combination at config layer; if injected programmatically the function still rejects
-- ⏳ `check_store_backend(... backend=postgres, dsn=invalid)` returns `fail` with the connection error
-- ⏳ `aqueduct doctor` output replaces the old `depot` / `observability` rows with `obs` / `lineage` / `depot` backend-aware rows
+- ✅ `check_store_backend("obs", cfg, is_kv_only=False)` returns `ok` for a reachable DuckDB — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `check_store_backend("obs", cfg, ...)` returns `fail` with `redis` because Literal split prevents the combination at config layer; if injected programmatically the function still rejects — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `check_store_backend(... backend=postgres, dsn=invalid)` returns `fail` with the connection error — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `aqueduct doctor` output replaces the old `depot` / `observability` rows with `obs` / `lineage` / `depot` backend-aware rows — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+
+---
+
+## Phase 29a — Patch Validation Pyramid
+
+### `aqueduct/patch/preview.py`
+
+#### `touched_module_ids(spec)`
+
+- ✅ patch with one `set_module_config_key` → returns `[module_id]`
+- ✅ patch with `replace_module_config` + `insert_module` + `add_probe` → returns each module_id once, insertion order preserved
+- ✅ patch with only `replace_context_value` → returns `[]` (no module touched)
+- ✅ patch with `replace_edge` → returns `[to_id]` only (consumer side)
+
+#### `_live_lineage_rows(bp_dict)`
+
+- ✅ Blueprint with no SQL Channels → returns `[]`
+- ✅ Blueprint with one `op: sql` Channel pulling 3 columns from 1 upstream → returns 3 rows with correct `source_table` / `source_column`
+- ✅ Blueprint with `SELECT *` Channel → returns wildcard rows (`output_column='*'`) — Gate 2 must tolerate this without false positives
+- ✅ Multi-input Channel resolves `source_table` per column when sqlglot can disambiguate; falls back to first upstream when ambiguous
+
+#### `run_gate2_lineage(before, after, spec)`
+
+- ✅ patch that does NOT change any Channel SQL → returns `status="pass"`, empty warnings
+- ✅ patch that renames a column in a Channel query and the renamed column is consumed downstream → returns one `LineageWarning` per missing column, `status="warn"`
+- ✅ patch that drops a SELECT column consumed downstream → returns a warning identifying both the consumer module and the missing column name
+- ✅ patch on a module with no downstream consumers → `status="pass"` even if columns disappear
+- ✅ `SELECT *` patched module → no false-positive warnings (wildcard handled)
+
+#### `run_gate3_sandbox(...)`
+
+- ✅ patched Blueprint that parses + compiles + executes without error → `status="pass"` and `egress_targets` lists every dropped Egress
+- ✅ patched Blueprint that fails to compile → `status="fail"` with the CompileError text in `detail`
+- ✅ patched Blueprint where a module fails at runtime → `status="fail"` mentions the failing module_id
+- ✅ `sample_rows=1000` → Ingress modules receive `sandbox_limit=1000` in their config; ingress.py wraps `.limit(1000)` post-load
+- ✅ `sample_rows=0` → no `sandbox_limit` marker injected; full data flows
+- ✅ Egress modules: none are executed; all are listed in `egress_targets` with `id`, `format`, `path`, `mode`
+- ✅ Spark unavailable (mock `make_spark_session` to raise) → `status="skip"`, not `fail`
+- ✅ Temp Blueprint file is unlinked after the call (even on exception paths)
+
+#### `render_unified_diff(before, after)`
+
+- ✅ identical Blueprints → empty diff string
+- ✅ single-field change → diff contains exactly one `-`/`+` pair
+
+### `aqueduct/executor/spark/ingress.py` — `sandbox_limit`
+
+- ✅ `read_ingress(module)` with `sandbox_limit=100` in config → returned DataFrame has plan node `LocalLimit 100` or equivalent
+- ✅ `read_ingress(module)` without `sandbox_limit` → returned DataFrame plan has no LIMIT node
+- ✅ `sandbox_limit` applied AFTER `partition_filters` (limit narrower than filter)
+- ✅ `sandbox_limit` applied BEFORE `schema_hint` validation (limit does not change schema metadata)
+
+### `agent.patch_validation` config
+
+- ✅ `AgentConnectionConfig(patch_validation="full_run")` validates and is the default
+- ✅ `AgentConnectionConfig(patch_validation="sandbox")` validates
+- ✅ `AgentConnectionConfig(patch_validation="bogus")` raises `pydantic.ValidationError`
+- ✅ Blueprint-level `agent.patch_validation` overrides engine default (`manifest.agent.patch_validation or cfg.agent.patch_validation`)
+- ✅ `manifest.agent.patch_validation=None` → engine default wins
+
+### Auto/aggressive integration — `cli.py:_run_patch_gates_inline`
+
+- ✅ auto mode + Gate 3 pass + `patch_validation=full_run` → full Spark run is still executed
+- ✅ auto mode + Gate 3 pass + `patch_validation=sandbox` → full Spark run is SKIPPED; Blueprint written directly
+- ✅ auto mode + Gate 3 fail → patch staged for human via `on_heal_failure`, `healing_outcomes.patch_applied=false`, loop breaks
+- ✅ aggressive mode + Gate 3 fail → `continue` to next iteration with `last_apply_error` populated; no Blueprint write
+- ✅ aggressive mode + Gate 3 pass + `patch_validation=sandbox` → Blueprint written, loop breaks
+- ✅ Each gate evaluation writes one row to `obs.patch_simulation` (gate2 + gate3)
+
+### `aqueduct patch preview` CLI
+
+- ✅ `aqueduct patch preview <patch>.json --blueprint bp.yml` (text format) — exit 0 when Gate 2 passes
+- ✅ `aqueduct patch preview ... --sandbox --sample 0` — Gate 3 runs unbounded; Egress targets printed
+- ✅ `aqueduct patch preview ... --format json` emits a top-level object with `patch_id`, `diff`, `gate2`, and (when `--sandbox`) `gate3` keys
+- ✅ Patch that fails Gate 1 guardrails exits with code 2 before Gate 2/3 run
+- ✅ Gate 2 warnings do not cause non-zero exit (status `warn` is informational)
+- ✅ Gate 3 `fail` causes exit code 2
+
+### `obs.patch_simulation` table — `Surveyor.record_patch_simulation()`
+
+- ✅ Insert one row → `SELECT COUNT(*) FROM patch_simulation` returns 1
+- ✅ Insert preserves all fields (patch_id, gate, status, detail, sample_rows, duration_ms, run_id, blueprint_id, recorded_at)
+- ✅ Method is a no-op when `Surveyor.start()` has not been called (`self._obs is None`)
+- ✅ Internal exceptions inside the insert never propagate to the healing loop (e.g. patched obs store raising on connect)
+
+---
+
+## Phase 29b — Gate 4: explain() regression check
+
+### `aqueduct/patch/explain_gate.py`
+
+#### `capture_plan_snapshot(df)`
+
+- ⏳ returns dict with `exchange_count`, `python_udf_count`, `broadcast_count`, `plan_text` keys
+- ⏳ counts `Exchange ` substring occurrences in formatted plan text
+- ⏳ counts `BatchEvalPython` substring occurrences
+- ⏳ counts `BroadcastExchange` substring occurrences
+- ⏳ falls back to `df._jdf.queryExecution().toString()` when `ExplainMode.fromString` is unavailable
+- ⏳ returns zero counts + empty plan text when both extraction paths fail (never raises)
+
+#### `run_gate4_explain(baseline, after, touched_modules=...)`
+
+- ⏳ empty `baseline` dict → `status="skip"`, detail mentions "baseline not yet established"
+- ⏳ baseline + matching after with identical counts → `status="pass"`, no regressions
+- ⏳ `after.exchange_count > baseline.exchange_count` → ExplainRegression with metric=`"exchange"`
+- ⏳ `after.python_udf_count > baseline.python_udf_count` → ExplainRegression with metric=`"python_udf"`
+- ⏳ `after.broadcast_count < baseline.broadcast_count` → ExplainRegression with metric=`"broadcast"`
+- ⏳ `touched_modules=["m1"]` → only `m1` compared even if other modules are in both maps
+- ⏳ `touched_modules=None` → intersection of `baseline.keys()` and `after.keys()` compared
+- ⏳ status `warn` when at least one regression; `pass` otherwise (never `fail`)
+- ⏳ `baseline_run_id` populated with one of the baseline `run_id`s on compare
+
+### `aqueduct/surveyor/surveyor.py` — Phase 29b methods
+
+- ⏳ `Surveyor.record_explain_snapshot(...)` writes one row to `obs.explain_snapshot`
+- ⏳ Rolling prune: after N+1 inserts for the same `(blueprint_id, module_id)`, oldest row deleted; only `keep_last_n` rows remain
+- ⏳ `Surveyor.latest_explain_snapshots()` returns `{module_id: {exchange_count, python_udf_count, broadcast_count, plan_text, run_id, captured_at}}` with one row per module (most recent `captured_at`)
+- ⏳ Method is a no-op when `_obs` is None or `blueprint_id` is None
+- ⏳ Internal exceptions never propagate
+
+### `agent.block_on_explain_regression` config
+
+- ⏳ `AgentConnectionConfig(block_on_explain_regression=False)` is the default
+- ⏳ `AgentConnectionConfig(block_on_explain_regression=True)` validates
+- ⏳ Blueprint-level `agent.block_on_explain_regression` overrides engine default
+- ⏳ Blueprint `block_on_explain_regression=None` → engine default wins
+- ⏳ Parser populates `AgentConfig.block_on_explain_regression` from Pydantic schema (regression test for the Phase 29a missed-field bug — verifies parser wires the field, not just defaults)
+
+### Executor wiring — `aqueduct/executor/spark/executor.py`
+
+- ⏳ `execute(..., explain_capture=dict)` fills the dict with per-module snapshots during a successful run
+- ⏳ `explain_capture` is NOT written to `obs.explain_snapshot` even when `surveyor` is also passed; both sinks happen independently
+- ⏳ `execute(..., surveyor=X, explain_capture=None)` writes to `obs.explain_snapshot` per successful non-Egress module
+- ⏳ Egress modules are NEVER captured (no DataFrame in frame_store, never iterated)
+- ⏳ Failure during capture for one module does NOT abort the run or skip the next module
+
+### `aqueduct/patch/preview.py` — Gate 3 explain wiring
+
+- ⏳ `run_gate3_sandbox(..., explain_capture=d)` forwards the dict to `execute()` and fills it during sandbox replay
+- ⏳ When `explain_capture` is omitted, behaviour is identical to Phase 29a (no per-module snapshot collection)
+
+### Auto/aggressive integration — `cli.py:_run_patch_gates_inline`
+
+- ⏳ Returns 4-tuple `(gate2, gate3, gate4, gates_passed)`; gate4 is None only when Gate 4 raised internally
+- ⏳ Gate 4 row appended to `obs.patch_simulation` with `gate="gate4"`
+- ⏳ Auto mode + Gate 4 warn → ⚠ regressions printed; loop continues to patch_validation logic
+- ⏳ Aggressive mode + `block_on_explain_regression=False` + Gate 4 warn → continues to Gate 3 decision (current behaviour)
+- ⏳ Aggressive mode + `block_on_explain_regression=True` + Gate 4 warn → patch rejected, `last_apply_error` populated, `continue` to next iteration; `healing_outcomes.patch_applied=false`
+- ⏳ Aggressive mode + `block_on_explain_regression=True` + Gate 4 pass → proceeds to Gate 3 / `patch_validation` decision normally
+
+### `aqueduct patch preview` CLI
+
+- ⏳ `aqueduct patch preview <patch>.json --blueprint bp.yml --sandbox` text output includes "Gate 4: explain() regression" section with status + duration
+- ⏳ `--format json --sandbox` emits top-level `gate4` key with `status`, `detail`, `duration_ms`, `baseline_run_id`, `regressions` (list of dicts)
+- ⏳ Empty `obs.explain_snapshot` → Gate 4 reports `status="skip"`, exit code stays 0
+- ⏳ Gate 4 warn (regression) does NOT raise exit code beyond Gate 3 status (warn-only at CLI surface)
+
+### `obs.explain_snapshot` table
+
+- ⏳ Table created on `Surveyor.start()` via `_EXPLAIN_SNAPSHOT_DDL`
+- ⏳ Primary key `(blueprint_id, run_id, module_id)` — re-inserting same triplet is idempotent (INSERT OR REPLACE)
+- ⏳ DDL `IF NOT EXISTS` — second `start()` does not raise
+- ⏳ DuckDB and Postgres backends both honour the DDL (paramstyle qmark→format rewrite)

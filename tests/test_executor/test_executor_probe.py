@@ -9,7 +9,7 @@ from pyspark.sql import Row
 
 from aqueduct.executor.spark.probe import _threshold, execute_probe
 from aqueduct.surveyor.surveyor import Surveyor
-from aqueduct.parser.models import Module, Edge
+from aqueduct.parser.models import Module, Edge, RetryPolicy
 from aqueduct.compiler.models import Manifest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
@@ -78,10 +78,11 @@ def test_evaluate_regulator_passed(tmp_path):
     conn.close()
     
     manifest = MagicMock()
+    manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
     surveyor = Surveyor(manifest, store_dir=tmp_path)
-    surveyor._run_id = "run_1"
+    surveyor.start("run_1")
     
     assert surveyor.evaluate_regulator("r1") is True
 
@@ -97,10 +98,11 @@ def test_evaluate_regulator_failed(tmp_path):
     conn.close()
     
     manifest = MagicMock()
+    manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
     surveyor = Surveyor(manifest, store_dir=tmp_path)
-    surveyor._run_id = "run_1"
+    surveyor.start("run_1")
     
     assert surveyor.evaluate_regulator("r1") is False
 
@@ -111,10 +113,11 @@ def test_evaluate_regulator_no_signal_defaults_open(tmp_path):
     conn.close()
     
     manifest = MagicMock()
+    manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
     surveyor = Surveyor(manifest, store_dir=tmp_path)
-    surveyor._run_id = "run_1"
+    surveyor.start("run_1")
     
     # No signal with 'passed' key -> defaults to True
     assert surveyor.evaluate_regulator("r1") is True
@@ -128,13 +131,23 @@ def test_regulator_timeout_opens_mid_poll(tmp_path):
     regulator = Module(id="r1", type="Regulator", label="Reg", config={"timeout_seconds": 10, "on_block": "abort"})
     manifest = Manifest(
         blueprint_id="bp1",
+        name="test",
+        description="",
+        aqueduct_version="1.0",
         context={},
-        spark_config={},
         modules=(ingress, regulator),
         edges=(
-            Edge(from_id="in1", to_id="r1"),
+            Edge(from_id="in1", to_id="r1", port="main"),
             Edge(from_id="p1", to_id="r1", port="signal") # signal source
-        )
+        ),
+        spark_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
+        provenance_map=None,
+        inputs_fingerprint={}
     )
     
     mock_surveyor = MagicMock()
@@ -159,19 +172,29 @@ def test_regulator_timeout_opens_mid_poll(tmp_path):
         assert reg_res.status == "success"
 
 def test_regulator_timeout_reaches_limit_aborts(tmp_path):
-    from aqueduct.executor.spark.executor import execute, AssertError
+    from aqueduct.executor.spark.executor import execute
     
     ingress = Module(id="in1", type="Ingress", label="In", config={"format": "parquet", "path": "p"})
     regulator = Module(id="r1", type="Regulator", label="Reg", config={"timeout_seconds": 1, "on_block": "abort"})
     manifest = Manifest(
         blueprint_id="bp1",
+        name="test",
+        description="",
+        aqueduct_version="1.0",
         context={},
-        spark_config={},
         modules=(ingress, regulator),
         edges=(
-            Edge(from_id="in1", to_id="r1"),
+            Edge(from_id="in1", to_id="r1", port="main"),
             Edge(from_id="p1", to_id="r1", port="signal")
-        )
+        ),
+        spark_config={},
+        retry_policy=RetryPolicy(),
+        agent=None,
+        udf_registry={},
+        macros={},
+        checkpoint=False,
+        provenance_map=None,
+        inputs_fingerprint={}
     )
     
     mock_surveyor = MagicMock()

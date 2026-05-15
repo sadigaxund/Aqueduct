@@ -71,7 +71,8 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     invalid_patch = mock_llm_patch(patch_id="invalid-fix")
     mock_gen_patch.return_value = MagicMock(patch=invalid_patch)
     
-    with patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, False)), \
+         patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
     
     assert "✗ LLM patch produces invalid Blueprint, discarding" in result.output
@@ -120,7 +121,8 @@ def test_aggressive_mode_fails_then_continues(
     
     # We need to mock _apply_patch_in_memory to return a valid manifest (mock it as MagicMock)
     # And we mock _stage_failed_patch to verify it's called
-    with patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), True)), \
+         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._stage_failed_patch") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
     
@@ -157,7 +159,8 @@ def test_aggressive_mode_succeeds_stops_loop(
     patch_obj = mock_llm_patch(patch_id="good-fix")
     mock_gen_patch.return_value = MagicMock(patch=patch_obj)
     
-    with patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), True)), \
+         patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._write_patch_to_blueprint") as mock_write:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
     
@@ -235,18 +238,18 @@ def test_block_full_actions_propagation(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
-    from aqueduct.config import AqueductConfig, DangerConfig, DeploymentConfig, StoresConfig, StoreBackendConfig
+    from aqueduct.config import AqueductConfig, DangerConfig, DeploymentConfig
     mock_cfg = AqueductConfig(
         danger=DangerConfig(
             allow_full_probe_actions=False,
             allow_aggressive_patching=True
         ),
         deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
-        stores=StoresConfig(
-            obs=StoreBackendConfig(path=".aqueduct/obs.db"),
-            lineage=StoreBackendConfig(path=".aqueduct/lineage.db"),
-            depot=StoreBackendConfig(path=".aqueduct/depot.db")
-        ),
+        stores={
+            "obs": {"path": ".aqueduct/obs.db"},
+            "lineage": {"path": ".aqueduct/lineage.db"},
+            "depot": {"path": ".aqueduct/depot.db"}
+        },
         spark_config={}
     )
     
@@ -260,6 +263,7 @@ def test_block_full_actions_propagation(
     args, kwargs = mock_exec.call_args
     assert kwargs["block_full_actions"] is True
     # Verification of loop stopping is implicit in call counts
+
 @patch("aqueduct.surveyor.llm.generate_llm_patch")
 @patch("aqueduct.executor.get_executor")
 def test_trigger_agent_stays_human(

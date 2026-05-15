@@ -481,6 +481,7 @@ def test_incremental_sidecar_written_depot_none(spark, tmp_path):
     assert wm is not None
 
 
+
 def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     """Watermark MAX computed from Egress output path, not the lazy Channel df (no double-scan)."""
     from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
@@ -492,13 +493,12 @@ def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     store_dir = tmp_path / "store_nodbl"
 
     call_log = []
-
-    original_compute = None
+    import aqueduct.executor.spark.executor as executor_mod
+    original_compute = executor_mod._compute_watermark_from_output
 
     def spy_compute(spark_session, path, fmt, wm_col):
         call_log.append({"path": path, "fmt": fmt})
-        from aqueduct.executor.spark.executor import _compute_watermark_from_output as _orig
-        return _orig(spark_session, path, fmt, wm_col)
+        return original_compute(spark_session, path, fmt, wm_col)
 
     manifest = create_manifest(
         modules=(

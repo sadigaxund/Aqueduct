@@ -74,7 +74,7 @@ def test_load_config_unknown_nested_key(tmp_path):
 def test_load_config_unknown_stores_key(tmp_path):
     """unknown key in stores -> ConfigError"""
     path = tmp_path / "stores_extra.yml"
-    path.write_text("stores:\n  observability: {path: ./obs.db}")
+    path.write_text("stores:\n  obs: {path: ./obs.db}")
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
 
@@ -139,3 +139,37 @@ def test_webhook_config_coercion(tmp_path):
     config = load_config(path)
     assert config.webhooks.on_success.url == "http://api.test/success"
     assert config.webhooks.on_success.method == "POST"
+
+def test_load_config_postgres_missing_driver(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "psycopg2", None)
+    monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
+    
+    path = tmp_path / "aq_pg.yml"
+    path.write_text("stores:\n  obs: {backend: postgres, path: postgresql://localhost/aq}")
+    
+    from aqueduct.config import ConfigError
+    with pytest.raises(ConfigError, match="psycopg2"):
+        load_config(path)
+
+def test_load_config_redis_missing_driver(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "redis", None)
+    
+    path = tmp_path / "aq_redis.yml"
+    path.write_text("stores:\n  depot: {backend: redis, path: redis://localhost}")
+    
+    from aqueduct.config import ConfigError
+    with pytest.raises(ConfigError, match="redis"):
+        load_config(path)
+
+def test_load_config_duckdb_lazy_imports(tmp_path, monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "psycopg2", None)
+    monkeypatch.setitem(sys.modules, "redis", None)
+    
+    path = tmp_path / "aq_duck.yml"
+    path.write_text("stores:\n  obs: {backend: duckdb, path: obs.db}")
+    
+    cfg = load_config(path)
+    assert cfg.stores.obs.backend == "duckdb"

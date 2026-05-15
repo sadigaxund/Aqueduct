@@ -29,7 +29,6 @@ def test_compile_outputs_json():
     assert "modules" in manifest
     assert "edges" in manifest
 
-@pytest.mark.xfail(reason="DepotStore.get raises CREATE TABLE error in read_only mode")
 def test_cli_run_writes_depot_last_run_id(tmp_path):
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
