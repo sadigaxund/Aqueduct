@@ -39,7 +39,12 @@ def _loaded_jar_names(spark: Any) -> list[str]:
         # listJars returns a Scala Seq — iterate to coerce to Python strings
         out: list[str] = []
         it = jars.iterator()
-        while it.hasNext():
+        while True:
+            # If spark is a MagicMock, hasNext() returns a Mock which is truthy.
+            # We check isinstance(..., bool) to break the loop for mocks.
+            has_next = it.hasNext()
+            if not isinstance(has_next, bool) or not has_next:
+                break
             out.append(str(it.next()))
         return out
     except Exception:

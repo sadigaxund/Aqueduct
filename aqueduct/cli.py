@@ -1276,7 +1276,7 @@ def run(
             )
             from aqueduct.stores import StoreBundle
             bundle = StoreBundle(
-                obs=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
+                observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
                 lineage=DuckDBLineageStore(resolved_store_dir / "lineage.db"),
                 depot=bundle.depot,  # depot path stays user-configured
             )
