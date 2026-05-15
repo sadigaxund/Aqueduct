@@ -614,6 +614,35 @@ pytest tests/
 
 ---
 
+## Versioning & Stability
+
+Aqueduct follows [semver](https://semver.org). The v1.0 stability contract:
+
+**Stable** (semver applies):
+- CLI command + flag names (see `aqueduct --help`)
+- `--format json` output on `aqueduct runs`, `patch list`, `patch preview`
+- Top-level imports: `parse`, `ParseError`, `AqueductWarning`, `__version__`, `exit_codes`
+- Storage table schemas in [`docs/ALL_TABLES.md`](docs/ALL_TABLES.md)
+- Blueprint schema via `aqueduct schema --target blueprint`
+- Warning rule IDs (`AQ-WARN [rule_id] ...`)
+
+**Exit codes** (`aqueduct/exit_codes.py`):
+
+| Code | Constant | Meaning |
+|---|---|---|
+| 0 | `SUCCESS` | Command completed |
+| 1 | `CONFIG_ERROR` | Malformed `aqueduct.yml` / Blueprint schema |
+| 2 | `DATA_OR_RUNTIME` | Spark / Assert / network / runtime error |
+| 3 | `HEAL_PENDING` | Patch staged for human review (`human` / `ci` mode) |
+| 4 | `VALIDATION_GATE` | Patch rejected by Gate 1–4 |
+| 5 | `USAGE_ERROR` | Invalid CLI flag / missing arg |
+
+**Not stable**: subpackage internals (`aqueduct.compiler.*`, `aqueduct.executor.*`, etc.), human-readable log lines (use `--log-format json` for structured output), pre-v1.0 alpha / RC builds.
+
+**Deprecation policy** (applies from v1.0.0): a deprecated name emits `DeprecationWarning` for one full minor release with the replacement listed, then is removed in the next minor.
+
+---
+
 ## License & Philosophy
 
 **Aqueduct is Apache 2.0 licensed.** See [LICENSE](LICENSE).

@@ -4,6 +4,38 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 30b — Stability Contract for v1.0
+_2026-05-15_
+
+Freeze the consumer-facing surface so v1.0 means "downstream tooling can
+build against this without fear."
+
+- **`aqueduct/exit_codes.py`** new module — six stable integer constants
+  (`SUCCESS=0`, `CONFIG_ERROR=1`, `DATA_OR_RUNTIME=2`, `HEAL_PENDING=3`,
+  `VALIDATION_GATE=4`, `USAGE_ERROR=5`). Documented in
+  `docs/STABILITY.md`; CI wrappers and Airflow operators can `case $?` /
+  `result.returncode == aqueduct.exit_codes.X`.
+- **`aqueduct schema --target {blueprint,config,patch}`** new CLI
+  command emits the Pydantic-derived JSON Schema. Unlocks IDE
+  autocomplete + CI gate without exposing internal model classes.
+  `-o <file>` to write, `-` for stdout.
+- **`--format json`** added to `aqueduct runs` and `aqueduct patch list`
+  (`aqueduct patch preview` already had it from Phase 29a). Output is
+  the v1.0 contract for machine consumers.
+- **Public API freeze** — `aqueduct/__init__.py` documents the contract
+  surface and the (intentionally small) `__all__`: `parse`, `ParseError`,
+  `AqueductWarning`, `__version__`. All other names live under
+  subpackages and are not part of v1.0.
+- **README "Versioning & Stability" section** — exit-code table,
+  stable surface list, deprecation policy (one-minor-release warning
+  then removal). Placed between Development and License so contributors
+  see the contract on landing.
+
+Pre-v1.0 reminder: the policy doc applies starting at `v1.0.0`. During
+alpha / RC, breaking changes can land in any patch.
+
+---
+
 ### Phase 30a — Extended Spark Warnings + Suppression Registry
 _2026-05-15_
 
