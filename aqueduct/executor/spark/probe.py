@@ -1,6 +1,6 @@
 """Probe executor — captures observability signals from a lazy DataFrame.
 
-Signals are written to DuckDB (``store_dir/obs.db``) so the Surveyor
+Signals are written to DuckDB (``store_dir/observability.db``) so the Surveyor
 can serve them via ``get_probe_signal()``.  For ``schema_snapshot`` a JSON
 file is also written to ``store_dir/snapshots/<run_id>/<probe_id>_schema.json``
 for human inspection.
@@ -11,7 +11,7 @@ schema_snapshot      Captures ``df.schema`` — zero Spark action.
 
 row_count_estimate   Two methods:
   method: spark_listener   No action; queries ``module_metrics`` table in
-                           ``obs.db`` for the upstream module's stage count.
+                           ``observability.db`` for the upstream module's stage count.
                            Returns ``estimate: null`` if no row exists yet.
                            Note: Spark stage fusion can group multiple logical
                            modules into one stage — the estimate reflects the
@@ -174,30 +174,30 @@ def _row_count_estimate(
     run_id: str = "",
     store_dir: "Path | None" = None,
     block_full_actions: bool = False,
-    obs_store: Any = None,
+    observability_store: Any = None,
 ) -> dict[str, Any]:
     """Estimate row count. sample method only triggers on a fraction.
 
-    `obs_store` is the Phase 28 obs-store backend (DuckDB / Postgres). When
-    None, a default DuckDB store is built from `store_dir/obs.db`.
+    `observability_store` is the Phase 28 obs-store backend (DuckDB / Postgres). When
+    None, a default DuckDB store is built from `store_dir/observability.db`.
     """
     method = signal_cfg.get("method", "sample")
 
     if method == "spark_listener":
         attach_to = signal_cfg.get("attach_to") or probe_id
-        if obs_store is None and store_dir is not None:
+        if observability_store is None and store_dir is not None:
             try:
-                from aqueduct.stores.duckdb_ import DuckDBObsStore
-                db_path = store_dir / "obs.db"
+                from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+                db_path = store_dir / "observability.db"
                 if not db_path.exists():
                     return {"method": "spark_listener", "estimate": None}
-                obs_store = DuckDBObsStore(db_path)
+                observability_store = DuckDBObservabilityStore(db_path)
             except Exception as exc:
                 logger.debug("spark_listener row_count_estimate setup failed: %s", exc)
                 return {"method": "spark_listener", "estimate": None}
-        if obs_store is not None:
+        if observability_store is not None:
             try:
-                with obs_store.connect() as cur:
+                with observability_store.connect() as cur:
                     row = cur.execute(
                         """
                         SELECT records_written, records_read
@@ -419,12 +419,12 @@ def execute_probe(
     run_id: str,
     store_dir: Path,
     block_full_actions: bool = False,
-    obs_store: Any = None,
+    observability_store: Any = None,
 ) -> None:
     """Capture observability signals for a single Probe module.
 
-    Writes one row per signal to the configured obs store
-    (``store_dir/obs.db`` for DuckDB by default; Postgres `obs.probe_signals`
+    Writes one row per signal to the configured observability store
+    (``store_dir/observability.db`` for DuckDB by default; Postgres `obs.probe_signals`
     when wired through Phase 28's `StoreBundle`).
     For ``schema_snapshot``, also writes a JSON file under ``snapshots/``.
 
@@ -436,8 +436,8 @@ def execute_probe(
         store_dir: Root observability store directory (used for snapshots/
                    and for the DuckDB fallback path).
         block_full_actions: Forward to per-signal helpers.
-        obs_store: Optional Phase 28 obs-store backend. When None, a default
-                   DuckDB store at ``store_dir/obs.db`` is constructed.
+        observability_store: Optional Phase 28 obs-store backend. When None, a default
+                   DuckDB store at ``store_dir/observability.db`` is constructed.
 
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
@@ -451,11 +451,11 @@ def execute_probe(
 
         store_dir.mkdir(parents=True, exist_ok=True)
 
-        if obs_store is None:
-            from aqueduct.stores.duckdb_ import DuckDBObsStore
-            obs_store = DuckDBObsStore(store_dir / "obs.db")
+        if observability_store is None:
+            from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+            observability_store = DuckDBObservabilityStore(store_dir / "observability.db")
 
-        with obs_store.connect() as cur:
+        with observability_store.connect() as cur:
             cur.execute(_DDL)
 
             for sig_cfg in signals:
@@ -470,7 +470,7 @@ def execute_probe(
                             run_id=run_id,
                             store_dir=store_dir,
                             block_full_actions=block_full_actions,
-                            obs_store=obs_store,
+                            observability_store=observability_store,
                         )
                     elif sig_type == "null_rates":
                         payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)

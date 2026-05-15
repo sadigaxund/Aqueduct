@@ -36,10 +36,23 @@ however we have a python module with that name, I very much liked something simi
 
 20. generate scenarios from Stackoverflow with the most commong bugs/issues vs specific cases
 
-25.TODO: maybe rename '- llm' to either '- agent' or '- healing' within doctor command.
-    21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
+21. maybe rename --store-dir to just --store, while at it, maybe major renaming before a release?
+
+
+26. can we catch this error before running the doctor or run commands:
+26/05/15 13:52:53 ERROR TransportRequestHandler: Error while invoking RpcHandler#receive() for one-way message.
+
+java.io.InvalidClassException: scala.collection.immutable.ArraySeq; local class incompatible: stream classdesc serialVersionUID = -1506415583798956640, local class serialVersionUID = -8615987390676041167
+
+Maybe a validation check that fails before even starting a spark session that tells that your client pyspark version does not match the server pyspark version, and shows the versions of both, and suggests to update one of them?
 
 
 
+27. Can LLM write back the SQL Macros as it was? or just regenerate the compiled version?
 
+28. maybe more helper cli commands to interact with .aqueduct/ database files
+
+29. I need to make the environments variable parsing more intuitive. Currently I believe 'aqueduct run' should we consistent. However, recently I had to adjust 'aqueduct doctor' command. Moreover, Im not sure if 'aqueduct check-config' works as expected. Since, when i run 'aqueduct doctor' I see this output (which is btw th recent change I told you about): "Loaded 7 variable(s) from /home/sakhund/Personal/Projects/TMP/01-spark-cluster/.env", Im not sure if it's good practice to show output like that. I want you to revise mechanisms of the commands from env parsing, schema validation and warnings in general. I want to make sure that all consistent and each mecahnism is fired wherever necessary.
+
+30. Correct me if im wrong: I know that we have 'validate' command which does not run but checks quick things, then we have doctor which fully tests all the systems and configs validities. Now then we also have 'doctor --blueprint' vs 'docter --config'. Also, we have 'aqueduct --check-config', isnt this just the same thing as 'validate' but could be added as flag? So, if there is a need for change and this all sound messy, then also I want this mechanism if not already present. Not sure how to interpret running both 'validate' and 'doctor' without explicit flag, due to development iteration doctor command automatically finds and checks aqueduct_config, is this intuitive? Moreover, can we pass .yml file directly without a flag, since it can be identified by the version header (e.g. aqueduct_config: "1.0")?
 

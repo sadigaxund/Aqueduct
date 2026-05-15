@@ -4,6 +4,33 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Rename — `llm` → `agent` across user-facing + internal surface
+_2026-05-15_
+
+Pre-v1.0 clean break (no deprecation aliases — stability policy applies
+from v1.0.0). The self-healing subsystem is consistently "the agent"
+everywhere now.
+
+- **Config**: `agent.llm_timeout` → `agent.timeout`,
+  `agent.llm_max_reprompts` → `agent.max_reprompts` (engine +
+  per-blueprint). Old keys → `ConfigError` (`extra="forbid"`).
+- **Module**: `aqueduct/agent/__init__.py` → `aqueduct/agent/__init__.py`.
+  `generate_llm_patch` → `generate_agent_patch`, `_call_llm` →
+  `_call_agent`, `LLMPatchResult` → `AgentPatchResult`,
+  `_llm_usable` → `_agent_usable`.
+- **Doctor**: check id `llm` → `agent`; `check_llm` → `check_agent`.
+- **Pytest marker**: `@pytest.mark.llm` → `@pytest.mark.agent`;
+  `pyproject.toml` marker + CI `pytest -m "not ... and not agent"`.
+  Test files `test_llm.py` → `test_agent.py`,
+  `test_llm_integration.py` → `test_agent_integration.py`.
+- Templates, spec §8.7 + examples, TEST_MANIFEST updated.
+
+`provider`, `base_url`, `model`, `provider_options` already lived under
+`agent:` and were not LLM-prefixed — unchanged. PyPI keyword "llm"
+retained for search discoverability.
+
+---
+
 ### Phase 30b — Stability Contract for v1.0
 _2026-05-15_
 
@@ -114,7 +141,7 @@ mechanism.
 
 ---
 
-### Phase 29b — Gate 4: Post-Patch `explain()` Regression Check
+### Phase 29b — the explain gate: Post-Patch `explain()` Regression Check
 _2026-05-15_
 
 Sits on top of Phase 29a — same surfaces (`aqueduct patch preview`,
@@ -126,31 +153,31 @@ regression. Warn-only by default; aggressive mode can opt in to blocking.
   pulls `df._jdf.queryExecution().explainString(ExplainMode.FormattedMode())`
   via py4j (same pattern as `metrics.py:_hadoop_fs_bytes`), counts
   `Exchange` / `BatchEvalPython` / `BroadcastExchange` nodes.
-  `run_gate4_explain(baseline, after, touched_modules=...)` diffs per
+  `run_explain_gate(baseline, after, touched_modules=...)` diffs per
   module — any increase in shuffles / Python UDF nodes or decrease in
   broadcast hints becomes an `ExplainRegression` warning.
 
-- **`obs.explain_snapshot`** new table — rolling per-module baseline. Captured
+- **`observability.explain_snapshot`** new table — rolling per-module baseline. Captured
   by the executor after every successful module run (non-Egress). Surveyor
   prunes to the most recent `keep_last_n` (default 5) rows per
   `(blueprint_id, module_id)` so storage is bounded. Cleanly survives
-  brand-new pipelines: Gate 4 returns `status="skip"` when no baseline rows
+  brand-new pipelines: the explain gate returns `status="skip"` when no baseline rows
   exist yet.
 
 - **`agent.block_on_explain_regression: bool = false`** new config knob on
   `AgentConnectionConfig` (engine default) and `AgentSchema` (blueprint
-  override). Default `false` preserves current behaviour — Gate 4 prints
+  override). Default `false` preserves current behaviour — the explain gate prints
   warnings, never blocks. `true` in aggressive mode rejects any patch with
   a regression and lets the agent retry with a new patch.
 
 - **Executor wiring** — `execute(..., explain_capture: dict | None = None)`
-  fills the dict during sandbox runs without persisting (no `obs.db` write);
+  fills the dict during sandbox runs without persisting (no `observability.db` write);
   real runs persist via `Surveyor.record_explain_snapshot()`. Same capture
   loop drives both sinks. Egress modules are skipped (no DataFrame in the
   frame_store).
 
-- **`_run_patch_gates_inline` returns Gate 4 alongside Gate 2/3** —
-  `obs.patch_simulation` audit table now records `gate="gate4"` rows. Auto
+- **`_run_patch_gates_inline` returns the explain gate alongside the lineage gate/3** —
+  `observability.patch_simulation` audit table now records `gate="explain"` rows. Auto
   mode prints regressions; aggressive mode prints + (optionally) blocks
   per `block_on_explain_regression`.
 
@@ -168,53 +195,53 @@ parsing is plenty for v1.0.
 
 ---
 
-### Phase 29a — Patch Validation Pyramid (Gates 2 & 3)
+### Phase 29a — Patch Validation Pyramid (lineage + sandbox gates)
 _2026-05-14_
 
 Catch broken patches before they touch real data. Builds two new gates on top
-of the existing patch lifecycle (Gate 1 schema + post-apply Parser re-check,
+of the existing patch lifecycle (the guardrails gate schema + post-apply Parser re-check,
 plus the deterministic guardrails from Audit Batch 1).
 
 - **`aqueduct patch preview <file> --blueprint <bp>`:** unified diff of the
-  Blueprint YAML + Gate 1 (guardrails re-check) + Gate 2 (live sqlglot
-  lineage impact). With `--sandbox`, also runs Gate 3 (compile patched
+  Blueprint YAML + the guardrails gate (guardrails re-check) + the lineage gate (live sqlglot
+  lineage impact). With `--sandbox`, also runs the sandbox gate (compile patched
   manifest, drop all Egress modules, inject per-Ingress `LIMIT N`, replay
   through the real executor). `--sample N` controls the limit; `--sample 0`
   = unbounded. `--format json` for machine-readable output.
 
-- **Gate 2 — live lineage impact** (`aqueduct/patch/preview.py`): re-runs
+- **the lineage gate — live lineage impact** (`aqueduct/patch/preview.py`): re-runs
   `sqlglot._extract_sql_lineage` over the patched Blueprint, compares output
   columns of touched modules against the pre-patch downstream consumers, and
   surfaces missing-column warnings. No dependency on a prior successful run
   — works on brand-new pipelines.
 
-- **Gate 3 — sandbox replay**: compiles the patched Blueprint, captures and
+- **the sandbox gate — sandbox replay**: compiles the patched Blueprint, captures and
   drops every Egress, optionally rewrites Ingress configs with a new
   `sandbox_limit` marker (consumed by `aqueduct/executor/spark/ingress.py`).
   Real SparkSession; real lazy plan; no sinks written. Egress targets are
   surfaced in the report so reviewers see exactly which writes were skipped.
 
 - **`agent.patch_validation` config knob** (engine + per-blueprint):
-  `full_run` (default) keeps the existing behaviour — Gate 2 + Gate 3 +
+  `full_run` (default) keeps the existing behaviour — the lineage gate + the sandbox gate +
   full Spark run, Blueprint written only on full-run success. `sandbox`
-  short-circuits the full run when Gate 3 passes; Blueprint is written
+  short-circuits the full run when the sandbox gate passes; Blueprint is written
   immediately. Lets `aggressive` mode close patch loops in seconds rather
   than minutes when the operator accepts sample-based confidence.
 
-- **Auto/aggressive integration**: both modes run Gate 2 + Gate 3 as a
+- **Auto/aggressive integration**: both modes run the lineage gate + the sandbox gate as a
   pre-filter before the in-memory full re-run. A sandbox failure stages the
   patch for human review (auto) or kicks the aggressive loop into a new
-  iteration. `patch_validation: sandbox` makes Gate 3 the only validation
+  iteration. `patch_validation: sandbox` makes the sandbox gate the only validation
   step.
 
-- **`obs.patch_simulation` table**: every gate evaluation is appended with
+- **`observability.patch_simulation` table**: every gate evaluation is appended with
   patch_id, gate, status, detail, sample_rows, duration_ms — audit trail
   for "why we accepted/rejected this patch without running the full
   pipeline." Phase 28 store backends carry it automatically.
 
 - **`ingress.py` `sandbox_limit` hook**: when the executor's Ingress sees
   this key in the module config, it wraps `reader.load()` in `.limit(N)`.
-  Never set by user-authored Blueprints — only by `run_gate3_sandbox`'s
+  Never set by user-authored Blueprints — only by `run_sandbox_gate`'s
   in-memory manifest rewrite.
 
 - **Templates, spec §8.7, CLI_REFERENCE, ALL_TABLES.md** updated with the
@@ -260,7 +287,7 @@ Six sequential audit batches reconciling spec ↔ code drift, tightening config 
 
 - **README LLM-autonomy callout (top of file):** new ⚠ block surfacing that the LLM only edits Blueprints when `agent.approval_mode` is `auto` or `aggressive`, that the default is `disabled`, that production should prefer `human` / `ci`, and that `aggressive` additionally requires `danger.allow_aggressive_patching: true`. Restates that guardrails are deterministic at patch-apply time, not prompt-time. Adopted reviewer scans the autonomy guarantees in the first paragraphs instead of having to find §8 of the spec.
 - **README "Scope — What Aqueduct Is and Is Not" section:** pulls the boundary statement from spec §13 into a two-column table on the README. Makes it clear up-front that Aqueduct is batch (not streaming), data prep (not ML training), CLI (not scheduler), and LLM-scoped-to-PatchSpec (not autonomous infra agent). Also fixes a stale README mention of the removed `block_full_actions_in_prod` flag.
-- **LLM rate-limit / spend-cap (`agent.max_heal_attempts_per_hour`):** new optional integer field on both `AgentSchema` (per-blueprint) and `AgentConnectionConfig` (engine default), with blueprint override winning. When set, the self-healing loop counts rows in `healing_outcomes` within the last 60 minutes and skips further LLM HTTP calls once the cap is reached — emitting a clear `⊘ LLM rate-limit reached` line. Default `None` = unlimited; no behaviour change for existing configs. Implementation reuses the existing `obs.db` (no schema change) via the new `Surveyor.count_recent_heal_attempts()` helper.
+- **LLM rate-limit / spend-cap (`agent.max_heal_attempts_per_hour`):** new optional integer field on both `AgentSchema` (per-blueprint) and `AgentConnectionConfig` (engine default), with blueprint override winning. When set, the self-healing loop counts rows in `healing_outcomes` within the last 60 minutes and skips further LLM HTTP calls once the cap is reached — emitting a clear `⊘ LLM rate-limit reached` line. Default `None` = unlimited; no behaviour change for existing configs. Implementation reuses the existing `observability.db` (no schema change) via the new `Surveyor.count_recent_heal_attempts()` helper.
 - **New `docs/ALL_TABLES.md` reference:** single document inventorying every DuckDB table Aqueduct writes — `run_records`, `failure_contexts`, `healing_outcomes`, `signal_overrides`, `probe_signals`, `module_metrics`, `maintenance_metrics`, `column_lineage`, `depot_kv` — with column types, the Python file that owns each DDL, and example SQL queries. Linked from the README documentation table. Closes audit §2.4.
 - **Robustness cleanup:**
   - `aqueduct/compiler/compiler.py` `inputs_fingerprint`: widen the `os.stat()` exception handler from `OSError` to `(OSError, ValueError)` so malformed paths (embedded null bytes, oversized components, URI-shaped strings the remote-scheme list does not catch) record `size_bytes=None` like other unfingerprintable paths instead of bubbling up as a hard compile error.
@@ -344,7 +371,7 @@ _2026-05-13_
 - `maintenance.optimize: true` → `OPTIMIZE delta.\`path\`` (with optional `ZORDER BY` via `zorder_by`)
 - `maintenance.vacuum: N` → `VACUUM delta.\`path\` RETAIN N HOURS`
 - Both ops are non-fatal: failures log as `WARNING`, pipeline continues
-- Timing (`optimize_ms`, `vacuum_ms`) written to `maintenance_metrics` table in `obs.db`
+- Timing (`optimize_ms`, `vacuum_ms`) written to `maintenance_metrics` table in `observability.db`
 - Compiler warning 8g: `maintenance.optimize: true` on non-delta Egress → emits warning at compile time
 
 ### Phase 24a — `error_type` Guardrail System
@@ -427,7 +454,7 @@ _2026-05-07_
 - `schema_hint` additive/subset modes: `{mode: strict|additive|subset, columns: [...]}` dict form; `additive` allows extra upstream columns; `subset` allows missing optional columns; `strict` (default) unchanged
 - `patches/pending/` and `patches/rejected/` added to `.gitignore` generated by `aqueduct init`
 - `PatchSpec` gains optional `confidence: float`, `category: str`, `root_cause: str` fields — LLM prompted to fill them; `confidence < 0.7` auto-escalates to human review regardless of `approval_mode`
-- `healing_outcomes` table in `obs.db` — persists every healing attempt with model, patch_id, confidence, patch_applied, run_success_after_patch
+- `healing_outcomes` table in `observability.db` — persists every healing attempt with model, patch_id, confidence, patch_applied, run_success_after_patch
 - `record_healing_outcome()` called at every patch decision point (guardrail block, human stage, auto apply, aggressive apply)
 
 **UDFs**
@@ -454,8 +481,8 @@ _2026-05-03_
 
 - `aqueduct patch commit --blueprint <path>` — finds applied patches newer than last git commit, builds `---aqueduct---` structured commit message, runs `git add && git commit`
 - `aqueduct patch discard --blueprint <path>` — `git checkout HEAD -- <blueprint>`; uncommitted applied patches moved back to `patches/pending/`
-- `aqueduct log <blueprint>` — parses git log for `---aqueduct---` blocks; table output with `--format json`; non-aqueduct commits shown as `(manual change)`
-- `aqueduct rollback <blueprint> --to <patch_id>` — `git revert --no-edit <hash>`; `--hard` destructive mode requires `"yes"` confirmation
+- `aqueduct patch log <blueprint>` — parses git log for `---aqueduct---` blocks; table output with `--format json`; non-aqueduct commits shown as `(manual change)`
+- `aqueduct patch rollback <blueprint> --to <patch_id>` — `git revert --no-edit <hash>`; `--hard` destructive mode requires `"yes"` confirmation
 - `aqueduct patch list` — tabular view of pending / applied / rejected patches; `--status` filter
 - All patch commands resolve `patches/` from project root via `aqueduct.yml` walk-up
 - Run-start warning when uncommitted applied patches exist before `aqueduct run`
@@ -477,14 +504,14 @@ _2026-05-02_
 ### Phase 16 — Store Layout Cleanup + `aqueduct runs`
 _2026-05-02_
 
-- `obs.db` merge: `runs.db` + `signals.db` → single `obs.db`; five tables under one file
-- `aqueduct runs [--blueprint] [--failed] [--last N]` CLI command reads `obs.db`
+- `observability.db` merge: `runs.db` + `signals.db` → single `observability.db`; five tables under one file
+- `aqueduct runs [--blueprint] [--failed] [--last N]` CLI command reads `observability.db`
 - Store directory defaults unified: `observability.path=".aqueduct"`, `lineage.path=".aqueduct"`, `depot.path=".aqueduct/depot.db"`
 - `blueprint_source_yaml` added to `FailureContext`; surveyor reads Blueprint file and populates it
 - LLM system prompt: CRITICAL rule — use template expressions from Blueprint source, not resolved literal paths
 - `llm_timeout`, `llm_max_reprompts`, `prompt_context` added to `AgentConnectionConfig`
 - ruamel deepcopy corruption fix: `_ruamel_copy()` round-trip instead of `copy.deepcopy`
-- `obs.db` cells no longer filled with zeros; uncollected metrics store `NULL`
+- `observability.db` cells no longer filled with zeros; uncollected metrics store `NULL`
 
 ---
 
@@ -522,7 +549,7 @@ _2026-05-01_
 _2026-05-01_
 
 - Docs, CLI, and example pass: `docs/specs.md` Assert section, `aqueduct.template.yml` Assert block, `examples/comprehensive_demo/blueprint.yml` updated
-- Signal overrides table added to `obs.db`; `evaluate_regulator()` checks it before probe signals
+- Signal overrides table added to `observability.db`; `evaluate_regulator()` checks it before probe signals
 
 ---
 
@@ -538,7 +565,7 @@ _2026-05-01_
 ### Phase 10 — CLI Commands + `op:join`
 _2026-05-01_
 
-- `aqueduct report` — tabular summary of last N runs from `obs.db`
+- `aqueduct report` — tabular summary of last N runs from `observability.db`
 - `aqueduct lineage <blueprint>` — renders column-level lineage from `lineage.db`; accepts blueprint file path; deduplicates output
 - `aqueduct signal <module_id> <signal>` — persistent gate overrides via `signal_overrides` table; `--clear` to remove
 - `aqueduct heal <blueprint>` — manually trigger LLM patch generation for last failed run
@@ -587,7 +614,7 @@ _2026-04-19_
 - `RetryPolicy` execution: `_with_retry()` wraps all 5 dispatch sites (Ingress, Channel, Junction, Funnel, Egress); exponential / linear / fixed backoff + jitter + `deadline_seconds`
 - `max_attempts` default changed from 3 → 1; Egress `mode: append` + `max_attempts > 1` emits compile warning
 - Column-level lineage writer: `aqueduct/compiler/lineage.py` uses sqlglot to extract source-table mappings; written to `lineage.db` (DuckDB) after successful run
-- LLM self-healing: `aqueduct/surveyor/llm.py` — `trigger_llm_patch()` full loop: `FailureContext` → LLM API → `PatchSpec` validation (up to 3 re-prompts) → auto-apply or stage for human review
+- LLM self-healing: `aqueduct/agent/__init__.py` — `trigger_llm_patch()` full loop: `FailureContext` → LLM API → `PatchSpec` validation (up to 3 re-prompts) → auto-apply or stage for human review
 - Supports Anthropic, Ollama (`/api/chat` streaming), and OpenAI-compatible providers
 - `approval_mode` default: `auto` → `disabled`; LLM only fires when explicitly configured
 - `on_pending_patches: ignore | warn | block` — suppresses LLM when unreviewed patches exist

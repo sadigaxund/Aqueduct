@@ -70,18 +70,18 @@ def check_depot(depot_path: Path) -> CheckResult:
         return CheckResult("depot", "fail", f"{depot_path}: {exc}", _ms(t))
 
 
-def check_observability(obs_db: Path) -> CheckResult:
-    """Create obs.db (and parent dirs) and verify connectivity."""
+def check_observability(observability_db: Path) -> CheckResult:
+    """Create observability.db (and parent dirs) and verify connectivity."""
     import duckdb
     t = time.monotonic()
     try:
-        obs_db.parent.mkdir(parents=True, exist_ok=True)
-        conn = duckdb.connect(str(obs_db))
+        observability_db.parent.mkdir(parents=True, exist_ok=True)
+        conn = duckdb.connect(str(observability_db))
         conn.execute("SELECT 1").fetchone()
         conn.close()
-        return CheckResult("observability", "ok", str(obs_db), _ms(t))
+        return CheckResult("observability", "ok", str(observability_db), _ms(t))
     except Exception as exc:
-        return CheckResult("observability", "fail", f"{obs_db}: {exc}", _ms(t))
+        return CheckResult("observability", "fail", f"{observability_db}: {exc}", _ms(t))
 
 
 def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
@@ -163,12 +163,12 @@ def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None
         return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
 
 
-def check_llm(
-    llm_provider: str,
+def check_agent(
+    agent_provider: str,
     base_url: str | None,
     model: str,
 ) -> CheckResult:
-    """Probe LLM connectivity.
+    """Probe agent (LLM) connectivity.
 
     anthropic:     verifies ANTHROPIC_API_KEY is set; does not make an API call
                    (avoid token cost in a health check).
@@ -178,16 +178,16 @@ def check_llm(
     import httpx
     t = time.monotonic()
 
-    if llm_provider == "anthropic":
+    if agent_provider == "anthropic":
         key = os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             return CheckResult(
-                "llm", "warn",
-                "provider=anthropic  ANTHROPIC_API_KEY not set — LLM self-healing will fail at runtime",
+                "agent", "warn",
+                "provider=anthropic  ANTHROPIC_API_KEY not set — agent self-healing will fail at runtime",
                 _ms(t),
             )
         return CheckResult(
-            "llm", "ok",
+            "agent", "ok",
             f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
             _ms(t),
         )
@@ -195,7 +195,7 @@ def check_llm(
     # openai_compat (Ollama, vLLM, LM Studio, …)
     if not base_url:
         return CheckResult(
-            "llm", "skip",
+            "agent", "skip",
             "provider=openai_compat  base_url not configured",
             _ms(t),
         )
@@ -210,14 +210,14 @@ def check_llm(
         if available and model not in available:
             model_note += f"  ⚠ not in loaded models: {', '.join(available[:5])}"
         return CheckResult(
-            "llm", "ok",
+            "agent", "ok",
             f"provider=openai_compat  endpoint={models_url}{model_note}",
             _ms(t),
         )
     except httpx.RequestError as exc:
-        return CheckResult("llm", "fail", f"{models_url}: {exc}", _ms(t))
+        return CheckResult("agent", "fail", f"{models_url}: {exc}", _ms(t))
     except Exception as exc:
-        return CheckResult("llm", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
+        return CheckResult("agent", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
 
 
 def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
@@ -240,7 +240,7 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
             return CheckResult("secrets", "ok", f"provider={provider}  ({pkg} installed)", _ms(t))
         except ImportError:
             return CheckResult(
-                "secrets", "error",
+                "secrets", "fail",
                 f"provider={provider} requires {pkg} which is not installed. {install_hint}",
                 _ms(t),
             )
@@ -248,7 +248,7 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
     if provider == "custom":
         if not resolver:
             return CheckResult(
-                "secrets", "error",
+                "secrets", "fail",
                 "provider=custom requires secrets.resolver to be set in aqueduct.yml",
                 _ms(t),
             )
@@ -259,7 +259,7 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
             getattr(mod, fn_name)
             return CheckResult("secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t))
         except Exception as exc:
-            return CheckResult("secrets", "error", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
+            return CheckResult("secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
 
     return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
 
@@ -946,7 +946,7 @@ def check_store_backend(
     """Probe a single configured store backend for reachability.
 
     Args:
-        label:       Display label — `obs`, `lineage`, or `depot`.
+        label:       Display label — `observability`, `lineage`, or `depot`.
         store_cfg:   Pydantic store config (`RelationalStoreConfig` or
                      `KVStoreConfig`). Has `.backend` and `.path` attributes.
         is_kv_only:  When True, treats redis as a valid backend (depot only).
@@ -1005,7 +1005,7 @@ def check_store_backend(
         if not is_kv_only:
             return CheckResult(
                 label, "fail",
-                "backend=redis is depot-only; obs and lineage need duckdb or postgres",
+                "backend=redis is depot-only; observability and lineage need duckdb or postgres",
                 _ms(t),
             )
         try:
@@ -1047,7 +1047,7 @@ def run_doctor(
         results.append(CheckResult("depot", "skip", "config failed"))
         results.append(CheckResult("observability", "skip", "config failed"))
         results.append(CheckResult("secrets", "skip", "config failed"))
-        results.append(CheckResult("llm", "skip", "config failed"))
+        results.append(CheckResult("agent", "skip", "config failed"))
         results.append(CheckResult("webhook", "skip", "config failed"))
         results.append(CheckResult("spark", "skip", "config failed"))
         results.append(CheckResult("storage", "skip", "config failed"))
@@ -1058,44 +1058,54 @@ def run_doctor(
     except ConfigError:
         return results  # already recorded above
 
-    # Cluster-mode store path validation
+    # Cluster-mode store path validation.
+    # Only the `duckdb` backend persists to the local FS — Phase 28 added
+    # postgres / redis backends whose `path` is a DSN (`postgresql://...` /
+    # `redis://...`) and which need no shared FS. Skip those.
     if cfg.deployment.env in ("cluster", "cloud"):
-        _store_paths = {
-            "obs": cfg.stores.obs.path,
-            "lineage": cfg.stores.lineage.path,
-            "depot": cfg.stores.depot.path,
+        _store_specs = {
+            "observability": (cfg.stores.observability.backend, cfg.stores.observability.path),
+            "lineage":        (cfg.stores.lineage.backend,       cfg.stores.lineage.path),
+            "depot":          (cfg.stores.depot.backend,         cfg.stores.depot.path),
+        }
+        _duckdb_paths = {
+            name: p for name, (backend, p) in _store_specs.items()
+            if backend == "duckdb"
         }
         _bad = [
-            name for name, p in _store_paths.items()
+            name for name, p in _duckdb_paths.items()
             if not p or p.startswith(".") or not Path(p).is_absolute()
         ]
         if _bad:
             results.append(CheckResult(
-                "cluster-stores", "error",
-                f"deployment.env={cfg.deployment.env!r} but store paths are relative/local: "
+                "cluster-stores", "fail",
+                f"deployment.env={cfg.deployment.env!r} but DuckDB store paths are relative/local: "
                 f"{_bad}. On YARN/K8s the driver CWD is ephemeral — stores will be lost on "
-                "restart. Set absolute paths on shared FS (NFS/EFS/PVC) in aqueduct.yml.",
+                "restart. Either set absolute paths on shared FS (NFS/EFS/PVC) in aqueduct.yml "
+                "or switch the affected stores to backend=postgres / redis.",
             ))
+        elif _duckdb_paths:
+            results.append(CheckResult("cluster-stores", "ok", "DuckDB store paths are absolute"))
         else:
-            results.append(CheckResult("cluster-stores", "ok", "store paths are absolute"))
+            results.append(CheckResult("cluster-stores", "ok", "no DuckDB stores — backend-managed persistence"))
     else:
         results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check"))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
 
-    # Per-store backend reachability — replaces the legacy obs.db/depot.db
+    # Per-store backend reachability — replaces the legacy observability.db/depot.db
     # file probes when a non-DuckDB backend is configured. For DuckDB
     # backends both probes still run and report the same OK signal.
-    results.append(check_store_backend("obs",     cfg.stores.obs))
-    results.append(check_store_backend("lineage", cfg.stores.lineage))
+    results.append(check_store_backend("observability", cfg.stores.observability))
+    results.append(check_store_backend("lineage",       cfg.stores.lineage))
     results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True))
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))
 
     # LLM connectivity
-    results.append(check_llm(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
+    results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure

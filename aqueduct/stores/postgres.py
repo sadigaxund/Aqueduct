@@ -3,7 +3,7 @@
 Single database, three schemas:
 
     aqueduct_db/
-      obs/      run_records, failure_contexts, healing_outcomes,
+      observability/      run_records, failure_contexts, healing_outcomes,
                 signal_overrides, probe_signals, module_metrics,
                 maintenance_metrics
       lineage/  column_lineage
@@ -17,7 +17,7 @@ DSN handling
 ------------
 `StoreBackendConfig.path` carries a libpq DSN
 (`postgresql://user:pass@host:5432/aqueduct_db`). Identical DSNs across
-`obs` / `lineage` / `depot` are connection-pool-deduplicated so a typical
+`observability` / `lineage` / `depot` are connection-pool-deduplicated so a typical
 3-line config opens one logical pool, not three.
 
 The `psycopg2-binary>=2.9` extra (`pip install aqueduct-core[postgres]`)
@@ -34,7 +34,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from aqueduct.stores.base import DepotStore, LineageStore, ObsStore, RelationalCursor
+from aqueduct.stores.base import DepotStore, LineageStore, ObservabilityStore, RelationalCursor
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ _POOLS_LOCK = threading.Lock()
 def _get_pool(dsn: str) -> Any:
     """Return a thread-safe psycopg2 SimpleConnectionPool keyed by DSN.
 
-    Identical DSNs in the config (e.g. obs + lineage + depot all targeting
+    Identical DSNs in the config (e.g. observability + lineage + depot all targeting
     the same `aqueduct_db`) share one pool. Pool size is intentionally
     modest — Aqueduct is driver-side; concurrent writers come from
     `--parallel` threads and parallel `aqueduct run` invocations.
@@ -153,8 +153,8 @@ class _PostgresRelational:
             yield cur
 
 
-class PostgresObsStore(_PostgresRelational, ObsStore):
-    _SCHEMA = "obs"
+class PostgresObservabilityStore(_PostgresRelational, ObservabilityStore):
+    _SCHEMA = "observability"
 
 
 class PostgresLineageStore(_PostgresRelational, LineageStore):

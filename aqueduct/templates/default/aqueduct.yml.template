@@ -98,7 +98,7 @@ spark_config: {}
 # ── Stores ────────────────────────────────────────────────────────────────────
 #
 # Phase 28: each store is pluggable. Default DuckDB layout under .aqueduct/:
-#   obs.db      — run records, failure contexts, signal overrides, probe
+#   observability.db      — run records, failure contexts, signal overrides, probe
 #                 signals, module + maintenance metrics, healing outcomes
 #   lineage.db  — column-level lineage
 #   depot.db    — depot KV store (@aq.depot.*)
@@ -108,7 +108,7 @@ spark_config: {}
 #   duckdb    — embedded; single-writer file. Suits local / dev / NFS.
 #               Accepted by obs / lineage / depot.
 #   postgres  — networked DSN; MVCC concurrent writers. Accepted by all
-#               three stores. With a shared DSN the engine creates `obs`,
+#               three stores. With a shared DSN the engine creates `observability`,
 #               `lineage`, `depot` schemas inside the target database.
 #   redis     — depot-only KV; rejected at config-load for obs / lineage.
 #
@@ -117,9 +117,9 @@ spark_config: {}
 
 stores:
 
-  obs:
+  observability:
     backend: duckdb
-    path: ".aqueduct/obs.db"
+    path: ".aqueduct/observability.db"
     # Postgres example (uncomment + install `aqueduct-core[postgres]`):
     # backend: postgres
     # path: "postgresql://aq@host:5432/aqueduct_db"
@@ -160,7 +160,7 @@ stores:
 # stores:
 #   obs:
 #     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/obs.db"
+#     path: "/mnt/nfs/aqueduct/observability.db"
 #   lineage:
 #     backend: duckdb
 #     path: "/mnt/nfs/aqueduct/lineage.db"
@@ -389,9 +389,9 @@ agent:
   # ANTHROPIC_API_KEY env var required at runtime
 
   # ── Timeouts and retries ──────────────────────────────────────────────────
-  # llm_timeout: 120.0          # HTTP socket timeout in seconds per LLM call.
+  # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
   #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
-  # llm_max_reprompts: 3        # Retries when LLM returns invalid PatchSpec JSON.
+  # max_reprompts: 3            # Retries when the agent returns invalid PatchSpec JSON.
   #                             # Does NOT retry on timeout/network failure (those abort immediately).
 
   # ── Custom prompt context ─────────────────────────────────────────────────
@@ -405,12 +405,12 @@ agent:
   # generated patch before writing it to the Blueprint on disk:
   #
   #   full_run (default, safest)
-  #     Gate 2 (live sqlglot lineage diff) + Gate 3 (sandbox replay against
+  #     the lineage gate (live sqlglot lineage diff) + the sandbox gate (sandbox replay against
   #     `--sample 1000` rows with Egress skipped) + full Spark run against the
   #     real Blueprint. Patch is written only when the full run succeeds.
   #
   #   sandbox
-  #     Gate 2 + Gate 3 only. Patch is written on sandbox pass without paying
+  #     the lineage gate + the sandbox gate only. Patch is written on sandbox pass without paying
   #     for a full real-data run. Fast unattended healing loop; lower
   #     confidence that the patch holds at production scale. Use only on
   #     pipelines whose data shape is well represented by the first 1000 rows.
@@ -418,21 +418,21 @@ agent:
   # Per-blueprint override available via the Blueprint agent: block.
   # patch_validation: full_run
 
-  # ── Gate 4 strictness (Phase 29b) ──────────────────────────────────────────
-  # block_on_explain_regression toggles whether Gate 4 (post-patch `explain()`
-  # regression check) is a hard blocker in aggressive mode. Gate 4 compares
+  # ── the explain gate strictness (Phase 29b) ──────────────────────────────────────────
+  # block_on_explain_regression toggles whether the explain gate (post-patch `explain()`
+  # regression check) is a hard blocker in aggressive mode. the explain gate compares
   # per-module `Exchange` / `BatchEvalPython` / `BroadcastExchange` counts in
   # the patched Manifest against the most recent baseline rolling-stored in
-  # `obs.explain_snapshot`.
-  #   false (default) — Gate 4 prints warnings but never rejects a patch.
+  # `observability.explain_snapshot`.
+  #   false (default) — the explain gate prints warnings but never rejects a patch.
   #   true            — aggressive mode rejects a patch with any regression
   #                     (extra shuffle, extra Python UDF, lost broadcast hint).
-  # Auto/human/disabled modes ignore this flag — Gate 4 is informational there.
+  # Auto/human/disabled modes ignore this flag — the explain gate is informational there.
   # Per-blueprint override available via the Blueprint agent: block.
   # block_on_explain_regression: false
 
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
-  # Surveyor counts rows written to obs.db `healing_outcomes` within the last
+  # Surveyor counts rows written to observability.db `healing_outcomes` within the last
   # 60 minutes for the running blueprint. When the count is reached, the next
   # LLM HTTP call is skipped and the run ends with a clear stderr message.
   # Default null = unlimited. Per-blueprint override available via the
@@ -443,7 +443,7 @@ agent:
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
   # model: "deepseek-r1:14b"
-  # llm_timeout: 600.0          # large local models need more time
+  # timeout: 600.0              # large local models need more time
   # provider_options:
   #   # Standard OpenAI params — merged into payload top-level (all openai_compat providers)
   #   temperature: 0.7

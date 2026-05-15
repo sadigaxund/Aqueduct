@@ -115,7 +115,7 @@ All `patch` commands derive the `patches/` root by walking up from the blueprint
 |---|---|
 | `aqueduct patch list` | Show pending patches (walk-up from CWD) |
 | `aqueduct patch list --status all` | Show pending + applied + rejected |
-| `aqueduct patch preview <file> --blueprint <path>` | Phase 29a — render unified diff + Gate 2 lineage impact. Add `--sandbox` to also run Gate 3 sandbox replay (`--sample N`, default 1000; `--sample 0` = unbounded). `--format json` for machine-readable report. |
+| `aqueduct patch preview <file> --blueprint <path>` | Phase 29a — render unified diff + lineage-gate impact. Add `--sandbox` to also run sandbox-gate replay (`--sample N`, default 1000; `--sample 0` = unbounded). `--format json` for machine-readable report. |
 | `aqueduct patch apply <file> --blueprint <path>` | Validate and apply patch to Blueprint; archive to `applied/` |
 | `aqueduct patch reject <file\|slug> --reason <text>` | Move patch to `rejected/`; record reason |
 | `aqueduct patch commit --blueprint <path>` | `git add` + `git commit` for all applied patches since last commit |
@@ -136,11 +136,11 @@ All `patch` commands derive the `patches/` root by walking up from the blueprint
 
 | Command | Description |
 |---|---|
-| `aqueduct log <blueprint>` | Parse git log for `---aqueduct---` patch commits; show table |
-| `aqueduct log <blueprint> --format json` | Machine-readable output |
-| `aqueduct rollback <blueprint> --to <patch_id>` | Restore blueprint file(s) to pre-patch state; creates a new forward commit (non-destructive) |
+| `aqueduct patch log <blueprint>` | Parse git log for `---aqueduct---` patch commits; show table |
+| `aqueduct patch log <blueprint> --format json` | Machine-readable output |
+| `aqueduct patch rollback <blueprint> --to <patch_id>` | Restore blueprint file(s) to pre-patch state; creates a new forward commit (non-destructive) |
 
-`aqueduct rollback` is file-scoped — it touches only the files changed by the target patch commit, not the entire repo.
+`aqueduct patch rollback` is file-scoped — it touches only the files changed by the target patch commit, not the entire repo.
 
 ---
 
@@ -150,7 +150,7 @@ All `patch` commands derive the `patches/` root by walking up from the blueprint
 |---|---|
 | Config | `aqueduct.yml` loads and parses without error |
 | Depot | DuckDB depot file readable/writable |
-| Observability | `obs.db` accessible |
+| Observability | `observability.db` accessible |
 | Lineage | `lineage.db` accessible |
 | LLM reachability | HTTP GET to configured `base_url` succeeds |
 | Spark version | JVM starts; PySpark version reported |

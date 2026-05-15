@@ -67,10 +67,10 @@ KVBackend = Literal["duckdb", "postgres", "redis"]
 
 
 class RelationalStoreConfig(BaseModel):
-    """Backend config for stores that need SQL semantics (obs, lineage).
+    """Backend config for stores that need SQL semantics (observability, lineage).
 
     `redis` is rejected at parse time via the `RelationalBackend` Literal —
-    redis is KV-only and cannot satisfy joins/aggregates that the obs /
+    redis is KV-only and cannot satisfy joins/aggregates that the observability /
     lineage queries rely on.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -102,7 +102,7 @@ class KVStoreConfig(BaseModel):
         description=(
             "Depot backend. `duckdb` (default) or `postgres` for relational; "
             "`redis` for high-QPS KV-only depot reads (watermarks, atomic "
-            "counters). `redis` is depot-only; choosing it for obs or "
+            "counters). `redis` is depot-only; choosing it for observability or "
             "lineage is rejected at config load."
         ),
     )
@@ -124,13 +124,13 @@ StoreBackendConfig = RelationalStoreConfig
 class StoresConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    obs: RelationalStoreConfig = Field(
-        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/obs.db"),
+    observability: RelationalStoreConfig = Field(
+        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/observability.db"),
         description=(
             "Observability store. Contains run records, failure contexts, "
             "healing outcomes, signal overrides, probe signals, module + "
             "maintenance metrics. With postgres backend, tables live in the "
-            "`obs` schema of the target DB."
+            "`observability` schema of the target DB."
         ),
     )
     lineage: RelationalStoreConfig = Field(
@@ -226,13 +226,13 @@ class AgentConnectionConfig(BaseModel):
     base_url: str | None = None
     model: str = "claude-sonnet-4-6"
     provider_options: dict[str, Any] | None = None
-    llm_timeout: float = Field(
+    timeout: float = Field(
         default=120.0,
-        description="HTTP socket timeout in seconds for LLM API calls. Increase for slow local models (e.g. 600.0).",
+        description="HTTP socket timeout in seconds for agent API calls. Increase for slow local models (e.g. 600.0).",
     )
-    llm_max_reprompts: int = Field(
+    max_reprompts: int = Field(
         default=3,
-        description="Max reprompt attempts when LLM returns invalid PatchSpec JSON.",
+        description="Max reprompt attempts when the agent returns invalid PatchSpec JSON.",
     )
     prompt_context: str | None = Field(
         default=None,
@@ -264,10 +264,10 @@ class AgentConnectionConfig(BaseModel):
     block_on_explain_regression: bool = Field(
         default=False,
         description=(
-            "Phase 29b — when True, Gate 4 (post-patch `explain()` regression "
+            "Phase 29b — when True, the explain gate (post-patch `explain()` regression "
             "check) is treated as blocking in aggressive mode: a patch that "
             "adds shuffles / Python UDF nodes or drops broadcast hints is "
-            "rejected instead of merely warned. Default False — Gate 4 is "
+            "rejected instead of merely warned. Default False — the explain gate is "
             "warn-only across all healing modes, preserving current behaviour."
         ),
     )
@@ -418,7 +418,7 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
 
     Mirrors `_validate_secrets_backend()`. The `RelationalBackend` /
     `KVBackend` Literal split already prevents `redis` from being chosen
-    for obs/lineage, so this function only needs to check driver
+    for observability/lineage, so this function only needs to check driver
     availability — it does not need to re-enforce the legal-combination
     matrix.
     """
@@ -426,9 +426,9 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
 
     seen: set[str] = set()
     for store_label, backend in (
-        ("obs",     stores_cfg.obs.backend),
-        ("lineage", stores_cfg.lineage.backend),
-        ("depot",   stores_cfg.depot.backend),
+        ("observability", stores_cfg.observability.backend),
+        ("lineage",       stores_cfg.lineage.backend),
+        ("depot",         stores_cfg.depot.backend),
     ):
         if backend == "duckdb":
             continue

@@ -99,7 +99,7 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     # injects this marker into a copy of the manifest, the Ingress wraps its
     # output in `.limit(N)` so the downstream DAG sees at most N rows. Marker
     # is never set by user-authored Blueprints; it is consumed only by
-    # `aqueduct.patch.preview.run_gate3_sandbox`.
+    # `aqueduct.patch.preview.run_sandbox_gate`.
     sandbox_limit = cfg.get("sandbox_limit")
     if isinstance(sandbox_limit, int) and sandbox_limit > 0:
         df = df.limit(int(sandbox_limit))

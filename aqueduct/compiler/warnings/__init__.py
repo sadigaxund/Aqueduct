@@ -7,7 +7,7 @@ Add a new rule by dropping a file in here and importing it in `RULES`.
 
 Compiler integration: `compile()` iterates `RULES`, calls each, emits returned
 strings via the same `warnings.warn(...)` channel as the existing 8a–8g
-diagnostics, so no Surveyor / no obs.db / no log-handler plumbing changes.
+diagnostics, so no Surveyor / no observability.db / no log-handler plumbing changes.
 
 To add a rule:
   1. Create `aqueduct/compiler/warnings/<rule_name>.py`.

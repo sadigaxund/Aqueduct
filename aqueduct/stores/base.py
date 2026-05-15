@@ -1,6 +1,6 @@
 """Base ABCs + factory for the pluggable store backends.
 
-Three relational-style stores (`obs`, `lineage`, `depot`) plus a depot-only
+Three relational-style stores (`observability`, `lineage`, `depot`) plus a depot-only
 KV fast-path. Every backend exposes a uniform `connect()` returning a
 context-manager that yields a `RelationalCursor`. The cursor accepts
 DuckDB-style `?` placeholders and translates them when the underlying
@@ -8,7 +8,7 @@ driver requires `%s` (Postgres) — call sites stay readable and identical
 regardless of backend.
 
 Redis is an exception: it exposes a KV-only path (`kv_get` / `kv_put` /
-`kv_delete`). Asking for `relational_connect()` on a Redis-backed obs
+`kv_delete`). Asking for `relational_connect()` on a Redis-backed observability
 or lineage store is a configuration error rejected at `load_config()`
 time via the `KVBackend` / `RelationalBackend` Literal split in
 `aqueduct.config`.
@@ -33,7 +33,7 @@ class BackendUnsupportedError(Exception):
     """Raised when a call site asks a backend for an operation it does not support.
 
     Concrete trigger: a Redis-backed depot is asked for `relational_connect()`,
-    or any obs/lineage write tries to run against Redis. In practice the
+    or any observability/lineage write tries to run against Redis. In practice the
     `KVBackend`/`RelationalBackend` Literal split in `aqueduct.config`
     prevents that combination from validating, so this exception is a
     last-line-of-defense for direct programmatic callers.
@@ -87,7 +87,7 @@ class RelationalCursor:
 # ── Store ABCs ────────────────────────────────────────────────────────────────
 
 class _RelationalStore(ABC):
-    """Common interface for relational-flavoured stores (obs + lineage + depot-PG)."""
+    """Common interface for relational-flavoured stores (observability + lineage + depot-PG)."""
 
     @abstractmethod
     @contextlib.contextmanager
@@ -105,7 +105,7 @@ class _RelationalStore(ABC):
         """Human-readable string for log lines and `aqueduct doctor` output."""
 
 
-class ObsStore(_RelationalStore):
+class ObservabilityStore(_RelationalStore):
     """Run records, failures, healing outcomes, signal overrides, probe signals, metrics."""
 
 
@@ -154,10 +154,10 @@ class DepotStore(ABC):
 @dataclass(frozen=True)
 class StoreBundle:
     """Resolved per-run stores. Each store may share an underlying connection
-    pool with another (e.g. postgres obs + lineage pointing at the same DSN).
+    pool with another (e.g. postgres observability + lineage pointing at the same DSN).
     """
 
-    obs: ObsStore
+    observability: ObservabilityStore
     lineage: LineageStore
     depot: DepotStore
 
@@ -167,16 +167,16 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
 
     Backend dispatch:
 
-    - `duckdb`   → `aqueduct.stores.duckdb_.DuckDBObsStore` + `DuckDBLineageStore` +
+    - `duckdb`   → `aqueduct.stores.duckdb_.DuckDBObservabilityStore` + `DuckDBLineageStore` +
                    `DuckDBDepotStore`.
-    - `postgres` → `aqueduct.stores.postgres.PostgresObsStore` etc., with the
-                   three logical schemas (`obs` / `lineage` / `depot`) auto-created
+    - `postgres` → `aqueduct.stores.postgres.PostgresObservabilityStore` etc., with the
+                   three logical schemas (`observability` / `lineage` / `depot`) auto-created
                    on first connect.
     - `redis`    → `aqueduct.stores.redis_.RedisDepotStore` (depot only).
 
     Backends are validated at config-load time
     (`StoreBackendConfig` + `StoresConfig` validators in `aqueduct.config`),
-    so an obs/lineage backend of `redis` cannot reach this function.
+    so an observability/lineage backend of `redis` cannot reach this function.
 
     Args:
         cfg: Validated `AqueductConfig`.
@@ -189,7 +189,7 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
     from aqueduct.stores.duckdb_ import (
         DuckDBDepotStore,
         DuckDBLineageStore,
-        DuckDBObsStore,
+        DuckDBObservabilityStore,
     )
 
     def _resolve_duckdb_path(store_cfg: "StoreBackendConfig") -> Path:
@@ -198,19 +198,19 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
             return Path(store_dir_override) / p.name
         return p
 
-    obs: ObsStore
+    obs: ObservabilityStore
     lineage: LineageStore
     depot: DepotStore
 
-    # ── obs ──────────────────────────────────────────────────────────────────
-    if cfg.stores.obs.backend == "duckdb":
-        obs = DuckDBObsStore(_resolve_duckdb_path(cfg.stores.obs))
-    elif cfg.stores.obs.backend == "postgres":
-        from aqueduct.stores.postgres import PostgresObsStore
-        obs = PostgresObsStore(cfg.stores.obs.path)
+    # ── observability ──────────────────────────────────────────────────────────────────
+    if cfg.stores.observability.backend == "duckdb":
+        obs = DuckDBObservabilityStore(_resolve_duckdb_path(cfg.stores.observability))
+    elif cfg.stores.observability.backend == "postgres":
+        from aqueduct.stores.postgres import PostgresObservabilityStore
+        obs = PostgresObservabilityStore(cfg.stores.observability.path)
     else:  # pragma: no cover — guarded at config layer
         raise BackendUnsupportedError(
-            f"obs.backend={cfg.stores.obs.backend!r} is not a supported relational backend"
+            f"obs.backend={cfg.stores.observability.backend!r} is not a supported relational backend"
         )
 
     # ── lineage ──────────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
             f"depot.backend={cfg.stores.depot.backend!r} is not a supported KV backend"
         )
 
-    return StoreBundle(obs=obs, lineage=lineage, depot=depot)
+    return StoreBundle(observability=obs, lineage=lineage, depot=depot)
 
 
 # Field placeholder so static analysis tools don't complain about the

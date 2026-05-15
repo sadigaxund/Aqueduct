@@ -22,7 +22,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark]"
-      - run: pytest -m "not integration and not llm"
+      - run: pytest -m "not integration and not agent"
 
   integration-stores:
     runs-on: ubuntu-latest

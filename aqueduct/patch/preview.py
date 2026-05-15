@@ -9,7 +9,7 @@ and powers two surfaces:
   Blueprint.
 
 - The internal `_apply_patch_in_memory` path used by `auto` and `aggressive`
-  modes — invokes `run_gate2_lineage` and `run_gate3_sandbox` ahead of the
+  modes — invokes `run_lineage_gate` and `run_sandbox_gate` ahead of the
   expensive full-pipeline re-run controlled by `agent.patch_validation`.
 
 Both gates operate on **live** lineage computed from the patched Blueprint
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class LineageWarning:
-    """A single Gate 2 finding."""
+    """A single lineage-gate finding."""
 
     severity: str               # "warn" | "fail"
     channel_id: str             # module that was patched
@@ -43,7 +43,7 @@ class LineageWarning:
 
 
 @dataclass
-class Gate2Result:
+class LineageGateResult:
     status: str = "pass"        # "pass" | "warn" | "fail"
     warnings: list[LineageWarning] = field(default_factory=list)
     touched_modules: list[str] = field(default_factory=list)
@@ -51,7 +51,7 @@ class Gate2Result:
 
 
 @dataclass
-class Gate3Result:
+class SandboxGateResult:
     status: str                 # "pass" | "fail" | "skip"
     detail: str
     sample_rows: int | None = None
@@ -149,13 +149,13 @@ def _consumers_of(rows: Iterable[dict[str, str]], source_table: str) -> list[tup
     return out
 
 
-# ── Gate 2 ────────────────────────────────────────────────────────────────────
+# ── lineage gate ────────────────────────────────────────────────────────────────────
 
-def run_gate2_lineage(
+def run_lineage_gate(
     blueprint_before: dict,
     blueprint_after: dict,
     patch_spec: Any,
-) -> Gate2Result:
+) -> LineageGateResult:
     """Compare live lineage before and after the patch.
 
     For each module the patch touches:
@@ -175,7 +175,7 @@ def run_gate2_lineage(
       `fail`  reserved for future hard breakage classes (kept for caller policy)
     """
     t0 = time.monotonic()
-    result = Gate2Result()
+    result = LineageGateResult()
     result.touched_modules = touched_module_ids(patch_spec)
     if not result.touched_modules:
         result.duration_ms = int((time.monotonic() - t0) * 1000)
@@ -215,9 +215,9 @@ def run_gate2_lineage(
     return result
 
 
-# ── Gate 3 sandbox replay ─────────────────────────────────────────────────────
+# ── sandbox gate sandbox replay ─────────────────────────────────────────────────────
 
-def run_gate3_sandbox(
+def run_sandbox_gate(
     blueprint_after: dict,
     *,
     blueprint_path: Any,
@@ -227,10 +227,10 @@ def run_gate3_sandbox(
     cli_overrides: dict[str, str] | None = None,
     profile: str | None = None,
     spark_session: Any = None,
-    obs_store: Any = None,
+    observability_store: Any = None,
     lineage_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
-) -> Gate3Result:
+) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
     The sandbox:
@@ -260,7 +260,7 @@ def run_gate3_sandbox(
         from aqueduct.patch.apply import _yaml_dump
         from aqueduct.executor import ExecuteError, get_executor
     except Exception as exc:  # pragma: no cover
-        return Gate3Result(
+        return SandboxGateResult(
             status="skip",
             detail=f"sandbox dependencies missing: {exc}",
             duration_ms=int((time.monotonic() - t0) * 1000),
@@ -276,7 +276,7 @@ def run_gate3_sandbox(
         try:
             bp = parse(str(tmp_path), profile=profile, cli_overrides=cli_overrides or None)
         except ParseError as exc:
-            return Gate3Result(
+            return SandboxGateResult(
                 status="fail",
                 detail=f"patched Blueprint failed to parse: {exc}",
                 duration_ms=int((time.monotonic() - t0) * 1000),
@@ -285,7 +285,7 @@ def run_gate3_sandbox(
         try:
             manifest = compiler_compile(bp, blueprint_path=tmp_path)
         except CompileError as exc:
-            return Gate3Result(
+            return SandboxGateResult(
                 status="fail",
                 detail=f"patched Blueprint failed to compile: {exc}",
                 duration_ms=int((time.monotonic() - t0) * 1000),
@@ -342,7 +342,7 @@ def run_gate3_sandbox(
                     quiet=True,
                 )
             except Exception as exc:
-                return Gate3Result(
+                return SandboxGateResult(
                     status="skip",
                     detail=f"sandbox could not start Spark: {exc}",
                     egress_targets=egress_targets,
@@ -362,12 +362,12 @@ def run_gate3_sandbox(
                 store_dir=None,
                 surveyor=None,
                 from_module=failed_module,
-                obs_store=obs_store,
+                observability_store=observability_store,
                 lineage_store=lineage_store,
                 explain_capture=explain_capture,
             )
         except ExecuteError as exc:
-            return Gate3Result(
+            return SandboxGateResult(
                 status="fail",
                 detail=f"sandbox execution raised: {exc}",
                 sample_rows=sample_rows if sample_rows > 0 else None,
@@ -380,7 +380,7 @@ def run_gate3_sandbox(
                 (r for r in result.module_results if r.status == "error"),
                 None,
             )
-            return Gate3Result(
+            return SandboxGateResult(
                 status="fail",
                 detail=(
                     f"sandbox run ended with status={result.status!r}"
@@ -391,7 +391,7 @@ def run_gate3_sandbox(
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
 
-        return Gate3Result(
+        return SandboxGateResult(
             status="pass",
             detail=(
                 f"sandbox replay succeeded against {sample_rows or '∞'} "

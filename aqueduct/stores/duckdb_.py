@@ -20,7 +20,7 @@ import duckdb
 from aqueduct.stores.base import (
     DepotStore,
     LineageStore,
-    ObsStore,
+    ObservabilityStore,
     RelationalCursor,
 )
 
@@ -53,8 +53,8 @@ class _DuckDBRelational:
                 conn.close()
 
 
-class DuckDBObsStore(_DuckDBRelational, ObsStore):
-    """Single-file DuckDB obs.db."""
+class DuckDBObservabilityStore(_DuckDBRelational, ObservabilityStore):
+    """Single-file DuckDB observability.db."""
 
 
 class DuckDBLineageStore(_DuckDBRelational, LineageStore):
@@ -62,7 +62,7 @@ class DuckDBLineageStore(_DuckDBRelational, LineageStore):
 
 
 class DuckDBDepotStore(_DuckDBRelational, DepotStore):
-    """Depot KV backed by DuckDB. Same single-writer constraint as obs/lineage."""
+    """Depot KV backed by DuckDB. Same single-writer constraint as observability/lineage."""
 
     _DDL = """
         CREATE TABLE IF NOT EXISTS depot_kv (

@@ -318,8 +318,8 @@ def run_scenario(
     provider: str = "anthropic",
     base_url: str | None = None,
     provider_options: dict[str, Any] | None = None,
-    llm_timeout: float = 120.0,
-    llm_max_reprompts: int = 3,
+    timeout: float = 120.0,
+    max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
 ) -> ScenarioResult:
     """Run one scenario against the LLM and validate the response.
@@ -327,7 +327,7 @@ def run_scenario(
     No Spark session required — builds a FailureContext by compiling the
     referenced blueprint, injects the failure, and calls the LLM.
     """
-    from aqueduct.surveyor.llm import generate_llm_patch
+    from aqueduct.agent import generate_agent_patch
 
     t0 = time.monotonic()
 
@@ -347,18 +347,18 @@ def run_scenario(
         )
 
     # Call LLM
-    llm_result = generate_llm_patch(
+    agent_result = generate_agent_patch(
         failure_ctx,
         model=model,
         patches_dir=patches_dir,
         provider=provider,
         base_url=base_url,
         provider_options=provider_options,
-        llm_timeout=llm_timeout,
-        llm_max_reprompts=llm_max_reprompts,
+        timeout=timeout,
+        max_reprompts=max_reprompts,
         engine_prompt_context=engine_prompt_context,
     )
-    patch = llm_result.patch
+    patch = agent_result.patch
 
     duration = time.monotonic() - t0
 
@@ -371,7 +371,7 @@ def run_scenario(
 
     # Check assertions
     assertion_failures, patch_valid, patch_applies, root_cause_match, category_match = (
-        _check_assertions(scenario.assertions, patch, blueprint_path, attempts=llm_result.attempts)
+        _check_assertions(scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts)
     )
 
     # Check expected_patch
@@ -392,8 +392,8 @@ def run_scenario(
         patch=patch,
         duration_seconds=duration,
         confidence=patch.confidence if patch else None,
-        attempts_to_parse=llm_result.attempts,
-        reprompt_errors=llm_result.reprompt_errors,
+        attempts_to_parse=agent_result.attempts,
+        reprompt_errors=agent_result.reprompt_errors,
         root_cause_match=root_cause_match,
         category_match=category_match,
     )
@@ -406,8 +406,8 @@ def run_benchmark(
     provider: str = "anthropic",
     base_url: str | None = None,
     provider_options: dict[str, Any] | None = None,
-    llm_timeout: float = 120.0,
-    llm_max_reprompts: int = 3,
+    timeout: float = 120.0,
+    max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     workers: int = 4,
 ) -> dict[str, dict[str, ScenarioResult]]:
@@ -451,8 +451,8 @@ def run_benchmark(
             provider=provider,
             base_url=base_url,
             provider_options=provider_options,
-            llm_timeout=llm_timeout,
-            llm_max_reprompts=llm_max_reprompts,
+            timeout=timeout,
+            max_reprompts=max_reprompts,
             engine_prompt_context=engine_prompt_context,
         )
         return scenario.id, model, r

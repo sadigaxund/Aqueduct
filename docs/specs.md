@@ -86,7 +86,7 @@ Aqueduct has five processing layers and three persistent stores. Each layer has 
 
 |**Store**|**Description**|
 | :- | :- |
-|**Observability Store**|Append-only log of all runtime signals: Probe readings, stage metrics, errors. Queryable by run\_id and module\_id. Backend: DuckDB embedded database (`.aqueduct/obs.db`).|
+|**Observability Store**|Append-only log of all runtime signals: Probe readings, stage metrics, errors. Queryable by run\_id and module\_id. Backend: DuckDB embedded database (`.aqueduct/observability.db`).|
 |**Lineage Store**|Stores structural column lineage graphs (computed at parse time) and runtime ColumnQualityReport entries per run. Backend: DuckDB embedded database (`.aqueduct/lineage.db`).|
 |**Depot (KV Store)**|Persistent key-value store for pipeline state across runs: watermarks, last-run metadata, cross-pipeline coordination values. Keyed by blueprint\_id + key name. Per-key read/write access flags. Backend: DuckDB embedded database (`.aqueduct/depot.db`).|
 
@@ -507,7 +507,7 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
 |**merge\_key**|List of columns forming the merge condition for mode: merge.|
 |**collect**|Boolean. If true, collects result to driver (small datasets only). Outputs to RunRecord as collected\_result. Not for production large datasets.|
 |**register\_as\_table**|Optional string. After writing, registers the output path as an external table with this name in the active Spark catalog. Non-fatal: registration failure logs a warning but does not fail the pipeline.|
-|**maintenance**|Optional dict. Post-write Delta Lake maintenance block. Keys: `optimize` (bool — run OPTIMIZE), `zorder_by` (str or list — ZORDER columns), `vacuum` (int — retain hours for VACUUM). Both ops are non-fatal: failures log as warnings. Timing written to `obs.db` `maintenance_metrics` table. Compiler emits warning 8g if `optimize: true` with non-delta format.|
+|**maintenance**|Optional dict. Post-write Delta Lake maintenance block. Keys: `optimize` (bool — run OPTIMIZE), `zorder_by` (str or list — ZORDER columns), `vacuum` (int — retain hours for VACUUM). Both ops are non-fatal: failures log as warnings. Timing written to `observability.db` `maintenance_metrics` table. Compiler emits warning 8g if `optimize: true` with non-delta format.|
 
 |**JUNCTION**|**Fan-out — splits one flow into multiple downstream branches**|
 | :-: | :- |
@@ -605,7 +605,7 @@ Macro bodies may not reference other macros. All `{{ param }}` placeholders in a
 |**Signal type**|**I/O Cost**|**Spark Actions**|**Implementation**|
 | :- | :- | :- | :- |
 |**schema\_snapshot**|Zero|0|`df.schema` is always available on a lazy DataFrame. Writes DuckDB row + JSON file.|
-|**row\_count\_estimate** (spark\_listener)|Zero|0|Reads `recordsWritten` from SparkListener stage metrics in `obs.db`. No Spark action.|
+|**row\_count\_estimate** (spark\_listener)|Zero|0|Reads `recordsWritten` from SparkListener stage metrics in `observability.db`. No Spark action.|
 |**row\_count\_estimate** (sample)|**Full dataset scan**|1|`df.sample(fraction).count()` — `sample()` is a row-level filter, not partition prune: all data is read.|
 |**null\_rates**|**Full dataset scan**|1|`df.sample(fraction).agg(...)` — despite the name, `sample()` reads 100% of the data before discarding rows. A 1% sample on a 10 TB table reads 10 TB.|
 |**sample\_rows**|First partition(s) only|1|`df.limit(n).collect()` — stops after N rows from the first partition(s).|
@@ -653,7 +653,7 @@ edges:
 |**Signal = error type / exception**|Treated identically to False. Gate closes. on\_block applies.|
 |**Signal = None / null**|Treated as True. Gate opens. This preserves passive-by-default behaviour for Probes that do not emit a signal on a given run.|
 
-|**Implementation note:**  The Regulator is evaluated by the Surveyor by reading `probe_signals` from `obs.db`. It looks for a `passed` key in the signal payload — only the `threshold` signal type writes this key. All other Probe signal types (`schema_snapshot`, `null_rates`, etc.) write raw metrics and cannot directly close a gate. To wire a Probe to a Regulator, include at least one `threshold` signal. When `timeout_seconds > 0` and the gate is closed, the executor polls every 2s until the gate opens or the timeout expires; on timeout, `on_block` applies (same as if the gate had been closed immediately).|
+|**Implementation note:**  The Regulator is evaluated by the Surveyor by reading `probe_signals` from `observability.db`. It looks for a `passed` key in the signal payload — only the `threshold` signal type writes this key. All other Probe signal types (`schema_snapshot`, `null_rates`, etc.) write raw metrics and cannot directly close a gate. To wire a Probe to a Regulator, include at least one `threshold` signal. When `timeout_seconds > 0` and the gate is closed, the executor polls every 2s until the gate opens or the timeout expires; on timeout, `on_block` applies (same as if the gate had been closed immediately).|
 | :- |
 
 |**SPILLWAY**|**Error output port — present on every Module, routes row-level failures**|
@@ -1456,7 +1456,7 @@ agent:
 3. If unreviewed patches exist in `patches/pending/` and `on_pending_patches: block` — LLM skipped, run ends.
 4. **Assembles FailureContext:** compiled module config with resolved values, **provenance map** (shows which context key or literal each config value came from), error message, truncated stack trace, doctor pre-flight hints.
 5. **Calls LLM** with FailureContext + PatchSpec JSON schema + optional `prompt_context` injections (engine-level, then blueprint-level appended after).
-6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct sends a reprompt showing the model its exact previous output alongside field-level error annotations (e.g. "line 8, column 3: missing comma — your output near the error: ..."). This is a real multi-turn conversation. Repeats up to `llm_max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry. Common field name aliases (`ops`→`operations`, `description`→`rationale`, `type`→`op` in operations) are silently normalized before validation, so minor LLM naming deviations do not consume reprompt budget.
+6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct sends a reprompt showing the model its exact previous output alongside field-level error annotations (e.g. "line 8, column 3: missing comma — your output near the error: ..."). This is a real multi-turn conversation. Repeats up to `agent.max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry. Common field name aliases (`ops`→`operations`, `description`→`rationale`, `type`→`op` in operations) are silently normalized before validation, so minor LLM naming deviations do not consume reprompt budget.
 7. **Confidence check.** If `confidence < 0.7`, the patch is forced to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied.
 8. **Guardrails check.** If the patch touches a path outside `allowed_paths` or uses a `forbidden_ops` operation, it is staged in `patches/pending/` for human review regardless of `approval_mode`.
 9. **Approval mode routing** (after confidence + guardrail checks pass):
@@ -1488,18 +1488,18 @@ All connection fields in the Blueprint `agent:` block override the engine defaul
 | `model` | `agent.model` | Model name string |
 | `base_url` | `agent.base_url` | Endpoint URL |
 | `provider_options` | `agent.provider_options` | Provider-specific options dict. `ollama_*` prefixed keys stripped and nested under `payload["options"]` (Ollama-only field). Unprefixed keys merged into payload top-level (standard OpenAI params: `temperature`, `top_p`, etc.). |
-| `llm_timeout` | `agent.llm_timeout` | HTTP timeout in seconds (default 120) |
-| `llm_max_reprompts` | `agent.llm_max_reprompts` | Reprompt retries on invalid PatchSpec (default 3) |
+| `timeout` | `agent.timeout` | HTTP timeout in seconds (default 120) |
+| `max_reprompts` | `agent.max_reprompts` | Reprompt retries on invalid PatchSpec (default 3) |
 | `confidence_threshold` | — (blueprint-only) | Minimum confidence to auto-apply patch (default 0.7; below → human review) |
 | `on_heal_failure` | — (blueprint-only) | `stage` \| `discard` \| `abort` — what to do when patch fails to fix pipeline (default `stage`) |
 | `prompt_context` | `agent.prompt_context` | Extra text appended to LLM system prompt (blueprint appended after engine) |
 | `max_heal_attempts_per_hour` | `agent.max_heal_attempts_per_hour` | Spend-cap. When set (integer ≥ 0), the Surveyor counts rows in `healing_outcomes` within the last 60 minutes for this blueprint and skips the next LLM HTTP call once the count is reached. Default `null` = unlimited. Per-blueprint override wins when both are set. |
-| `patch_validation` | `agent.patch_validation` | Phase 29a — validation level for auto / aggressive. `full_run` (default): Gate 2 (lineage) + Gate 3 (sandbox replay) + full Spark run; Blueprint written only if the full run succeeds. `sandbox`: Gate 2 + Gate 3 only; Blueprint written on sandbox pass without a full run. Blueprint value wins over the engine default. |
-| `block_on_explain_regression` | `agent.block_on_explain_regression` | Phase 29b — when `true`, Gate 4 (post-patch `explain()` regression check) is treated as **blocking** in aggressive mode: a patch that adds shuffles / Python UDF nodes or drops broadcast hints is rejected instead of merely warned. Default `false` — Gate 4 is warn-only across all modes, preserving current behaviour. Per-blueprint override wins. |
+| `patch_validation` | `agent.patch_validation` | Phase 29a — validation level for auto / aggressive. `full_run` (default): the lineage gate + the sandbox gate (replay) + full Spark run; Blueprint written only if the full run succeeds. `sandbox`: the lineage gate + the sandbox gate only; Blueprint written on sandbox pass without a full run. Blueprint value wins over the engine default. |
+| `block_on_explain_regression` | `agent.block_on_explain_regression` | Phase 29b — when `true`, the explain gate (post-patch `explain()` regression check) is treated as **blocking** in aggressive mode: a patch that adds shuffles / Python UDF nodes or drops broadcast hints is rejected instead of merely warned. Default `false` — the explain gate is warn-only across all modes, preserving current behaviour. Per-blueprint override wins. |
 
 Blueprint values win on conflict. `null` (unset) means inherit from engine.
 
-**`healing_outcomes` table:** Every healing attempt — whether the patch was applied, whether the re-run succeeded — is recorded in `obs.db`'s `healing_outcomes` table:
+**`healing_outcomes` table:** Every healing attempt — whether the patch was applied, whether the re-run succeeded — is recorded in `observability.db`'s `healing_outcomes` table:
 
 | Column | Description |
 |---|---|
@@ -1554,10 +1554,10 @@ Checks Ingress/Egress paths exist, formats match file extensions, LLM is reachab
 
 **Step 3 — Inspect the failure context**
 
-The failure context is stored in `obs.db` (table: `failure_contexts`). The full context — including provenance JSON, stack trace, and probe signals — is what the LLM receives:
+The failure context is stored in `observability.db` (table: `failure_contexts`). The full context — including provenance JSON, stack trace, and probe signals — is what the LLM receives:
 ```bash
 # Query directly
-duckdb .aqueduct/obs/<blueprint_id>/obs.db \
+duckdb .aqueduct/obs/<blueprint_id>/observability.db \
   "SELECT error_message, failed_module FROM failure_contexts WHERE run_id='<run_id>'"
 ```
 
@@ -1607,7 +1607,7 @@ aqueduct run blueprints/pipeline.yml
 
 **Step 9 — Check healing analytics**
 ```bash
-duckdb .aqueduct/obs/<blueprint_id>/obs.db \
+duckdb .aqueduct/obs/<blueprint_id>/observability.db \
   "SELECT patch_id, confidence, failure_category, patch_applied, run_success_after_patch FROM healing_outcomes ORDER BY applied_at DESC LIMIT 10"
 ```
 
@@ -1676,7 +1676,7 @@ Pass rate                         |       95%        |   80%
 Avg confidence                    |      0.91        |  0.82
 ```
 
-**Prompt versioning:** `PROMPT_VERSION` constant in `surveyor/llm.py` is stored in patch `_aq_meta`. Bump it manually when the system prompt changes. This correlates benchmark scores to prompt versions over time.
+**Prompt versioning:** `PROMPT_VERSION` constant in `aqueduct/agent/__init__.py` is stored in patch `_aq_meta`. Bump it manually when the system prompt changes. This correlates benchmark scores to prompt versions over time.
 
 
 # **9. Type System**
@@ -1750,14 +1750,14 @@ stores:
   #   depot   : duckdb | postgres | redis    (KV — redis allowed here only)
   #
   # Runtime artefacts under each parent directory (DuckDB layout shown):
-  #   obs.db      — run records, failure contexts, probe signals, module/maintenance metrics, signal overrides, healing_outcomes
+  #   observability.db      — run records, failure contexts, probe signals, module/maintenance metrics, signal overrides, healing_outcomes
   #   lineage.db  — column-level lineage
   #   depot.db    — cross-run KV state (@aq.depot.*)
-  #   snapshots/  — schema_snapshot JSON files (one file per probe per run, alongside obs.db)
-  #   watermarks/ — sidecar JSON files for incremental Channels (alongside obs.db)
-  obs:
+  #   snapshots/  — schema_snapshot JSON files (one file per probe per run, alongside observability.db)
+  #   watermarks/ — sidecar JSON files for incremental Channels (alongside observability.db)
+  observability:
     backend: duckdb                # duckdb | postgres
-    path: ".aqueduct/obs.db"       # DuckDB file path; for postgres pass a libpq DSN
+    path: ".aqueduct/observability.db"       # DuckDB file path; for postgres pass a libpq DSN
   lineage:
     backend: duckdb                # duckdb | postgres
     path: ".aqueduct/lineage.db"
@@ -1767,8 +1767,8 @@ stores:
 agent:
   provider: "anthropic"            # "anthropic" | "openai_compat"
   model: "claude-sonnet-4-6"
-  llm_timeout: 120.0               # HTTP timeout per LLM call; increase for slow local models
-  llm_max_reprompts: 3             # max retries when LLM returns invalid PatchSpec JSON
+  timeout: 120.0                   # HTTP timeout per agent call; increase for slow local models
+  max_reprompts: 3                 # max retries when the agent returns invalid PatchSpec JSON
   prompt_context: |                # optional: appended to LLM system prompt for all blueprints
     This cluster runs Databricks. All paths use s3a:// or dbfs://.
   aggressive_max_patches: 5
@@ -2039,10 +2039,10 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct runs [blueprint]`|List recent run history from `obs.db`.|`--blueprint`, `--failed`, `--last <N>`, `--config`|
+|`aqueduct runs [blueprint]`|List recent run history from `observability.db`.|`--blueprint`, `--failed`, `--last <N>`, `--config`|
 |`aqueduct report <run_id>`|Print Flow Report for a run.|`--format <table|json|csv>`, `--config`, `--store-dir`|
 |`aqueduct lineage <blueprint>`|Print column-level lineage graph.|`--from <table_id>`, `--column <col>`, `--format <table|json>`|
-|`aqueduct log <blueprint.yml>`|Show git history with patch metadata.|`--format <table|json>`|
+|`aqueduct patch log <blueprint.yml>`|Show git history with patch metadata.|`--format <table|json>`|
 
 ## **11.3 Self-Healing & Signal Commands**
 
@@ -2062,7 +2062,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |`aqueduct patch reject <ref>`|Reject a pending patch with a reason.|`--reason` (required), `--patches-dir`|
 |`aqueduct patch commit`|Commit applied patches to git.|`--blueprint` (required), `--patches-dir`|
 |`aqueduct patch discard`|Revert Blueprint to git HEAD.|`--blueprint` (required), `--patches-dir`|
-|`aqueduct rollback <blueprint>`|Restore blueprint file(s) to pre-patch state via a new forward commit.|`--to <patch_id>`|
+|`aqueduct patch rollback <blueprint>`|Restore blueprint file(s) to pre-patch state via a new forward commit.|`--to <patch_id>`|
 
 ## **11.5 System Integrity Commands**
 
@@ -2269,7 +2269,7 @@ In `cluster` or `cloud` `deployment.env`, `aqueduct doctor` warns when a Bluepri
 
 ## **14.4 Observability State Persistence**
 
-`obs.db` (DuckDB) runs on the driver — always correct. Spark workers never access it.
+`observability.db` (DuckDB) runs on the driver — always correct. Spark workers never access it.
 
 | Deployment | Driver persistence | Action required |
 |---|---|---|
@@ -2278,13 +2278,13 @@ In `cluster` or `cloud` `deployment.env`, `aqueduct doctor` warns when a Bluepri
 | Spark standalone | Permanent (driver host) | None |
 | Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
 
-**Store paths config:** there is no top-level `store_dir:` field in `aqueduct.yml`. Each store (`obs`, `lineage`, `depot`) has its own path under the `stores:` block. In ephemeral environments, point all three at a persistent mount:
+**Store paths config:** there is no top-level `store_dir:` field in `aqueduct.yml`. Each store (`observability`, `lineage`, `depot`) has its own path under the `stores:` block. In ephemeral environments, point all three at a persistent mount:
 
 ```yaml
 # aqueduct.yml — persist all observability state on a PVC mount
 stores:
-  obs:
-    path: "/mnt/aqueduct-state/obs.db"
+  observability:
+    path: "/mnt/aqueduct-state/observability.db"
   lineage:
     path: "/mnt/aqueduct-state/lineage.db"
   depot:
@@ -2305,7 +2305,7 @@ agent:
   provider: openai_compat
   base_url: "${LLM_BASE_URL}"
   model: "${LLM_MODEL}"
-  llm_timeout: 60
+  timeout: 60
   approval_mode: human
 ```
 
@@ -2404,7 +2404,7 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 
 ### Git rollback
 
-`aqueduct rollback` is a **development tool only**.
+`aqueduct patch rollback` is a **development tool only**.
 
 It restores only the blueprint file(s) touched by the target patch commit by checking out their pre-patch content from git history and creating a new forward commit. No history is rewritten; other files in the repository are never touched. Arcade blueprints that were part of the same patch commit are automatically included.
 
@@ -2419,7 +2419,7 @@ In production: rollback = revert the commit in git → CI/CD redeployment. Do no
 | API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
 | LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
 | `aggressive` mode in production | Requires `danger.allow_aggressive_patching: true` — do not set in prod config. |
-| `obs.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
+| `observability.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
 | Patch tampering | Phase 25 (planned): patch signature verification for `aggressive` mode. |
 | `danger.*` settings in shared config | Never commit `danger.*: true` to a shared/prod `aqueduct.yml`. Use env-specific overrides or per-run CLI flags. |
 

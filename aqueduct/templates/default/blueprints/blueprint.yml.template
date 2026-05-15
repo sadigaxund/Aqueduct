@@ -110,21 +110,21 @@ agent:
   confidence_threshold: 0.7
 
   # max_heal_attempts_per_hour: optional spend-cap. Surveyor refuses the next
-  # LLM call once this many healing attempts have been recorded in obs.db
+  # LLM call once this many healing attempts have been recorded in observability.db
   # within the last 60 minutes for this blueprint. Default null = unlimited.
   # Overrides the engine-level agent.max_heal_attempts_per_hour in aqueduct.yml.
   # max_heal_attempts_per_hour: 10
 
   # patch_validation: Phase 29a — override the engine-level validation level.
-  #   full_run — Gate 2 + Gate 3 + full Spark run (safest)
-  #   sandbox  — Gate 2 + Gate 3 only (fastest)
+  #   full_run — the lineage gate + the sandbox gate + full Spark run (safest)
+  #   sandbox  — the lineage gate + the sandbox gate only (fastest)
   # Leave unset to inherit aqueduct.yml agent.patch_validation.
   # patch_validation: full_run
 
-  # block_on_explain_regression: Phase 29b — when true, Gate 4 (post-patch
+  # block_on_explain_regression: Phase 29b — when true, the explain gate (post-patch
   # `explain()` regression check) rejects patches in aggressive mode that add
   # shuffles / Python UDF nodes or drop broadcast hints. Default false →
-  # Gate 4 is warn-only. Leave unset to inherit aqueduct.yml.
+  # the explain gate is warn-only. Leave unset to inherit aqueduct.yml.
   # block_on_explain_regression: false
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
@@ -171,8 +171,8 @@ agent:
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "claude-sonnet-4-6"
-  # llm_timeout: 300.0            # seconds; increase for slow local models
-  # llm_max_reprompts: 5          # max conversation turns when LLM returns invalid PatchSpec
+  # timeout: 300.0               # seconds; increase for slow local models
+  # max_reprompts: 5             # max conversation turns when the agent returns invalid PatchSpec
 
   # prompt_context: |             # Appended to LLM system prompt after engine-level prompt_context.
   #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.

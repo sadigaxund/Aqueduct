@@ -1,10 +1,10 @@
 """Phase 29b — Gate 4: post-patch physical-plan regression check.
 
-Sits next to Gates 2 (lineage diff) and 3 (sandbox replay) in
-`aqueduct/patch/preview.py`. After Gate 3 passes, the patched Manifest is
+Sits next to the lineage and sandbox gates in
+`aqueduct/patch/preview.py`. After the sandbox gate passes, the patched Manifest is
 compiled and `df.explain(mode="formatted")` is captured per module. Counts
 of `Exchange`, `BatchEvalPython`, and `BroadcastExchange` nodes are compared
-against the pre-patch baseline stored in `obs.explain_snapshot`.
+against the pre-patch baseline stored in `observability.explain_snapshot`.
 
 Warn-only by default. Aggressive mode may block on regression via the
 `agent.block_on_explain_regression` knob.
@@ -37,7 +37,7 @@ class ExplainRegression:
 
 
 @dataclass
-class Gate4Result:
+class ExplainGateResult:
     status: str = "pass"   # "pass" | "warn" | "fail" | "skip"
     regressions: list[ExplainRegression] = field(default_factory=list)
     detail: str = ""
@@ -87,14 +87,14 @@ def capture_plan_snapshot(df: Any) -> dict[str, Any]:
     }
 
 
-# ── Gate 4 ────────────────────────────────────────────────────────────────────
+# ── explain gate ────────────────────────────────────────────────────────────────────
 
-def run_gate4_explain(
+def run_explain_gate(
     baseline_by_module: dict[str, dict],
     after_by_module: dict[str, dict],
     *,
     touched_modules: list[str] | None = None,
-) -> Gate4Result:
+) -> ExplainGateResult:
     """Compare post-patch plan counts against pre-patch baseline.
 
     Args:
@@ -113,7 +113,7 @@ def run_gate4_explain(
               caller should not block on this.
     """
     t0 = time.monotonic()
-    result = Gate4Result()
+    result = ExplainGateResult()
 
     if not baseline_by_module:
         result.status = "skip"

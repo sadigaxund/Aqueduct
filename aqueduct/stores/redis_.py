@@ -3,7 +3,7 @@
 High-QPS watermark / counter / coordination workloads. Asking for
 `relational_connect()` on this store raises `BackendUnsupportedError` —
 the config-layer validators in `aqueduct.config` reject `redis` for
-obs/lineage backends so this state is unreachable from a validated
+observability/lineage backends so this state is unreachable from a validated
 config, but the guard is kept as a defense-in-depth measure for direct
 programmatic callers.
 

@@ -49,8 +49,8 @@ class AgentConfig:
     base_url: str | None = None
     model: str | None = None
     provider_options: dict | None = None
-    llm_timeout: float | None = None
-    llm_max_reprompts: int | None = None
+    timeout: float | None = None
+    max_reprompts: int | None = None
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsConfig = field(default_factory=GuardrailsConfig)
     # Minimum LLM confidence to auto-apply patch (below threshold → escalate to human)
