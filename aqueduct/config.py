@@ -341,6 +341,29 @@ class WebhooksConfig(BaseModel):
 
 # ── Top-level config ──────────────────────────────────────────────────────────
 
+class WarningsConfig(BaseModel):
+    """Phase 30a — controls Aqueduct's diagnostic warnings (compile-time + session-startup).
+
+    Warnings are emitted with the format ``AQ-WARN [rule_id] message``; copy
+    the bracketed rule_id into ``suppress`` to silence one rule. ``silence_all``
+    is the override for environments where any diagnostic is noise (e.g.
+    one-shot scripts or CI smoke jobs).
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    suppress: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of `rule_id` strings to silence. Copy IDs straight from "
+            "the `AQ-WARN [...]` prefix in terminal output."
+        ),
+    )
+    silence_all: bool = Field(
+        default=False,
+        description="If True, every Aqueduct warning is silenced regardless of `suppress`.",
+    )
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -361,6 +384,7 @@ class AqueductConfig(BaseModel):
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
+    warnings: "WarningsConfig" = Field(default_factory=lambda: WarningsConfig())
     spark_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",

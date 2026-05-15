@@ -4,6 +4,84 @@
 
 ## v1.0.0a2 — 2026-05-12
 
+### Phase 30a — Extended Spark Warnings + Suppression Registry
+_2026-05-15_
+
+Two-tier modular warning system on top of the pre-existing 8a–8g
+performance diagnostics, plus standardized `AQ-WARN [rule_id]` output so
+users can copy IDs straight into a suppression list.
+
+**Tier 1 — compile-time** (pure static analysis on the compiled Manifest,
+zero runtime cost):
+- `kafka_checkpoint_stale` — Channel with `checkpoint: true` fed by a
+  Kafka Ingress freezes the second consumer's stream view to a single
+  micro-batch.
+- `nondeterministic_fanout` — multi-consumer Channel whose SQL uses
+  `rand()` / `uuid()` / `current_timestamp()` without a Checkpoint
+  upstream → each branch re-evaluates the function independently.
+- `count_col_likely_count_star` — `COUNT(col)` silently skips NULLs;
+  flag for review unless the user actually meant null-aware counting.
+- `file_format_no_repartition` — Egress `parquet` / `json` / `csv`
+  without `repartition` / `coalesce` / `partition_by` produces one tiny
+  file per task partition.
+- `jdbc_missing_partition` — JDBC Ingress without `partitionColumn` +
+  `lowerBound` + `upperBound` (or `predicates`) reads through a single
+  executor connection.
+
+**Tier 2 — session-startup** (one-time, runs once per `SparkSession`,
+~ms cost):
+- `jar_availability` — scans the Blueprint for `format: kafka` /
+  `delta` / `iceberg` / `hudi` and JDBC driver classes, reads
+  `spark.sparkContext._jsc.sc().listJars()` once, warns when no JAR
+  whose name contains the expected fragment is loaded.
+
+**Modular registry:** rules live in `aqueduct/compiler/warnings/`
+(tier 1) and `aqueduct/executor/spark/warnings/` (tier 2). Each rule
+file exports `RULE_ID: str` and `def check(manifest, [spark]) ->
+list[str]`. Add a rule by dropping a file in the package and appending
+to the registry's `RULES` list.
+
+**Standardized output format:**
+    AQ-WARN [rule_id] human-readable message
+Distinct from Spark's `WARNING:` and Python's
+`path:line: Category: msg`. Easy to `grep AQ-WARN` and easy to copy the
+bracketed ID into the suppress list.
+
+**Suppression:**
+- `aqueduct.yml`:
+  ```yaml
+  warnings:
+    suppress: [count_col_likely_count_star, jdbc_missing_partition]
+    silence_all: false
+  ```
+- CLI: `--suppress-warning <rule_id>` (repeatable) and `--no-warnings`
+  (silence everything). CLI flags merge with config.
+- `WarningsConfig` Pydantic model + `compile(warnings_suppress=...,
+  warnings_silence_all=...)` and `execute(warnings_suppress=...,
+  warnings_silence_all=...)` keyword args for library users.
+- Process-global default installed via
+  `aqueduct.warnings.set_default_suppress()`; falls back when no
+  explicit suppress is passed.
+
+**Legacy 8a–8g retrofit:** the pre-existing compiler warnings keep their
+behaviour but now use stable rule IDs (`perf_probe_sample_full_scan`,
+`perf_incremental_watermark_scan`, `perf_python_udf_row_at_a_time`,
+`perf_delta_append_no_partition`, `perf_multi_consumer_no_cache`,
+`perf_hadoop_fs_in_options`, `maintenance_optimize_non_delta`,
+`delivery_append_retry_dupes`) and emit through the same
+`aqueduct.warnings.emit()` channel — all suppressible via the same
+mechanism.
+
+**Other:**
+- Fixed stray escape-sequence `SyntaxWarning` in
+  `executor/spark/executor.py:599` docstring (regex flagged by
+  Python 3.12+).
+- Existing CLI helper `_compile_with_warnings` now recognises the
+  `AqueductWarning` category and renders `AQ-WARN [id] msg`; other
+  `UserWarning`s keep the legacy `WARNING:` prefix.
+
+---
+
 ### Phase 29b — Gate 4: Post-Patch `explain()` Regression Check
 _2026-05-15_
 

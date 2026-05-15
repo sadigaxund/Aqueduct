@@ -455,6 +455,31 @@ agent:
   #   ollama_num_batch: 1024     # prompt eval batch size
   #   ollama_num_predict: -1     # -1 = no token limit
 
+# ── Warnings (Phase 30a) ──────────────────────────────────────────────────────
+# Aqueduct emits compile-time and session-startup diagnostics with the format
+#     AQ-WARN [rule_id] message
+# Copy the bracketed rule_id straight from the terminal into the suppress list
+# below to silence one rule. CLI flags (--suppress-warning / --no-warnings) are
+# merged on top of this list.
+#
+# Available compile-time rule IDs (registry: aqueduct/compiler/warnings/):
+#   kafka_checkpoint_stale, nondeterministic_fanout,
+#   count_col_likely_count_star, file_format_no_repartition,
+#   jdbc_missing_partition
+# Legacy (pre-30a) compile-time rules, also suppressible:
+#   delivery_append_retry_dupes, perf_probe_sample_full_scan,
+#   perf_incremental_watermark_scan, perf_python_udf_row_at_a_time,
+#   perf_delta_append_no_partition, perf_multi_consumer_no_cache,
+#   perf_hadoop_fs_in_options, maintenance_optimize_non_delta
+# Session-startup rules (registry: aqueduct/executor/spark/warnings/):
+#   jar_availability
+#
+# warnings:
+#   suppress:
+#     - count_col_likely_count_star
+#     - jdbc_missing_partition
+#   silence_all: false   # nuclear option — silence every Aqueduct warning
+
 # ── Danger settings ───────────────────────────────────────────────────────────
 # All default to false (safe production mode). Set to true only when needed.
 # Aqueduct prints a startup warning for any active danger setting.

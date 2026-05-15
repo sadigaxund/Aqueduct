@@ -596,7 +596,7 @@ def _compute_watermark_from_output(
 ) -> str | None:
     """Compute MAX(watermark_col) from already-written Egress output.
 
-    For delta: uses `SELECT MAX() FROM delta.\`path\`` which Spark can satisfy
+    For delta: uses ``SELECT MAX() FROM delta.`path` `` which Spark can satisfy
     using Delta's transaction log statistics — often a metadata-only operation.
     For other formats: reads the materialized output files (not the upstream DAG).
     Returns None on any failure.
@@ -688,6 +688,8 @@ def execute(
     obs_store: Any = None,
     lineage_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
+    warnings_suppress: set[str] | None = None,
+    warnings_silence_all: bool = False,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -754,6 +756,16 @@ def execute(
                     "(hash %s → %s). Checkpoint data may be stale.",
                     resume_run_id, stored_hash, current_hash,
                 )
+
+    # ── Phase 30a tier 2 — session-startup warnings (JAR availability, ...) ──
+    if not warnings_silence_all:
+        try:
+            from aqueduct.executor.spark.warnings import run_all as _run_session_warnings
+            from aqueduct.warnings import emit as _aq_emit
+            for _rid, _msg in _run_session_warnings(manifest, spark, suppress=warnings_suppress):
+                _aq_emit(_rid, _msg, suppress=warnings_suppress)
+        except Exception:
+            pass
 
     # Register UDFs before any module executes so Channel SQL can reference them.
     try:
