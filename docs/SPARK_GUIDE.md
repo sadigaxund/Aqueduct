@@ -28,7 +28,7 @@ Only the output is 1% of rows; the I/O cost is 100%.
 
 | Signal | Zero-cost method |
 |---|---|
-| `row_count_estimate` | `method: spark_listener` — reads from `obs.db`, no Spark action |
+| `row_count_estimate` | `method: spark_listener` — reads from `observability.db`, no Spark action |
 | `schema_snapshot` | Always zero-action |
 | `partition_stats` | `df.rdd.getNumPartitions()` — zero action |
 
@@ -125,7 +125,7 @@ orchestrator-level retry handling.
 ### SparkListener Row Estimates — Stage Fusion Caveat
 
 The `row_count_estimate` signal with `method: spark_listener` queries `module_metrics`
-in `obs.db` using the module's ID as the lookup key. This works correctly when each
+in `observability.db` using the module's ID as the lookup key. This works correctly when each
 logical module maps to its own Spark stage.
 
 **Edge case — stage fusion:** Spark's Catalyst optimizer can fuse multiple logical

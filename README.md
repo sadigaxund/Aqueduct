@@ -7,7 +7,7 @@
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
-> ### ⚠ The LLM can edit your Blueprints
+> ### ⚠ The agent can edit your Blueprints
 >
 > Self-healing is opt-in. The agent only modifies your Blueprint file when `agent.approval_mode` is set to `auto` or `aggressive`. **The default is `disabled`** — no LLM call, no Blueprint mutation, no Spark hidden cost.
 >
@@ -15,18 +15,7 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 > - `human` — patch is staged to `patches/pending/` for an engineer to apply via `aqueduct patch apply`.
 > - `ci` — patch is `POST`ed to a configured webhook (`agent.ci_webhook_url`) so your CI system can open a PR.
 >
-> `aggressive` mode additionally requires `danger.allow_aggressive_patching: true` in `aqueduct.yml`. Patches always pass through deterministic guardrails (`agent.guardrails.allowed_paths`, `forbidden_ops`, `heal_on_errors`, `never_heal_errors`) — the LLM cannot bypass them by hallucination, because enforcement happens at patch-apply time in code, not at prompt time.
-
----
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [Blueprint & Engine Spec](docs/specs.md) | Full specification — module types, config fields, compiler, executor, LLM agent, patch grammar |
-| [Spark Guide](docs/SPARK_GUIDE.md) | Compiler warnings, probe cost model, contributor rules, resource tuning, S3A committers, AQE |
-| [CLI Reference](docs/CLI_REFERENCE.md) | All commands, flags, exit codes, `aqueduct run` / `patch` / `doctor` / `heal` reference |
-| [All Tables Reference](docs/ALL_TABLES.md) | Schema + example queries for every DuckDB table Aqueduct writes (obs.db, lineage.db, depot.db) |
+> `aggressive` mode additionally requires `danger.allow_aggressive_patching: true` in `aqueduct.yml`. Patches always pass through deterministic guardrails (`agent.guardrails.allowed_paths`, `forbidden_ops`, `heal_on_errors`, `never_heal_errors`) — the agent cannot bypass them by hallucination, because enforcement happens at patch-apply time in code, not at prompt time.
 
 ---
 
@@ -34,10 +23,10 @@ Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Bluep
 
 - **Declarative YAML Blueprints** - No DAG wiring in code. Version-control your entire pipeline.
 - **Any Spark Connector** - Pass any format Spark supports (JDBC, Kafka, Avro, ORC, Delta, Parquet, CSV…) directly in config. Aqueduct adds no format restrictions.
-- **Self-Contained Failure Context** - Every failure ships a complete `FailureContext` JSON: failed module config, upstream lineage, Probe signals, retry history, and provenance metadata (where each value came from in the Blueprint). The LLM, or you, can diagnose without touching logs.
-- **Patch Grammar, Not Codegen** - The LLM operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
+- **Self-Contained Failure Context** - Every failure ships a complete `FailureContext` JSON: failed module config, upstream lineage, Probe signals, retry history, and provenance metadata (where each value came from in the Blueprint). The agent, or you, can diagnose without touching logs.
+- **Patch Grammar, Not Codegen** - The agent operates inside a structured `PatchSpec` schema. Patches are auditable, reversible, and never hallucinate invalid YAML.
 - **Zero-Cost Observability** - Probes capture schema snapshots, null rates, value distributions, distinct counts, freshness, and sample rows using lazy Spark operations and sampling. Costly sample-scan signals are gated behind `danger.allow_full_probe_actions` (default `false`) so production runs are zero-extra-action by default.
-- **Inline Data Quality Gates** - `Assert` modules enforce schema, row counts, null rates, freshness, and custom SQL rules inline. Failing rows route to a spillway; the pipeline aborts, warns, fires a webhook, or triggers the LLM agent based on per-rule configuration.
+- **Inline Data Quality Gates** - `Assert` modules enforce schema, row counts, null rates, freshness, and custom SQL rules inline. Failing rows route to a spillway; the pipeline aborts, warns, fires a webhook, or triggers the agent based on per-rule configuration.
 - **Spillway Error Routing** - Bad rows route to a separate error Egress with `_aq_error_*` metadata columns. Good rows flow uninterrupted.
 - **Depot KV Store** - Cross-run pipeline state backed by DuckDB. Read at compile time via `@aq.depot.get()`, write at runtime via `format: depot` Egress. Powers `materialize: incremental` on Channels - watermark-based incremental reads without a streaming engine.
 - **Passive-by-Default Gates** - Regulators (signal-driven quality gates) compile away entirely unless wired to a Probe signal. Zero overhead for unused features.
@@ -57,12 +46,50 @@ flowchart TD
 
     CO -. "reads shared state" .-> DP[("🗄️ Depot\nPipeline State")]
     EX -- "writes output" --> DP
-    EX & SU -- "stores metrics\n& data lineage" --> DB[("📦 Observability\nobs.db · lineage.db")]
+    EX & SU -- "stores metrics\n& data lineage" --> DB[("📦 Observability\nobservability.db · lineage.db")]
 
     SU -. "something broke" .-> LLM["🤖 AI Agent\nDiagnoses the failure,\ngenerates a fix"]
     LLM -. "apply fix →\nre-compile → retry" .-> CO
     LLM -. "save fix to disk\n(aggressive mode only)" .-> BP
 ```
+
+Five layers, one direction: **Parser → Compiler → Executor → Surveyor**, with the **Agent** as an optional repair loop hanging off the Surveyor. The vocabulary below is themed after Roman aqueduct engineering — each term's *function* is stated first, the metaphor second.
+
+---
+
+## Glossary
+
+### Engine vocabulary
+
+| Term | What it does | Why the name |
+|---|---|---|
+| **Aqueduct** | The engine: parses, compiles, runs, and self-heals Spark pipelines end to end. | A Roman aqueduct carries the flow the whole way. |
+| **Blueprint** | Your pipeline as YAML — modules + edges. The human-authored source of truth. | The drawn plan before anything is built. |
+| **Manifest** | The compiled, fully-resolved Blueprint the Executor runs: `@aq.*` tokens resolved, Arcades expanded, passive Regulators removed. | The finalized build spec handed to the crew. |
+| **Parser** | Reads the Blueprint YAML, validates schema, resolves variables. | Industry-standard term (intentionally not themed). |
+| **Compiler** | Expands Arcades/macros, builds the execution plan, emits the Manifest. | Industry-standard term. |
+| **Executor** | Runs the Manifest on Apache Spark. | Industry-standard term. |
+| **Surveyor** | Observability + self-healing orchestrator: records every run, persists signals & lineage, commissions the Agent on failure. | The Roman surveyor who set the aqueduct's gradient and inspected the structure. |
+| **Agent** | The LLM repair brain: turns a `FailureContext` into a structured, guardrailed `PatchSpec`. Opt-in; default off. | Modern term — no metaphor. |
+| **Depot** | Cross-run key/value state store; powers incremental watermarks (`@aq.depot.*`). | The cistern that holds water between flows. |
+| **Spillway** | Error-row overflow: bad rows divert to a side sink with `_aq_error_*` columns; good rows flow on. | A dam's spillway sheds excess without breaking the structure. |
+| **Probe** | Taps the flowing DataFrame for observability signals without halting it. | An inspection tap on the channel. |
+| **Regulator** | Signal-driven quality gate; opens/closes downstream flow based on a Probe signal; compiles away if unwired. | The sluice that regulates flow. |
+| **Arcade** | A reusable sub-Blueprint, namespaced and inlined at compile time. | The repeating arched span of a Roman aqueduct. |
+
+### Module types
+
+| Type | Role |
+|---|---|
+| `Ingress` | Load data from any Spark-supported source |
+| `Egress` | Write data to any Spark-supported sink, or `format: depot` for KV state; `collect: true` to pull results to driver; `register_as_table` to catalog the output |
+| `Channel` | Transformation (SQL or 12 native ops: deduplicate, filter, select, rename, cast, join, union, sort, repartition, coalesce, cache + sql); optional `spillway_condition` routes bad rows |
+| `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
+| `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
+| `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) - never halts pipeline |
+| `Regulator` | Data quality gate; evaluates Probe signals; blocks or skips downstream on failure |
+| `Assert` | Inline data quality rules (schema, row counts, null rates, freshness, SQL, custom); failing rows route to spillway |
+| `Arcade` | Reusable sub-Blueprint; namespaced and inlined at compile time |
 
 ---
 
@@ -85,7 +112,7 @@ pip install aqueduct-core[secrets]  # All three secrets backends at once
 pip install aqueduct-core[all]
 ```
 
-The base package installs the CLI, parser, compiler, and LLM self-healing. All LLM providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency - no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
+The base package installs the CLI, parser, compiler, and LLM self-healing. All agent providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency - no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
 
 Requires Python 3.11+ and Java 17 (for local Spark). **Spark 3.3+ recommended** for full metrics collection (`records_written`, `records_read`). Older versions collect `bytes` and `duration_ms` only; row counts will be 0.
 
@@ -96,12 +123,12 @@ Requires Python 3.11+ and Java 17 (for local Spark). **Spark 3.3+ recommended** 
 ```bash
 mkdir my-pipeline && cd my-pipeline
 
-# 1. Creates: blueprints/example.yml, aqueduct.yml, .gitignore, patches/, arcades/
-# 2. Runs git init + initial commit automatically
-aqueduct init --name my-pipeline
+# Scaffolds: aqueduct.yml.template, blueprints/, arcades/, tests/,
+# benchmarks/, patches/{pending,rejected}/  — then runs git init + first commit.
+aqueduct init
 ```
 
-Or manually:
+Or write it by hand:
 
 ### 1. Write a Blueprint
 
@@ -176,8 +203,8 @@ spark_config:
   spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
 
 stores:
-  obs:
-    path: ".aqueduct/obs.db"
+  observability:
+    path: ".aqueduct/observability.db"
   lineage:
     path: ".aqueduct/lineage.db"
   depot:
@@ -204,80 +231,9 @@ aqueduct run pipeline.yml --config aqueduct.yml
 
 ---
 
-## Secrets Management
-
-`@aq.secret('KEY')` resolves a secret at compile time. By default (`provider: env`) it reads `os.environ`. For cloud deployments, configure a backend provider in `aqueduct.yml`:
-
-```yaml
-secrets:
-  provider: aws        # env | aws | gcp | azure | custom
-  region: us-east-1   # AWS only; GCP/Azure use env-var-based config
-```
-
-| Provider | Backend | Install |
-|---|---|---|
-| `env` (default) | `os.environ` / `.env` file | built-in |
-| `aws` | AWS Secrets Manager via `boto3` | `pip install aqueduct-core[aws]` |
-| `gcp` | GCP Secret Manager via `google-cloud-secret-manager` | `pip install aqueduct-core[gcp]` |
-| `azure` | Azure Key Vault via `azure-keyvault-secrets` | `pip install aqueduct-core[azure]` |
-| `custom` | Any callable `(key: str) -> str \| None` | built-in |
-
-All backends cache the resolved value into `os.environ` after the first fetch — subsequent calls within the same run are free.
-
-**Custom provider** — point to any Python callable:
-
-```yaml
-secrets:
-  provider: custom
-  resolver: my_org.vault.fetch_secret  # importlib path; fn(key: str) -> str | None
-```
-
-**Note:** `aqueduct.yml` itself is loaded before the secrets provider is live, so secrets in `aqueduct.yml` always use `${VAR}` env-var syntax. Use `@aq.secret()` in Blueprint files.
-
-`aqueduct doctor` validates provider-specific SDK availability and configuration before any run.
-
----
-
-## LLM Provider Options
-
-`provider_options` passes extra parameters to the configured LLM provider. Keys prefixed with `ollama_` route to Ollama's `options` payload; unprefixed keys merge to the top-level request body:
-
-```yaml
-agent:
-  provider: openai_compat
-  base_url: "http://localhost:11434/v1"
-  model: "llama3.1:70b"
-  provider_options:
-    ollama_num_thread: 8    # → payload["options"]["num_thread"]
-    ollama_num_gpu: 1       # → payload["options"]["num_gpu"]
-    temperature: 0.1        # → payload["temperature"]
-```
-
----
-
 ## Core Concepts
 
-### Blueprint
-
-A YAML file describing your pipeline. Contains modules (data sources, transforms, sinks) and edges (data flow).
-
-### Manifest
-
-The compiled, fully-resolved form of a Blueprint. All `@aq.*` runtime tokens resolved, Arcades expanded, passive Regulators compiled away. This is what the Executor runs.
-
-### Module Types
-
-| Type | Role |
-|---|---|
-| `Ingress` | Load data from any Spark-supported source |
-| `Egress` | Write data to any Spark-supported sink, or `format: depot` for KV state; `collect: true` to pull results to driver; `register_as_table` to catalog the output |
-| `Channel` | Transformation (SQL or 12 native ops: deduplicate, filter, select, rename, cast, join, union, sort, repartition, coalesce, cache + sql); optional `spillway_condition` routes bad rows |
-| `Junction` | Split one DataFrame into named branches (conditional / broadcast / partition) |
-| `Funnel` | Merge multiple DataFrames (union_all / union / coalesce / zip) |
-| `Probe` | Capture observability signals (schema, null rates, value distribution, distinct counts, freshness, partition stats, sample rows) - never halts pipeline |
-| `Regulator` | Data quality gate; evaluates Probe signals; blocks or skips downstream on failure |
-| `Assert` | Inline data quality rules (schema, row counts, null rates, freshness, SQL, custom); failing rows route to spillway |
-| `Arcade` | Reusable sub-Blueprint; namespaced and inlined at compile time |
+The vocabulary (Blueprint, Manifest, Spillway, Depot, …) is defined in the [Glossary](#glossary). This section covers the mechanics.
 
 ### Runtime Functions (`@aq.*`)
 
@@ -432,7 +388,7 @@ edges:
 
 **Performance:** All aggregate rules (`min_rows`, `freshness`, `sql`) batch into one `df.agg()`. All `null_rate` rules share one `df.sample().agg()`. Schema match is zero-action. Row-level rules (`sql_row`, `custom`) are lazy filters. **At most 2 Spark actions** per Assert module.
 
-**`error_type` field:** Each rule accepts an optional `error_type:` string. When the rule fires, the label propagates through `ModuleResult` → `FailureContext` and is available to the LLM guardrail system (see below).
+**`error_type` field:** Each rule accepts an optional `error_type:` string. When the rule fires, the label propagates through `ModuleResult` → `FailureContext` and is available to the agent guardrail system (see Configuration → Agent Guardrails).
 
 **vs Spillway:** Spillway catches UDF runtime exceptions (bad rows discovered during execution). Assert enforces explicit business rules you declare up front. They solve different problems and compose naturally.
 
@@ -493,6 +449,59 @@ aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
 
 **Assertion types:** `row_count` (exact count), `contains` (rows must appear in output), `sql` (SQL expression over `__output__` view returns truthy).
 
+---
+
+## Configuration
+
+Engine configuration lives in `aqueduct.yml`. The three blocks you touch most: **secrets**, **agent** (LLM provider), and **stores**.
+
+### Secrets Management
+
+`@aq.secret('KEY')` resolves a secret at compile time. By default (`provider: env`) it reads `os.environ`. For cloud deployments, configure a backend provider:
+
+```yaml
+secrets:
+  provider: aws        # env | aws | gcp | azure | custom
+  region: us-east-1   # AWS only; GCP/Azure use env-var-based config
+```
+
+| Provider | Backend | Install |
+|---|---|---|
+| `env` (default) | `os.environ` / `.env` file | built-in |
+| `aws` | AWS Secrets Manager via `boto3` | `pip install aqueduct-core[aws]` |
+| `gcp` | GCP Secret Manager via `google-cloud-secret-manager` | `pip install aqueduct-core[gcp]` |
+| `azure` | Azure Key Vault via `azure-keyvault-secrets` | `pip install aqueduct-core[azure]` |
+| `custom` | Any callable `(key: str) -> str \| None` | built-in |
+
+All backends cache the resolved value into `os.environ` after the first fetch — subsequent calls within the same run are free.
+
+**Custom provider** — point to any Python callable:
+
+```yaml
+secrets:
+  provider: custom
+  resolver: my_org.vault.fetch_secret  # importlib path; fn(key: str) -> str | None
+```
+
+**Note:** `aqueduct.yml` itself is loaded before the secrets provider is live, so secrets in `aqueduct.yml` always use `${VAR}` env-var syntax. Use `@aq.secret()` in Blueprint files. `aqueduct doctor` validates provider-specific SDK availability before any run.
+
+### Agent Provider Options
+
+The self-healing agent talks to any Anthropic or OpenAI-compatible endpoint. `provider_options` passes extra parameters through; keys prefixed with `ollama_` route to Ollama's `options` payload, unprefixed keys merge into the top-level request body:
+
+```yaml
+agent:
+  provider: openai_compat
+  base_url: "http://localhost:11434/v1"
+  model: "llama3.1:70b"
+  timeout: 120          # HTTP socket timeout per agent call (seconds)
+  max_reprompts: 3      # retries when the agent returns invalid PatchSpec JSON
+  provider_options:
+    ollama_num_thread: 8    # → payload["options"]["num_thread"]
+    ollama_num_gpu: 1       # → payload["options"]["num_gpu"]
+    temperature: 0.1        # → payload["temperature"]
+```
+
 ### Agent Guardrails
 
 Two tiers of guardrails, both deterministic — not prompt hints:
@@ -504,59 +513,69 @@ agent:
   approval_mode: auto
   guardrails:
     forbidden_ops:
-      - remove_module        # LLM can never delete modules autonomously
+      - remove_module        # agent can never delete modules autonomously
       - replace_retry_policy # retry config managed by humans only
     allowed_paths:
-      - "s3://company-data/*"   # fnmatch - LLM may only write paths matching these patterns
+      - "s3://company-data/*"   # fnmatch - agent may only write paths matching these patterns
       - "data/raw/*"
 ```
 
 - `forbidden_ops` — PatchSpec operation names always blocked. Empty = all ops permitted.
 - `allowed_paths` — fnmatch patterns restricting `path`/`output_path` config values. Empty = unrestricted.
 
-**Pre-trigger guards** (block or whitelist LLM before it even fires):
+**Pre-trigger guards** (block or whitelist the agent before it even fires):
 
 ```yaml
 agent:
   guardrails:
-    # Whitelist: LLM only fires when the failure matches one of these labels.
+    # Whitelist: agent only fires when the failure matches one of these labels.
     # Labels come from Assert rules' error_type field, or from the exception
     # class name in the stack trace (e.g. "SparkException", "AnalysisException").
     heal_on_errors:
       - DataQualityViolation
       - SchemaError
 
-    # Blacklist: LLM never fires on these. Takes priority over heal_on_errors.
+    # Blacklist: agent never fires on these. Takes priority over heal_on_errors.
     never_heal_errors:
       - SLABreach            # ops team handles SLA violations manually
-      - EmptyDataset         # upstream data missing — LLM can't fix that
+      - EmptyDataset         # upstream data missing — agent can't fix that
 ```
 
-- `heal_on_errors` — if non-empty, LLM only triggers when the failure's `error_type` (or stack trace exception class) matches. Empty = no restriction.
-- `never_heal_errors` — LLM never fires when failure matches. Takes priority over `heal_on_errors`.
+- `heal_on_errors` — if non-empty, agent only triggers when the failure's `error_type` (or stack trace exception class) matches. Empty = no restriction.
+- `never_heal_errors` — agent never fires when failure matches. Takes priority over `heal_on_errors`.
 
-`aqueduct doctor` warns if a guardrail entry doesn't match any `error_type` declared in the blueprint's Assert rules (catches typos before they silently have no effect).
+`aqueduct doctor` warns if a guardrail entry doesn't match any `error_type` declared in the blueprint's Assert rules (catches typos before they silently have no effect). If a patch violates `forbidden_ops` or `allowed_paths`, `apply_patch` raises an error before touching the Blueprint file.
 
-If a patch violates `forbidden_ops` or `allowed_paths`, `apply_patch` raises an error before touching the Blueprint file.
+### Stores
 
+Aqueduct persists run history, lineage, and cross-run state to three pluggable stores. Default backend is DuckDB (file-local, zero-config). Postgres and Redis backends are available for concurrent / clustered deployments — see [`docs/specs.md`](docs/specs.md) and [`docs/ALL_TABLES.md`](docs/ALL_TABLES.md).
+
+```yaml
+stores:
+  observability:     { path: ".aqueduct/observability.db" }       # run records, probe signals, metrics
+  lineage: { path: ".aqueduct/lineage.db" }   # column-level lineage
+  depot:   { path: ".aqueduct/depot.db" }     # @aq.depot.* KV state
+```
+
+> On YARN/K8s the driver filesystem is ephemeral. With the DuckDB backend, set absolute paths on shared storage (NFS/EFS/PVC) or switch observability/lineage to `backend: postgres`. `aqueduct doctor` flags relative DuckDB paths under `deployment.env: cluster`.
 
 ---
 
-## Observability
+## Observability & Self-Healing
 
-Aqueduct writes all observability data to DuckDB files under `.aqueduct/`:
+Aqueduct writes all observability data to DuckDB files under `.aqueduct/` (or the configured backend):
 
 ```
 .aqueduct/
-  obs.db          - run records, probe signals, module metrics, signal overrides
+  observability.db          - run records, probe signals, module metrics, signal overrides
   lineage.db      - column-level lineage
   depot.db        - depot KV store (@aq.depot.*)
   snapshots/      - schema_snapshot JSON files (one per probe per run)
 ```
 
 ```bash
-# Run records and probe signals (all in obs.db)
-duckdb .aqueduct/obs.db
+# Run records and probe signals (all in observability.db)
+duckdb .aqueduct/observability.db
 SELECT run_id, blueprint_id, status, started_at, finished_at FROM run_records;
 SELECT probe_id, signal_type, payload FROM probe_signals ORDER BY captured_at DESC;
 
@@ -574,9 +593,12 @@ Or use the CLI:
 ```bash
 aqueduct runs                        # list recent runs
 aqueduct runs --failed --last 10     # last 10 failed runs
+aqueduct runs --format json          # machine-readable (CI / scripting)
 aqueduct report <run_id>             # detailed flow report
 aqueduct lineage <blueprint_id>      # column lineage graph
 ```
+
+When a run fails and self-healing is enabled, the Surveyor assembles a `FailureContext`, the Agent emits a `PatchSpec`, and the patch passes a validation pyramid (guardrails → lineage impact → sandbox replay → plan-regression check) before it is applied or staged. Inspect generated patches with `aqueduct patch list` / `aqueduct patch preview`.
 
 ---
 
@@ -587,30 +609,11 @@ aqueduct lineage <blueprint_id>      # column lineage graph
 | A **batch processing engine** for Apache Spark — each run is finite, starts, processes a bounded dataset, completes. | Streaming (Spark Structured Streaming / Kafka) — deferred to spec v1.1; use Spark Structured Streaming or Flink directly. |
 | A **declarative control plane** — engineers describe *what*, not *how* Spark executes. | A visual graph editor / drag-and-drop UI — Blueprint YAML is the source of truth. A UI would be a separate product layer. |
 | A **data preparation layer** producing validated DataFrames in storage. | An ML training orchestrator — use MLflow Pipelines, Vertex AI Pipelines, or Kubeflow. Aqueduct prepares the data they consume. |
-| An **LLM-integrated operations tool** — self-healing, patch lifecycle, FailureContext, deterministic guardrails. | An LLM autonomous infrastructure agent — Aqueduct's LLM scope is bounded to PatchSpec operations on the Blueprint. It cannot run shell, modify infra, or call arbitrary APIs. |
+| An **LLM-integrated operations tool** — self-healing, patch lifecycle, FailureContext, deterministic guardrails. | An LLM autonomous infrastructure agent — Aqueduct's agent scope is bounded to PatchSpec operations on the Blueprint. It cannot run shell, modify infra, or call arbitrary APIs. |
 | A **CLI invoked by an orchestrator** (cron, Airflow, Prefect, Dagster, K8s CronJob). | A scheduler — `aqueduct run` is a one-shot command, not a daemon. |
 | A **Spark execution engine** (Flink is a stub for v1.1). | A multi-engine federated query layer — use Trino / Starburst / Athena for that. |
 
 See [§13 of the spec](docs/specs.md) for the full scope statement and roadmap (Flink, MLOps inference op, MCP server, multi-pipeline orchestration).
-
----
-
-## Development & Contributing
-
-```bash
-# Clone and install in editable mode with all dev dependencies
-git clone https://github.com/sadigaxund/aqueduct
-cd aqueduct
-pip install -e ".[spark,dev]"
-
-# Switch to Java 17 (required for local Spark) then run the test suite
-source ~/.bashrc && use_java17
-pytest tests/
-```
-
-- **Bug reports & feature requests** — open an issue. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-- **Pull requests** — check [CONTRIBUTING.md](CONTRIBUTING.md) before submitting.
-- **Changelog** — all releases and phase completions tracked in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
@@ -634,7 +637,7 @@ Aqueduct follows [semver](https://semver.org). The v1.0 stability contract:
 | 1 | `CONFIG_ERROR` | Malformed `aqueduct.yml` / Blueprint schema |
 | 2 | `DATA_OR_RUNTIME` | Spark / Assert / network / runtime error |
 | 3 | `HEAL_PENDING` | Patch staged for human review (`human` / `ci` mode) |
-| 4 | `VALIDATION_GATE` | Patch rejected by Gate 1–4 |
+| 4 | `VALIDATION_GATE` | Patch rejected by a validation-pyramid gate |
 | 5 | `USAGE_ERROR` | Invalid CLI flag / missing arg |
 
 **Not stable**: subpackage internals (`aqueduct.compiler.*`, `aqueduct.executor.*`, etc.), human-readable log lines (use `--log-format json` for structured output), pre-v1.0 alpha / RC builds.
@@ -643,8 +646,38 @@ Aqueduct follows [semver](https://semver.org). The v1.0 stability contract:
 
 ---
 
+## Development & Contributing
+
+```bash
+# Clone and install in editable mode with all dev dependencies
+git clone https://github.com/sadigaxund/aqueduct
+cd aqueduct
+pip install -e ".[spark,dev]"
+
+# Switch to Java 17 (required for local Spark) then run the test suite
+source ~/.bashrc && use_java17
+pytest tests/
+```
+
+- **Bug reports & feature requests** — open an issue. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+- **Pull requests** — check [CONTRIBUTING.md](CONTRIBUTING.md) before submitting.
+- **Changelog** — all releases and phase completions tracked in [CHANGELOG.md](CHANGELOG.md).
+
+---
+
 ## License & Philosophy
 
 **Aqueduct is Apache 2.0 licensed.** See [LICENSE](LICENSE).
 
 This repository contains the full, production-ready engine. No "pro" tier, no telemetry, no lock-in. Run it locally, in CI, or on a production cluster — free and open, forever.
+
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [Blueprint & Engine Spec](docs/specs.md) | Full specification — module types, config fields, compiler, executor, agent, patch grammar |
+| [Spark Guide](docs/SPARK_GUIDE.md) | Compiler warnings, probe cost model, contributor rules, resource tuning, S3A committers, AQE |
+| [CLI Reference](docs/CLI_REFERENCE.md) | All commands, flags, exit codes, `aqueduct run` / `patch` / `doctor` / `heal` reference |
+| [All Tables Reference](docs/ALL_TABLES.md) | Schema + example queries for every table Aqueduct writes (observability.db, lineage.db, depot.db) |

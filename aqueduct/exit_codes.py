@@ -12,8 +12,9 @@ Codes:
     3   HEAL_PENDING         healing produced a patch staged for human
                              review (only emitted by `aqueduct run` /
                              `aqueduct heal` in `human` / `ci` mode)
-    4   VALIDATION_GATE      patch validation pyramid (Gate 1–4) rejected
-                             a patch in non-interactive mode
+    4   VALIDATION_GATE      a validation-pyramid gate (guardrails / lineage /
+                             sandbox / explain) rejected a patch in
+                             non-interactive mode
     5   USAGE_ERROR          CLI invoked with invalid flag / missing arg.
                              Click already exits with this category; the
                              constant is here for completeness.

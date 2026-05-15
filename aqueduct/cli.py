@@ -112,7 +112,7 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     return True, ""
 
 
-def _llm_usable(provider: str, base_url: str | None) -> bool:
+def _agent_usable(provider: str, base_url: str | None) -> bool:
     """Return True if the LLM provider appears reachable without making a network call.
 
     anthropic:     requires ANTHROPIC_API_KEY in os.environ
@@ -157,7 +157,7 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
         from aqueduct.parser.parser import ParseError, parse
         from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
-        from aqueduct.surveyor.llm import archive_patch
+        from aqueduct.agent import archive_patch
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
@@ -197,16 +197,17 @@ def _run_patch_gates_inline(
     blueprint_id: str,
     sample_rows: int = 1000,
 ):
-    """Phase 29a/b — execute Gates 2 (lineage), 3 (sandbox), 4 (explain) inline.
+    """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
-    Returns (gate2, gate3, gate4, gates_passed). gates_passed is True when
-    Gate 3 passes (or is skipped — Spark unavailable / no patch impact) AND
-    Gate 4 does not hard-block (Gate 4 is warn-only by default; only fails
-    when `agent.block_on_explain_regression` is True).
+    Returns (lineage_res, sandbox_res, explain_res, gates_passed).
+    gates_passed is True when the sandbox gate passes (or is skipped —
+    Spark unavailable / no patch impact) AND the explain gate does not
+    hard-block (explain is warn-only by default; only blocks when
+    `agent.block_on_explain_regression` is True).
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
-    from aqueduct.patch.preview import run_gate2_lineage, run_gate3_sandbox
-    from aqueduct.patch.explain_gate import run_gate4_explain
+    from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
+    from aqueduct.patch.explain_gate import run_explain_gate
 
     bp_raw = _yaml_load(blueprint_path)
     try:
@@ -214,14 +215,14 @@ def _run_patch_gates_inline(
     except Exception:
         return None, None, None, False
 
-    gate2 = run_gate2_lineage(bp_raw, bp_after, patch)
+    lineage_res = run_lineage_gate(bp_raw, bp_after, patch)
     try:
         surveyor.record_patch_simulation(
             patch_id=patch.patch_id,
-            gate="gate2",
-            status=gate2.status,
-            detail="; ".join(w.detail for w in gate2.warnings) or None,
-            duration_ms=gate2.duration_ms,
+            gate="lineage",
+            status=lineage_res.status,
+            detail="; ".join(w.detail for w in lineage_res.warnings) or None,
+            duration_ms=lineage_res.duration_ms,
             run_id=current_run_id,
             blueprint_id=blueprint_id,
         )
@@ -229,56 +230,56 @@ def _run_patch_gates_inline(
         pass
 
     explain_after: dict[str, dict] = {}
-    gate3 = run_gate3_sandbox(
+    sandbox_res = run_sandbox_gate(
         bp_after,
         blueprint_path=blueprint_path,
         patch_id=patch.patch_id,
         failed_module=failed_module,
         sample_rows=int(sample_rows),
-        obs_store=bundle.obs,
+        observability_store=bundle.observability,
         lineage_store=bundle.lineage,
         explain_capture=explain_after,
     )
     try:
         surveyor.record_patch_simulation(
             patch_id=patch.patch_id,
-            gate="gate3",
-            status=gate3.status,
-            detail=gate3.detail,
-            sample_rows=gate3.sample_rows,
-            duration_ms=gate3.duration_ms,
+            gate="sandbox",
+            status=sandbox_res.status,
+            detail=sandbox_res.detail,
+            sample_rows=sandbox_res.sample_rows,
+            duration_ms=sandbox_res.duration_ms,
             run_id=current_run_id,
             blueprint_id=blueprint_id,
         )
     except Exception:
         pass
 
-    # Gate 4 — compare per-module plan counts vs baseline in obs.explain_snapshot
-    gate4 = None
+    # explain gate — per-module plan-count diff vs baseline in
+    # observability.explain_snapshot
+    explain_res = None
     try:
         baseline = surveyor.latest_explain_snapshots(blueprint_id=blueprint_id) if surveyor else {}
-        gate4 = run_gate4_explain(baseline, explain_after, touched_modules=gate2.touched_modules)
+        explain_res = run_explain_gate(baseline, explain_after, touched_modules=lineage_res.touched_modules)
         surveyor.record_patch_simulation(
             patch_id=patch.patch_id,
-            gate="gate4",
-            status=gate4.status,
-            detail=gate4.detail or "; ".join(r.detail for r in gate4.regressions) or None,
-            duration_ms=gate4.duration_ms,
+            gate="explain",
+            status=explain_res.status,
+            detail=explain_res.detail or "; ".join(r.detail for r in explain_res.regressions) or None,
+            duration_ms=explain_res.duration_ms,
             run_id=current_run_id,
             blueprint_id=blueprint_id,
         )
     except Exception:
         pass
 
-    gate3_passed = gate3.status in ("pass", "skip")
-    gates_passed = gate3_passed
-    return gate2, gate3, gate4, gates_passed
+    gates_passed = sandbox_res.status in ("pass", "skip")
+    return lineage_res, sandbox_res, explain_res, gates_passed
 
 
 def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
-        from aqueduct.surveyor.llm import stage_patch_for_human
+        from aqueduct.agent import stage_patch_for_human
         stage_patch_for_human(patch, patches_dir, failure_ctx,
                               on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
         click_mod.echo(
@@ -508,7 +509,7 @@ def check_config(config_path: str | None) -> None:
     source = config_path or "aqueduct.yml (CWD) or defaults"
     click.echo(f"✓ config valid  [{source}]")
     click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-    click.echo(f"  stores:  obs={cfg.stores.obs.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
+    click.echo(f"  stores:  obs={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
     click.echo(f"  secrets: provider={cfg.secrets.provider}")
     wh_lines = []
     if cfg.webhooks.on_failure:
@@ -557,12 +558,28 @@ def check_config(config_path: str | None) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
 )
+@click.option(
+    "--env-file",
+    "env_file",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Load environment variables from a .env file (auto-discovers .env next to --config if omitted).",
+)
+@click.option(
+    "--no-env-file",
+    "no_env_file",
+    is_flag=True,
+    default=False,
+    help="Disable automatic .env discovery.",
+)
 def doctor(
     config_path: str | None,
     skip_spark: bool,
     blueprint_path: str | None,
     aqtest_path: str | None,
     aqscenario_path: str | None,
+    env_file: str | None,
+    no_env_file: bool,
 ) -> None:
     """Probe all configured resources: config, stores, Spark, webhook, secrets, storage.
 
@@ -578,6 +595,19 @@ def doctor(
     """
     from pathlib import Path
     from aqueduct.doctor import run_doctor
+
+    # ── .env loading (so ${VAR} placeholders in aqueduct.yml resolve) ───────────
+    if not no_env_file:
+        if env_file:
+            _env_path = Path(env_file).resolve()
+        elif config_path:
+            _env_path = Path(config_path).resolve().parent / ".env"
+        else:
+            _env_path = Path.cwd() / ".env"
+        if _env_path.exists():
+            _n = _load_env_file(_env_path)
+            if _n:
+                click.echo(f"  Loaded {_n} variable(s) from {_env_path}", err=True)
 
     _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
     _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
@@ -955,17 +985,17 @@ def run(
             sys.exit(1)
 
         # CLI flags override config file; config file overrides built-in defaults
-        # Per-pipeline store paths: default .aqueduct/obs/<blueprint_id>.db instead of shared obs.db
+        # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
         if store_dir_abs:
             resolved_store_dir = store_dir_abs
         else:
-            _obs_path = cfg.stores.obs.path
-            _default_obs = ".aqueduct/obs.db"
-            if _obs_path == _default_obs:
+            _observability_path = cfg.stores.observability.path
+            _default_obs = ".aqueduct/observability.db"
+            if _observability_path == _default_obs:
                 # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
                 resolved_store_dir = None  # set below after manifest
             else:
-                resolved_store_dir = Path(_obs_path).parent
+                resolved_store_dir = Path(_observability_path).parent
         # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
         resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
         engine = cfg.deployment.engine
@@ -1040,7 +1070,7 @@ def run(
 
         # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
         if resolved_store_dir is None:
-            resolved_store_dir = Path(f".aqueduct/obs/{manifest.blueprint_id}")
+            resolved_store_dir = Path(f".aqueduct/observability/{manifest.blueprint_id}")
             resolved_store_dir.mkdir(parents=True, exist_ok=True)
 
         # ── Cluster-mode store path warning ───────────────────────────────────────
@@ -1050,9 +1080,9 @@ def run(
                 click.echo(
                     f"WARNING: deployment.env={cfg.deployment.env!r} but store dir "
                     f"{str(resolved_store_dir)!r} is not an absolute path. "
-                    "On YARN/K8s the driver CWD is ephemeral — obs.db, watermarks, "
+                    "On YARN/K8s the driver CWD is ephemeral — observability.db, watermarks, "
                     "and checkpoints will be lost on driver restart. "
-                    "Set stores.obs.path to an absolute shared FS path in aqueduct.yml.",
+                    "Set stores.observability.path to an absolute shared FS path in aqueduct.yml.",
                     err=True,
                 )
 
@@ -1117,8 +1147,8 @@ def run(
         resolved_agent_base_url = bp_agent.base_url or eng.base_url
         resolved_agent_model = bp_agent.model or eng.model
         resolved_agent_provider_options = bp_agent.provider_options or eng.provider_options
-        resolved_agent_llm_timeout = bp_agent.llm_timeout or eng.llm_timeout
-        resolved_agent_llm_max_reprompts = bp_agent.llm_max_reprompts or eng.llm_max_reprompts
+        resolved_agent_timeout = bp_agent.timeout or eng.timeout
+        resolved_agent_max_reprompts = bp_agent.max_reprompts or eng.max_reprompts
         resolved_agent_engine_prompt_context = eng.prompt_context
         resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
 
@@ -1134,18 +1164,18 @@ def run(
             )
 
         # ── Surveyor — start ───────────────────────────────────────────────────────
-        # For DuckDB defaults the bundle's obs store points at `.aqueduct/obs.db`;
-        # rebuild with the per-pipeline resolved_store_dir so the obs store lives
-        # under `.aqueduct/obs/<blueprint_id>/` like before Phase 28.
-        if cfg.stores.obs.backend == "duckdb":
+        # For DuckDB defaults the bundle's obs store points at `.aqueduct/observability.db`;
+        # rebuild with the per-pipeline resolved_store_dir so the observability store lives
+        # under `.aqueduct/observability/<blueprint_id>/` like before Phase 28.
+        if cfg.stores.observability.backend == "duckdb":
             from aqueduct.stores.duckdb_ import (
                 DuckDBDepotStore,
                 DuckDBLineageStore,
-                DuckDBObsStore,
+                DuckDBObservabilityStore,
             )
             from aqueduct.stores import StoreBundle
             bundle = StoreBundle(
-                obs=DuckDBObsStore(resolved_store_dir / "obs.db"),
+                obs=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
                 lineage=DuckDBLineageStore(resolved_store_dir / "lineage.db"),
                 depot=bundle.depot,  # depot path stays user-configured
             )
@@ -1193,7 +1223,7 @@ def run(
                     block_full_actions=not cfg.danger.allow_full_probe_actions,
                     parallel=parallel,
                     use_observe=cfg.metrics.use_observe,
-                    obs_store=bundle.obs,
+                    observability_store=bundle.observability,
                     lineage_store=bundle.lineage,
                 )
             except ExecuteError as exc:
@@ -1216,7 +1246,7 @@ def run(
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                if _llm_usable(resolved_agent_provider, resolved_agent_base_url):
+                if _agent_usable(resolved_agent_provider, resolved_agent_base_url):
                     click.echo(
                         "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
@@ -1225,7 +1255,7 @@ def run(
             if effective_mode == "disabled" or failure_ctx is None:
                 break
 
-            if not _llm_usable(resolved_agent_provider, resolved_agent_base_url):
+            if not _agent_usable(resolved_agent_provider, resolved_agent_base_url):
                 click.echo(
                     f"  ⚠  LLM not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
                     "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
@@ -1261,13 +1291,13 @@ def run(
                     click.echo(
                         f"  ⊘  LLM rate-limit reached: {_recent} healing attempt(s) "
                         f"in the last 60 minutes (max_heal_attempts_per_hour={_heal_cap}). "
-                        "Run ends without further LLM calls. Inspect healing_outcomes in obs.db.",
+                        "Run ends without further LLM calls. Inspect healing_outcomes in observability.db.",
                         err=True,
                     )
                     break
 
             # ── Generate patch ────────────────────────────────────────────────────
-            from aqueduct.surveyor.llm import archive_patch, generate_llm_patch, stage_patch_for_human
+            from aqueduct.agent import archive_patch, generate_agent_patch, stage_patch_for_human
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}"
                 if approval_mode == "aggressive"
@@ -1294,26 +1324,26 @@ def run(
             except Exception:
                 pass  # doctor errors must never block self-healing
 
-            llm_result = generate_llm_patch(
+            agent_result = generate_agent_patch(
                 failure_ctx,
                 model=resolved_agent_model,
                 patches_dir=patches_dir,
                 provider=resolved_agent_provider,
                 base_url=resolved_agent_base_url,
                 provider_options=resolved_agent_provider_options,
-                llm_timeout=resolved_agent_llm_timeout,
-                llm_max_reprompts=resolved_agent_llm_max_reprompts,
+                timeout=resolved_agent_timeout,
+                max_reprompts=resolved_agent_max_reprompts,
                 engine_prompt_context=resolved_agent_engine_prompt_context,
                 blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
                 last_apply_error=last_apply_error,
             )
-            patch = llm_result.patch
+            patch = agent_result.patch
             if patch is None:
                 click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
                 if on_hf == "stage":
                     click.echo(
-                        "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in obs.db.",
+                        "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
                         err=True,
                     )
                 break
@@ -1418,7 +1448,7 @@ def run(
                 )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
-                        click.echo(f"  ⚠ Gate 4 regression: {_r.detail}", err=True)
+                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
                 if _g3 is not None and not _g3_passed:
                     click.echo(
                         f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
@@ -1515,13 +1545,13 @@ def run(
                 )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
-                        click.echo(f"  ⚠ Gate 4 regression: {_r.detail}", err=True)
+                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
                 if _block_on_g4 and _g4 is not None and _g4.status == "warn":
                     last_apply_error = (
-                        f"Patch {patch.patch_id!r} rejected by Gate 4 (explain regression): "
+                        f"Patch {patch.patch_id!r} rejected by the explain gate: "
                         + "; ".join(r.detail for r in _g4.regressions)
                     )
-                    click.echo(f"  ✗ aggressive: Gate 4 blocked — {last_apply_error}", err=True)
+                    click.echo(f"  ✗ aggressive: explain gate blocked — {last_apply_error}", err=True)
                     surveyor.record_healing_outcome(
                         run_id=current_run_id, failed_module=failure_ctx.failed_module,
                         failure_category=patch.category, model=resolved_agent_model,
@@ -1762,7 +1792,7 @@ def patch() -> None:
     "--sandbox",
     is_flag=True,
     default=False,
-    help="Also run Gate 3 — replay the patched Blueprint on a sampled DataFrame.",
+    help="Also run the sandbox gate — replay the patched Blueprint on a sampled DataFrame.",
 )
 @click.option(
     "--sample",
@@ -1770,7 +1800,7 @@ def patch() -> None:
     type=int,
     default=1000,
     show_default=True,
-    help="Per-Ingress row limit during Gate 3. 0 = unbounded (full data).",
+    help="Per-Ingress row limit during the sandbox gate. 0 = unbounded (full data).",
 )
 @click.option(
     "--config",
@@ -1785,7 +1815,7 @@ def patch() -> None:
     type=click.Choice(["text", "json"], case_sensitive=False),
     default="text",
     show_default=True,
-    help="Output format. `text` (default) renders diff + Gate findings. `json` emits a machine-readable report.",
+    help="Output format. `text` (default) renders diff + gate findings. `json` emits a machine-readable report.",
 )
 def patch_preview(
     patch_file: str,
@@ -1797,11 +1827,12 @@ def patch_preview(
 ) -> None:
     """Validation pyramid preview for a pending patch.
 
-    Always runs Gate 1 (schema + post-apply Parser re-check) and Gate 2
-    (live lineage impact). With `--sandbox`, also runs Gate 3 (replay the
-    patched Blueprint on a per-Ingress LIMIT N, Egress modules skipped and
-    listed in the report) and Gate 4 (post-patch `explain()` regression
-    check against the most recent baseline in `obs.explain_snapshot`).
+    Always runs the guardrails gate (schema + post-apply Parser re-check)
+    and the lineage gate (live lineage impact). With `--sandbox`, also
+    runs the sandbox gate (replay the patched Blueprint on a per-Ingress
+    LIMIT N, Egress modules skipped and listed in the report) and the
+    explain gate (post-patch `explain()` regression
+    check against the most recent baseline in `observability.explain_snapshot`).
     """
     import json as _json
     from pathlib import Path as _Path
@@ -1815,10 +1846,10 @@ def patch_preview(
     )
     from aqueduct.patch.preview import (
         render_unified_diff,
-        run_gate2_lineage,
-        run_gate3_sandbox,
+        run_lineage_gate,
+        run_sandbox_gate,
     )
-    from aqueduct.patch.explain_gate import run_gate4_explain
+    from aqueduct.patch.explain_gate import run_explain_gate
 
     bp_raw = _yaml_load(_Path(blueprint_path))
     try:
@@ -1827,12 +1858,12 @@ def patch_preview(
         click.echo(f"✗ patch schema error: {exc}", err=True)
         sys.exit(2)
 
-    # Gate 1 — guardrails (deterministic). Identical enforcement used by
+    # Guardrails gate — deterministic. Identical enforcement used by
     # `patch apply`; surfaced here so reviewers see violations up front.
     try:
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
-        click.echo(f"✗ Gate 1 (guardrails) blocked: {exc}", err=True)
+        click.echo(f"✗ Guardrails gate blocked: {exc}", err=True)
         sys.exit(2)
 
     try:
@@ -1842,10 +1873,10 @@ def patch_preview(
         sys.exit(2)
 
     diff = render_unified_diff(bp_raw, bp_after)
-    gate2 = run_gate2_lineage(bp_raw, bp_after, spec)
+    lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
 
-    gate3 = None
-    gate4 = None
+    sandbox_res = None
+    explain_res = None
     if sandbox:
         cfg = None
         try:
@@ -1859,17 +1890,17 @@ def patch_preview(
         failed_module = None
         explain_after: dict[str, dict] = {}
         # patch_id is used both for run-tagging and tempfile naming
-        gate3 = run_gate3_sandbox(
+        sandbox_res = run_sandbox_gate(
             bp_after,
             blueprint_path=_Path(blueprint_path),
             patch_id=spec.patch_id,
             failed_module=failed_module,
             sample_rows=int(sample_rows),
-            obs_store=bundle.obs,
+            observability_store=bundle.observability,
             lineage_store=bundle.lineage,
             explain_capture=explain_after,
         )
-        # Gate 4 — explain regression. Baseline read directly from obs.
+        # Explain gate — baseline read directly from the observability store.
         try:
             from aqueduct.stores import get_stores as _gs  # noqa
             from aqueduct.surveyor.surveyor import Surveyor
@@ -1882,38 +1913,38 @@ def patch_preview(
             _baseline = _surv.latest_explain_snapshots(blueprint_id=_mf.blueprint_id)
         except Exception:
             _baseline = {}
-        gate4 = run_gate4_explain(_baseline, explain_after, touched_modules=gate2.touched_modules)
+        explain_res = run_explain_gate(_baseline, explain_after, touched_modules=lineage_res.touched_modules)
 
     if out_format.lower() == "json":
         report = {
             "patch_id": spec.patch_id,
             "blueprint_path": str(blueprint_path),
             "diff": diff,
-            "gate2": {
-                "status": gate2.status,
-                "touched_modules": gate2.touched_modules,
-                "warnings": [w.__dict__ for w in gate2.warnings],
-                "duration_ms": gate2.duration_ms,
+            "lineage": {
+                "status": lineage_res.status,
+                "touched_modules": lineage_res.touched_modules,
+                "warnings": [w.__dict__ for w in lineage_res.warnings],
+                "duration_ms": lineage_res.duration_ms,
             },
         }
-        if gate3 is not None:
-            report["gate3"] = {
-                "status": gate3.status,
-                "detail": gate3.detail,
-                "sample_rows": gate3.sample_rows,
-                "duration_ms": gate3.duration_ms,
-                "egress_targets": gate3.egress_targets,
+        if sandbox_res is not None:
+            report["sandbox"] = {
+                "status": sandbox_res.status,
+                "detail": sandbox_res.detail,
+                "sample_rows": sandbox_res.sample_rows,
+                "duration_ms": sandbox_res.duration_ms,
+                "egress_targets": sandbox_res.egress_targets,
             }
-        if gate4 is not None:
-            report["gate4"] = {
-                "status": gate4.status,
-                "detail": gate4.detail,
-                "duration_ms": gate4.duration_ms,
-                "baseline_run_id": gate4.baseline_run_id,
-                "regressions": [r.__dict__ for r in gate4.regressions],
+        if explain_res is not None:
+            report["explain"] = {
+                "status": explain_res.status,
+                "detail": explain_res.detail,
+                "duration_ms": explain_res.duration_ms,
+                "baseline_run_id": explain_res.baseline_run_id,
+                "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         click.echo(_json.dumps(report, indent=2))
-        sys.exit(0 if gate2.status != "fail" and (gate3 is None or gate3.status == "pass" or gate3.status == "skip") else 2)
+        sys.exit(0 if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else 2)
 
     # Text report
     click.echo(f"Patch {spec.patch_id}")
@@ -1925,48 +1956,48 @@ def patch_preview(
     click.echo(diff if diff.strip() else "  (no textual change)")
 
     click.echo()
-    click.echo("── Gate 2: lineage impact (live sqlglot) ─────────────────────")
-    click.echo(f"  status:          {gate2.status}")
-    click.echo(f"  touched modules: {', '.join(gate2.touched_modules) or '(none)'}")
-    if gate2.warnings:
-        for w in gate2.warnings:
+    click.echo("── Lineage gate (live sqlglot) ───────────────────────────────")
+    click.echo(f"  status:          {lineage_res.status}")
+    click.echo(f"  touched modules: {', '.join(lineage_res.touched_modules) or '(none)'}")
+    if lineage_res.warnings:
+        for w in lineage_res.warnings:
             click.echo(f"  ⚠ {w.detail}")
     else:
         click.echo("  no downstream column-consumption regressions detected")
-    click.echo(f"  duration:        {gate2.duration_ms} ms")
+    click.echo(f"  duration:        {lineage_res.duration_ms} ms")
 
-    if gate3 is not None:
+    if sandbox_res is not None:
         click.echo()
-        click.echo("── Gate 3: sandbox replay ────────────────────────────────────")
-        click.echo(f"  status:      {gate3.status}")
-        click.echo(f"  detail:      {gate3.detail}")
-        if gate3.sample_rows is not None:
-            click.echo(f"  sample_rows: {gate3.sample_rows}")
-        click.echo(f"  duration:    {gate3.duration_ms} ms")
-        if gate3.egress_targets:
+        click.echo("── Sandbox gate (replay) ─────────────────────────────────────")
+        click.echo(f"  status:      {sandbox_res.status}")
+        click.echo(f"  detail:      {sandbox_res.detail}")
+        if sandbox_res.sample_rows is not None:
+            click.echo(f"  sample_rows: {sandbox_res.sample_rows}")
+        click.echo(f"  duration:    {sandbox_res.duration_ms} ms")
+        if sandbox_res.egress_targets:
             click.echo("  Egress operations (sandbox skipped):")
-            for t in gate3.egress_targets:
+            for t in sandbox_res.egress_targets:
                 click.echo(
                     f"    {t.get('id')}  → {t.get('format')}  {t.get('path')}"
                     + (f"  (mode={t.get('mode')})" if t.get("mode") else "")
                 )
 
-    if gate4 is not None:
+    if explain_res is not None:
         click.echo()
-        click.echo("── Gate 4: explain() regression ──────────────────────────────")
-        click.echo(f"  status:   {gate4.status}")
-        click.echo(f"  detail:   {gate4.detail}")
-        if gate4.baseline_run_id:
-            click.echo(f"  baseline: run {gate4.baseline_run_id}")
-        if gate4.regressions:
-            for r in gate4.regressions:
+        click.echo("── Explain gate (plan regression) ────────────────────────────")
+        click.echo(f"  status:   {explain_res.status}")
+        click.echo(f"  detail:   {explain_res.detail}")
+        if explain_res.baseline_run_id:
+            click.echo(f"  baseline: run {explain_res.baseline_run_id}")
+        if explain_res.regressions:
+            for r in explain_res.regressions:
                 click.echo(f"  ⚠ {r.detail}")
-        click.echo(f"  duration: {gate4.duration_ms} ms")
+        click.echo(f"  duration: {explain_res.duration_ms} ms")
 
     exit_code = 0
-    if gate2.status == "fail":
+    if lineage_res.status == "fail":
         exit_code = 2
-    if gate3 is not None and gate3.status == "fail":
+    if sandbox_res is not None and sandbox_res.status == "fail":
         exit_code = 2
     sys.exit(exit_code)
 
@@ -2460,13 +2491,13 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
-    obs_db = resolved / "obs.db"
-    if not obs_db.exists():
-        click.echo(f"✗ obs.db not found at {obs_db}", err=True)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
+    observability_db = resolved / "observability.db"
+    if not observability_db.exists():
+        click.echo(f"✗ observability.db not found at {observability_db}", err=True)
         sys.exit(1)
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
+    conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
         row = conn.execute(
             """
@@ -2482,7 +2513,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
         conn.close()
 
     if row is None:
-        click.echo(f"✗ run {run_id!r} not found in {obs_db}", err=True)
+        click.echo(f"✗ run {run_id!r} not found in {observability_db}", err=True)
         sys.exit(1)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
@@ -2558,10 +2589,10 @@ def runs(
 
     cfg = load_config(Path(config_path) if config_path else None)
     _apply_warnings_from_cfg(cfg)
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
-    obs_db = resolved / "obs.db"
-    if not obs_db.exists():
-        click.echo(f"No runs found (obs.db not at {obs_db})")
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
+    observability_db = resolved / "observability.db"
+    if not observability_db.exists():
+        click.echo(f"No runs found (observability.db not at {observability_db})")
         return
 
     blueprint_id: str | None = None
@@ -2577,7 +2608,7 @@ def runs(
         else:
             blueprint_id = blueprint
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
+    conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
         where_parts = []
         params: list = []
@@ -2702,7 +2733,7 @@ def lineage(
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
     lineage_db = resolved / "lineage.db"
     if not lineage_db.exists():
         click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
@@ -2817,7 +2848,7 @@ def signal(
 
     if value_str is None and error_msg is None:
         # Show current override status
-        with bundle.obs.connect() as cur:
+        with bundle.observability.connect() as cur:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             row = cur.execute(
                 "SELECT passed, error_message, CAST(set_at AS VARCHAR) FROM signal_overrides WHERE signal_id = ?",
@@ -2840,7 +2871,7 @@ def signal(
     passed = value_str == "true"
 
     now = datetime.now(tz=timezone.utc).isoformat()
-    with bundle.obs.connect() as cur:
+    with bundle.observability.connect() as cur:
         cur.execute(_SIGNAL_OVERRIDES_DDL)
         if passed:
             # Clear override — delete row entirely
@@ -2948,7 +2979,7 @@ def heal(
     (no Spark required) and validates the LLM response against expected assertions.
     """
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.surveyor.llm import build_prompt, generate_llm_patch, stage_patch_for_human
+    from aqueduct.agent import build_prompt, generate_agent_patch, stage_patch_for_human
 
     if not run_id and not scenario_path:
         click.echo(
@@ -2969,8 +3000,8 @@ def heal(
     resolved_base_url = eng.base_url
     resolved_model = eng.model
     resolved_provider_options = eng.provider_options
-    resolved_llm_timeout = eng.llm_timeout
-    resolved_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_timeout = eng.timeout
+    resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
     if resolved_model is None and not print_prompt:
@@ -3014,8 +3045,8 @@ def heal(
             provider=resolved_provider or "anthropic",
             base_url=resolved_base_url,
             provider_options=resolved_provider_options,
-            llm_timeout=resolved_llm_timeout,
-            llm_max_reprompts=resolved_llm_max_reprompts,
+            timeout=resolved_timeout,
+            max_reprompts=resolved_max_reprompts,
             engine_prompt_context=resolved_engine_prompt_context,
         )
 
@@ -3040,13 +3071,13 @@ def heal(
     import duckdb as _duckdb
     from aqueduct.surveyor.models import FailureContext
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
-    obs_db = resolved / "obs.db"
-    if not obs_db.exists():
-        click.echo(f"✗ obs.db not found at {obs_db}", err=True)
+    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
+    observability_db = resolved / "observability.db"
+    if not observability_db.exists():
+        click.echo(f"✗ observability.db not found at {observability_db}", err=True)
         sys.exit(1)
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
+    conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
         fc_row = conn.execute(
             """
@@ -3096,25 +3127,25 @@ def heal(
         f"provider={resolved_provider}  model={resolved_model}"
     )
 
-    llm_result = generate_llm_patch(
+    agent_result = generate_agent_patch(
         failure_ctx,
         model=resolved_model,
         patches_dir=patches_path,
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
         provider_options=resolved_provider_options,
-        llm_timeout=resolved_llm_timeout,
-        llm_max_reprompts=resolved_llm_max_reprompts,
+        timeout=resolved_timeout,
+        max_reprompts=resolved_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
     )
-    patch = llm_result.patch
+    patch = agent_result.patch
 
     if patch is None:
         click.echo(
-            f"✗ LLM failed to produce a valid patch after {llm_result.attempts} attempt(s)",
+            f"✗ LLM failed to produce a valid patch after {agent_result.attempts} attempt(s)",
             err=True,
         )
-        for err in llm_result.reprompt_errors:
+        for err in agent_result.reprompt_errors:
             click.echo(f"  · {err}", err=True)
         sys.exit(1)
 
@@ -3198,8 +3229,8 @@ def benchmark(
     resolved_base_url = eng.base_url
     resolved_model = eng.model
     resolved_provider_options = eng.provider_options
-    resolved_llm_timeout = eng.llm_timeout
-    resolved_llm_max_reprompts = eng.llm_max_reprompts
+    resolved_timeout = eng.timeout
+    resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
     model_list = list(models) if models else ([resolved_model] if resolved_model else None)
@@ -3222,8 +3253,8 @@ def benchmark(
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
         provider_options=resolved_provider_options,
-        llm_timeout=resolved_llm_timeout,
-        llm_max_reprompts=resolved_llm_max_reprompts,
+        timeout=resolved_timeout,
+        max_reprompts=resolved_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
         workers=workers,
     )
@@ -3265,7 +3296,7 @@ def benchmark(
 
 # ── aqueduct log ─────────────────────────────────────────────────────────────
 
-@cli.command("log")
+@patch.command("log")
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option(
     "--format",
@@ -3354,7 +3385,7 @@ def log_cmd(blueprint: str, fmt: str) -> None:
 
 # ── aqueduct rollback ─────────────────────────────────────────────────────────
 
-@cli.command("rollback")
+@patch.command("rollback")
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("--to", "patch_id", required=True, help="Revert the git commit containing this patch_id")
 def rollback_cmd(blueprint: str, patch_id: str) -> None:
@@ -3493,9 +3524,9 @@ def stores_info(config_path: str | None) -> None:
 
     bundle = get_stores(cfg)
     rows = [
-        ("obs",     bundle.obs.backend,     bundle.obs.location_label),
-        ("lineage", bundle.lineage.backend, bundle.lineage.location_label),
-        ("depot",   bundle.depot.backend,   bundle.depot.location_label),
+        ("observability", bundle.observability.backend, bundle.observability.location_label),
+        ("lineage",       bundle.lineage.backend,       bundle.lineage.location_label),
+        ("depot",         bundle.depot.backend,         bundle.depot.location_label),
     ]
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
@@ -3526,10 +3557,10 @@ def stores_info(config_path: str | None) -> None:
     default="depot",
     show_default=True,
     help=(
-        "Which store to migrate. v1 ships depot migration only; obs/lineage "
+        "Which store to migrate. v1 ships depot migration only; observability/lineage "
         "migration requires schema-aware row copying and is tracked in TODOs.md "
         "for a follow-up phase. Document the manual route: COPY each DuckDB "
-        "table to Parquet, then `\\copy obs.<table> FROM 'file.parquet'` on PG."
+        "table to Parquet, then `\\copy observability.<table> FROM 'file.parquet'` on PG."
     ),
 )
 def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:

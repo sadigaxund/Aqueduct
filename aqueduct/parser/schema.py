@@ -64,8 +64,8 @@ class AgentSchema(BaseModel):
     base_url: str | None = None
     model: str | None = None
     provider_options: dict[str, Any] | None = None
-    llm_timeout: float | None = None
-    llm_max_reprompts: int | None = None
+    timeout: float | None = None
+    max_reprompts: int | None = None
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsSchema = Field(default_factory=GuardrailsSchema)
     # Minimum LLM confidence to auto-apply patch (below threshold → escalate to human)
@@ -83,7 +83,7 @@ class AgentSchema(BaseModel):
     # the full-run step — fastest, lowest confidence, lets aggressive mode
     # close patch loops in seconds rather than minutes.
     patch_validation: Literal["full_run", "sandbox"] | None = None
-    # Phase 29b — when True (aggressive mode only), Gate 4 (post-patch
+    # Phase 29b — when True (aggressive mode only), the explain gate (post-patch
     # `explain()` regression check) is treated as blocking. Default None
     # inherits engine `agent.block_on_explain_regression` (= False).
     block_on_explain_regression: bool | None = None

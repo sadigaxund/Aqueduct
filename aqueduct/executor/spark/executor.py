@@ -255,19 +255,19 @@ CREATE TABLE IF NOT EXISTS maintenance_metrics (
 """
 
 
-def _resolve_obs_store(store_dir: "Path | None", obs_store: Any) -> Any:
-    """Return the supplied obs-store backend or build a default DuckDB one.
+def _resolve_observability_store(store_dir: "Path | None", observability_store: Any) -> Any:
+    """Return the supplied observability-store backend or build a default DuckDB one.
 
     Internal helper so probe/metric writers can stay backend-agnostic without
     every call site duplicating the construction logic.
     """
-    if obs_store is not None:
-        return obs_store
+    if observability_store is not None:
+        return observability_store
     if store_dir is None:
         return None
-    from aqueduct.stores.duckdb_ import DuckDBObsStore
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
     store_dir.mkdir(parents=True, exist_ok=True)
-    return DuckDBObsStore(store_dir / "obs.db")
+    return DuckDBObservabilityStore(store_dir / "observability.db")
 
 
 def _write_maintenance_metrics(
@@ -275,14 +275,14 @@ def _write_maintenance_metrics(
     run_id: str,
     timing: "dict[str, Any]",
     store_dir: "Path | None",
-    obs_store: Any = None,
+    observability_store: Any = None,
 ) -> None:
-    obs = _resolve_obs_store(store_dir, obs_store)
-    if obs is None:
+    store = _resolve_observability_store(store_dir, observability_store)
+    if store is None:
         return
     try:
         from datetime import datetime, timezone
-        with obs.connect() as cur:
+        with store.connect() as cur:
             cur.execute(_MAINTENANCE_METRICS_DDL)
             cur.execute(
                 "INSERT INTO maintenance_metrics "
@@ -305,15 +305,15 @@ def _write_stage_metrics(
     run_id: str,
     metrics: "dict[str, Any]",
     store_dir: "Path | None",
-    obs_store: Any = None,
+    observability_store: Any = None,
 ) -> None:
-    """Persist SparkListener stage metrics to the configured obs store (non-fatal)."""
-    obs = _resolve_obs_store(store_dir, obs_store)
-    if obs is None:
+    """Persist SparkListener stage metrics to the configured observability store (non-fatal)."""
+    store = _resolve_observability_store(store_dir, observability_store)
+    if store is None:
         return
     try:
         from datetime import datetime, timezone
-        with obs.connect() as cur:
+        with store.connect() as cur:
             cur.execute(_MODULE_METRICS_DDL)
             cur.execute(
                 """
@@ -343,14 +343,14 @@ def _update_metric(
     module_id: str,
     column: str,
     value: "int | None",
-    obs_store: Any = None,
+    observability_store: Any = None,
 ) -> None:
     """UPDATE a single column in an existing module_metrics row (non-fatal)."""
-    obs = _resolve_obs_store(store_dir, obs_store)
-    if obs is None:
+    store = _resolve_observability_store(store_dir, observability_store)
+    if store is None:
         return
     try:
-        with obs.connect() as cur:
+        with store.connect() as cur:
             cur.execute(
                 f"UPDATE module_metrics SET {column} = ? WHERE run_id = ? AND module_id = ?",
                 [value, run_id, module_id],
@@ -685,7 +685,7 @@ def execute(
     block_full_actions: bool = False,
     parallel: bool = False,
     use_observe: bool = True,
-    obs_store: Any = None,
+    observability_store: Any = None,
     lineage_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
     warnings_suppress: set[str] | None = None,
@@ -891,7 +891,7 @@ def execute(
                      "bytes_read": dir_bytes(module.config.get("path", "")),
                      "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
-                    obs_store=obs_store,
+                    observability_store=observability_store,
                 )
                 frame_store[module.id] = _obs_df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1029,7 +1029,7 @@ def execute(
                         module.id, run_id,
                         {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                         store_dir,
-                        obs_store=obs_store,
+                        observability_store=observability_store,
                     )
                     _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
                     local_results.append(ModuleResult(module_id=module.id, status="success"))
@@ -1087,7 +1087,7 @@ def execute(
                     module.id, run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
-                    obs_store=obs_store,
+                    observability_store=observability_store,
                 )
                 for branch_id, branch_df in branch_dfs.items():
                     frame_store[f"{module.id}.{branch_id}"] = branch_df
@@ -1150,7 +1150,7 @@ def execute(
                     module.id, run_id,
                     {**null_metrics(), "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
-                    obs_store=obs_store,
+                    observability_store=observability_store,
                 )
                 frame_store[module.id] = df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
@@ -1341,7 +1341,7 @@ def execute(
                      "bytes_written": dir_bytes(module.config.get("path", "")),
                      "duration_ms": int((time.monotonic() - _t0) * 1000)},
                     store_dir,
-                    obs_store=obs_store,
+                    observability_store=observability_store,
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
 
@@ -1355,7 +1355,7 @@ def execute(
                         )
                         _write_maintenance_metrics(
                             module.id, run_id, _maint_timing, store_dir,
-                            obs_store=obs_store,
+                            observability_store=observability_store,
                         )
 
                 # ── Sidecar watermark update ───────────────────────────────────
@@ -1397,7 +1397,7 @@ def execute(
                     )
                 elif store_dir is not None:
                     try:
-                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, obs_store=obs_store)
+                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store)
                     except Exception as exc:
                         logger.warning("Probe %r failed: %s", module.id, exc)
 
@@ -1452,7 +1452,7 @@ def execute(
             try:
                 _rr = get_observation(_obs, "records_read")
                 if _rr is not None:
-                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr, obs_store=obs_store)
+                    _update_metric(store_dir, run_id, _mod_id, "records_read", _rr, observability_store=observability_store)
             except Exception as exc:
                 logger.debug("Observation collection failed for %r: %s", _mod_id, exc)
 
@@ -1466,8 +1466,8 @@ def execute(
 
     # ── Phase 29b: capture explain() snapshots for Gate 4 ─────────────────────
     # Two sinks: `surveyor.record_explain_snapshot()` (real runs → persists into
-    # `obs.explain_snapshot`) and the in-memory `explain_capture` dict (sandbox
-    # runs in Gate 3 → no persistence, used by Gate 4 in-process).
+    # `observability.explain_snapshot`) and the in-memory `explain_capture` dict (sandbox
+    # runs in the sandbox gate → no persistence, used by the explain gate in-process).
     if surveyor is not None or explain_capture is not None:
         try:
             from aqueduct.patch.explain_gate import capture_plan_snapshot

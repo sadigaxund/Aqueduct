@@ -6,7 +6,7 @@ Default DuckDB layout (per-blueprint):
 
 ```
 .aqueduct/
-  obs.db          ← run records, failures, healing, signals, probes, metrics
+  observability.db          ← run records, failures, healing, signals, probes, metrics
   lineage.db      ← column-level lineage
   depot.db        ← cross-run KV state (@aq.depot.*)
   snapshots/      ← schema_snapshot JSON files (one per probe per run)
@@ -15,7 +15,7 @@ Default DuckDB layout (per-blueprint):
 ```
 
 When `backend: postgres` is configured for a store, the tables documented
-below live in a per-store schema (`obs.*`, `lineage.*`, `depot.*`) inside
+below live in a per-store schema (`observability.*`, `lineage.*`, `depot.*`) inside
 a single Postgres database. When `backend: redis` is configured for the
 depot, the `depot_kv` keys live directly in the configured Redis database
 without a relational table. SQL examples below run against DuckDB and
@@ -28,9 +28,9 @@ schema migrations on startup (see `aqueduct/surveyor/surveyor.py:_DDL`).
 
 ---
 
-## `obs.db` — Observability store
+## `observability.db` — Observability store
 
-Single DuckDB file per blueprint (Phase 20: `.aqueduct/obs/{blueprint_id}/obs.db`).
+Single DuckDB file per blueprint (Phase 20: `.aqueduct/observability/{blueprint_id}/observability.db`).
 Opened by both the Surveyor (write path) and the CLI / `aqueduct doctor` (read path).
 
 ### `run_records`
@@ -116,24 +116,24 @@ ORDER BY attempts DESC;
 | `run_id` | VARCHAR | Failing run that triggered healing (null for direct `patch preview`) |
 | `blueprint_id` | VARCHAR | |
 | `patch_id` | VARCHAR NOT NULL | Matches `patches/applied/{id}.json` |
-| `gate` | VARCHAR NOT NULL | `gate2` (lineage), `gate3` (sandbox replay), `gate4` (explain regression) |
+| `gate` | VARCHAR NOT NULL | `guardrails`, `lineage`, `sandbox`, `explain` |
 | `status` | VARCHAR NOT NULL | `pass` / `fail` / `warn` / `skip` |
 | `detail` | VARCHAR | Free-text — failing rule, missing column, executor error, plan regression list |
-| `sample_rows` | BIGINT | Per-Ingress LIMIT used by Gate 3 (NULL for Gate 2 / Gate 4) |
+| `sample_rows` | BIGINT | Per-Ingress LIMIT used by the sandbox gate (NULL for the lineage gate / the explain gate) |
 | `duration_ms` | BIGINT | Wall-clock for the gate |
 | `recorded_at` | VARCHAR | ISO-8601 UTC |
 
 ```sql
--- Were recent patches blocked by Gate 3 sandboxes?
+-- Were recent patches blocked by sandbox-gatees?
 SELECT patch_id, status, detail, recorded_at
 FROM patch_simulation
-WHERE gate = 'gate3' AND status = 'fail'
+WHERE gate = 'sandbox' AND status = 'fail'
 ORDER BY recorded_at DESC LIMIT 20;
 ```
 
 ### `explain_snapshot`
 
-**Source:** `aqueduct/surveyor/surveyor.py:_EXPLAIN_SNAPSHOT_DDL` (added Phase 29b). Rolling per-module physical-plan baseline. Written by the executor after every successful module run (non-Egress). Read by Gate 4 (`aqueduct/patch/explain_gate.py`) as the pre-patch baseline. Surveyor prunes to the most recent `keep_last_n` (default 5) rows per `(blueprint_id, module_id)`.
+**Source:** `aqueduct/surveyor/surveyor.py:_EXPLAIN_SNAPSHOT_DDL` (added Phase 29b). Rolling per-module physical-plan baseline. Written by the executor after every successful module run (non-Egress). Read by the explain gate (`aqueduct/patch/explain_gate.py`) as the pre-patch baseline. Surveyor prunes to the most recent `keep_last_n` (default 5) rows per `(blueprint_id, module_id)`.
 
 | Column | Type | Notes |
 |---|---|---|
