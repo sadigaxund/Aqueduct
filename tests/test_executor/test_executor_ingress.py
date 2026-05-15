@@ -368,9 +368,10 @@ def test_partition_filters_with_date_comparison(spark: SparkSession, tmp_path):
     assert ids == [1, 2]
 
 
+
 def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession):
-    """partition_filters on JDBC (no path) → .where() applied after reader.load()."""
-    from unittest.mock import MagicMock, patch
+    """partition_filters on JDBC (no path) -> .where() applied after reader.load()."""
+    from unittest.mock import MagicMock
 
     # Real df to be "returned" by the mocked JDBC reader
     real_df = spark.range(10)
@@ -392,10 +393,11 @@ def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession)
         }
     )
 
-    with patch.object(spark, "read", mock_reader):
-        df = read_ingress(module, spark)
+    mock_spark = MagicMock()
+    mock_spark.read = mock_reader
+    df = read_ingress(module, mock_spark)
 
     # load() called without a path argument (JDBC is pathless)
     mock_reader.load.assert_called_once_with()
-    # filter was applied — only rows with id >= 5 survive
+    # filter was applied - only rows with id >= 5 survive
     assert df.count() == 5

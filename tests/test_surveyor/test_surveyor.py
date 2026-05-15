@@ -85,6 +85,7 @@ class TestEvaluateRegulatorSignalOverride:
         edge.to_id = regulator_id
         edge.port = "signal"
         manifest = MagicMock(spec=Manifest)
+        manifest.blueprint_id = "test-bp"
         manifest.edges = [edge]
         return manifest
 
@@ -105,7 +106,7 @@ class TestEvaluateRegulatorSignalOverride:
         conn.close()
 
         s = Surveyor(manifest, store_dir=store)
-        s._run_id = "run-x"
+        s.start("run-x")
         assert s.evaluate_regulator("reg1") is False
 
     def test_no_override_returns_true_when_no_probe_signals(self, tmp_path):
@@ -114,7 +115,7 @@ class TestEvaluateRegulatorSignalOverride:
         store = tmp_path / "signals"
         store.mkdir()
         s = Surveyor(manifest, store_dir=store)
-        s._run_id = "run-x"
+        s.start("run-x")
         assert s.evaluate_regulator("reg1") is True
 
 
@@ -128,7 +129,7 @@ class TestSurveyorBlueprintSourceYaml:
         bp_path = tmp_path / "blueprint.yml"
         bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
 
-        manifest = Manifest(blueprint_id="b1", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path)
         surveyor.start("r1")
 
@@ -149,7 +150,7 @@ class TestSurveyorBlueprintSourceYaml:
         from aqueduct.compiler.models import Manifest
         from aqueduct.executor.models import ExecutionResult, ModuleResult
 
-        manifest = Manifest(blueprint_id="b1", context={}, modules=(), edges=(), spark_config={})
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None)
         surveyor.start("r1")
 
@@ -163,3 +164,29 @@ class TestSurveyorBlueprintSourceYaml:
         assert ctx is not None
         assert ctx.blueprint_source_yaml is None
 
+class TestSurveyorStores:
+    def test_surveyor_uses_injected_stores(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.stores import StoreBundle
+        from aqueduct.stores.duckdb_ import DuckDBObsStore, DuckDBLineageStore, DuckDBDepotStore
+        
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        
+        obs = DuckDBObsStore(tmp_path / "obs.db")
+        lineage = DuckDBLineageStore(tmp_path / "lineage.db")
+        depot = DuckDBDepotStore(tmp_path / "depot.db")
+        bundle = StoreBundle(obs=obs, lineage=lineage, depot=depot)
+        
+        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+        assert surveyor._obs_store is obs
+
+    def test_surveyor_default_store(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.compiler.models import Manifest
+        from aqueduct.stores.duckdb_ import DuckDBObsStore
+        
+        manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
+        
+        surveyor = Surveyor(manifest, store_dir=tmp_path)
+        assert isinstance(surveyor._obs_store, DuckDBObsStore)

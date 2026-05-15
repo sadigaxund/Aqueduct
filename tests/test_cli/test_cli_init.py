@@ -17,10 +17,10 @@ def empty_cwd(tmp_path, monkeypatch):
 
 def test_init_scaffold_success(empty_cwd):
     runner = CliRunner()
-    result = runner.invoke(cli, ["init", "--name", "test-project"])
+    result = runner.invoke(cli, ["init"])
     
     assert result.exit_code == 0
-    assert "✓ test-project ready" in result.output
+    assert "✓ my-project ready" in result.output
     
     # Check files (actual names used in cli.py)
     assert (empty_cwd / "aqueduct.yml.template").exists()

@@ -49,3 +49,42 @@ class TestDoctorFormatMismatch:
         _check_format_ext_mismatch(results, "ingress:m1", "parquet", ["data.csv"], "/tmp/data.csv", 100)
         assert len(results) == 1
         assert results[0].status == "warn"
+
+class TestDoctorStoreBackends:
+    def test_doctor_check_store_backend_duckdb(self, tmp_path):
+        from aqueduct.doctor import check_store_backend
+        from aqueduct.config import AqueductConfig
+        cfg = AqueductConfig()
+        cfg.stores.obs.path = str(tmp_path / "obs.db")
+        result = check_store_backend("obs", cfg, is_kv_only=False)
+        assert result.status == "ok"
+        
+    def test_doctor_check_store_backend_obs_redis_fail(self):
+        from aqueduct.doctor import check_store_backend
+        from aqueduct.config import AqueductConfig
+        cfg = AqueductConfig()
+        cfg.stores.obs.backend = "redis"
+        cfg.stores.obs.path = "redis://localhost"
+        result = check_store_backend("obs", cfg, is_kv_only=False)
+        assert result.status == "fail"
+        assert "redis not supported for obs" in result.detail.lower()
+
+    def test_doctor_check_store_backend_postgres_invalid_dsn(self):
+        from aqueduct.doctor import check_store_backend
+        from aqueduct.config import AqueductConfig
+        cfg = AqueductConfig()
+        cfg.stores.obs.backend = "postgres"
+        cfg.stores.obs.path = "postgresql://invalid:invalid@invalid/invalid"
+        result = check_store_backend("obs", cfg, is_kv_only=False)
+        assert result.status == "fail"
+
+    def test_doctor_output_shows_new_stores(self, tmp_path):
+        from click.testing import CliRunner
+        from aqueduct.cli import cli
+        runner = CliRunner()
+        config = tmp_path / "aq.yml"
+        config.write_text("aqueduct_config: '1.0'")
+        result = runner.invoke(cli, ["doctor", "--config", str(config)])
+        assert "obs:" in result.output
+        assert "lineage:" in result.output
+        assert "depot:" in result.output
