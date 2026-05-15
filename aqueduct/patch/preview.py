@@ -229,6 +229,7 @@ def run_gate3_sandbox(
     spark_session: Any = None,
     obs_store: Any = None,
     lineage_store: Any = None,
+    explain_capture: dict[str, dict] | None = None,
 ) -> Gate3Result:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -363,6 +364,7 @@ def run_gate3_sandbox(
                 from_module=failed_module,
                 obs_store=obs_store,
                 lineage_store=lineage_store,
+                explain_capture=explain_capture,
             )
         except ExecuteError as exc:
             return Gate3Result(

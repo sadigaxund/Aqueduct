@@ -166,20 +166,22 @@ def _run_patch_gates_inline(
     blueprint_id: str,
     sample_rows: int = 1000,
 ):
-    """Phase 29a — execute Gate 2 (lineage) and Gate 3 (sandbox) for a generated patch.
+    """Phase 29a/b — execute Gates 2 (lineage), 3 (sandbox), 4 (explain) inline.
 
-    Returns (gate2_result, gate3_result_or_None, gate3_passed). gate3_passed is True
-    when Gate 3 either passes outright or is skipped (Spark unavailable / no patch
-    impact). False only when the sandbox actually surfaced a failing module.
+    Returns (gate2, gate3, gate4, gates_passed). gates_passed is True when
+    Gate 3 passes (or is skipped — Spark unavailable / no patch impact) AND
+    Gate 4 does not hard-block (Gate 4 is warn-only by default; only fails
+    when `agent.block_on_explain_regression` is True).
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
     from aqueduct.patch.preview import run_gate2_lineage, run_gate3_sandbox
+    from aqueduct.patch.explain_gate import run_gate4_explain
 
     bp_raw = _yaml_load(blueprint_path)
     try:
         bp_after = apply_patch_to_dict(bp_raw, patch)
     except Exception:
-        return None, None, False
+        return None, None, None, False
 
     gate2 = run_gate2_lineage(bp_raw, bp_after, patch)
     try:
@@ -193,8 +195,9 @@ def _run_patch_gates_inline(
             blueprint_id=blueprint_id,
         )
     except Exception:
-        pass  # patch_simulation insert must never block the healing loop
+        pass
 
+    explain_after: dict[str, dict] = {}
     gate3 = run_gate3_sandbox(
         bp_after,
         blueprint_path=blueprint_path,
@@ -203,6 +206,7 @@ def _run_patch_gates_inline(
         sample_rows=int(sample_rows),
         obs_store=bundle.obs,
         lineage_store=bundle.lineage,
+        explain_capture=explain_after,
     )
     try:
         surveyor.record_patch_simulation(
@@ -218,8 +222,26 @@ def _run_patch_gates_inline(
     except Exception:
         pass
 
+    # Gate 4 — compare per-module plan counts vs baseline in obs.explain_snapshot
+    gate4 = None
+    try:
+        baseline = surveyor.latest_explain_snapshots(blueprint_id=blueprint_id) if surveyor else {}
+        gate4 = run_gate4_explain(baseline, explain_after, touched_modules=gate2.touched_modules)
+        surveyor.record_patch_simulation(
+            patch_id=patch.patch_id,
+            gate="gate4",
+            status=gate4.status,
+            detail=gate4.detail or "; ".join(r.detail for r in gate4.regressions) or None,
+            duration_ms=gate4.duration_ms,
+            run_id=current_run_id,
+            blueprint_id=blueprint_id,
+        )
+    except Exception:
+        pass
+
     gate3_passed = gate3.status in ("pass", "skip")
-    return gate2, gate3, gate3_passed
+    gates_passed = gate3_passed
+    return gate2, gate3, gate4, gates_passed
 
 
 def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
@@ -1257,8 +1279,8 @@ def run(
                 break
 
             elif effective_mode == "auto":
-                # Phase 29a — Gate 2 (lineage) + Gate 3 (sandbox) pre-filter.
-                _g2, _g3, _g3_passed = _run_patch_gates_inline(
+                # Phase 29a/b — Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
+                _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
                     patch=patch,
                     blueprint_path=Path(blueprint),
                     bundle=bundle,
@@ -1267,6 +1289,9 @@ def run(
                     current_run_id=current_run_id,
                     blueprint_id=manifest.blueprint_id,
                 )
+                if _g4 is not None and _g4.status == "warn":
+                    for _r in _g4.regressions:
+                        click.echo(f"  ⚠ Gate 4 regression: {_r.detail}", err=True)
                 if _g3 is not None and not _g3_passed:
                     click.echo(
                         f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
@@ -1346,8 +1371,8 @@ def run(
                 break
 
             elif effective_mode == "aggressive":
-                # Phase 29a — Gate 2 + Gate 3 pre-filter for aggressive too
-                _g2, _g3, _g3_passed = _run_patch_gates_inline(
+                # Phase 29a/b — Gates 2, 3, 4 pre-filter for aggressive too.
+                _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
                     patch=patch,
                     blueprint_path=Path(blueprint),
                     bundle=bundle,
@@ -1356,6 +1381,27 @@ def run(
                     current_run_id=current_run_id,
                     blueprint_id=manifest.blueprint_id,
                 )
+                _block_on_g4 = (
+                    manifest.agent.block_on_explain_regression
+                    if manifest.agent.block_on_explain_regression is not None
+                    else cfg.agent.block_on_explain_regression
+                )
+                if _g4 is not None and _g4.status == "warn":
+                    for _r in _g4.regressions:
+                        click.echo(f"  ⚠ Gate 4 regression: {_r.detail}", err=True)
+                if _block_on_g4 and _g4 is not None and _g4.status == "warn":
+                    last_apply_error = (
+                        f"Patch {patch.patch_id!r} rejected by Gate 4 (explain regression): "
+                        + "; ".join(r.detail for r in _g4.regressions)
+                    )
+                    click.echo(f"  ✗ aggressive: Gate 4 blocked — {last_apply_error}", err=True)
+                    surveyor.record_healing_outcome(
+                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        failure_category=patch.category, model=resolved_agent_model,
+                        patch_id=patch.patch_id, confidence=patch.confidence,
+                        patch_applied=False, run_success_after_patch=False,
+                    )
+                    continue
                 if _g3 is not None and not _g3_passed:
                     click.echo(
                         f"  ✗ aggressive: sandbox rejected patch — {_g3.detail}",
@@ -1627,7 +1673,8 @@ def patch_preview(
     Always runs Gate 1 (schema + post-apply Parser re-check) and Gate 2
     (live lineage impact). With `--sandbox`, also runs Gate 3 (replay the
     patched Blueprint on a per-Ingress LIMIT N, Egress modules skipped and
-    listed in the report).
+    listed in the report) and Gate 4 (post-patch `explain()` regression
+    check against the most recent baseline in `obs.explain_snapshot`).
     """
     import json as _json
     from pathlib import Path as _Path
@@ -1644,6 +1691,7 @@ def patch_preview(
         run_gate2_lineage,
         run_gate3_sandbox,
     )
+    from aqueduct.patch.explain_gate import run_gate4_explain
 
     bp_raw = _yaml_load(_Path(blueprint_path))
     try:
@@ -1670,6 +1718,7 @@ def patch_preview(
     gate2 = run_gate2_lineage(bp_raw, bp_after, spec)
 
     gate3 = None
+    gate4 = None
     if sandbox:
         cfg = None
         try:
@@ -1680,6 +1729,7 @@ def patch_preview(
         from aqueduct.stores import get_stores
         bundle = get_stores(cfg)
         failed_module = None
+        explain_after: dict[str, dict] = {}
         # patch_id is used both for run-tagging and tempfile naming
         gate3 = run_gate3_sandbox(
             bp_after,
@@ -1689,7 +1739,22 @@ def patch_preview(
             sample_rows=int(sample_rows),
             obs_store=bundle.obs,
             lineage_store=bundle.lineage,
+            explain_capture=explain_after,
         )
+        # Gate 4 — explain regression. Baseline read directly from obs.
+        try:
+            from aqueduct.stores import get_stores as _gs  # noqa
+            from aqueduct.surveyor.surveyor import Surveyor
+            # Compile to retrieve blueprint_id without full run.
+            from aqueduct.parser.parser import parse as _parse
+            from aqueduct.compiler.compiler import compile as _compile
+            _bp = _parse(blueprint_path)
+            _mf = _compile(_bp, blueprint_path=_Path(blueprint_path))
+            _surv = Surveyor(manifest=_mf, store_dir=cfg.store_dir, stores=bundle)
+            _baseline = _surv.latest_explain_snapshots(blueprint_id=_mf.blueprint_id)
+        except Exception:
+            _baseline = {}
+        gate4 = run_gate4_explain(_baseline, explain_after, touched_modules=gate2.touched_modules)
 
     if out_format.lower() == "json":
         report = {
@@ -1710,6 +1775,14 @@ def patch_preview(
                 "sample_rows": gate3.sample_rows,
                 "duration_ms": gate3.duration_ms,
                 "egress_targets": gate3.egress_targets,
+            }
+        if gate4 is not None:
+            report["gate4"] = {
+                "status": gate4.status,
+                "detail": gate4.detail,
+                "duration_ms": gate4.duration_ms,
+                "baseline_run_id": gate4.baseline_run_id,
+                "regressions": [r.__dict__ for r in gate4.regressions],
             }
         click.echo(_json.dumps(report, indent=2))
         sys.exit(0 if gate2.status != "fail" and (gate3 is None or gate3.status == "pass" or gate3.status == "skip") else 2)
@@ -1749,6 +1822,18 @@ def patch_preview(
                     f"    {t.get('id')}  → {t.get('format')}  {t.get('path')}"
                     + (f"  (mode={t.get('mode')})" if t.get("mode") else "")
                 )
+
+    if gate4 is not None:
+        click.echo()
+        click.echo("── Gate 4: explain() regression ──────────────────────────────")
+        click.echo(f"  status:   {gate4.status}")
+        click.echo(f"  detail:   {gate4.detail}")
+        if gate4.baseline_run_id:
+            click.echo(f"  baseline: run {gate4.baseline_run_id}")
+        if gate4.regressions:
+            for r in gate4.regressions:
+                click.echo(f"  ⚠ {r.detail}")
+        click.echo(f"  duration: {gate4.duration_ms} ms")
 
     exit_code = 0
     if gate2.status == "fail":

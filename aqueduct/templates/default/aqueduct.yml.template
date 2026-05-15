@@ -418,6 +418,19 @@ agent:
   # Per-blueprint override available via the Blueprint agent: block.
   # patch_validation: full_run
 
+  # ── Gate 4 strictness (Phase 29b) ──────────────────────────────────────────
+  # block_on_explain_regression toggles whether Gate 4 (post-patch `explain()`
+  # regression check) is a hard blocker in aggressive mode. Gate 4 compares
+  # per-module `Exchange` / `BatchEvalPython` / `BroadcastExchange` counts in
+  # the patched Manifest against the most recent baseline rolling-stored in
+  # `obs.explain_snapshot`.
+  #   false (default) — Gate 4 prints warnings but never rejects a patch.
+  #   true            — aggressive mode rejects a patch with any regression
+  #                     (extra shuffle, extra Python UDF, lost broadcast hint).
+  # Auto/human/disabled modes ignore this flag — Gate 4 is informational there.
+  # Per-blueprint override available via the Blueprint agent: block.
+  # block_on_explain_regression: false
+
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
   # Surveyor counts rows written to obs.db `healing_outcomes` within the last
   # 60 minutes for the running blueprint. When the count is reached, the next

@@ -66,6 +66,9 @@ class AgentConfig:
     # Controls whether auto/aggressive validates a generated patch by a full
     # Spark run after the sandbox replay, or by sandbox replay alone.
     patch_validation: str | None = None
+    # Phase 29b: opt-in stricter Gate 4 (explain regression) for aggressive mode.
+    # None = inherit from engine default (False).
+    block_on_explain_regression: bool | None = None
 
 
 @dataclass(frozen=True)
