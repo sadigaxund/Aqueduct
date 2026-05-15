@@ -7,15 +7,7 @@
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
-> ### ⚠ The agent can edit your Blueprints
->
-> Self-healing is opt-in. The agent only modifies your Blueprint file when `agent.approval_mode` is set to `auto` or `aggressive`. **The default is `disabled`** — no LLM call, no Blueprint mutation, no Spark hidden cost.
->
-> For production, prefer:
-> - `human` — patch is staged to `patches/pending/` for an engineer to apply via `aqueduct patch apply`.
-> - `ci` — patch is `POST`ed to a configured webhook (`agent.ci_webhook_url`) so your CI system can open a PR.
->
-> `aggressive` mode additionally requires `danger.allow_aggressive_patching: true` in `aqueduct.yml`. Patches always pass through deterministic guardrails (`agent.guardrails.allowed_paths`, `forbidden_ops`, `heal_on_errors`, `never_heal_errors`) — the agent cannot bypass them by hallucination, because enforcement happens at patch-apply time in code, not at prompt time.
+> **Self-healing is opt-in and off by default.** The agent never calls an LLM or touches your Blueprint unless you set `agent.approval_mode`. See [Agent Guardrails](#agent-guardrails) for the approval modes and the deterministic guards that bound what a patch can do.
 
 ---
 
@@ -61,7 +53,7 @@ Five layers, one direction: **Parser → Compiler → Executor → Surveyor**, w
 
 ### Engine vocabulary
 
-| Term | What it does | Why the name |
+| Term | What it does | Metaphor |
 |---|---|---|
 | **Aqueduct** | The engine: parses, compiles, runs, and self-heals Spark pipelines end to end. | A Roman aqueduct carries the flow the whole way. |
 | **Blueprint** | Your pipeline as YAML — modules + edges. The human-authored source of truth. | The drawn plan before anything is built. |
@@ -503,6 +495,18 @@ agent:
 ```
 
 ### Agent Guardrails
+
+**Approval modes** (`agent.approval_mode`) decide what happens when self-healing fires:
+
+- `disabled` — **default**. No LLM call, no Blueprint mutation, no Spark hidden cost.
+- `human` — patch staged to `patches/pending/` for an engineer to apply via `aqueduct patch apply`.
+- `ci` — patch `POST`ed to `agent.ci_webhook_url` so your CI system can open a PR.
+- `auto` — patch validated in-memory then written to the Blueprint file automatically.
+- `aggressive` — like `auto`, multi-patch; additionally requires `danger.allow_aggressive_patching: true`.
+
+For production prefer `human` or `ci`. Whatever the mode, every patch passes the
+guardrails below — enforced at patch-apply time **in code, not in the prompt**,
+so the agent cannot bypass them by hallucination.
 
 Two tiers of guardrails, both deterministic — not prompt hints:
 

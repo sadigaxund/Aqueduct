@@ -3,7 +3,6 @@
 ## Project Context
 Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 - **Full spec**: `docs/specs.md` — read it for domain details. This file is process and constraint guidance only.
-- **What's next**: `~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/TODOs.md`
 
 ## Tech Stack
 - **Language**: Python 3.11+. Monolithic CLI — runs on the Spark driver. No servers.
@@ -36,7 +35,7 @@ When adding an LLM provider: add `_call_<provider>()` in `surveyor/llm.py` using
 **Spark behavior reference**: read `docs/SPARK_GUIDE.md` before modifying Executor modules or implementing new Channel operations.
 
 ## TODOs Memory Rule
-`~/.claude/projects/-home-sakhund-Personal-Projects-Aqueduct/memory/TODOs.md` is the single source of truth for what's next, what's stubbed, and what's deferred.
+`TODOs.md` is the single source of truth for what's next, what's stubbed, and what's deferred.
 
 - **"What's left?" / "What's next?"** → read TODOs.md first.
 - **After every planning session** → update TODOs.md with agreed phases.
