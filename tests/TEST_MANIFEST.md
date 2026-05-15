@@ -2009,3 +2009,101 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ Primary key `(blueprint_id, run_id, module_id)` — re-inserting same triplet is idempotent (INSERT OR REPLACE)
 - ⏳ DDL `IF NOT EXISTS` — second `start()` does not raise
 - ⏳ DuckDB and Postgres backends both honour the DDL (paramstyle qmark→format rewrite)
+
+---
+
+## Phase 30a — Extended Spark Warnings + Suppression
+
+### `aqueduct/warnings.py` core infra
+
+- ⏳ `AqueductWarning` subclasses `UserWarning`
+- ⏳ `emit(rule_id, msg)` calls `warnings.warn` with category `AqueductWarning` and prefix `[aqueduct:rule_id] msg`
+- ⏳ `emit(..., suppress={rid})` is a no-op when `rid` matches `rule_id`
+- ⏳ `set_default_suppress([rid])` makes subsequent `emit(rid, ...)` no-ops without explicit suppress arg
+- ⏳ `set_default_suppress([], silence_all=True)` silences every emit including non-listed IDs
+- ⏳ Explicit `emit(..., suppress=...)` arg takes priority over default
+- ⏳ `emit()` never raises — internal exceptions swallowed
+- ⏳ `install_cli_formatter()` is idempotent; second call is a no-op
+- ⏳ `install_cli_formatter()` renders `AqueductWarning` as `AQ-WARN [rule_id] msg\n`; non-Aqueduct warnings keep default formatting
+
+### `aqueduct/compiler/warnings/` tier 1 rules
+
+#### `kafka_checkpoint_stale.py`
+- ⏳ `RULE_ID == "kafka_checkpoint_stale"`
+- ⏳ Channel with `checkpoint=True` + Kafka Ingress upstream → one warning
+- ⏳ Channel with `checkpoint=True` + Parquet Ingress upstream → no warning
+- ⏳ Channel with `checkpoint=False` + Kafka Ingress upstream → no warning
+
+#### `nondeterministic_fanout.py`
+- ⏳ `RULE_ID == "nondeterministic_fanout"`
+- ⏳ 2-consumer Channel with `rand()` in SQL → one warning
+- ⏳ Single-consumer Channel with `rand()` → no warning
+- ⏳ Multi-consumer Channel without nondeterministic fn → no warning
+- ⏳ Multi-consumer Channel with `rand()` + `checkpoint=True` → no warning
+- ⏳ Detects `uuid()`, `current_timestamp()`, `now()`, `random()`, case-insensitive
+
+#### `count_col_likely_count_star.py`
+- ⏳ `RULE_ID == "count_col_likely_count_star"`
+- ⏳ `COUNT(user_id)` → one warning
+- ⏳ `COUNT(*)` → no warning
+- ⏳ `COUNT(DISTINCT col)` → no warning
+- ⏳ Multiple `COUNT(col)` in one query → one warning per match
+
+#### `file_format_no_repartition.py`
+- ⏳ `RULE_ID == "file_format_no_repartition"`
+- ⏳ Parquet Egress without partition hints → warning
+- ⏳ Parquet Egress with `partition_by` → no warning
+- ⏳ Parquet Egress with `repartition` → no warning
+- ⏳ Parquet Egress with `coalesce` → no warning
+- ⏳ Delta Egress without partition hints → no warning (transaction log handles)
+- ⏳ JSON, CSV trigger the rule same as parquet
+
+#### `jdbc_missing_partition.py`
+- ⏳ `RULE_ID == "jdbc_missing_partition"`
+- ⏳ JDBC Ingress without the 4 options → warning
+- ⏳ JDBC Ingress with `partitionColumn` + `lowerBound` + `upperBound` → no warning
+- ⏳ JDBC Ingress with `predicates` → no warning
+- ⏳ JDBC Egress (write) is NOT flagged (rule is Ingress-only)
+
+#### Registry — `aqueduct/compiler/warnings/__init__.py`
+- ⏳ `RULES` contains all five `(rule_id, check)` tuples
+- ⏳ `run_all(manifest)` returns `[(rule_id, msg), ...]` for every rule that fires
+- ⏳ `run_all(manifest, suppress={"kafka_checkpoint_stale"})` skips that rule entirely (never invokes the check fn)
+- ⏳ A check that raises is silently skipped (other rules still run)
+
+### `aqueduct/executor/spark/warnings/` tier 2 rules
+
+#### `jar_availability.py`
+- ⏳ `RULE_ID == "jar_availability"`
+- ⏳ Blueprint with `format: kafka` + no `spark-sql-kafka` JAR loaded → warning
+- ⏳ Blueprint with `format: kafka` + `spark-sql-kafka-0-10` JAR loaded → no warning (substring match)
+- ⏳ `format: delta` checks `delta-core` / `delta-spark` fragments
+- ⏳ `format: iceberg` checks `iceberg-spark`
+- ⏳ JDBC modules with `options.driver` set but no JDBC-ish JAR loaded → warning naming the driver classes
+- ⏳ Core `format: jdbc` without an explicit driver class → no JAR warning (core Spark handles)
+
+### Compiler integration — `aqueduct/compiler/compiler.py`
+- ⏳ `compile(bp, warnings_suppress={"kafka_checkpoint_stale"})` does NOT emit that rule
+- ⏳ `compile(bp, warnings_silence_all=True)` emits zero Aqueduct warnings (tier 1 + legacy 8a–8g)
+- ⏳ Legacy rules 8a–8g now use stable rule IDs (`perf_probe_sample_full_scan`, `perf_incremental_watermark_scan`, `perf_python_udf_row_at_a_time`, `perf_delta_append_no_partition`, `perf_multi_consumer_no_cache`, `perf_hadoop_fs_in_options`, `maintenance_optimize_non_delta`, `delivery_append_retry_dupes`)
+- ⏳ Each legacy ID is suppressible via the same `warnings.suppress` list
+
+### Executor integration — `aqueduct/executor/spark/executor.py`
+- ⏳ `execute(manifest, spark)` calls `run_all(manifest, spark)` after `getOrCreate()` and emits findings
+- ⏳ `execute(..., warnings_suppress={"jar_availability"})` skips the rule
+- ⏳ `execute(..., warnings_silence_all=True)` emits zero Aqueduct warnings
+
+### CLI integration — `aqueduct/cli.py`
+- ⏳ `aqueduct --suppress-warning kafka_checkpoint_stale compile bp.yml` skips that rule
+- ⏳ `aqueduct --suppress-warning a --suppress-warning b ...` (repeatable) merges both into suppress set
+- ⏳ `aqueduct --no-warnings compile bp.yml` silences all Aqueduct warnings
+- ⏳ `warnings.suppress` in `aqueduct.yml` is merged with CLI flags on top
+- ⏳ `warnings.silence_all: true` in `aqueduct.yml` mirrors `--no-warnings`
+- ⏳ `_compile_with_warnings()` renders `AqueductWarning` as `AQ-WARN [id] msg`; falls back to `WARNING:` for other UserWarnings
+
+### `WarningsConfig` Pydantic model — `aqueduct/config.py`
+- ⏳ `WarningsConfig().suppress == []` and `silence_all == False`
+- ⏳ `WarningsConfig(suppress=["foo"])` validates
+- ⏳ `WarningsConfig(silence_all=True)` validates
+- ⏳ Extra unknown keys → `pydantic.ValidationError` (`extra="forbid"`)
+- ⏳ `AqueductConfig().warnings` exists with default `WarningsConfig`

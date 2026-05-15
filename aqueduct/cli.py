@@ -18,13 +18,44 @@ import warnings
 import click
 
 
+def _apply_warnings_from_cfg(cfg) -> None:
+    """Merge `cfg.warnings` with the CLI flags installed by the root group.
+
+    Idempotent. Call once per command immediately after `load_config()` so the
+    engine-level `warnings.suppress` from aqueduct.yml is honoured alongside
+    any `--suppress-warning` / `--no-warnings` flags the user passed.
+    """
+    from aqueduct.warnings import _DEFAULT_SUPPRESS, _DEFAULT_SILENCE_ALL, set_default_suppress
+    merged = set(_DEFAULT_SUPPRESS) | set(getattr(cfg.warnings, "suppress", []) or [])
+    set_default_suppress(
+        suppress=merged,
+        silence_all=_DEFAULT_SILENCE_ALL or bool(getattr(cfg.warnings, "silence_all", False)),
+    )
+
+
 def _compile_with_warnings(compile_fn, *args, **kwargs):
-    """Call compile_fn, intercept UserWarnings, reprint as clean CLI output."""
+    """Call compile_fn, intercept warnings, reprint as clean CLI output.
+
+    Aqueduct's own diagnostics (AqueductWarning category, prefix
+    `[aqueduct:rule_id] `) become `AQ-WARN [rule_id] <msg>` lines so the
+    rule_id is easy to copy into `warnings.suppress` in aqueduct.yml.
+    Non-Aqueduct UserWarnings fall back to the legacy `WARNING:` prefix.
+    """
+    from aqueduct.warnings import AqueductWarning
+    _AQ_PREFIX = "[aqueduct:"
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result = compile_fn(*args, **kwargs)
     for w in caught:
-        if issubclass(w.category, UserWarning):
+        msg = str(w.message)
+        if issubclass(w.category, AqueductWarning) and msg.startswith(_AQ_PREFIX):
+            body = msg[len(_AQ_PREFIX):]
+            try:
+                rid, rest = body.split("] ", 1)
+                click.echo(f"AQ-WARN [{rid}] {rest}", err=True)
+            except ValueError:
+                click.echo(f"AQ-WARN {body}", err=True)
+        elif issubclass(w.category, UserWarning):
             click.echo(f"WARNING: {w.message}", err=True)
         else:
             warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
@@ -329,10 +360,35 @@ class _AqueductJsonLogFormatter:
         "use when shipping logs to Loki / Splunk / Datadog."
     ),
 )
+@click.option(
+    "--suppress-warning",
+    "suppress_warnings",
+    multiple=True,
+    metavar="RULE_ID",
+    help=(
+        "Silence one Aqueduct warning by rule_id. Repeatable. Copy the ID from "
+        "the `AQ-WARN [...]` prefix in prior output. Merged with "
+        "`warnings.suppress` from aqueduct.yml."
+    ),
+)
+@click.option(
+    "--no-warnings",
+    "no_warnings",
+    is_flag=True,
+    default=False,
+    help="Silence all Aqueduct warnings (compile-time + session-startup).",
+)
 @click.pass_context
-def cli(ctx: click.Context, verbose: bool, log_format: str) -> None:
+def cli(
+    ctx: click.Context,
+    verbose: bool,
+    log_format: str,
+    suppress_warnings: tuple[str, ...],
+    no_warnings: bool,
+) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
     import logging
+    from aqueduct.warnings import install_cli_formatter, set_default_suppress
     level = logging.DEBUG if verbose else logging.WARNING
 
     if log_format.lower() == "json":
@@ -346,6 +402,16 @@ def cli(ctx: click.Context, verbose: bool, log_format: str) -> None:
     else:
         fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
         logging.basicConfig(level=level, format=fmt)
+
+    # Phase 30a — install AQ-WARN [rule_id] format + stash CLI suppress overrides.
+    # Engine-level `warnings.suppress` from aqueduct.yml is merged later, once a
+    # command actually loads config (commands that never read config still
+    # honour the CLI flag).
+    install_cli_formatter()
+    set_default_suppress(suppress=list(suppress_warnings), silence_all=no_warnings)
+    ctx.ensure_object(dict)
+    ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
+    ctx.obj["no_warnings_cli"] = no_warnings
 
 
 @cli.command()
@@ -381,6 +447,7 @@ def check_config(config_path: str | None) -> None:
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ {exc}", err=True)
         sys.exit(1)
@@ -544,6 +611,12 @@ def compile(
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.parser.parser import ParseError, parse
+    from aqueduct.config import load_config, ConfigError
+    try:
+        _cfg = load_config(None)
+        _apply_warnings_from_cfg(_cfg)
+    except ConfigError:
+        pass  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -823,6 +896,7 @@ def run(
         # ── Load engine config ─────────────────────────────────────────────────────
         try:
             cfg = load_config(config_path_abs)
+            _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
             click.echo(f"✗ config error: {exc}", err=True)
             sys.exit(1)
@@ -1723,6 +1797,7 @@ def patch_preview(
         cfg = None
         try:
             cfg = load_config(_Path(config_path) if config_path else None)
+            _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
             click.echo(f"✗ config error (needed for sandbox): {exc}", err=True)
             sys.exit(1)
@@ -2221,6 +2296,7 @@ def test_cmd(
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -2301,6 +2377,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -2389,6 +2466,7 @@ def runs(blueprint: str | None, failed: bool, limit: int, store_dir: str | None,
     from aqueduct.config import load_config
 
     cfg = load_config(Path(config_path) if config_path else None)
+    _apply_warnings_from_cfg(cfg)
     resolved = Path(store_dir) if store_dir else Path(cfg.stores.obs.path).parent
     obs_db = resolved / "obs.db"
     if not obs_db.exists():
@@ -2499,6 +2577,7 @@ def lineage(
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -2622,6 +2701,7 @@ def signal(
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -2772,6 +2852,7 @@ def heal(
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -3000,6 +3081,7 @@ def benchmark(
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -3297,6 +3379,7 @@ def stores_info(config_path: str | None) -> None:
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
@@ -3358,6 +3441,7 @@ def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)

@@ -66,6 +66,8 @@ def compile(  # noqa: A001
     secrets_provider: str = "env",
     secrets_region: str | None = None,
     secrets_resolver: str | None = None,
+    warnings_suppress: set[str] | None = None,
+    warnings_silence_all: bool = False,
 ) -> Manifest:
     """Compile a parsed Blueprint into a fully-resolved Manifest.
 
@@ -239,15 +241,25 @@ def compile(  # noqa: A001
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
 
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
+    from aqueduct.warnings import emit as _aq_emit
+    _supp = warnings_suppress
+    if warnings_silence_all:
+        _supp = {"_silence_all_"}  # sentinel — every emit() callsite below short-circuits
+
+    def _w(rule_id: str, msg: str) -> None:
+        if warnings_silence_all:
+            return
+        _aq_emit(rule_id, msg, suppress=_supp)
+
     if blueprint.retry_policy.max_attempts > 1:
         for m in modules:
             if m.type == "Egress" and m.config.get("mode") == "append":
-                warnings.warn(
+                _w(
+                    "delivery_append_retry_dupes",
                     f"Egress '{m.id}' uses mode=append with "
                     f"max_attempts={blueprint.retry_policy.max_attempts} — "
                     "retries may produce duplicate rows. "
                     "Use mode=overwrite for idempotent writes, or set max_attempts=1.",
-                    stacklevel=2,
                 )
 
     # ── 8. Performance diagnostics ────────────────────────────────────────────
@@ -264,13 +276,13 @@ def compile(  # noqa: A001
             # row_count_estimate with spark_listener method is zero-action
             if sig_type == "row_count_estimate" and sig.get("method") == "spark_listener":
                 continue
-            warnings.warn(
+            _w(
+                "perf_probe_sample_full_scan",
                 f"Probe '{m.id}' signal '{sig_type}' uses df.sample() — "
                 "this is a FULL DATASET SCAN. sample() is a row-level filter, not a "
                 "partition prune: all data is read before rows are discarded. "
                 "Use method: spark_listener for zero-cost row counts. "
                 "See docs/SPARK_GUIDE.md#probe-sample-cost.",
-                stacklevel=2,
             )
 
     # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
@@ -283,26 +295,26 @@ def compile(  # noqa: A001
             um.checkpoint for um in modules if um.id in upstream_ids
         )
         if not upstream_checkpointed:
-            warnings.warn(
+            _w(
+                "perf_incremental_watermark_scan",
                 f"Channel '{m.id}' uses materialize=incremental. "
                 "After each run, Aqueduct computes MAX(watermark_column) on the output — "
                 "a second full scan if the DataFrame is not cached. "
                 "Add a Checkpoint upstream or accept the extra Spark action. "
                 "See docs/SPARK_GUIDE.md#incremental-watermark-scan.",
-                stacklevel=2,
             )
 
     # 8c. Python UDF registered — row-at-a-time execution warning
     for udf_entry in blueprint.udf_registry:
         if udf_entry.get("lang", "python") == "python":
-            warnings.warn(
+            _w(
+                "perf_python_udf_row_at_a_time",
                 f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
                 "Python UDFs execute row-at-a-time and bypass Arrow/vectorized execution. "
                 "For high-volume channels, prefer native Spark SQL expressions or "
                 "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
                 "and unaffected, but the UDF body will not be vectorized. "
                 "See docs/SPARK_GUIDE.md#python-udf-performance.",
-                stacklevel=2,
             )
 
     # 8d. Delta append without partition hint — small-file accumulation risk
@@ -312,13 +324,13 @@ def compile(  # noqa: A001
         if m.config.get("format") in ("delta", "parquet") and m.config.get("mode") == "append":
             has_partition = bool(m.config.get("partition_by") or m.config.get("repartition"))
             if not has_partition:
-                warnings.warn(
+                _w(
+                    "perf_delta_append_no_partition",
                     f"Egress '{m.id}' uses format={m.config.get('format')!r} with mode=append "
                     "but has no partition_by or repartition hint. "
                     "Incremental appends without partitioning accumulate small files over time, "
                     "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
                     "See docs/SPARK_GUIDE.md#planned-future-checks.",
-                    stacklevel=2,
                 )
 
     # 8e. Multi-consumer Channel without cache — DAG re-evaluated per consumer
@@ -331,13 +343,13 @@ def compile(  # noqa: A001
         if m.type != "Channel":
             continue
         if consumer_counts.get(m.id, 0) > 1 and m.id not in checkpointed_ids:
-            warnings.warn(
+            _w(
+                "perf_multi_consumer_no_cache",
                 f"Channel '{m.id}' has {consumer_counts[m.id]} downstream consumers "
                 "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "
                 "consumer branch — consider adding a Checkpoint or cache() boundary to "
                 "avoid redundant computation. "
                 "See docs/SPARK_GUIDE.md#caching-strategy.",
-                stacklevel=2,
             )
 
     # 8f. Hadoop filesystem keys in Ingress options — must be in spark_config instead
@@ -350,7 +362,8 @@ def compile(  # noqa: A001
             if any(str(k).startswith(p) for p in _HADOOP_FS_PREFIXES)
         ]
         if bad_keys:
-            warnings.warn(
+            _w(
+                "perf_hadoop_fs_in_options",
                 f"Ingress '{m.id}' has Hadoop filesystem keys in 'options': "
                 f"{bad_keys}. DataFrameReader.option() does NOT propagate these to "
                 "Spark's HadoopConfiguration — the S3A/GCS/Azure FileSystem will not "
@@ -358,7 +371,6 @@ def compile(  # noqa: A001
                 "the 'spark.hadoop.' prefix instead: e.g. "
                 "'spark.hadoop.fs.s3a.access.key'. "
                 "See docs/SPARK_GUIDE.md#jdbc-ingress-parallelism.",
-                stacklevel=2,
             )
 
     # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only
@@ -367,12 +379,12 @@ def compile(  # noqa: A001
             continue
         maint = m.config.get("maintenance", {})
         if maint and maint.get("optimize") and m.config.get("format", "").lower() != "delta":
-            warnings.warn(
+            _w(
+                "maintenance_optimize_non_delta",
                 f"Egress '{m.id}' has maintenance.optimize=true but format="
                 f"{m.config.get('format')!r}. OPTIMIZE is a Delta Lake operation and "
                 "will fail at runtime on non-Delta tables. Set format: delta or remove "
                 "the maintenance block.",
-                stacklevel=2,
             )
 
     prov_map = ProvenanceMap(
@@ -382,7 +394,7 @@ def compile(  # noqa: A001
         context=context_provenance,
     )
 
-    return Manifest(
+    manifest = Manifest(
         blueprint_id=blueprint.id,
         name=blueprint.name,
         description=blueprint.description,
@@ -399,3 +411,15 @@ def compile(  # noqa: A001
         provenance_map=prov_map,
         inputs_fingerprint=inputs_fingerprint,
     )
+
+    # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
+    if not warnings_silence_all:
+        try:
+            from aqueduct.compiler.warnings import run_all as _run_compile_warnings
+            from aqueduct.warnings import emit as _emit
+            for _rid, _msg in _run_compile_warnings(manifest, suppress=warnings_suppress):
+                _emit(_rid, _msg, suppress=warnings_suppress)
+        except Exception:
+            pass  # warnings must never block compilation
+
+    return manifest
