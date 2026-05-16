@@ -311,33 +311,68 @@ def _load_env_file(env_path: "Path") -> int:
     return loaded
 
 
-# ── Unified .env resolution ───────────────────────────────────────────────────
-# Single discovery order used by every command (run / doctor / validate):
-#   1. explicit --env-file
-#   2. <input-file's directory>/.env   (blueprint or aqueduct.yml dir)
-#   3. <cwd>/.env
-# The "loaded N" line is DEBUG-only (visible with `aqueduct -v`) — routine,
-# not worth default-verbosity noise.
+# ── Unified env resolution (Phase 30) ─────────────────────────────────────────
+# One code path for EVERY config-consuming command. Deterministic, transparent.
+#
+# Precedence (highest first):
+#   1. -e / --env KEY=VAL   (CLI, docker-style, repeatable — overwrites)
+#   2. real os.environ      (already exported / injected by orchestrator)
+#   3. <anchor-dir>/.env    (project file beside aqueduct.yml / blueprint)
+#   4. --env-file PATH       fallback only if no project .env (explicit override)
+#   5. ${VAR:-default}       (resolver-level, in parser/config)
+#
+# cwd is intentionally NOT searched — a stray ./.env silently changing a run
+# is the exact footgun we're removing. Disable .env discovery entirely with
+# AQ_NO_ENV_FILE=1 (command-independent; CI / prod hermetic). A one-line
+# stderr notice is always emitted so the implicit load is never invisible.
+
+
+def _apply_cli_env(cli_env: "tuple[str, ...] | list[str]") -> int:
+    """Apply `-e KEY=VAL` overrides into os.environ. Returns count.
+
+    Highest precedence: overwrites real env AND any later .env (the .env
+    loader skips keys already present). Docker `-e` semantics.
+    """
+    import os
+    n = 0
+    for item in cli_env or ():
+        key, sep, val = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise click.BadParameter(
+                f"-e/--env expects KEY=VALUE, got {item!r}", param_hint="-e",
+            )
+        os.environ[key] = val.strip()
+        n += 1
+    return n
+
 
 def _resolve_and_load_env(
     explicit: "str | None",
     anchor: "Path | None",
-    disabled: bool = False,
+    cli_env: "tuple[str, ...] | list[str] | None" = None,
 ) -> None:
-    """Resolve and load a .env file. No-op when `disabled`.
+    """Apply -e overrides, then load a single .env file. Emits a stderr notice.
 
-    `anchor` is the input file (blueprint / aqueduct.yml) whose directory is
-    searched before falling back to cwd. Passing None skips step 2.
+    `anchor` = the input file (aqueduct.yml / blueprint) whose directory holds
+    the project .env. cwd is never searched. AQ_NO_ENV_FILE=1 disables .env
+    discovery (overrides still applied).
     """
-    import logging as _logging
-    if disabled:
+    import os
+    n_over = _apply_cli_env(cli_env or ())
+    over = f"; {n_over} from -e" if n_over else ""
+
+    if os.environ.get("AQ_NO_ENV_FILE"):
+        click.echo(
+            f"(env: .env discovery disabled — AQ_NO_ENV_FILE{over})", err=True
+        )
         return
+
     candidates: list[Path] = []
-    if explicit:
-        candidates.append(Path(explicit).resolve())
     if anchor is not None:
         candidates.append(Path(anchor).resolve().parent / ".env")
-    candidates.append(Path.cwd() / ".env")
+    if explicit:
+        candidates.append(Path(explicit).resolve())
 
     seen: set[Path] = set()
     for cand in candidates:
@@ -345,10 +380,30 @@ def _resolve_and_load_env(
             seen.add(cand)
             continue
         n = _load_env_file(cand)
-        _logging.getLogger("aqueduct.cli").debug(
-            "Loaded %d variable(s) from %s", n, cand
-        )
+        click.echo(f"(env: loaded {n} var(s) from {cand}{over})", err=True)
         return  # first existing file wins — do not stack multiple .env files
+
+    if n_over:
+        click.echo(f"(env: no .env file found{over})", err=True)
+
+
+def _env_options(f):
+    """Shared decorator: adds `--env-file` + `-e/--env` to a command.
+
+    Phase 30 — every config-consuming command gets identical env handling
+    via this single decorator (no per-command copy-paste to forget). The
+    `--no-env-file` flag is gone; use the AQ_NO_ENV_FILE=1 env var instead
+    (command-independent, CI/prod-settable).
+    """
+    f = click.option(
+        "--env-file", "env_file", default=None, type=click.Path(dir_okay=False),
+        help="Fallback .env if no project .env beside the config/blueprint.",
+    )(f)
+    f = click.option(
+        "-e", "--env", "cli_env", multiple=True, metavar="KEY=VAL",
+        help="Set an env var (repeatable, docker-style). Highest precedence.",
+    )(f)
+    return f
 
 
 def _sniff_file_kind(path: "Path") -> "str | None":
@@ -485,15 +540,10 @@ def cli(
 
 @cli.command()
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--env-file", "env_file", default=None, type=click.Path(dir_okay=False),
-    help="Load a .env file before validation (so ${VAR} placeholders resolve).",
-)
-@click.option(
-    "--no-env-file", "no_env_file", is_flag=True, default=False,
-    help="Disable automatic .env discovery.",
-)
-def validate(files: tuple[str, ...], env_file: str | None, no_env_file: bool) -> None:
+@_env_options
+def validate(
+    files: tuple[str, ...], env_file: str | None, cli_env: tuple[str, ...]
+) -> None:
     """Static validation — parse + schema check, no side effects.
 
     File type is detected by its version header, no flag needed:
@@ -520,7 +570,7 @@ def validate(files: tuple[str, ...], env_file: str | None, no_env_file: bool) ->
 
     any_fail = False
     for path in targets:
-        _resolve_and_load_env(env_file, path, disabled=no_env_file)
+        _resolve_and_load_env(env_file, path, cli_env=cli_env)
         kind = _sniff_file_kind(path)
 
         if kind == "config":
@@ -640,27 +690,14 @@ def schema(target: str, output: str) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
 )
-@click.option(
-    "--env-file",
-    "env_file",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Load a .env file before checks (so ${VAR} placeholders resolve).",
-)
-@click.option(
-    "--no-env-file",
-    "no_env_file",
-    is_flag=True,
-    default=False,
-    help="Disable automatic .env discovery.",
-)
+@_env_options
 def doctor(
     target: str | None,
     skip_spark: bool,
     aqtest_path: str | None,
     aqscenario_path: str | None,
     env_file: str | None,
-    no_env_file: bool,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Live connectivity checks: config, stores, Spark, webhook, secrets, storage.
 
@@ -710,7 +747,7 @@ def doctor(
 
     # Anchor .env discovery to the resolved input file's directory.
     _anchor = config_path or blueprint_path
-    _resolve_and_load_env(env_file, _anchor, disabled=no_env_file)
+    _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
 
     _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
     _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
@@ -986,20 +1023,7 @@ def _format_provenance_rows(pairs) -> str:
     default=False,
     help="Allow approval_mode: aggressive for this run (overrides danger.allow_aggressive_patching=false)",
 )
-@click.option(
-    "--env-file",
-    "env_file",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Load environment variables from a .env file before running (auto-discovers .env next to blueprint if omitted).",
-)
-@click.option(
-    "--no-env-file",
-    "no_env_file",
-    is_flag=True,
-    default=False,
-    help="Disable automatic .env discovery.",
-)
+@_env_options
 @click.option(
     "--parallel",
     is_flag=True,
@@ -1021,7 +1045,7 @@ def run(
     execution_date_str: str | None,
     allow_aggressive: bool = False,
     env_file: str | None = None,
-    no_env_file: bool = False,
+    cli_env: tuple[str, ...] = (),
     parallel: bool = False,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
@@ -1070,10 +1094,12 @@ def run(
     os.chdir(_project_root)
     try:
         # ── .env loading (after project root, before config so vars resolve) ──
-        # cwd is already _project_root here, so anchor=None → the helper's
-        # cwd/.env step resolves to <project_root>/.env (preserves prior
-        # behaviour) while unifying format + DEBUG-only verbosity.
-        _resolve_and_load_env(env_file, None, disabled=no_env_file)
+        # Anchor on _project_root so the helper loads <project_root>/.env
+        # (config dir, else blueprint dir walked up). cwd discovery was
+        # dropped Phase 30 — this keeps the project .env working without it.
+        _resolve_and_load_env(
+            env_file, _project_root / blueprint_abs.name, cli_env=cli_env
+        )
         # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
         blueprint = str(blueprint_abs)
 
@@ -1927,6 +1953,7 @@ def patch() -> None:
     show_default=True,
     help="Output format. `text` (default) renders diff + gate findings. `json` emits a machine-readable report.",
 )
+@_env_options
 def patch_preview(
     patch_file: str,
     blueprint_path: str,
@@ -1934,6 +1961,8 @@ def patch_preview(
     sample_rows: int,
     config_path: str | None,
     out_format: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Validation pyramid preview for a pending patch.
 
@@ -1990,6 +2019,11 @@ def patch_preview(
     if sandbox:
         cfg = None
         try:
+            _resolve_and_load_env(
+                env_file,
+                _Path(config_path) if config_path else _Path(blueprint_path),
+                cli_env=cli_env,
+            )
             cfg = load_config(_Path(config_path) if config_path else None)
             _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
@@ -2475,11 +2509,14 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
     default=False,
     help="Suppress Spark progress output",
 )
+@_env_options
 def test_cmd(
     test_file: str,
     blueprint_path: str | None,
     config_path: str | None,
     quiet: bool,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Run isolated module tests from a test YAML file.
 
@@ -2514,6 +2551,13 @@ def test_cmd(
     from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     try:
+        _resolve_and_load_env(
+            env_file,
+            Path(config_path) if config_path
+            else Path(blueprint_path) if blueprint_path
+            else Path(test_file),
+            cli_env=cli_env,
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -2585,7 +2629,11 @@ def test_cmd(
     default="table",
     show_default=True,
 )
-def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str) -> None:
+@_env_options
+def report(
+    run_id: str, store_dir: str | None, config_path: str | None, fmt: str,
+    env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
     """Print the Flow Report for a completed run."""
     import csv as _csv
     import io
@@ -2595,6 +2643,9 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     from aqueduct.config import ConfigError, load_config
 
     try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -2685,6 +2736,7 @@ def report(run_id: str, store_dir: str | None, config_path: str | None, fmt: str
     default="text", show_default=True,
     help="Output format. `json` for machine-readable consumption (Phase 30b).",
 )
+@_env_options
 def runs(
     blueprint: str | None,
     failed: bool,
@@ -2692,11 +2744,16 @@ def runs(
     store_dir: str | None,
     config_path: str | None,
     out_format: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """List recent blueprint runs."""
     import duckdb as _duckdb
     from aqueduct.config import load_config
 
+    _resolve_and_load_env(
+        env_file, Path(config_path) if config_path else None, cli_env=cli_env
+    )
     cfg = load_config(Path(config_path) if config_path else None)
     _apply_warnings_from_cfg(cfg)
     resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
@@ -2806,6 +2863,7 @@ def runs(
     default="table",
     show_default=True,
 )
+@_env_options
 def lineage(
     blueprint_id_or_blueprint: str,
     store_dir: str | None,
@@ -2813,6 +2871,8 @@ def lineage(
     from_table: str | None,
     column_filter: str | None,
     fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Print column-level lineage graph for a blueprint.
 
@@ -2824,6 +2884,9 @@ def lineage(
     from aqueduct.config import ConfigError, load_config
 
     try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -2924,12 +2987,15 @@ def lineage(
     default=None,
     help="Path to aqueduct.yml",
 )
+@_env_options
 def signal(
     signal_id: str,
     value_str: str | None,
     error_msg: str | None,
     store_dir: str | None,
     config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Set or clear a persistent gate override for a Probe signal.
 
@@ -2948,6 +3014,9 @@ def signal(
     from aqueduct.surveyor.surveyor import _SIGNAL_OVERRIDES_DDL
 
     try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -3066,6 +3135,7 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
     show_default=True,
     help="Output format for --print-prompt.",
 )
+@_env_options
 def heal(
     run_id: str | None,
     scenario_path: str | None,
@@ -3075,6 +3145,8 @@ def heal(
     patches_dir: str,
     print_prompt: bool,
     print_prompt_format: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Manually trigger LLM self-healing for a failed run or scenario.
 
@@ -3099,6 +3171,13 @@ def heal(
         sys.exit(1)
 
     try:
+        _resolve_and_load_env(
+            env_file,
+            Path(config_path) if config_path
+            else Path(scenario_path) if scenario_path
+            else None,
+            cli_env=cli_env,
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -3307,6 +3386,7 @@ def heal(
     show_default=True,
     help="Max concurrent LLM calls (set to 1 for serial execution)",
 )
+@_env_options
 def benchmark(
     scenarios_dir: str,
     models: tuple[str, ...],
@@ -3314,6 +3394,8 @@ def benchmark(
     patches_dir: str,
     fmt: str,
     workers: int,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Run scenario suite against one or more LLM models and compare results.
 
@@ -3328,6 +3410,11 @@ def benchmark(
     from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
 
     try:
+        _resolve_and_load_env(
+            env_file,
+            Path(config_path) if config_path else Path(scenarios_dir),
+            cli_env=cli_env,
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -3620,12 +3707,18 @@ def stores_group() -> None:
     type=click.Path(dir_okay=False),
     help="Path to aqueduct.yml",
 )
-def stores_info(config_path: str | None) -> None:
+@_env_options
+def stores_info(
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...]
+) -> None:
     """Print each store's resolved backend + location label."""
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
 
     try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
@@ -3673,7 +3766,11 @@ def stores_info(config_path: str | None) -> None:
         "table to Parquet, then `\\copy observability.<table> FROM 'file.parquet'` on PG."
     ),
 )
-def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:
+@_env_options
+def stores_migrate(
+    config_path: str | None, from_path: str, store: str,
+    env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
     """Copy KV rows from a DuckDB file into the configured target backend.
 
     Useful when promoting an existing DuckDB-backed project to Postgres or Redis
@@ -3688,6 +3785,9 @@ def stores_migrate(config_path: str | None, from_path: str, store: str) -> None:
         sys.exit(1)
 
     try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:

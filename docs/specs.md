@@ -1815,24 +1815,38 @@ webhooks:
       text: "Pipeline *${blueprint_id}* complete — ${module_count} modules  run_id=${run_id}"
 ```
 
-**`.env` file auto-loading**
+**`.env` file auto-loading** (Phase 30 — unified across every command)
 
-`aqueduct run` auto-discovers a `.env` file in the **project root** (the directory containing `aqueduct.yml`) and loads it into `os.environ` before any config parsing. This means `${VAR}`, `${VAR:-default}`, and `@aq.secret('KEY')` in both `aqueduct.yml` and Blueprints all see the loaded values.
+**Every** config-consuming command (`run`, `doctor`, `validate`, `test`, `report`, `runs`, `lineage`, `signal`, `heal`, `benchmark`, `patch preview`, `stores info`, `stores migrate`) auto-discovers a `.env` file in the directory of the file you pass (the config / blueprint anchor) and loads it into `os.environ` before any config parsing. `${VAR}`, `${VAR:-default}`, and `@aq.secret('KEY')` in both `aqueduct.yml` and Blueprints see the loaded values. A one-line stderr notice is always emitted so the implicit load is never invisible:
 
-- Existing env vars are never overwritten (env always wins over `.env`).
-- Drop a `.env` next to the blueprint for local dev — no manual `export` needed.
-- `--env-file <path>` — explicit override; loads that file instead of auto-discovery.
-- `--no-env-file` — disables auto-discovery entirely (for CI where vars are injected externally).
+```
+(env: loaded 3 var(s) from /path/to/project/.env)
+```
+
+Precedence (highest first):
+
+1. `-e KEY=VAL` / `--env KEY=VAL` — CLI override, repeatable, docker-style
+2. real `os.environ` — already exported / orchestrator-injected
+3. `<anchor-dir>/.env` — project file beside the config / blueprint
+4. `--env-file PATH` — explicit fallback, used only if no anchored `.env`
+5. `${VAR:-default}` — resolver-level default
+
+- Existing env vars are never overwritten (real env always wins over `.env`).
+- **cwd is intentionally NOT searched** — a stray `./.env` silently changing a run is a footgun. Only the anchor directory and an explicit `--env-file` are considered.
+- `AQ_NO_ENV_FILE=1` — disables `.env` discovery entirely (CI / prod where vars are injected externally). Command-independent env var; replaces the old `--no-env-file` flag. `-e` overrides still apply.
+- `--env-file <path>` — explicit fallback `.env` (used only when no anchored project `.env` exists).
+- `-e/--env KEY=VAL` — set a var inline, repeatable, highest precedence (docker semantics).
 
 ```bash
-# .env next to blueprint — loaded automatically
+# .env next to aqueduct.yml / blueprint — loaded automatically by ALL commands
 AQUEDUCT_LLM_MODEL=qwen3:32b
 AQUEDUCT_LLM_BASE_URL=http://localhost:11434/v1
 S3_SECRET=mysecret
 
-aqueduct run pipeline.yml                        # auto-loads .env
-aqueduct run pipeline.yml --env-file prod/.env   # explicit path
-aqueduct run pipeline.yml --no-env-file          # skip (CI)
+aqueduct stores info --config=aqueduct.yml          # auto-loads ./.env
+aqueduct run pipeline.yml -e RUN_ENV=staging        # inline override
+aqueduct run pipeline.yml --env-file prod/.env      # explicit fallback
+AQ_NO_ENV_FILE=1 aqueduct run pipeline.yml          # skip discovery (CI)
 ```
 
 **Environment variable substitution in `aqueduct.yml`**
@@ -2030,7 +2044,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
 |`aqueduct init <name>`|Scaffold a new project in the current directory.|`--name`|
-|`aqueduct validate <file>...`|Static parse + schema (header-detected: blueprint or config). Subsumes `check-config`.|`--env-file`/`--no-env-file`|(none)|
+|`aqueduct validate <file>...`|Static parse + schema (header-detected: blueprint or config). Subsumes `check-config`.|`--env-file`, `-e/--env` (all config commands; see `.env` auto-loading)|
 |`aqueduct compile <blueprint.yml>`|Compile to a resolved Manifest JSON.|`-p/--profile`, `--ctx`, `--execution-date`, `-o/--output`|
 |`aqueduct run <blueprint.yml>`|Execute a Blueprint on Spark.|(see Run Flags below)|
 |`aqueduct test <test_file.yml>`|Run isolated module tests.|`--blueprint`, `--config`, `--quiet`|
@@ -2088,8 +2102,9 @@ Detailed reference for the most common command:
 | `--run-id <uuid>` | Force a specific UUID for this run. Useful for tracking runs across external systems. |
 | `--store-dir <path>` | Override the default `.aqueduct` directory for observability and state storage. |
 | `--allow-aggressive` | Allow `approval_mode: aggressive` for this run, overriding `danger.allow_aggressive_patching: false` in config. Single-use — does not modify `aqueduct.yml`. |
-| `--env-file <path>` | Load environment variables from a `.env` file before running. If omitted, Aqueduct auto-discovers `.env` in the blueprint's directory. Existing env vars are never overwritten. |
-| `--no-env-file` | Disable `.env` auto-discovery. Use in CI where variables are injected externally and a local `.env` might cause conflicts. |
+| `--env-file <path>` | Explicit fallback `.env`, used only when no anchored project `.env` exists beside the config/blueprint. Existing env vars are never overwritten. |
+| `-e, --env KEY=VAL` | Set an env var inline (repeatable, docker-style). Highest precedence — overrides real env and any `.env`. |
+| `AQ_NO_ENV_FILE=1` (env var, not a flag) | Disable `.env` auto-discovery entirely. Command-independent; use in CI where variables are injected externally. Replaces the removed `--no-env-file` flag. |
 | `--parallel` | Execute independent DAG branches concurrently. Aqueduct identifies fully-independent connected components in the data-flow graph (Union-Find) and submits each to a separate Python thread. Only beneficial when the Blueprint contains multiple independent source trees (e.g. two separate Ingress→Egress chains with no shared edges). Junction fan-out is already parallel via Spark's lazy evaluation — `--parallel` adds nothing for single-tree blueprints. First component failure cancels remaining components. |
 
 **Sub-DAG execution example:**

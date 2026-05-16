@@ -205,7 +205,7 @@ stores:
 
 ### 3. Run
 
-Aqueduct auto-loads a `.env` file from the project root before executing - put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. No credential hardcoding required.
+Every command auto-loads a `.env` from the directory of the config/blueprint you pass (not cwd) before executing — put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. A `(env: loaded N var(s) from …)` notice confirms the load. Override inline with `-e KEY=VAL`, point elsewhere with `--env-file`, or disable discovery with `AQ_NO_ENV_FILE=1` (CI). No credential hardcoding required.
 
 ```bash
 aqueduct run pipeline.yml --config aqueduct.yml

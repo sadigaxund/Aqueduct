@@ -220,17 +220,21 @@ metrics:
 #
 # ── .env file auto-loading ────────────────────────────────────────────────────
 #
-# `aqueduct run` auto-discovers a `.env` file in the project root (same
-# directory as this aqueduct.yml). Variables in `.env` are loaded into os.environ before config
-# parsing — existing env vars are never overwritten.
+# EVERY command (run/doctor/validate/test/report/runs/lineage/signal/heal/
+# benchmark/patch preview/stores info/stores migrate) auto-discovers a `.env`
+# in the directory of the config/blueprint you pass (NOT cwd) and loads it
+# into os.environ before config parsing. Existing env vars are never
+# overwritten. A `(env: loaded N var(s) from …)` line is printed to stderr.
 #
-# Drop a `.env` next to your blueprint to avoid manual `export`:
+# Drop a `.env` next to this aqueduct.yml to avoid manual `export`:
 #   AQUEDUCT_LLM_MODEL=qwen3:32b
 #   AQUEDUCT_LLM_BASE_URL=http://localhost:11434/v1
 #   S3_SECRET=...
 #
-# Or pass an explicit path:  aqueduct run pipeline.yml --env-file secrets/.env
-# To disable auto-discovery: aqueduct run pipeline.yml --no-env-file
+# Precedence: -e KEY=VAL  >  real env  >  <dir>/.env  >  --env-file  >  default
+#   aqueduct run pipeline.yml -e RUN_ENV=staging      # inline override
+#   aqueduct run pipeline.yml --env-file secrets/.env # explicit fallback
+#   AQ_NO_ENV_FILE=1 aqueduct run pipeline.yml        # disable discovery (CI)
 #
 # ── Environment variable substitution in aqueduct.yml itself ─────────────────
 #

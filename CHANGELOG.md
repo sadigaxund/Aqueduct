@@ -2,6 +2,19 @@
 
 ---
 
+### feat(cli): unified, transparent `.env` loading across every command
+_2026-05-17_
+
+`.env` auto-load (`_resolve_and_load_env`) was wired into only `run` /
+`doctor` / `validate`. `stores info`, `stores migrate`, `patch preview`,
+`test`, `report`, `runs`, `lineage`, `signal`, `heal`, `benchmark` skipped it
+→ those required a manual `source .env` while the other three did not. Cause:
+the loader was per-command copy-paste, not centralized — easy to forget on
+new subcommands. Reported via `stores info --config=aqueduct.yml` failing
+with `Missing environment variables` on the cluster showcase.
+
+---
+
 ### fix(parser): resolve Tier-0 tokens in `spark_config` + `macros` (ISSUE-027)
 _2026-05-16_
 
