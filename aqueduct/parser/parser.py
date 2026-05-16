@@ -191,6 +191,16 @@ def parse(
         block_on_explain_regression=validated.agent.block_on_explain_regression,
     )
 
+    # Tier-0 resolution applies here too (parity with module config /
+    # context_override) — ${ENV:-default} / ${ctx.*} in spark_config and
+    # macros must be substituted, Spark/macros do no var expansion (ISSUE-027).
+    # Wrapped so a bad ${ctx.*} surfaces as ParseError, not raw ValueError.
+    try:
+        resolved_spark_config = resolve_value(dict(validated.spark_config), ctx_map)
+        resolved_macros = resolve_value(dict(validated.macros), ctx_map)
+    except ValueError as exc:
+        raise ParseError(f"spark_config / macros resolution failed: {exc}") from exc
+
     return Blueprint(
         aqueduct_version=validated.aqueduct,
         id=validated.id,
@@ -199,11 +209,11 @@ def parse(
         context=ContextRegistry(values=ctx_map),
         modules=modules,
         edges=edges,
-        spark_config=dict(validated.spark_config),
+        spark_config=resolved_spark_config,
         retry_policy=retry_policy,
         agent=agent,
         udf_registry=tuple(validated.udf_registry),
-        macros=dict(validated.macros),
+        macros=resolved_macros,
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
     )
