@@ -2,6 +2,25 @@
 
 ---
 
+### fix(parser): resolve Tier-0 tokens in `spark_config` + `macros` (ISSUE-027)
+_2026-05-16_
+
+`parser.parse` wrapped module `config` / `context_override` in
+`resolve_value()` but passed top-level `spark_config` and `macros` verbatim.
+`${ENV:-default}` / `${ctx.*}` in those blocks were never substituted — Spark
+and the macro engine do no var expansion, so e.g.
+`spark.jars.packages: "${MY_PKG:-org.example:pkg:1.0}"` reached Spark literally
+→ `IllegalArgumentException` on Maven coordinates.
+
+- `spark_config` / `macros` now resolved via `resolve_value(dict(...),
+  ctx_map)` in `parser/parser.py` — parity with module config. `{{ param }}`
+  macro placeholders untouched (not `${...}`); `@aq.*` / reserved
+  `${ctx._watermark}` still deferred.
+- Resolution wrapped in `try/except ValueError → ParseError` (was outside any
+  guard — a bad `${ctx.*}` escaped as raw `ValueError`, not `ParseError`).
+
+---
+
 ### fix(parser): preserve `${ctx._watermark}` through parse/compile
 _2026-05-16_
 
