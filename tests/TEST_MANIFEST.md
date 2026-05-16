@@ -143,6 +143,10 @@ This section tracks high-level functional verification of core features against 
 ### `resolver.py`
 - ✅ missing env var without default raises ParseError
 - ✅ nested `${ctx.foo.bar}` resolved correctly
+- ⏳ `${ctx._watermark}` NOT in ctx_map → preserved verbatim (token unchanged), no `Undefined context reference` raised (reserved-deferred carve-out)
+- ⏳ non-reserved unknown `${ctx.foo}` still raises `Undefined context reference: ${ctx.foo}` (carve-out is exact-set, not blanket underscore)
+- ⏳ `_sub_ctx` preserves `${ctx._watermark}` while still resolving other real `${ctx.*}` keys in the same string
+- ⏳ end-to-end: a `materialize: incremental` Blueprint with `WHERE ts > ${ctx._watermark}` parses + compiles (`aqueduct validate` rc=0); Manifest Channel query still contains the literal `${ctx._watermark}` token
 
 ### `schema.py`
 - ✅ unknown module type fails validation
