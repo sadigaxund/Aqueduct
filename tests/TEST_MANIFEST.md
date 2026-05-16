@@ -143,10 +143,14 @@ This section tracks high-level functional verification of core features against 
 ### `resolver.py`
 - ✅ missing env var without default raises ParseError
 - ✅ nested `${ctx.foo.bar}` resolved correctly
-- ⏳ `${ctx._watermark}` NOT in ctx_map → preserved verbatim (token unchanged), no `Undefined context reference` raised (reserved-deferred carve-out)
-- ⏳ non-reserved unknown `${ctx.foo}` still raises `Undefined context reference: ${ctx.foo}` (carve-out is exact-set, not blanket underscore)
-- ⏳ `_sub_ctx` preserves `${ctx._watermark}` while still resolving other real `${ctx.*}` keys in the same string
-- ⏳ end-to-end: a `materialize: incremental` Blueprint with `WHERE ts > ${ctx._watermark}` parses + compiles (`aqueduct validate` rc=0); Manifest Channel query still contains the literal `${ctx._watermark}` token
+- ✅ `${ctx._watermark}` NOT in ctx_map → preserved verbatim (token unchanged), no `Undefined context reference` raised (reserved-deferred carve-out) — `tests/test_parser/test_resolver.py`
+- ✅ non-reserved unknown `${ctx.foo}` still raises `Undefined context reference: ${ctx.foo}` (carve-out is exact-set, not blanket underscore) — `tests/test_parser/test_resolver.py`
+- ✅ `_sub_ctx` preserves `${ctx._watermark}` while still resolving other real `${ctx.*}` keys in the same string — `tests/test_parser/test_resolver.py`
+- ✅ end-to-end: a `materialize: incremental` Blueprint with `WHERE ts > ${ctx._watermark}` parses + compiles (`aqueduct validate` rc=0); Manifest Channel query still contains the literal `${ctx._watermark}` token — `tests/test_parser/test_resolver.py`
+- ✅ ISSUE-027: `spark_config: {spark.jars.packages: "${MY_PKG:-org.example:pkg:1.0}"}` → parsed Blueprint `spark_config` value is `org.example:pkg:1.0` (env unset → default applied) — `tests/test_parser/test_resolver.py::test_spark_config_env_default_applied`
+- ✅ ISSUE-027: `macros` value containing `${AQ_REGION:-US}` → resolved (`country = 'US'`); `{{ param }}` placeholders in the same macro left untouched for the compiler — `tests/test_parser/test_resolver.py::test_macros_env_resolved_jinja_placeholder_untouched`
+- ✅ ISSUE-027: `${ctx.key}` in `spark_config` resolves from the context map (happy path) — `tests/test_parser/test_resolver.py::test_spark_config_ctx_resolves_from_context_map`
+- ✅ ISSUE-027: undefined non-reserved `${ctx.x}` in `spark_config` raises `ParseError` — FIXED: `parser.py` hoists `spark_config`/`macros` `resolve_value()` into a guarded block (`ValueError→ParseError`, mirrors module-config pattern). `tests/test_parser/test_resolver.py::test_spark_config_undefined_ctx_raises_parseerror`
 
 ### `schema.py`
 - ✅ unknown module type fails validation
@@ -882,6 +886,7 @@ Does NOT apply or stage — caller decides.
 ## Failure Report
 
 - [✅] `tests/test_cli/test_cli_aggressive.py::test_aggressive_mode_invalid_patch_stops_loop`: RESOLVED. Autonomous fix-and-verify loop verified end-to-end.
+- [✅] `tests/test_parser/test_resolver.py::test_spark_config_undefined_ctx_raises_parseerror`: RESOLVED (ISSUE-027). App hoisted `spark_config`/`macros` `resolve_value()` into a guarded block raising `ParseError` on `ValueError` (mirrors `parser.py:131` module-config pattern). `xfail` marker removed; 21/21 resolver tests pass. Issue moved to `.dev/RESOLVED/ISSUE-027.md`.
 
 ---
 

@@ -154,4 +154,3 @@ tmp/
 patches/
 **/data/output/**
 !**/data/input/*
-CLAUDE.md

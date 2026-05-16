@@ -31,7 +31,10 @@ def test_obs_store_location_label(obs_store):
     assert len(label) > 0
     # Redaction checks if applicable (Postgres passwords)
     if obs_store.backend == "postgres":
-        assert ":" not in label.split("@")[0]  # rough check that password isn't there
+        # password must be redacted: userinfo (between // and @) carries no user:pass
+        if "@" in label:
+            userinfo = label.split("//", 1)[1].split("@", 1)[0]
+            assert ":" not in userinfo
 
 def test_redis_obs_rejected():
     with pytest.raises(ValidationError):

@@ -28,4 +28,7 @@ def test_lineage_store_location_label(lineage_store):
     assert isinstance(label, str)
     assert len(label) > 0
     if lineage_store.backend == "postgres":
-        assert ":" not in label.split("@")[0]  # rough check that password isn't there
+        # password must be redacted: userinfo (between // and @) carries no user:pass
+        if "@" in label:
+            userinfo = label.split("//", 1)[1].split("@", 1)[0]
+            assert ":" not in userinfo
