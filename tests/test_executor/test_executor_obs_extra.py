@@ -16,7 +16,7 @@ def test_write_stage_metrics_success(tmp_path):
     }
     _write_stage_metrics("m1", "r1", metrics, store_dir)
     
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
     
     conn = duckdb.connect(str(db_path))
@@ -34,7 +34,7 @@ def test_write_stage_metrics_success(tmp_path):
 def test_update_metric_success(tmp_path):
     store_dir = tmp_path / "obs"
     store_dir.mkdir()
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     
     # Setup initial row
     conn = duckdb.connect(str(db_path))

@@ -162,3 +162,85 @@ modules:
     manifest = compiler_compile(bp, blueprint_path=None)
     assert manifest.provenance_map is not None
     assert manifest.provenance_map.blueprint_path == ""
+
+def test_compile_inputs_fingerprint_arcade_expanded_local(tmp_path, bp_path):
+    """
+    compile(): Arcade-expanded Ingress (sub-blueprint Ingress namespaced as {arcade_id}__{child_id})
+    with a local path -> fingerprint entry exists keyed by the expanded ID with stat fields populated.
+    """
+    # 1. Create sub-blueprint
+    sub_bp_path = tmp_path / "sub.yml"
+    in_file = tmp_path / "input.parquet"
+    in_file.write_text("arcade_data")
+    
+    sub_bp_path.write_text(f"""
+aqueduct: "1.0"
+id: sub_bp
+name: Sub Blueprint
+modules:
+  - id: child_in
+    type: Ingress
+    label: Child IN
+    config:
+      format: parquet
+      path: {in_file}
+""")
+
+    # 2. Create main blueprint with Arcade
+    bp_path.write_text(f"""
+aqueduct: "1.0"
+id: main_bp
+name: Main Blueprint
+modules:
+  - id: arc
+    type: Arcade
+    label: Arcade Mod
+    ref: {sub_bp_path.name}
+""")
+    
+    bp = parse(str(bp_path))
+    manifest = compiler_compile(bp, blueprint_path=bp_path)
+    
+    # Expected namespaced ID: arc__child_in
+    assert "arc__child_in" in manifest.inputs_fingerprint
+    fp = manifest.inputs_fingerprint["arc__child_in"]
+    assert fp["size_bytes"] == len("arcade_data")
+    assert isinstance(fp["last_modified"], str)
+
+def test_compile_inputs_fingerprint_arcade_expanded_remote(tmp_path, bp_path):
+    """
+    compile(): Arcade-expanded Ingress with remote path -> fingerprint entry exists
+    keyed by expanded ID with size_bytes=None, last_modified=None.
+    """
+    sub_bp_path = tmp_path / "sub_remote.yml"
+    sub_bp_path.write_text("""
+aqueduct: "1.0"
+id: sub_bp
+name: Sub Remote
+modules:
+  - id: child_in
+    type: Ingress
+    label: Child IN
+    config:
+      format: parquet
+      path: s3a://bucket/arcade_data.parquet
+""")
+
+    bp_path.write_text(f"""
+aqueduct: "1.0"
+id: main_bp
+name: Main Remote
+modules:
+  - id: arc
+    type: Arcade
+    label: Arcade Mod
+    ref: {sub_bp_path.name}
+""")
+    
+    bp = parse(str(bp_path))
+    manifest = compiler_compile(bp, blueprint_path=bp_path)
+    
+    assert "arc__child_in" in manifest.inputs_fingerprint
+    fp = manifest.inputs_fingerprint["arc__child_in"]
+    assert fp["size_bytes"] is None
+    assert fp["last_modified"] is None

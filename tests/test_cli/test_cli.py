@@ -24,7 +24,9 @@ def test_compile_outputs_json():
     runner = CliRunner()
     result = runner.invoke(cli, ["compile", str(FIXTURES / "valid_minimal.yml")])
     assert result.exit_code == 0
-    manifest = json.loads(result.output)
+    # Find the start of JSON in case of warnings
+    json_start = result.output.find('{')
+    manifest = json.loads(result.output[json_start:])
     assert manifest["blueprint_id"] == "blueprint.hello.world"
     assert "modules" in manifest
     assert "edges" in manifest
@@ -84,3 +86,145 @@ def test_compile_invalid_execution_date():
     result = runner.invoke(cli, ["compile", str(FIXTURES / "valid_minimal.yml"), "--execution-date", "not-a-date"])
     assert result.exit_code != 0
     assert "must be YYYY-MM-DD" in result.output
+
+def test_cli_run_honors_metrics_config(spark, tmp_path):
+    """aqueduct run: when metrics.use_observe=false in aqueduct.yml, module_metrics row has NULL records_written"""
+    runner = CliRunner()
+    bp_path = tmp_path / "bp.yml"
+    in_path = tmp_path / "in.parquet"
+    spark.range(1, 4).selectExpr("id AS a").write.parquet(str(in_path))
+    
+    bp_path.write_text(f"""
+aqueduct: '1.0'
+id: test_obs
+name: Test Obs
+modules:
+  - id: in
+    type: Ingress
+    label: In
+    config: {{format: parquet, path: {in_path}}}
+  - id: out
+    type: Egress
+    label: Out
+    config: {{format: parquet, path: {tmp_path / "out"}}}
+edges:
+  - from: in
+    to: out
+""")
+    config_path = tmp_path / "aqueduct.yml"
+    config_path.write_text(f"""
+metrics:
+  use_observe: false
+stores:
+  observability: {{path: {tmp_path / "obs.db"}}}
+""")
+    
+    # We need to ensure the CLI uses this config file.
+    # The --config flag is the most direct way.
+    result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
+    assert result.exit_code == 0, result.output
+    
+    # Check DuckDB directly
+    import duckdb
+    # CLI preserves custom filenames when configured (ISSUE-024)
+    db_path = tmp_path / "obs.db"
+    assert db_path.exists(), f"Obs DB not found at {db_path}. Files in tmp_path: {list(tmp_path.glob('*'))}"
+
+    conn = duckdb.connect(str(db_path))
+    try:
+        rows = conn.execute("SELECT records_written FROM module_metrics WHERE module_id='out'").fetchall()
+    finally:
+        conn.close()
+    
+    assert len(rows) > 0
+    for (val,) in rows:
+        assert val is None
+
+class TestCLICompileShow:
+    """Tests for aqueduct compile --show flags."""
+
+    def test_compile_show_manifest_default(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compile", str(FIXTURES / "valid_minimal.yml"), "--show", "manifest"])
+        assert result.exit_code == 0
+        # Should be valid JSON
+        json_start = result.output.find('{')
+        manifest = json.loads(result.output[json_start:])
+        assert "blueprint_id" in manifest
+
+    def test_compile_show_provenance(self, tmp_path):
+        runner = CliRunner()
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text("""
+aqueduct: '1.0'
+id: prov_test
+name: Prov Test
+context:
+  base_path: /data
+modules:
+  - id: m1
+    type: Ingress
+    label: M1
+    config:
+      format: parquet
+      path: ${ctx.base_path}/in.parquet
+edges: []
+""", encoding="utf-8")
+        result = runner.invoke(cli, ["compile", str(bp_path), "--show", "provenance"])
+        assert result.exit_code == 0
+        assert "# Context" in result.output
+        assert "base_path" in result.output
+        assert "# Module: m1" in result.output
+        assert "original_expression" in result.output
+        assert "${ctx.base_path}/in.parquet" in result.output
+
+    def test_compile_show_inputs(self, tmp_path):
+        runner = CliRunner()
+        data_path = tmp_path / "data.csv"
+        data_path.write_text("a,b,c\n1,2,3", encoding="utf-8")
+        
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(f"""
+aqueduct: '1.0'
+id: input_test
+name: Input Test
+modules:
+  - id: in1
+    type: Ingress
+    label: In1
+    config: {{format: csv, path: {data_path}}}
+edges: []
+""", encoding="utf-8")
+        result = runner.invoke(cli, ["compile", str(bp_path), "--show", "inputs"])
+        assert result.exit_code == 0
+        assert "module_id" in result.output
+        assert "path" in result.output
+        assert "in1" in result.output
+        assert str(data_path) in result.output
+        assert "B" in result.output
+
+    def test_compile_show_all(self, tmp_path):
+        runner = CliRunner()
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text("""
+aqueduct: '1.0'
+id: all_test
+name: All Test
+modules:
+  - id: in
+    type: Ingress
+    label: In
+    config: {format: parquet, path: /tmp/in}
+edges: []
+""", encoding="utf-8")
+        result = runner.invoke(cli, ["compile", str(bp_path), "--show", "all"])
+        assert result.exit_code == 0
+        assert '"blueprint_id": "all_test"' in result.output
+        assert "── Provenance ──" in result.output
+        assert "── Inputs fingerprint ──" in result.output
+
+    def test_compile_show_invalid_choice(self):
+        runner = CliRunner()
+        result = runner.invoke(cli, ["compile", str(FIXTURES / "valid_minimal.yml"), "--show", "xml"])
+        assert result.exit_code != 0
+        assert "Invalid value for '--show'" in result.output

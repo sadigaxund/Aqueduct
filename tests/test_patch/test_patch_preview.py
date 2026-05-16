@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 from aqueduct.patch.preview import (
     touched_module_ids,
     _live_lineage_rows,
-    run_gate2_lineage,
+    run_lineage_gate,
     render_unified_diff,
 )
 from aqueduct.patch.grammar import PatchSpec
@@ -115,7 +115,7 @@ class TestGate2Lineage:
             "edges": [{"from": "m1", "to": "ch1"}]
         }
         spec = _patch({"op": "set_module_config_key", "module_id": "ch1", "key": "label", "value": "New"})
-        result = run_gate2_lineage(bp, bp, spec)
+        result = run_lineage_gate(bp, bp, spec)
         assert result.status == "pass"
         assert not result.warnings
 
@@ -144,7 +144,7 @@ class TestGate2Lineage:
             ]
         }
         spec = _patch({"op": "replace_module_config", "module_id": "ch1", "config": {"op": "sql", "query": "SELECT a AS b FROM m1"}})
-        result = run_gate2_lineage(bp_before, bp_after, spec)
+        result = run_lineage_gate(bp_before, bp_after, spec)
         assert result.status == "warn"
         assert len(result.warnings) == 1
         assert result.warnings[0].missing_column == "a"
@@ -167,7 +167,7 @@ class TestGate2Lineage:
             "edges": [{"from": "m1", "to": "ch1"}, {"from": "ch1", "to": "ch2"}]
         }
         spec = _patch({"op": "replace_module_config", "module_id": "ch1", "config": {"op": "sql", "query": "SELECT * FROM m1"}})
-        result = run_gate2_lineage(bp_before, bp_after, spec)
+        result = run_lineage_gate(bp_before, bp_after, spec)
         assert result.status == "pass" # Wildcard in NEW outputs suppresses check
 
 

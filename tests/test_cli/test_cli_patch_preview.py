@@ -5,7 +5,7 @@ from click.testing import CliRunner
 from pathlib import Path
 
 from aqueduct.cli import cli
-from aqueduct.patch.preview import Gate2Result, Gate3Result, LineageWarning
+from aqueduct.patch.preview import LineageGateResult, SandboxGateResult, LineageWarning
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
@@ -34,7 +34,7 @@ edges: []
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("""
 stores:
-  obs: { path: .aqueduct/obs.db }
+  observability: { path: .aqueduct/obs.db }
   lineage: { path: .aqueduct/lineage.db }
   depot: { path: .aqueduct/depot.db }
 deployment: { engine: spark, target: local }
@@ -42,13 +42,13 @@ deployment: { engine: spark, target: local }
     
     return bp_path, patch_path, config_path
 
-@patch("aqueduct.patch.preview.run_gate2_lineage")
+@patch("aqueduct.patch.preview.run_lineage_gate")
 def test_patch_preview_text_gate2_pass(mock_g2, setup):
     """aqueduct patch preview --blueprint bp.yml patch.json -> exit 0 on Gate 2 pass"""
     bp_path, patch_path, _ = setup
     runner = CliRunner()
     
-    mock_g2.return_value = Gate2Result(
+    mock_g2.return_value = LineageGateResult(
         status="pass", duration_ms=10, touched_modules=["src"], warnings=[]
     )
     
@@ -61,13 +61,13 @@ def test_patch_preview_text_gate2_pass(mock_g2, setup):
     assert "status:          pass" in result.output
     assert "no downstream column-consumption regressions detected" in result.output
 
-@patch("aqueduct.patch.preview.run_gate2_lineage")
+@patch("aqueduct.patch.preview.run_lineage_gate")
 def test_patch_preview_text_gate2_warn(mock_g2, setup):
     """Gate 2 warnings do not cause non-zero exit"""
     bp_path, patch_path, _ = setup
     runner = CliRunner()
     
-    mock_g2.return_value = Gate2Result(
+    mock_g2.return_value = LineageGateResult(
         status="warn", 
         duration_ms=10, 
         touched_modules=["src"], 
@@ -86,15 +86,15 @@ def test_patch_preview_text_gate2_warn(mock_g2, setup):
     assert "status:          warn" in result.output
     assert "⚠ col1 missing" in result.output
 
-@patch("aqueduct.patch.preview.run_gate2_lineage")
-@patch("aqueduct.patch.preview.run_gate3_sandbox")
+@patch("aqueduct.patch.preview.run_lineage_gate")
+@patch("aqueduct.patch.preview.run_sandbox_gate")
 def test_patch_preview_sandbox_json(mock_g3, mock_g2, setup):
     """aqueduct patch preview ... --sandbox --format json emits detailed report"""
     bp_path, patch_path, config_path = setup
     runner = CliRunner()
     
-    mock_g2.return_value = Gate2Result(status="pass", duration_ms=10, touched_modules=["src"], warnings=[])
-    mock_g3.return_value = Gate3Result(
+    mock_g2.return_value = LineageGateResult(status="pass", duration_ms=10, touched_modules=["src"], warnings=[])
+    mock_g3.return_value = SandboxGateResult(
         status="pass", 
         duration_ms=50, 
         sample_rows=100, 
@@ -113,20 +113,20 @@ def test_patch_preview_sandbox_json(mock_g3, mock_g2, setup):
     assert result.exit_code == 0
     data = json.loads(result.output)
     assert data["patch_id"] == "P001"
-    assert data["gate2"]["status"] == "pass"
-    assert data["gate3"]["status"] == "pass"
-    assert data["gate3"]["sample_rows"] == 100
-    assert data["gate3"]["egress_targets"][0]["id"] == "sink1"
+    assert data["lineage"]["status"] == "pass"
+    assert data["sandbox"]["status"] == "pass"
+    assert data["sandbox"]["sample_rows"] == 100
+    assert data["sandbox"]["egress_targets"][0]["id"] == "sink1"
 
-@patch("aqueduct.patch.preview.run_gate2_lineage")
-@patch("aqueduct.patch.preview.run_gate3_sandbox")
+@patch("aqueduct.patch.preview.run_lineage_gate")
+@patch("aqueduct.patch.preview.run_sandbox_gate")
 def test_patch_preview_gate3_fail_exit2(mock_g3, mock_g2, setup):
     """Gate 3 fail causes exit code 2"""
     bp_path, patch_path, config_path = setup
     runner = CliRunner()
     
-    mock_g2.return_value = Gate2Result(status="pass", duration_ms=10, touched_modules=[], warnings=[])
-    mock_g3.return_value = Gate3Result(status="fail", duration_ms=50, sample_rows=0, detail="Runtime error")
+    mock_g2.return_value = LineageGateResult(status="pass", duration_ms=10, touched_modules=[], warnings=[])
+    mock_g3.return_value = SandboxGateResult(status="fail", duration_ms=50, sample_rows=0, detail="Runtime error")
     
     result = runner.invoke(cli, [
         "patch", "preview", str(patch_path), 
@@ -151,5 +151,5 @@ def test_patch_preview_gate1_blocked(mock_guard, setup):
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
     
     assert result.exit_code == 2
-    assert "✗ Gate 1 (guardrails) blocked: Guardrail violation" in result.output
+    assert "✗ Guardrails gate blocked: Guardrail violation" in result.output
 

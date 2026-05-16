@@ -39,7 +39,7 @@ class TestLogCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["log", str(bp_file)])
+        result = runner.invoke(cli, ["patch", "log", str(bp_file)])
 
         assert result.exit_code == 0
         assert "No git history" in result.output
@@ -51,7 +51,7 @@ class TestLogCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["log", str(bp_file)])
+        result = runner.invoke(cli, ["patch", "log", str(bp_file)])
 
         assert result.exit_code == 0
         assert "P001" in result.output
@@ -64,7 +64,7 @@ class TestLogCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["log", str(bp_file)])
+        result = runner.invoke(cli, ["patch", "log", str(bp_file)])
 
         assert result.exit_code == 0
         assert "(manual change)" in result.output
@@ -76,7 +76,7 @@ class TestLogCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["log", str(bp_file), "--format", "json"])
+        result = runner.invoke(cli, ["patch", "log", str(bp_file), "--format", "json"])
 
         assert result.exit_code == 0
         data = json.loads(result.output)
@@ -99,7 +99,7 @@ class TestLogCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["log", str(bp_file)])
+        result = runner.invoke(cli, ["patch", "log", str(bp_file)])
 
         assert result.exit_code == 0
         # The 40-char column has at most 40 chars visible for patches
@@ -134,7 +134,7 @@ class TestRollbackCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001"])
+        result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001"])
 
         assert result.exit_code == 0
         cmds = [" ".join(c) for c in calls]
@@ -150,7 +150,7 @@ class TestRollbackCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "GHOST_PATCH"])
+        result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "GHOST_PATCH"])
 
         assert result.exit_code == 1
         assert "GHOST_PATCH" in result.output
@@ -159,7 +159,7 @@ class TestRollbackCmd:
     def test_hard_flag_no_longer_accepted(self, bp_file):
         """--hard flag is removed and passing it produces a click error."""
         runner = CliRunner()
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001", "--hard"])
+        result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001", "--hard"])
 
         assert result.exit_code == 2
         assert "No such option: --hard" in result.output
@@ -181,7 +181,7 @@ class TestRollbackCmd:
 
         monkeypatch.setattr(subprocess, "run", mock_run)
         runner = CliRunner()
-        result = runner.invoke(cli, ["rollback", str(bp_file), "--to", "P001"])
+        result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001"])
 
         assert result.exit_code == 1
         assert "error: pathspec" in result.output

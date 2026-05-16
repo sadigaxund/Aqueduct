@@ -38,7 +38,7 @@ def test_depot_store_location_label(depot_store):
 def test_redis_depot_ok():
     cfg = AqueductConfig(**{
         "stores": {
-            "obs": {"backend": "duckdb", "path": "obs.db"},
+            "observability": {"backend": "duckdb", "path": "observability.db"},
             "lineage": {"backend": "duckdb", "path": "lineage.db"},
             "depot": {"backend": "redis", "path": "redis://localhost:6379/15"}
         }

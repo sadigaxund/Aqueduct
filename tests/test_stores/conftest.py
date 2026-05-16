@@ -1,7 +1,8 @@
-import os
 import uuid
 import pytest
-import contextlib
+from tests.conftest import (
+    _pg_dsn, _pg_is_reachable, _redis_url, _redis_is_reachable
+)
 
 @pytest.fixture(params=[
     "duckdb",
@@ -10,16 +11,17 @@ import contextlib
 def obs_store(request, tmp_path):
     backend = request.param
     if backend == "duckdb":
-        from aqueduct.stores.duckdb_ import DuckDBObsStore
-        store_path = tmp_path / "obs.db"
-        yield DuckDBObsStore(store_path)
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        store_path = tmp_path / "observability.db"
+        yield DuckDBObservabilityStore(store_path)
     elif backend == "postgres":
-        dsn = os.environ.get("AQ_PG_DSN")
-        if not dsn:
-            pytest.skip("AQ_PG_DSN not set")
-        from aqueduct.stores.postgres import PostgresObsStore
+        if not _pg_is_reachable():
+            pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
+        
+        dsn = _pg_dsn()
+        from aqueduct.stores.postgres import PostgresObservabilityStore
         schema_name = f"obs_test_{uuid.uuid4().hex[:8]}"
-        store = PostgresObsStore(dsn)
+        store = PostgresObservabilityStore(dsn)
         store._SCHEMA = schema_name
         yield store
         # Teardown
@@ -41,9 +43,10 @@ def lineage_store(request, tmp_path):
         store_path = tmp_path / "lineage.db"
         yield DuckDBLineageStore(store_path)
     elif backend == "postgres":
-        dsn = os.environ.get("AQ_PG_DSN")
-        if not dsn:
-            pytest.skip("AQ_PG_DSN not set")
+        if not _pg_is_reachable():
+            pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
+            
+        dsn = _pg_dsn()
         from aqueduct.stores.postgres import PostgresLineageStore
         schema_name = f"lineage_test_{uuid.uuid4().hex[:8]}"
         store = PostgresLineageStore(dsn)
@@ -82,9 +85,10 @@ def depot_store(request, tmp_path):
         store_path = tmp_path / "depot.db"
         yield DuckDBDepotStore(store_path)
     elif backend == "postgres":
-        dsn = os.environ.get("AQ_PG_DSN")
-        if not dsn:
-            pytest.skip("AQ_PG_DSN not set")
+        if not _pg_is_reachable():
+            pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
+            
+        dsn = _pg_dsn()
         from aqueduct.stores.postgres import PostgresDepotStore
         schema_name = f"depot_test_{uuid.uuid4().hex[:8]}"
         store = PostgresDepotStore(dsn)
@@ -98,13 +102,12 @@ def depot_store(request, tmp_path):
             cur.execute(f'DROP SCHEMA IF EXISTS "{schema_name}" CASCADE')
         conn.close()
     elif backend == "redis":
-        url = os.environ.get("AQ_REDIS_URL", "redis://localhost:6379/15")
-        try:
-            import redis
-            client = redis.Redis.from_url(url, decode_responses=True)
-            client.ping()
-        except Exception:
-            pytest.skip("Redis not reachable")
+        if not _redis_is_reachable():
+            pytest.skip("Redis not reachable (set AQ_REDIS_URL)")
+            
+        url = _redis_url()
+        import redis
+        client = redis.Redis.from_url(url, decode_responses=True)
             
         from aqueduct.stores.redis_ import RedisDepotStore
         store = RedisDepotStore(url)

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
-from aqueduct.patch.preview import run_gate3_sandbox
+from aqueduct.patch.preview import run_sandbox_gate
 from aqueduct.executor.spark.ingress import read_ingress
 
 
@@ -26,7 +26,7 @@ def test_gate3_pass_on_valid_blueprint(spark, sample_data, tmp_path):
         "edges": [{"from": "in", "to": "out"}]
     }
     
-    result = run_gate3_sandbox(
+    result = run_sandbox_gate(
         bp,
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
@@ -60,7 +60,7 @@ def test_gate3_fail_on_compile_error(spark, tmp_path):
         ]
     }
     
-    result = run_gate3_sandbox(
+    result = run_sandbox_gate(
         bp,
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
@@ -86,7 +86,7 @@ def test_gate3_fail_on_runtime_error(spark, sample_data, tmp_path):
         "edges": [{"from": "in", "to": "m1"}]
     }
     
-    result = run_gate3_sandbox(
+    result = run_sandbox_gate(
         bp,
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
@@ -136,7 +136,7 @@ def test_gate3_sample_rows_zero(spark, sample_data, tmp_path):
         ],
         "edges": []
     }
-    result = run_gate3_sandbox(
+    result = run_sandbox_gate(
         bp, blueprint_path=tmp_path / "bp.yml", patch_id="p0",
         failed_module=None, sample_rows=0, spark_session=spark
     )
@@ -159,7 +159,7 @@ def test_gate3_temp_file_unlinked(spark, sample_data, tmp_path):
         mock_file.name = str(tmp_path / "mock.yml")
         mock_tmp.return_value.__enter__.return_value = mock_file
         
-        run_gate3_sandbox(
+        run_sandbox_gate(
             bp, blueprint_path=tmp_path / "bp.yml", patch_id="ptmp",
             failed_module=None, spark_session=spark
         )
@@ -177,7 +177,7 @@ def test_gate3_spark_unavailable_skips(tmp_path):
             "modules": [{"id": "in", "type": "Ingress", "label": "In", "config": {"format": "parquet", "path": "p"}}],
             "edges": []
         }
-        result = run_gate3_sandbox(
+        result = run_sandbox_gate(
             bp, blueprint_path=tmp_path / "bp.yml", patch_id="p_skip",
             failed_module=None, spark_session=None # Force it to call make_spark_session
         )

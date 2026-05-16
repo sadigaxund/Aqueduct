@@ -28,15 +28,15 @@ edges: []
     return bp_path
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.doctor.check_blueprint_sources_from_manifest")
-def test_doctor_warn_adds_hints_before_llm(
+def test_doctor_warn_adds_hints_before_agent(
     mock_check, mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint
 ):
-    """blueprint has warn doctor result -> failure_ctx.doctor_hints non-empty before LLM call."""
+    """blueprint has warn doctor result -> failure_ctx.doctor_hints non-empty before Agent call."""
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
@@ -81,7 +81,7 @@ def test_doctor_warn_adds_hints_before_llm(
 
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 @patch("aqueduct.doctor.check_blueprint_sources_from_manifest")
 def test_doctor_exception_swallowed_hints_empty(
@@ -89,7 +89,7 @@ def test_doctor_exception_swallowed_hints_empty(
 ):
     """doctor check throws exception -> exception swallowed; doctor_hints stays empty; self-healing continues."""
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec

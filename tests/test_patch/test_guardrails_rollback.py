@@ -207,6 +207,6 @@ edges: []
                     return MagicMock(returncode=0, stdout="blueprint.yml\n")
                 return MagicMock(returncode=0)
             mock_run.side_effect = side_effect
-            result = runner.invoke(cli, ["rollback", str(env["bp_path"]), "--to", "abc123"])
+            result = runner.invoke(cli, ["patch", "rollback", str(env["bp_path"]), "--to", "abc123"])
         assert result.exit_code == 0
         assert "Original" in env["bp_path"].read_text()

@@ -158,7 +158,7 @@ def test_probe_does_not_halt_blueprint(spark: SparkSession, sample_data, tmp_pat
     assert spark.read.parquet(str(out)).count() == 10
 
     # Signals DB written
-    assert (store / "obs.db").exists()
+    assert (store / "observability.db").exists()
 
 
 # ── Regulator ─────────────────────────────────────────────────────────────────
@@ -284,7 +284,7 @@ def test_linear_ingress_egress_metrics(spark: SparkSession, sample_data, tmp_pat
     assert result.status == "success"
 
     import duckdb
-    conn = duckdb.connect(str(store / "obs.db"))
+    conn = duckdb.connect(str(store / "observability.db"))
     # Schema: (run_id, module_id, records_read, bytes_read, records_written, bytes_written, duration_ms, captured_at)
     metrics = conn.execute("SELECT module_id, records_read, bytes_read, records_written, bytes_written, duration_ms FROM module_metrics").fetchall()
     conn.close()
@@ -316,7 +316,7 @@ def test_channel_metrics(spark: SparkSession, sample_data, tmp_path):
     assert result.status == "success"
 
     import duckdb
-    conn = duckdb.connect(str(store / "obs.db"))
+    conn = duckdb.connect(str(store / "observability.db"))
     metrics = conn.execute("SELECT module_id, duration_ms FROM module_metrics WHERE module_id = 'clean'").fetchone()
     conn.close()
 

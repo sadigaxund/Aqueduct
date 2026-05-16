@@ -21,7 +21,7 @@ def cli_runner():
 
 @pytest.fixture
 def obs_db(tmp_path):
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE run_records (run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR, started_at TIMESTAMP, finished_at TIMESTAMP, module_results JSON)")
     conn.execute("CREATE TABLE failure_contexts (run_id VARCHAR PRIMARY KEY, blueprint_id VARCHAR, failed_module VARCHAR, error_message VARCHAR, stack_trace VARCHAR, manifest_json JSON, provenance_json JSON, started_at TIMESTAMP, finished_at TIMESTAMP)")
@@ -42,7 +42,7 @@ def lineage_db(tmp_path):
 @pytest.fixture
 def aq_config(tmp_path, obs_db, lineage_db):
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  obs: {{ path: {obs_db} }}\n  lineage: {{ path: {lineage_db} }}\n")
+    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  observability: {{ path: {obs_db} }}\n  lineage: {{ path: {lineage_db} }}\n")
     return config_path
 
 
@@ -109,7 +109,7 @@ class TestRunsCommand:
     def test_runs_no_db(self, cli_runner, tmp_path):
         """aqueduct runs with no obs.db -> prints 'No runs found' without error."""
         conf = tmp_path / "aq_no_db.yml"
-        conf.write_text("stores:\n  obs: { path: /tmp/ghost_obs.db }\n")
+        conf.write_text("stores:\n  observability: { path: /tmp/ghost_obs.db }\n")
         result = cli_runner.invoke(cli, ["runs", "--config", str(conf)])
         assert result.exit_code == 0
         assert "No runs found" in result.output

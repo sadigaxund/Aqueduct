@@ -32,7 +32,7 @@ agent:
 """)
     # Create the obs.db parent directory so it doesn't fail on exist check
     (tmp_path / ".aqueduct").mkdir(exist_ok=True)
-    (tmp_path / ".aqueduct" / "obs.db").touch()
+    (tmp_path / ".aqueduct" / "observability.db").touch()
     return config_path
 
 
@@ -113,7 +113,7 @@ agent:
   provider: openai_compat
 """)
     (tmp_path / ".aqueduct").mkdir(exist_ok=True)
-    (tmp_path / ".aqueduct" / "obs.db").touch()
+    (tmp_path / ".aqueduct" / "observability.db").touch()
     store_dir = tmp_path / ".aqueduct"
 
     runner = CliRunner()

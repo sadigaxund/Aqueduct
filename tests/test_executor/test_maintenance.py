@@ -186,7 +186,7 @@ def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
         result = execute(manifest, spark, store_dir=store_dir)
 
     assert result.status == "success"
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
     conn = duckdb.connect(str(db_path))
     rows = conn.execute("SELECT * FROM maintenance_metrics WHERE module_id = 'out'").fetchall()
@@ -209,7 +209,7 @@ def test_write_maintenance_metrics_db_error_debug_only(tmp_path, caplog):
     store_dir = tmp_path / "store_fail"
     store_dir.mkdir()
     # Write a corrupt/non-duckdb file at obs.db path to trigger DB error
-    (store_dir / "obs.db").write_text("not a duckdb file")
+    (store_dir / "observability.db").write_text("not a duckdb file")
 
     with caplog.at_level(logging.DEBUG):
         _write_maintenance_metrics("m1", "run-1", {"optimize_ms": 5}, store_dir)

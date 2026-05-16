@@ -1,6 +1,7 @@
 from __future__ import annotations
 import pytest
 import duckdb
+import threading
 import json
 import time
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from pyspark.sql import Row
 
 from aqueduct.executor.spark.probe import _threshold, execute_probe
+from aqueduct.executor.spark.executor import execute
 from aqueduct.surveyor.surveyor import Surveyor
 from aqueduct.parser.models import Module, Edge, RetryPolicy
 from aqueduct.compiler.models import Manifest
@@ -55,7 +57,7 @@ def test_execute_probe_writes_to_db(spark, tmp_path):
     
     execute_probe(module, df, spark, "run_1", tmp_path)
     
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "observability.db"
     assert db_path.exists()
     
     conn = duckdb.connect(str(db_path))
@@ -68,7 +70,7 @@ def test_execute_probe_writes_to_db(spark, tmp_path):
 
 def test_evaluate_regulator_passed(tmp_path):
     # Setup obs.db with a passed signal
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload VARCHAR, captured_at TIMESTAMP DEFAULT now())")
     conn.execute(
@@ -88,7 +90,7 @@ def test_evaluate_regulator_passed(tmp_path):
 
 def test_evaluate_regulator_failed(tmp_path):
     # Setup obs.db with a failed signal
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload VARCHAR, captured_at TIMESTAMP DEFAULT now())")
     conn.execute(
@@ -107,7 +109,7 @@ def test_evaluate_regulator_failed(tmp_path):
     assert surveyor.evaluate_regulator("r1") is False
 
 def test_evaluate_regulator_no_signal_defaults_open(tmp_path):
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload VARCHAR, captured_at TIMESTAMP DEFAULT now())")
     conn.close()
@@ -123,64 +125,93 @@ def test_evaluate_regulator_no_signal_defaults_open(tmp_path):
     assert surveyor.evaluate_regulator("r1") is True
 
 
-def test_regulator_timeout_opens_mid_poll(tmp_path):
-    from aqueduct.executor.spark.executor import execute
+def test_regulator_timeout_opens_mid_poll(spark, tmp_path):
+    """Regulator gate starts closed, opens mid-poll after a signal is inserted."""
+    # 1. Manifest with Ingress -> Regulator -> Egress
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
     
-    # 1. Manifest with Ingress -> Regulator
-    ingress = Module(id="in1", type="Ingress", label="In", config={"format": "parquet", "path": "p"})
-    regulator = Module(id="r1", type="Regulator", label="Reg", config={"timeout_seconds": 10, "on_block": "abort"})
+    ingress = Module(id="in1", type="Ingress", label="In", config={"format": "parquet", "path": in_path})
+    regulator = Module(id="r1", type="Regulator", label="Reg", config={"timeout_seconds": 60, "on_block": "abort"})
+    egress = Module(id="out1", type="Egress", label="Out", config={"format": "parquet", "path": out_path})
+    
     manifest = Manifest(
-        blueprint_id="bp1",
+        blueprint_id="bp_poll_success",
         name="test",
-        description="",
-        aqueduct_version="1.0",
         context={},
-        modules=(ingress, regulator),
+        modules=(ingress, regulator, egress),
         edges=(
             Edge(from_id="in1", to_id="r1", port="main"),
-            Edge(from_id="p1", to_id="r1", port="signal") # signal source
+            Edge(from_id="r1", to_id="out1", port="main"),
+            Edge(from_id="p1", to_id="r1", port="signal")
         ),
         spark_config={},
-        retry_policy=RetryPolicy(),
-        agent=None,
-        udf_registry={},
-        macros={},
-        checkpoint=False,
-        provenance_map=None,
-        inputs_fingerprint={}
     )
     
-    mock_surveyor = MagicMock()
-    # First call: False (closed), Second call: True (open)
-    mock_surveyor.evaluate_regulator.side_effect = [False, True]
+    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    run_id = "run_poll_success"
+    surveyor.start(run_id)
     
-    spark = MagicMock()
-    # Mock ingress producing a DF
-    mock_df = MagicMock()
-    with patch("aqueduct.executor.spark.executor.read_ingress", return_value=mock_df), \
-         patch("time.sleep") as mock_sleep:
+    # Create the table and insert initial CLOSED signal
+    db_path = tmp_path / "observability.db"
+    conn = duckdb.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS probe_signals (
+            run_id      VARCHAR     NOT NULL,
+            probe_id    VARCHAR     NOT NULL,
+            signal_type VARCHAR     NOT NULL,
+            payload     VARCHAR     NOT NULL,
+            captured_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+    conn.execute(
+        "INSERT INTO probe_signals (run_id, probe_id, signal_type, payload, captured_at) VALUES (?, ?, ?, ?, now())",
+        [run_id, "p1", "threshold", json.dumps({"passed": False})]
+    )
+    conn.close()
+    
+    def _insert_signal():
+        time.sleep(1) # Wait for execute to start polling
+        conn = duckdb.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO probe_signals (run_id, probe_id, signal_type, payload, captured_at) VALUES (?, ?, ?, ?, now())",
+            [run_id, "p1", "threshold", json.dumps({"passed": True})]
+        )
+        conn.close()
         
-        # We need a frame_store to check results
-        res = execute(manifest, spark, store_dir=tmp_path, surveyor=mock_surveyor)
-        
-        # Should have called evaluate_regulator twice
-        assert mock_surveyor.evaluate_regulator.call_count == 2
-        assert mock_sleep.call_count == 1
-        
-        # Regulator should be success
-        reg_res = next(r for r in res.module_results if r.module_id == "r1")
-        assert reg_res.status == "success"
+    t = threading.Thread(target=_insert_signal, daemon=True)
+    
+    # Patch poll interval to be fast
+    original_sleep = time.sleep
+    def mocked_sleep(seconds):
+        if seconds == 2.0: # poll_interval in executor.py
+            original_sleep(0.1)
+        else:
+            original_sleep(seconds)
 
-def test_regulator_timeout_reaches_limit_aborts(tmp_path):
-    from aqueduct.executor.spark.executor import execute
+    with patch("time.sleep", side_effect=mocked_sleep):
+        t.start()
+        res = execute(manifest, spark, store_dir=tmp_path, surveyor=surveyor, run_id=run_id)
+        t.join(timeout=5)
+        
+    assert res.status == "success"
+    assert spark.read.parquet(out_path).count() == 5
     
-    ingress = Module(id="in1", type="Ingress", label="In", config={"format": "parquet", "path": "p"})
+    reg_res = next(r for r in res.module_results if r.module_id == "r1")
+    assert reg_res.status == "success"
+
+def test_regulator_timeout_reaches_limit_aborts(spark, tmp_path):
+    """Regulator gate remains closed and times out, triggering abort."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    
+    ingress = Module(id="in1", type="Ingress", label="In", config={"format": "parquet", "path": in_path})
     regulator = Module(id="r1", type="Regulator", label="Reg", config={"timeout_seconds": 1, "on_block": "abort"})
+    
     manifest = Manifest(
-        blueprint_id="bp1",
+        blueprint_id="bp_poll_abort",
         name="test",
-        description="",
-        aqueduct_version="1.0",
         context={},
         modules=(ingress, regulator),
         edges=(
@@ -188,27 +219,40 @@ def test_regulator_timeout_reaches_limit_aborts(tmp_path):
             Edge(from_id="p1", to_id="r1", port="signal")
         ),
         spark_config={},
-        retry_policy=RetryPolicy(),
-        agent=None,
-        udf_registry={},
-        macros={},
-        checkpoint=False,
-        provenance_map=None,
-        inputs_fingerprint={}
     )
     
-    mock_surveyor = MagicMock()
-    mock_surveyor.evaluate_regulator.return_value = False
+    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    run_id = "run_poll_abort"
+    surveyor.start(run_id)
     
-    spark = MagicMock()
-    mock_df = MagicMock()
-    with patch("aqueduct.executor.spark.executor.read_ingress", return_value=mock_df), \
-         patch("time.sleep") as mock_sleep:
+    db_path = tmp_path / "observability.db"
+    conn = duckdb.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS probe_signals (
+            run_id      VARCHAR     NOT NULL,
+            probe_id    VARCHAR     NOT NULL,
+            signal_type VARCHAR     NOT NULL,
+            payload     VARCHAR     NOT NULL,
+            captured_at TIMESTAMPTZ NOT NULL
+        );
+    """)
+    conn.execute(
+        "INSERT INTO probe_signals (run_id, probe_id, signal_type, payload, captured_at) VALUES (?, ?, ?, ?, now())",
+        [run_id, "p1", "threshold", json.dumps({"passed": False})]
+    )
+    conn.close()
+    
+    original_sleep = time.sleep
+    def mocked_sleep(seconds):
+        if seconds == 2.0:
+            original_sleep(0.1)
+        else:
+            original_sleep(seconds)
+
+    with patch("time.sleep", side_effect=mocked_sleep):
+        res = execute(manifest, spark, store_dir=tmp_path, surveyor=surveyor, run_id=run_id)
         
-        res = execute(manifest, spark, store_dir=tmp_path, surveyor=mock_surveyor)
-        
-        assert mock_surveyor.evaluate_regulator.call_count >= 1
-        
-        reg_res = next(r for r in res.module_results if r.module_id == "r1")
-        assert reg_res.status == "error"
-        assert "Regulator gate closed; on_block=abort" in reg_res.error
+    assert res.status == "error"
+    reg_res = next(r for r in res.module_results if r.module_id == "r1")
+    assert reg_res.status == "error"
+    assert "Regulator gate closed; on_block=abort" in reg_res.error

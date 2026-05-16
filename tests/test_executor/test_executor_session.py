@@ -95,3 +95,27 @@ class TestSessionQuietMode:
         # restored after context
         assert sys.stderr is original_stderr
         assert ran == [True]
+
+
+# ── ISSUE-026: stop_spark_session AQ_TESTING guard ────────────────────────────
+
+class TestStopSparkSessionGuard:
+    def test_aq_testing_set_skips_stop(self, monkeypatch):
+        """AQ_TESTING set → stop_spark_session returns without touching session."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.session import stop_spark_session
+
+        monkeypatch.setenv("AQ_TESTING", "1")
+        mock_spark = MagicMock()
+        stop_spark_session(mock_spark)
+        mock_spark.stop.assert_not_called()
+
+    def test_aq_testing_unset_calls_stop(self, monkeypatch):
+        """AQ_TESTING unset → stop_spark_session calls spark.stop() once."""
+        from unittest.mock import MagicMock
+        from aqueduct.executor.spark.session import stop_spark_session
+
+        monkeypatch.delenv("AQ_TESTING", raising=False)
+        mock_spark = MagicMock()
+        stop_spark_session(mock_spark)
+        mock_spark.stop.assert_called_once_with()
