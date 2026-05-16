@@ -33,7 +33,10 @@ def test_depot_store_location_label(depot_store):
     assert isinstance(label, str)
     assert len(label) > 0
     if depot_store.backend in ("postgres", "redis"):
-        assert ":" not in label.split("@")[0]  # rough check that password isn't there
+        # password must be redacted: userinfo (between // and @) carries no user:pass
+        if "@" in label:
+            userinfo = label.split("//", 1)[1].split("@", 1)[0]
+            assert ":" not in userinfo
 
 def test_redis_depot_ok():
     cfg = AqueductConfig(**{

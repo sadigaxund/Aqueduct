@@ -109,14 +109,14 @@ def test_execute_persists_into_postgres(spark, tmp_path):
             Module(id="ch", type="Channel", label="Ch",
                     config={"op": "sql", "query": "SELECT id, dbl FROM in"}),
             Module(id="pr", type="Probe", label="Pr",
-                    config={"signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
+                    config={"attach_to": "ch",
+                            "signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
             Module(id="out", type="Egress", label="Out",
                     config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
         ),
         edges=(
             Edge(from_id="in", to_id="ch", port="main"),
-            Edge(from_id="ch", to_id="pr", port="main"),
-            Edge(from_id="pr", to_id="out", port="main"),
+            Edge(from_id="ch", to_id="out", port="main"),
         ),
     )
 
