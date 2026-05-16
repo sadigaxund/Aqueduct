@@ -1,2 +1,4 @@
+aqueduct_config: "1.0"
+
 danger:
   allow_full_probe_actions: true
