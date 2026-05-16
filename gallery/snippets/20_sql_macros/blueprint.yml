@@ -1,0 +1,47 @@
+# blueprint.yml
+# SQL Macros: reusable SQL fragments resolved at compile time.
+# The Manifest the engine runs contains plain SQL — no macro syntax survives.
+
+aqueduct: "1.0"
+id: sql_macros_demo
+name: "SQL Macros Snippet"
+
+# Plain macro: a named SQL fragment.
+# Parameterized macro: {{ param }} placeholders filled at the call site.
+macros:
+  active: "status = 'active' AND deleted_at IS NULL"
+  trunc:  "DATE_TRUNC('{{ period }}', {{ col }})"
+
+modules:
+  - id: orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true", nullValue: ""}
+
+  - id: recent_active
+    label: "Active Orders Since 2026"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT order_id, status, order_ts, amount
+        FROM orders
+        WHERE {{ macros.active }}
+          AND {{ macros.trunc(period='day', col=order_ts) }} >= '2026-01-01'
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: orders
+    to: recent_active
+  - from: recent_active
+    to: output_save

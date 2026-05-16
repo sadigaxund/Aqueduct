@@ -5,15 +5,6 @@ aqueduct: "1.0"
 id: s3_parquet_demo
 name: "S3/Minio Parquet Ingress Snippet"
 
-spark_config:
-  spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
-  # Workaround for ISSUE-001: Set Hadoop properties globally via spark.hadoop prefix
-  spark.hadoop.fs.s3a.endpoint: "${S3_ENDPOINT:-}"
-  spark.hadoop.fs.s3a.access.key: "${S3_ACCESS_KEY:-}"
-  spark.hadoop.fs.s3a.secret.key: "${S3_SECRET_KEY:-}"
-  spark.hadoop.fs.s3a.path.style.access: "true"
-  spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
-  spark.hadoop.fs.s3a.aws.credentials.provider: "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
 
 modules:
   - id: weather_data_s3

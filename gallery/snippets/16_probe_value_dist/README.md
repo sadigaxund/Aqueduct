@@ -46,4 +46,4 @@ In `blueprint.yml`:
         percentiles: [0.25, 0.5, 0.75, 0.95]
 ```
 
-Results are stored in the default `.aqueduct/obs.db` (DuckDB format).
+Results are stored in the default per-pipeline `.aqueduct/observability/<blueprint_id>/observability.db` (DuckDB format).

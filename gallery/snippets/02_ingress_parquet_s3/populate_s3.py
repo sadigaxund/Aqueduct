@@ -2,6 +2,12 @@ import pandas as pd
 import os
 import sys
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 def main():
     print("--- Aqueduct S3/Minio Population Tool ---")
     
@@ -9,13 +15,12 @@ def main():
     s3_path = "s3a://aqueduct-gallery/weather-data/"
     bucket_name = "aqueduct-gallery"
     
-    print(f"Target Path: {s3_path}")
+    # Try to get from environment first
+    endpoint = os.environ.get("S3_ENDPOINT", "").strip()
+    access_key = os.environ.get("S3_ACCESS_KEY", "").strip()
+    secret_key = os.environ.get("S3_SECRET_KEY", "").strip()
 
-    # Ask for Minio/Custom S3 settings if they want to override defaults
-    print("\n[Optional] Connection Settings (press Enter to skip):")
-    endpoint = input("  Endpoint URL (e.g. http://localhost:9000): ").strip()
-    access_key = input("  Access Key: ").strip()
-    secret_key = input("  Secret Key: ").strip()
+    print(f"Target Path: {s3_path}")
 
     # Create sample data
     df = pd.DataFrame({
@@ -53,16 +58,10 @@ def main():
         output_file = f"{s3_path.replace('s3a://', 's3://')}weather_data.parquet"
         
         df.to_parquet(output_file, index=False, storage_options=storage_options)
-        print(f"\n[bold green]✓[/bold green] Successfully uploaded to {output_file}")
+        print(f"\nSuccessfully uploaded to {output_file}")
         
-        print("\nTo run Aqueduct against this store, use these environment variables:")
-        if endpoint:
-            print(f"export S3_ENDPOINT={endpoint}")
-        if access_key:
-            print(f"export S3_ACCESS_KEY={access_key}")
-        if secret_key:
-            print(f"export S3_SECRET_KEY={secret_key}")
-        print("\nThen run: aqueduct run blueprint.yml")
+        
+        print("\nNext run: aqueduct run blueprint.yml")
 
     except ImportError:
         print("\nError: 's3fs' library not found.")

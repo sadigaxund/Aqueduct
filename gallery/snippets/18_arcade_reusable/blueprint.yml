@@ -1,0 +1,48 @@
+# blueprint.yml
+# Arcade: one reusable sub-Blueprint, instantiated twice with different context.
+
+aqueduct: "1.0"
+id: arcade_demo
+name: "Reusable Arcade Snippet"
+
+modules:
+  - id: us_sales
+    label: "US Sales (Arcade)"
+    type: Arcade
+    ref: arcades/region_filter.yml
+    context_override:
+      region: US
+      src_path: data/input/sales.csv
+
+  - id: eu_sales
+    label: "EU Sales (Arcade)"
+    type: Arcade
+    ref: arcades/region_filter.yml
+    context_override:
+      region: EU
+      src_path: data/input/sales.csv
+
+  - id: combined
+    label: "Union Both Regions"
+    type: Funnel
+    config:
+      mode: union_all
+      inputs:
+        - us_sales
+        - eu_sales
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: us_sales
+    to: combined
+  - from: eu_sales
+    to: combined
+  - from: combined
+    to: output_save

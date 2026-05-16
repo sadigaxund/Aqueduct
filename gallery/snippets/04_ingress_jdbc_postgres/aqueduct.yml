@@ -4,6 +4,10 @@ deployment:
   target: local
   master_url: "local[*]"
 
+spark_config:
+  # JDBC drivers for PostgreSQL and SQLite
+  spark.jars.packages: "org.postgresql:postgresql:42.5.0,org.xerial:sqlite-jdbc:3.36.0.3"
+
 stores:
   observability:
     backend: duckdb
