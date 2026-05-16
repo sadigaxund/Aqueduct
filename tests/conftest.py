@@ -2,40 +2,85 @@ import os
 import pytest
 from pyspark.sql import SparkSession
 
-
-# ── Ollama (local LLM) ────────────────────────────────────────────────────────
-# Set AQ_OLLAMA_URL in your local environment (NOT committed to git).
-# Example: export AQ_OLLAMA_URL=http://10.0.0.39:11434
-# Defaults to http://localhost:11434 when unset.
-# Tests skip automatically when the resolved host is not reachable.
-
-def _ollama_url() -> str:
-    return os.environ.get("AQ_OLLAMA_URL", "http://localhost:11434")
+# Signals short-lived CLI commands (`aqueduct test` / `doctor`) NOT to call
+# SparkSession.stop() — under pytest make_spark_session().getOrCreate() returns
+# the shared session-scoped fixture; stopping it kills the SparkContext for
+# every later test (ISSUE-026). The `spark` fixture owns the lifecycle here.
+os.environ.setdefault("AQ_TESTING", "1")
 
 
-def _ollama_is_reachable() -> bool:
-    url = _ollama_url()
+# ── Agent / LLM testing policy ────────────────────────────────────────────────
+# No live-LLM fixtures. LLM responses are non-deterministic and a live model
+# (e.g. gemma3:12b ≈ 8-12 GB) is slow, RAM-heavy and flaky — it tests model
+# precision, not Aqueduct code. Deterministic agent-loop coverage lives in
+# tests/test_surveyor/test_agent.py (mocks aqueduct.agent._call_agent /
+# httpx.post). End-to-end model behaviour is validated by .aqscenario.yml
+# scenarios, not the unit suite.
+
+
+# ── Anthropic ─────────────────────────────────────────────────────────────────
+# Set ANTHROPIC_API_KEY in your environment to run live Claude tests.
+
+def _anthropic_is_available() -> bool:
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+requires_anthropic = pytest.mark.skipif(
+    not _anthropic_is_available(),
+    reason="ANTHROPIC_API_KEY not set",
+)
+
+
+# ── Postgres ──────────────────────────────────────────────────────────────────
+# Set AQ_PG_DSN in your environment. Example: postgresql://user:pass@localhost:5432/db
+
+def _pg_dsn() -> str | None:
+    return os.environ.get("AQ_PG_DSN")
+
+
+def _pg_is_reachable() -> bool:
+    dsn = _pg_dsn()
+    if not dsn:
+        return False
     try:
-        import httpx
-        resp = httpx.get(url.rstrip("/") + "/api/tags", timeout=3.0)
-        return resp.status_code == 200
+        import psycopg2
+        conn = psycopg2.connect(dsn, connect_timeout=3)
+        conn.close()
+        return True
     except Exception:
         return False
 
 
-@pytest.fixture(scope="session")
-def ollama_url() -> str:
-    """Session-scoped fixture: returns Ollama base URL or skips the test."""
-    url = _ollama_url()
-    if not _ollama_is_reachable():
-        pytest.skip(f"Ollama at {url} is not reachable — set AQ_OLLAMA_URL or start Ollama locally")
-    return url
-
-
-requires_ollama = pytest.mark.skipif(
-    not _ollama_is_reachable(),
-    reason="Ollama not reachable (set AQ_OLLAMA_URL and ensure host is up)",
+requires_postgres = pytest.mark.skipif(
+    not _pg_is_reachable(),
+    reason="Postgres not reachable (set AQ_PG_DSN and ensure DB is up)",
 )
+
+
+# ── Redis ─────────────────────────────────────────────────────────────────────
+# Set AQ_REDIS_URL in your environment. Defaults to redis://localhost:6379/15
+
+def _redis_url() -> str:
+    return os.environ.get("AQ_REDIS_URL", "redis://localhost:6379/15")
+
+
+def _redis_is_reachable() -> bool:
+    url = _redis_url()
+    try:
+        import redis
+        client = redis.Redis.from_url(url, socket_timeout=3)
+        client.ping()
+        return True
+    except Exception:
+        return False
+
+
+requires_redis = pytest.mark.skipif(
+    not _redis_is_reachable(),
+    reason="Redis not reachable (set AQ_REDIS_URL and ensure server is up)",
+)
+
+
 
 
 # ── Spark ─────────────────────────────────────────────────────────────────────
@@ -51,7 +96,6 @@ def _spark_is_healthy():
     try:
         spark = SparkSession.builder.master(_spark_master()).getOrCreate()
         spark.range(1).count()
-        spark.stop()
         return True
     except Exception:
         return False

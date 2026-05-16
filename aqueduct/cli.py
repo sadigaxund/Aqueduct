@@ -1087,12 +1087,18 @@ def run(
 
         # CLI flags override config file; config file overrides built-in defaults
         # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
+        # _using_default_obs_path: only the default path gets relocated to a
+        # per-pipeline .aqueduct/observability/<blueprint_id>/ dir below. A
+        # user-set observability.path / lineage.path is already honoured
+        # verbatim by get_stores() and must NOT be clobbered (ISSUE-024).
+        _using_default_obs_path = False
         if store_dir_abs:
             resolved_store_dir = store_dir_abs
         else:
             _observability_path = cfg.stores.observability.path
             _default_obs = ".aqueduct/observability.db"
             if _observability_path == _default_obs:
+                _using_default_obs_path = True
                 # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
                 resolved_store_dir = None  # set below after manifest
             else:
@@ -1265,10 +1271,13 @@ def run(
             )
 
         # ── Surveyor — start ───────────────────────────────────────────────────────
-        # For DuckDB defaults the bundle's obs store points at `.aqueduct/observability.db`;
-        # rebuild with the per-pipeline resolved_store_dir so the observability store lives
-        # under `.aqueduct/observability/<blueprint_id>/` like before Phase 28.
-        if cfg.stores.observability.backend == "duckdb":
+        # For DuckDB *defaults only* the bundle's obs store points at the shared
+        # `.aqueduct/observability.db`; rebuild it under the per-pipeline
+        # resolved_store_dir (`.aqueduct/observability/<blueprint_id>/`) like
+        # before Phase 28. A user-customised observability.path / lineage.path
+        # is already honoured verbatim by get_stores() — do NOT rebuild it,
+        # that would silently ignore the configured filename (ISSUE-024).
+        if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
             from aqueduct.stores.duckdb_ import (
                 DuckDBDepotStore,
                 DuckDBLineageStore,
@@ -2501,7 +2510,7 @@ def test_cmd(
     from pathlib import Path
 
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.executor.spark.session import make_spark_session
+    from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
     from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
     try:
@@ -2531,7 +2540,7 @@ def test_cmd(
         click.echo(f"✗ test file error: {exc}", err=True)
         sys.exit(1)
     finally:
-        spark.stop()
+        stop_spark_session(spark)
 
     # ── Print results ─────────────────────────────────────────────────────────
     click.echo(f"\nTest suite: {test_file}")

@@ -311,18 +311,18 @@ class TestRunScenario:
         assert len(result.failures) >= 1
         assert "FailureContext" in result.failures[0] or "not found" in result.failures[0].lower()
 
-    def test_llm_returns_none_patch_invalid(self, tmp_path):
-        """run_scenario: LLM returns None → ScenarioResult(passed=False, patch_valid=False)."""
+    def test_agent_returns_none_patch_invalid(self, tmp_path):
+        """run_scenario: Agent returns None → ScenarioResult(passed=False, patch_valid=False)."""
         sc = _write_scenario(tmp_path)
         scenario = load_scenario(sc)
 
-        # Mock generate_llm_patch to return a result with patch=None
+        # Mock generate_agent_patch to return a result with patch=None
         mock_result = MagicMock()
         mock_result.patch = None
         mock_result.attempts = 0
         mock_result.reprompt_errors = []
 
-        with patch("aqueduct.surveyor.llm.generate_llm_patch", return_value=mock_result):
+        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result):
             result = run_scenario(
                 scenario,
                 model="claude-3",

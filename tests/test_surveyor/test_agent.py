@@ -10,12 +10,12 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from aqueduct.patch.grammar import PatchSpec
-from aqueduct.surveyor.llm import (
+from aqueduct.agent import (
     MAX_REPROMPTS,
     PROMPT_VERSION,
     _parse_patch_spec,
     archive_patch,
-    generate_llm_patch,
+    generate_agent_patch,
     stage_patch_for_human,
 )
 from aqueduct.surveyor.models import FailureContext
@@ -163,7 +163,7 @@ class TestStageForHuman:
 
 class TestPatchFilename:
     def test_patch_filename_includes_timestamp(self, tmp_path):
-        from aqueduct.surveyor.llm import _patch_filename
+        from aqueduct.agent import _patch_filename
         spec = _patch_spec(patch_id="test")
         patches_dir = tmp_path / "patches"
         filename = _patch_filename(spec, patches_dir)
@@ -172,7 +172,7 @@ class TestPatchFilename:
         assert "_test.json" in filename
 
     def test_patch_filename_ignores_seq_logic(self, tmp_path):
-        from aqueduct.surveyor.llm import _patch_filename
+        from aqueduct.agent import _patch_filename
         spec = _patch_spec(patch_id="test")
         patches_dir = tmp_path / "patches"
         
@@ -252,14 +252,14 @@ class TestArchivePatch:
         assert m1_config["path"] == "/tmp/new_data"
 
 
-# ── generate_llm_patch ───────────────────────────────────────────────────────
+# ── generate_agent_patch ───────────────────────────────────────────────────────
 
 
 class TestGenerateLlmPatch:
     def test_no_api_key_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         ctx = _failure_ctx()
-        result = generate_llm_patch(
+        result = generate_agent_patch(
             failure_ctx=ctx,
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
@@ -272,9 +272,9 @@ class TestGenerateLlmPatch:
         def bad_llm(*_args, **_kw):
             return "not valid json {{{"
 
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", bad_llm)
+        monkeypatch.setattr("aqueduct.agent._call_agent", bad_llm)
 
-        result = generate_llm_patch(
+        result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
@@ -287,9 +287,9 @@ class TestGenerateLlmPatch:
         def mock_llm(*_args, **_kw):
             return _valid_patch_json()
 
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", mock_llm)
+        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
 
-        result = generate_llm_patch(
+        result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
@@ -307,9 +307,9 @@ class TestGenerateLlmPatch:
                 return "invalid json"
             return _valid_patch_json()
 
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", flaky_llm)
+        monkeypatch.setattr("aqueduct.agent._call_agent", flaky_llm)
 
-        result = generate_llm_patch(
+        result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
             model="claude-sonnet-4-6",
             patches_dir=tmp_path / "patches",
@@ -385,7 +385,7 @@ class TestLlmHelpers:
         from aqueduct.surveyor.surveyor import Surveyor, _DDL
         
         def extract_failure_context(run_id: str, store_dir: Path):
-            db_path = store_dir / "obs.db"
+            db_path = store_dir / "observability.db"
             if not db_path.exists(): return None
             conn = duckdb.connect(str(db_path))
             try:
@@ -401,7 +401,7 @@ class TestLlmHelpers:
 
         store = tmp_path / "obs"
         store.mkdir()
-        db_path = store / "obs.db"
+        db_path = store / "observability.db"
         conn = duckdb.connect(str(db_path))
         conn.execute(_DDL)
         conn.execute(
@@ -416,74 +416,67 @@ class TestLlmHelpers:
 
     def test_extract_failure_context_missing_returns_none(self, tmp_path):
         def extract_failure_context(run_id: str, store_dir: Path):
-            db_path = store_dir / "obs.db"
+            db_path = store_dir / "observability.db"
             if not db_path.exists(): return None
             return "not none" # dummy
         # Store doesn't even exist
         assert extract_failure_context("ghost", tmp_path / "obs") is None
 
     def test_reprompt_limit_exceeded(self, monkeypatch, tmp_path):
-        from aqueduct.surveyor.llm import generate_llm_patch, MAX_REPROMPTS
+        from aqueduct.agent import generate_agent_patch, MAX_REPROMPTS
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        
+
         call_count = 0
         def always_invalid(*_args, **_kw):
             nonlocal call_count
             call_count += 1
             return "not json"
-        
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", always_invalid)
-        
-        from unittest.mock import MagicMock
-        ctx = MagicMock()
-        result = generate_llm_patch(ctx, "model", tmp_path)
-        
+
+        monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
+
+        result = generate_agent_patch(_failure_ctx(), "model", tmp_path)
+
         assert result.patch is None
-        # Should have tried exactly llm_max_reprompts (defaults to MAX_REPROMPTS=3)
+        # Should have tried exactly max_reprompts (defaults to MAX_REPROMPTS=3)
         assert call_count == MAX_REPROMPTS
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
-        from aqueduct.surveyor.llm import generate_llm_patch
+        from aqueduct.agent import generate_agent_patch
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        
+
         call_count = 0
         def always_invalid(*_args, **_kw):
             nonlocal call_count
             call_count += 1
             return "not json"
-        
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", always_invalid)
-        
-        from unittest.mock import MagicMock
-        ctx = MagicMock()
-        result = generate_llm_patch(ctx, "model", tmp_path, llm_max_reprompts=5)
-        
+
+        monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
+
+        result = generate_agent_patch(_failure_ctx(), "model", tmp_path, max_reprompts=5)
+
         assert result.patch is None
         assert call_count == 5
 
     def test_generate_llm_patch_uses_llm_timeout(self, monkeypatch, tmp_path):
-        from aqueduct.surveyor.llm import generate_llm_patch
+        from aqueduct.agent import generate_agent_patch
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        
+
         timeout_used = None
         def mock_call_llm(*_args, **kwargs):
             nonlocal timeout_used
             timeout_used = kwargs.get("timeout")
             return _valid_patch_json()
-        
-        monkeypatch.setattr("aqueduct.surveyor.llm._call_llm", mock_call_llm)
-        
-        from unittest.mock import MagicMock
-        ctx = MagicMock()
-        generate_llm_patch(ctx, "model", tmp_path, llm_timeout=600.0)
-        
-        assert timeout_used == 600.0
 
+        monkeypatch.setattr("aqueduct.agent._call_agent", mock_call_llm)
+
+        generate_agent_patch(_failure_ctx(), "model", tmp_path, timeout=600.0)
+
+        assert timeout_used == 600.0
 
 
 class TestBuildSystemPrompt:
     def test_engine_prompt_context_included(self, tmp_path):
-        from aqueduct.surveyor.llm import _build_system_prompt
+        from aqueduct.agent import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context="Engine rule 1.",
@@ -492,7 +485,7 @@ class TestBuildSystemPrompt:
         assert "Engine rule 1." in prompt
 
     def test_blueprint_prompt_context_included(self, tmp_path):
-        from aqueduct.surveyor.llm import _build_system_prompt
+        from aqueduct.agent import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context=None,
@@ -501,7 +494,7 @@ class TestBuildSystemPrompt:
         assert "Blueprint rule 2." in prompt
 
     def test_both_contexts_included(self, tmp_path):
-        from aqueduct.surveyor.llm import _build_system_prompt
+        from aqueduct.agent import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context="Engine rule 1.",
@@ -530,7 +523,7 @@ class TestFailureContextBlueprintSourceYaml:
         assert ctx.blueprint_source_yaml == "id: test"
         assert ctx.to_dict()["blueprint_source_yaml"] == "id: test"
     def test_llm_user_prompt_includes_blueprint_source_yaml(self):
-        from aqueduct.surveyor.llm import _build_user_prompt
+        from aqueduct.agent import _build_user_prompt
         from aqueduct.surveyor.models import FailureContext
         ctx = FailureContext(
             run_id="r1",
@@ -548,7 +541,7 @@ class TestFailureContextBlueprintSourceYaml:
         assert "id: my_blueprint" in prompt
 
     def test_llm_system_prompt_includes_template_expressions_rule(self, tmp_path):
-        from aqueduct.surveyor.llm import _build_system_prompt
+        from aqueduct.agent import _build_system_prompt
         prompt = _build_system_prompt(patches_dir=tmp_path)
         assert "using template expressions" in prompt
         assert "Do NOT hard-code the resolved literal path" in prompt
@@ -559,7 +552,7 @@ class TestFailureContextBlueprintSourceYaml:
 class TestDoctorHintsInLLMPrompt:
     def test_doctor_hints_non_empty_includes_section(self, tmp_path):
         """doctor_hints non-empty → user prompt contains 'Blueprint issues detected' section."""
-        from aqueduct.surveyor.llm import _build_user_prompt
+        from aqueduct.agent import _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=("warn: bad path /tmp/missing",),
@@ -571,7 +564,7 @@ class TestDoctorHintsInLLMPrompt:
 
     def test_doctor_hints_empty_section_absent(self, tmp_path):
         """doctor_hints empty → 'Blueprint issues detected' section absent."""
-        from aqueduct.surveyor.llm import _build_user_prompt
+        from aqueduct.agent import _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=(),
@@ -594,7 +587,7 @@ class TestProviderOptionsDispatch:
         return mock
 
     def test_ollama_prefix_stripped_into_options(self):
-        from aqueduct.surveyor.llm import _call_openai_compat
+        from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
         import httpx
 
@@ -619,7 +612,7 @@ class TestProviderOptionsDispatch:
         assert "ollama_num_thread" not in captured["payload"]
 
     def test_generic_key_merged_top_level(self):
-        from aqueduct.surveyor.llm import _call_openai_compat
+        from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
         captured = {}
@@ -642,7 +635,7 @@ class TestProviderOptionsDispatch:
         assert "options" not in captured["payload"]
 
     def test_mixed_ollama_and_generic_both_dispatched(self):
-        from aqueduct.surveyor.llm import _call_openai_compat
+        from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
         captured = {}
@@ -666,7 +659,7 @@ class TestProviderOptionsDispatch:
         assert payload["temperature"] == 0.7
 
     def test_provider_options_none_payload_unchanged(self):
-        from aqueduct.surveyor.llm import _call_openai_compat
+        from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
         captured = {}

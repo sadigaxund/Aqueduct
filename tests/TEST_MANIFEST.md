@@ -11,11 +11,13 @@ When adding a new feature, add a task under the relevant module with the exact f
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `AQ_SPARK_MASTER` | `local[1]` | Spark master URL used by the `spark` session fixture. Set to `spark://host:7077` or `yarn` to run tests against a remote cluster. |
-| `AQ_OLLAMA_URL` | `http://localhost:11434` | Ollama base URL. LLM integration tests (`test_llm_integration.py`) skip automatically when unreachable. |
-| `AQ_OLLAMA_MODEL` | `gemma3:12b` | Model name sent to Ollama in integration tests. |
-| `AQ_PG_DSN` | _(unset)_ | Postgres DSN for store integration tests. If unset, Postgres params skip. Example: `postgresql://aq:aq@localhost:5432/aq_test`. |
-| `AQ_REDIS_URL` | `redis://localhost:6379/15` | Redis URL for store integration tests. Skips when unreachable. |
+| `AQ_SPARK_MASTER` | `local[1]` | Spark master URL. Set to `spark://host:7077` or `yarn` for remote clusters. |
+| `AQ_PG_DSN` | _(unset)_ | Postgres DSN for integration tests. Example: `postgresql://user:pass@localhost:5432/db`. |
+| `AQ_REDIS_URL` | `redis://localhost:6379/15` | Redis URL for depot store integration tests. |
+| `ANTHROPIC_API_KEY` | _(unset)_ | Set in agent tests only to exercise the env-key branch; no live call is made. |
+
+> No Ollama / live-LLM env vars. The unit suite never contacts a model — see
+> the LLM testing policy below.
 
 Spark artifacts are isolated to `/tmp/`:
 - warehouse → `/tmp/aqueduct_test_spark_warehouse`
@@ -30,34 +32,33 @@ Spark artifacts are isolated to `/tmp/`:
 |---|---|---|
 | _(none)_ | runs | nothing — pure unit tests, deterministic |
 | `integration` | **skipped** | live Postgres + Redis (see env vars) |
-| `llm` | **skipped** | reachable Ollama at `AQ_OLLAMA_URL` |
 | `scenario` | **skipped** | scenario runner (`aqueduct scenario run`) — non-deterministic eval, not regression |
 
 Commands:
 ```bash
-pytest                                   # default: unit only
+pytest                                   # default: unit only — fully deterministic, no model
 pytest -m integration                    # store integration (PG + Redis)
-pytest -m llm                            # Ollama-backed LLM checks
-pytest -m "integration or llm"           # full local fat suite
 aqueduct scenario run                    # non-deterministic LLM eval (separate runner)
 ```
 
 ### LLM testing policy
 
-**Default `pytest` MUST be deterministic. No live LLM calls.** Surveyor / patch /
-healing-loop tests cover code paths via mocked `_call_llm()` or `httpx.MockTransport`
-with canned JSON responses. Assertions target structural properties (patch JSON
-shape, retry count, prompt-section presence, guardrail rejection reason) — never
-exact LLM output strings.
+**The unit suite NEVER contacts a model. There are no live-LLM fixtures or
+markers.** A live model (e.g. `gemma3:12b` ≈ 8-12 GB) is slow, RAM-heavy and
+flaky, and what it returns measures *model precision*, not Aqueduct code.
 
-Non-deterministic LLM evaluation belongs to **scenarios** (`.aqscenario.yml`),
-not pytest. Scenarios run via `aqueduct scenario run`, optionally against
-Ollama (local, free) or cloud LLMs (manual, token-burning). Scenarios are
-benchmark/eval, not pass/fail unit gates.
+Agent-loop coverage is deterministic: `tests/test_surveyor/test_agent.py`
+mocks `aqueduct.agent._call_agent` (reprompt loop, parse, dispatch, auto-apply)
+or patches `httpx.post` with canned JSON (`_call_openai_compat` /
+`_call_anthropic` provider routing). Assertions target structural properties
+(patch JSON shape, retry count, prompt-section presence, guardrail rejection
+reason, payload key routing) — never exact LLM output strings.
 
-Tests that hit a real LLM endpoint in default `pytest` are bugs — must be
-either rewritten with a mock or moved behind `@pytest.mark.llm` /
-`@pytest.mark.scenario`.
+Non-deterministic model evaluation belongs to **scenarios** (`.aqscenario.yml`)
+run via `aqueduct scenario run` — benchmark/eval, not pass/fail unit gates.
+
+Any test that contacts a real LLM endpoint in `pytest` is a bug — rewrite with
+a mock or move it into a `.aqscenario.yml`.
 
 ---
 
@@ -91,7 +92,7 @@ This section tracks high-level functional verification of core features against 
   - ✅ Signal Battery: Schema, null_rates, distribution, distinct, freshness, partition_stats.
   - ✅ `row_count_estimate`: `method: sample` and `method: spark_listener` (with documented lazy limitation).
   - ✅ Cost Controls: `block_full_actions` suppresses costly signals in production mode.
-  - ✅ Persistence: DuckDB `obs.db` stores signals with run_id/captured_at metadata.
+  - ✅ Persistence: DuckDB `observability.db` stores signals with run_id/captured_at metadata.
 - ✅ **Regulator (Gate):**
   - ✅ Passive Compile-away: Zero runtime overhead for unwired regulators.
   - ✅ Active Evaluation: Gate closes on `False` or Surveyor evaluation error.
@@ -166,8 +167,8 @@ This section tracks high-level functional verification of core features against 
 - ✅ Probe with `value_distribution` signal → warns
 - ✅ Probe with `distinct_count` signal → warns
 - ✅ Probe with `schema_snapshot` or `partition_stats` only → no warning emitted
-- [✅] Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "SPARK_GUIDE.md#incremental-watermark-scan"
-- [✅] Channel with `materialize: incremental` + Checkpoint upstream → no warning
+- ✅ Channel with `materialize: incremental` and no Checkpoint upstream → warns containing "second scan" and "SPARK_GUIDE.md#incremental-watermark-scan"
+- ✅ Channel with `materialize: incremental` + Checkpoint upstream → no warning
 - ✅ UDF registry entry with `lang: python` → warns containing "row-at-a-time" and "SPARK_GUIDE.md#python-udf-performance"
 - ✅ UDF registry entry with `lang: java` → no warning
 - ✅ Egress with `format: delta` + `mode: append` + no `partition_by`/`repartition` → warns containing "small files"
@@ -175,7 +176,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ Egress with `format: delta` + `mode: append` + `partition_by` present → no warning
 - ✅ Egress with `format: delta` + `mode: overwrite` (no append) → no warning
 - ✅ Channel with 2+ downstream consumers and no Checkpoint → warns containing "re-evaluate" and consumer count
-- [✅] Channel with 2+ downstream consumers where a Checkpoint exists upstream → no warning
+- ✅ Channel with 2+ downstream consumers where a Checkpoint exists upstream → no warning
 - ✅ Channel with single downstream consumer → no warning
 
 ---
@@ -204,7 +205,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ `provider: custom`, `resolver=None` → error (resolver required for custom provider)
 - ✅ `provider: custom`, valid resolver → importlib load attempted; ok if callable found
 
-#### `surveyor/llm.py` — `provider_options` dispatch
+#### `agent/__init__.py` — `provider_options` dispatch
 - ✅ `provider_options` with `ollama_num_thread: 8` → `payload["options"]["num_thread"] = 8` (prefix stripped)
 - ✅ `provider_options` with generic key `temperature: 0.5` → `payload["temperature"] = 0.5`
 - ✅ mixed `ollama_*` + generic keys → both dispatched correctly; no key collision
@@ -404,7 +405,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ multiple rules with different `error_type` → only first-failing rule's label in `FailureContext`
 
 ### Surveyor `get_probe_signal()`
-- ✅ returns empty list when `obs.db` does not exist
+- ✅ returns empty list when `observability.db` does not exist
 - ✅ returns rows matching `probe_id` after `execute_probe` writes them
 - ✅ `signal_type` filter returns only rows of that type
 - ✅ `payload` field is a deserialized dict (not a raw JSON string)
@@ -512,7 +513,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ `on_failure_webhook=None` (default) — no per-module webhook call made
 
 ### `surveyor.py` — `Surveyor`
-- ✅ `start()` creates `.aqueduct/obs.db` and tables if not existing
+- ✅ `start()` creates `.aqueduct/observability.db` and tables if not existing
 - ✅ `start()` inserts a `run_records` row with `status='running'`
 - ✅ `record()` raises `RuntimeError` if called before `start()`
 - ✅ `record()` updates `run_records` row to `status='success'` on success
@@ -645,11 +646,11 @@ This section tracks high-level functional verification of core features against 
 ### `AqueductConfig` defaults
 - ✅ `deployment.target` defaults to `"local"`
 - ✅ `deployment.master_url` defaults to `"local[*]"`
-- ✅ `stores.obs.path` defaults to `".aqueduct/obs.db"` ← **renamed from `observability`; now full file path**
+- ✅ `stores.observability.path` defaults to `".aqueduct/observability.db"` ← **renamed from `observability`; now full file path**
 - ✅ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` ← **now full file path**
 - ✅ `stores.depot.path` defaults to `".aqueduct/depot.db"` ← **updated (was `.aqueduct/depot.duckdb`)**
-- ✅ `agent.llm_timeout` defaults to `120.0`
-- ✅ `agent.llm_max_reprompts` defaults to `3`
+- ✅ `agent.timeout` defaults to `120.0`
+- ✅ `agent.max_reprompts` defaults to `3`
 - ✅ `agent.prompt_context` defaults to `None`
 - ✅ `agent.default_model` defaults to `"claude-sonnet-4-6"`
 - ✅ `probes.max_sample_rows` defaults to `100`
@@ -680,7 +681,7 @@ This section tracks high-level functional verification of core features against 
 ### `Surveyor.evaluate_regulator()`
 - ✅ returns `True` when `start()` not called (no run_id)
 - ✅ returns `True` when no signal-port edge wired to regulator
-- ✅ returns `True` when `obs.db` does not exist
+- ✅ returns `True` when `observability.db` does not exist
 - ✅ returns `True` when no rows found for probe_id / run_id
 - ✅ returns `True` when latest signal payload has no `passed` key
 - ✅ returns `True` when latest signal `passed=None`
@@ -716,7 +717,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `test_junction_conditional_split`: Junction splits US/EU; each output has 5 correct-region rows
 - ✅ `test_funnel_union_all`: two identical inputs stacked; output has 20 rows
 - ✅ `test_spillway_error_routing`: null row → spillway (1 row + `_aq_error_*`); good rows → main (9 rows)
-- ✅ `test_probe_does_not_halt_blueprint`: Probe runs; obs.db written; blueprint succeeds
+- ✅ `test_probe_does_not_halt_blueprint`: Probe runs; observability.db written; blueprint succeeds
 - ✅ `test_regulator_open_gate_passthrough`: no surveyor → gate open → all 10 rows in output
 - ✅ `test_regulator_closed_gate_skips_downstream`: mock surveyor returns False → gate + sink both "skipped"
 - ✅ `test_junction_funnel_channel_pattern`: Junction → Funnel → Channel (regression); all 10 rows + `blueprint_tag` column in output
@@ -841,22 +842,26 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
 - ✅ `write_lineage`: called after successful blueprint execution with `store_dir` set; `lineage.db` written
 
-### LLM Self-Healing (`aqueduct/surveyor/llm.py`)
+### Agent Self-Healing (`aqueduct/agent/__init__.py`)
 
-**`trigger_llm_patch(failure_ctx, model, api_endpoint, max_tokens, approval_mode, blueprint_path, patches_dir)`:** calls Anthropic API, validates PatchSpec, dispatches to `_auto_apply` or `_stage_for_human`.
-**`_stage_for_human(patch_spec, patches_dir, failure_ctx)`:** writes to `patches/pending/<patch_id>.json` with `_aq_meta` annotation.
-**`_auto_apply(patch_spec, blueprint_path, patches_dir, failure_ctx)`:** applies patch to Blueprint YAML on disk atomically; archives to `patches/applied/`; returns None on parse failure.
+All tests mock `aqueduct.agent._call_agent` (or patch `httpx.post`) — no live model.
 
-- ✅ `_stage_for_human`: creates `patches/pending/<patch_id>.json` with correct fields
-- ✅ `_stage_for_human`: written JSON contains `_aq_meta.run_id` and `_aq_meta.blueprint_id`
-- ✅ `_auto_apply`: applies valid patch → Blueprint file on disk is modified
-- ✅ `_auto_apply`: patch produces invalid Blueprint → Blueprint unchanged, returns None
-- ✅ `_auto_apply`: archives PatchSpec to `patches/applied/` with `applied_at` and `auto_applied=True`
-- ✅ `trigger_llm_patch`: `ANTHROPIC_API_KEY` not set → returns None (RuntimeError caught internally)
-- ✅ `trigger_llm_patch`: LLM returns markdown-fenced JSON → fences stripped, parsed correctly
-- ✅ `trigger_llm_patch`: LLM returns invalid PatchSpec → reprompt up to MAX_REPROMPTS times; returns None after exhaustion
-- ✅ Surveyor `record()`: on failure with `approval_mode=auto`, `trigger_llm_patch` is called (mock LLM)
-- ✅ Surveyor `record()`: on success, LLM loop NOT triggered
+**`generate_agent_patch(failure_ctx, model, patches_dir, ...)`:** runs the reprompt
+loop, validates PatchSpec, returns `AgentPatchResult(patch, attempts, reprompt_errors)`.
+Does NOT apply or stage — caller decides.
+**`stage_patch_for_human(patch_spec, patches_dir, failure_ctx)`:** writes to
+`patches/pending/<patch_id>.json` with `_aq_meta` annotation.
+**`archive_patch(...)`:** archives an applied PatchSpec to `patches/applied/`.
+
+- ✅ `generate_agent_patch`: `ANTHROPIC_API_KEY` not set → `result.patch is None`
+- ✅ `generate_agent_patch`: valid JSON → `result.patch` is a PatchSpec with expected `patch_id`
+- ✅ `generate_agent_patch`: always-invalid response → `result.patch is None`, `call_count == MAX_REPROMPTS`
+- ✅ `generate_agent_patch`: custom `max_reprompts` honoured (call_count == N)
+- ✅ `generate_agent_patch`: invalid then valid → reprompts, succeeds, exactly 2 calls
+- ✅ `generate_agent_patch`: `timeout=` forwarded to `_call_agent`
+- ✅ `_call_openai_compat`: `ollama_*` provider_options stripped into `payload["options"]`; generic keys merged top-level; mixed both dispatched; `None` leaves payload unchanged (httpx.post mocked)
+- ✅ `stage_patch_for_human`: creates `patches/pending/<patch_id>.json` with `_aq_meta.run_id` / `_aq_meta.blueprint_id`
+- ✅ Surveyor `record()`: on failure returns FailureContext; on success returns None (LLM loop NOT triggered from record())
 
 ### Arcade `required_context` validation (`aqueduct/compiler/expander.py`)
 
@@ -995,9 +1000,9 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ no `heal_on_errors`/`never_heal_errors` → no warning emitted
 - ✅ blueprint has no Assert modules → any entry produces warning (none to match against)
 
-### Patch Rollback — `aqueduct rollback` — `aqueduct/cli.py`
+### Patch Rollback — `aqueduct patch rollback` — `aqueduct/cli.py`
 
-**Phase 18 redesign:** file backups eliminated; rollback uses git via `aqueduct rollback <blueprint> --to <patch_id>`.
+**Phase 18 redesign:** file backups eliminated; rollback uses git via `aqueduct patch rollback <blueprint> --to <patch_id>`.
 Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 ### Phase 10 — Channel `op: join` + SQL Macros ✅
@@ -1038,7 +1043,7 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ valid run_id + `--format json` → JSON with run_id, blueprint_id, status, module_results
 - ✅ valid run_id + `--format csv` → CSV with header row
 - ✅ unknown run_id → exit code 1 with error message
-- ✅ missing obs.db → exit code 1 with error message
+- ✅ missing observability.db → exit code 1 with error message
 
 #### `aqueduct lineage` — `aqueduct/cli.py`
 
@@ -1063,10 +1068,10 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 
 #### `aqueduct heal` — `aqueduct/cli.py`
 
-- ✅ run_id with failure_context → FailureContext reconstructed, generate_llm_patch called
+- ✅ run_id with failure_context → FailureContext reconstructed, generate_agent_patch called
 - ✅ `--module` overrides `failed_module` field in FailureContext passed to LLM
 - ✅ run_id with no failure_context → exit code 1 with clear message
-- ✅ missing obs.db → exit code 1
+- ✅ missing observability.db → exit code 1
 - ✅ no agent model configured in aqueduct.yml → exit code 1 with clear message
 - ✅ LLM returns valid patch → patch staged in patches/pending/
 
@@ -1101,6 +1106,9 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ invalid YAML test file → exit code 1 with parser error
 - ✅ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
 - ✅ `--blueprint` overrides blueprint path from test file
+- ✅ ISSUE-026: `stop_spark_session(spark)` skips `spark.stop()` when `AQ_TESTING` is set (returns without touching the session) — `tests/test_executor/test_executor_session.py::TestStopSparkSessionGuard`
+- ✅ ISSUE-026: `stop_spark_session(spark)` calls `spark.stop()` when `AQ_TESTING` is unset (monkeypatch.delenv + Mock spark, assert `.stop()` called once) — `tests/test_executor/test_executor_session.py::TestStopSparkSessionGuard`
+- ✅ ISSUE-026: invoking `aqueduct test` then `aqueduct doctor` via CliRunner inside the suite does NOT tear down the shared session-scoped `spark` fixture (a subsequent `spark.range(1).count()` still works) — `tests/test_cli/test_cli_issue026.py`
 
 ### Phase 14 — Aggressive mode in-memory validation (validate_patch removed)
 
@@ -1167,20 +1175,23 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ## Phase 16 — Store Layout + `aqueduct runs` + LLM Patch Reliability
 
-### Store layout — `obs.db` merge (`aqueduct/config.py`, `surveyor/`, `executor/spark/`)
+### Store layout — `observability.db` merge (`aqueduct/config.py`, `surveyor/`, `executor/spark/`)
 
-- ✅ `stores.obs.path` defaults to `".aqueduct/obs.db"` (full file path; field renamed from `observability`)
+- ✅ `stores.observability.path` defaults to `".aqueduct/observability.db"` (full file path; field renamed from `observability`)
 - ✅ `stores.lineage.path` defaults to `".aqueduct/lineage.db"` (full file path)
 - ✅ `stores.depot.path` defaults to `".aqueduct/depot.db"`
 - ✅ unknown key `stores.observability` in YAML → `ConfigError` (extra="forbid")
-- ✅ `Surveyor.start()` creates `obs.db` (not `runs.db`)
-- ✅ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `obs.db`
-- ✅ `Surveyor.get_probe_signal()`: reads from `obs.db`; returns empty list if `obs.db` absent
-- ✅ `execute_probe()`: writes `probe_signals` rows to `obs.db`
-- ✅ `_write_stage_metrics()`: writes `module_metrics` rows to `obs.db`
+- ✅ `aqueduct run` with default `stores.observability.path` → DuckDB store under per-pipeline `.aqueduct/observability/<blueprint_id>/observability.db`
+- ✅ `aqueduct run` with **custom** `stores.observability.path: /tmp/my_obs.db` (+ `stores.lineage.path: /tmp/my_lin.db`) → store files created at exactly those paths/filenames; CLI does NOT clobber to `observability.db`/`lineage.db`
+- ✅ `aqueduct run --store-dir DIR` → obs/lineage under `DIR/` (get_stores `store_dir_override`), rebuild branch skipped
+- ✅ `Surveyor.start()` creates `observability.db` (not `runs.db`)
+- ✅ `Surveyor.evaluate_regulator()`: reads `signal_overrides` + `probe_signals` from `observability.db`
+- ✅ `Surveyor.get_probe_signal()`: reads from `observability.db`; returns empty list if `observability.db` absent
+- ✅ `execute_probe()`: writes `probe_signals` rows to `observability.db`
+- ✅ `_write_stage_metrics()`: writes `module_metrics` rows to `observability.db`
 - ✅ `records_read` updated via `_update_metric` after Egress completes (Phase 18 logic)
-- ✅ `aqueduct signal`: reads/writes `signal_overrides` in `obs.db`
-- ✅ `aqueduct doctor` obs check: opens `obs.db` file (not directory probe)
+- ✅ `aqueduct signal`: reads/writes `signal_overrides` in `observability.db`
+- ✅ `aqueduct doctor` obs check: opens `observability.db` file (not directory probe)
 
 ### `schema_snapshot` path (`aqueduct/executor/spark/probe.py`)
 
@@ -1188,14 +1199,14 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `aqueduct runs` command (`aqueduct/cli.py`)
 
-- ✅ `aqueduct runs` with no obs.db → prints "No runs found" without error
+- ✅ `aqueduct runs` with no observability.db → prints "No runs found" without error
 - ✅ `aqueduct runs` lists recent runs ordered by `started_at DESC`
 - ✅ `aqueduct runs --failed` → shows only runs with `status="error"`
 - ✅ `aqueduct runs --blueprint blueprint.yml` → filters by blueprint_id from file
 - ✅ `aqueduct runs --last 5` → shows at most 5 rows
 - ✅ default output has columns: `run_id`, `blueprint_id`, `status`, `started_at`, `finished_at`
 
-### LLM `prompt_context` threading (`aqueduct/surveyor/llm.py`, `aqueduct/parser/`, `aqueduct/compiler/`)
+### LLM `prompt_context` threading (`aqueduct/agent/__init__.py`, `aqueduct/parser/`, `aqueduct/compiler/`)
 
 - ✅ `agent.prompt_context` in `aqueduct.yml` → appended to LLM system prompt
 - ✅ `agent.prompt_context` in Blueprint `agent:` block → appended to LLM system prompt (after engine-level context)
@@ -1221,12 +1232,12 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `replace_module_config` op: injected config dict strings are double-quoted in output YAML
 - ✅ round-trip of patched Blueprint through Parser succeeds (no YAML parse error)
 
-### `agent.llm_timeout` / `agent.llm_max_reprompts` (`aqueduct/config.py`, `aqueduct/surveyor/llm.py`)
+### `agent.timeout` / `agent.max_reprompts` (`aqueduct/config.py`, `aqueduct/agent/__init__.py`)
 
-- ✅ `AgentConnectionConfig.llm_timeout` default `120.0`; custom value in YAML respected
-- ✅ `AgentConnectionConfig.llm_max_reprompts` default `3`; custom value in YAML respected
-- ✅ `generate_llm_patch()` uses `llm_timeout` for HTTP socket timeout (not hardcoded 120)
-- ✅ LLM returns invalid PatchSpec JSON → reprompts up to `llm_max_reprompts` times; returns None after
+- ✅ `AgentConnectionConfig.timeout` default `120.0`; custom value in YAML respected
+- ✅ `AgentConnectionConfig.max_reprompts` default `3`; custom value in YAML respected
+- ✅ `generate_agent_patch()` uses `timeout` for HTTP socket timeout (not hardcoded 120)
+- ✅ LLM returns invalid PatchSpec JSON → reprompts up to `max_reprompts` times; returns None after
 
 ---
 
@@ -1253,7 +1264,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ no applied patches dir → returns empty list
 - ✅ `_aq_meta.applied_at` field used when top-level `applied_at` absent
 
-### Patch naming — `_patch_filename()` — `aqueduct/surveyor/llm.py`
+### Patch naming — `_patch_filename()` — `aqueduct/agent/__init__.py`
 - ✅ `stage_patch_for_human` writes `{seq:05d}_{ts}_{slug}.json` format
 - ✅ `archive_patch` writes same structured naming
 - ✅ seq = count of all .json files across pending/ + applied/ + rejected/ + 1
@@ -1275,17 +1286,17 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ git checkout failure → exits 1 with error message
 - ✅ patches moved count printed in output
 
-### `aqueduct log <blueprint>` — `aqueduct/cli.py`
+### `aqueduct patch log <blueprint>` — `aqueduct/cli.py`
 - ✅ no git history for blueprint → prints "No git history for this blueprint."
 - ✅ commit with `---aqueduct---` block → patch_id + ops extracted and shown
 - ✅ commit without `---aqueduct---` block → shows "(manual change)"
 - ✅ `--format json` → array of objects with hash, date, patches, ops, run_id fields
 - ✅ long patches column truncated to 40 chars with `..` suffix
 
-### `aqueduct rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
+### `aqueduct patch rollback <blueprint> --to <patch_id>` — `aqueduct/cli.py`
 - ✅ patch_id found → checks out blueprint file(s) from parent commit; stages and commits; prints hash
 - ✅ patch_id found in arcade commit (multiple files) → all touched files restored and committed together
-- ✅ patch_id not found → error message with hint to run `aqueduct log`; exits 1
+- ✅ patch_id not found → error message with hint to run `aqueduct patch log`; exits 1
 - ✅ parent commit resolution fails (first-ever commit) → exits 1 with error
 - ✅ `git checkout <file>` failure → exits 1 with stderr; no commit created
 - ✅ `git commit` failure → exits 1 with stderr
@@ -1317,7 +1328,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ no `aqueduct.yml` found after 8 levels → returns `<blueprint_parent>/patches`
 - ✅ all patch commands (`apply`, `commit`, `discard`, `list`, `reject`) use same root when `--patches-dir` not set
 
-### `aqueduct doctor --blueprint` — format/extension mismatch — `aqueduct/doctor.py`
+### `aqueduct doctor <blueprint>` — format/extension mismatch — `aqueduct/doctor.py`
 - ✅ `format=parquet` + path `*.parquet` → ok, no mismatch warning
 - ✅ `format=csv` + path `*.parquet` → warn: "format='csv' but file extension suggests different format"
 - ✅ `format=parquet` + path `*.csv` → warn
@@ -1326,7 +1337,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ glob with mixed extensions (some match, some don't) → warn on mismatch files
 - ✅ non-glob path: single file checked for extension mismatch
 
-### LLM doctor hints injection — `aqueduct/cli.py` + `aqueduct/surveyor/llm.py`
+### LLM doctor hints injection — `aqueduct/cli.py` + `aqueduct/agent/__init__.py`
 - ✅ blueprint has warn doctor result → `failure_ctx.doctor_hints` non-empty before LLM call
 - ✅ doctor check throws exception → exception swallowed; `doctor_hints` stays empty; self-healing continues
 - ✅ `doctor_hints` non-empty → LLM prompt contains "Blueprint issues detected before run" section
@@ -1380,7 +1391,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ Manifest has no provenance_map → `provenance_json` is None
 
 
-### LLM prompt provenance section — `aqueduct/surveyor/llm.py`
+### LLM prompt provenance section — `aqueduct/agent/__init__.py`
 - ✅ `_build_provenance_section(None)` → empty string
 - ✅ arcade-expanded module → "Arcade-expanded" and "does NOT exist in the Blueprint YAML" in output
 - ✅ context_ref value → "use replace_context_value(key=...)" hint shown
@@ -1547,7 +1558,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `format_benchmark_table`: single model single scenario → correct table shape
 - ✅ `format_benchmark_table`: summary rows (parse rate, apply rate, pass rate, avg confidence)
 
-#### Prompt versioning — `aqueduct/surveyor/llm.py`
+#### Prompt versioning — `aqueduct/agent/__init__.py`
 - ✅ `PROMPT_VERSION` constant present in module
 - ✅ `stage_patch_for_human`: _aq_meta includes prompt_version
 - ✅ `archive_patch`: _aq_meta includes prompt_version
@@ -1574,8 +1585,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `compile()`: path does not exist (OSError) → fingerprint entry has `size_bytes=None`
 - ✅ `compile()`: non-Ingress modules not in `inputs_fingerprint`
 - ✅ `Manifest.to_dict()` includes `inputs_fingerprint` key
-- ⏳ `compile()`: Arcade-expanded Ingress (sub-blueprint Ingress namespaced as `{arcade_id}__{child_id}`) with a local path → fingerprint entry exists keyed by the expanded ID with stat fields populated. confirms `inputs_fingerprint` walks the post-expansion module list, not pre-expansion.
-- ⏳ `compile()`: Arcade-expanded Ingress with remote path → fingerprint entry exists keyed by expanded ID with `size_bytes=None`, `last_modified=None`. Mirrors the top-level remote-path case.
+- ✅ `compile()`: Arcade-expanded Ingress (sub-blueprint Ingress namespaced as `{arcade_id}__{child_id}`) with a local path → fingerprint entry exists keyed by the expanded ID with stat fields populated. confirms `inputs_fingerprint` walks the post-expansion module list, not pre-expansion.
+- ✅ `compile()`: Arcade-expanded Ingress with remote path → fingerprint entry exists keyed by expanded ID with `size_bytes=None`, `last_modified=None`. Mirrors the top-level remote-path case.
 
 ## Phase 23C — Incremental Channel
 
@@ -1607,7 +1618,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 ## Compiler Warning — Hadoop FS Keys in Ingress Options (ISSUE-001)
 
 #### Compiler — `aqueduct/compiler/compiler.py`
-- ✅ Ingress with `options: {fs.s3a.access.key: ...}` → `warnings.warn` containing "spark_config"
+- ✅ Ingress with `options: {fs.s3a.access.key: ...}` → `AQ-WARN [perf_hadoop_fs_in_options]` containing "spark_config"
 - ✅ Ingress with `options: {fs.gs.project.id: ...}` → warning emitted
 - ✅ Ingress with `options: {fs.azure.account.key: ...}` → warning emitted
 - ✅ Ingress with `options: {header: true}` (non-Hadoop key) → no warning
@@ -1637,7 +1648,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 #### Executor — `aqueduct/executor/spark/executor.py`
 - ✅ Egress with `maintenance:` block → `run_maintenance` called after successful write
 - ✅ Egress with no `maintenance:` block → `run_maintenance` NOT called
-- ✅ Maintenance timing written to `maintenance_metrics` table in `obs.db`
+- ✅ Maintenance timing written to `maintenance_metrics` table in `observability.db`
 - ✅ Maintenance write failure → debug log only, pipeline continues
 
 #### Compiler — `aqueduct/compiler/compiler.py`
@@ -1659,52 +1670,52 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `MetricsConfig.use_observe` — `aqueduct/config.py` + `aqueduct/executor/spark/metrics.py`
 
-- ⏳ `MetricsConfig` parses `use_observe: true` and `use_observe: false` without error
-- ⏳ `MetricsConfig` rejects extra keys (e.g. `use_observe: true` plus `unknown: 1` → `extra="forbid"` raises `ValidationError`)
-- ⏳ `observe_df(df, name, alias, enabled=False)` returns `(df, None)` without inserting an `Observation` node — verifiable via `df.explain()` not containing `CollectMetrics`
-- ⏳ `observe_df(df, name, alias, enabled=True)` returns a wrapped df with a usable `Observation` (Spark 3.3+)
-- ⏳ `execute(use_observe=False)` path completes a full Ingress→Channel→Egress run; resulting `module_metrics.records_written` is `NULL` (not collected) but the pipeline succeeds
-- ⏳ `cli.py:run` reads `cfg.metrics.use_observe` and forwards it to `execute()`; default `true` reproduces pre-audit behaviour
+- ✅ `MetricsConfig` parses `use_observe: true` and `use_observe: false` without error
+- ✅ `MetricsConfig` rejects extra keys (e.g. `use_observe: true` plus `unknown: 1` → `extra="forbid"` raises `ValidationError`)
+- ✅ `observe_df(df, name, alias, enabled=False)` returns `(df, None)` without inserting an `Observation` node — verifiable via `df.explain()` not containing `CollectMetrics`
+- ✅ `observe_df(df, name, alias, enabled=True)` returns a wrapped df with a usable `Observation` (Spark 3.3+)
+- ✅ `execute(use_observe=False)` path completes a full Ingress→Channel→Egress run; resulting `module_metrics.records_written` is `NULL` (not collected) but the pipeline succeeds
+- ✅ `cli.py:run` reads `cfg.metrics.use_observe` and forwards it to `execute()`; default `true` reproduces pre-audit behaviour
 
 ### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
 
-- ⏳ `aqueduct --version` exits 0 and prints `aqueduct <version>` with the version sourced from `importlib.metadata.version("aqueduct-core")`
-- ⏳ `aqueduct.__version__` falls back to `"0.0.0+unknown"` when `importlib.metadata.version("aqueduct-core")` raises `PackageNotFoundError` (simulate with monkeypatch)
-- ⏳ `aqueduct --help` lists `--version` in its options block
+- ✅ `aqueduct --version` exits 0 and prints `aqueduct <version>` with the version sourced from `importlib.metadata.version("aqueduct-core")`
+- ✅ `aqueduct.__version__` falls back to `"0.0.0+unknown"` when `importlib.metadata.version("aqueduct-core")` raises `PackageNotFoundError` (simulate with monkeypatch)
+- ✅ `aqueduct --help` lists `--version` in its options block
 
 ### `DeploymentConfig` Literal validation — `aqueduct/config.py`
 
-- ⏳ `DeploymentConfig(target="local")` accepts every documented value (`local`, `standalone`, `yarn`, `kubernetes`, `databricks`, `emr`, `dataproc`)
-- ⏳ `DeploymentConfig(target="bogus")` raises `pydantic.ValidationError` mentioning the full list of accepted literals
-- ⏳ `DeploymentConfig(engine="spark")` and `DeploymentConfig(engine="flink")` both validate; `engine="duckdb"` raises `ValidationError`
-- ⏳ `load_config(path)` propagates the Literal validation error wrapped in `ConfigError` with the user-friendly formatter
+- ✅ `DeploymentConfig(target="local")` accepts every documented value (`local`, `standalone`, `yarn`, `kubernetes`, `databricks`, `emr`, `dataproc`)
+- ✅ `DeploymentConfig(target="bogus")` raises `pydantic.ValidationError` mentioning the full list of accepted literals
+- ✅ `DeploymentConfig(engine="spark")` and `DeploymentConfig(engine="flink")` both validate; `engine="duckdb"` raises `ValidationError`
+- ✅ `load_config(path)` propagates the Literal validation error wrapped in `ConfigError` with the user-friendly formatter
 
 ### `[secrets]` extra + early SDK check — `pyproject.toml` + `aqueduct/config.py`
 
-- ⏳ `pyproject.toml` exposes `secrets` extra that aggregates `aws`, `gcp`, `azure`
-- ⏳ `pyproject.toml`: `all` extra pulls in `spark` and `secrets`
-- ⏳ `load_config()` with `secrets.provider=env` does not import any cloud SDK
-- ⏳ `load_config()` with `secrets.provider=aws` and `boto3` importable → returns `AqueductConfig` without error
-- ⏳ `load_config()` with `secrets.provider=aws` and `boto3` NOT importable (monkeypatch `importlib.util.find_spec` to return None) → raises `ConfigError` containing both `pip install aqueduct-core[aws]` and `pip install aqueduct-core[secrets]`
-- ⏳ Same as above for `provider=gcp` and `provider=azure`
-- ⏳ `load_config()` with `secrets.provider=custom` does not run the SDK check (no `ConfigError` even when no SDK is present)
-- ⏳ `aqueduct doctor:check_secrets` still produces a structured `CheckResult` for the same misconfiguration (does not break when `load_config` already raised)
+- ✅ `pyproject.toml` exposes `secrets` extra that aggregates `aws`, `gcp`, `azure`
+- ✅ `pyproject.toml`: `all` extra pulls in `spark` and `secrets`
+- ✅ `load_config()` with `secrets.provider=env` does not import any cloud SDK
+- ✅ `load_config()` with `secrets.provider=aws` and `boto3` importable → returns `AqueductConfig` without error
+- ✅ `load_config()` with `secrets.provider=aws` and `boto3` NOT importable (monkeypatch `importlib.util.find_spec` to return None) → raises `ConfigError` containing both `pip install aqueduct-core[aws]` and `pip install aqueduct-core[secrets]`
+- ✅ Same as above for `provider=gcp` and `provider=azure`
+- ✅ `load_config()` with `secrets.provider=custom` does not run the SDK check (no `ConfigError` even when no SDK is present)
+- ✅ `aqueduct doctor:check_secrets` still produces a structured `CheckResult` for the same misconfiguration (does not break when `load_config` already raised)
 
 ### `aqueduct/templates/default/aqueduct.yml.template` — fields documented
 
-- ⏳ Template no longer contains `block_full_actions_in_prod`
-- ⏳ Template contains a commented `metrics:` block describing `use_observe`
-- ⏳ Generating a project via `aqueduct init` produces an `aqueduct.yml` that parses without error against the current `AqueductConfig` schema
+- ✅ Template no longer contains `block_full_actions_in_prod`
+- ✅ Template contains a commented `metrics:` block describing `use_observe`
+- ✅ Generating a project via `aqueduct init` produces an `aqueduct.yml` that parses without error against the current `AqueductConfig` schema
 
 ### cloudpickle patch fragility (`aqueduct/doctor.py`)
 
-- ⏳ `check_cloudpickle()` on a Python version + pyspark combination where `pyspark.cloudpickle` does not exist (simulate with monkeypatch) → returns `CheckResult(status="skip")` rather than raising
-- ⏳ `check_cloudpickle()` on Python 3.13+ with system `cloudpickle>=3.0` installed → reports `ok` with patched version
-- ⏳ `check_cloudpickle()` on Python 3.13+ with no system `cloudpickle` → reports `warn` with install hint
+- ✅ `check_cloudpickle()` on a Python version + pyspark combination where `pyspark.cloudpickle` does not exist (simulate with monkeypatch) → returns `CheckResult(status="skip")` rather than raising
+- ✅ `check_cloudpickle()` on Python 3.13+ with system `cloudpickle>=3.0` installed → reports `ok` with patched version
+- ✅ `check_cloudpickle()` on Python 3.13+ with no system `cloudpickle` → reports `warn` with install hint
 
 ### doctor `pyspark` import discipline
 
-- ⏳ `import aqueduct.doctor` from a fresh interpreter (no pyspark installed) does NOT raise `ImportError`. Verifies the three pyspark imports remain inside function bodies, not at module top. Regression for the documented "doctor.py is the spark-isolation exception" rule in `CLAUDE.md`.
+- ✅ `import aqueduct.doctor` from a fresh interpreter (no pyspark installed) does NOT raise `ImportError`. Verifies the three pyspark imports remain inside function bodies, not at module top. Regression for the documented "doctor.py is the spark-isolation exception" rule in `CLAUDE.md`.
 
 ---
 
@@ -1712,67 +1723,67 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `doctor --aqtest` / `doctor --aqscenario` — `aqueduct/doctor.py:check_aqtest()` / `check_aqscenario()`
 
-- ⏳ `check_aqtest(path)`: missing file → single `CheckResult(status="fail", detail contains "file not found")`
-- ⏳ `check_aqtest(path)`: malformed YAML → `fail` with `invalid YAML` in detail
-- ⏳ `check_aqtest(path)`: top-level non-mapping → `fail`
-- ⏳ `check_aqtest(path)`: missing or wrong `aqueduct_test` version → `fail`
-- ⏳ `check_aqtest(path)`: missing `blueprint:` field → `fail`
-- ⏳ `check_aqtest(path)`: blueprint reference does not resolve → `fail` with resolved path in message
-- ⏳ `check_aqtest(path)`: empty `tests:` list → single `warn` result
-- ⏳ `check_aqtest(path)`: test case `module` does not exist in referenced blueprint → `fail` listing available module IDs
-- ⏳ `check_aqtest(path)`: test case missing `assertions` → reported under "test case issues"
-- ⏳ `check_aqtest(path)`: all module IDs resolve + assertions present → `ok`
-- ⏳ `check_aqscenario(path)`: reuses `aqueduct.surveyor.scenario.load_scenario` so the same version/key checks apply
-- ⏳ `check_aqscenario(path)`: `inject_failure.module` not in referenced blueprint → `fail`
-- ⏳ `check_aqscenario(path)`: blueprint reference points at non-existent file → `fail`
-- ⏳ `check_aqscenario(path)`: valid scenario → `ok` with `id` and `failed_module` echoed
-- ⏳ `aqueduct doctor --aqtest <path>` runs only the aqtest check + the standard config / store / secrets checks
-- ⏳ `aqueduct doctor --aqtest <path> --aqscenario <path2>` runs both file pre-flights in one pass
-- ⏳ `aqueduct doctor --blueprint <path> --aqtest <path>` runs all per-file checks (additive flags)
-- ⏳ Any failed `aqtest` / `aqscenario` check sets process exit code 1
+- ✅ `check_aqtest(path)`: missing file → single `CheckResult(status="fail", detail contains "file not found")`
+- ✅ `check_aqtest(path)`: malformed YAML → `fail` with `invalid YAML` in detail
+- ✅ `check_aqtest(path)`: top-level non-mapping → `fail`
+- ✅ `check_aqtest(path)`: missing or wrong `aqueduct_test` version → `fail`
+- ✅ `check_aqtest(path)`: missing `blueprint:` field → `fail`
+- ✅ `check_aqtest(path)`: blueprint reference does not resolve → `fail` with resolved path in message
+- ✅ `check_aqtest(path)`: empty `tests:` list → single `warn` result
+- ✅ `check_aqtest(path)`: test case `module` does not exist in referenced blueprint → `fail` listing available module IDs
+- ✅ `check_aqtest(path)`: test case missing `assertions` → reported under "test case issues"
+- ✅ `check_aqtest(path)`: all module IDs resolve + assertions present → `ok`
+- ✅ `check_aqscenario(path)`: reuses `aqueduct.surveyor.scenario.load_scenario` so the same version/key checks apply
+- ✅ `check_aqscenario(path)`: `inject_failure.module` not in referenced blueprint → `fail`
+- ✅ `check_aqscenario(path)`: blueprint reference points at non-existent file → `fail`
+- ✅ `check_aqscenario(path)`: valid scenario → `ok` with `id` and `failed_module` echoed
+- ✅ `aqueduct doctor --aqtest <path>` runs only the aqtest check + the standard config / store / secrets checks
+- ✅ `aqueduct doctor --aqtest <path> --aqscenario <path2>` runs both file pre-flights in one pass
+- ✅ `aqueduct doctor <blueprint> --aqtest <path>` runs all per-file checks (additive flags)
+- ✅ Any failed `aqtest` / `aqscenario` check sets process exit code 1
 
 ### `compile --show {manifest|provenance|inputs|all}` — `aqueduct/cli.py:_render_compile_show()`
 
-- ⏳ `--show manifest` (default) → byte-identical JSON to pre-flag behaviour
-- ⏳ `--show provenance` → emits the `# Context` section first, then a `# Module: <id>` section per module, each with a `key | source_type | original_expression | resolved_value` table
-- ⏳ `--show provenance` on a blueprint with no `context:` block → still emits per-module tables; context section omitted
-- ⏳ `--show inputs` → emits `module_id | path | size | last_modified` table; remote paths render `—` for size + last_modified
-- ⏳ `--show inputs` on a blueprint with no Ingress modules → "(no Ingress modules; inputs_fingerprint is empty)"
-- ⏳ `--show all` → full manifest JSON + both rendered tables, separated by `── Provenance ──` and `── Inputs fingerprint ──` headers
-- ⏳ `--show provenance` rendered table uses `original_expression` (not `origin_expression`) for the column header — guards against the field-rename regression
-- ⏳ Invalid value (e.g. `--show foo`) → click reports allowed choices and exits non-zero
+- ✅ `--show manifest` (default) → byte-identical JSON to pre-flag behaviour
+- ✅ `--show provenance` → emits the `# Context` section first, then a `# Module: <id>` section per module, each with a `key | source_type | original_expression | resolved_value` table
+- ✅ `--show provenance` on a blueprint with no `context:` block → still emits per-module tables; context section omitted
+- ✅ `--show inputs` → emits `module_id | path | size | last_modified` table; remote paths render `—` for size + last_modified
+- ✅ `--show inputs` on a blueprint with no Ingress modules → "(no Ingress modules; inputs_fingerprint is empty)"
+- ✅ `--show all` → full manifest JSON + both rendered tables, separated by `── Provenance ──` and `── Inputs fingerprint ──` headers
+- ✅ `--show provenance` rendered table uses `original_expression` (not `origin_expression`) for the column header — guards against the field-rename regression
+- ✅ Invalid value (e.g. `--show foo`) → click reports allowed choices and exits non-zero
 
 ### LLM spend-cap — `agent.max_heal_attempts_per_hour`
 
-- ⏳ `AgentSchema` accepts integer values and `null` for `max_heal_attempts_per_hour` (frozen at `extra="forbid"`)
-- ⏳ `AgentConnectionConfig` accepts integer values and `null` for `max_heal_attempts_per_hour`
-- ⏳ Blueprint value of `max_heal_attempts_per_hour` wins over engine value when both are set
-- ⏳ `Surveyor.count_recent_heal_attempts(within_minutes=60)` returns 0 when `start()` has not been called (no connection)
-- ⏳ `Surveyor.count_recent_heal_attempts(within_minutes=60)` counts rows whose `applied_at >= now - 60min`; rows outside the window are excluded
-- ⏳ `Surveyor.count_recent_heal_attempts(...)` swallows DB errors and returns 0 (defensive)
-- ⏳ CLI loop: with `max_heal_attempts_per_hour=2` and 2 prior healing rows in `obs.db`, the next failure emits the `⊘ LLM rate-limit reached` line and breaks the loop without calling `generate_llm_patch`
-- ⏳ CLI loop: with `max_heal_attempts_per_hour=None` (default) the rate-limit check is skipped entirely
+- ✅ `AgentSchema` accepts integer values and `null` for `max_heal_attempts_per_hour` (frozen at `extra="forbid"`)
+- ✅ `AgentConnectionConfig` accepts integer values and `null` for `max_heal_attempts_per_hour`
+- ✅ Blueprint value of `max_heal_attempts_per_hour` wins over engine value when both are set
+- ✅ `Surveyor.count_recent_heal_attempts(within_minutes=60)` returns 0 when `start()` has not been called (no connection)
+- ✅ `Surveyor.count_recent_heal_attempts(within_minutes=60)` counts rows whose `applied_at >= now - 60min`; rows outside the window are excluded
+- ✅ `Surveyor.count_recent_heal_attempts(...)` swallows DB errors and returns 0 (defensive)
+- ✅ CLI loop: with `max_heal_attempts_per_hour=2` and 2 prior healing rows in `observability.db`, the next failure emits the `⊘ LLM rate-limit reached` line and breaks the loop without calling `generate_agent_patch`
+- ✅ CLI loop: with `max_heal_attempts_per_hour=None` (default) the rate-limit check is skipped entirely
 
 ### Cloudpickle hardening — `aqueduct/executor/spark/udf.py:_patch_pyspark_cloudpickle()`
 
-- ⏳ Python ≤ 3.12 → function returns immediately, no warning logged
-- ⏳ Python 3.13+, system `cloudpickle` not installed → `logger.warning` with `pip install cloudpickle` hint
-- ⏳ Python 3.13+, `pyspark.cloudpickle` import succeeds → patch applied, `logger.info` confirmation
-- ⏳ Python 3.13+, `pyspark.cloudpickle` raises ImportError but `pyspark.cloudpickle_fast` succeeds → patch applied, log includes `cloudpickle_fast` as the path
-- ⏳ Python 3.13+, none of `pyspark.cloudpickle` / `cloudpickle_fast` / `_cloudpickle` importable → `logger.warning` ("not importable under any known path") + skip
-- ⏳ Python 3.13+, bundled module imported but missing `dumps` / `loads` / `CloudPickler` → `logger.warning` listing the missing attrs + skip (no AttributeError)
-- ⏳ Python 3.13+, version-parse failure on `__version__` strings → `logger.warning` mentioning parse failure + skip
-- ⏳ Python 3.13+, system cloudpickle version ≤ bundled version → no patch, no warning
+- ✅ Python ≤ 3.12 → function returns immediately, no warning logged
+- ✅ Python 3.13+, system `cloudpickle` not installed → `logger.warning` with `pip install cloudpickle` hint
+- ✅ Python 3.13+, `pyspark.cloudpickle` import succeeds → patch applied, `logger.info` confirmation
+- ✅ Python 3.13+, `pyspark.cloudpickle` raises ImportError but `pyspark.cloudpickle_fast` succeeds → patch applied, log includes `cloudpickle_fast` as the path
+- ✅ Python 3.13+, none of `pyspark.cloudpickle` / `cloudpickle_fast` / `_cloudpickle` importable → `logger.warning` ("not importable under any known path") + skip
+- ✅ Python 3.13+, bundled module imported but missing `dumps` / `loads` / `CloudPickler` → `logger.warning` listing the missing attrs + skip (no AttributeError)
+- ✅ Python 3.13+, version-parse failure on `__version__` strings → `logger.warning` mentioning parse failure + skip
+- ✅ Python 3.13+, system cloudpickle version ≤ bundled version → no patch, no warning
 
 ### `--log-format json` — `aqueduct/cli.py:_AqueductJsonLogFormatter`
 
-- ⏳ `_AqueductJsonLogFormatter.format(record)` returns a valid JSON object string with `ts` / `level` / `logger` / `msg` keys
-- ⏳ `ts` is ISO-8601 UTC parsed from `record.created`
-- ⏳ Records with `exc_info` set get an additional `exc` field containing the formatted traceback string
-- ⏳ Records with non-serialisable arguments fall back to `str()` via `default=str` (no `TypeError`)
-- ⏳ `aqueduct -v --log-format json validate <blueprint>` emits JSON lines for every log record (no `INFO foo:` formatted lines mixed in)
-- ⏳ `aqueduct --log-format text` (default) produces the same output as `aqueduct` without the flag — regression guard
-- ⏳ Invalid value (e.g. `--log-format xml`) → click reports allowed choices and exits non-zero
+- ✅ `_AqueductJsonLogFormatter.format(record)` returns a valid JSON object string with `ts` / `level` / `logger` / `msg` keys
+- ✅ `ts` is ISO-8601 UTC parsed from `record.created`
+- ✅ Records with `exc_info` set get an additional `exc` field containing the formatted traceback string
+- ✅ Records with non-serialisable arguments fall back to `str()` via `default=str` (no `TypeError`)
+- ✅ `aqueduct -v --log-format json validate <file>` emits JSON lines for every log record (no `INFO foo:` formatted lines mixed in)
+- ✅ `aqueduct --log-format text` (default) produces the same output as `aqueduct` without the flag — regression guard
+- ✅ Invalid value (e.g. `--log-format xml`) → click reports allowed choices and exits non-zero
 
 ---
 
@@ -1790,8 +1801,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `aqueduct/stores/duckdb_.py`
 
-- ✅ `DuckDBObsStore.connect()` opens / closes a real DuckDB connection per call
-- ✅ `DuckDBObsStore.connect()` creates parent directories when the path's parent does not yet exist — `tests/test_stores/test_obs_store.py::test_duckdb_creates_parent_dirs`
+- ✅ `DuckDBObservabilityStore.connect()` opens / closes a real DuckDB connection per call
+- ✅ `DuckDBObservabilityStore.connect()` creates parent directories when the path's parent does not yet exist — `tests/test_stores/test_observability_store.py::test_duckdb_creates_parent_dirs`
 - ✅ `DuckDBDepotStore.kv_get(missing_key, default="x")` returns `"x"` without raising
 - ✅ `DuckDBDepotStore.kv_put / kv_get / kv_delete` round-trip
 - ✅ Equivalent behavior verified for `DuckDBLineageStore`
@@ -1799,9 +1810,9 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 ### `aqueduct/stores/postgres.py`
 
 - ✅ `_get_pool` caches the pool per DSN (two `connect()` calls against the same DSN do not create two pools) — `tests/test_stores/test_postgres.py`
-- ✅ `_ensure_schema(dsn, "obs")` is idempotent — calling it twice does not raise
-- ✅ `PostgresObsStore.connect()` sets `search_path` to `"obs"` so unqualified `SELECT … FROM run_records` resolves correctly
-- ✅ `PostgresObsStore.location_label` redacts password from DSN (`postgresql://user:secret@host/db` → `postgresql://user@host/db`)
+- ✅ `_ensure_schema(dsn, "observability")` is idempotent — calling it twice does not raise
+- ✅ `PostgresObservabilityStore.connect()` sets `search_path` to `"obs"` so unqualified `SELECT … FROM run_records` resolves correctly
+- ✅ `PostgresObservabilityStore.location_label` redacts password from DSN (`postgresql://user:secret@host/db` → `postgresql://user@host/db`)
 - ✅ `PostgresDepotStore.kv_put / kv_get / kv_delete` round-trip against a real PG instance (integration test, marker `integration`)
 - ✅ `psycopg2` missing → `ImportError` with the documented install hint at first `_get_pool()` call — `tests/test_stores/test_postgres.py`
 
@@ -1819,18 +1830,18 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `KVStoreConfig(backend="redis", path="redis://h/0")` validates
 - ✅ `RelationalStoreConfig(backend="duckdb"|"postgres", ...)` both validate
 - ✅ `KVStoreConfig(backend="duckdb"|"postgres"|"redis", ...)` all three validate
-- ✅ `load_config(...)` raises `ConfigError` when `stores.obs.backend == "postgres"` and `psycopg2` is not importable (monkeypatch `importlib.util.find_spec`) — `tests/test_parser/test_config.py::test_load_config_postgres_missing_driver`
+- ✅ `load_config(...)` raises `ConfigError` when `stores.observability.backend == "postgres"` and `psycopg2` is not importable (monkeypatch `importlib.util.find_spec`) — `tests/test_parser/test_config.py::test_load_config_postgres_missing_driver`
 - ✅ `load_config(...)` raises `ConfigError` when `stores.depot.backend == "redis"` and `redis` is not importable — `tests/test_parser/test_config.py::test_load_config_redis_missing_driver`
 - ✅ `load_config(...)` with all backends `duckdb` does not import psycopg2 or redis — `tests/test_parser/test_config.py`
 
 ### Wired call sites
 
 - ✅ `Surveyor(stores=bundle)` honours the supplied bundle — `record_healing_outcome()` writes against `bundle.obs` — `tests/test_surveyor/test_surveyor.py::test_surveyor_uses_injected_stores`
-- ✅ `Surveyor()` without `stores=` falls back to a `DuckDBObsStore` at `store_dir/obs.db` — `tests/test_surveyor/test_surveyor.py::test_surveyor_default_store`
-- ⏳ `DepotStore(backend=Redis...)` round-trips a watermark via `.put()` / `.get()` [integration — needs `AQ_REDIS_URL`]
-- ⏳ `write_lineage(..., lineage_store=postgres_store)` writes rows into the `lineage.column_lineage` table of the configured Postgres instance [integration — needs `AQ_PG_DSN`]
-- ⏳ `execute(..., obs_store=postgres_store, lineage_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres [integration]
-- ⏳ `aqueduct signal <id>` with the Postgres backend reads/writes the `obs.signal_overrides` schema-qualified table [integration]
+- ✅ `Surveyor()` without `stores=` falls back to a `DuckDBObservabilityStore` at `store_dir/observability.db` — `tests/test_surveyor/test_surveyor.py::test_surveyor_default_store`
+- ✅ `DepotStore(backend=Redis...)` round-trips a watermark via `kv_put`/`kv_get` [DuckDB param always runs; Redis param needs `AQ_REDIS_URL`] — `tests/test_stores/test_wired_backends.py`
+- ✅ `write_lineage(..., lineage_store=postgres_store)` writes rows into the `column_lineage` table [DuckDB param always runs; Postgres param needs `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
+- ✅ `execute(..., observability_store=postgres_store, lineage_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres [integration — skips without `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
+- ✅ `aqueduct signal <id>` with the Postgres backend reads/writes the `observability.signal_overrides` schema-qualified table [integration — skips without `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
 
 ### `aqueduct stores` CLI
 
@@ -1842,10 +1853,10 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `aqueduct doctor`
 
-- ✅ `check_store_backend("obs", cfg, is_kv_only=False)` returns `ok` for a reachable DuckDB — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
-- ✅ `check_store_backend("obs", cfg, ...)` returns `fail` with `redis` because Literal split prevents the combination at config layer; if injected programmatically the function still rejects — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `check_store_backend("observability", cfg, is_kv_only=False)` returns `ok` for a reachable DuckDB — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `check_store_backend("observability", cfg, ...)` returns `fail` with `redis` because Literal split prevents the combination at config layer; if injected programmatically the function still rejects — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
 - ✅ `check_store_backend(... backend=postgres, dsn=invalid)` returns `fail` with the connection error — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
-- ✅ `aqueduct doctor` output replaces the old `depot` / `observability` rows with `obs` / `lineage` / `depot` backend-aware rows — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
+- ✅ `aqueduct doctor` output replaces the old `depot` / `observability` rows with `observability` / `lineage` / `depot` backend-aware rows — `tests/test_cli/test_cli_doctor.py::TestDoctorStoreBackends`
 
 ---
 
@@ -1864,10 +1875,10 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 - ✅ Blueprint with no SQL Channels → returns `[]`
 - ✅ Blueprint with one `op: sql` Channel pulling 3 columns from 1 upstream → returns 3 rows with correct `source_table` / `source_column`
-- ✅ Blueprint with `SELECT *` Channel → returns wildcard rows (`output_column='*'`) — Gate 2 must tolerate this without false positives
+- ✅ Blueprint with `SELECT *` Channel → returns wildcard rows (`output_column='*'`) — the lineage gate must tolerate this without false positives
 - ✅ Multi-input Channel resolves `source_table` per column when sqlglot can disambiguate; falls back to first upstream when ambiguous
 
-#### `run_gate2_lineage(before, after, spec)`
+#### `run_lineage_gate(before, after, spec)`
 
 - ✅ patch that does NOT change any Channel SQL → returns `status="pass"`, empty warnings
 - ✅ patch that renames a column in a Channel query and the renamed column is consumed downstream → returns one `LineageWarning` per missing column, `status="warn"`
@@ -1875,7 +1886,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ patch on a module with no downstream consumers → `status="pass"` even if columns disappear
 - ✅ `SELECT *` patched module → no false-positive warnings (wildcard handled)
 
-#### `run_gate3_sandbox(...)`
+#### `run_sandbox_gate(...)`
 
 - ✅ patched Blueprint that parses + compiles + executes without error → `status="pass"` and `egress_targets` lists every dropped Egress
 - ✅ patched Blueprint that fails to compile → `status="fail"` with the CompileError text in `detail`
@@ -1908,107 +1919,107 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### Auto/aggressive integration — `cli.py:_run_patch_gates_inline`
 
-- ✅ auto mode + Gate 3 pass + `patch_validation=full_run` → full Spark run is still executed
-- ✅ auto mode + Gate 3 pass + `patch_validation=sandbox` → full Spark run is SKIPPED; Blueprint written directly
-- ✅ auto mode + Gate 3 fail → patch staged for human via `on_heal_failure`, `healing_outcomes.patch_applied=false`, loop breaks
-- ✅ aggressive mode + Gate 3 fail → `continue` to next iteration with `last_apply_error` populated; no Blueprint write
-- ✅ aggressive mode + Gate 3 pass + `patch_validation=sandbox` → Blueprint written, loop breaks
-- ✅ Each gate evaluation writes one row to `obs.patch_simulation` (gate2 + gate3)
+- ✅ auto mode + the sandbox gate pass + `patch_validation=full_run` → full Spark run is still executed
+- ✅ auto mode + the sandbox gate pass + `patch_validation=sandbox` → full Spark run is SKIPPED; Blueprint written directly
+- ✅ auto mode + the sandbox gate fail → patch staged for human via `on_heal_failure`, `healing_outcomes.patch_applied=false`, loop breaks
+- ✅ aggressive mode + the sandbox gate fail → `continue` to next iteration with `last_apply_error` populated; no Blueprint write
+- ✅ aggressive mode + the sandbox gate pass + `patch_validation=sandbox` → Blueprint written, loop breaks
+- ✅ Each gate evaluation writes one row to `observability.patch_simulation` (lineage + sandbox)
 
 ### `aqueduct patch preview` CLI
 
-- ✅ `aqueduct patch preview <patch>.json --blueprint bp.yml` (text format) — exit 0 when Gate 2 passes
-- ✅ `aqueduct patch preview ... --sandbox --sample 0` — Gate 3 runs unbounded; Egress targets printed
-- ✅ `aqueduct patch preview ... --format json` emits a top-level object with `patch_id`, `diff`, `gate2`, and (when `--sandbox`) `gate3` keys
-- ✅ Patch that fails Gate 1 guardrails exits with code 2 before Gate 2/3 run
-- ✅ Gate 2 warnings do not cause non-zero exit (status `warn` is informational)
-- ✅ Gate 3 `fail` causes exit code 2
+- ✅ `aqueduct patch preview <patch>.json --blueprint bp.yml` (text format) — exit 0 when the lineage gate passes
+- ✅ `aqueduct patch preview ... --sandbox --sample 0` — the sandbox gate runs unbounded; Egress targets printed
+- ✅ `aqueduct patch preview ... --format json` emits a top-level object with `patch_id`, `diff`, `lineage gate`, and (when `--sandbox`) `sandbox gate` keys
+- ✅ Patch that fails the guardrails gate guardrails exits with code 2 before the lineage gate/3 run
+- ✅ the lineage gate warnings do not cause non-zero exit (status `warn` is informational)
+- ✅ the sandbox gate `fail` causes exit code 2
 
-### `obs.patch_simulation` table — `Surveyor.record_patch_simulation()`
+### `observability.patch_simulation` table — `Surveyor.record_patch_simulation()`
 
 - ✅ Insert one row → `SELECT COUNT(*) FROM patch_simulation` returns 1
 - ✅ Insert preserves all fields (patch_id, gate, status, detail, sample_rows, duration_ms, run_id, blueprint_id, recorded_at)
 - ✅ Method is a no-op when `Surveyor.start()` has not been called (`self._obs is None`)
-- ✅ Internal exceptions inside the insert never propagate to the healing loop (e.g. patched obs store raising on connect)
+- ✅ Internal exceptions inside the insert never propagate to the healing loop (e.g. patched observability store raising on connect)
 
 ---
 
-## Phase 29b — Gate 4: explain() regression check
+## Phase 29b — the explain gate: explain() regression check
 
 ### `aqueduct/patch/explain_gate.py`
 
 #### `capture_plan_snapshot(df)`
 
-- ⏳ returns dict with `exchange_count`, `python_udf_count`, `broadcast_count`, `plan_text` keys
-- ⏳ counts `Exchange ` substring occurrences in formatted plan text
-- ⏳ counts `BatchEvalPython` substring occurrences
-- ⏳ counts `BroadcastExchange` substring occurrences
-- ⏳ falls back to `df._jdf.queryExecution().toString()` when `ExplainMode.fromString` is unavailable
-- ⏳ returns zero counts + empty plan text when both extraction paths fail (never raises)
+- ✅ returns dict with `exchange_count`, `python_udf_count`, `broadcast_count`, `plan_text` keys
+- ✅ counts `Exchange ` substring occurrences in formatted plan text
+- ✅ counts `BatchEvalPython` substring occurrences
+- ✅ counts `BroadcastExchange` substring occurrences
+- ✅ falls back to `df._jdf.queryExecution().toString()` when `ExplainMode.fromString` is unavailable
+- ✅ returns zero counts + empty plan text when both extraction paths fail (never raises)
 
-#### `run_gate4_explain(baseline, after, touched_modules=...)`
+#### `run_explain_gate(baseline, after, touched_modules=...)`
 
-- ⏳ empty `baseline` dict → `status="skip"`, detail mentions "baseline not yet established"
-- ⏳ baseline + matching after with identical counts → `status="pass"`, no regressions
-- ⏳ `after.exchange_count > baseline.exchange_count` → ExplainRegression with metric=`"exchange"`
-- ⏳ `after.python_udf_count > baseline.python_udf_count` → ExplainRegression with metric=`"python_udf"`
-- ⏳ `after.broadcast_count < baseline.broadcast_count` → ExplainRegression with metric=`"broadcast"`
-- ⏳ `touched_modules=["m1"]` → only `m1` compared even if other modules are in both maps
-- ⏳ `touched_modules=None` → intersection of `baseline.keys()` and `after.keys()` compared
-- ⏳ status `warn` when at least one regression; `pass` otherwise (never `fail`)
-- ⏳ `baseline_run_id` populated with one of the baseline `run_id`s on compare
+- ✅ empty `baseline` dict → `status="skip"`, detail mentions "baseline not yet established"
+- ✅ baseline + matching after with identical counts → `status="pass"`, no regressions
+- ✅ `after.exchange_count > baseline.exchange_count` → ExplainRegression with metric=`"exchange"`
+- ✅ `after.python_udf_count > baseline.python_udf_count` → ExplainRegression with metric=`"python_udf"`
+- ✅ `after.broadcast_count < baseline.broadcast_count` → ExplainRegression with metric=`"broadcast"`
+- ✅ `touched_modules=["m1"]` → only `m1` compared even if other modules are in both maps
+- ✅ `touched_modules=None` → intersection of `baseline.keys()` and `after.keys()` compared
+- ✅ status `warn` when at least one regression; `pass` otherwise (never `fail`)
+- ✅ `baseline_run_id` populated with one of the baseline `run_id`s on compare
 
 ### `aqueduct/surveyor/surveyor.py` — Phase 29b methods
 
-- ⏳ `Surveyor.record_explain_snapshot(...)` writes one row to `obs.explain_snapshot`
-- ⏳ Rolling prune: after N+1 inserts for the same `(blueprint_id, module_id)`, oldest row deleted; only `keep_last_n` rows remain
-- ⏳ `Surveyor.latest_explain_snapshots()` returns `{module_id: {exchange_count, python_udf_count, broadcast_count, plan_text, run_id, captured_at}}` with one row per module (most recent `captured_at`)
-- ⏳ Method is a no-op when `_obs` is None or `blueprint_id` is None
-- ⏳ Internal exceptions never propagate
+- ✅ `Surveyor.record_explain_snapshot(...)` writes one row to `observability.explain_snapshot`
+- ✅ Rolling prune: after N+1 inserts for the same `(blueprint_id, module_id)`, oldest row deleted; only `keep_last_n` rows remain
+- ✅ `Surveyor.latest_explain_snapshots()` returns `{module_id: {exchange_count, python_udf_count, broadcast_count, plan_text, run_id, captured_at}}` with one row per module (most recent `captured_at`)
+- ✅ Method is a no-op when `_obs` is None or `blueprint_id` is None
+- ✅ Internal exceptions never propagate
 
 ### `agent.block_on_explain_regression` config
 
-- ⏳ `AgentConnectionConfig(block_on_explain_regression=False)` is the default
-- ⏳ `AgentConnectionConfig(block_on_explain_regression=True)` validates
-- ⏳ Blueprint-level `agent.block_on_explain_regression` overrides engine default
-- ⏳ Blueprint `block_on_explain_regression=None` → engine default wins
-- ⏳ Parser populates `AgentConfig.block_on_explain_regression` from Pydantic schema (regression test for the Phase 29a missed-field bug — verifies parser wires the field, not just defaults)
+- ✅ `AgentConnectionConfig(block_on_explain_regression=False)` is the default
+- ✅ `AgentConnectionConfig(block_on_explain_regression=True)` validates
+- ✅ Blueprint-level `agent.block_on_explain_regression` overrides engine default
+- ✅ Blueprint `block_on_explain_regression=None` → engine default wins
+- ✅ Parser populates `AgentConfig.block_on_explain_regression` from Pydantic schema (regression test for the Phase 29a missed-field bug — verifies parser wires the field, not just defaults)
 
 ### Executor wiring — `aqueduct/executor/spark/executor.py`
 
-- ⏳ `execute(..., explain_capture=dict)` fills the dict with per-module snapshots during a successful run
-- ⏳ `explain_capture` is NOT written to `obs.explain_snapshot` even when `surveyor` is also passed; both sinks happen independently
-- ⏳ `execute(..., surveyor=X, explain_capture=None)` writes to `obs.explain_snapshot` per successful non-Egress module
-- ⏳ Egress modules are NEVER captured (no DataFrame in frame_store, never iterated)
-- ⏳ Failure during capture for one module does NOT abort the run or skip the next module
+- ✅ `execute(..., explain_capture=dict)` fills the dict with per-module snapshots during a successful run
+- ✅ `explain_capture` is NOT written to `observability.explain_snapshot` even when `surveyor` is also passed; both sinks happen independently
+- ✅ `execute(..., surveyor=X, explain_capture=None)` writes to `observability.explain_snapshot` per successful non-Egress module
+- ✅ Egress modules are NEVER captured (no DataFrame in frame_store, never iterated)
+- ✅ Failure during capture for one module does NOT abort the run or skip the next module
 
-### `aqueduct/patch/preview.py` — Gate 3 explain wiring
+### `aqueduct/patch/preview.py` — the sandbox gate explain wiring
 
-- ⏳ `run_gate3_sandbox(..., explain_capture=d)` forwards the dict to `execute()` and fills it during sandbox replay
-- ⏳ When `explain_capture` is omitted, behaviour is identical to Phase 29a (no per-module snapshot collection)
+- ✅ `run_sandbox_gate(..., explain_capture=d)` forwards the dict to `execute()` and fills it during sandbox replay
+- ✅ When `explain_capture` is omitted, behaviour is identical to Phase 29a (no per-module snapshot collection)
 
 ### Auto/aggressive integration — `cli.py:_run_patch_gates_inline`
 
-- ⏳ Returns 4-tuple `(gate2, gate3, gate4, gates_passed)`; gate4 is None only when Gate 4 raised internally
-- ⏳ Gate 4 row appended to `obs.patch_simulation` with `gate="gate4"`
-- ⏳ Auto mode + Gate 4 warn → ⚠ regressions printed; loop continues to patch_validation logic
-- ⏳ Aggressive mode + `block_on_explain_regression=False` + Gate 4 warn → continues to Gate 3 decision (current behaviour)
-- ⏳ Aggressive mode + `block_on_explain_regression=True` + Gate 4 warn → patch rejected, `last_apply_error` populated, `continue` to next iteration; `healing_outcomes.patch_applied=false`
-- ⏳ Aggressive mode + `block_on_explain_regression=True` + Gate 4 pass → proceeds to Gate 3 / `patch_validation` decision normally
+- ✅ Returns 4-tuple `(lineage gate, sandbox gate, explain gate, gates_passed)`; explain gate is None only when the explain gate raised internally
+- ✅ the explain gate row appended to `observability.patch_simulation` with `gate="explain"` (Note: manifest said "explain gate", code uses "explain")
+- ✅ Auto mode + the explain gate warn → ⚠ regressions printed; loop continues to patch_validation logic
+- ✅ Aggressive mode + `block_on_explain_regression=False` + the explain gate warn → continues to the sandbox gate decision (current behaviour)
+- ✅ Aggressive mode + `block_on_explain_regression=True` + the explain gate warn → patch rejected, `last_apply_error` populated, `continue` to next iteration; `healing_outcomes.patch_applied=false`
+- ✅ Aggressive mode + `block_on_explain_regression=True` + the explain gate pass → proceeds to the sandbox gate / `patch_validation` decision normally
 
 ### `aqueduct patch preview` CLI
 
-- ⏳ `aqueduct patch preview <patch>.json --blueprint bp.yml --sandbox` text output includes "Gate 4: explain() regression" section with status + duration
-- ⏳ `--format json --sandbox` emits top-level `gate4` key with `status`, `detail`, `duration_ms`, `baseline_run_id`, `regressions` (list of dicts)
-- ⏳ Empty `obs.explain_snapshot` → Gate 4 reports `status="skip"`, exit code stays 0
-- ⏳ Gate 4 warn (regression) does NOT raise exit code beyond Gate 3 status (warn-only at CLI surface)
+- ✅ `aqueduct patch preview <patch>.json --blueprint bp.yml --sandbox` text output includes "Explain gate" section with status + duration
+- ✅ `--format json --sandbox` emits top-level `explain` key (Note: manifest said "explain gate") with `status`, `detail`, `duration_ms`, `baseline_run_id`, `regressions`
+- ✅ Empty `observability.explain_snapshot` → the explain gate reports `status="skip"`, exit code stays 0
+- ✅ the explain gate warn (regression) does NOT raise exit code beyond the sandbox gate status (warn-only at CLI surface)
 
-### `obs.explain_snapshot` table
+### `observability.explain_snapshot` table
 
-- ⏳ Table created on `Surveyor.start()` via `_EXPLAIN_SNAPSHOT_DDL`
-- ⏳ Primary key `(blueprint_id, run_id, module_id)` — re-inserting same triplet is idempotent (INSERT OR REPLACE)
-- ⏳ DDL `IF NOT EXISTS` — second `start()` does not raise
-- ⏳ DuckDB and Postgres backends both honour the DDL (paramstyle qmark→format rewrite)
+- ✅ Table created on `Surveyor.start()` via `_EXPLAIN_SNAPSHOT_DDL`
+- ✅ Primary key `(blueprint_id, run_id, module_id)` — re-inserting same triplet is idempotent (INSERT OR REPLACE)
+- ✅ DDL `IF NOT EXISTS` — second `start()` does not raise
+- ✅ DuckDB and Postgres backends both honour the DDL (paramstyle qmark→format rewrite)
 
 ---
 
@@ -2016,139 +2027,181 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `aqueduct/warnings.py` core infra
 
-- ⏳ `AqueductWarning` subclasses `UserWarning`
-- ⏳ `emit(rule_id, msg)` calls `warnings.warn` with category `AqueductWarning` and prefix `[aqueduct:rule_id] msg`
-- ⏳ `emit(..., suppress={rid})` is a no-op when `rid` matches `rule_id`
-- ⏳ `set_default_suppress([rid])` makes subsequent `emit(rid, ...)` no-ops without explicit suppress arg
-- ⏳ `set_default_suppress([], silence_all=True)` silences every emit including non-listed IDs
-- ⏳ Explicit `emit(..., suppress=...)` arg takes priority over default
-- ⏳ `emit()` never raises — internal exceptions swallowed
-- ⏳ `install_cli_formatter()` is idempotent; second call is a no-op
-- ⏳ `install_cli_formatter()` renders `AqueductWarning` as `AQ-WARN [rule_id] msg\n`; non-Aqueduct warnings keep default formatting
+- ✅ `AqueductWarning` subclasses `UserWarning` — `tests/test_warnings.py`
+- ✅ `emit(rule_id, msg)` calls `warnings.warn` with category `AqueductWarning` and prefix `[aqueduct:rule_id] msg` — `tests/test_warnings.py`
+- ✅ `emit(..., suppress={rid})` is a no-op when `rid` matches `rule_id` — `tests/test_warnings.py`
+- ✅ `set_default_suppress([rid])` makes subsequent `emit(rid, ...)` no-ops without explicit suppress arg — `tests/test_warnings.py`
+- ✅ `set_default_suppress([], silence_all=True)` silences every emit including non-listed IDs — `tests/test_warnings.py`
+- ✅ Explicit `emit(..., suppress=...)` arg takes priority over default — `tests/test_warnings.py`
+- ✅ `emit()` never raises — internal exceptions swallowed — `tests/test_warnings.py`
+- ✅ `install_cli_formatter()` is idempotent; second call is a no-op — `tests/test_warnings.py`
+- ✅ `install_cli_formatter()` renders `AqueductWarning` as `AQ-WARN [rule_id] msg\n`; non-Aqueduct warnings keep default formatting — `tests/test_warnings.py`
 
 ### `aqueduct/compiler/warnings/` tier 1 rules
 
 #### `kafka_checkpoint_stale.py`
-- ⏳ `RULE_ID == "kafka_checkpoint_stale"`
-- ⏳ Channel with `checkpoint=True` + Kafka Ingress upstream → one warning
-- ⏳ Channel with `checkpoint=True` + Parquet Ingress upstream → no warning
-- ⏳ Channel with `checkpoint=False` + Kafka Ingress upstream → no warning
+- ✅ `RULE_ID == "kafka_checkpoint_stale"`
+- ✅ Channel with `checkpoint=True` + Kafka Ingress upstream → one warning
+- ✅ Channel with `checkpoint=True` + Parquet Ingress upstream → no warning
+- ✅ Channel with `checkpoint=False` + Kafka Ingress upstream → no warning
 
 #### `nondeterministic_fanout.py`
-- ⏳ `RULE_ID == "nondeterministic_fanout"`
-- ⏳ 2-consumer Channel with `rand()` in SQL → one warning
-- ⏳ Single-consumer Channel with `rand()` → no warning
-- ⏳ Multi-consumer Channel without nondeterministic fn → no warning
-- ⏳ Multi-consumer Channel with `rand()` + `checkpoint=True` → no warning
-- ⏳ Detects `uuid()`, `current_timestamp()`, `now()`, `random()`, case-insensitive
+- ✅ `RULE_ID == "nondeterministic_fanout"`
+- ✅ 2-consumer Channel with `rand()` in SQL → one warning
+- ✅ Single-consumer Channel with `rand()` → no warning
+- ✅ Multi-consumer Channel without nondeterministic fn → no warning
+- ✅ Multi-consumer Channel with `rand()` + `checkpoint=True` → no warning
+- ✅ Detects `uuid()`, `current_timestamp()`, `now()`, `random()`, case-insensitive
 
 #### `count_col_likely_count_star.py`
-- ⏳ `RULE_ID == "count_col_likely_count_star"`
-- ⏳ `COUNT(user_id)` → one warning
-- ⏳ `COUNT(*)` → no warning
-- ⏳ `COUNT(DISTINCT col)` → no warning
-- ⏳ Multiple `COUNT(col)` in one query → one warning per match
+- ✅ `RULE_ID == "count_col_likely_count_star"`
+- ✅ `COUNT(user_id)` → one warning
+- ✅ `COUNT(*)` → no warning
+- ✅ `COUNT(DISTINCT col)` → no warning
+- ✅ Multiple `COUNT(col)` in one query → one warning per match
 
 #### `file_format_no_repartition.py`
-- ⏳ `RULE_ID == "file_format_no_repartition"`
-- ⏳ Parquet Egress without partition hints → warning
-- ⏳ Parquet Egress with `partition_by` → no warning
-- ⏳ Parquet Egress with `repartition` → no warning
-- ⏳ Parquet Egress with `coalesce` → no warning
-- ⏳ Delta Egress without partition hints → no warning (transaction log handles)
-- ⏳ JSON, CSV trigger the rule same as parquet
+- ✅ `RULE_ID == "file_format_no_repartition"`
+- ✅ Parquet Egress without partition hints → warning
+- ✅ Parquet Egress with `partition_by` → no warning
+- ✅ Parquet Egress with `repartition` → no warning
+- ✅ Parquet Egress with `coalesce` → no warning
+- ✅ Delta Egress without partition hints → no warning (transaction log handles)
+- ✅ JSON, CSV trigger the rule same as parquet
 
 #### `jdbc_missing_partition.py`
-- ⏳ `RULE_ID == "jdbc_missing_partition"`
-- ⏳ JDBC Ingress without the 4 options → warning
-- ⏳ JDBC Ingress with `partitionColumn` + `lowerBound` + `upperBound` → no warning
-- ⏳ JDBC Ingress with `predicates` → no warning
-- ⏳ JDBC Egress (write) is NOT flagged (rule is Ingress-only)
+- ✅ `RULE_ID == "jdbc_missing_partition"`
+- ✅ JDBC Ingress without the 4 options → warning
+- ✅ JDBC Ingress with `partitionColumn` + `lowerBound` + `upperBound` → no warning
+- ✅ JDBC Ingress with `predicates` → no warning
+- ✅ JDBC Egress (write) is NOT flagged (rule is Ingress-only)
 
 #### Registry — `aqueduct/compiler/warnings/__init__.py`
-- ⏳ `RULES` contains all five `(rule_id, check)` tuples
-- ⏳ `run_all(manifest)` returns `[(rule_id, msg), ...]` for every rule that fires
-- ⏳ `run_all(manifest, suppress={"kafka_checkpoint_stale"})` skips that rule entirely (never invokes the check fn)
-- ⏳ A check that raises is silently skipped (other rules still run)
+- ✅ `RULES` contains all five `(rule_id, check)` tuples
+- ✅ `run_all(manifest)` returns `[(rule_id, msg), ...]` for every rule that fires
+- ✅ `run_all(manifest, suppress={"kafka_checkpoint_stale"})` skips that rule entirely (never invokes the check fn)
+- ✅ A check that raises is silently skipped (other rules still run)
 
 ### `aqueduct/executor/spark/warnings/` tier 2 rules
 
 #### `jar_availability.py`
-- ⏳ `RULE_ID == "jar_availability"`
-- ⏳ Blueprint with `format: kafka` + no `spark-sql-kafka` JAR loaded → warning
-- ⏳ Blueprint with `format: kafka` + `spark-sql-kafka-0-10` JAR loaded → no warning (substring match)
-- ⏳ `format: delta` checks `delta-core` / `delta-spark` fragments
-- ⏳ `format: iceberg` checks `iceberg-spark`
-- ⏳ JDBC modules with `options.driver` set but no JDBC-ish JAR loaded → warning naming the driver classes
-- ⏳ Core `format: jdbc` without an explicit driver class → no JAR warning (core Spark handles)
+- ✅ `RULE_ID == "jar_availability"`
+- ✅ Blueprint with `format: kafka` + no `spark-sql-kafka` JAR loaded → warning
+- ✅ Blueprint with `format: kafka` + `spark-sql-kafka-0-10` JAR loaded → no warning (substring match)
+- ✅ `format: delta` checks `delta-core` / `delta-spark` fragments
+- ✅ `format: iceberg` checks `iceberg-spark`
+- ✅ JDBC modules with `options.driver` set but no JDBC-ish JAR loaded → warning naming the driver classes
+- ✅ Core `format: jdbc` without an explicit driver class → no JAR warning (core Spark handles)
 
 ### Compiler integration — `aqueduct/compiler/compiler.py`
-- ⏳ `compile(bp, warnings_suppress={"kafka_checkpoint_stale"})` does NOT emit that rule
-- ⏳ `compile(bp, warnings_silence_all=True)` emits zero Aqueduct warnings (tier 1 + legacy 8a–8g)
-- ⏳ Legacy rules 8a–8g now use stable rule IDs (`perf_probe_sample_full_scan`, `perf_incremental_watermark_scan`, `perf_python_udf_row_at_a_time`, `perf_delta_append_no_partition`, `perf_multi_consumer_no_cache`, `perf_hadoop_fs_in_options`, `maintenance_optimize_non_delta`, `delivery_append_retry_dupes`)
-- ⏳ Each legacy ID is suppressible via the same `warnings.suppress` list
+- ✅ `compile(bp, warnings_suppress={"kafka_checkpoint_stale"})` does NOT emit that rule
+- ✅ `compile(bp, warnings_silence_all=True)` emits zero Aqueduct warnings (tier 1 + legacy 8a–8g)
+- ✅ Legacy rules 8a–8g now use stable rule IDs (`perf_probe_sample_full_scan`, `perf_incremental_watermark_scan`, `perf_python_udf_row_at_a_time`, `perf_delta_append_no_partition`, `perf_multi_consumer_no_cache`, `perf_hadoop_fs_in_options`, `maintenance_optimize_non_delta`, `delivery_append_retry_dupes`)
+- ✅ Each legacy ID is suppressible via the same `warnings.suppress` list
 
 ### Executor integration — `aqueduct/executor/spark/executor.py`
-- ⏳ `execute(manifest, spark)` calls `run_all(manifest, spark)` after `getOrCreate()` and emits findings
-- ⏳ `execute(..., warnings_suppress={"jar_availability"})` skips the rule
-- ⏳ `execute(..., warnings_silence_all=True)` emits zero Aqueduct warnings
+- ✅ `execute(manifest, spark)` calls `run_all(manifest, spark)` after `getOrCreate()` and emits findings
+- ✅ `execute(..., warnings_suppress={"jar_availability"})` skips the rule
+- ✅ `execute(..., warnings_silence_all=True)` emits zero Aqueduct warnings
 
 ### CLI integration — `aqueduct/cli.py`
-- ⏳ `aqueduct --suppress-warning kafka_checkpoint_stale compile bp.yml` skips that rule
-- ⏳ `aqueduct --suppress-warning a --suppress-warning b ...` (repeatable) merges both into suppress set
-- ⏳ `aqueduct --no-warnings compile bp.yml` silences all Aqueduct warnings
-- ⏳ `warnings.suppress` in `aqueduct.yml` is merged with CLI flags on top
-- ⏳ `warnings.silence_all: true` in `aqueduct.yml` mirrors `--no-warnings`
-- ⏳ `_compile_with_warnings()` renders `AqueductWarning` as `AQ-WARN [id] msg`; falls back to `WARNING:` for other UserWarnings
+- ✅ `aqueduct --suppress-warning kafka_checkpoint_stale compile bp.yml` skips that rule
+- ✅ `aqueduct --suppress-warning a --suppress-warning b ...` (repeatable) merges both into suppress set
+- ✅ `aqueduct --no-warnings compile bp.yml` silences all Aqueduct warnings
+- ✅ `warnings.suppress` in `aqueduct.yml` is merged with CLI flags on top
+- ✅ `warnings.silence_all: true` in `aqueduct.yml` mirrors `--no-warnings`
+- ✅ `_compile_with_warnings()` renders `AqueductWarning` as `AQ-WARN [id] msg`; falls back to `WARNING:` for other UserWarnings
 
 ### `WarningsConfig` Pydantic model — `aqueduct/config.py`
-- ⏳ `WarningsConfig().suppress == []` and `silence_all == False`
-- ⏳ `WarningsConfig(suppress=["foo"])` validates
-- ⏳ `WarningsConfig(silence_all=True)` validates
-- ⏳ Extra unknown keys → `pydantic.ValidationError` (`extra="forbid"`)
-- ⏳ `AqueductConfig().warnings` exists with default `WarningsConfig`
+- ✅ `WarningsConfig().suppress == []` and `silence_all == False`
+- ✅ `WarningsConfig(suppress=["foo"])` validates
+- ✅ `WarningsConfig(silence_all=True)` validates
+- ✅ Extra unknown keys → `pydantic.ValidationError` (`extra="forbid"`)
+- ✅ `AqueductConfig().warnings` exists with default `WarningsConfig`
 
 ---
 
 ## Phase 30b — Stability Contract for v1.0
 
 ### `aqueduct/exit_codes.py`
-- ⏳ Constants `SUCCESS=0`, `CONFIG_ERROR=1`, `DATA_OR_RUNTIME=2`, `HEAL_PENDING=3`, `VALIDATION_GATE=4`, `USAGE_ERROR=5` exposed at module level
-- ⏳ `__all__` includes all six names
-- ⏳ Importable from top-level: `from aqueduct import exit_codes`
+- ✅ Constants `SUCCESS=0`, `CONFIG_ERROR=1`, `DATA_OR_RUNTIME=2`, `HEAL_PENDING=3`, `VALIDATION_GATE=4`, `USAGE_ERROR=5` exposed at module level — tests/test_cli/test_exit_codes.py::test_exit_codes_exposed
+- ✅ `__all__` includes all six names — tests/test_cli/test_exit_codes.py::test_exit_codes_in_all
+- ✅ Importable from top-level:  — tests/test_cli/test_exit_codes.py::test_exit_codes_exposed`from aqueduct import exit_codes`
 
 ### `aqueduct schema` command
-- ⏳ `aqueduct schema --target blueprint` emits JSON Schema with `$defs` and `properties`
-- ⏳ `aqueduct schema --target config` emits AqueductConfig schema
-- ⏳ `aqueduct schema --target patch` emits PatchSpec schema
-- ⏳ `aqueduct schema --target bogus` rejected by Click before execution
-- ⏳ `-o file.json` writes the schema to disk, prints confirmation to stderr; stdout silent
-- ⏳ Default `-o -` writes JSON to stdout
-- ⏳ Output parses as valid JSON (`json.loads` round-trip)
-- ⏳ Generation failure exits with code 2
+- ✅ `aqueduct schema --target blueprint` emits JSON Schema with `$defs` and `properties`
+- ✅ `aqueduct schema --target config` emits AqueductConfig schema
+- ✅ `aqueduct schema --target patch` emits PatchSpec schema
+- ✅ `aqueduct schema --target bogus` rejected by Click before execution
+- ✅ `-o file.json` writes the schema to disk, prints confirmation to stderr; stdout silent
+- ✅ Default `-o -` writes JSON to stdout
+- ✅ Output parses as valid JSON (`json.loads` round-trip)
+- ✅ Generation failure exits with code 2
 
 ### `aqueduct runs --format json`
-- ⏳ Returns list of `{run_id, blueprint_id, status, started_at, finished_at, first_failed_module}` objects
-- ⏳ Empty store → returns `[]` (not `"No runs found."`), exit 0
-- ⏳ `--failed --format json` filters to status=error rows only
-- ⏳ `--blueprint <id> --format json` filters to that blueprint
-- ⏳ Output parses as valid JSON
+- ✅ Returns list of `{run_id, blueprint_id, status, started_at, finished_at, first_failed_module}` objects
+- ✅ Empty store → returns `[]` (not `"No runs found."`), exit 0
+- ✅ `--failed --format json` filters to status=error rows only
+- ✅ `--blueprint <id> --format json` filters to that blueprint
+- ✅ Output parses as valid JSON
 
 ### `aqueduct patch list --format json`
-- ⏳ Returns list of `{status, file, patch_id, rationale, confidence, category}` objects
-- ⏳ Empty patches dir → returns `[]`, exit 0
-- ⏳ `--status all --format json` includes pending + applied + rejected with `status` field set
-- ⏳ Output parses as valid JSON
-- ⏳ Each entry includes `status` matching the lifecycle dir
+- ✅ Returns list of `{status, file, patch_id, rationale, confidence, category}` objects
+- ✅ Empty patches dir → returns `[]`, exit 0
+- ✅ `--status all --format json` includes pending + applied + rejected with `status` field set
+- ✅ Output parses as valid JSON
+- ✅ Each entry includes `status` matching the lifecycle dir
 
 ### Public API surface — `aqueduct/__init__.py`
-- ⏳ `from aqueduct import parse, ParseError, AqueductWarning, __version__` succeeds
-- ⏳ `__all__` contains exactly: `__version__`, `parse`, `ParseError`, `AqueductWarning`
-- ⏳ `from aqueduct import exit_codes` succeeds
-- ⏳ Subpackage internals (`aqueduct.compiler`, `aqueduct.executor.spark`, etc.) still importable but not in `__all__`
+- ✅ `from aqueduct import parse, ParseError, AqueductWarning, __version__` succeeds
+- ✅ `__all__` contains exactly: `__version__`, `parse`, `ParseError`, `AqueductWarning`
+- ✅ `from aqueduct import exit_codes` succeeds
+- ✅ Subpackage internals (`aqueduct.compiler`, `aqueduct.executor.spark`, etc.) still importable but not in `__all__`
 
 ### README — Versioning & Stability section
-- ⏳ Section "Versioning & Stability" present between Development and License
-- ⏳ Exit code table includes all six codes with constant names + meanings
-- ⏳ Deprecation policy paragraph present
-- ⏳ Stable surface list mentions `parse`, `ParseError`, `AqueductWarning`, `exit_codes`
+- ✅ Section "Versioning & Stability" present between Development and License
+- ✅ Exit code table includes all six codes with constant names + meanings
+- ✅ Deprecation policy paragraph present
+- ✅ Stable surface list mentions `parse`, `ParseError`, `AqueductWarning`, `exit_codes`
+
+---
+
+## Pre-release CLI cleanup — env resolution + validate/doctor unification
+
+### `_resolve_and_load_env(explicit, anchor, disabled)`
+- ✅ Order: `--env-file` wins over `<anchor dir>/.env` wins over `<cwd>/.env`
+- ✅ First existing file wins — does NOT stack multiple .env files
+- ✅ `disabled=True` → no-op
+- ✅ `anchor=None` → only cwd/.env considered
+- ✅ Existing env vars never overwritten (delegates to `_load_env_file`)
+- ✅ "Loaded N" emitted at DEBUG only — absent at default verbosity, present with `aqueduct -v`
+
+### `_sniff_file_kind(path)`
+- ✅ `aqueduct: "1.0"` header → `"blueprint"`
+- ✅ `aqueduct_config: "1.0"` → `"config"`
+- ✅ `aqueduct_test: "1.0"` → `"aqtest"`
+- ✅ `aqueduct_scenario: "1.0"` → `"aqscenario"`
+- ✅ no recognised header → `None`
+- ✅ unreadable file → `None` (never raises)
+- ✅ `aqueduct_config` matched before `aqueduct` (longest-prefix; no false blueprint match)
+
+### `aqueduct validate <file>...`
+- ✅ Blueprint file → `✓ [blueprint: id  N modules, M edges]`, exit 0
+- ✅ Config file → full engine summary (engine/target/stores/secrets/webhooks), exit 0
+- ✅ Invalid config (`stores.obs`) → `✗`, exit 1
+- ✅ Multiple files → each validated independently; exit 1 if ANY invalid
+- ✅ No argument + `aqueduct.yml` in CWD → validates it, prints `(no file given → …)`
+- ✅ No argument + no `aqueduct.yml` → `✗ no file given`, exit 1
+- ✅ Unknown header → falls back to blueprint parse (parser emits precise error)
+- ✅ `.aqtest` / `.aqscenario` file → informational redirect to `doctor`, not a hard fail
+- ✅ `check-config` command no longer registered (removed)
+
+### `aqueduct doctor [TARGET]`
+- ✅ No TARGET + `aqueduct.yml` in CWD → uses it, prints `(no file given → checking aqueduct.yml)`
+- ✅ TARGET with `aqueduct_config:` header → config probe path
+- ✅ TARGET with `aqueduct:` header → blueprint source probe path
+- ✅ TARGET with `aqueduct_test:` → routed to aqtest pre-flight
+- ✅ TARGET with `aqueduct_scenario:` → routed to aqscenario pre-flight
+- ✅ TARGET with no recognised header → `✗ unrecognised Aqueduct file`, exit 1
+- ✅ `--config` / `--blueprint` flags removed (positional only)
+- ✅ `.env` anchored to resolved input file's directory

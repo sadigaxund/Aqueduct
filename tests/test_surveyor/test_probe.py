@@ -21,7 +21,7 @@ def test_execute_probe_no_signals(spark: SparkSession, tmp_path: Path):
     
     # Should return immediately without writing anything
     execute_probe(module, df, spark, "run-1", store_dir)
-    assert not (store_dir / "obs.db").exists()
+    assert not (store_dir / "observability.db").exists()
 
 
 def test_execute_probe_unknown_signal(spark: SparkSession, tmp_path: Path, caplog):
@@ -33,7 +33,7 @@ def test_execute_probe_unknown_signal(spark: SparkSession, tmp_path: Path, caplo
     store_dir = tmp_path / "store"
     
     execute_probe(module, df, spark, "run-1", store_dir)
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
     
     # Warning logged for unknown signal
@@ -66,7 +66,7 @@ def test_execute_probe_schema_snapshot(spark: SparkSession, tmp_path: Path):
     assert payload["fields"][0]["name"] == "id"
     
     # DB row inserted
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     rows = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='schema_snapshot'").fetchall()
     conn.close()
     
@@ -84,7 +84,7 @@ def test_execute_probe_row_count_estimate_sample(spark: SparkSession, tmp_path: 
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'").fetchone()[0]
     conn.close()
     
@@ -104,7 +104,7 @@ def test_execute_probe_row_count_estimate_spark_listener(spark: SparkSession, tm
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='row_count_estimate'").fetchone()[0]
     conn.close()
     
@@ -123,7 +123,7 @@ def test_execute_probe_null_rates(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='null_rates'").fetchone()[0]
     conn.close()
     
@@ -142,7 +142,7 @@ def test_execute_probe_null_rates_no_columns(spark: SparkSession, tmp_path: Path
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals").fetchone()[0]
     conn.close()
     
@@ -161,7 +161,7 @@ def test_execute_probe_sample_rows(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='sample_rows'").fetchone()[0]
     conn.close()
     
@@ -186,7 +186,7 @@ def test_execute_probe_exception_isolation(spark: SparkSession, tmp_path: Path):
     execute_probe(module, df, spark, "run-1", store_dir)
     
     # sample_rows should still be captured
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     types = [r[0] for r in conn.execute("SELECT signal_type FROM probe_signals").fetchall()]
     conn.close()
     
@@ -218,7 +218,7 @@ def test_execute_probe_value_distribution(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='value_distribution'").fetchone()[0]
     conn.close()
     
@@ -244,7 +244,7 @@ def test_execute_probe_distinct_count(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='distinct_count'").fetchone()[0]
     conn.close()
     
@@ -264,7 +264,7 @@ def test_execute_probe_data_freshness(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='data_freshness'").fetchone()[0]
     conn.close()
     
@@ -284,7 +284,7 @@ def test_execute_probe_partition_stats(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     payload_str = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='partition_stats'").fetchone()[0]
     conn.close()
     

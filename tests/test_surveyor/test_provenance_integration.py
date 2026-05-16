@@ -1,5 +1,5 @@
 """Tests for Phase 19 provenance layer: FailureContext.provenance_json,
-Surveyor provenance_json building, and LLM _build_provenance_section.
+Surveyor provenance_json building, and Agent _build_provenance_section.
 
 Covers ⏳ items from TEST_MANIFEST.md Phase 19 section.
 """
@@ -54,7 +54,7 @@ def test_to_dict_provenance_json_set():
 
 # ── _build_provenance_section ──────────────────────────────────────────────────
 
-from aqueduct.surveyor.llm import _build_provenance_section
+from aqueduct.agent import _build_provenance_section
 
 
 def test_build_provenance_section_none_returns_empty():

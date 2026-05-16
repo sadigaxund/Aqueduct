@@ -154,7 +154,7 @@ def test_write_stage_metrics_creates_table_and_inserts(tmp_path: Path):
 
     _write_stage_metrics("egress_01", "run-xyz", metrics, store_dir)
 
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
 
     conn = duckdb.connect(str(db_path))
@@ -198,7 +198,7 @@ def test_egress_writes_module_metrics_on_success(spark, tmp_path: Path):
     result = execute(manifest, spark, run_id="run-mm1", store_dir=store_dir)
     assert result.status == "success"
 
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
 
     conn = duckdb.connect(str(db_path))
@@ -226,7 +226,7 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
 
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
 
     conn = duckdb.connect(str(db_path))
     try:
@@ -266,3 +266,80 @@ def test_row_count_estimate_spark_listener_reads_module_metrics(
 
     assert result["method"] == "spark_listener"
     assert result["estimate"] == 77
+
+def test_observe_df_disabled(spark):
+    """observe_df(df, name, alias, enabled=False) returns (df, None) without inserting an Observation node"""
+    df = spark.createDataFrame([(1, "a")], ["id", "name"])
+    obs_name = "test_obs_disabled"
+    
+    observed_df, obs = observe_df(df, obs_name, enabled=False)
+    
+    assert observed_df is df
+    assert obs is None
+    
+    # Verifiable via df.explain() not containing CollectMetrics
+    # CollectMetrics is the node added by observe()
+    explain_str = observed_df._jdf.queryExecution().executedPlan().toString()
+    assert "CollectMetrics" not in explain_str
+
+def test_observe_df_enabled(spark):
+    """observe_df(df, name, alias, enabled=True) returns a wrapped df with a usable Observation (Spark 3.3+)"""
+    try:
+        from pyspark.sql import Observation
+    except ImportError:
+        pytest.skip("Observation not available")
+        
+    df = spark.createDataFrame([(1, "a")], ["id", "name"])
+    obs_name = "test_obs_enabled"
+    
+    observed_df, obs = observe_df(df, obs_name, enabled=True)
+    
+    assert obs is not None
+    assert isinstance(obs, Observation)
+    assert observed_df is not df # It's a new DataFrame wrapping the old one
+    
+    # Verifiable via df.explain() containing CollectMetrics
+    explain_str = observed_df._jdf.queryExecution().executedPlan().toString()
+    assert "CollectMetrics" in explain_str
+
+def test_execute_use_observe_false(spark, tmp_path):
+    """
+    execute(use_observe=False) path completes a full Ingress→Channel→Egress run;
+    resulting module_metrics.records_written is NULL (not collected) but the pipeline succeeds
+    """
+    from aqueduct.compiler.models import Manifest
+    from aqueduct.executor.spark.executor import execute
+    from aqueduct.parser.models import Edge, Module
+
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+
+    manifest = Manifest(
+        blueprint_id="test.metrics_use_observe_false",
+        modules=(
+            Module(id="ing", type="Ingress", label="Ing", config={"format": "parquet", "path": in_path}),
+            Module(id="egr", type="Egress",  label="Egr", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="ing", to_id="egr", port="main"),),
+        context={},
+        spark_config={},
+    )
+
+    result = execute(manifest, spark, run_id="run-obs-false", store_dir=store_dir, use_observe=False)
+    assert result.status == "success"
+
+    db_path = store_dir / "observability.db"
+    conn = duckdb.connect(str(db_path))
+    try:
+        rows = conn.execute(
+            "SELECT module_id, records_written "
+            "FROM module_metrics WHERE run_id = 'run-obs-false'"
+        ).fetchall()
+    finally:
+        conn.close()
+
+    # Records written should be None (NULL in DB) when use_observe=False
+    for mod_id, records_written in rows:
+        assert records_written is None

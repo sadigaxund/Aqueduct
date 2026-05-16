@@ -13,8 +13,6 @@ from typing import Any
 
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.spark.udf import _patch_pyspark_cloudpickle
-
 _DEFAULT_MASTER = "local[*]"
 
 # log4j/log4j2 suppress flags injected into driver JVM before session start
@@ -73,6 +71,10 @@ def make_spark_session(
     Returns:
         An active SparkSession.
     """
+    # Localized per import discipline: compat patch lives behind the factory
+    # entrypoint, not at module load (ISSUE-025).
+    from aqueduct.executor.spark.udf import _patch_pyspark_cloudpickle
+
     _patch_pyspark_cloudpickle()
     builder = SparkSession.builder.master(master_url).appName(blueprint_id)
 
@@ -96,3 +98,20 @@ def make_spark_session(
         session = builder.getOrCreate()
 
     return session
+
+
+def stop_spark_session(spark: SparkSession) -> None:
+    """Stop a SparkSession created by a short-lived CLI command.
+
+    `make_spark_session` uses `getOrCreate()`, so the returned session may be a
+    pre-existing global one (e.g. the session-scoped pytest fixture, or a
+    long-lived cluster driver session). Eagerly calling `.stop()` there tears
+    down a `SparkContext` other code still depends on — under pytest this kills
+    every subsequent test with `'NoneType' object has no attribute 'sc'`
+    (ISSUE-026). When `AQ_TESTING` is set we skip the stop and let the fixture
+    own the session lifecycle. In a real one-shot CLI run the process exits
+    immediately after, so the OS reclaims the JVM regardless.
+    """
+    if os.environ.get("AQ_TESTING"):
+        return
+    spark.stop()

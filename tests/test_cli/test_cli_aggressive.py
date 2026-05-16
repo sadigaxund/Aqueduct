@@ -34,7 +34,7 @@ edges: []
     return bp_path
 
 @pytest.fixture
-def mock_llm_patch():
+def mock_agent_patch():
     def _make_patch(patch_id="fix-1", rationale="test", ops=None):
         return PatchSpec(
             patch_id=patch_id,
@@ -47,16 +47,16 @@ def mock_llm_patch():
     return _make_patch
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 def test_aggressive_mode_invalid_patch_stops_loop(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_llm_patch
+    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch produces invalid Blueprint (compile fail) -> loop stops.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -66,12 +66,12 @@ def test_aggressive_mode_invalid_patch_stops_loop(
                         module_results=[ModuleResult(module_id="in", status="error", error="Boom")]),
     ]
     
-    # 2. LLM returns a patch that will fail compilation (e.g. duplicate module id)
+    # 2. Agent returns a patch that will fail compilation (e.g. duplicate module id)
     # Actually, we can just mock _apply_patch_in_memory to return None
-    invalid_patch = mock_llm_patch(patch_id="invalid-fix")
+    invalid_patch = mock_agent_patch(patch_id="invalid-fix")
     mock_gen_patch.return_value = MagicMock(patch=invalid_patch)
     
-    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, False)), \
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, False)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
     
@@ -82,16 +82,16 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     assert "New Label" not in base_blueprint.read_text()
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 def test_aggressive_mode_fails_then_continues(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_llm_patch
+    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch valid but re-run fails -> on_heal_failure applied (staged), loop continues.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -111,17 +111,17 @@ def test_aggressive_mode_fails_then_continues(
                         module_results=[ModuleResult(module_id="in", status="error", error="E6")]),
     ]
     
-    # 2. LLM returns two different patches
+    # 2. Agent returns two different patches
     mock_gen_patch.side_effect = [
-        MagicMock(patch=mock_llm_patch(patch_id="fix-1")),
-        MagicMock(patch=mock_llm_patch(patch_id="fix-2")),
+        MagicMock(patch=mock_agent_patch(patch_id="fix-1")),
+        MagicMock(patch=mock_agent_patch(patch_id="fix-2")),
         MagicMock(patch=None),
         MagicMock(patch=None),
     ]
     
     # We need to mock _apply_patch_in_memory to return a valid manifest (mock it as MagicMock)
     # And we mock _stage_failed_patch to verify it's called
-    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), True)), \
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._stage_failed_patch") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
@@ -136,16 +136,16 @@ def test_aggressive_mode_fails_then_continues(
     assert "New Label" not in base_blueprint.read_text()
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 def test_aggressive_mode_succeeds_stops_loop(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_llm_patch
+    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: aggressive mode + patch valid + re-run succeeds -> Blueprint written to disk, loop stops.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -156,10 +156,10 @@ def test_aggressive_mode_succeeds_stops_loop(
         ExecutionResult(blueprint_id="test_bp", run_id="r2", status="success", module_results=[]),
     ]
     
-    patch_obj = mock_llm_patch(patch_id="good-fix")
+    patch_obj = mock_agent_patch(patch_id="good-fix")
     mock_gen_patch.return_value = MagicMock(patch=patch_obj)
     
-    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), True)), \
+    with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._write_patch_to_blueprint") as mock_write:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
@@ -169,16 +169,16 @@ def test_aggressive_mode_succeeds_stops_loop(
     assert mock_write.call_count == 1
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 def test_trigger_agent_escalation(
-    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_llm_patch
+    mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint, mock_agent_patch
 ):
     """
     Scenario: result.trigger_agent=True + approval_mode=disabled -> effective_mode set to "human".
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -192,9 +192,9 @@ def test_trigger_agent_escalation(
                         trigger_agent=True),
     ]
     
-    mock_gen_patch.return_value = MagicMock(patch=mock_llm_patch())
+    mock_gen_patch.return_value = MagicMock(patch=mock_agent_patch())
     
-    with patch("aqueduct.surveyor.llm.stage_patch_for_human") as mock_stage:
+    with patch("aqueduct.agent.stage_patch_for_human") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint)])
     
     assert "LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
@@ -202,7 +202,7 @@ def test_trigger_agent_escalation(
     assert mock_stage.call_count == 1
 
 @patch("aqueduct.executor.get_executor")
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
 def test_trigger_agent_false_disabled_breaks(
     mock_surveyor_cls, mock_gen_patch, mock_get_executor, base_blueprint
@@ -211,7 +211,7 @@ def test_trigger_agent_false_disabled_breaks(
     Scenario: result.trigger_agent=False + approval_mode=disabled -> loop breaks immediately.
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -234,7 +234,7 @@ def test_block_full_actions_propagation(
     Scenario: cfg.danger.allow_full_probe_actions=False -> block_full_actions=True passed to execute().
     """
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -246,7 +246,7 @@ def test_block_full_actions_propagation(
         ),
         deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
         stores={
-            "obs": {"path": ".aqueduct/obs.db"},
+            "observability": {"path": ".aqueduct/obs.db"},
             "lineage": {"path": ".aqueduct/lineage.db"},
             "depot": {"path": ".aqueduct/depot.db"}
         },
@@ -264,14 +264,14 @@ def test_block_full_actions_propagation(
     assert kwargs["block_full_actions"] is True
     # Verification of loop stopping is implicit in call counts
 
-@patch("aqueduct.surveyor.llm.generate_llm_patch")
+@patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.executor.get_executor")
 def test_trigger_agent_stays_human(
-    mock_get_executor, mock_gen_patch, base_blueprint, mock_llm_patch
+    mock_get_executor, mock_gen_patch, base_blueprint, mock_agent_patch
 ):
     """trigger_agent=True + approval_mode=human -> stays human (no override message)"""
     runner = CliRunner()
-    patch("aqueduct.cli._llm_usable", return_value=True).start()
+    patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
@@ -285,10 +285,10 @@ def test_trigger_agent_stays_human(
         ExecutionResult(blueprint_id="test_bp", run_id="r2", status="success", module_results=()),
     ]
     
-    from aqueduct.surveyor.llm import LLMPatchResult
-    mock_gen_patch.return_value = LLMPatchResult(patch=mock_llm_patch(), attempts=1)
+    from aqueduct.agent import AgentPatchResult
+    mock_gen_patch.return_value = AgentPatchResult(patch=mock_agent_patch(), attempts=1)
     
-    with patch("aqueduct.surveyor.llm.stage_patch_for_human") as mock_stage:
+    with patch("aqueduct.agent.stage_patch_for_human") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint)])
     
     # Should NOT have the override message

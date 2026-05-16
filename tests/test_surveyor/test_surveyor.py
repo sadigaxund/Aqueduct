@@ -85,8 +85,8 @@ class TestEvaluateRegulatorSignalOverride:
         edge.to_id = regulator_id
         edge.port = "signal"
         manifest = MagicMock(spec=Manifest)
-        manifest.blueprint_id = "test-bp"
         manifest.edges = [edge]
+        manifest.blueprint_id = "test-bp"
         return manifest
 
     def test_override_false_blocks_even_if_probe_says_true(self, tmp_path):
@@ -96,7 +96,7 @@ class TestEvaluateRegulatorSignalOverride:
         manifest = self._make_manifest()
         store = tmp_path / "signals"
         store.mkdir()
-        signals_db = store / "obs.db"
+        signals_db = store / "observability.db"
         conn = duckdb.connect(str(signals_db))
         conn.execute(_SIGNAL_OVERRIDES_DDL)
         conn.execute(
@@ -169,24 +169,75 @@ class TestSurveyorStores:
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores import StoreBundle
-        from aqueduct.stores.duckdb_ import DuckDBObsStore, DuckDBLineageStore, DuckDBDepotStore
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBLineageStore, DuckDBDepotStore
         
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         
-        obs = DuckDBObsStore(tmp_path / "obs.db")
+        obs = DuckDBObservabilityStore(tmp_path / "observability.db")
         lineage = DuckDBLineageStore(tmp_path / "lineage.db")
         depot = DuckDBDepotStore(tmp_path / "depot.db")
-        bundle = StoreBundle(obs=obs, lineage=lineage, depot=depot)
+        bundle = StoreBundle(observability=obs, lineage=lineage, depot=depot)
         
         surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
-        assert surveyor._obs_store is obs
+        assert surveyor._observability is obs
 
     def test_surveyor_default_store(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        from aqueduct.stores.duckdb_ import DuckDBObsStore
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
         
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         
         surveyor = Surveyor(manifest, store_dir=tmp_path)
-        assert isinstance(surveyor._obs_store, DuckDBObsStore)
+        surveyor.start("r1")
+        assert isinstance(surveyor._observability, DuckDBObservabilityStore)
+
+class TestSurveyorSpendCap:
+    def test_count_recent_heal_attempts_empty(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        manifest = MagicMock()
+        manifest.blueprint_id = "test-bp"
+        s = Surveyor(manifest, store_dir=tmp_path)
+        s.start("r1")
+        assert s.count_recent_heal_attempts() == 0
+
+    def test_count_recent_heal_attempts_with_data(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        manifest = MagicMock()
+        manifest.blueprint_id = "test-bp"
+        s = Surveyor(manifest, store_dir=tmp_path)
+        s.start("r1")
+        
+        s.record_healing_outcome(
+            run_id="r1", failed_module="m1", failure_category="err",
+            model="gpt-4", patch_id="p1", confidence=0.9,
+            patch_applied=True, run_success_after_patch=True
+        )
+        assert s.count_recent_heal_attempts(within_minutes=60) == 1
+
+    def test_count_recent_heal_attempts_excludes_old(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        import datetime as _dt
+        manifest = MagicMock()
+        manifest.blueprint_id = "test-bp"
+        s = Surveyor(manifest, store_dir=tmp_path)
+        s.start("r1")
+        
+        # Manually insert an old row
+        old_ts = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=120)).isoformat()
+        with s._observability.connect() as cur:
+            cur.execute(
+                "INSERT INTO healing_outcomes (id, run_id, applied_at) VALUES (?, ?, ?)",
+                ["old-id", "r1", old_ts]
+            )
+            
+        assert s.count_recent_heal_attempts(within_minutes=60) == 0
+        assert s.count_recent_heal_attempts(within_minutes=180) == 1
+
+    def test_count_recent_heal_attempts_swallows_db_errors(self, tmp_path):
+        from aqueduct.surveyor.surveyor import Surveyor
+        manifest = MagicMock()
+        manifest.blueprint_id = "test-bp"
+        s = Surveyor(manifest, store_dir=tmp_path)
+        # Not calling start() so connection will fail/not exist
+        assert s.count_recent_heal_attempts() == 0

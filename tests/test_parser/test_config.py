@@ -74,7 +74,7 @@ def test_load_config_unknown_nested_key(tmp_path):
 def test_load_config_unknown_stores_key(tmp_path):
     """unknown key in stores -> ConfigError"""
     path = tmp_path / "stores_extra.yml"
-    path.write_text("stores:\n  obs: {path: ./obs.db}")
+    path.write_text("stores:\n  ghost: {path: ./obs.db}")
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
 
@@ -82,7 +82,7 @@ def test_config_defaults():
     config = AqueductConfig()
     assert config.deployment.target == "local"
     assert config.deployment.master_url == "local[*]"
-    assert config.stores.obs.path == ".aqueduct/obs.db"
+    assert config.stores.observability.path == ".aqueduct/observability.db"
     assert config.stores.lineage.path == ".aqueduct/lineage.db"
     assert config.stores.depot.path == ".aqueduct/depot.db"
     assert config.agent.model == "claude-sonnet-4-6"
@@ -146,7 +146,7 @@ def test_load_config_postgres_missing_driver(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "psycopg2.pool", None)
     
     path = tmp_path / "aq_pg.yml"
-    path.write_text("stores:\n  obs: {backend: postgres, path: postgresql://localhost/aq}")
+    path.write_text("stores:\n  observability: {backend: postgres, path: postgresql://localhost/aq}")
     
     from aqueduct.config import ConfigError
     with pytest.raises(ConfigError, match="psycopg2"):
@@ -169,7 +169,47 @@ def test_load_config_duckdb_lazy_imports(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "redis", None)
     
     path = tmp_path / "aq_duck.yml"
-    path.write_text("stores:\n  obs: {backend: duckdb, path: obs.db}")
+    path.write_text("stores:\n  observability: {backend: duckdb, path: obs.db}")
     
     cfg = load_config(path)
-    assert cfg.stores.obs.backend == "duckdb"
+    assert cfg.stores.observability.backend == "duckdb"
+
+def test_metrics_config_parsing(tmp_path):
+    """MetricsConfig parses use_observe: true and use_observe: false without error"""
+    path = tmp_path / "metrics.yml"
+    
+    # Test true
+    path.write_text("metrics:\n  use_observe: true")
+    cfg = load_config(path)
+    assert cfg.metrics.use_observe is True
+    
+    # Test false
+    path.write_text("metrics:\n  use_observe: false")
+    cfg = load_config(path)
+    assert cfg.metrics.use_observe is False
+
+def test_metrics_config_extra_keys_forbidden(tmp_path):
+    """MetricsConfig rejects extra keys (extra="forbid" raises ValidationError via ConfigError)"""
+    path = tmp_path / "metrics_extra.yml"
+    path.write_text("metrics:\n  use_observe: true\n  unknown: 1")
+    with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)
+
+def test_deployment_config_literal_validation(tmp_path):
+    """DeploymentConfig fields (engine, target, env) reject invalid Literal values"""
+    path = tmp_path / "invalid_lit.yml"
+    
+    # Invalid engine
+    path.write_text("deployment:\n  engine: turbo-pascal")
+    with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)
+        
+    # Invalid target
+    path.write_text("deployment:\n  target: the-moon")
+    with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)
+        
+    # Invalid env
+    path.write_text("deployment:\n  env: void")
+    with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)

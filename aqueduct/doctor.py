@@ -94,7 +94,7 @@ def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckRes
 
     def _probe() -> tuple[str, bool, CheckResult]:
         import pyspark
-        from aqueduct.executor.spark.session import make_spark_session
+        from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
         spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
         n = spark.range(1).count()
         cluster_ver = spark.version
@@ -103,7 +103,7 @@ def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckRes
         ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
         spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
-        spark.stop()
+        stop_spark_session(spark)
         return spark_detail, ver_mismatch, storage_result
 
     storage_skip = CheckResult("storage", "skip", "spark check did not complete")

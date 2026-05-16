@@ -33,7 +33,7 @@ def test_surveyor_lifecycle_start(manifest, tmp_path):
     surveyor.start(run_id)
     
     # Verify directory and DB creation
-    db_path = store_dir / "obs.db"
+    db_path = store_dir / "observability.db"
     assert db_path.exists()
     
     # Verify 'running' record insertion
@@ -70,7 +70,7 @@ def test_surveyor_record_success(manifest, tmp_path):
     assert ctx is None
     
     import duckdb
-    conn = duckdb.connect(str(tmp_path / "obs.db"))
+    conn = duckdb.connect(str(tmp_path / "observability.db"))
     status = conn.execute("SELECT status FROM run_records WHERE run_id = ?", [run_id]).fetchone()[0]
     assert status == "success"
     
@@ -104,7 +104,7 @@ def test_surveyor_record_failure(manifest, tmp_path):
         
         # Verify DB persistence
         import duckdb
-        conn = duckdb.connect(str(tmp_path / "obs.db"))
+        conn = duckdb.connect(str(tmp_path / "observability.db"))
         
         # Check run_records
         status = conn.execute("SELECT status FROM run_records WHERE run_id = ?", [run_id]).fetchone()[0]
@@ -163,7 +163,7 @@ def test_surveyor_multi_run_persistence(manifest, tmp_path):
     surveyor.stop()
     
     import duckdb
-    conn = duckdb.connect(str(tmp_path / "obs.db"))
+    conn = duckdb.connect(str(tmp_path / "observability.db"))
     count = conn.execute("SELECT COUNT(*) FROM run_records").fetchone()[0]
     assert count == 2
     conn.close()
@@ -179,7 +179,7 @@ def test_surveyor_get_probe_signal_with_db(manifest, tmp_path):
     store_dir = tmp_path / "store"
     import duckdb
     store_dir.mkdir(parents=True)
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("""
         CREATE TABLE probe_signals (
             run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload JSON, captured_at TIMESTAMPTZ
@@ -202,7 +202,7 @@ def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
     store_dir = tmp_path / "store"
     import duckdb
     store_dir.mkdir(parents=True)
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("""
         CREATE TABLE probe_signals (
             run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR, payload JSON, captured_at TIMESTAMPTZ
@@ -250,7 +250,7 @@ def test_surveyor_regulator_no_rows(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.close()
     
@@ -269,7 +269,7 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"other":1}), '2025-01-01T00:00:00Z'])
     conn.close()
@@ -289,7 +289,7 @@ def test_surveyor_regulator_passed_none(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":None}), '2025-01-01T00:00:00Z'])
     conn.close()
@@ -309,7 +309,7 @@ def test_surveyor_regulator_passed_false(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":False}), '2025-01-01T00:00:00Z'])
     conn.close()
@@ -329,7 +329,7 @@ def test_surveyor_regulator_passed_true(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":True}), '2025-01-01T00:00:00Z'])
     conn.close()
@@ -349,7 +349,7 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":False}), '2025-01-01T00:00:00Z'])
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":True}), '2025-01-02T00:00:00Z'])
@@ -381,7 +381,7 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
     surveyor.start("run1")
 
     # Corrupt the DB after start so evaluate_regulator hits the exception
-    (store_dir / "obs.db").write_text("not a db")
+    (store_dir / "observability.db").write_text("not a db")
 
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -389,7 +389,7 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
     store_dir = tmp_path / "store"
     store_dir.mkdir(parents=True)
     import duckdb, json
-    conn = duckdb.connect(str(store_dir / "obs.db"))
+    conn = duckdb.connect(str(store_dir / "observability.db"))
     # Probe says PASS (True)
     conn.execute("CREATE TABLE probe_signals (run_id VARCHAR, probe_id VARCHAR, payload JSON, captured_at TIMESTAMPTZ)")
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?)", ['run1', 'probe1', json.dumps({"passed":True}), '2025-01-01T00:00:00Z'])

@@ -8,6 +8,13 @@ from pathlib import Path
 from click.testing import CliRunner
 from aqueduct.cli import cli
 
+from unittest.mock import patch
+
+@pytest.fixture(autouse=True)
+def mock_spark_stop():
+    with patch("pyspark.sql.SparkSession.stop"):
+        yield
+
 @pytest.fixture
 def test_setup(tmp_path):
     # Blueprint

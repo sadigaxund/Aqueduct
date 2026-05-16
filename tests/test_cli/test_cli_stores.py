@@ -10,7 +10,7 @@ def test_cli_stores_info(tmp_path):
     config.write_text("aqueduct_config: '1.0'")
     result = runner.invoke(cli, ["stores", "info", "--config", str(config)])
     assert result.exit_code == 0
-    assert "obs" in result.output
+    assert "observability" in result.output
     assert "lineage" in result.output
     assert "depot" in result.output
 
@@ -43,7 +43,7 @@ def test_cli_stores_migrate_populated(tmp_path):
     
     result = runner.invoke(cli, ["stores", "migrate", "--from-duckdb", str(pop_db), "--store", "depot", "--config", str(config)])
     assert result.exit_code == 0
-    assert "1 rows" in result.output
+    assert "1 depot key(s)" in result.output
 
 def test_cli_stores_migrate_same_file_refused(tmp_path):
     runner = CliRunner()
@@ -65,7 +65,9 @@ def test_cli_stores_migrate_unsupported_store(tmp_path):
     config = tmp_path / "aq.yml"
     config.write_text("aqueduct_config: '1.0'")
     db_path = tmp_path / "test.db"
+    db_path.touch()
     
-    result = runner.invoke(cli, ["stores", "migrate", "--from-duckdb", str(db_path), "--store", "obs", "--config", str(config)])
+    result = runner.invoke(cli, ["stores", "migrate", "--from-duckdb", str(db_path), "--store", "observability", "--config", str(config)])
     assert result.exit_code != 0
-    assert "only depot migration" in result.output.lower()
+    assert "invalid value for '--store'" in result.output.lower()
+    assert "depot" in result.output.lower()

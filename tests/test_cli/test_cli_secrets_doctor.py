@@ -23,7 +23,7 @@ class TestCheckSecrets:
     def test_aws_boto3_missing_raises_error(self):
         with patch.dict(sys.modules, {"boto3": None}):
             result = check_secrets("aws")
-        assert result.status == "error"
+        assert result.status == "fail"
         assert "pip install aqueduct-core[aws]" in result.detail
 
     def test_aws_boto3_present_ok(self):
@@ -35,18 +35,18 @@ class TestCheckSecrets:
     def test_gcp_sdk_missing_error(self):
         with patch.dict(sys.modules, {"google.cloud.secretmanager": None}):
             result = check_secrets("gcp")
-        assert result.status == "error"
+        assert result.status == "fail"
         assert "[gcp]" in result.detail
 
     def test_azure_sdk_missing_error(self):
         with patch.dict(sys.modules, {"azure.keyvault.secrets": None}):
             result = check_secrets("azure")
-        assert result.status == "error"
+        assert result.status == "fail"
         assert "[azure]" in result.detail
 
     def test_custom_no_resolver_error(self):
         result = check_secrets("custom", resolver=None)
-        assert result.status == "error"
+        assert result.status == "fail"
         assert "resolver" in result.detail.lower()
 
     def test_custom_valid_resolver_ok(self):

@@ -37,18 +37,18 @@ def test_redis_obs_rejected():
     with pytest.raises(ValidationError):
         AqueductConfig(**{
             "stores": {
-                "obs": {"backend": "redis", "path": "redis://localhost:6379/15"},
+                "observability": {"backend": "redis", "path": "redis://localhost:6379/15"},
                 "lineage": {"backend": "duckdb", "path": "lineage.db"},
                 "depot": {"backend": "duckdb", "path": "depot.db"}
             }
         })
 
 def test_duckdb_creates_parent_dirs(tmp_path):
-    from aqueduct.stores.duckdb_ import DuckDBObsStore
-    nested_path = tmp_path / "deep" / "nested" / "dir" / "obs.db"
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    nested_path = tmp_path / "deep" / "nested" / "dir" / "observability.db"
     assert not nested_path.parent.exists()
     
-    store = DuckDBObsStore(nested_path)
+    store = DuckDBObservabilityStore(nested_path)
     with store.connect():
         pass
         
