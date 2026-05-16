@@ -2,6 +2,25 @@
 
 ---
 
+### fix(parser): preserve `${ctx._watermark}` through parse/compile
+_2026-05-16_
+
+`materialize: incremental` Channels reference `${ctx._watermark}`, which the
+Executor substitutes per-run (Depot value, or sentinel `1900-01-01 00:00:00`
+on first run). The Tier-0 resolver resolved all `${ctx.*}` at parse time and
+raised `Undefined context reference: ${ctx._watermark}` — so any incremental
+Blueprint authored the documented way failed `aqueduct validate` **and**
+`aqueduct run` (compile). It only worked in executor unit tests that
+hand-build a Manifest and bypass the Parser.
+
+- Added `_RESERVED_DEFERRED = {"_watermark"}` in `parser/resolver.py`.
+  `_sub_ctx` now preserves a reserved token verbatim (like Tier-1 `@aq.*`)
+  instead of raising, so it survives into the Manifest query for the
+  Executor's runtime substitution.
+- Surfaced by new gallery snippet `19_depot_incremental`.
+
+---
+
 ## v1.0.0a2 — 2026-05-12
 
 ### CLI cleanup — unified env resolution + validate/doctor by header

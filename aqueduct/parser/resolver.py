@@ -29,6 +29,13 @@ _ENV_RE = re.compile(r"\$\{(?!ctx\.)([^}:\s]+?)(?::-(.*?))?\}")
 # Detect any unresolved Tier 1 references so we can leave them for the Compiler
 _TIER1_RE = re.compile(r"@aq\.")
 
+# Reserved ${ctx.*} keys that are NOT resolved at parse/compile time — they are
+# substituted by the Executor at runtime. `_watermark` is injected per-run by
+# the incremental-Channel machinery (sentinel '1900-01-01 00:00:00' on first
+# run, else the value persisted in the Depot). Like Tier-1 @aq.*, these are
+# preserved verbatim so the token survives into the Manifest query.
+_RESERVED_DEFERRED = frozenset({"_watermark"})
+
 
 def flatten_dict(d: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     """Recursively flatten nested dict to dot-notation keys."""
@@ -70,6 +77,9 @@ def _sub_ctx(value: str, ctx_map: dict[str, str], depth: int = 0) -> str:
     def _replace(m: re.Match) -> str:
         key = m.group(1)
         if key not in ctx_map:
+            if key in _RESERVED_DEFERRED:
+                # Preserve the token for the Executor's runtime substitution.
+                return m.group(0)
             raise ValueError(f"Undefined context reference: ${{ctx.{key}}}")
         resolved = ctx_map[key]
         # If resolved value itself has ctx refs, recurse
