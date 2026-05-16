@@ -20,8 +20,12 @@ modules:
     config:
       op: sql
       query: "SELECT * FROM raw_scores"
-      # The spillway_condition handles the actual splitting logic
-      spillway_condition: "CAST(score AS DOUBLE) IS NULL OR score < 0 OR score > 100"
+      # The spillway_condition handles the actual splitting logic.
+      # try_cast (not cast) so a malformed value like 'invalid' becomes NULL
+      # and routes to the spillway instead of aborting the stage under Spark
+      # ANSI mode — `score < 0` on a STRING column does an implicit
+      # STRING->BIGINT cast that throws on 'invalid'.
+      spillway_condition: "try_cast(score AS DOUBLE) IS NULL OR try_cast(score AS DOUBLE) < 0 OR try_cast(score AS DOUBLE) > 100"
     checkpoint: true
 
   - id: good_output

@@ -7,8 +7,8 @@ import os
 console = Console()
 
 def main():
-    # Look in the default .aqueduct directory
-    db_path = ".aqueduct/obs/probe_dist_demo/obs.db"
+    # Look in the default per-pipeline observability store
+    db_path = ".aqueduct/observability/probe_dist_demo/observability.db"
     
     if not os.path.exists(db_path):
         console.print("[bold red]Error:[/bold red] Observability store not found. Did you run the pipeline?")

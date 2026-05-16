@@ -54,4 +54,4 @@ Every benchmark result is tied to a `prompt_version`. This allows us to correlat
 To support **Aggressive Mode** (autonomous patching without human review), we are implementing a signing layer:
 - **Patch Signatures**: SHA-256 hashes of patches + blueprint state.
 - **Verification**: `aqueduct run` verifies signatures before applying autonomous patches to detect tampering.
-- **Audit Log**: Verified patches are surfaced in `aqueduct log` with a `✓` status.
+- **Audit Log**: Verified patches are surfaced in `aqueduct patch log` with a `✓` status.

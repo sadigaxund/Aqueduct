@@ -1,0 +1,38 @@
+# arcades/region_filter.yml
+# A reusable, self-contained sub-Blueprint (Arcade).
+# The parent supplies `region` and `src_path` via context_override.
+
+aqueduct: "1.0"
+id: region_filter
+name: "Region Filter Arcade"
+
+# Keys the parent MUST provide in the Arcade module's context_override.
+# Compilation fails fast if any are missing.
+required_context:
+  - region
+  - src_path
+
+modules:
+  - id: ingress
+    label: "Load ${ctx.region} Sales"
+    type: Ingress
+    config:
+      format: csv
+      path: "${ctx.src_path}"
+      options: {header: "true", inferSchema: "true"}
+
+  - id: filtered
+    label: "Keep ${ctx.region} Rows"
+    type: Channel
+    config:
+      op: sql
+      # Use the __input__ alias, NOT the upstream module id. At Arcade
+      # expansion module ids are namespaced (ingress -> us_sales__ingress)
+      # but SQL text is not rewritten. The engine registers a single
+      # upstream as the stable view `__input__`, so sub-Blueprint SQL
+      # stays namespace-agnostic and reusable.
+      query: "SELECT region, product, amount FROM __input__ WHERE region = '${ctx.region}'"
+
+edges:
+  - from: ingress
+    to: filtered

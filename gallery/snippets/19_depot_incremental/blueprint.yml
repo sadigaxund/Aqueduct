@@ -1,0 +1,49 @@
+# blueprint.yml
+# Depot + incremental Channel: watermark-based incremental processing
+# without a streaming engine. The high-water mark is persisted in the Depot
+# KV store between runs.
+
+aqueduct: "1.0"
+id: depot_incremental_demo
+name: "Depot Incremental Snippet"
+
+modules:
+  - id: events
+    label: "Event Stream Source"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/events.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: new_events
+    label: "Only Rows Past Watermark"
+    type: Channel
+    config:
+      op: sql
+      # materialize: incremental tells the engine to:
+      #   1. read the last persisted MAX(watermark_column) from the Depot,
+      #   2. inject it as ${ctx._watermark} (sentinel '1900-01-01 00:00:00'
+      #      on the very first run → full scan),
+      #   3. after a successful run, persist the new MAX(event_ts) back.
+      materialize: incremental
+      watermark_column: event_ts
+      query: |
+        SELECT id, event_ts, value
+        FROM events
+        WHERE CAST(event_ts AS TIMESTAMP) > CAST(${ctx._watermark} AS TIMESTAMP)
+
+  - id: output_save
+    label: "Append New Rows"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/events.parquet
+      # append (not overwrite) — each run adds only the new slice.
+      mode: append
+
+edges:
+  - from: events
+    to: new_events
+  - from: new_events
+    to: output_save

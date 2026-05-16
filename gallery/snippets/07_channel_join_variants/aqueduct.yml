@@ -5,6 +5,6 @@ deployment:
   master_url: "local[*]"
 
 stores:
-  obs:
+  observability:
     backend: duckdb
-    path: .aqueduct/obs.db
+    path: .aqueduct/observability.db
