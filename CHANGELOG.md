@@ -36,6 +36,24 @@ _2026-05-17_
   never exercised end-to-end. Projectwide sweep confirms no other
   offending DDL types or `INSERT OR REPLACE`. Full multi-backend
   certification tracked as Phase 33.
+- **docs(showcase 01): rewritten as a guided cluster walkthrough.**
+  `.env`/`.env.example` removed — two vars now: `HOST_IP` exported
+  (compose + seed), `DRIVER_HOST` via `aqueduct run -e`. `seed.py`
+  env-based (was reading `.env` from the wrong dir). README is now an
+  educational DIY tour: the two-IP gotcha, the S3A jar split (driver via
+  `${PWD}/jars/*`, executors via the prebaked `-showcase01` image —
+  corrected the false bind-mount claim), Postgres-store read-back
+  (module_metrics / column_lineage / run_records), seed-first callout.
+  Fixed stale Spark UI port (`8090`→`8080`), `data/seed.py`→`seed.py`,
+  "pipeline complete"→"blueprint complete", DuckDB→Postgres inspection.
+- **fix(cli): non-DuckDB store `path` no longer Path()'d as a directory.**
+  `run` derived `resolved_store_dir = Path(cfg.stores.observability.path).parent`
+  without checking backend — for postgres/redis the `path` is a DSN, so it
+  created a bogus `postgresql:/user:pass@host:port` directory. Now gated on
+  `backend == "duckdb"`; non-DuckDB defers to the local
+  `.aqueduct/observability/<blueprint_id>` scratch dir (the DSN store
+  persists itself). Sole offender — doctor/`get_stores` are already
+  backend-gated.
 - **One warning-suppression mechanism: `suppress` + `"*"`.** BREAKING:
   `warnings.silence_all` config field and the `--no-warnings` CLI flag
   removed (pre-v1.0 clean break, no alias). Silence everything with
