@@ -1586,11 +1586,8 @@ aqueduct heal <run_id> --print-prompt
 
 # Machine-readable JSON {"system": "...", "user": "..."}
 aqueduct heal <run_id> --print-prompt --print-prompt-format json
-
-# Works with scenarios too
-aqueduct heal --scenario path/to/scenario.aqscenario.yml --print-prompt
 ```
-Prints the exact system and user prompt that would be sent, then exits without calling the model. Does not require `agent.model` to be configured. Useful for debugging prompt construction, estimating token cost, or comparing prompt changes across scenarios.
+Prints the exact system and user prompt that would be sent, then exits without calling the model. Does not require `agent.model` to be configured. Useful for debugging prompt construction or estimating token cost.
 
 **Step 7 — Inspect the patch**
 ```bash
@@ -1653,14 +1650,14 @@ assertions:
 
 **Running scenarios:**
 ```bash
-# Single scenario test (PASS/FAIL with assertion details)
-aqueduct heal --scenario aqscenarios/scenario_format_mismatch.aqscenario.yml
+# Single scenario (PASS/FAIL with assertion details)
+aqueduct benchmark aqscenarios/format_csv_read_as_parquet.aqscenario.yml
 
-# Compare models across all scenarios in a directory
-aqueduct benchmark --scenarios aqscenarios/ --model claude-opus-4-7 --model llama3
+# Compare models across a whole directory of scenarios
+aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --model llama3
 
 # JSON output for CI integration
-aqueduct benchmark --scenarios aqscenarios/ --model claude-opus-4-7 --output json
+aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --output json
 ```
 
 **Benchmark output:**
@@ -2062,9 +2059,8 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct heal <run_id>`|Manually trigger LLM healing for a failure.|`--module <module_id>`, `--scenario <path>`, `--config`, `--patches-dir`|
-|`aqueduct heal --scenario <path>`|Run scenario-based healing (no Spark). Builds FailureContext from a `.aqscenario.yml` file, calls the LLM, validates against expected assertions.||
-|`aqueduct benchmark`|Run scenario suite against one or more models and compare results.|`--scenarios <dir>`, `--model <model>` (repeatable), `--output <table\|json>`, `--config`|
+|`aqueduct heal <run_id>`|Manually trigger LLM healing for a failed run (reads FailureContext from the observability store, stages a real patch).|`--module <module_id>`, `--store-dir`, `--config`, `--patches-dir`, `--print-prompt`|
+|`aqueduct benchmark <file-or-dir>`|Evaluate one `.aqscenario.yml` or a directory of them against one or more models (no Spark). File/dir as positional or `--scenarios`. Connection triad overridable per-run (precedence: flag > `aqueduct.yml` agent > default); `provider_options`/`guardrails` stay config-only.|`--model <model>` (repeatable), `--provider <anthropic\|openai_compat>`, `--base-url <url>`, `--timeout <sec>`, `--output <table\|json>`, `--workers`, `--config`|
 |`aqueduct signal <signal_id>`|Set/clear persistent gate overrides.|`--value <true|false>`, `--error <msg>`, `--config`|
 
 ## **11.4 Patch Management Commands**
@@ -2131,7 +2127,7 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies (pipeline A must complete before pipeline B starts) are handled externally via Depot watermarks and standard orchestrators (Airflow, Prefect, etc.) triggering aqueduct run commands. A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential v1.2 feature.
 
 ### **LLM Model Benchmarking**
-Scenario-based LLM benchmarking is implemented via `.aqscenario.yml` files and the `aqueduct benchmark` command. See §11.3 for command reference. Scenarios define a simulated failure, expected patch ops, and pass/fail assertions — no Spark required. Run `aqueduct benchmark --scenarios <dir> --model A --model B` to compare models.
+Scenario-based LLM benchmarking is implemented via `.aqscenario.yml` files and the `aqueduct benchmark` command. See §11.3 for command reference. Scenarios define a simulated failure, expected patch ops, and pass/fail assertions — no Spark required. Run `aqueduct benchmark <file-or-dir> --model A --model B` to compare models (a single `.aqscenario.yml` or a directory; positional or `--scenarios`).
 
 ### **MCP (Model Context Protocol) Readiness**
 Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools — moving from prompt engineering to structured tool use for greater reliability and composability.

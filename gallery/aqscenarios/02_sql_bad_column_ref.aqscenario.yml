@@ -1,0 +1,22 @@
+aqueduct_scenario: "1.0"
+
+id: sql_bad_column_ref
+description: >
+  The SQL query in clean_users references a column named signup_date which doesn't exist (should be signup_ts).
+blueprint: blueprints/pipeline.yml
+
+inject_failure:
+  module: clean_users
+  error_message: >
+    AnalysisException: [UNRESOLVED_COLUMN] Cannot resolve column signup_date in users_raw
+
+expected_patch:
+  ops:
+    - op: set_module_config_key
+      module_id: clean_users
+      key: query
+      value_contains: "signup_ts"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true

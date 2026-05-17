@@ -64,7 +64,11 @@ See [`aqtests/README.md`](aqtests/README.md).
 
 ## Aqscenarios
 
-[`aqscenarios/`](aqscenarios) holds self-healing scenario tests: a
-Blueprint plus an injected failure, run via `aqueduct benchmark` to
-exercise the Agent loop deterministically across models.
-See [`aqscenarios/README.md`](aqscenarios/README.md).
+[`aqscenarios/`](aqscenarios) holds self-healing scenario tests: a Blueprint plus an injected failure, run via `aqueduct benchmark` to exercise the Agent loop deterministically across models. No Spark needed. See [`aqscenarios/README.md`](aqscenarios/README.md).
+
+- [`01_schema_drift_column_rename`](aqscenarios/01_schema_drift_column_rename.aqscenario.yml) — upstream renamed `event_ts` -> `event_time`, breaking downstream SQL selection.
+- [`02_sql_bad_column_ref`](aqscenarios/02_sql_bad_column_ref.aqscenario.yml) — SQL query references non-existent `signup_date` instead of `signup_ts`.
+- [`03_format_csv_read_as_parquet`](aqscenarios/03_format_csv_read_as_parquet.aqscenario.yml) — Ingress reads CSV source file declaring `format: parquet`.
+- [`04_bad_path_typo`](aqscenarios/04_bad_path_typo.aqscenario.yml) — Ingress file path has a typo (`events_raw.csv` instead of `events.csv`).
+- [`05_type_string_vs_numeric`](aqscenarios/05_type_string_vs_numeric.aqscenario.yml) — Upstream events `event_id` is parsed as a string, downstream sum aggregate fails.
+

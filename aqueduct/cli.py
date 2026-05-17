@@ -3149,13 +3149,6 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
 @cli.command()
 @click.argument("run_id", required=False, default=None)
 @click.option(
-    "--scenario",
-    "scenario_path",
-    default=None,
-    type=click.Path(exists=True, dir_okay=False),
-    help="Run scenario-based healing from a .aqscenario.yml file instead of a live run_id",
-)
-@click.option(
     "--module",
     "module_id",
     default=None,
@@ -3196,7 +3189,6 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
 @_env_options
 def heal(
     run_id: str | None,
-    scenario_path: str | None,
     module_id: str | None,
     store_dir: str | None,
     config_path: str | None,
@@ -3206,34 +3198,27 @@ def heal(
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
-    """Manually trigger LLM self-healing for a failed run or scenario.
-
-    Two modes:
+    """Manually trigger LLM self-healing for a failed run.
 
     \b
-    Live run:      aqueduct heal <run_id>
-    Scenario test: aqueduct heal --scenario path/to/scenario.aqscenario.yml
+    aqueduct heal <run_id>
 
-    In live mode, reads the FailureContext from the observability store.
-    In scenario mode, builds a synthetic FailureContext from the scenario file
-    (no Spark required) and validates the LLM response against expected assertions.
+    Reads the FailureContext for that run from the observability store,
+    asks the agent for a patch, and stages it into the patch lifecycle.
+    Scenario/aqscenario evaluation is a separate concern — use
+    `aqueduct benchmark <file-or-dir>`.
     """
     from aqueduct.config import ConfigError, load_config
     from aqueduct.agent import build_prompt, generate_agent_patch, stage_patch_for_human
 
-    if not run_id and not scenario_path:
-        click.echo(
-            "✗ provide either a run_id argument or --scenario <path>",
-            err=True,
-        )
+    if not run_id:
+        click.echo("✗ provide a run_id argument", err=True)
         sys.exit(1)
 
     try:
         _resolve_and_load_env(
             env_file,
-            Path(config_path) if config_path
-            else Path(scenario_path) if scenario_path
-            else None,
+            Path(config_path) if config_path else None,
             cli_env=cli_env,
         )
         cfg = load_config(Path(config_path) if config_path else None)
@@ -3259,60 +3244,6 @@ def heal(
         sys.exit(1)
 
     patches_path = Path(patches_dir)
-
-    # ── Scenario mode ─────────────────────────────────────────────────────────
-    if scenario_path:
-        from aqueduct.surveyor.scenario import load_scenario, run_scenario, _build_failure_ctx
-
-        try:
-            scenario = load_scenario(Path(scenario_path))
-        except Exception as exc:
-            click.echo(f"✗ failed to load scenario: {exc}", err=True)
-            sys.exit(1)
-
-        if print_prompt:
-            try:
-                failure_ctx = _build_failure_ctx(scenario)
-            except Exception as exc:
-                click.echo(f"✗ failed to build failure context from scenario: {exc}", err=True)
-                sys.exit(1)
-            prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context)
-            _print_prompt(prompt, print_prompt_format)
-            return
-
-        click.echo(
-            f"↻ heal scenario  id={scenario.id}  "
-            f"provider={resolved_provider}  model={resolved_model}"
-        )
-
-        result = run_scenario(
-            scenario,
-            model=resolved_model,
-            patches_dir=patches_path,
-            provider=resolved_provider or "anthropic",
-            base_url=resolved_base_url,
-            provider_options=resolved_provider_options,
-            timeout=resolved_timeout,
-            max_reprompts=resolved_max_reprompts,
-            engine_prompt_context=resolved_engine_prompt_context,
-        )
-
-        status = "PASS" if result.passed else "FAIL"
-        conf = f"  confidence={result.confidence:.2f}" if result.confidence is not None else ""
-        att = f"  attempts={result.attempts_to_parse}" if result.attempts_to_parse else ""
-        click.echo(f"{status}  scenario={scenario.id}  {result.duration_seconds:.1f}s{conf}{att}")
-
-        if result.reprompt_errors:
-            for i, err in enumerate(result.reprompt_errors, 1):
-                click.echo(f"  reprompt {i}: {err}", err=True)
-
-        if result.failures:
-            for f in result.failures:
-                click.echo(f"  ✗ {f}", err=True)
-            sys.exit(1)
-
-        click.echo("  All assertions passed.")
-        return
 
     # ── Live run mode ─────────────────────────────────────────────────────────
     import duckdb as _duckdb
@@ -3404,12 +3335,19 @@ def heal(
 # ── aqueduct benchmark ────────────────────────────────────────────────────────
 
 @cli.command()
+@click.argument(
+    "scenarios_pos",
+    required=False,
+    default=None,
+    type=click.Path(exists=True),
+)
 @click.option(
     "--scenarios",
     "scenarios_dir",
-    required=True,
-    type=click.Path(exists=True, file_okay=False),
-    help="Directory containing .aqscenario.yml files (searched recursively)",
+    default=None,
+    type=click.Path(exists=True),
+    help="A .aqscenario.yml file or a directory of them (searched recursively). "
+    "May also be given as a positional argument.",
 )
 @click.option(
     "--model",
@@ -3417,6 +3355,28 @@ def heal(
     multiple=True,
     default=None,
     help="Model to benchmark (repeatable: --model A --model B). Defaults to agent.model in aqueduct.yml",
+)
+@click.option(
+    "--provider",
+    "provider_override",
+    default=None,
+    type=click.Choice(["anthropic", "openai_compat"]),
+    help="Override agent.provider for this run (e.g. openai_compat for Ollama/vLLM).",
+)
+@click.option(
+    "--base-url",
+    "base_url_override",
+    default=None,
+    help="Override agent.base_url for this run (e.g. http://host:11434/v1).",
+)
+@click.option(
+    "--timeout",
+    "timeout_override",
+    default=None,
+    type=float,
+    help="Override agent.timeout (seconds) for this run. Raise for slow/cold "
+    "local models (default 120; e.g. 600). Use 0 for no limit (unbounded "
+    "read; connect still fails fast).",
 )
 @click.option(
     "--config",
@@ -3446,8 +3406,12 @@ def heal(
 )
 @_env_options
 def benchmark(
-    scenarios_dir: str,
+    scenarios_pos: str | None,
+    scenarios_dir: str | None,
     models: tuple[str, ...],
+    provider_override: str | None,
+    base_url_override: str | None,
+    timeout_override: float | None,
     config_path: str | None,
     patches_dir: str,
     fmt: str,
@@ -3455,15 +3419,25 @@ def benchmark(
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
-    """Run scenario suite against one or more LLM models and compare results.
+    """Run one or many scenarios against one or more LLM models and compare.
 
+    \b
     Example:
-      aqueduct benchmark --scenarios scenarios/ --model claude-opus-4-7 --model llama3
+      aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --model llama3
+      aqueduct benchmark one.aqscenario.yml          # single scenario
 
-    Discovers all .aqscenario.yml files recursively in the given directory,
-    runs each against every specified model, and prints a comparison table.
+    Takes a .aqscenario.yml file or a directory (recursively globbed),
+    runs each against every specified model, prints a comparison table.
     No Spark required — scenarios inject failures synthetically.
     """
+    target = scenarios_pos or scenarios_dir
+    if not target:
+        click.echo(
+            "✗ provide a scenario file or directory (positional, or --scenarios)",
+            err=True,
+        )
+        sys.exit(1)
+    scenarios_dir = target
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
 
@@ -3480,11 +3454,17 @@ def benchmark(
         sys.exit(1)
 
     eng = cfg.agent
-    resolved_provider = eng.provider
-    resolved_base_url = eng.base_url
+    # Precedence: CLI flag > cfg.agent > built-in default. Connection identity
+    # only — provider_options / guardrails stay config (aqueduct.yml).
+    resolved_provider = provider_override or eng.provider
+    resolved_base_url = base_url_override or eng.base_url
     resolved_model = eng.model
     resolved_provider_options = eng.provider_options
-    resolved_timeout = eng.timeout
+    resolved_timeout = timeout_override if timeout_override is not None else eng.timeout
+    # 0 = sentinel for "no limit" → None (httpx: unbounded read; connect
+    # still bounded so an unreachable host fails fast).
+    if resolved_timeout == 0:
+        resolved_timeout = None
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
