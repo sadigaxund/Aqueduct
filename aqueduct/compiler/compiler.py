@@ -244,7 +244,7 @@ def compile(  # noqa: A001
     from aqueduct.warnings import emit as _aq_emit
     _supp = warnings_suppress
     if warnings_silence_all:
-        _supp = {"_silence_all_"}  # sentinel — every emit() callsite below short-circuits
+        _supp = {"*"}  # universal suppress sentinel — emit() short-circuits on "*"
 
     def _w(rule_id: str, msg: str) -> None:
         if warnings_silence_all:

@@ -5,6 +5,55 @@
 ### feat(doctor): collapse noise + reword agent line; fix pyspark sql_ctx warning
 _2026-05-17_
 
+- **`CheckResult` is now policy-as-data** — `group` + `quiet_when_ok`
+  fields; renderer is generic (no per-name branches). `quiet_when_ok`
+  rows (cloudpickle when green) collapse with `skip` rows into one
+  **aligned** `· more` pseudo-row (was a misaligned `· skipped:` line).
+- **`agent` no longer nags when unconfigured.** Self-healing is opt-in;
+  default provider=anthropic + no `ANTHROPIC_API_KEY` + no explicit
+  `base_url` → `skip` "self-healing not configured (opt-in)", not `warn`.
+  `warn` only when intent is explicit (base_url set) but key missing.
+- **`cluster-stores` downgraded fail → warn.** Blueprint still runs and
+  doctor cannot prove loss (can't tell if `.aqueduct/` is a shared
+  mount). New rule: ✗ = "will break"; ⚠ = "runs, but fragile". Restores
+  trust that every ✗ is genuinely broken. doctor stays advisory — never
+  gates `run`.
+- **Storage probe no longer does bucket I/O.** Old probe read a synthetic
+  `aqueduct-doctor-probe` bucket — forced users to pre-create a health
+  bucket and gave false ✗ (MinIO 403s on missing buckets). Replaced with
+  endpoint TCP reachability + creds-present, and an honest note that full
+  S3 auth is verified by an actual run (doctor never creates probe
+  buckets). `✗` only on a genuinely unreachable endpoint. Dead
+  `_storage_probe_paths` removed.
+- **One warning-suppression mechanism: `suppress` + `"*"`.** BREAKING:
+  `warnings.silence_all` config field and the `--no-warnings` CLI flag
+  removed (pre-v1.0 clean break, no alias). Silence everything with
+  `warnings.suppress: ["*"]` in aqueduct.yml or
+  `aqueduct --suppress-warning '*' run bp.yml`. `emit()` short-circuits on
+  the `"*"` sentinel; `set_default_suppress()` lost its `silence_all`
+  param; compiler's internal `_silence_all_` sentinel → `"*"`. Fixes the
+  papercut where `aqueduct run --no-warnings` errored (it was a
+  group-level flag — must precede the subcommand; `--suppress-warning`
+  has the same placement, now documented inline). Migration: replace
+  `silence_all: true` → `suppress: ["*"]`.
+- **Ad-hoc cluster store-path `WARNING:` migrated to AQ-WARN.** `run`'s
+  hand-rolled `click.echo("WARNING: …")` (relative store dir on
+  env=cluster) now goes through `aqueduct.warnings.emit(...)` as rule
+  `cluster_store_path_relative` — standardized `AQ-WARN [id]` prefix,
+  suppressible via `warnings.suppress` / `--suppress-warning` /
+  `silence_all`, shared rule_id + wording with doctor's `cluster-stores`.
+  Was the only AQ-WARN-class offender (other `⚠` banners are
+  intentionally a different, non-suppressible category).
+- **`cluster-stores` message shortened to one line.** The real "can the
+  driver use this store" test is already the per-store DuckDB-open probe
+  (`observability` / `lineage` / `depot`); `cluster-stores` is now just a
+  terse fragility hint, not a paragraph.
+- **`--skip-spark` storage row says *skipped*, not *failed*.**
+  `check_storage(..., skipped=True)` → `skip` "configured (…); not probed
+  (--skip-spark)" instead of a misleading "Spark check failed" warn.
+- **Additive `--aqtest` / `--aqscenario` documented** (combine a
+  config/blueprint probe with a test/scenario pre-flight in one call;
+  single-file is already header-sniffed via the positional arg).
 - **Spark check split into reachability (default) + `--preflight` (full).**
   Default is now a fast, bounded TCP probe of the master host:port (+ S3A
   endpoint) — no SparkSession, ~3s, no slow-vs-broken ambiguity, no false

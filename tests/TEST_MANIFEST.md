@@ -2231,3 +2231,11 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ `--preflight`: builds real session w/ spark_config, runs task, version + storage; unbounded (no timeout); failure → `preflight session failed: …`
 - ⏳ `SPARK_PROBE_TIMEOUT` / `ThreadPoolExecutor` removed from doctor (no import, no ref)
 - ⏳ `--skip-spark` still short-circuits before any probe
+- ⏳ `CheckResult` has `group` + `quiet_when_ok` fields (defaults `"general"`, `False`)
+- ⏳ Default render hides `status==skip` AND (`status==ok` and `quiet_when_ok`); `--verbose` shows all
+- ⏳ Hidden rows collapse to one `· more <names>  (ok / not applicable / not configured — --verbose)` line, left-aligned to same column as shown rows (name `ljust(col_w)`, col_w ≥ len("more"))
+- ⏳ cloudpickle ok → `quiet_when_ok=True` (hidden default, shown on warn/fail or --verbose)
+- ⏳ `check_agent`: provider=anthropic + no key + no base_url → `skip` "self-healing not configured (opt-in)"; + base_url set → `warn`; + key present → `ok`
+- ⏳ `check_storage(spark_config, spark_ok=False, skipped=True)` → `skip` "configured (…); not probed (--skip-spark)" (NOT warn "Spark check failed")
+- ⏳ `cluster-stores` with relative DuckDB paths in `env: cluster` → `warn` (not `fail`); suite still `✓ all checks passed`; message states runnable + shared-FS/postgres fix + safe-to-ignore caveat
+- ⏳ Additive: `doctor aqueduct.yml --aqscenario X.aqscenario.yml` runs config probe AND scenario pre-flight in one invocation (positional + flag, different kinds)
