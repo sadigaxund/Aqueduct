@@ -93,7 +93,7 @@ class ScenarioResult:
     passed: bool
     patch_valid: bool             # PatchSpec parsed without error
     patch_applies: bool           # patch can be applied to blueprint
-    failures: list[str]           # descriptions of failed assertions
+    failures: list[str]           # GATING failures only (correctness) — these flip passed
     patch: Any                    # PatchSpec | None
     duration_seconds: float
     confidence: float | None = None
@@ -101,6 +101,8 @@ class ScenarioResult:
     reprompt_errors: list[str] = field(default_factory=list)  # validation error per failed attempt
     root_cause_match: bool | None = None   # None = assertion not configured
     category_match: bool | None = None     # None = assertion not configured
+    soft_failures: list[str] = field(default_factory=list)  # quality misses — reported, NEVER flip passed
+    diag_score: float | None = None  # fraction of configured diagnosis signals hit; None = none configured
 
     @property
     def diag_correct(self) -> bool | None:
@@ -233,13 +235,21 @@ def _check_assertions(
     patch: "Any",  # PatchSpec | None
     blueprint_path: Path | None,
     attempts: int = 0,
-) -> tuple[list[str], bool, bool, bool | None, bool | None]:
-    """Evaluate assertion list.
+) -> tuple[list[str], list[str], bool, bool, bool | None, bool | None]:
+    """Evaluate assertion list, split into gating vs scoring.
 
-    Returns (failures, patch_valid, patch_applies, root_cause_match, category_match).
-    root_cause_match and category_match are None when those assertions are not configured.
+    Returns (hard_failures, soft_failures, patch_valid, patch_applies,
+    root_cause_match, category_match).
+
+    Gating (correctness — flips PASS/FAIL): `patch_is_valid`,
+    `patch_applies`. Scoring (quality — recorded, NEVER flips PASS/FAIL):
+    `root_cause_contains`, `expected_category`, `max_attempts`,
+    `min_confidence`. A correct fix with imperfect diagnosis still PASSes;
+    the soft misses are reported and rolled into the diagnosis score.
+    root_cause_match / category_match are None when not configured.
     """
-    failures: list[str] = []
+    failures: list[str] = []        # gating (correctness)
+    soft_failures: list[str] = []   # scoring (quality, non-gating)
     patch_valid = patch is not None
     patch_applies = False
     root_cause_match: bool | None = None
@@ -272,7 +282,7 @@ def _check_assertions(
         if "max_attempts" in assertion:
             max_att = int(assertion["max_attempts"])
             if attempts > max_att:
-                failures.append(
+                soft_failures.append(
                     f"max_attempts: took {attempts} LLM call(s), max allowed {max_att} "
                     f"(reprompts needed → LLM needed schema correction)"
                 )
@@ -281,9 +291,9 @@ def _check_assertions(
             min_conf = float(assertion["min_confidence"])
             actual_conf = patch.confidence if patch else None
             if actual_conf is None:
-                failures.append(f"min_confidence: patch has no confidence field (expected >= {min_conf})")
+                soft_failures.append(f"min_confidence: patch has no confidence field (expected >= {min_conf})")
             elif actual_conf < min_conf:
-                failures.append(
+                soft_failures.append(
                     f"min_confidence: {actual_conf:.2f} < {min_conf:.2f}"
                 )
 
@@ -292,7 +302,7 @@ def _check_assertions(
             actual_cat = patch.category if patch else None
             category_match = actual_cat == expected_cat
             if not category_match:
-                failures.append(
+                soft_failures.append(
                     f"expected_category: expected {expected_cat!r}, got {actual_cat!r}"
                 )
 
@@ -302,11 +312,11 @@ def _check_assertions(
             actual_rc = (patch.root_cause or "").lower() if patch else ""
             root_cause_match = any(kw in actual_rc for kw in keywords)
             if not root_cause_match:
-                failures.append(
+                soft_failures.append(
                     f"root_cause_contains: none of {keywords!r} found in {actual_rc!r}"
                 )
 
-    return failures, patch_valid, patch_applies, root_cause_match, category_match
+    return failures, soft_failures, patch_valid, patch_applies, root_cause_match, category_match
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -369,18 +379,23 @@ def run_scenario(
         if bp_candidate.exists():
             blueprint_path = bp_candidate
 
-    # Check assertions
-    assertion_failures, patch_valid, patch_applies, root_cause_match, category_match = (
+    # Check assertions — gating (correctness) vs soft (quality)
+    hard_failures, soft_failures, patch_valid, patch_applies, root_cause_match, category_match = (
         _check_assertions(scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts)
     )
 
-    # Check expected_patch
+    # expected_patch is a correctness/effect check → gating
     expected_failures: list[str] = []
     if patch is not None and scenario.expected_patch:
         expected_failures = _check_expected_patch(patch, scenario.expected_patch)
 
-    all_failures = assertion_failures + expected_failures
-    passed = len(all_failures) == 0
+    gating_failures = hard_failures + expected_failures
+    passed = len(gating_failures) == 0  # diagnosis quality NEVER flips this
+
+    # Diagnosis score: fraction of configured diagnosis signals that hit
+    # (None when the scenario configures neither root_cause nor category).
+    diag_signals = [s for s in (root_cause_match, category_match) if s is not None]
+    diag_score = (sum(diag_signals) / len(diag_signals)) if diag_signals else None
 
     return ScenarioResult(
         scenario_id=scenario.id,
@@ -388,7 +403,9 @@ def run_scenario(
         passed=passed,
         patch_valid=patch_valid,
         patch_applies=patch_applies,
-        failures=all_failures,
+        failures=gating_failures,
+        soft_failures=soft_failures,
+        diag_score=diag_score,
         patch=patch,
         duration_seconds=duration,
         confidence=patch.confidence if patch else None,
@@ -501,14 +518,15 @@ def format_benchmark_table(
             r = model_results.get(model)
             if r is None:
                 cells.append(f"{'—':^{model_col_w}}")
-            elif r.passed:
-                conf = f"{r.confidence:.2f}" if r.confidence is not None else "—"
-                t = f"{r.duration_seconds:.1f}s"
-                cell = f"PASS {conf} {t}"
-                cells.append(f"{cell:^{model_col_w}}")
             else:
+                status = "PASS" if r.passed else "FAIL"
                 t = f"{r.duration_seconds:.1f}s"
-                cell = f"FAIL {t}"
+                diag = f" d{r.diag_score:.0%}" if r.diag_score is not None else ""
+                if r.passed:
+                    conf = f"{r.confidence:.2f}" if r.confidence is not None else "—"
+                    cell = f"{status} {conf}{diag} {t}"
+                else:
+                    cell = f"{status}{diag} {t}"
                 cells.append(f"{cell:^{model_col_w}}")
         lines.append(f"{sid:<{id_col_w}}  | " + " | ".join(cells))
 
@@ -534,6 +552,10 @@ def format_benchmark_table(
         ("Diag-only rate", lambda rs: (
             f"{sum(1 for r in rs if r.diag_correct is True and not r.patch_applies) / max(1, sum(1 for r in rs if r.diag_correct is not None)):.0%}"
             if any(r.diag_correct is not None for r in rs) else "—"
+        )),
+        ("Diag score", lambda rs: (
+            f"{sum(r.diag_score for r in rs if r.diag_score is not None) / max(1, sum(1 for r in rs if r.diag_score is not None)):.0%}"
+            if any(r.diag_score is not None for r in rs) else "—"
         )),
     ]:
         cells = []

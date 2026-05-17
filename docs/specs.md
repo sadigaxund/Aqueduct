@@ -1375,6 +1375,31 @@ The agent responds exclusively with a PatchSpec JSON object. Any response that i
 |**replace\_retry\_policy**|Replace the pipeline-level retry policy. Used when the agent determines the current policy is causing repeated failures.|
 |**add\_arcade\_ref**|Reference a new or existing Arcade sub-Blueprint. Used when the agent restructures repeated logic into a reusable Arcade.|
 
+> **`replace_module_config` vs `set_module_config_key` — prefer surgical.**
+> `replace_module_config` overwrites the module's **entire** `config:`
+> block with exactly what the LLM restates. Any key the LLM does not
+> re-include is **silently dropped** — e.g. a one-column query fix that
+> uses `replace_module_config` and forgets `checkpoint: true`,
+> `metrics_boundary: true`, or `materialize: incremental` +
+> `watermark_column` produces a Blueprint that still parses and compiles
+> but has silently lost that behaviour. `set_module_config_key` mutates
+> one key and leaves the rest intact, so it cannot drop unrelated config.
+> Both ops can reach the same end-state when the module has no other
+> keys to lose (then they are equivalent), but in general the surgical op
+> is the safer fix and the LLM is prompted to prefer it.
+>
+> To **enforce** surgical edits, add `replace_module_config` to
+> `agent.guardrails.forbidden_ops` (see §8.6) — at `approval_mode: auto`
+> / `aggressive` the patch is then rejected at apply time regardless of
+> what the LLM produced. Scenario authors can do the same per-scenario
+> via `expected_patch.forbidden_ops` in an `.aqscenario.yml`.
+>
+> Note: this forbid-it mechanism is **policy-based opt-in**. There is no
+> automatic check that a `replace_module_config` *silently dropped a key
+> that was present before* yet still compiles — a deterministic
+> "config-key preservation" gate is tracked in `TODOs.md` Phase 33 and
+> will be documented here once it lands.
+
 **Patch metadata fields** (returned by the LLM alongside operations):
 
 | Field | Type | Description |
@@ -2127,7 +2152,7 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 Aqueduct currently runs one pipeline per invocation. Cross-pipeline dependencies (pipeline A must complete before pipeline B starts) are handled externally via Depot watermarks and standard orchestrators (Airflow, Prefect, etc.) triggering aqueduct run commands. A native Aqueduct workflow layer (a Blueprint of Blueprints) is a potential v1.2 feature.
 
 ### **LLM Model Benchmarking**
-Scenario-based LLM benchmarking is implemented via `.aqscenario.yml` files and the `aqueduct benchmark` command. See §11.3 for command reference. Scenarios define a simulated failure, expected patch ops, and pass/fail assertions — no Spark required. Run `aqueduct benchmark <file-or-dir> --model A --model B` to compare models (a single `.aqscenario.yml` or a directory; positional or `--scenarios`).
+Scenario-based LLM benchmarking is implemented via `.aqscenario.yml` files and the `aqueduct benchmark` command. See §11.3 for command reference. Scenarios define a simulated failure and assertions — no Spark required. Assertions are **two-tier**: *gating* (correctness — `patch_is_valid`, `patch_applies`, `expected_patch`) flips PASS/FAIL; *scoring* (diagnosis quality — `root_cause_contains`, `expected_category`, `max_attempts`, `min_confidence`) is recorded as a diagnosis score and reported, but **never fails a correct fix**. A model that fixes the bug but explains it imperfectly still PASSes; the quality gap shows in the `Diag score` row / `diag_score` JSON field, not the verdict. Run `aqueduct benchmark <file-or-dir> --model A --model B` to compare models (a single `.aqscenario.yml` or a directory; positional or `--scenarios`).
 
 ### **MCP (Model Context Protocol) Readiness**
 Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools — moving from prompt engineering to structured tool use for greater reliability and composability.
