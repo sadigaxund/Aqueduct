@@ -2082,7 +2082,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct doctor [file]`|Probe all resources. Spark check defaults to a fast bounded TCP reachability probe (master + S3 endpoint, no session); `--preflight` builds a real unbounded Spark session with the actual `spark_config`. Default view shows only actionable rows (ok/warn/fail); not-applicable / not-configured checks collapse to one `· skipped:` line.|`--skip-spark`, `--preflight`, `--verbose` (show skipped rows), `--aqtest`, `--aqscenario`, `--env-file`, `-e/--env`|
+|`aqueduct doctor [file]`|Probe all resources. The positional file is header-sniffed (config / blueprint / aqtest / aqscenario) — no flag needed for a single file. `--aqtest` / `--aqscenario` are **additive**: combine a config/blueprint probe **and** a test/scenario schema pre-flight in one invocation (the positional slot holds one file of one kind; the flags add a second concern of a different kind, e.g. `aqueduct doctor aqueduct.yml --aqscenario heal.aqscenario.yml`). Spark check defaults to a fast bounded TCP reachability probe (master + S3 endpoint, no session); `--preflight` builds a real unbounded Spark session with the actual `spark_config`. Default view = actionable rows only (ok/warn/fail); skip rows + green low-signal rows (e.g. cloudpickle) collapse into one aligned `· more` line — `--verbose` expands. ✗ means "this will break"; ⚠ means "runs, but fragile". doctor is advisory — it never gates `run`.|`--skip-spark`, `--preflight`, `--verbose`, `--aqtest`, `--aqscenario`, `--env-file`, `-e/--env`|
 
 ## **11.6 Key Flags for `aqueduct run`**
 

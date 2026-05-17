@@ -42,39 +42,36 @@ _AQ_PREFIX = "[aqueduct:"
 # Process-global fallback suppress set — populated once at CLI startup from
 # `config.warnings.suppress` + `--suppress-warning` flags. Library callers may
 # still pass an explicit `suppress=` to `emit()` which takes priority.
+# `"*"` is the wildcard sentinel — present in the set ⇒ silence every rule.
+# One mechanism: blacklist rule_ids, or `*` for all, or empty for none.
+_SUPPRESS_ALL = "*"
 _DEFAULT_SUPPRESS: set[str] = set()
-_DEFAULT_SILENCE_ALL: bool = False
 
 
-def set_default_suppress(suppress: Iterable[str] | None, silence_all: bool = False) -> None:
+def set_default_suppress(suppress: Iterable[str] | None) -> None:
     """CLI startup hook — install the process-wide suppress defaults.
 
+    `suppress` is a set of rule_ids; the sentinel `"*"` silences all.
     Idempotent. Library users (`import aqueduct`) don't need to call this —
     they pass `suppress=` explicitly when calling `compile()` / `execute()`,
     or accept all warnings.
     """
-    global _DEFAULT_SUPPRESS, _DEFAULT_SILENCE_ALL
+    global _DEFAULT_SUPPRESS
     _DEFAULT_SUPPRESS = set(suppress or ())
-    _DEFAULT_SILENCE_ALL = bool(silence_all)
 
 
 def emit(rule_id: str, message: str, *, suppress: Iterable[str] | None = None) -> None:
-    """Emit one Aqueduct warning unless `rule_id` is in `suppress`.
+    """Emit one Aqueduct warning unless suppressed.
 
-    Resolution order for the active suppress set:
-      1. Explicit `suppress=` argument (library callers, e.g. `compile()`)
-      2. Process-global default installed via `set_default_suppress()`
-    Whichever is non-empty wins; if both are provided, the explicit set wins.
-
-    `silence_all` (process-global) short-circuits every emission to a no-op.
+    Active suppress set: explicit `suppress=` arg (library callers) if given,
+    else the process-global default from `set_default_suppress()`. The
+    sentinel `"*"` in that set silences every rule.
 
     Never raises.
     """
     try:
-        if _DEFAULT_SILENCE_ALL:
-            return
         active = set(suppress) if suppress is not None else _DEFAULT_SUPPRESS
-        if rule_id in active:
+        if _SUPPRESS_ALL in active or rule_id in active:
             return
         _w.warn(f"{_AQ_PREFIX}{rule_id}] {message}", category=AqueductWarning, stacklevel=3)
     except Exception:

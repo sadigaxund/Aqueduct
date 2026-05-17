@@ -33,6 +33,9 @@ class CheckResult:
     status: Literal["ok", "fail", "warn", "skip"]
     detail: str
     elapsed_ms: int = 0
+    # Data-driven render policy (renderer stays generic — no per-name branches).
+    group: str = "general"        # "spark" | "stores" | "agent" | "io" | …  (visual grouping deferred)
+    quiet_when_ok: bool = False   # low-signal env detail (cloudpickle): hide row when green, show on warn/fail
 
 
 # ── Individual checks ─────────────────────────────────────────────────────────
@@ -241,18 +244,30 @@ def check_agent(
 
     if agent_provider == "anthropic":
         key = os.environ.get("ANTHROPIC_API_KEY")
+        # Self-healing is opt-in and off by default. provider defaults to
+        # "anthropic" with no base_url — i.e. nothing was actually configured.
+        # No explicit intent + no key → not a misconfig, just unused: skip,
+        # don't nag. Intent = an explicit base_url (only set deliberately).
+        explicit_intent = bool(base_url)
         if not key:
+            if not explicit_intent:
+                return CheckResult(
+                    "agent", "skip",
+                    "self-healing not configured (opt-in; set agent.provider + "
+                    "ANTHROPIC_API_KEY, or agent.provider: openai_compat, to enable)",
+                    _ms(t), group="agent",
+                )
             return CheckResult(
                 "agent", "warn",
-                "configured provider=anthropic; ANTHROPIC_API_KEY not set — "
-                "set it, or switch agent.provider to openai_compat "
-                "(Ollama/vLLM/LM Studio). Self-healing only; pipeline runs fine without it.",
-                _ms(t),
+                "agent configured but ANTHROPIC_API_KEY not set — set it, or switch "
+                "agent.provider to openai_compat (Ollama/vLLM/LM Studio). "
+                "Self-healing only; pipeline runs fine without it.",
+                _ms(t), group="agent",
             )
         return CheckResult(
             "agent", "ok",
-            f"configured provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
-            _ms(t),
+            f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
+            _ms(t), group="agent",
         )
 
     # openai_compat (Ollama, vLLM, LM Studio, …)
@@ -327,8 +342,14 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
     return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
 
 
-def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
-    """Detect configured object storage from spark_config keys."""
+def check_storage(
+    spark_config: dict[str, Any], spark_ok: bool, *, skipped: bool = False
+) -> CheckResult:
+    """Detect configured object storage from spark_config keys.
+
+    `skipped=True` → the Spark probe was deliberately not run (--skip-spark):
+    report as skip, not a failure (nothing failed; it just wasn't verified).
+    """
     t = time.monotonic()
     detected: list[str] = []
 
@@ -341,46 +362,45 @@ def check_storage(spark_config: dict[str, Any], spark_ok: bool) -> CheckResult:
         detected.append("ADLS")
 
     if not detected:
-        return CheckResult("storage", "skip", "no object storage keys in spark_config", _ms(t))
+        return CheckResult("storage", "skip", "no object storage keys in spark_config", _ms(t), group="spark")
+
+    if skipped:
+        return CheckResult(
+            "storage", "skip",
+            f"configured ({', '.join(detected)}); not probed (--skip-spark)",
+            _ms(t), group="spark",
+        )
 
     if not spark_ok:
         return CheckResult(
             "storage", "warn",
-            f"configured ({', '.join(detected)}) but Spark check failed — cannot verify connectivity",
-            _ms(t),
+            f"configured ({', '.join(detected)}); connectivity not verified (Spark session not built)",
+            _ms(t), group="spark",
         )
 
-    # Spark is up — try a read that should return "path not found", not "auth error"
-    try:
-        from pyspark.sql import SparkSession
-        spark = SparkSession.getActiveSession()
-        if spark is None:
-            return CheckResult("storage", "warn", f"configured ({', '.join(detected)}) but no active session", _ms(t))
+    # Endpoint reachability + creds-present. NO bucket I/O: doctor must never
+    # require the user to pre-create a health-check bucket, and a read against
+    # a synthetic bucket is ambiguous (MinIO 403s on missing buckets). Full S3
+    # auth is proven by an actual run — stated honestly here.
+    s3_ep = spark_config.get("spark.hadoop.fs.s3a.endpoint")
+    has_keys = bool(
+        spark_config.get("spark.hadoop.fs.s3a.access.key")
+        and spark_config.get("spark.hadoop.fs.s3a.secret.key")
+    )
+    note = "auth not bucket-tested (doctor creates no probe bucket; a real run verifies it fully)"
 
-        errors: list[str] = []
-        for label, path_prefix in _storage_probe_paths(spark_config):
-            probe_path = path_prefix + "_aq_doctor_probe_nonexistent/"
-            try:
-                spark.read.parquet(probe_path)
-                # If it actually reads something, storage is accessible
-                return CheckResult("storage", "ok", f"{label}: readable (unexpected — probe path exists?)", _ms(t))
-            except Exception as exc:
-                msg = str(exc).lower()
-                if any(word in msg for word in ("no such file", "path does not exist", "filenotfoundexception", "nosuchkey")):
-                    errors.append(f"{label}: reachable (path not found — expected)")
-                elif any(word in msg for word in ("access denied", "403", "unauthorized", "forbidden", "credentials")):
-                    errors.append(f"{label}: auth error — check credentials")
-                    return CheckResult("storage", "fail", "; ".join(errors), _ms(t))
-                else:
-                    errors.append(f"{label}: {exc}")
+    if s3_ep:
+        hp = _host_port(s3_ep, 80)
+        if hp is None:
+            return CheckResult("storage", "warn", f"configured ({', '.join(detected)}) — cannot parse endpoint {s3_ep}", _ms(t), group="spark")
+        if not _tcp_ok(*hp):
+            return CheckResult("storage", "fail", f"S3/MinIO endpoint {s3_ep} — TCP connect to {hp[0]}:{hp[1]} failed", _ms(t), group="spark")
+        if not has_keys:
+            return CheckResult("storage", "warn", f"endpoint {s3_ep} reachable; no access/secret key in spark_config — {note}", _ms(t), group="spark")
+        return CheckResult("storage", "ok", f"endpoint {s3_ep} reachable; creds present; {note}", _ms(t), group="spark")
 
-        # All probes returned "path not found" — storage is reachable
-        all_ok = all("reachable" in e for e in errors)
-        status = "ok" if all_ok else "warn"
-        return CheckResult("storage", status, "; ".join(errors), _ms(t))
-
-    except Exception as exc:
-        return CheckResult("storage", "warn", f"storage probe failed: {exc}", _ms(t))
+    # GCS / ADLS: no single fixed endpoint to TCP-probe cheaply.
+    return CheckResult("storage", "ok", f"configured ({', '.join(detected)}); {note}", _ms(t), group="spark")
 
 
 # ── Blueprint source checks ───────────────────────────────────────────────────
@@ -739,18 +759,6 @@ def _ms(t: float) -> int:
     return int((time.monotonic() - t) * 1000)
 
 
-def _storage_probe_paths(spark_config: dict[str, Any]) -> list[tuple[str, str]]:
-    """Return (label, path_prefix) pairs for configured storage backends."""
-    paths = []
-    if any(k.startswith("spark.hadoop.fs.s3a") for k in spark_config):
-        endpoint = spark_config.get("spark.hadoop.fs.s3a.endpoint", "")
-        bucket = "aqueduct-doctor-probe"
-        paths.append(("S3/MinIO", f"s3a://{bucket}/"))
-    if any(k.startswith("spark.hadoop.google.cloud") for k in spark_config):
-        paths.append(("GCS", "gs://aqueduct-doctor-probe/"))
-    return paths
-
-
 # ── Cloudpickle compatibility check ──────────────────────────────────────────
 
 def check_cloudpickle_compat(master_url: str) -> CheckResult:
@@ -768,7 +776,7 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
         import pyspark.cloudpickle as bundled_cp
         bundled_ver = tuple(int(x) for x in bundled_cp.__version__.split(".")[:2])
     except Exception as exc:
-        return CheckResult("cloudpickle", "skip", f"pyspark not installed: {exc}", _ms(t))
+        return CheckResult("cloudpickle", "skip", f"pyspark not installed: {exc}", _ms(t), group="spark")
 
     try:
         import cloudpickle as system_cp
@@ -785,7 +793,7 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
             f"system={'not installed' if system_ver == (0, 0) else '.'.join(str(x) for x in system_ver)}"
             "  (no compatibility issue below Python 3.13)"
         )
-        return CheckResult("cloudpickle", "ok", detail, _ms(t))
+        return CheckResult("cloudpickle", "ok", detail, _ms(t), group="spark", quiet_when_ok=True)
 
     # Python 3.13+ — bundled cloudpickle must be >=3.0 or system >=3.0 present for patch
     driver_ok = system_ver >= (3, 0)
@@ -802,11 +810,11 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
             "DRIVER: cloudpickle<3.0 — Python UDFs will crash. "
             "Fix: pip install 'cloudpickle>=3.0'"
         )
-        return CheckResult("cloudpickle", "fail", "  ".join(detail_parts), _ms(t))
+        return CheckResult("cloudpickle", "fail", "  ".join(detail_parts), _ms(t), group="spark")
 
     if is_local:
         detail_parts.append("driver patched OK  (local mode — no workers)")
-        return CheckResult("cloudpickle", "ok", "  ".join(detail_parts), _ms(t))
+        return CheckResult("cloudpickle", "ok", "  ".join(detail_parts), _ms(t), group="spark", quiet_when_ok=True)
 
     # Remote cluster — workers need cloudpickle>=3.0 independently
     detail_parts.append(
@@ -815,7 +823,7 @@ def check_cloudpickle_compat(master_url: str) -> CheckResult:
         "(e.g. pip install cloudpickle>=3.0 in cluster init script) "
         "or use lang: java UDFs to avoid Python serialization entirely"
     )
-    return CheckResult("cloudpickle", "warn", "  ".join(detail_parts), _ms(t))
+    return CheckResult("cloudpickle", "warn", "  ".join(detail_parts), _ms(t), group="spark")
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
@@ -1141,19 +1149,21 @@ def run_doctor(
             if not p or p.startswith(".") or not Path(p).is_absolute()
         ]
         if _bad:
+            # WARN, not FAIL: the blueprint still runs, and doctor cannot prove
+            # data loss — it can't tell if .aqueduct/ sits on a mounted shared
+            # FS. ✗ means "this will break"; this is "runs, but fragile".
             results.append(CheckResult(
-                "cluster-stores", "fail",
-                f"deployment.env={cfg.deployment.env!r} but DuckDB store paths are relative/local: "
-                f"{_bad}. On YARN/K8s the driver CWD is ephemeral — stores will be lost on "
-                "restart. Either set absolute paths on shared FS (NFS/EFS/PVC) in aqueduct.yml "
-                "or switch the affected stores to backend=postgres / redis.",
+                "cluster-stores", "warn",
+                f"relative DuckDB paths {_bad} on env=cluster — lost on driver restart "
+                "unless on a shared FS. Use an absolute shared-FS path or postgres/redis.",
+                group="stores",
             ))
         elif _duckdb_paths:
-            results.append(CheckResult("cluster-stores", "ok", "DuckDB store paths are absolute"))
+            results.append(CheckResult("cluster-stores", "ok", "DuckDB store paths are absolute", group="stores"))
         else:
-            results.append(CheckResult("cluster-stores", "ok", "no DuckDB stores — backend-managed persistence"))
+            results.append(CheckResult("cluster-stores", "ok", "no DuckDB stores — backend-managed persistence", group="stores"))
     else:
-        results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check"))
+        results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
@@ -1186,8 +1196,8 @@ def run_doctor(
 
     # Spark + storage (optional, slow — storage probe runs inside same session)
     if skip_spark:
-        results.append(CheckResult("spark", "skip", "--skip-spark flag set"))
-        results.append(check_storage(cfg.spark_config, spark_ok=False))
+        results.append(CheckResult("spark", "skip", "--skip-spark flag set", group="spark"))
+        results.append(check_storage(cfg.spark_config, spark_ok=False, skipped=True))
         if blueprint_path is not None:
             results.extend(check_blueprint_sources(blueprint_path))
         if aqtest_path is not None:

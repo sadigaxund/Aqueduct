@@ -23,14 +23,11 @@ def _apply_warnings_from_cfg(cfg) -> None:
 
     Idempotent. Call once per command immediately after `load_config()` so the
     engine-level `warnings.suppress` from aqueduct.yml is honoured alongside
-    any `--suppress-warning` / `--no-warnings` flags the user passed.
+    any `--suppress-warning` flags the user passed. Use `*` to silence all.
     """
-    from aqueduct.warnings import _DEFAULT_SUPPRESS, _DEFAULT_SILENCE_ALL, set_default_suppress
+    from aqueduct.warnings import _DEFAULT_SUPPRESS, set_default_suppress
     merged = set(_DEFAULT_SUPPRESS) | set(getattr(cfg.warnings, "suppress", []) or [])
-    set_default_suppress(
-        suppress=merged,
-        silence_all=_DEFAULT_SILENCE_ALL or bool(getattr(cfg.warnings, "silence_all", False)),
-    )
+    set_default_suppress(suppress=merged)
 
 
 def _compile_with_warnings(compile_fn, *args, **kwargs):
@@ -490,17 +487,11 @@ class _AqueductJsonLogFormatter:
     multiple=True,
     metavar="RULE_ID",
     help=(
-        "Silence one Aqueduct warning by rule_id. Repeatable. Copy the ID from "
-        "the `AQ-WARN [...]` prefix in prior output. Merged with "
-        "`warnings.suppress` from aqueduct.yml."
+        "Silence an Aqueduct warning by rule_id (copy from the `AQ-WARN [...]` "
+        "prefix). Repeatable. Use `--suppress-warning '*'` to silence ALL. "
+        "Merged with `warnings.suppress` from aqueduct.yml. Goes BEFORE the "
+        "subcommand: `aqueduct --suppress-warning '*' run bp.yml`."
     ),
-)
-@click.option(
-    "--no-warnings",
-    "no_warnings",
-    is_flag=True,
-    default=False,
-    help="Silence all Aqueduct warnings (compile-time + session-startup).",
 )
 @click.pass_context
 def cli(
@@ -508,7 +499,6 @@ def cli(
     verbose: bool,
     log_format: str,
     suppress_warnings: tuple[str, ...],
-    no_warnings: bool,
 ) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
     import logging
@@ -532,10 +522,9 @@ def cli(
     # command actually loads config (commands that never read config still
     # honour the CLI flag).
     install_cli_formatter()
-    set_default_suppress(suppress=list(suppress_warnings), silence_all=no_warnings)
+    set_default_suppress(suppress=list(suppress_warnings))
     ctx.ensure_object(dict)
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
-    ctx.obj["no_warnings_cli"] = no_warnings
 
 
 @cli.command()
@@ -786,13 +775,18 @@ def doctor(
         preflight=preflight,
     )
 
-    # Default view shows only actionable rows (ok / warn / fail). `skip` rows
-    # — not-applicable (local-mode cluster-stores) or not-configured (webhook,
-    # storage) — are collapsed into one summary line. `--verbose` shows all.
-    shown = results if verbose else [r for r in results if r.status != "skip"]
-    skipped = [r for r in results if r.status == "skip"]
+    # Default view = actionable rows only. Hidden (collapsed into one aligned
+    # line): `skip` rows (not-applicable / not-configured) and green
+    # low-signal rows (quiet_when_ok, e.g. cloudpickle). Policy is data on
+    # CheckResult — the renderer stays generic, no per-name branches.
+    def _hidden(r) -> bool:
+        return r.status == "skip" or (r.status == "ok" and r.quiet_when_ok)
 
-    col_w = max((len(r.name) for r in shown), default=0) + 2
+    shown = results if verbose else [r for r in results if not _hidden(r)]
+    hidden = [] if verbose else [r for r in results if _hidden(r)]
+
+    col_w = max((len(r.name) for r in shown), default=0)
+    col_w = max(col_w, len("more")) + 2
     any_fail = False
     for r in shown:
         icon = _STATUS_ICON[r.status]
@@ -804,10 +798,11 @@ def doctor(
         if r.status == "fail":
             any_fail = True
 
-    if skipped and not verbose:
-        names = ", ".join(r.name for r in skipped)
+    if hidden:
+        names = ", ".join(r.name for r in hidden)
+        # Same `  {glyph} {name.ljust(col_w)}{detail}` shape as every row above.
         click.echo(click.style(
-            f"  · skipped: {names}  (not applicable / not configured — --verbose for detail)",
+            f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)",
             fg="bright_black",
         ))
 
@@ -1241,17 +1236,16 @@ def run(
             resolved_store_dir.mkdir(parents=True, exist_ok=True)
 
         # ── Cluster-mode store path warning ───────────────────────────────────────
-        if cfg.deployment.env in ("cluster", "cloud"):
-            _abs = resolved_store_dir.is_absolute()
-            if not _abs:
-                click.echo(
-                    f"WARNING: deployment.env={cfg.deployment.env!r} but store dir "
-                    f"{str(resolved_store_dir)!r} is not an absolute path. "
-                    "On YARN/K8s the driver CWD is ephemeral — observability.db, watermarks, "
-                    "and checkpoints will be lost on driver restart. "
-                    "Set stores.observability.path to an absolute shared FS path in aqueduct.yml.",
-                    err=True,
-                )
+        # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
+        # doctor's `cluster-stores` check — single source of truth, one wording.
+        if cfg.deployment.env in ("cluster", "cloud") and not resolved_store_dir.is_absolute():
+            from aqueduct.warnings import emit as _emit_warning
+            _emit_warning(
+                "cluster_store_path_relative",
+                f"relative store dir {str(resolved_store_dir)!r} on env="
+                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
+                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
+            )
 
         # ── Aggressive mode danger gate ────────────────────────────────────────────
         if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:

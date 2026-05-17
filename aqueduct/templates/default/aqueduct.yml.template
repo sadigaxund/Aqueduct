@@ -463,8 +463,9 @@ agent:
 # Aqueduct emits compile-time and session-startup diagnostics with the format
 #     AQ-WARN [rule_id] message
 # Copy the bracketed rule_id straight from the terminal into the suppress list
-# below to silence one rule. CLI flags (--suppress-warning / --no-warnings) are
-# merged on top of this list.
+# below to silence one rule. The single entry "*" silences ALL warnings.
+# CLI: `aqueduct --suppress-warning <id> run bp.yml` (or '*'); goes BEFORE the
+# subcommand. Merged on top of this list.
 #
 # Available compile-time rule IDs (registry: aqueduct/compiler/warnings/):
 #   kafka_checkpoint_stale, nondeterministic_fanout,
@@ -482,7 +483,9 @@ agent:
 #   suppress:
 #     - count_col_likely_count_star
 #     - jdbc_missing_partition
-#   silence_all: false   # nuclear option — silence every Aqueduct warning
+# # nuclear option — silence every Aqueduct warning:
+# warnings:
+#   suppress: ["*"]
 
 # ── Danger settings ───────────────────────────────────────────────────────────
 # All default to false (safe production mode). Set to true only when needed.
