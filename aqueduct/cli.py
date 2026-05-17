@@ -3509,7 +3509,13 @@ def benchmark(
                     "reprompt_errors": r.reprompt_errors,
                     "root_cause_match": r.root_cause_match,
                     "category_match": r.category_match,
+                    "diag_score": r.diag_score,
                     "failures": r.failures,
+                    "soft_failures": r.soft_failures,
+                    "patch": (
+                        r.patch.model_dump(mode="json")
+                        if r.patch is not None else None
+                    ),
                 }
         click.echo(json.dumps(output, indent=2))
     else:
@@ -3525,6 +3531,12 @@ def benchmark(
         if r.passed
     )
     failed = total - passed
+    if failed and fmt != "json":
+        click.echo(
+            f"({failed} failed — rerun with --output json for failure "
+            f"detail + the generated patch)",
+            err=True,
+        )
     if failed:
         sys.exit(1)
 

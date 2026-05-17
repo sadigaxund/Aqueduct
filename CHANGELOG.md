@@ -21,8 +21,25 @@ release and are marked **BREAKING**.
   files, including a user `.gitignore`, are never overwritten.
 - `aqueduct doctor` `--aqtest` / `--aqscenario` pre-flight, combinable
   with a config/blueprint probe in one pass.
+- `aqueduct benchmark --output json` now includes the generated
+  `patch` (PatchSpec) per result, so a failure can be diagnosed without
+  re-running. Table mode prints a `(N failed — rerun with --output
+  json …)` hint when any scenario fails.
 
 ### Changed
+- `aqueduct benchmark` scoring is now two-tier: **correctness gates**
+  PASS/FAIL (`patch_is_valid`, `patch_applies`, `expected_patch`), while
+  **diagnosis quality** (`root_cause_contains`, `expected_category`,
+  `max_attempts`, `min_confidence`) is recorded as a diagnosis score and
+  reported (`diag_score`/`soft_failures` in JSON, `d%` + `Diag score` in
+  the table) but **never fails an otherwise-correct fix**.
+- Gallery `aqscenarios` benchmark suite reworked for fidelity: each
+  scenario now has its own blueprint carrying exactly one real defect,
+  `inject_failure.error_message` mirrors authentic Spark output (error
+  class, `SQLSTATE`, suggestion list), and scoring is op-agnostic
+  (outcome + diagnosis, not a hard-coded patch op). Previously 4/5
+  scenarios injected an error unrelated to the shared clean blueprint
+  (unsolvable/ungradable).
 - `.env` is now auto-loaded by **every** command from the directory of
   the config/blueprint passed (previously only `run`/`doctor`/`validate`).
   A one-line stderr notice reports what was loaded; `-e KEY=VAL`
