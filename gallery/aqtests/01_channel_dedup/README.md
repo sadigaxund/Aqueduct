@@ -38,3 +38,6 @@ aqueduct run blueprint.yml
   `__output__` view; truthy result passes).
 - Testable module types: Channel, Junction, Funnel, Assert. Ingress and
   Egress are never executed by `aqueduct test`.
+- Always runs on `local[*]` — `deployment.master_url` is ignored (unit
+  test, not integration). `--master` overrides only if a module needs
+  cluster runtime.

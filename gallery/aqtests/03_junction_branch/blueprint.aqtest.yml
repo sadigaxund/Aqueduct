@@ -1,0 +1,48 @@
+# blueprint.aqtest.yml
+# Run with:  aqueduct test blueprint.aqtest.yml
+
+aqueduct_test: "1.0"
+blueprint: blueprint.yml          # relative to this test file
+
+tests:
+  - id: defaults_to_first_branch_active
+    module: route_tickets
+    # Omitting 'branch:' asserts against the first branch ('active')
+    inputs:
+      raw_tickets:
+        schema:
+          ticket_id: long
+          status: string
+        rows:
+          - [1, "NEW"]
+          - [2, "PENDING"]
+          - [3, "CLOSED"]
+          - [4, "RESOLVED"]
+    assertions:
+      - type: row_count
+        expected: 2
+      - type: contains
+        rows:
+          - { ticket_id: 1, status: "NEW" }
+          - { ticket_id: 2, status: "PENDING" }
+
+  - id: targets_specific_branch_other
+    module: route_tickets
+    branch: other        # targets the 'other' branch
+    inputs:
+      raw_tickets:
+        schema:
+          ticket_id: long
+          status: string
+        rows:
+          - [1, "NEW"]
+          - [2, "PENDING"]
+          - [3, "CLOSED"]
+          - [4, "RESOLVED"]
+    assertions:
+      - type: row_count
+        expected: 2
+      - type: contains
+        rows:
+          - { ticket_id: 3, status: "CLOSED" }
+          - { ticket_id: 4, status: "RESOLVED" }

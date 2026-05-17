@@ -1,0 +1,48 @@
+# blueprint.yml
+# Funnel module merging two upstream sources.
+
+aqueduct: "1.0"
+id: funnel_merge_demo
+name: "Funnel Merge Testing Demo"
+
+modules:
+  - id: source_a
+    label: "Source A"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/primary.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: source_b
+    label: "Source B"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/secondary.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: union_sources
+    label: "Union Merger"
+    type: Funnel
+    config:
+      mode: union
+      inputs:
+        - source_a
+        - source_b
+
+  - id: save_result
+    label: "Save Result"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/merged.csv
+      mode: overwrite
+
+edges:
+  - from: source_a
+    to: union_sources
+  - from: source_b
+    to: union_sources
+  - from: union_sources
+    to: save_result

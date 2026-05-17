@@ -45,9 +45,12 @@ The goal is to maintain 20–30 canonical scenarios covering the most frequent d
 
 ## Prompt Versioning
 
-Every benchmark result is tied to a `prompt_version`. This allows us to correlate score improvements or regressions to specific changes in the system prompt.
-- `prompt_version` is recorded in patch metadata and `healing_outcomes`.
-- Versions are manually bumped when significant structural changes are made to the agent's instructions.
+Goal: correlate score improvements/regressions to specific system-prompt changes.
+
+**Status — partially implemented:**
+- `PROMPT_VERSION` constant (`aqueduct/agent/__init__.py`), manually bumped on significant prompt changes. ✅
+- Stamped into applied-patch metadata (`_aq_meta.prompt_version`). ✅
+- **Not yet:** `prompt_version` is *not* recorded in `healing_outcomes`, and benchmark results carry no `prompt_version` (benchmark has no persistence at all). So cross-version correlation / regression tracking is **not possible yet** — tracked as Phase 33 (benchmark persistence + `healing_outcomes.prompt_version`).
 
 ## Future: Integrity & Signing (Phase 25)
 

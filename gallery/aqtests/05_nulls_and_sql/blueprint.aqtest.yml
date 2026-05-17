@@ -1,0 +1,37 @@
+# blueprint.aqtest.yml
+# Run with:  aqueduct test blueprint.aqtest.yml
+
+aqueduct_test: "1.0"
+blueprint: blueprint.yml          # relative to this test file
+
+tests:
+  - id: verifies_null_mechanics
+    module: items_pass
+    inputs:
+      raw_items:
+        schema:
+          item_id: long
+          category: string
+          price: double
+        rows:
+          - [1, "Books", 12.99]
+          - [2, null, 4.50]       # Category is explicitly NULL
+          - [3, "Toys", null]     # Price is explicitly NULL
+    assertions:
+      - type: row_count
+        expected: 3
+      
+      - type: contains
+        rows:
+          # Asserts that category is indeed NULL for item 2
+          - { item_id: 2, category: null, price: 4.50 }
+          # Asserts that price is indeed NULL for item 3
+          - { item_id: 3, category: "Toys", price: null }
+
+      - type: sql
+        # Assert that aggregate counts match expectations with NULL rows
+        expr: "SELECT count(*) = 3 FROM __output__"
+      - type: sql
+        expr: "SELECT count(category) = 2 FROM __output__"   # Item 2's category is NULL, so count is 2
+      - type: sql
+        expr: "SELECT count(price) = 2 FROM __output__"      # Item 3's price is NULL, so count is 2

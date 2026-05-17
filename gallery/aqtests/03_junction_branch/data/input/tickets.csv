@@ -1,0 +1,5 @@
+ticket_id,status
+1,NEW
+2,PENDING
+3,CLOSED
+4,RESOLVED
