@@ -107,3 +107,29 @@ def test_selector_included_invalid(linear_dag):
         _selector_included(modules, edges, "X", None)
     with pytest.raises(ExecuteError, match="not found in Manifest"):
         _selector_included(modules, edges, None, "X")
+
+
+def test_find_connected_components_probe_unioned_with_target():
+    # One data tree (A->B) + a Probe (P) attached to B (no edge exists)
+    # Should result in ONE component: {"A", "B", "P"}
+    ids = {"A", "B", "P"}
+    edges = (Edge(from_id="A", to_id="B", port="main"),)
+    modules = (
+        Module(id="A", type="Ingress", label="A", config={}),
+        Module(id="B", type="Channel", label="B", config={}),
+        Module(id="P", type="Probe", label="P", config={}, attach_to="B"),
+    )
+    components = _find_connected_components(ids, edges, modules)
+    assert len(components) == 1
+    assert set(components[0]) == {"A", "B", "P"}
+
+
+def test_find_connected_components_modules_default():
+    # Backwards compatibility: when modules is omitted, defaults to () (edge-only behavior)
+    # A->B, P is a disconnected node
+    ids = {"A", "B", "P"}
+    edges = (Edge(from_id="A", to_id="B", port="main"),)
+    components = _find_connected_components(ids, edges)
+    assert len(components) == 2
+    comp_sets = sorted([sorted(list(c)) for c in components])
+    assert comp_sets == [["A", "B"], ["P"]]

@@ -256,3 +256,66 @@ def test_regulator_timeout_reaches_limit_aborts(spark, tmp_path):
     reg_res = next(r for r in res.module_results if r.module_id == "r1")
     assert reg_res.status == "error"
     assert "Regulator gate closed; on_block=abort" in reg_res.error
+
+
+def test_parallel_multi_tree_probe_integration(spark, tmp_path):
+    """--parallel + Probe attached in a multi-tree blueprint: Probe runs in the same thread
+
+    and immediately after its attach_to module, so signals are written deterministically.
+    """
+    in_path1 = str(tmp_path / "in1.parquet")
+    spark.range(5).write.parquet(in_path1)
+    out_path1 = str(tmp_path / "out1.parquet")
+
+    in_path2 = str(tmp_path / "in2.parquet")
+    spark.range(10).write.parquet(in_path2)
+    out_path2 = str(tmp_path / "out2.parquet")
+
+    # Tree 1: in1 -> ch1 -> out1 (with Probe p1 attached to ch1)
+    ingress1 = Module(id="in1", type="Ingress", label="In1", config={"format": "parquet", "path": in_path1})
+    channel1 = Module(id="ch1", type="Channel", label="Ch1", config={"op": "sql", "query": "SELECT id FROM in1"})
+    probe1 = Module(id="p1", type="Probe", label="P1", attach_to="ch1", config={
+        "signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]
+    })
+    egress1 = Module(id="out1", type="Egress", label="Out1", config={"format": "parquet", "path": out_path1})
+
+    # Tree 2: in2 -> out2
+    ingress2 = Module(id="in2", type="Ingress", label="In2", config={"format": "parquet", "path": in_path2})
+    egress2 = Module(id="out2", type="Egress", label="Out2", config={"format": "parquet", "path": out_path2})
+
+    manifest = Manifest(
+        blueprint_id="bp_parallel_multi_tree",
+        name="test",
+        context={},
+        modules=(ingress1, channel1, probe1, egress1, ingress2, egress2),
+        edges=(
+            Edge(from_id="in1", to_id="ch1", port="main"),
+            Edge(from_id="ch1", to_id="out1", port="main"),
+            Edge(from_id="in2", to_id="out2", port="main"),
+        ),
+        spark_config={},
+    )
+
+    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    run_id = "run_parallel_multi_tree"
+    surveyor.start(run_id)
+
+    res = execute(manifest, spark, store_dir=tmp_path, surveyor=surveyor, run_id=run_id, parallel=True)
+
+    assert res.status == "success"
+
+    # Verify that tree 1 and tree 2 output files were created and correct counts exist
+    assert spark.read.parquet(out_path1).count() == 5
+    assert spark.read.parquet(out_path2).count() == 10
+
+    # Verify that the Probe successfully ran and wrote a threshold signal to the DuckDB store
+    db_path = tmp_path / "observability.db"
+    assert db_path.exists()
+    conn = duckdb.connect(str(db_path))
+    row = conn.execute("SELECT payload FROM probe_signals WHERE probe_id='p1'").fetchone()
+    conn.close()
+
+    assert row is not None
+    payload = json.loads(row[0])
+    assert payload["passed"] is True
+    assert payload["expr"] == "COUNT(*) > 0"

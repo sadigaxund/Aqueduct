@@ -509,8 +509,7 @@ def test_execute_probe_appended_last(spark: SparkSession, tmp_path):
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
-            Module(id="p1", type="Probe", label="P1", config={
-                "attach_to": "in",
+            Module(id="p1", type="Probe", label="P1", attach_to="in", config={
                 "signals": [{"type": "schema_snapshot"}]
             }),
         ),
@@ -533,8 +532,7 @@ def test_execute_probe_missing_attach_to(spark: SparkSession, tmp_path):
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path}),
-            Module(id="p1", type="Probe", label="P1", config={
-                "attach_to": "missing",
+            Module(id="p1", type="Probe", label="P1", attach_to="missing", config={
                 "signals": [{"type": "schema_snapshot"}]
             }),
         ),
@@ -555,8 +553,7 @@ def test_execute_probe_failure_ignores(spark: SparkSession, tmp_path):
         blueprint_id="test.probe_no_store",
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="p1", type="Probe", label="P1", config={
-                "attach_to": "in",
+            Module(id="p1", type="Probe", label="P1", attach_to="in", config={
                 "signals": [{"type": "schema_snapshot"}]
             }),
         ),

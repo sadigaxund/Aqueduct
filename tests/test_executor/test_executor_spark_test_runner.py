@@ -175,3 +175,73 @@ def test_run_test_file_not_found(spark: SparkSession):
     with pytest.raises(TestSchemaError, match="missing 'blueprint'"):
         run_test_file(Path("test.yml"), spark)
     Path("test.yml").unlink()
+
+
+def test_bundled_template_conformance(spark: SparkSession, tmp_path: Path):
+    import yaml
+    from aqueduct.executor.spark.test_runner import run_test_file
+
+    # 1. Locate the aqtest.yml.template file
+    template_path = Path(__file__).parents[2] / "aqueduct" / "templates" / "default" / "aqtests" / "aqtest.yml.template"
+    assert template_path.exists(), f"Template not found at {template_path}"
+
+    # 2. Parse the template as YAML
+    template_content = template_path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(template_content)
+
+    # 3. Assert its structure
+    assert raw.get("aqueduct_test") == "1.0", f"Unexpected aqueduct_test version: {raw.get('aqueduct_test')}"
+    assert raw.get("blueprint") == "blueprint.yml", f"Unexpected blueprint: {raw.get('blueprint')}"
+    
+    tests = raw.get("tests")
+    assert isinstance(tests, list) and len(tests) > 0, "No tests list or empty in template"
+
+    for idx, test_case in enumerate(tests):
+        test_id = test_case.get("id", f"test_{idx}")
+        assert isinstance(test_case.get("module"), str) and test_case["module"], f"Test {test_id} missing non-empty 'module' string"
+        
+        inputs = test_case.get("inputs")
+        assert isinstance(inputs, dict) and inputs, f"Test {test_id} inputs must be a non-empty mapping"
+        
+        for input_id, input_spec in inputs.items():
+            assert isinstance(input_spec.get("schema"), dict) and input_spec["schema"], f"Input {input_id} in {test_id} must have a non-empty 'schema' dict"
+            assert isinstance(input_spec.get("rows"), list), f"Input {input_id} in {test_id} must have a 'rows' list"
+            
+        assertions = test_case.get("assertions")
+        assert isinstance(assertions, list) and assertions, f"Test {test_id} must have a non-empty assertions list"
+        for a_idx, assertion in enumerate(assertions):
+            assert assertion.get("type") in {"row_count", "contains", "sql"}, f"Assertion {a_idx} in {test_id} has invalid/unknown type {assertion.get('type')}"
+
+    # 4. Construct a valid minimal dummy blueprint.yml
+    bp_content = """
+aqueduct: '1.0'
+id: bp1
+name: Test Blueprint
+modules:
+  - id: dedup_latest
+    type: Channel
+    label: L
+    config:
+      op: sql
+      query: |
+        SELECT user_id, version, data
+        FROM (
+          SELECT *, row_number() OVER (PARTITION BY user_id ORDER BY version DESC) as rn
+          FROM raw_users
+        )
+        WHERE rn = 1
+edges: []
+"""
+    (tmp_path / "blueprint.yml").write_text(bp_content, encoding="utf-8")
+    
+    # Write the template content into a test file in the temp path
+    test_file_path = tmp_path / "aqtest.yml"
+    test_file_path.write_text(template_content, encoding="utf-8")
+
+    # Run the test file
+    suite_result = run_test_file(test_file_path, spark)
+    assert suite_result.total == 1
+    assert suite_result.passed == 1
+    assert suite_result.failed == 0
+    assert suite_result.success is True
+

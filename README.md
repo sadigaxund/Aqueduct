@@ -2,12 +2,33 @@
 
 **Intelligent, self-healing Spark pipelines. Declarative. Observable. Autonomous.**
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/aqueduct-core?style=flat-square)](https://pypi.org/project/aqueduct-core/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
+[![CI](https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/ci.yml?branch=main&style=flat-square)](https://github.com/sadigaxund/aqueduct/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
 > **Self-healing is opt-in and off by default.** The agent never calls an LLM or touches your Blueprint unless you set `agent.approval_mode`. See [Agent Guardrails](#agent-guardrails) for the approval modes and the deterministic guards that bound what a patch can do.
+
+---
+
+## Contents
+
+**Guides**
+
+- [Blueprint & Engine Spec](docs/specs.md): every module type, config field, the compiler/executor/agent, patch grammar
+- [CLI Reference](docs/CLI_REFERENCE.md): all commands, flags, exit codes
+- [Spark Guide](docs/SPARK_GUIDE.md): compiler warnings, probe cost model, resource tuning, S3A committers, AQE
+- [All Tables Reference](docs/ALL_TABLES.md): schema + example queries for every table Aqueduct writes
+- [**Gallery**](gallery/): runnable examples. 20 feature snippets, a full Spark-cluster showcase, self-healing scenarios
+
+**This page**
+
+- [What Makes Aqueduct Different?](#what-makes-aqueduct-different) · [How It Works](#how-it-works) · [Glossary](#glossary)
+- [Installation](#installation) · [Quick Start](#quick-start) · [Core Concepts](#core-concepts)
+- [Configuration](#configuration) · [Observability & Self-Healing](#observability--self-healing)
+- [Scope](#scope) · [Versioning & Stability](#versioning--stability) · [Development & Contributing](#development--contributing)
 
 ---
 
@@ -87,138 +108,126 @@ Five layers, one direction: **Parser → Compiler → Executor → Surveyor**, w
 
 ## Installation
 
+Most people want the Spark build:
+
 ```bash
-# Core CLI + parser + compiler + LLM self-healing (no Spark dependency)
-pip install aqueduct-core
-
-# With Spark execution (required for aqueduct run)
 pip install aqueduct-core[spark]
-
-# With secrets provider backends
-pip install aqueduct-core[aws]      # AWS Secrets Manager (boto3)
-pip install aqueduct-core[gcp]      # GCP Secret Manager
-pip install aqueduct-core[azure]    # Azure Key Vault
-pip install aqueduct-core[secrets]  # All three secrets backends at once
-
-# Everything (Spark + every secrets backend)
-pip install aqueduct-core[all]
 ```
 
-The base package installs the CLI, parser, compiler, and LLM self-healing. All agent providers (Anthropic, OpenAI-compatible, Ollama) use `httpx` which is a core dependency - no extra install needed. Spark execution requires the `[spark]` extra (`pyspark`, `delta-spark`).
+That is everything needed to author and run pipelines. The bare core
+(`pip install aqueduct-core`, no Spark) still does `validate`, `compile`,
+and the self-healing agent (all providers use `httpx`, already included).
 
-Requires Python 3.11+ and Java 17 (for local Spark). **Spark 3.3+ recommended** for full metrics collection (`records_written`, `records_read`). Older versions collect `bytes` and `duration_ms` only; row counts will be 0.
+Optional extras, added only if you need them:
+
+- `[spark]`: Spark execution (`pyspark`, `delta-spark`). Required for `aqueduct run`.
+- `[aws]` / `[gcp]` / `[azure]`: one cloud secrets backend.
+- `[secrets]`: all three secrets backends. `[all]`: Spark plus all secrets.
+
+Needs Python 3.11+. Local Spark needs Java 17. Spark 3.3+ gives full
+row-count metrics; older Spark reports only `bytes` and `duration_ms`.
 
 ---
 
 ## Quick Start
 
-```bash
-mkdir my-pipeline && cd my-pipeline
+Scaffold a project:
 
-# Scaffolds: aqueduct.yml.template, blueprints/, arcades/, tests/,
-# benchmarks/, patches/{pending,rejected}/  — then runs git init + first commit.
-aqueduct init
+```bash
+pip install aqueduct-core[spark]
+aqueduct init my-pipeline
+cd my-pipeline
 ```
 
-Or write it by hand:
+`aqueduct init` lays out the project structure (`blueprints/ aqtests/
+aqscenarios/ arcades/ patches/`), writes `.template` files for the config,
+Blueprint, test, and scenario formats, drops a `.gitignore` pre-loaded
+with Spark/Aqueduct runtime junk (`spark-warehouse/`, `artifacts/`,
+`metastore_db/`, `.aqueduct/`) and `.env`, and makes a first git commit
+(existing files, including a user `.gitignore`, are never overwritten). The
+templates are heavily commented references, not runnable as-is. It prints
+the next steps:
 
-### 1. Write a Blueprint
+```
+Next steps:
+  1. Create blueprints/<name>.yml  (see aqueduct.yml.template for reference)
+  2. aqueduct validate blueprints/<name>.yml
+  3. aqueduct run blueprints/<name>.yml
+```
+
+> Want to watch one run *right now* instead? Clone the repo and run a
+> bundled example: every [Gallery](gallery/) snippet ships its own data
+> and is runnable with no config or credentials, e.g.
+> `cd gallery/snippets/01_ingress_csv_options && aqueduct run blueprint.yml`.
+
+### Anatomy of a Blueprint
+
+A Blueprint is two lists: `modules` (what to do) and `edges` (how data
+flows between them). Here is a complete one that reads a CSV and writes
+it back as Parquet, the kind of file you would save as
+`blueprints/hello.yml`:
 
 ```yaml
-# pipeline.yml
+# blueprints/hello.yml
 aqueduct: "1.0"
-id: my.first.pipeline
-name: "Order Processing"
-
-context:
-  today: "@aq.date.today()"   # resolved at compile time; reference as ${ctx.today} in config values
+id: hello.pipeline
 
 modules:
-  - id: raw_orders
+  - id: load
     type: Ingress
-    label: "Load orders"
     config:
-      format: parquet
-      path: "s3a://data/orders/"
+      format: csv
+      path: "data/in.csv"
+      options: { header: "true" }
 
-  - id: clean_orders
-    type: Channel
-    label: "Filter invalid rows"
-    config:
-      op: sql
-      query: |
-        SELECT *
-        FROM raw_orders
-        WHERE amount IS NOT NULL
-          AND order_date <= CURRENT_TIMESTAMP()
-      spillway_condition: "amount IS NULL OR order_date > CURRENT_TIMESTAMP()"
-
-  - id: good_output
+  - id: save
     type: Egress
-    label: "Write clean orders"
     config:
       format: parquet
-      path: "s3a://processed/orders/date=${ctx.today}/"
-      mode: overwrite
-
-  - id: error_output
-    type: Egress
-    label: "Write rejected rows"
-    config:
-      format: parquet
-      path: "s3a://errors/orders/date=${ctx.today}/"
+      path: "data/out/"
       mode: overwrite
 
 edges:
-  - from: raw_orders
-    to: clean_orders
-  - from: clean_orders
-    to: good_output
-  - from: clean_orders
-    to: error_output
-    port: spillway
+  - from: load
+    to: save
 ```
 
-### 2. Configure the engine
+Complete, but it needs a `data/in.csv` to read. Point it at any CSV you
+have. Add a `Channel` to transform, an `Assert` to gate quality, a
+spillway edge to divert bad rows, when you need them. The
+[Gallery](gallery/) has 20 focused snippets (one feature each, data
+included) and the [spec](docs/specs.md) documents every field.
+
+### The engine config
+
+Config file says where Spark is and where to keep state. Copy the
+generated `aqueduct.yml.template` to `aqueduct.yml` and trim it; the
+minimal local version is two lines:
 
 ```yaml
 # aqueduct.yml
 aqueduct_config: "1.0"
-
 deployment:
-  master_url: "spark://your-cluster:7077"
-
-spark_config:
-  spark.hadoop.fs.s3a.endpoint: "http://minio:9000"
-  spark.hadoop.fs.s3a.access.key: "@aq.secret('S3_KEY')"
-  spark.hadoop.fs.s3a.secret.key: "@aq.secret('S3_SECRET')"
-  spark.jars.packages: "org.apache.hadoop:hadoop-aws:3.3.4"
-
-stores:
-  observability:
-    path: ".aqueduct/observability.db"
-  lineage:
-    path: ".aqueduct/lineage.db"
-  depot:
-    path: ".aqueduct/depot.db"
+  master_url: "local[*]"        # or spark://host:7077 for a cluster
 ```
 
-### 3. Run
+Stores default to a local `.aqueduct/` directory, so nothing else is
+required to start. For credentials, drop a `.env` next to this file and
+reference `@aq.secret('KEY')` in your Blueprint or config; it is loaded
+automatically (details under [Configuration](#configuration)).
 
-Every command auto-loads a `.env` from the directory of the config/blueprint you pass (not cwd) before executing — put secrets there and reference them as `@aq.secret('MY_KEY')` in your Blueprint. A `(env: loaded N var(s) from …)` notice confirms the load. Override inline with `-e KEY=VAL`, point elsewhere with `--env-file`, or disable discovery with `AQ_NO_ENV_FILE=1` (CI). No credential hardcoding required.
+### Run
 
 ```bash
-aqueduct run pipeline.yml --config aqueduct.yml
+aqueduct run blueprints/hello.yml --config aqueduct.yml
 ```
 
 ```
-▶ my.first.pipeline  (4 modules)  run=abc123  master=spark://your-cluster:7077
-  ✓ raw_orders
-  ✓ clean_orders
-  ✓ good_output
-  ✓ error_output
+▶ hello.pipeline  (2 modules)  run=abc123  engine=spark  master=local[*]
+  ✓ load
+  ✓ save
 
-✓ pipeline complete  run_id=abc123
+✓ blueprint complete  run_id=abc123
 ```
 
 ---
@@ -437,7 +446,10 @@ tests:
 ```bash
 aqueduct test pipeline.aqtest.yml
 aqueduct test pipeline.aqtest.yml --blueprint pipeline.yml --quiet
+aqueduct test pipeline.aqtest.yml --master spark://host:7077   # rarely needed
 ```
+
+Runs on `local[*]` by default — aqtests are isolated unit tests over inline data, so `deployment.master_url` is **ignored** (a notice prints if a non-local master was configured). Use `--master` only when a module's correctness depends on cluster runtime; that's an integration concern, not what aqtest verifies.
 
 **Assertion types:** `row_count` (exact count), `contains` (rows must appear in output), `sql` (SQL expression over `__output__` view returns truthy).
 
@@ -606,18 +618,32 @@ When a run fails and self-healing is enabled, the Surveyor assembles a `FailureC
 
 ---
 
-## Scope — What Aqueduct Is and Is Not
+## Scope
 
-| What it is | What it isn't (use these instead) |
-|---|---|
-| A **batch processing engine** for Apache Spark — each run is finite, starts, processes a bounded dataset, completes. | Streaming (Spark Structured Streaming / Kafka) — deferred to spec v1.1; use Spark Structured Streaming or Flink directly. |
-| A **declarative control plane** — engineers describe *what*, not *how* Spark executes. | A visual graph editor / drag-and-drop UI — Blueprint YAML is the source of truth. A UI would be a separate product layer. |
-| A **data preparation layer** producing validated DataFrames in storage. | An ML training orchestrator — use MLflow Pipelines, Vertex AI Pipelines, or Kubeflow. Aqueduct prepares the data they consume. |
-| An **LLM-integrated operations tool** — self-healing, patch lifecycle, FailureContext, deterministic guardrails. | An LLM autonomous infrastructure agent — Aqueduct's agent scope is bounded to PatchSpec operations on the Blueprint. It cannot run shell, modify infra, or call arbitrary APIs. |
-| A **CLI invoked by an orchestrator** (cron, Airflow, Prefect, Dagster, K8s CronJob). | A scheduler — `aqueduct run` is a one-shot command, not a daemon. |
-| A **Spark execution engine** (Flink is a stub for v1.1). | A multi-engine federated query layer — use Trino / Starburst / Athena for that. |
+**Aqueduct is** a declarative control plane for **batch** Apache Spark.
+You describe *what* the pipeline should do; Aqueduct compiles, runs, and
+self-heals it. Each `aqueduct run` is a one-shot, finite job over a
+bounded dataset, meant to be invoked by an orchestrator you already have
+(cron, Airflow, Prefect, Dagster, a K8s CronJob).
 
-See [§13 of the spec](docs/specs.md) for the full scope statement and roadmap (Flink, MLOps inference op, MCP server, multi-pipeline orchestration).
+**Aqueduct is not**, and deliberately defers to better-suited tools:
+
+- **A streaming engine.** Runs are finite. For unbounded data use Spark
+  Structured Streaming or Flink directly (streaming is roadmap v1.1).
+- **A scheduler.** `aqueduct run` is a command, not a daemon. Bring your
+  own orchestrator.
+- **A visual / drag-and-drop builder.** The Blueprint YAML is the single
+  source of truth; a UI would be a separate layer on top.
+- **An ML training orchestrator.** Aqueduct prepares validated data;
+  hand it to MLflow, Vertex AI Pipelines, or Kubeflow.
+- **A federated query layer.** One Spark engine per run, not cross-engine
+  federation. Use Trino / Starburst / Athena for that.
+- **An open-ended infra agent.** The self-healing agent is bounded to
+  `PatchSpec` edits on your Blueprint. It cannot run shell, change infra,
+  or call arbitrary APIs.
+
+Full scope statement and roadmap (Flink, MLOps inference op, MCP server,
+multi-pipeline orchestration): [§13 of the spec](docs/specs.md).
 
 ---
 
@@ -673,15 +699,9 @@ pytest tests/
 
 **Aqueduct is Apache 2.0 licensed.** See [LICENSE](LICENSE).
 
-This repository contains the full, production-ready engine. No "pro" tier, no telemetry, no lock-in. Run it locally, in CI, or on a production cluster — free and open, forever.
+This repository contains the full, production-ready engine. No "pro"
+tier, no telemetry, no lock-in. Run it locally, in CI, or on a
+production cluster. Free and open, forever.
 
----
-
-## Documentation
-
-| Document | Description |
-|---|---|
-| [Blueprint & Engine Spec](docs/specs.md) | Full specification — module types, config fields, compiler, executor, agent, patch grammar |
-| [Spark Guide](docs/SPARK_GUIDE.md) | Compiler warnings, probe cost model, contributor rules, resource tuning, S3A committers, AQE |
-| [CLI Reference](docs/CLI_REFERENCE.md) | All commands, flags, exit codes, `aqueduct run` / `patch` / `doctor` / `heal` reference |
-| [All Tables Reference](docs/ALL_TABLES.md) | Schema + example queries for every table Aqueduct writes (observability.db, lineage.db, depot.db) |
+Documentation and examples are linked from [Contents](#contents) at the
+top.
