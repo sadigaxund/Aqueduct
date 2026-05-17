@@ -228,3 +228,65 @@ edges: []
         result = runner.invoke(cli, ["compile", str(FIXTURES / "valid_minimal.yml"), "--show", "xml"])
         assert result.exit_code != 0
         assert "Invalid value for '--show'" in result.output
+
+
+def test_cli_run_postgres_observability_no_bogus_dir(tmp_path):
+    """Verify that using postgres as the stores.observability.backend does NOT create a postgresql:/... directory.
+    It should fall back to a safe per-pipeline local path (.aqueduct/observability/<blueprint_id>) for scratch work."""
+    runner = CliRunner()
+    bp_path = tmp_path / "bp.yml"
+    input_fixture = (FIXTURES / "valid_minimal.yml").resolve()
+    bp_path.write_text(f"""
+aqueduct: '1.0'
+id: postgres_store_test
+name: Postgres Store Test
+modules:
+  - id: in
+    type: Ingress
+    label: In
+    config:
+      format: csv
+      path: {input_fixture}
+edges: []
+""")
+    config_path = tmp_path / "aqueduct.yml"
+    config_path.write_text("""
+stores:
+  observability:
+    backend: postgres
+    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
+  lineage:
+    backend: postgres
+    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
+  depot:
+    backend: postgres
+    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
+""")
+    
+    from unittest.mock import patch, MagicMock
+    
+    mock_bundle = MagicMock()
+    mock_bundle.depot.backend = "postgres"
+    
+    with patch("aqueduct.stores.get_stores", return_value=mock_bundle), \
+         patch("aqueduct.executor.get_executor") as mock_get_executor:
+        
+        mock_executor = MagicMock()
+        mock_executor.return_value.status = "success"
+        mock_get_executor.return_value = mock_executor
+        
+        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
+        
+        # Verify execution succeeded (exit 0)
+        assert result.exit_code == 0, result.output
+        
+        # Check that no directory starting with "postgresql:" exists
+        # in either CWD or tmp_path
+        bogus_cwd = [str(p) for p in Path(".").glob("postgresql:*")]
+        bogus_tmp = [str(p) for p in tmp_path.glob("postgresql:*")]
+        assert len(bogus_cwd) == 0, f"Bogus directory created in CWD: {bogus_cwd}"
+        assert len(bogus_tmp) == 0, f"Bogus directory created in tmp_path: {bogus_tmp}"
+        
+        fallback_dir = tmp_path / ".aqueduct/observability/postgres_store_test"
+        assert fallback_dir.exists(), "Local scratch directory was not created under tmp_path/.aqueduct"
+
