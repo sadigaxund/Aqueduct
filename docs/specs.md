@@ -2082,7 +2082,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct doctor`|Probe all resources (Spark, DBs, Cloud).|`--config`, `--skip-spark`, `--blueprint`|
+|`aqueduct doctor [file]`|Probe all resources. Spark check defaults to a fast bounded TCP reachability probe (master + S3 endpoint, no session); `--preflight` builds a real unbounded Spark session with the actual `spark_config`. Default view shows only actionable rows (ok/warn/fail); not-applicable / not-configured checks collapse to one `· skipped:` line.|`--skip-spark`, `--preflight`, `--verbose` (show skipped rows), `--aqtest`, `--aqscenario`, `--env-file`, `-e/--env`|
 
 ## **11.6 Key Flags for `aqueduct run`**
 

@@ -8,6 +8,7 @@
 *.duckdb
 *.duckdb.wal
 **/spark-warehouse/
+artifacts/
 
 # --- Virtual Environments & Secrets ---
 .env

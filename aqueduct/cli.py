@@ -674,7 +674,16 @@ def schema(target: str, output: str) -> None:
     "--skip-spark",
     is_flag=True,
     default=False,
-    help="Skip Spark connectivity check (fast mode — avoids JVM startup).",
+    help="Skip the Spark check entirely.",
+)
+@click.option(
+    "--preflight",
+    "preflight",
+    is_flag=True,
+    default=False,
+    help="Full Spark session test with real spark_config (builds a session, runs a task). "
+         "Unbounded — waits out cluster cold-start / jar shipping (Ctrl-C to abort). "
+         "Default is a fast bounded TCP reachability probe, no session.",
 )
 @click.option(
     "--aqtest",
@@ -690,12 +699,21 @@ def schema(target: str, output: str) -> None:
     type=click.Path(exists=True, dir_okay=False),
     help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
 )
+@click.option(
+    "--verbose",
+    "verbose",
+    is_flag=True,
+    default=False,
+    help="Show skipped checks too (not-applicable / not-configured), not just the collapsed summary.",
+)
 @_env_options
 def doctor(
     target: str | None,
     skip_spark: bool,
+    preflight: bool,
     aqtest_path: str | None,
     aqscenario_path: str | None,
+    verbose: bool,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -752,10 +770,12 @@ def doctor(
     _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
     _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
 
-    if not skip_spark:
-        click.echo("Running connectivity checks (Spark may take 10–15s for JVM startup)...")
-    else:
+    if skip_spark:
         click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
+    elif preflight:
+        click.echo("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...")
+    else:
+        click.echo("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...")
 
     results = run_doctor(
         config_path=config_path,
@@ -763,11 +783,18 @@ def doctor(
         blueprint_path=blueprint_path,
         aqtest_path=Path(aqtest_path) if aqtest_path else None,
         aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
+        preflight=preflight,
     )
 
-    col_w = max(len(r.name) for r in results) + 2
+    # Default view shows only actionable rows (ok / warn / fail). `skip` rows
+    # — not-applicable (local-mode cluster-stores) or not-configured (webhook,
+    # storage) — are collapsed into one summary line. `--verbose` shows all.
+    shown = results if verbose else [r for r in results if r.status != "skip"]
+    skipped = [r for r in results if r.status == "skip"]
+
+    col_w = max((len(r.name) for r in shown), default=0) + 2
     any_fail = False
-    for r in results:
+    for r in shown:
         icon = _STATUS_ICON[r.status]
         color = _STATUS_COLOR[r.status]
         label = r.name.ljust(col_w)
@@ -776,6 +803,13 @@ def doctor(
         click.echo(click.style(line, fg=color) if color else line)
         if r.status == "fail":
             any_fail = True
+
+    if skipped and not verbose:
+        names = ", ".join(r.name for r in skipped)
+        click.echo(click.style(
+            f"  · skipped: {names}  (not applicable / not configured — --verbose for detail)",
+            fg="bright_black",
+        ))
 
     click.echo()
     if any_fail:
