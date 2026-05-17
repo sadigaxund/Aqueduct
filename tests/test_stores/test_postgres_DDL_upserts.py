@@ -180,18 +180,17 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
         provenance_map=ProvenanceMap(blueprint_id="bp_p33", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
         modules=(
-            Module(id="in", type="Ingress", label="In",
+            Module(id="src", type="Ingress", label="In",
                     config={"format": "parquet", "path": in_path}),
             Module(id="ch", type="Channel", label="Ch",
-                    config={"op": "sql", "query": "SELECT id, dbl FROM in"}),
-            Module(id="pr", type="Probe", label="Pr",
-                    config={"attach_to": "ch",
-                            "signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
+                    config={"op": "sql", "query": "SELECT id, dbl FROM src"}),
+            Module(id="pr", type="Probe", label="Pr", attach_to="ch",
+                    config={"signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
             Module(id="out", type="Egress", label="Out",
                     config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
         ),
         edges=(
-            Edge(from_id="in", to_id="ch", port="main"),
+            Edge(from_id="src", to_id="ch", port="main"),
             Edge(from_id="ch", to_id="out", port="main"),
         ),
     )
@@ -200,12 +199,19 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     try:
         # Patch get_stores to return our bundle
         bundle = StoreBundle(observability=obs_store, lineage=lin_store, depot=depot_store)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        
+        surveyor.start(run_id)
         with patch("aqueduct.stores.base.get_stores", return_value=bundle):
             result = execute(
-                manifest, spark, store_dir=tmp_path,
+                manifest, spark, run_id=run_id, store_dir=tmp_path,
+                surveyor=surveyor, depot=depot_store,
                 observability_store=obs_store, lineage_store=lin_store,
             )
             assert result.status == "success"
+        surveyor.record(result)
+        surveyor.stop()
         
         # Verify DDL + inserts portable and written successfully
         conn = psycopg2.connect(dsn)

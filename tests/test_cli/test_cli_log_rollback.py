@@ -162,7 +162,8 @@ class TestRollbackCmd:
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001", "--hard"])
 
         assert result.exit_code == 2
-        assert "No such option: --hard" in result.output
+        assert "no such option" in result.output.lower()
+        assert "--hard" in result.output
 
     def test_git_checkout_failure_exits_1(self, bp_file, monkeypatch):
         """git checkout fails → exits 1 with stderr content."""

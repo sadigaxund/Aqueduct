@@ -137,3 +137,99 @@ edges: []
     result = runner.invoke(cli, ["test", str(test_setup / "pass.aqtest.yml"), "--blueprint", str(bp2)])
     assert result.exit_code == 1
     assert "0 passed" in result.output
+
+
+def test_cli_test_master_routing_defaults_to_local(test_setup, tmp_path):
+    # Create aqueduct.yml with deployment.master_url set to cluster
+    cfg_path = tmp_path / "aqueduct.yml"
+    cfg_path.write_text("""
+aqueduct_config: "1.0"
+deployment:
+  engine: spark
+  target: standalone
+  master_url: "spark://h:7077"
+  env: cluster
+""")
+
+    from aqueduct.executor.spark.test_runner import TestSuiteResult
+    
+    with patch("aqueduct.executor.spark.session.make_spark_session") as mock_make, \
+         patch("aqueduct.executor.spark.test_runner.run_test_file", return_value=TestSuiteResult(total=1, passed=1, failed=0, results=[])):
+        
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "test", 
+            str(test_setup / "pass.aqtest.yml"),
+            "--config", str(cfg_path)
+        ])
+        
+        # Check stderr notice was printed because master_url is non-local and no --master was passed
+        assert "(test: ignoring deployment.master_url='spark://h:7077'; running on local[*] — pass --master to override)" in result.output
+        
+        # Check make_spark_session was called with master_url="local[*]"
+        mock_make.assert_called_once()
+        kwargs = mock_make.call_args[1]
+        assert kwargs["master_url"] == "local[*]"
+
+
+def test_cli_test_master_routing_local_config_no_notice(test_setup, tmp_path):
+    # Create aqueduct.yml with local or unset master_url
+    cfg_path = tmp_path / "aqueduct.yml"
+    cfg_path.write_text("""
+aqueduct_config: "1.0"
+deployment:
+  master_url: "local[*]"
+""")
+
+    from aqueduct.executor.spark.test_runner import TestSuiteResult
+    
+    with patch("aqueduct.executor.spark.session.make_spark_session") as mock_make, \
+         patch("aqueduct.executor.spark.test_runner.run_test_file", return_value=TestSuiteResult(total=1, passed=1, failed=0, results=[])):
+        
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "test", 
+            str(test_setup / "pass.aqtest.yml"),
+            "--config", str(cfg_path)
+        ])
+        
+        # No notice printed
+        assert "ignoring deployment.master_url" not in result.output
+        
+        # make_spark_session received local[*]
+        mock_make.assert_called_once()
+        kwargs = mock_make.call_args[1]
+        assert kwargs["master_url"] == "local[*]"
+
+
+def test_cli_test_master_routing_custom_master(test_setup, tmp_path):
+    # Check custom master passed verbatim to make_spark_session, no notice emitted
+    cfg_path = tmp_path / "aqueduct.yml"
+    cfg_path.write_text("""
+aqueduct_config: "1.0"
+deployment:
+  master_url: "spark://h:7077"
+""")
+
+    from aqueduct.executor.spark.test_runner import TestSuiteResult
+    
+    with patch("aqueduct.executor.spark.session.make_spark_session") as mock_make, \
+         patch("aqueduct.executor.spark.test_runner.run_test_file", return_value=TestSuiteResult(total=1, passed=1, failed=0, results=[])):
+        
+        runner = CliRunner()
+        result = runner.invoke(cli, [
+            "test", 
+            str(test_setup / "pass.aqtest.yml"),
+            "--config", str(cfg_path),
+            "--master", "spark://custom-host:7077"
+        ])
+        
+        # No notice printed
+        assert "ignoring deployment.master_url" not in result.output
+        
+        # make_spark_session received the custom master
+        mock_make.assert_called_once()
+        kwargs = mock_make.call_args[1]
+        assert kwargs["master_url"] == "spark://custom-host:7077"
+
+

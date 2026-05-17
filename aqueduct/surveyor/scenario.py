@@ -409,7 +409,7 @@ def run_benchmark(
     timeout: float = 120.0,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
-    workers: int = 4,
+    workers: int = 1,
 ) -> dict[str, dict[str, ScenarioResult]]:
     """Run all scenarios in scenarios_dir against each model.
 
@@ -417,7 +417,7 @@ def run_benchmark(
     Each pair is an independent LLM HTTP call — no shared state.
 
     Args:
-        workers: Max concurrent LLM calls. Default 4. Set to 1 for serial execution.
+        workers: Max concurrent LLM calls. Default 1 (serial). Set >1 to parallelize.
 
     Returns:
         {scenario_id: {model: ScenarioResult}}

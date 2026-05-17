@@ -1654,13 +1654,13 @@ assertions:
 **Running scenarios:**
 ```bash
 # Single scenario test (PASS/FAIL with assertion details)
-aqueduct heal --scenario tests/scenario_format_mismatch.aqscenario.yml
+aqueduct heal --scenario aqscenarios/scenario_format_mismatch.aqscenario.yml
 
 # Compare models across all scenarios in a directory
-aqueduct benchmark --scenarios tests/ --model claude-opus-4-7 --model llama3
+aqueduct benchmark --scenarios aqscenarios/ --model claude-opus-4-7 --model llama3
 
 # JSON output for CI integration
-aqueduct benchmark --scenarios tests/ --model claude-opus-4-7 --output json
+aqueduct benchmark --scenarios aqscenarios/ --model claude-opus-4-7 --output json
 ```
 
 **Benchmark output:**
@@ -1676,7 +1676,7 @@ Pass rate                         |       95%        |   80%
 Avg confidence                    |      0.91        |  0.82
 ```
 
-**Prompt versioning:** `PROMPT_VERSION` constant in `aqueduct/agent/__init__.py` is stored in patch `_aq_meta`. Bump it manually when the system prompt changes. This correlates benchmark scores to prompt versions over time.
+**Prompt versioning:** `PROMPT_VERSION` constant in `aqueduct/agent/__init__.py`, bumped manually when the system prompt changes, is stamped into applied-patch `_aq_meta`. It is **not** written to `healing_outcomes` and **not** carried on benchmark results — so correlating benchmark scores to prompt versions over time is not yet possible (Phase 33: benchmark persistence + `healing_outcomes.prompt_version`).
 
 
 # **9. Type System**
@@ -1973,7 +1973,7 @@ The Depot KV store uses DuckDB in embedded mode. DuckDB's embedded mode supports
 
 # **10.6 `aqueduct test` — Isolated Module Testing**
 
-`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The same SparkSession configuration from `aqueduct.yml` is used (`make_spark_session()`), defaulting `quiet=True`.
+`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. `spark_config` from `aqueduct.yml` is applied, but the session **always runs on `local[*]`** — aqtests are isolated unit tests over tiny inline DataFrames, so `deployment.master_url` is deliberately ignored to keep a cluster-pointed config from dragging unit tests onto the cluster. A one-line stderr notice is printed when a non-local `deployment.master_url` is ignored. Override with `--master <url>` only for modules whose correctness depends on cluster runtime (cluster-installed UDF deps, catalog/SQL extensions, Spark-version-specific behavior) — that is an integration concern, not what aqtest certifies.
 
 ## **Test file format**
 
@@ -2043,11 +2043,11 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
-|`aqueduct init <name>`|Scaffold a new project in the current directory.|`--name`|
+|`aqueduct init`|Scaffold a new project in the cwd (name = `cwd.name`): dirs (`blueprints/ aqtests/ aqscenarios/ arcades/ patches/{pending,rejected}/`), `.template` files, a `.gitignore` pre-loaded with Spark/Aqueduct runtime junk + `.env` + ephemeral `patches/{pending,rejected}/` contents, then a first git commit. Never overwrites existing files (incl. a user `.gitignore`).|(none)|
 |`aqueduct validate <file>...`|Static parse + schema (header-detected: blueprint or config). Subsumes `check-config`.|`--env-file`, `-e/--env` (all config commands; see `.env` auto-loading)|
 |`aqueduct compile <blueprint.yml>`|Compile to a resolved Manifest JSON.|`-p/--profile`, `--ctx`, `--execution-date`, `-o/--output`|
 |`aqueduct run <blueprint.yml>`|Execute a Blueprint on Spark.|(see Run Flags below)|
-|`aqueduct test <test_file.yml>`|Run isolated module tests.|`--blueprint`, `--config`, `--quiet`|
+|`aqueduct test <test_file.yml>`|Run isolated module tests (always `local[*]` unless `--master`).|`--blueprint`, `--config`, `--quiet`, `--master`, `--env-file`, `-e/--env`|
 
 ## **11.2 Observability Commands**
 

@@ -10,7 +10,7 @@ Aqueduct includes a native benchmarking CLI to run the scenario suite against on
 
 ```bash
 # Run the full suite against the default model
-aqueduct benchmark --scenarios gallery/benchmarks/suite-01-healing/
+aqueduct benchmark --scenarios gallery/aqscenarios/suite-01-healing/
 
 # Compare multiple models side-by-side
 aqueduct benchmark --scenarios ... --models claude-3-5-sonnet,gpt-4o,llama-3-70b

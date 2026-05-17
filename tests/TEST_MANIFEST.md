@@ -1106,6 +1106,8 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ missing blueprint → `TestError`
 - ✅ Junction module: first branch used when no `branch:` specified
 - ✅ Junction module: `branch: <name>` targets specific branch
+- ✅ REGRESSION: bundled `aqueduct/templates/default/tests/aqtest.yml.template` parses as YAML and conforms to the `run_test_file` schema (top-level `aqueduct_test`, `blueprint`, `tests[]` each with `module` + non-empty `inputs.<id>.{schema,rows}` + `assertions[].type` in {row_count,contains,sql}). Guards the template/runner drift bug where the template documented a `fixtures:`/`expected:<egress>` format the runner rejects.
+
 
 #### `aqueduct test` CLI command — `aqueduct/cli.py`
 
@@ -1115,6 +1117,9 @@ Old `patch rollback` tests above are superseded by Phase 18 rollback tests.
 - ✅ invalid YAML test file → exit code 1 with parser error
 - ✅ `--quiet` suppresses Spark progress (quiet=True passed to make_spark_session)
 - ✅ `--blueprint` overrides blueprint path from test file
+- ✅ `aqueduct test` runs on `local[*]` regardless of `deployment.master_url` (cluster-pointed config does NOT make `make_spark_session` receive the cluster master)
+- ✅ `aqueduct test` with non-local `deployment.master_url` and no `--master` → stderr notice `(test: ignoring deployment.master_url=...; running on local[*] — pass --master to override)`; local/unset master → no notice
+- ✅ `aqueduct test --master spark://h:7077` → that master passed verbatim to `make_spark_session`, no notice emitted
 - ✅ ISSUE-026: `stop_spark_session(spark)` skips `spark.stop()` when `AQ_TESTING` is set (returns without touching the session) — `tests/test_executor/test_executor_session.py::TestStopSparkSessionGuard`
 - ✅ ISSUE-026: `stop_spark_session(spark)` calls `spark.stop()` when `AQ_TESTING` is unset (monkeypatch.delenv + Mock spark, assert `.stop()` called once) — `tests/test_executor/test_executor_session.py::TestStopSparkSessionGuard`
 - ✅ ISSUE-026: invoking `aqueduct test` then `aqueduct doctor` via CliRunner inside the suite does NOT tear down the shared session-scoped `spark` fixture (a subsequent `spark.range(1).count()` still works) — `tests/test_cli/test_cli_issue026.py`
@@ -1254,7 +1259,10 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ### `init` command (`aqueduct/cli.py`)
 
-- ✅ `aqueduct init` in empty dir: creates `blueprints/`, `aqueduct.yml.template`, `arcades/`, `tests/`, `patches/pending/`, `patches/rejected/`, `benchmarks/`
+- ✅ `aqueduct init` in empty dir: creates `blueprints/`, `aqueduct.yml.template`, `arcades/`, `aqtests/` (+ `aqtests/aqtest.yml.template`), `aqscenarios/` (+ `aqscenarios/aqscenario.yml.template`), `patches/pending/`, `patches/rejected/`. SUPERSEDES the pre-rename assertion (`tests/`/`benchmarks/`) — those scaffold dirs were renamed to `aqtests/`/`aqscenarios/` for gallery consistency; package template source dirs `aqueduct/templates/default/{aqtests,aqscenarios}/` renamed in lockstep, `importlib.resources` subpaths updated.
+- ✅ `aqueduct init` writes a `.gitignore` from `templates/default/gitignore.template` (contains `spark-warehouse/`, `artifacts/`, `metastore_db/`, `.aqueduct/`, `.env`, `patches/pending/*` + `!patches/pending/.gitkeep`) and it is tracked in the first commit
+- ✅ `aqueduct init` when `.gitignore` already exists → skipped, user content preserved, reported under "skip" (asserts `_copy_template`'s exists-guard covers the dotfile dest)
+
 - ✅ `aqueduct init`: project name derived from `cwd.name` (no `--name` flag; dropped 2026-05-15)
 - ✅ `aqueduct init` when files already exist: existing files skipped (not overwritten), new dirs still created
 - ✅ `git init` run when not already in a git repo; skipped when already in one
@@ -1428,6 +1436,9 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `_find_connected_components`: two modules connected by edge → one component
 - ✅ `_find_connected_components`: two disconnected Ingress→Egress chains → two components
 - ✅ `_find_connected_components`: signal-only edge (port="signal") does not merge components
+- ✅ ISSUE-042: `_find_connected_components(ids, edges, modules)` unions every `Probe` into its `attach_to` target's component (no edge exists) — Probe is NOT a singleton component; with one data tree + a Probe → ONE component (serial path), never raced on a separate `--parallel` thread
+- ✅ `_find_connected_components` `modules` arg defaults to `()` (back-compat: edge-only behavior when omitted)
+- ✅ `--parallel` + Probe attached to a module in a multi-tree blueprint: Probe runs in the same thread/after its `attach_to`; `probe_signals` populated deterministically (no silent skip)
 - ✅ `parallel=False` (default) → `_find_connected_components` never called; serial loop runs
 - ✅ `parallel=True`, single component → correctly identified and executed serially
 - ✅ `parallel=True`, two independent components → dispatched to `ThreadPoolExecutor` and executed concurrently

@@ -15,13 +15,11 @@ from aqueduct import warnings as aqw
 def _reset_warnings_globals():
     """warnings.py holds process-global state — reset it around every test."""
     saved_suppress = set(aqw._DEFAULT_SUPPRESS)
-    saved_silence = aqw._DEFAULT_SILENCE_ALL
     saved_installed = aqw._INSTALLED
     saved_formatwarning = warnings.formatwarning
-    aqw.set_default_suppress([], silence_all=False)
+    aqw.set_default_suppress([])
     yield
     aqw._DEFAULT_SUPPRESS = saved_suppress
-    aqw._DEFAULT_SILENCE_ALL = saved_silence
     aqw._INSTALLED = saved_installed
     warnings.formatwarning = saved_formatwarning
 
@@ -70,7 +68,7 @@ def test_default_suppress_makes_emit_noop_without_explicit_arg():
 
 
 def test_silence_all_silences_every_emit():
-    aqw.set_default_suppress([], silence_all=True)
+    aqw.set_default_suppress(["*"])
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         aqw.emit("any_rule_id", "msg")

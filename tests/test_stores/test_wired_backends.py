@@ -78,8 +78,10 @@ def test_execute_persists_into_postgres(spark, tmp_path):
 
     import psycopg2
     from aqueduct.stores.postgres import (
-        PostgresObservabilityStore, PostgresLineageStore,
+        PostgresObservabilityStore, PostgresLineageStore, PostgresDepotStore,
     )
+    from aqueduct.stores.base import StoreBundle
+    from aqueduct.surveyor.surveyor import Surveyor
     from aqueduct.executor.spark.executor import execute
     from aqueduct.compiler.models import Manifest
     from aqueduct.compiler.provenance import ProvenanceMap
@@ -92,6 +94,8 @@ def test_execute_persists_into_postgres(spark, tmp_path):
     obs_store._SCHEMA = obs_schema
     lin_store = PostgresLineageStore(dsn)
     lin_store._SCHEMA = lin_schema
+    depot_store = PostgresDepotStore(dsn)
+    depot_store._SCHEMA = obs_schema
 
     in_path = str(tmp_path / "in_e2e.parquet")
     out_path = str(tmp_path / "out_e2e")
@@ -104,28 +108,35 @@ def test_execute_persists_into_postgres(spark, tmp_path):
         provenance_map=ProvenanceMap(blueprint_id="bp_e2e", blueprint_path="", modules={}, context={}),
         inputs_fingerprint={},
         modules=(
-            Module(id="in", type="Ingress", label="In",
+            Module(id="src", type="Ingress", label="In",
                     config={"format": "parquet", "path": in_path}),
             Module(id="ch", type="Channel", label="Ch",
-                    config={"op": "sql", "query": "SELECT id, dbl FROM in"}),
-            Module(id="pr", type="Probe", label="Pr",
-                    config={"attach_to": "ch",
-                            "signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
+                    config={"op": "sql", "query": "SELECT id, dbl FROM src"}),
+            Module(id="pr", type="Probe", label="Pr", attach_to="ch",
+                    config={"signals": [{"type": "threshold", "expr": "COUNT(*) > 0"}]}),
             Module(id="out", type="Egress", label="Out",
                     config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
         ),
         edges=(
-            Edge(from_id="in", to_id="ch", port="main"),
+            Edge(from_id="src", to_id="ch", port="main"),
             Edge(from_id="ch", to_id="out", port="main"),
         ),
     )
 
+    bundle = StoreBundle(observability=obs_store, lineage=lin_store, depot=depot_store)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+
     try:
+        surveyor.start(run_id)
         result = execute(
-            manifest, spark, store_dir=tmp_path,
+            manifest, spark, run_id=run_id, store_dir=tmp_path,
+            surveyor=surveyor, depot=depot_store,
             observability_store=obs_store, lineage_store=lin_store,
         )
         assert result.status == "success"
+        surveyor.record(result)
+        surveyor.stop()
 
         conn = psycopg2.connect(dsn)
         conn.autocommit = True

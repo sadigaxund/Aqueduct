@@ -2545,12 +2545,19 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
     default=False,
     help="Suppress Spark progress output",
 )
+@click.option(
+    "--master",
+    default=None,
+    help="Spark master for the test session. Default: local[*] (unit tests "
+    "ignore deployment.master_url). Set only for cluster-runtime-dependent modules.",
+)
 @_env_options
 def test_cmd(
     test_file: str,
     blueprint_path: str | None,
     config_path: str | None,
     quiet: bool,
+    master: str | None,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -2601,7 +2608,22 @@ def test_cmd(
         sys.exit(1)
 
     merged_spark_config = dict(cfg.spark_config)
-    master_url = cfg.deployment.master_url
+
+    # aqtests are isolated unit tests over inline data — they run local by
+    # default and deliberately ignore deployment.master_url so a cluster-
+    # pointed config never drags unit tests onto the cluster. --master is
+    # the escape hatch for modules whose correctness needs cluster runtime.
+    if master:
+        master_url = master
+    else:
+        master_url = "local[*]"
+        config_master = cfg.deployment.master_url
+        if config_master and not config_master.startswith("local"):
+            click.echo(
+                f"(test: ignoring deployment.master_url={config_master!r}; "
+                f"running on {master_url} — pass --master to override)",
+                err=True,
+            )
 
     spark = make_spark_session(
         "aqueduct_test",
@@ -3418,9 +3440,9 @@ def heal(
 )
 @click.option(
     "--workers",
-    default=4,
+    default=1,
     show_default=True,
-    help="Max concurrent LLM calls (set to 1 for serial execution)",
+    help="Max concurrent LLM calls. Default 1 (serial); set >1 to parallelize scenario×model pairs.",
 )
 @_env_options
 def benchmark(
@@ -3894,19 +3916,20 @@ def init() -> None:
     # Directories
     _mkdir(cwd / "arcades")
     _mkdir(cwd / "blueprints")
-    _mkdir(cwd / "tests")
-    _mkdir(cwd / "benchmarks")
+    _mkdir(cwd / "aqtests")
+    _mkdir(cwd / "aqscenarios")
     _mkdir(cwd / "patches" / "pending")
     _mkdir(cwd / "patches" / "rejected")
 
     # Templates
+    _copy_template("gitignore.template", cwd / ".gitignore")
     _copy_template("aqueduct.yml.template", cwd / "aqueduct.yml.template")
     _copy_template(
         "blueprints/blueprint.yml.template", cwd / "blueprints" / "blueprint.yml.template"
     )
-    _copy_template("tests/aqtest.yml.template", cwd / "tests" / "aqtest.yml.template")
+    _copy_template("aqtests/aqtest.yml.template", cwd / "aqtests" / "aqtest.yml.template")
     _copy_template(
-        "benchmarks/aqscenario.yml.template", cwd / "benchmarks" / "aqscenario.yml.template"
+        "aqscenarios/aqscenario.yml.template", cwd / "aqscenarios" / "aqscenario.yml.template"
     )
 
     for f in created:

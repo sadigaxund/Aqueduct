@@ -1,0 +1,36 @@
+# ── Aqueduct / Spark runtime artifacts (do not commit) ───────────────
+spark-warehouse/
+artifacts/
+metastore_db/
+derby.log
+spark-events/
+*.crc
+
+# Aqueduct local observability scratch (non-duckdb store backends)
+.aqueduct/
+
+# Patch lifecycle: pending/rejected are ephemeral review staging,
+# applied/ is committed alongside the Blueprint. Keep the dirs, ignore
+# their contents.
+patches/pending/*
+patches/rejected/*
+!patches/pending/.gitkeep
+!patches/rejected/.gitkeep
+
+# DuckDB observability store written next to the project
+*.duckdb
+*.duckdb.wal
+
+# ── Secrets — Aqueduct auto-loads .env from the config dir ───────────
+.env
+.env.*
+!.env.template
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ── OS / editor ──────────────────────────────────────────────────────
+.DS_Store

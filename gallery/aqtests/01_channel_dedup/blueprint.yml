@@ -1,0 +1,51 @@
+# blueprint.yml
+# Keep-latest dedup by user_id. The Channel `dedup_latest` is what the
+# aqtest exercises in isolation — Ingress/Egress are here so the same
+# Blueprint also runs end-to-end with `aqueduct run`.
+
+aqueduct: "1.0"
+id: aqtest_dedup_demo
+name: "Aqtest — Channel Dedup"
+
+modules:
+  - id: raw_users
+    label: "Raw Users with Dupes"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: dedup_latest
+    label: "Keep Highest version per user_id"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        WITH ranked AS (
+          SELECT
+            *,
+            ROW_NUMBER() OVER (
+              PARTITION BY user_id ORDER BY version DESC
+            ) AS _rn
+          FROM raw_users
+        )
+        SELECT user_id, version, data
+        FROM ranked
+        WHERE _rn = 1
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_users
+    to: dedup_latest
+  - from: dedup_latest
+    to: output_save

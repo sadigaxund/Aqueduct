@@ -1,0 +1,93 @@
+# Aqueduct Test Template — all possible fields documented
+# Used with: aqueduct test <file>
+#            aqueduct test <file> --blueprint other.yml --config aqueduct.yml
+#
+# An aqtest runs ONE module in isolation against inline rows and asserts
+# its output. There is no Ingress, no Egress, no external source, and no
+# fixture files — Spark builds each input DataFrame from the rows you
+# list. A local Spark session is required (unlike .aqscenario.yml, which
+# is Spark-free).
+
+aqueduct_test: "1.0"
+
+# ── Blueprint reference ───────────────────────────────────────────────────────
+
+# Path to the blueprint YAML, resolved relative to THIS test file.
+# Override at the CLI with `--blueprint`. The blueprint is parsed +
+# compiled to locate the module under test; it is never run end-to-end.
+blueprint: blueprint.yml
+
+# ── Test cases ────────────────────────────────────────────────────────────────
+
+tests:
+  - # Identifier shown in the result output. Optional (defaults to
+    # "(unnamed)"), but always set one — it is how failures are reported.
+    id: keeps_only_latest_row_per_key
+
+    # REQUIRED. The module under test, by its blueprint module id.
+    # Only these module types can be tested in isolation:
+    #   Channel, Junction, Funnel, Assert
+    # Ingress and Egress are never executed by `aqueduct test`.
+    module: dedup_latest
+
+    # REQUIRED. One entry per UPSTREAM module id the target reads from
+    # (the `from:` side of the edges feeding `module`). Each becomes an
+    # in-memory DataFrame — no files, no sources.
+    inputs:
+      raw_users:                  # upstream module id
+
+        # column name → type. Accepted type names (case-insensitive):
+        #   long  int/integer  short  byte  double  float  string
+        #   boolean/bool  timestamp  date  binary  decimal
+        # Anything else is passed through to Spark's DDL parser as-is
+        # (e.g. `decimal(10,2)`, `array<string>`, `struct<a:int>`).
+        # All columns are nullable.
+        schema:
+          user_id: long
+          version: long
+          data: string
+
+        # Positional rows matching `schema` column order. Use a YAML
+        # null (`null` / `~` / empty) for SQL NULL.
+        rows:
+          - [1, 1, "old"]
+          - [1, 2, "new"]
+          - [2, 1, "solo"]
+
+    # Junction only: which output branch to assert against. Omit to use
+    # the first branch. Ignored for Channel/Funnel/Assert.
+    # branch: matched
+
+    # Assertions run against the module's output. All must pass for the
+    # test case to pass.
+    assertions:
+
+      # Exact output row count.
+      - type: row_count
+        expected: 2
+
+      # Each listed row must exist in the output (partial column match;
+      # a column set to null asserts that column IS NULL). Order-free.
+      - type: contains
+        rows:
+          - { user_id: 1, version: 2, data: "new" }
+          - { user_id: 2, version: 1, data: "solo" }
+
+      # Arbitrary Spark SQL against the output. The output is registered
+      # as the view `__output__`. The query's first column of its first
+      # row must be truthy for the assertion to pass.
+      - type: sql
+        expr: "SELECT count(DISTINCT user_id) = 2 FROM __output__"
+      - type: sql
+        expr: "SELECT bool_and(version = 2) FROM __output__ WHERE user_id = 1"
+
+  # Add more cases as needed; each is independent.
+  # - id: another_case
+  #   module: some_channel
+  #   inputs:
+  #     upstream_id:
+  #       schema: { id: long }
+  #       rows: [[1], [2]]
+  #   assertions:
+  #     - type: row_count
+  #       expected: 2
