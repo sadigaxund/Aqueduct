@@ -25,6 +25,17 @@ _2026-05-17_
   S3 auth is verified by an actual run (doctor never creates probe
   buckets). `✗` only on a genuinely unreachable endpoint. Dead
   `_storage_probe_paths` removed.
+- **fix(stores): Postgres backend DDL/SQL portability.** `stores.*.backend:
+  postgres` crashed: surveyor `_DDL` used `DOUBLE` (DuckDB/Spark spelling;
+  Postgres `psycopg2.errors.UndefinedObject: type "double" does not exist`)
+  → `DOUBLE PRECISION` (valid in both). Surveyor's 3× `INSERT OR REPLACE`
+  (DuckDB/SQLite-only; Postgres has no such statement) → portable
+  `INSERT … ON CONFLICT (pk) DO UPDATE SET … = EXCLUDED.…` on
+  `run_records` / `failure_contexts` / `explain_snapshot`. `stores/base.py`
+  only rewrites `?`→`%s`, never type/statement dialect — postgres was
+  never exercised end-to-end. Projectwide sweep confirms no other
+  offending DDL types or `INSERT OR REPLACE`. Full multi-backend
+  certification tracked as Phase 33.
 - **One warning-suppression mechanism: `suppress` + `"*"`.** BREAKING:
   `warnings.silence_all` config field and the `--no-warnings` CLI flag
   removed (pre-v1.0 clean break, no alias). Silence everything with
