@@ -46,6 +46,16 @@ _2026-05-17_
   (module_metrics / column_lineage / run_records), seed-first callout.
   Fixed stale Spark UI port (`8090`→`8080`), `data/seed.py`→`seed.py`,
   "pipeline complete"→"blueprint complete", DuckDB→Postgres inspection.
+- **fix(executor): `--parallel` Probe race (ISSUE-042).** Probes bind via
+  `attach_to`, not graph edges, so `_find_connected_components` (data-edge
+  Union-Find) put every Probe in its own singleton component → dispatched
+  to a separate thread, racing the thread producing its `attach_to`
+  frame → `frame_store.get(attach_to)` None → Probe silently skipped
+  (lost signals, Regulators starve). Now each Probe is unioned into its
+  `attach_to` target's component (runs same thread, after the target).
+  Only affects opt-in `--parallel` (not the default path — report's
+  "default" / named flaky tests were inaccurate). Spillway unaffected
+  (`spillway` is a data edge; only `signal` is non-data).
 - **fix(config): dedupe missing-env-var error.** `_expand_env_vars`
   appended one entry per regex match, so a var used N times in
   `aqueduct.yml` (e.g. `${HOST_IP}` in master_url + s3a + 3 DSNs) printed

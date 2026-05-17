@@ -454,13 +454,23 @@ def _build_execution_order(manifest: Manifest) -> list[Module]:
 
 
 def _find_connected_components(
-    module_ids: set[str], edges: tuple[Edge, ...]
+    module_ids: set[str],
+    edges: tuple[Edge, ...],
+    modules: tuple[Module, ...] = (),
 ) -> list[set[str]]:
     """Union-Find: identify independent connected trees in the data-flow graph.
 
     Two modules are in the same component if there is any data-flow path between
     them (directly or transitively). Components with no shared edges can be
     executed concurrently.
+
+    Probe modules have NO data edges — they bind to their target via the
+    `attach_to` field, not the graph. Without explicit unioning a Probe would
+    form its own singleton component and be dispatched to a separate parallel
+    thread, racing the thread that produces its `attach_to` frame (ISSUE-042:
+    `frame_store.get(attach_to)` returns None → Probe silently skipped). So
+    union every Probe into its `attach_to` target's component — they then run
+    in the same thread, after `attach_to` (the order already sequences them).
 
     Returns a list of sets, each set containing the module IDs of one component.
     """
@@ -486,6 +496,16 @@ def _find_connected_components(
     for e in edges:
         if _is_data_edge(e) and e.from_id in module_ids and e.to_id in module_ids:
             _union(e.from_id, e.to_id)
+
+    # ISSUE-042: bind Probes to their attach_to target's component (no edge exists).
+    for m in modules:
+        if (
+            m.type == "Probe"
+            and m.attach_to
+            and m.id in module_ids
+            and m.attach_to in module_ids
+        ):
+            _union(m.id, m.attach_to)
 
     components: dict[str, set[str]] = {}
     for mid in module_ids:
@@ -1409,7 +1429,9 @@ def execute(
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if parallel:
         all_module_ids = {m.id for m in order}
-        components = _find_connected_components(all_module_ids, manifest.edges)
+        components = _find_connected_components(
+            all_module_ids, manifest.edges, manifest.modules
+        )
 
         if len(components) > 1:
             component_orders = [
