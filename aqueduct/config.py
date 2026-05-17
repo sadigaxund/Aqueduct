@@ -555,8 +555,10 @@ def load_config(path: Path | None = None) -> AqueductConfig:
 
     raw_text, missing = _expand_env_vars(raw_text)
     if missing:
+        # One var can occur many times in aqueduct.yml — dedupe, keep first-seen order.
+        unique_missing = list(dict.fromkeys(missing))
         raise ConfigError(
-            f"Missing environment variables in {resolved}: {', '.join(missing)}"
+            f"Missing environment variables in {resolved}: {', '.join(unique_missing)}"
         )
 
     try:
