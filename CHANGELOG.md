@@ -46,6 +46,11 @@ _2026-05-17_
   (module_metrics / column_lineage / run_records), seed-first callout.
   Fixed stale Spark UI port (`8090`→`8080`), `data/seed.py`→`seed.py`,
   "pipeline complete"→"blueprint complete", DuckDB→Postgres inspection.
+- **fix(config): dedupe missing-env-var error.** `_expand_env_vars`
+  appended one entry per regex match, so a var used N times in
+  `aqueduct.yml` (e.g. `${HOST_IP}` in master_url + s3a + 3 DSNs) printed
+  N times. Now `dict.fromkeys` dedupes at the raise site, first-seen
+  order preserved.
 - **fix(cli): non-DuckDB store `path` no longer Path()'d as a directory.**
   `run` derived `resolved_store_dir = Path(cfg.stores.observability.path).parent`
   without checking backend — for postgres/redis the `path` is a DSN, so it
