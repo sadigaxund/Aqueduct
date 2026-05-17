@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     failure_category VARCHAR,
     model        VARCHAR,
     patch_id     VARCHAR,
-    confidence   DOUBLE,
+    confidence   DOUBLE PRECISION,
     patch_applied BOOLEAN,
     run_success_after_patch BOOLEAN,
     applied_at   VARCHAR
@@ -240,9 +240,15 @@ class Surveyor:
 
             cur.execute(
                 """
-                INSERT OR REPLACE INTO run_records
+                INSERT INTO run_records
                     (run_id, blueprint_id, status, started_at, finished_at, module_results)
                 VALUES (?, ?, 'running', ?, NULL, '[]')
+                ON CONFLICT (run_id) DO UPDATE SET
+                    blueprint_id   = EXCLUDED.blueprint_id,
+                    status         = EXCLUDED.status,
+                    started_at     = EXCLUDED.started_at,
+                    finished_at    = EXCLUDED.finished_at,
+                    module_results = EXCLUDED.module_results
                 """,
                 [run_id, self._manifest.blueprint_id, _iso(self._started_at)],
             )
@@ -336,10 +342,19 @@ class Surveyor:
         with self._observability.connect() as cur:
             cur.execute(
                 """
-                INSERT OR REPLACE INTO failure_contexts
+                INSERT INTO failure_contexts
                     (run_id, blueprint_id, failed_module, error_message,
                      stack_trace, manifest_json, provenance_json, started_at, finished_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    blueprint_id    = EXCLUDED.blueprint_id,
+                    failed_module   = EXCLUDED.failed_module,
+                    error_message   = EXCLUDED.error_message,
+                    stack_trace     = EXCLUDED.stack_trace,
+                    manifest_json   = EXCLUDED.manifest_json,
+                    provenance_json = EXCLUDED.provenance_json,
+                    started_at      = EXCLUDED.started_at,
+                    finished_at     = EXCLUDED.finished_at
                 """,
                 [
                     ctx.run_id,
@@ -496,10 +511,16 @@ class Surveyor:
         with self._observability.connect() as cur:
             cur.execute(
                 """
-                INSERT OR REPLACE INTO explain_snapshot
+                INSERT INTO explain_snapshot
                   (blueprint_id, run_id, module_id, captured_at,
                    exchange_count, python_udf_count, broadcast_count, plan_text)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (blueprint_id, run_id, module_id) DO UPDATE SET
+                    captured_at      = EXCLUDED.captured_at,
+                    exchange_count   = EXCLUDED.exchange_count,
+                    python_udf_count = EXCLUDED.python_udf_count,
+                    broadcast_count  = EXCLUDED.broadcast_count,
+                    plan_text        = EXCLUDED.plan_text
                 """,
                 [
                     bp_id, run_id, module_id,
