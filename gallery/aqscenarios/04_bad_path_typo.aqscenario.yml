@@ -1,0 +1,22 @@
+aqueduct_scenario: "1.0"
+
+id: bad_path_typo
+description: >
+  The Ingress path has a typo or points to a non-existent file path instead of events.csv.
+blueprint: blueprints/pipeline.yml
+
+inject_failure:
+  module: events_raw
+  error_message: >
+    IngressError: [events_raw] PathDoesNotExistException: Path data/input/events_raw.csv does not exist.
+
+expected_patch:
+  ops:
+    - op: set_module_config_key
+      module_id: events_raw
+      key: path
+      value_contains: "events.csv"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true

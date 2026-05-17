@@ -1,0 +1,22 @@
+aqueduct_scenario: "1.0"
+
+id: format_csv_read_as_parquet
+description: >
+  Ingress users_raw declares format: parquet but the underlying file is actually a CSV.
+blueprint: blueprints/pipeline.yml
+
+inject_failure:
+  module: users_raw
+  error_message: >
+    IngressError: [users_raw] AnalysisException: Unable to infer schema for Parquet. It must be specified manually.
+
+expected_patch:
+  ops:
+    - op: set_module_config_key
+      module_id: users_raw
+      key: format
+      value_contains: "csv"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true

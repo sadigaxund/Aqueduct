@@ -1,0 +1,22 @@
+aqueduct_scenario: "1.0"
+
+id: schema_drift_column_rename
+description: >
+  Upstream renamed event_ts to event_time, causing downstream clean_events to fail to resolve the column.
+blueprint: blueprints/pipeline.yml
+
+inject_failure:
+  module: clean_events
+  error_message: >
+    AnalysisException: [TABLE_OR_VIEW_NOT_FOUND] Cannot resolve column event_ts in events_raw
+
+expected_patch:
+  ops:
+    - op: set_module_config_key
+      module_id: clean_events
+      key: query
+      value_contains: "event_time"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true

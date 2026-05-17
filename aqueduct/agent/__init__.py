@@ -798,9 +798,9 @@ def generate_agent_patch(
 
     if patch_spec is None:
         logger.error(
-            "LLM agent failed to produce a valid PatchSpec after %d attempts "
+            "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r",
-            max_reprompts, failure_ctx.blueprint_id, failure_ctx.run_id,
+            attempts_made, failure_ctx.blueprint_id, failure_ctx.run_id,
         )
     return AgentPatchResult(patch=patch_spec, attempts=attempts_made, reprompt_errors=reprompt_errors)
 

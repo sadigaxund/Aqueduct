@@ -1,0 +1,22 @@
+aqueduct_scenario: "1.0"
+
+id: type_string_vs_numeric
+description: >
+  Downstream clean_events tries to aggregate event_id but event_id was parsed as a string upstream.
+blueprint: blueprints/pipeline.yml
+
+inject_failure:
+  module: clean_events
+  error_message: >
+    AnalysisException: Cannot resolve function 'sum' due to data type mismatch: argument 1 requires numeric type, but event_id is string
+
+expected_patch:
+  ops:
+    - op: set_module_config_key
+      module_id: clean_events
+      key: query
+      value_contains: "CAST"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true

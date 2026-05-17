@@ -424,7 +424,10 @@ def run_benchmark(
     """
     import concurrent.futures
 
-    scenario_files = sorted(scenarios_dir.glob("**/*.aqscenario.yml"))
+    if scenarios_dir.is_file():
+        scenario_files = [scenarios_dir]
+    else:
+        scenario_files = sorted(scenarios_dir.glob("**/*.aqscenario.yml"))
     if not scenario_files:
         logger.warning("No .aqscenario.yml files found in %s", scenarios_dir)
         return {}
