@@ -1152,7 +1152,15 @@ def run(
         else:
             _observability_path = cfg.stores.observability.path
             _default_obs = ".aqueduct/observability.db"
-            if _observability_path == _default_obs:
+            if cfg.stores.observability.backend != "duckdb":
+                # Non-DuckDB (postgres/redis): `path` is a DSN, NOT a
+                # filesystem path — never Path()/mkdir it (would create a
+                # bogus `postgresql:/user:pass@host:port` dir). The DSN store
+                # persists itself; use the default per-pipeline local scratch
+                # dir (.aqueduct/observability/<blueprint_id>) for any
+                # residual local artifacts only.
+                resolved_store_dir = None  # set below after manifest
+            elif _observability_path == _default_obs:
                 _using_default_obs_path = True
                 # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
                 resolved_store_dir = None  # set below after manifest
