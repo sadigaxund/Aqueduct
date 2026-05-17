@@ -1,0 +1,53 @@
+# blueprint.yml
+# Assert module with row-level quarantine logic.
+# In isolation, `aqueduct test` executes the `filter_large_amounts` Assert module
+# and returns the passing DataFrame.
+
+aqueduct: "1.0"
+id: aqtest_assert_demo
+name: "Aqtest — Assert Quarantine"
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+
+  - id: filter_large_amounts
+    label: "Only Keep Amounts >= 10"
+    type: Assert
+    config:
+      rules:
+        - type: sql_row
+          expr: "amount >= 10"
+          on_fail: quarantine
+
+  - id: passing_save
+    label: "Save Good Orders"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/passing.csv
+      mode: overwrite
+
+  - id: quarantined_save
+    label: "Save Bad Orders"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/quarantined.csv
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: filter_large_amounts
+  - from: filter_large_amounts
+    to: passing_save
+  - from: filter_large_amounts
+    to: quarantined_save
+    port: spillway

@@ -1,0 +1,36 @@
+# blueprint.yml
+# Simple pass-through Channel module.
+
+aqueduct: "1.0"
+id: nulls_and_sql_demo
+name: "Nulls and SQL Testing Demo"
+
+modules:
+  - id: raw_items
+    label: "Raw Items"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/items.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: items_pass
+    label: "Pass-Through"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT * FROM raw_items"
+
+  - id: save_items
+    label: "Save Items"
+    type: Egress
+    config:
+      format: csv
+      path: data/output/items.csv
+      mode: overwrite
+
+edges:
+  - from: raw_items
+    to: items_pass
+  - from: items_pass
+    to: save_items

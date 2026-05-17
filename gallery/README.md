@@ -56,6 +56,12 @@ isolation.
 rows, output asserted — no sources, no fixtures, Spark-backed, seconds.
 See [`aqtests/README.md`](aqtests/README.md).
 
+- [`01_channel_dedup`](aqtests/01_channel_dedup) — inline-row keep-latest dedup Channel; `row_count` / `contains` / `sql`
+- [`02_assert_quarantine`](aqtests/02_assert_quarantine) — row-level quarantine quality gate isolated Assert testing
+- [`03_junction_branch`](aqtests/03_junction_branch) — conditional multi-branch routing and branch targeting with `branch:`
+- [`04_funnel_merge`](aqtests/04_funnel_merge) — multi-input union merge Funnel testing
+- [`05_nulls_and_sql`](aqtests/05_nulls_and_sql) — YAML null rows, null checks in contains, aggregate SQL assertions
+
 ## Aqscenarios
 
 [`aqscenarios/`](aqscenarios) holds self-healing scenario tests: a

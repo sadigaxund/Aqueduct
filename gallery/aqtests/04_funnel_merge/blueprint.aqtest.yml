@@ -1,0 +1,33 @@
+# blueprint.aqtest.yml
+# Run with:  aqueduct test blueprint.aqtest.yml
+
+aqueduct_test: "1.0"
+blueprint: blueprint.yml          # relative to this test file
+
+tests:
+  - id: unions_two_upstream_inputs
+    module: union_sources
+    inputs:
+      source_a:
+        schema:
+          id: long
+          name: string
+        rows:
+          - [1, "Alice"]
+          - [2, "Bob"]
+      source_b:
+        schema:
+          id: long
+          name: string
+        rows:
+          - [3, "Charlie"]
+          - [4, "David"]
+    assertions:
+      - type: row_count
+        expected: 4
+      - type: contains
+        rows:
+          - { id: 1, name: "Alice" }
+          - { id: 2, name: "Bob" }
+          - { id: 3, name: "Charlie" }
+          - { id: 4, name: "David" }
