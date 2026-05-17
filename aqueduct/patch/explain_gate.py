@@ -52,7 +52,9 @@ def _formatted_plan(df: Any) -> str:
     try:
         jdf = df._jdf
         qe = jdf.queryExecution()
-        spark = df.sql_ctx.sparkSession if hasattr(df, "sql_ctx") else df.sparkSession
+        # Prefer .sparkSession — accessing .sql_ctx (even via hasattr) triggers
+        # a pyspark Deprecation/UserWarning and breaks when pyspark removes it.
+        spark = df.sparkSession if hasattr(df, "sparkSession") else df.sql_ctx.sparkSession
         jvm = spark._jvm
         formatted = jvm.org.apache.spark.sql.execution.ExplainMode.fromString("formatted")
         return qe.explainString(formatted)

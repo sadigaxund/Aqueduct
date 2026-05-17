@@ -2177,13 +2177,18 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 
 ## Pre-release CLI cleanup — env resolution + validate/doctor unification
 
-### `_resolve_and_load_env(explicit, anchor, disabled)`
-- ✅ Order: `--env-file` wins over `<anchor dir>/.env` wins over `<cwd>/.env`
-- ✅ First existing file wins — does NOT stack multiple .env files
-- ✅ `disabled=True` → no-op
-- ✅ `anchor=None` → only cwd/.env considered
-- ✅ Existing env vars never overwritten (delegates to `_load_env_file`)
-- ✅ "Loaded N" emitted at DEBUG only — absent at default verbosity, present with `aqueduct -v`
+### `_resolve_and_load_env(explicit, anchor, cli_env)` — Phase 30 (SUPERSEDES the pre-Phase-30 cwd/`disabled` design below)
+- ✅ Precedence: `-e KEY=VAL` > real `os.environ` > `<anchor dir>/.env` > `--env-file` > unset
+- ✅ `<anchor dir>/.env` discovered (config/blueprint directory); first existing of [anchor/.env, --env-file] wins, no stacking
+- ✅ **cwd/.env is NEVER searched** (footgun removed) — a `.env` only in cwd, with anchor elsewhere, is ignored
+- ✅ `anchor=None` + no `--env-file` → no file loaded (no cwd fallback)
+- ✅ `AQ_NO_ENV_FILE=1` → `.env` discovery skipped; `-e` overrides STILL applied; emits `(env: .env discovery disabled — AQ_NO_ENV_FILE)`
+- ✅ `-e KEY=VAL` written to `os.environ` (overwrites real env + later `.env`); `_apply_cli_env` returns count
+- ✅ `-e` malformed (`no-equals`, empty key) → `click.BadParameter`
+- ✅ Existing env vars never overwritten by the `.env` file (delegates to `_load_env_file`)
+- ✅ Stderr notice ALWAYS emitted when something loaded: `(env: loaded N var(s) from <path>)`, `; N from -e` suffix when `-e` used, `(env: no .env file found; N from -e)` when only `-e`
+- ✅ `@_env_options` decorator present on ALL 13 config commands (run/doctor/validate/test/report/runs/lineage/signal/heal/benchmark/patch preview/stores info/stores migrate); `--no-env-file` flag absent everywhere
+- ✅ `stores info` / `stores migrate` resolve `${VAR}` from anchored `.env` (regression: previously required manual `source .env`)
 
 ### `_sniff_file_kind(path)`
 - ✅ `aqueduct: "1.0"` header → `"blueprint"`
@@ -2214,3 +2219,15 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ TARGET with no recognised header → `✗ unrecognised Aqueduct file`, exit 1
 - ✅ `--config` / `--blueprint` flags removed (positional only)
 - ✅ `.env` anchored to resolved input file's directory
+- ⏳ Default view omits `skip` rows; emits one `· skipped: <names>  (not applicable / not configured — --verbose for detail)` line
+- ⏳ `--verbose` → all rows shown (incl. `-` skip rows), no collapse line
+- ⏳ All rows `ok` + some `skip` → still `✓ all checks passed` (skip never fails)
+- ⏳ `agent` warn detail mentions configured provider + openai_compat alternative + "pipeline runs fine without it"
+- ⏳ No `skip` rows → no `· skipped:` line printed
+- ⏳ `explain_gate._formatted_plan` uses `df.sparkSession` (no `sql_ctx` access) — no pyspark UserWarning emitted
+- ⏳ Default (no `--preflight`): Spark check = TCP reachability, no SparkSession built; `local*` master → ok "local mode"; unreachable remote → fail in ~3s with honest msg ("Not a timeout"), NOT 45s
+- ⏳ `_host_port` parses `spark://h:p`, `http://h:p`, `h:p`; bad → None. `_tcp_ok` False on refused/unroutable within timeout
+- ⏳ Default: S3A endpoint TCP-probed when `spark.hadoop.fs.s3a.endpoint` set; else falls back to `check_storage(spark_ok=False)`
+- ⏳ `--preflight`: builds real session w/ spark_config, runs task, version + storage; unbounded (no timeout); failure → `preflight session failed: …`
+- ⏳ `SPARK_PROBE_TIMEOUT` / `ThreadPoolExecutor` removed from doctor (no import, no ref)
+- ⏳ `--skip-spark` still short-circuits before any probe

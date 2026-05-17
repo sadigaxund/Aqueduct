@@ -2,6 +2,34 @@
 
 ---
 
+### feat(doctor): collapse noise + reword agent line; fix pyspark sql_ctx warning
+_2026-05-17_
+
+- **Spark check split into reachability (default) + `--preflight` (full).**
+  Default is now a fast, bounded TCP probe of the master host:port (+ S3A
+  endpoint) — no SparkSession, ~3s, no slow-vs-broken ambiguity, no false
+  "master unreachable?" timeout. `--preflight` builds a real session with
+  the actual `spark_config`, runs a task, checks version + storage, and is
+  **unbounded** (waits out cold-start / jar shipping; Ctrl-C to abort).
+  Removed the misleading 45s `SPARK_PROBE_TIMEOUT` / `ThreadPoolExecutor`
+  path. `--skip-spark` unchanged.
+
+- **`doctor` default view shows only actionable rows** (ok / warn / fail).
+  `skip` rows (not-applicable like local-mode `cluster-stores`, or
+  not-configured like `webhook` / `storage`) collapse into one
+  `· skipped: a, b, c` line. `--verbose` restores the full per-row list.
+- **`agent` warn line reworded** — `configured provider=anthropic;
+  ANTHROPIC_API_KEY not set — set it, or switch agent.provider to
+  openai_compat (Ollama/vLLM/LM Studio). Self-healing only; pipeline runs
+  fine without it.` Old text implied anthropic was the only option and
+  read like a hard failure.
+- **`explain_gate._formatted_plan`**: prefer `df.sparkSession` over
+  `df.sql_ctx` — accessing `.sql_ctx` (even via `hasattr`) fired pyspark's
+  `DataFrame.sql_ctx is an internal property … use DataFrame.sparkSession`
+  UserWarning and would break on pyspark removal.
+
+---
+
 ### feat(cli): unified, transparent `.env` loading across every command
 _2026-05-17_
 

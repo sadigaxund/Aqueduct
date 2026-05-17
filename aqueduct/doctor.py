@@ -20,12 +20,9 @@ from __future__ import annotations
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
-
-SPARK_PROBE_TIMEOUT = 45  # seconds — JVM cold-start can be slow
 
 
 # ── Result model ──────────────────────────────────────────────────────────────
@@ -84,45 +81,109 @@ def check_observability(observability_db: Path) -> CheckResult:
         return CheckResult("observability", "fail", f"{observability_db}: {exc}", _ms(t))
 
 
-def check_spark(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
-    """Create a SparkSession, probe Spark + object storage, stop.  Runs in a thread with timeout.
+def _host_port(url: str, default_port: int) -> tuple[str, int] | None:
+    """Extract (host, port) from spark://h:p / http://h:p / h:p. None if unparseable."""
+    import re
+    from urllib.parse import urlparse
+    if "://" in url:
+        p = urlparse(url)
+        if p.hostname:
+            return p.hostname, p.port or default_port
+        return None
+    m = re.match(r"^([^:/]+):(\d+)$", url.strip())
+    if m:
+        return m.group(1), int(m.group(2))
+    return None
 
-    Returns (spark_result, storage_result) — storage probe runs inside the same
-    session before stop() so SparkSession.getActiveSession() is valid.
+
+def _tcp_ok(host: str, port: int, timeout: float = 3.0) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _reachability_probe(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
+    """Fast, bounded default: TCP-reach the master + S3 endpoint. No SparkSession.
+
+    Answers the 95% question — "is my master/endpoint wiring sane" — in ~3s,
+    with no slow-vs-broken ambiguity. Full session test lives behind --preflight.
     """
     t = time.monotonic()
+    hint = "  (reachability only — run `aqueduct doctor --preflight` for a full Spark session test)"
 
-    def _probe() -> tuple[str, bool, CheckResult]:
+    if master_url.startswith("local"):
+        spark_res = CheckResult(
+            "spark", "ok",
+            f"master={master_url}  local mode — session built in-process at run time{hint}",
+            _ms(t),
+        )
+    else:
+        hp = _host_port(master_url, 7077)
+        if hp is None:
+            spark_res = CheckResult("spark", "warn", f"master={master_url}  cannot parse host:port for TCP probe{hint}", _ms(t))
+        elif _tcp_ok(*hp):
+            spark_res = CheckResult("spark", "ok", f"master={master_url}  reachable (TCP {hp[0]}:{hp[1]}){hint}", _ms(t))
+        else:
+            spark_res = CheckResult(
+                "spark", "fail",
+                f"master={master_url}  TCP connect to {hp[0]}:{hp[1]} failed — master down, "
+                f"wrong HOST_IP, or firewall. (Not a timeout: no SparkSession was built.)",
+                _ms(t),
+            )
+
+    # S3A endpoint reachability (only if object storage is configured).
+    s3_ep = spark_config.get("spark.hadoop.fs.s3a.endpoint")
+    if s3_ep:
+        hp = _host_port(s3_ep, 80)
+        if hp and _tcp_ok(*hp):
+            storage_res = CheckResult("storage", "ok", f"s3a endpoint {s3_ep} reachable (TCP)", _ms(t))
+        elif hp:
+            storage_res = CheckResult("storage", "fail", f"s3a endpoint {s3_ep} — TCP connect to {hp[0]}:{hp[1]} failed", _ms(t))
+        else:
+            storage_res = CheckResult("storage", "warn", f"s3a endpoint {s3_ep} — cannot parse host:port", _ms(t))
+    else:
+        storage_res = check_storage(spark_config, spark_ok=False)
+    return spark_res, storage_res
+
+
+def check_spark(
+    master_url: str, spark_config: dict[str, Any], preflight: bool = False
+) -> tuple[CheckResult, CheckResult]:
+    """Probe Spark + object storage.
+
+    Default (`preflight=False`): fast bounded TCP reachability of master +
+    S3 endpoint. No SparkSession — no slow/broken ambiguity, no false timeout.
+
+    `preflight=True`: build a real SparkSession with the actual spark_config,
+    run a task, check version + storage. **Unbounded** — you asked for the
+    truth, so it waits as long as cluster cold-start / jar shipping needs
+    (Ctrl-C to abort). This is the real "will my pipeline's Spark start" test.
+    """
+    if not preflight:
+        return _reachability_probe(master_url, spark_config)
+
+    t = time.monotonic()
+    try:
         import pyspark
         from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
         spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
-        n = spark.range(1).count()
+        spark.range(1).count()
         cluster_ver = spark.version
         client_ver = pyspark.__version__
         ver_mismatch = cluster_ver.split(".")[0] != client_ver.split(".")[0]
         ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
-        spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}{ver_note}"
+        spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}  [preflight]{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
         stop_spark_session(spark)
-        return spark_detail, ver_mismatch, storage_result
-
-    storage_skip = CheckResult("storage", "skip", "spark check did not complete")
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        future = ex.submit(_probe)
-        try:
-            spark_detail, ver_mismatch, storage_result = future.result(timeout=SPARK_PROBE_TIMEOUT)
-            spark_status = "warn" if ver_mismatch else "ok"
-            return CheckResult("spark", spark_status, spark_detail, _ms(t)), storage_result
-        except FuturesTimeout:
-            return (
-                CheckResult("spark", "fail", f"timed out after {SPARK_PROBE_TIMEOUT}s — master unreachable? ({master_url})", _ms(t)),
-                storage_skip,
-            )
-        except Exception as exc:
-            return (
-                CheckResult("spark", "fail", f"{master_url}: {exc}", _ms(t)),
-                storage_skip,
-            )
+        return CheckResult("spark", "warn" if ver_mismatch else "ok", spark_detail, _ms(t)), storage_result
+    except Exception as exc:
+        return (
+            CheckResult("spark", "fail", f"preflight session failed: {master_url}: {exc}", _ms(t)),
+            CheckResult("storage", "skip", "preflight spark session did not complete"),
+        )
 
 
 def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None = None, timeout: int = 10) -> CheckResult:
@@ -183,12 +244,14 @@ def check_agent(
         if not key:
             return CheckResult(
                 "agent", "warn",
-                "provider=anthropic  ANTHROPIC_API_KEY not set — agent self-healing will fail at runtime",
+                "configured provider=anthropic; ANTHROPIC_API_KEY not set — "
+                "set it, or switch agent.provider to openai_compat "
+                "(Ollama/vLLM/LM Studio). Self-healing only; pipeline runs fine without it.",
                 _ms(t),
             )
         return CheckResult(
             "agent", "ok",
-            f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
+            f"configured provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
             _ms(t),
         )
 
@@ -1033,6 +1096,7 @@ def run_doctor(
     blueprint_path: Path | None = None,
     aqtest_path: Path | None = None,
     aqscenario_path: Path | None = None,
+    preflight: bool = False,
 ) -> list[CheckResult]:
     """Run all checks and return results in order."""
     from aqueduct.config import load_config, ConfigError
@@ -1132,7 +1196,9 @@ def run_doctor(
             results.extend(check_aqscenario(aqscenario_path))
         return results
 
-    spark_result, storage_result = check_spark(cfg.deployment.master_url, cfg.spark_config)
+    spark_result, storage_result = check_spark(
+        cfg.deployment.master_url, cfg.spark_config, preflight=preflight
+    )
     results.append(spark_result)
     results.append(storage_result)
 
