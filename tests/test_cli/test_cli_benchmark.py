@@ -258,7 +258,7 @@ def test_benchmark_output_json_includes_patch(mock_run_benchmark, tmp_path):
     config_path.write_text("agent:\n  provider: openai_compat\n  model: claude-sonnet-4-6\n")
 
     runner = CliRunner()
-    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--output", "json"])
+    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
     
     assert result.exit_code == 0
     # The output might have a header line: "↻ benchmark scenarios=..."
@@ -304,7 +304,7 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path)])
     
     assert result.exit_code == 1
-    assert "(1 failed — rerun with --output json" in result.stderr
+    assert "(1 failed — rerun with --format json" in result.stderr
 
     # 2. With all pass in table mode -> warning NOT printed
     mock_run_benchmark.return_value = {
@@ -328,7 +328,7 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
     }
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path)])
     assert result.exit_code == 0
-    assert "rerun with --output json" not in result.stderr
+    assert "rerun with --format json" not in result.stderr
 
     # 3. With failure in json mode -> warning NOT printed
     mock_run_benchmark.return_value = {
@@ -350,8 +350,8 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
             )
         }
     }
-    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--output", "json"])
+    result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
     assert result.exit_code == 1
-    assert "rerun with --output json" not in result.stderr
+    assert "rerun with --format json" not in result.stderr
 
 

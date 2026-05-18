@@ -226,10 +226,13 @@ metrics:
 # into os.environ before config parsing. Existing env vars are never
 # overwritten. A `(env: loaded N var(s) from …)` line is printed to stderr.
 #
-# Drop a `.env` next to this aqueduct.yml to avoid manual `export`:
-#   AQUEDUCT_LLM_MODEL=qwen3:32b
-#   AQUEDUCT_LLM_BASE_URL=http://localhost:11434/v1
-#   S3_SECRET=...
+# Drop a `.env` next to this aqueduct.yml to avoid manual `export`. Names
+# must be either a real env var the code reads (e.g. ANTHROPIC_API_KEY)
+# or referenced in this file via ${VAR} / @aq.secret('KEY') — arbitrary
+# names do nothing on their own:
+#   ANTHROPIC_API_KEY=sk-ant-...     # read directly by the agent
+#   MINIO_ACCESS_KEY=...             # used below as ${MINIO_ACCESS_KEY}
+#   MINIO_SECRET_KEY=...             # used below as ${MINIO_SECRET_KEY}
 #
 # Precedence: -e KEY=VAL  >  real env  >  <dir>/.env  >  --env-file  >  default
 #   aqueduct run pipeline.yml -e RUN_ENV=staging      # inline override

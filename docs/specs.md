@@ -1610,7 +1610,7 @@ Generates a patch for the most recent failed run. Useful when `approval_mode: di
 aqueduct heal <run_id> --print-prompt
 
 # Machine-readable JSON {"system": "...", "user": "..."}
-aqueduct heal <run_id> --print-prompt --print-prompt-format json
+aqueduct heal <run_id> --print-prompt json
 ```
 Prints the exact system and user prompt that would be sent, then exits without calling the model. Does not require `agent.model` to be configured. Useful for debugging prompt construction or estimating token cost.
 
@@ -1682,7 +1682,7 @@ aqueduct benchmark aqscenarios/format_csv_read_as_parquet.aqscenario.yml
 aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --model llama3
 
 # JSON output for CI integration
-aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --output json
+aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --format json
 ```
 
 **Benchmark output:**
@@ -2085,7 +2085,7 @@ Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error
 |**Command**|**Description**|**Key Flags**|
 | :- | :- | :- |
 |`aqueduct heal <run_id>`|Manually trigger LLM healing for a failed run (reads FailureContext from the observability store, stages a real patch).|`--module <module_id>`, `--store-dir`, `--config`, `--patches-dir`, `--print-prompt`|
-|`aqueduct benchmark <file-or-dir>`|Evaluate one `.aqscenario.yml` or a directory of them against one or more models (no Spark). File/dir as positional or `--scenarios`. Connection triad overridable per-run (precedence: flag > `aqueduct.yml` agent > default); `provider_options`/`guardrails` stay config-only.|`--model <model>` (repeatable), `--provider <anthropic\|openai_compat>`, `--base-url <url>`, `--timeout <sec>`, `--output <table\|json>`, `--workers`, `--config`|
+|`aqueduct benchmark <file-or-dir>`|Evaluate one `.aqscenario.yml` or a directory of them against one or more models (no Spark). File/dir as positional or `--scenarios`. Connection triad overridable per-run (precedence: flag > `aqueduct.yml` agent > default); `provider_options`/`guardrails` stay config-only.|`--model <model>` (repeatable), `--provider <anthropic\|openai_compat>`, `--base-url <url>`, `--timeout <sec>`, `--format <table\|json>`, `--workers`, `--config`|
 |`aqueduct signal <signal_id>`|Set/clear persistent gate overrides.|`--value <true|false>`, `--error <msg>`, `--config`|
 
 ## **11.4 Patch Management Commands**

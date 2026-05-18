@@ -89,7 +89,7 @@ FROM failure_contexts WHERE run_id = ?;
 | `failure_category` | VARCHAR | LLM-assigned, e.g. `schema_drift`, `bad_path` |
 | `model` | VARCHAR | LLM model name from `agent.model` |
 | `patch_id` | VARCHAR | PatchSpec identifier |
-| `confidence` | DOUBLE | 0.0–1.0 |
+| `confidence` | DOUBLE PRECISION | 0.0–1.0 (portable across DuckDB + Postgres) |
 | `patch_applied` | BOOLEAN | False if guardrail blocked or human-staged |
 | `run_success_after_patch` | BOOLEAN | True only when re-run reached success |
 | `applied_at` | VARCHAR | ISO-8601 UTC (string, not TIMESTAMPTZ) — used by rate-limit query |

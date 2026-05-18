@@ -60,7 +60,7 @@ def test_heal_print_prompt_json(mock_connect, mock_fc_row, test_config, tmp_path
 
     runner = CliRunner()
     store_dir = tmp_path / ".aqueduct"
-    result = runner.invoke(cli, ["heal", "test_run", "--print-prompt", "--print-prompt-format", "json", "--config", str(test_config), "--store-dir", str(store_dir)])
+    result = runner.invoke(cli, ["heal", "test_run", "--print-prompt", "json", "--config", str(test_config), "--store-dir", str(store_dir)])
     
     assert result.exit_code == 0, f"Failed with: {result.exception or result.output}"
     

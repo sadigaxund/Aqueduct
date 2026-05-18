@@ -106,6 +106,11 @@ def test_init_git_not_installed(empty_cwd, monkeypatch):
 
 def test_init_git_actual(empty_cwd):
     # Real git integration check on empty_cwd
+    # Pre-initialize and configure git identity to ensure commit succeeds in headless/CI environments
+    subprocess.run(["git", "init"], cwd=empty_cwd)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=empty_cwd)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=empty_cwd)
+
     runner = CliRunner()
     result = runner.invoke(cli, ["init"])
     

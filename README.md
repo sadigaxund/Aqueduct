@@ -150,7 +150,7 @@ the next steps:
 
 ```
 Next steps:
-  1. Create blueprints/<name>.yml  (see aqueduct.yml.template for reference)
+  1. Create blueprints/<name>.yml  (see blueprint.yml.template for reference)
   2. aqueduct validate blueprints/<name>.yml
   3. aqueduct run blueprints/<name>.yml
 ```
