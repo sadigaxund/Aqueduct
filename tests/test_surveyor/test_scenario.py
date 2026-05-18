@@ -193,100 +193,126 @@ class TestCheckExpectedPatch:
         p = self._patch_with_ops({"op": "set_module_config_key"})
         assert _check_expected_patch(p, {}) == []
 
+    def test_expected_patch_module_id_only_matching(self):
+        # Spec only has module_id; actual op name is different but module_id matches -> PASS
+        p = self._patch_with_ops(
+            {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "/new"},
+        )
+        expected = {"ops": [{"module_id": "src"}]}
+        assert _check_expected_patch(p, expected) == []
+
+        # Spec has module_id; actual op targeting different module -> FAIL
+        expected_bad = {"ops": [{"module_id": "other"}]}
+        failures = _check_expected_patch(p, expected_bad)
+        assert len(failures) == 1
+        assert "no generated op matches" in failures[0]
+
 
 # ── _check_assertions ─────────────────────────────────────────────────────────
 
 class TestCheckAssertions:
     def test_patch_is_valid_true_patch_none_fails(self):
-        failures, patch_valid, *_ = _check_assertions(
+        failures, soft_failures, patch_valid, *_ = _check_assertions(
             [{"patch_is_valid": True}], patch=None, blueprint_path=None
         )
         assert not patch_valid
         assert any("patch is None" in f for f in failures)
+        assert soft_failures == []
 
     def test_patch_is_valid_true_patch_present_passes(self):
-        failures, patch_valid, *_ = _check_assertions(
+        failures, soft_failures, patch_valid, *_ = _check_assertions(
             [{"patch_is_valid": True}], patch=_fake_patch(), blueprint_path=None
         )
         assert patch_valid
         assert failures == []
+        assert soft_failures == []
 
     def test_min_confidence_below_threshold_fails(self):
         p = _fake_patch(confidence=0.5)
-        failures, *_ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"min_confidence": 0.8}], patch=p, blueprint_path=None
         )
-        assert any("min_confidence" in f for f in failures)
+        assert failures == []
+        assert any("min_confidence" in f for f in soft_failures)
 
     def test_min_confidence_above_threshold_passes(self):
         p = _fake_patch(confidence=0.95)
-        failures, *_ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"min_confidence": 0.8}], patch=p, blueprint_path=None
         )
         assert failures == []
+        assert soft_failures == []
 
     def test_max_attempts_exceeded_fails(self):
         p = _fake_patch()
-        failures, *_ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"max_attempts": 1}], patch=p, blueprint_path=None, attempts=3
         )
-        assert any("max_attempts" in f for f in failures)
+        assert failures == []
+        assert any("max_attempts" in f for f in soft_failures)
 
     def test_max_attempts_within_limit_passes(self):
         p = _fake_patch()
-        failures, *_ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"max_attempts": 3}], patch=p, blueprint_path=None, attempts=2
         )
         assert failures == []
+        assert soft_failures == []
 
     def test_expected_category_match_passes(self):
         p = _fake_patch(category="schema_drift")
-        failures, _, _, _, category_match = _check_assertions(
+        failures, soft_failures, _, _, _, category_match = _check_assertions(
             [{"expected_category": "schema_drift"}], patch=p, blueprint_path=None
         )
         assert category_match is True
         assert failures == []
+        assert soft_failures == []
 
     def test_expected_category_mismatch_fails(self):
         p = _fake_patch(category="format_mismatch")
-        failures, _, _, _, category_match = _check_assertions(
+        failures, soft_failures, _, _, _, category_match = _check_assertions(
             [{"expected_category": "schema_drift"}], patch=p, blueprint_path=None
         )
         assert category_match is False
-        assert any("expected_category" in f for f in failures)
+        assert failures == []
+        assert any("expected_category" in f for f in soft_failures)
 
     def test_root_cause_contains_match_passes(self):
         p = _fake_patch(root_cause="column 'event_ts' was renamed to 'event_time'")
-        failures, _, _, root_cause_match, _ = _check_assertions(
+        failures, soft_failures, _, _, root_cause_match, _ = _check_assertions(
             [{"root_cause_contains": "event_time"}], patch=p, blueprint_path=None
         )
         assert root_cause_match is True
         assert failures == []
+        assert soft_failures == []
 
     def test_root_cause_contains_no_match_fails(self):
         p = _fake_patch(root_cause="unrelated error")
-        failures, _, _, root_cause_match, _ = _check_assertions(
+        failures, soft_failures, _, _, root_cause_match, _ = _check_assertions(
             [{"root_cause_contains": "event_time"}], patch=p, blueprint_path=None
         )
         assert root_cause_match is False
-        assert any("root_cause_contains" in f for f in failures)
+        assert failures == []
+        assert any("root_cause_contains" in f for f in soft_failures)
 
     def test_patch_applies_true_patch_none_fails(self):
         """patch_applies=true + patch=None → failure."""
-        failures, _, _, _, _ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"patch_applies": True}], patch=None, blueprint_path=None
         )
         assert any("cannot check" in f for f in failures)
+        assert soft_failures == []
 
     def test_patch_applies_nonexistent_blueprint_skipped(self, tmp_path):
         """patch_applies=true + blueprint path doesn't exist → warning only, no failure."""
         p = _fake_patch()
         missing = tmp_path / "does_not_exist.yml"
-        failures, _, _, _, _ = _check_assertions(
+        failures, soft_failures, *_ = _check_assertions(
             [{"patch_applies": True}], patch=p, blueprint_path=missing
         )
         # Skipped silently — no failure added
         assert failures == []
+        assert soft_failures == []
 
 
 # ── run_scenario ──────────────────────────────────────────────────────────────
@@ -331,6 +357,116 @@ class TestRunScenario:
 
         assert result.patch_valid is False
         assert result.passed is False
+
+    def test_run_scenario_soft_split_and_diag_score(self, tmp_path):
+        # Create a scenario containing:
+        # - patch_is_valid: true (gating)
+        # - patch_applies: true (gating)
+        # - root_cause_contains: "column" (scoring)
+        # - expected_category: "schema_drift" (scoring)
+        # - min_confidence: 0.8 (scoring)
+        sc_text = """aqueduct_scenario: "1.0"
+id: test_soft
+description: Test soft split
+blueprint: blueprint.yml
+inject_failure:
+  module: src
+  error_message: "boom"
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: "column"
+  - expected_category: "schema_drift"
+  - min_confidence: 0.8
+"""
+        sc_path = _write_scenario(tmp_path, sc_text)
+        scenario = load_scenario(sc_path)
+
+        # Mock generate_agent_patch to return a valid patch but with:
+        # - confidence = 0.5 (miss)
+        # - category = "other" (miss)
+        # - root_cause = "column missing" (hit)
+        from aqueduct.patch.grammar import PatchSpec
+        patch_obj = PatchSpec(
+            patch_id="fix-1",
+            rationale="test",
+            confidence=0.5,
+            category="other",
+            root_cause="column missing",
+            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}]
+        )
+        
+        mock_result = MagicMock()
+        mock_result.patch = patch_obj
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+
+        # We mock _try_apply_patch in scenario.py to succeed so patch_applies passes
+        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result), \
+             patch("aqueduct.surveyor.scenario._try_apply_patch", return_value=(True, "")):
+            result = run_scenario(
+                scenario,
+                model="claude-3",
+                patches_dir=tmp_path / "patches",
+            )
+
+        # 1. Check gating vs soft split
+        assert result.passed is True  # correct fix passes even with imperfect diagnosis!
+        assert len(result.failures) == 0
+        assert len(result.soft_failures) == 2  # min_confidence and expected_category missed
+        
+        # 2. Check diag_score
+        # root_cause_contains is a hit (1/1), expected_category is a miss (0/1)
+        # So diag_score = 0.5
+        assert result.diag_score == 0.5
+
+    def test_run_scenario_expected_patch_gating(self, tmp_path):
+        # Create a scenario containing expected_patch that will fail
+        sc_text = """aqueduct_scenario: "1.0"
+id: test_gating
+description: Test expected patch gating
+blueprint: blueprint.yml
+inject_failure:
+  module: src
+  error_message: "boom"
+assertions:
+  - patch_is_valid: true
+expected_patch:
+  ops:
+    - op: replace_module_config
+      module_id: src
+"""
+        sc_path = _write_scenario(tmp_path, sc_text)
+        scenario = load_scenario(sc_path)
+
+        # Mock agent return to produce a patch with different operations (causes expected_patch to fail)
+        from aqueduct.patch.grammar import PatchSpec
+        patch_obj = PatchSpec(
+            patch_id="fix-1",
+            rationale="test",
+            confidence=0.9,
+            category="other",
+            root_cause="test",
+            operations=[{"op": "replace_module_label", "module_id": "src", "label": "New Label"}]
+        )
+        
+        mock_result = MagicMock()
+        mock_result.patch = patch_obj
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+
+        with patch("aqueduct.agent.generate_agent_patch", return_value=mock_result):
+            result = run_scenario(
+                scenario,
+                model="claude-3",
+                patches_dir=tmp_path / "patches",
+            )
+
+        # expected_patch is a hard/gating blocker
+        assert result.passed is False
+        assert len(result.failures) == 1
+        assert "no generated op matches" in result.failures[0]
+
 
 
 # ── format_benchmark_table ────────────────────────────────────────────────────
@@ -405,3 +541,86 @@ class TestFormatBenchmarkTable:
         }
         table = format_benchmark_table(results, models=["m1", "m2"])
         assert "—" in table
+
+    def test_table_displays_diag_score(self):
+        """d% appears in cell when diag_score is set, and Diag score summary row is averaged."""
+        results = {
+            "s1": {
+                "m1": ScenarioResult(
+                    scenario_id="s1",
+                    model="m1",
+                    passed=True,
+                    patch_valid=True,
+                    patch_applies=True,
+                    failures=[],
+                    patch=None,
+                    duration_seconds=1.0,
+                    confidence=0.9,
+                    attempts_to_parse=1,
+                    diag_score=0.5,
+                )
+            },
+            "s2": {
+                "m1": ScenarioResult(
+                    scenario_id="s2",
+                    model="m1",
+                    passed=False,
+                    patch_valid=True,
+                    patch_applies=False,
+                    failures=["fail"],
+                    patch=None,
+                    duration_seconds=1.0,
+                    confidence=None,
+                    attempts_to_parse=1,
+                    diag_score=1.0,
+                )
+            }
+        }
+        table = format_benchmark_table(results, models=["m1"])
+        
+        # Check cell format for PASS with d50%
+        # diag_score=0.5 -> d50%
+        assert "PASS" in table
+        assert "d50%" in table
+        
+        # Check cell format for FAIL with d100%
+        # diag_score=1.0 -> d100%
+        assert "FAIL" in table
+        assert "d100%" in table
+        
+        # Check Diag score summary row: (0.5 + 1.0) / 2 = 0.75 -> 75%
+        assert "Diag score" in table
+        assert "75%" in table
+
+    def test_table_no_diag_score_displays_dash(self):
+        """When diag_score is None, d% is omitted and summary row displays —."""
+        results = {
+            "s1": {
+                "m1": ScenarioResult(
+                    scenario_id="s1",
+                    model="m1",
+                    passed=True,
+                    patch_valid=True,
+                    patch_applies=True,
+                    failures=[],
+                    patch=None,
+                    duration_seconds=1.0,
+                    confidence=0.9,
+                    attempts_to_parse=1,
+                    diag_score=None,
+                )
+            }
+        }
+        table = format_benchmark_table(results, models=["m1"])
+        
+        # Cell has no d%
+        s1_line = [line for line in table.split("\n") if "s1" in line][0]
+        # In s1 row, verify the d% indicator is omitted (e.g. no "d" character in cell details)
+        assert "d" not in s1_line.split("s1")[1]
+        
+        # Summary row has —
+        assert "Diag score" in table
+        # Find the line containing "Diag score" and assert it ends with "—" or has it
+        diag_line = [line for line in table.split("\n") if "Diag score" in line][0]
+        assert "—" in diag_line
+
