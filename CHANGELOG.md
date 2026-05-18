@@ -8,7 +8,12 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [1.0.0] — 2026-05-18
+
+First stable release. The stability contract (`docs/STABILITY.md`, exit
+codes, frozen public API) is now in force; subsequent breaking changes
+follow SemVer. Consolidates everything previously staged as Unreleased
+and the `1.0.0a2` pre-release (which never shipped separately).
 
 ### Added
 - `aqueduct benchmark` accepts a single `.aqscenario.yml` (positional or
@@ -21,10 +26,38 @@ release and are marked **BREAKING**.
   files, including a user `.gitignore`, are never overwritten.
 - `aqueduct doctor` `--aqtest` / `--aqscenario` pre-flight, combinable
   with a config/blueprint probe in one pass.
-- `aqueduct benchmark --output json` now includes the generated
+- `aqueduct benchmark --format json` now includes the generated
   `patch` (PatchSpec) per result, so a failure can be diagnosed without
-  re-running. Table mode prints a `(N failed — rerun with --output
+  re-running. Table mode prints a `(N failed — rerun with --format
   json …)` hint when any scenario fails.
+- Stable exit codes (`aqueduct/exit_codes.py`) and `docs/STABILITY.md`;
+  downstream tooling can branch on `$?`.
+- `aqueduct schema --target {blueprint,config,patch}` emits the JSON
+  Schema for IDE autocomplete / CI gating.
+- `--format json` on `aqueduct runs` and `aqueduct patch list`.
+- Two-tier suppressible warning system with stable `AQ-WARN [rule_id]`
+  IDs and `warnings.suppress` / `--suppress-warning`. New rules:
+  `kafka_checkpoint_stale`, `nondeterministic_fanout`,
+  `count_col_likely_count_star`, `file_format_no_repartition`,
+  `jdbc_missing_partition`, `jar_availability`.
+- Post-patch `explain()` regression check and
+  `agent.block_on_explain_regression` (warn-only by default).
+- `aqueduct patch preview` with lineage + sandbox validation gates;
+  `agent.patch_validation: full_run | sandbox`.
+- Pluggable observability/lineage/depot store backends (Postgres;
+  Redis for depot) with `aqueduct stores info|migrate` and
+  `[postgres]` / `[redis]` extras.
+- Secrets providers `aws` / `gcp` / `azure` / `custom` with
+  `[aws]` / `[gcp]` / `[azure]` extras.
+- Global `--log-format {text,json}` for structured log shipping.
+- `agent.max_heal_attempts_per_hour` spend-cap on self-healing.
+- `aqueduct compile --show {manifest,provenance,inputs,all}`.
+- Ingress `partition_filters`; Egress `maintenance:` (Delta
+  OPTIMIZE/VACUUM); Channel `metrics_boundary`; Channel
+  `materialize: incremental` + `watermark_column`; `Manifest`
+  input fingerprinting.
+- Assert `error_type` plus `agent.guardrails.heal_on_errors` /
+  `never_heal_errors` pre-trigger guards.
 
 ### Changed
 - `aqueduct benchmark` scoring is now two-tier: **correctness gates**
@@ -57,6 +90,17 @@ release and are marked **BREAKING**.
   break", ⚠ = "runs but fragile". doctor stays advisory.
 - Init scaffold directories renamed for consistency: `tests/` → `aqtests/`,
   `benchmarks/` → `aqscenarios/`.
+- Default `agent.model` is now `claude-sonnet-4-6`.
+- Incremental-Channel watermark is computed from materialized Egress
+  output instead of re-scanning the upstream DAG twice.
+- Cluster/cloud deployments with relative store paths now error in
+  `doctor` and warn at run start.
+- Public API frozen to a small `__all__` (`parse`, `ParseError`,
+  `AqueductWarning`, `__version__`); everything else is internal.
+- **BREAKING:** `aqueduct benchmark --output` renamed to `--format`
+  (data-shape selector; consistent with `runs`/`report`/`patch list`).
+  `-o`/`--output` is now reserved exclusively for file destinations
+  (`schema`); `compile --show` keeps its artefact-slice meaning.
 
 ### Deprecated
 - _None._
@@ -65,9 +109,23 @@ release and are marked **BREAKING**.
 - **BREAKING:** `heal --scenario` removed. `heal` is production-only
   (heal a real failed `run_id`); scenario evaluation is
   `aqueduct benchmark <file-or-dir>`.
+- **BREAKING:** `heal --print-prompt-format` removed — folded into
+  `--print-prompt [text|json]` (bare = text, `--print-prompt json` for
+  JSON).
 - **BREAKING:** `warnings.silence_all` config field and `--no-warnings`
   flag removed. Use `warnings.suppress: ["*"]` or
   `--suppress-warning '*'`.
+- **BREAKING:** `aqueduct check-config` removed — use `aqueduct validate`
+  (auto-detects blueprint vs engine config by header, accepts multiple
+  files).
+- **BREAKING:** `aqueduct doctor --config` / `--blueprint` removed — pass
+  the file positionally (header-sniffed).
+- **BREAKING:** `agent.llm_timeout` → `agent.timeout`,
+  `agent.llm_max_reprompts` → `agent.max_reprompts` (the self-healing
+  subsystem is uniformly "the agent"; no aliases).
+- **BREAKING:** `probes.block_full_actions_in_prod` →
+  `danger.allow_full_probe_actions` (inverted polarity).
+- `ollama_options` renamed to `provider_options`.
 
 ### Fixed
 - Postgres store backend (`stores.*.backend: postgres`) no longer crashes
@@ -87,60 +145,6 @@ release and are marked **BREAKING**.
 - Bundled `aqtest.yml.template` rewritten to match the real
   `aqueduct test` runner schema (it previously documented a
   non-functional format).
-
-## [1.0.0a2] — 2026-05-12
-
-### Added
-- Stable exit codes (`aqueduct/exit_codes.py`) and `docs/STABILITY.md`;
-  downstream tooling can branch on `$?`.
-- `aqueduct schema --target {blueprint,config,patch}` emits the JSON
-  Schema for IDE autocomplete / CI gating.
-- `--format json` on `aqueduct runs` and `aqueduct patch list`.
-- Two-tier suppressible warning system with stable `AQ-WARN [rule_id]`
-  IDs and `warnings.suppress` / `--suppress-warning`. New rules:
-  `kafka_checkpoint_stale`, `nondeterministic_fanout`,
-  `count_col_likely_count_star`, `file_format_no_repartition`,
-  `jdbc_missing_partition`, `jar_availability`.
-- Post-patch `explain()` regression check and
-  `agent.block_on_explain_regression` (warn-only by default).
-- `aqueduct patch preview` with lineage + sandbox validation gates;
-  `agent.patch_validation: full_run | sandbox`.
-- Pluggable observability/lineage/depot store backends (Postgres;
-  Redis for depot) with `aqueduct stores info|migrate` and
-  `[postgres]` / `[redis]` extras.
-- Secrets providers `aws` / `gcp` / `azure` / `custom` with
-  `[aws]` / `[gcp]` / `[azure]` extras.
-- Global `--log-format {text,json}` for structured log shipping.
-- `agent.max_heal_attempts_per_hour` spend-cap on self-healing.
-- `aqueduct compile --show {manifest,provenance,inputs,all}`.
-- Ingress `partition_filters`; Egress `maintenance:` (Delta
-  OPTIMIZE/VACUUM); Channel `metrics_boundary`; Channel
-  `materialize: incremental` + `watermark_column`; `Manifest`
-  input fingerprinting.
-- Assert `error_type` plus `agent.guardrails.heal_on_errors` /
-  `never_heal_errors` pre-trigger guards.
-
-### Changed
-- Default `agent.model` is now `claude-sonnet-4-6`.
-- Incremental-Channel watermark is computed from materialized Egress
-  output instead of re-scanning the upstream DAG twice.
-- Cluster/cloud deployments with relative store paths now error in
-  `doctor` and warn at run start.
-- Public API frozen to a small `__all__` (`parse`, `ParseError`,
-  `AqueductWarning`, `__version__`); everything else is internal.
-
-### Removed
-- **BREAKING:** `aqueduct check-config` removed — use `aqueduct validate`
-  (auto-detects blueprint vs engine config by header, accepts multiple
-  files).
-- **BREAKING:** `aqueduct doctor --config` / `--blueprint` removed — pass
-  the file positionally (header-sniffed).
-- **BREAKING:** `agent.llm_timeout` → `agent.timeout`,
-  `agent.llm_max_reprompts` → `agent.max_reprompts` (the self-healing
-  subsystem is uniformly "the agent"; no aliases).
-- **BREAKING:** `probes.block_full_actions_in_prod` →
-  `danger.allow_full_probe_actions` (inverted polarity).
-- `ollama_options` renamed to `provider_options`.
 
 ## [1.0.0a1] — 2026-05-12
 

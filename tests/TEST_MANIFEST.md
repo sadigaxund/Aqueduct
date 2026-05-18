@@ -1589,7 +1589,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `heal <run_id>`: still works (existing flow unbroken)
 - ✅ `heal` with no args → exit 1, message `✗ provide a run_id argument` (no longer mentions `--scenario`)
 - ✅ `heal <run_id> --print-prompt`: prints system block + user block to stdout, exits 0, no LLM called
-- ✅ `heal <run_id> --print-prompt --print-prompt-format json`: output is valid JSON with "system" and "user" keys
+- ✅ `heal <run_id> --print-prompt json`: valid JSON with "system"/"user" (flag folded — `--print-prompt-format` REMOVED; bare `--print-prompt` = text, `--print-prompt json` = JSON; absent = None → model required)
 - ✅ `heal --print-prompt` with no agent.model configured: succeeds (model guard skipped)
 - ✅ `benchmark --scenarios <dir> --model A --model B`: runs all scenarios, prints table
 - ✅ `benchmark <file.aqscenario.yml>` (positional, single file) runs just that scenario (`run_benchmark` `scenarios_dir.is_file()` branch → `[path]`, no glob)
@@ -1599,13 +1599,13 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `benchmark --provider`/`--base-url` override only connection identity; `provider_options` still sourced from `cfg.agent` (not flag-settable)
 - ✅ `benchmark --timeout 600` → `run_benchmark` receives `timeout=600.0`; omitted → `cfg.agent.timeout` (default 120.0). Precedence: flag `is not None` > `cfg.agent` > default
 - ✅ `benchmark --timeout 0` → `resolved_timeout` mapped to `None` (unbounded); reaches `_call_anthropic` (`httpx.post(timeout=None)`) and `_call_openai_compat` (`httpx.Timeout(connect=15, read=None, write=30, pool=5)`) — connect still bounded, read unbounded. Default stays 120 (never unbounded)
-- ✅ `benchmark --output json`: outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
-- ✅ `benchmark --output json` per-result now includes `patch` = `PatchSpec.model_dump(mode="json")` when a patch was generated, else `null`
-- ✅ `benchmark` table mode with ≥1 failure prints `(N failed — rerun with --output json …)` to stderr; not printed when all pass; not printed in `--output json` mode
+- ✅ `benchmark --format json` (flag RENAMED from `--output`): outputs JSON dict {scenario_id: {model: {passed, confidence, ...}}}
+- ✅ `benchmark --format json` per-result includes `patch` = `PatchSpec.model_dump(mode="json")` when a patch was generated, else `null`
+- ✅ `benchmark` table mode with ≥1 failure prints `(N failed — rerun with --format json …)` to stderr; not printed when all pass; not printed in `--format json` mode
 - ✅ `benchmark`: any FAIL → sys.exit(1); all PASS → sys.exit(0)
 - ✅ `_check_assertions` now returns a 6-tuple `(hard_failures, soft_failures, patch_valid, patch_applies, root_cause_match, category_match)` — existing tests unpacking the old 5-tuple must update
 - ✅ Gating vs soft split: a result with `patch_is_valid` ∧ `patch_applies` true but `root_cause_contains`/`expected_category`/`max_attempts`/`min_confidence` missed → `passed is True`; the misses appear in `ScenarioResult.soft_failures`, NOT `failures`; `failures` holds only gating (incl. `expected_patch`) blockers
-- ✅ `ScenarioResult.diag_score` = fraction of configured diagnosis signals (root_cause/category) hit; `None` when neither configured; surfaced in `--output json` (`diag_score`, `soft_failures`) and table (`d%` in cell + `Diag score` summary row)
+- ✅ `ScenarioResult.diag_score` = fraction of configured diagnosis signals (root_cause/category) hit; `None` when neither configured; surfaced in `--format json` (`diag_score`, `soft_failures`) and table (`d%` in cell + `Diag score` summary row)
 - ✅ `expected_patch` failure still gates (in `failures`, flips `passed`)
 - ✅ aqscenarios use module-id-only `expected_patch.ops: [{module_id: <m>}]`: `_match_op_spec` matches ANY op carrying that `module_id` (`set_module_config_key` and `replace_module_config` both pass — op-agnostic, format-immune); an op targeting a different module → gating fail. Floor only — does not verify patch *content* (deferred: Phase 33 effect-matcher/`--execute`)
 

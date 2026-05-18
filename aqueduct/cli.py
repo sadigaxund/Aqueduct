@@ -3174,17 +3174,12 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
 @click.option(
     "--print-prompt",
     "print_prompt",
-    is_flag=True,
-    default=False,
-    help="Print the LLM prompt that would be sent and exit without calling the model.",
-)
-@click.option(
-    "--print-prompt-format",
-    "print_prompt_format",
+    is_flag=False,
+    flag_value="text",
+    default=None,
     type=click.Choice(["text", "json"]),
-    default="text",
-    show_default=True,
-    help="Output format for --print-prompt.",
+    help="Print the LLM prompt that would be sent and exit without calling "
+    "the model. Bare = text; `--print-prompt json` for JSON.",
 )
 @_env_options
 def heal(
@@ -3193,8 +3188,7 @@ def heal(
     store_dir: str | None,
     config_path: str | None,
     patches_dir: str,
-    print_prompt: bool,
-    print_prompt_format: str,
+    print_prompt: str | None,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -3297,7 +3291,7 @@ def heal(
 
     if print_prompt:
         prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context)
-        _print_prompt(prompt, print_prompt_format)
+        _print_prompt(prompt, print_prompt)
         return
 
     click.echo(
@@ -3391,12 +3385,13 @@ def heal(
     help="Root directory for patch lifecycle (for previous-patch history)",
 )
 @click.option(
-    "--output",
+    "--format",
     "fmt",
     default="table",
     type=click.Choice(["table", "json"]),
     show_default=True,
-    help="Output format",
+    help="Output data shape (table | json). (-o/--output is reserved for "
+    "file destinations on other commands; this is the data format.)",
 )
 @click.option(
     "--workers",
@@ -3533,7 +3528,7 @@ def benchmark(
     failed = total - passed
     if failed and fmt != "json":
         click.echo(
-            f"({failed} failed — rerun with --output json for failure "
+            f"({failed} failed — rerun with --format json for failure "
             f"detail + the generated patch)",
             err=True,
         )
@@ -3961,7 +3956,7 @@ def init() -> None:
 
     click.echo(f"\n✓ {project_name} ready")
     click.echo("\nNext steps:")
-    click.echo("  1. Create blueprints/<name>.yml  (see aqueduct.template.yml for reference)")
+    click.echo("  1. Create blueprints/<name>.yml  (see blueprint.template.yml for reference)")
     click.echo("  2. aqueduct validate blueprints/<name>.yml")
     click.echo("  3. aqueduct run blueprints/<name>.yml")
 
