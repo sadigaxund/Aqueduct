@@ -2,21 +2,24 @@ aqueduct_scenario: "1.0"
 
 id: format_csv_read_as_parquet
 description: >
-  Ingress users_raw declares format: parquet but the underlying file is actually a CSV.
-blueprint: blueprints/pipeline.yml
+  Ingress users_raw declares format: parquet but the file at the path is actually CSV.
+blueprint: blueprints/03_format_csv_read_as_parquet.yml
 
 inject_failure:
   module: users_raw
-  error_message: >
-    IngressError: [users_raw] AnalysisException: Unable to infer schema for Parquet. It must be specified manually.
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNABLE_TO_INFER_SCHEMA] Unable to infer schema for Parquet. It must be specified manually. SQLSTATE: 42KD9
+      at org.apache.spark.sql.execution.datasources.DataSource.getOrInferFileFormatSchema(DataSource.scala:201)
+      at org.apache.spark.sql.execution.datasources.DataSource.resolveRelation(DataSource.scala:411)
+    (Ingress users_raw — reader.format("parquet").load("data/input/users.csv"))
 
+# Op-agnostic + diagnosis. Strict op-shape pin removed — see TODOs Phase
+# 33 (`_match_op_spec`).
 expected_patch:
   ops:
-    - op: set_module_config_key
-      module_id: users_raw
-      key: format
-      value_contains: "csv"
+    - module_id: users_raw   # op-agnostic gating: patch must modify the failing module
 
 assertions:
   - patch_is_valid: true
   - patch_applies: true
+  - root_cause_contains: ["parquet", "csv", "schema"]

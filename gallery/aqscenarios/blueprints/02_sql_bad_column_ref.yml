@@ -1,0 +1,63 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 02): clean_users selects `signup_date`, which does
+# not exist in users_raw — the column is `signup_ts`.
+modules:
+  - id: users_raw
+    type: Ingress
+    label: Raw Users
+    config:
+      format: csv
+      path: data/input/users.csv
+  - id: clean_users
+    type: Channel
+    label: Clean Users
+    config:
+      op: sql
+      query: |
+        SELECT
+          id,
+          name,
+          signup_date
+        FROM users_raw
+  - id: events_raw
+    type: Ingress
+    label: Raw Events
+    config:
+      format: csv
+      path: data/input/events.csv
+  - id: clean_events
+    type: Channel
+    label: Clean Events
+    config:
+      op: sql
+      query: |
+        SELECT
+          event_id,
+          user_id,
+          CAST(event_time AS timestamp) as event_time,
+          event_type
+        FROM events_raw
+  - id: join_data
+    type: Channel
+    label: Join Data
+    config:
+      op: sql
+      query: |
+        SELECT
+          u.id,
+          u.name,
+          e.event_time,
+          e.event_type
+        FROM clean_users u
+        JOIN clean_events e ON u.id = e.user_id
+edges:
+  - from: users_raw
+    to: clean_users
+  - from: events_raw
+    to: clean_events
+  - from: clean_users
+    to: join_data
+  - from: clean_events
+    to: join_data
