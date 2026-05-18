@@ -317,6 +317,31 @@ class TestGenerateLlmPatch:
         assert result.patch is not None
         assert len(call_count) == 2
 
+    def test_api_error_on_attempt_1_breaks_loop(self, tmp_path, monkeypatch, caplog):
+        import logging
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+        def failing_llm(*_args, **_kw):
+            raise RuntimeError("API timeout or disconnect")
+
+        monkeypatch.setattr("aqueduct.agent._call_agent", failing_llm)
+
+        with caplog.at_level(logging.ERROR):
+            result = generate_agent_patch(
+                failure_ctx=_failure_ctx(),
+                model="claude-sonnet-4-6",
+                patches_dir=tmp_path / "patches",
+                max_reprompts=3,
+            )
+        assert result.patch is None
+        assert result.attempts == 1
+        assert len(result.reprompt_errors) == 1
+        assert "API error: API timeout or disconnect" in result.reprompt_errors[0]
+
+        # Verify the error log uses actual attempts_made (1)
+        err_messages = [rec.message for rec in caplog.records if rec.levelno == logging.ERROR]
+        assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in err_messages)
+
 
 # ── Surveyor integration ──────────────────────────────────────────────────────
 

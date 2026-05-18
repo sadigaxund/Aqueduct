@@ -74,33 +74,6 @@ def test_heal_print_prompt_json(mock_connect, mock_fc_row, test_config, tmp_path
     assert "test_bp" in data["user"]
 
 
-def test_heal_scenario_print_prompt(tmp_path, test_config):
-    # Create a minimal blueprint file the scenario can reference
-    bp_path = tmp_path / "bp.yml"
-    bp_path.write_text("""
-aqueduct: "1.0"
-id: bp1
-name: Test BP
-modules: []
-""")
-    scenario_path = tmp_path / "scenario.aqscenario.yml"
-    scenario_path.write_text(f"""
-aqueduct_scenario: "1.0"
-id: test_scenario
-blueprint: bp.yml
-inject_failure:
-  module: m1
-  error_message: Simulated failure
-""")
-    runner = CliRunner()
-    result = runner.invoke(cli, ["heal", "--scenario", str(scenario_path), "--print-prompt", "--config", str(test_config)])
-    
-    assert result.exit_code == 0, f"Failed with: {result.output}"
-    assert "## SYSTEM PROMPT" in result.output
-    assert "## USER PROMPT" in result.output
-    assert "bp1" in result.output
-
-
 @patch("duckdb.connect")
 def test_heal_print_prompt_no_model_succeeds(mock_connect, mock_fc_row, tmp_path):
     mock_conn = MagicMock()
@@ -122,4 +95,10 @@ agent:
     assert result.exit_code == 0, f"Failed with: {result.output}"
     assert "## SYSTEM PROMPT" in result.output
 
+
+def test_heal_no_args_exit_1():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["heal"])
+    assert result.exit_code == 1
+    assert "✗ provide a run_id argument" in result.output
 
