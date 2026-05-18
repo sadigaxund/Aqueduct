@@ -1,0 +1,61 @@
+aqueduct: "1.0"
+id: pipeline
+name: Pipeline
+# Defect (for scenario 05): clean_events does SUM(event_id), but event_id
+# is read from CSV (no schema) as STRING — numeric aggregate fails.
+modules:
+  - id: users_raw
+    type: Ingress
+    label: Raw Users
+    config:
+      format: csv
+      path: data/input/users.csv
+  - id: clean_users
+    type: Channel
+    label: Clean Users
+    config:
+      op: sql
+      query: |
+        SELECT
+          id,
+          name,
+          signup_ts
+        FROM users_raw
+  - id: events_raw
+    type: Ingress
+    label: Raw Events
+    config:
+      format: csv
+      path: data/input/events.csv
+  - id: clean_events
+    type: Channel
+    label: Clean Events
+    config:
+      op: sql
+      query: |
+        SELECT
+          user_id,
+          SUM(event_id) AS event_id_total
+        FROM events_raw
+        GROUP BY user_id
+  - id: join_data
+    type: Channel
+    label: Join Data
+    config:
+      op: sql
+      query: |
+        SELECT
+          u.id,
+          u.name,
+          e.event_id_total
+        FROM clean_users u
+        JOIN clean_events e ON u.id = e.user_id
+edges:
+  - from: users_raw
+    to: clean_users
+  - from: events_raw
+    to: clean_events
+  - from: clean_users
+    to: join_data
+  - from: clean_events
+    to: join_data

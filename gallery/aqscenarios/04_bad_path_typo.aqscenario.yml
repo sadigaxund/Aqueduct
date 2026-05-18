@@ -2,21 +2,24 @@ aqueduct_scenario: "1.0"
 
 id: bad_path_typo
 description: >
-  The Ingress path has a typo or points to a non-existent file path instead of events.csv.
-blueprint: blueprints/pipeline.yml
+  events_raw path has a typo (data/input/events_raw.csv); the real file is data/input/events.csv.
+blueprint: blueprints/04_bad_path_typo.yml
 
 inject_failure:
   module: events_raw
-  error_message: >
-    IngressError: [events_raw] PathDoesNotExistException: Path data/input/events_raw.csv does not exist.
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [PATH_NOT_FOUND] Path does not exist: file:/work/data/input/events_raw.csv. SQLSTATE: 42K03
+      at org.apache.spark.sql.errors.QueryCompilationErrors$.dataPathNotExistError(QueryCompilationErrors.scala:1389)
+      at org.apache.spark.sql.execution.datasources.DataSource.checkAndGlobPathIfNecessary(DataSource.scala:765)
+    (Ingress events_raw — reader.format("csv").load("data/input/events_raw.csv"))
 
+# Op-agnostic + diagnosis. Strict op-shape pin removed — see TODOs Phase
+# 33 (`_match_op_spec`).
 expected_patch:
   ops:
-    - op: set_module_config_key
-      module_id: events_raw
-      key: path
-      value_contains: "events.csv"
+    - module_id: events_raw   # op-agnostic gating: patch must modify the failing module
 
 assertions:
   - patch_is_valid: true
   - patch_applies: true
+  - root_cause_contains: ["events_raw.csv", "events.csv", "path"]

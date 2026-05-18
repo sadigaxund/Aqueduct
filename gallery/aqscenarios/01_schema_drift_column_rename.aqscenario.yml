@@ -7,16 +7,29 @@ blueprint: blueprints/pipeline.yml
 
 inject_failure:
   module: clean_events
-  error_message: >
-    AnalysisException: [TABLE_OR_VIEW_NOT_FOUND] Cannot resolve column event_ts in events_raw
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `event_ts` cannot be resolved. Did you mean one of the following? [`event_id`, `event_time`, `user_id`, `event_type`]. SQLSTATE: 42703
+    == SQL (line 3, position 8) ==
+      CAST(event_ts AS timestamp) as event_time
+           ^^^^^^^^
+    'Project [event_id#41, user_id#42, cast('event_ts as timestamp) AS event_time#48, event_type#44]
+    +- SubqueryAlias events_raw
+       +- Relation [event_id#41,user_id#42,event_time#43,event_type#44] csv
+
+# No expected_patch op-shape pin on purpose. The fix is valid via either
+# `set_module_config_key` (surgical) or `replace_module_config` (whole
+# block) — both reach the same correct end-state for this module, which
+# has no other config keys to lose. Pinning one op name produced false
+# FAILs on capable models that chose the other valid op. Scored instead
+# on: produces a schema-valid patch, the patch applies, and the model
+# diagnosed the right cause. (Systemic effect/equivalence matcher is
+# tracked in TODOs Phase 33 — `_match_op_spec` op-name strictness.)
 
 expected_patch:
   ops:
-    - op: set_module_config_key
-      module_id: clean_events
-      key: query
-      value_contains: "event_time"
+    - module_id: clean_events   # op-agnostic gating: patch must modify the failing module
 
 assertions:
   - patch_is_valid: true
   - patch_applies: true
+  - root_cause_contains: ["event_ts", "event_time"]

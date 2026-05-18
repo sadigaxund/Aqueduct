@@ -8,12 +8,12 @@ It enables model selection based on evidence, catches prompt regressions in CI, 
 
 Scenario evaluations run completely offline and require no heavy Apache Spark sessions. They operate under a modular, highly reusable architecture:
 
-1. **Clean Control Blueprints**: The suite references master blueprint definitions under [blueprints/](blueprints/) (e.g. `pipeline.yml`). The blueprint itself is kept completely healthy, clean, and compiles with no errors.
-2. **Independent Scenario Files**: Each `.aqscenario.yml` file is an independent execution unit simulating one specific data engineering issue (such as a schema drift, typo, or type cast conflict). 
-3. **Synthetic Failure Injection**: When you execute a scenario, Aqueduct's runner loads the clean blueprint, compiles it into a static DAG, and synthetically injects exactly one single failure defined in the scenario's `inject_failure` block.
-4. **Prompt Generation & Verification**: The combined failure context is packaged into a realistic diagnostic prompt for the LLM. The resulting recovery patch is parsed, validated against the Pydantic `PatchSpec` JSON schema, syntactically applied back to the blueprint, and validated via the compiler to guarantee correct resolution.
+1. **One blueprint per scenario, each with exactly one real defect**: every scenario points at its own blueprint under [blueprints/](blueprints/) (`<NN_id>.yml`) — a copy of the same pipeline carrying the single defect that scenario is about (a wrong column, a `format`/`path` mistake, a type bug). The agent's job is to *patch that blueprint*, so the defect must actually be present in it — a "clean" blueprint plus an unrelated error would be unsolvable and ungradable.
+2. **Realistic `inject_failure`**: `error_message` is written to match what Spark/Aqueduct **actually emits** for that defect (error class, `SQLSTATE`, the `Did you mean …?` suggestion list, the unresolved-plan relation schema). Nothing extra is spoon-fed — only what a real run would print. The runner builds the FailureContext from the (compilable) blueprint + this error; no Spark session needed.
+3. **Prompt & verification**: the failure context becomes the diagnostic prompt. The LLM's recovery patch is parsed against the `PatchSpec` schema, applied back to the blueprint, and re-compiled.
+4. **Op-agnostic scoring**: scenarios assert on *outcome + diagnosis* (`patch_is_valid`, `patch_applies`, `root_cause_contains`), not a hard-coded op name — a correct fix via any valid op passes. (True runtime correctness — "does the patched query actually run" — needs the future `--execute` mode; see the project TODOs Phase 33.)
 
-By decoupling the pipeline topology from individual failure states, you can test dozens of highly custom, complex pipeline recovery paths using a single, reusable blueprint definition!
+The defect lives in the blueprint and the error mirrors a real Spark failure, so each scenario is a faithful, gradable recovery task — not a narrative bolted onto a healthy pipeline.
 
 ## The `benchmark` Command
 

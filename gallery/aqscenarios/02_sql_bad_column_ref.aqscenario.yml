@@ -2,21 +2,28 @@ aqueduct_scenario: "1.0"
 
 id: sql_bad_column_ref
 description: >
-  The SQL query in clean_users references a column named signup_date which doesn't exist (should be signup_ts).
-blueprint: blueprints/pipeline.yml
+  clean_users selects a column `signup_date` that does not exist in users_raw — the column is `signup_ts`.
+blueprint: blueprints/02_sql_bad_column_ref.yml
 
 inject_failure:
   module: clean_users
-  error_message: >
-    AnalysisException: [UNRESOLVED_COLUMN] Cannot resolve column signup_date in users_raw
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `signup_date` cannot be resolved. Did you mean one of the following? [`id`, `name`, `signup_ts`]. SQLSTATE: 42703
+    == SQL (line 4, position 8) ==
+          signup_date
+          ^^^^^^^^^^^
+    'Project [id#10, name#11, 'signup_date]
+    +- SubqueryAlias users_raw
+       +- Relation [id#10,name#11,signup_ts#12] csv
 
+# Scored op-agnostically (any valid op that corrects the column ref is
+# accepted) + diagnosis. Strict op-shape pin removed — see TODOs Phase 33
+# (`_match_op_spec`).
 expected_patch:
   ops:
-    - op: set_module_config_key
-      module_id: clean_users
-      key: query
-      value_contains: "signup_ts"
+    - module_id: clean_users   # op-agnostic gating: patch must modify the failing module
 
 assertions:
   - patch_is_valid: true
   - patch_applies: true
+  - root_cause_contains: ["signup_date", "signup_ts"]
