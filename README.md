@@ -1,16 +1,25 @@
-# Aqueduct
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/ceb9dd65-5a20-4325-bdc6-2244417333ea" alt="Aqueduct Logo" width="280" />
+</p>
 
-**Intelligent, self-healing Spark pipelines. Declarative. Observable. Autonomous.**
+<h1 align="center">Aqueduct</h1>
 
-[![PyPI](https://img.shields.io/pypi/v/aqueduct-core?style=flat-square)](https://pypi.org/project/aqueduct-core/)
-[![Python](https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square)](https://www.python.org/)
-[![CI](https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/ci.yml?branch=main&style=flat-square)](https://github.com/sadigaxund/aqueduct/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square)](LICENSE)
+<p align="center">
+  <strong>Intelligent, self-healing Spark pipelines. Declarative. Observable. Autonomous.</strong>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/aqueduct-core/"><img src="https://img.shields.io/pypi/v/aqueduct-core?style=flat-square" alt="PyPI" /></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square" alt="Python" /></a>
+  <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/ci.yml?branch=main&style=flat-square" alt="CI" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License" /></a>
+</p>
+
+---
 
 Aqueduct is a control plane for Apache Spark. You write pipelines as YAML *Blueprints*. Aqueduct validates, compiles, and executes them while monitoring every step. When something breaks, Aqueduct can **autonomously patch the pipeline** using an LLM agent, applying structured, auditable fixes.
 
-> **Self-healing is opt-in and off by default.** The agent never calls an LLM or touches your Blueprint unless you set `agent.approval_mode`. See [Agent Guardrails](#agent-guardrails) for the approval modes and the deterministic guards that bound what a patch can do.
-
+> 🛡️ **Self-healing is opt-in and off by default.** The agent never calls an LLM or touches your Blueprint unless you set `agent.approval_mode`. See [Agent Guardrails](#agent-guardrails) for the approval modes and the deterministic guards that bound what a patch can do.
 ---
 
 ## Contents
