@@ -8,6 +8,24 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+### Added
+- **Apache Airflow integration** (`aqueduct.integrations.airflow`, Phase 31):
+  drop-in `AqueductOperator` plus deferrable `AqueductPatchSensor` /
+  `AqueductPatchTrigger`. The operator subprocesses `aqueduct run` and maps
+  the engine's stable exit codes onto Airflow outcomes; `HEAL_PENDING`
+  (exit 3) triggers an async patch-approval wait that releases the worker
+  slot via Airflow 2.7+ deferrable triggers. Install with
+  `pip install aqueduct-core[airflow]`. See
+  `aqueduct/integrations/airflow/README.md` for the full DAG example.
+- New extras: `[airflow]` (slim, Airflow only) and `[schedulers]`
+  (aggregate of scheduler integrations). `[all]` now pulls in
+  `[schedulers]`.
+- `docs/specs.md §10.7 — Orchestrator Integration Contract`: documents
+  the engine-agnostic exit-code + patch-CLI JSON surface that any
+  scheduler integration consumes.
+
 ## [1.0.0] — 2026-05-18
 
 First stable release. The stability contract (`docs/STABILITY.md`, exit

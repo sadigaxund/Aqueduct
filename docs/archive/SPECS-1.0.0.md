@@ -2054,52 +2054,6 @@ aqueduct test pipeline.aqtest.yml --config aqueduct.yml
 
 Exit code 0 = all tests passed. Exit code 1 = any test failed or test file error.
 
-# **10.7 Orchestrator Integration Contract**
-
-Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect, …) wrap `aqueduct run` and consume two stable surfaces: the **exit-code contract** and the **patch CLI JSON**. Both are part of the v1.0 stability guarantee — semver applies.
-
-## **Exit codes (stable)**
-
-| Code | Constant | Meaning | Orchestrator action |
-| :- | :- | :- | :- |
-| `0` | `SUCCESS` | Run finished cleanly. | mark task success |
-| `1` | `CONFIG_ERROR` | Malformed `aqueduct.yml` / blueprint schema error. | fail task, no retry |
-| `2` | `DATA_OR_RUNTIME` | Runtime failure (Spark error, Assert, missing input). | apply task retry policy |
-| `3` | `HEAL_PENDING` | Surveyor produced a patch staged for human review. | wait for approval (defer / sensor) |
-| `4` | `VALIDATION_GATE` | Validation pyramid rejected a patch in non-interactive mode. | fail task |
-| `5` | `USAGE_ERROR` | CLI invoked with invalid flag / missing arg. | fail task, no retry |
-
-Codes are append-only — a retired number is never reused. See `aqueduct/exit_codes.py`.
-
-## **HEAL_PENDING sidecar**
-
-When `aqueduct run` exits `3`, a patch JSON has been written to `<patches-root>/pending/<patch_id>.json` (path resolution: blueprint-adjacent `patches/` directory unless overridden). The patch carries `patch_id`, `rationale`, `confidence`, `category`, and the structured `PatchSpec` ops. The orchestrator does not need to read this file directly — it polls the patch CLI instead.
-
-## **Patch CLI JSON**
-
-`aqueduct patch list --status {pending|applied|rejected|all} --format json --patches-dir <dir>` emits a JSON array. Each entry is:
-
-```json
-{
-  "status": "pending",
-  "file": "/abs/path/to/patches/pending/<patch_id>.json",
-  "patch_id": "<uuid>",
-  "rationale": "...",
-  "confidence": 0.87,
-  "category": "schema_drift"
-}
-```
-
-`status` reflects lifecycle directory membership. Approval transitions an entry from `pending` → `applied`; rejection moves it to `rejected`. The CLI is the source of truth — schedulers should not watch the filesystem directly.
-
-## **Integration boundary**
-
-* **Aqueduct owns**: blueprint parsing, Spark execution, retry semantics inside a run, patch generation, lineage / observability writes, healing loop budgets.
-* **Orchestrator owns**: schedule, upstream/downstream task DAG, task-level retry policy, secrets injection (as env vars), worker slot allocation, alerting.
-* **Glue**: stable exit codes + patch CLI JSON. No long-lived process, no socket, no shared DB schema.
-
-A scheduler integration is a thin shim — operator subprocesses `aqueduct run`, sensor polls `aqueduct patch list --format json`. The first such shim is `aqueduct.integrations.airflow` (Phase 31).
-
 # **11. CLI Reference**
 ## **11.1 Core Commands**
 

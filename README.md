@@ -5,7 +5,11 @@
 <h1 align="center">Aqueduct</h1>
 
 <p align="center">
-  <strong>Intelligent, self-healing Spark pipelines. Declarative. Observable. Autonomous.</strong>
+  <strong>Agentic Spark — intelligent, self-healing pipelines. Declarative. Observable. Autonomous.</strong>
+</p>
+
+<p align="center">
+  <em>Wake up to a pending patch awaiting your approval — not a wall of error logs.</em>
 </p>
 
 <p align="center">
@@ -131,7 +135,10 @@ Optional extras, added only if you need them:
 
 - `[spark]`: Spark execution (`pyspark`, `delta-spark`). Required for `aqueduct run`.
 - `[aws]` / `[gcp]` / `[azure]`: one cloud secrets backend.
-- `[secrets]`: all three secrets backends. `[all]`: Spark plus all secrets.
+- `[secrets]`: all three secrets backends.
+- `[airflow]`: Airflow operator + deferrable sensor (`aqueduct.integrations.airflow`).
+- `[schedulers]`: aggregate of all scheduler integrations (currently just `airflow`).
+- `[all]`: Spark plus secrets, store backends, and scheduler integrations.
 
 Needs Python 3.11+. Local Spark needs Java 17. Spark 3.3+ gives full
 row-count metrics; older Spark reports only `bytes` and `duration_ms`.
@@ -624,6 +631,24 @@ aqueduct lineage <blueprint_id>      # column lineage graph
 ```
 
 When a run fails and self-healing is enabled, the Surveyor assembles a `FailureContext`, the Agent emits a `PatchSpec`, and the patch passes a validation pyramid (guardrails → lineage impact → sandbox replay → plan-regression check) before it is applied or staged. Inspect generated patches with `aqueduct patch list` / `aqueduct patch preview`.
+
+---
+
+## Orchestrator Integrations
+
+Aqueduct stays scheduler-agnostic — schedulers invoke `aqueduct run` and key off the stable exit-code contract (see [§10.7](docs/specs.md)). The first shipped integration is Apache Airflow:
+
+```python
+from aqueduct.integrations.airflow import AqueductOperator
+
+AqueductOperator(
+    task_id="run_etl",
+    blueprint="dags/etl.blueprint.yml",
+    run_id="{{ run_id }}",
+)
+```
+
+Install with `pip install aqueduct-core[airflow]`. The operator runs the blueprint, maps `HEAL_PENDING` (exit code 3) onto an Airflow deferrable trigger so the worker slot is released while waiting for human patch approval, and resumes automatically once the patch is applied or rejected. Full docs: [`aqueduct/integrations/airflow/README.md`](aqueduct/integrations/airflow/README.md).
 
 ---
 
