@@ -2273,3 +2273,25 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ Postgres: `run_records`/`failure_contexts`/`explain_snapshot` upserts use `INSERT … ON CONFLICT (pk) DO UPDATE` (no `INSERT OR REPLACE`); re-running same run_id updates (no PK violation), works on both backends
 - ✅ Phase 33 matrix: a real blueprint run with `stores.*.backend: postgres` (and redis-KV depot) completes — observability/lineage/depot writes succeed; verify `column_lineage`/`probe_signals`/`module_metrics`/`maintenance_metrics` DDL+inserts portable
 - ✅ `run` with `stores.observability.backend: postgres`/`redis`: does NOT create a `postgresql:/…`/`redis:/…` directory; `resolved_store_dir` falls back to `.aqueduct/observability/<blueprint_id>`; DSN never `Path()`'d (gated on `backend == "duckdb"`)
+
+### Phase 31 — Airflow Integration (`aqueduct.integrations.airflow`)
+- ✅ `AqueductOperator.execute`: exit code 0 → returns `{"run_id", "exit_code": 0}` (XCom push shape), no `defer` call, no exception
+- ✅ `AqueductOperator.execute`: exit code 2 (`DATA_OR_RUNTIME`) → raises `AirflowException` with run_id in message; does NOT call `defer`
+- ✅ `AqueductOperator.execute`: exit code 3 (`HEAL_PENDING`) → calls `self.defer(trigger=AqueductPatchTrigger(...), method_name="resume_from_patch")`; does NOT raise; trigger constructor receives `run_id`, `blueprint`, resolved `patches_dir`, `poll_interval`
+- ✅ `AqueductOperator.execute`: other exit codes (1/4/5) → `AirflowException`
+- ✅ `AqueductOperator._build_command`: emits `aqueduct run <blueprint> --run-id <id>`; appends `--config` only when set; appends `extra_args` last
+- ✅ `AqueductOperator._resolved_patches_dir`: explicit `patches_dir` wins; otherwise `<blueprint dir>/patches`
+- ✅ `AqueductOperator.resume_from_patch`: `status=approved` → re-invokes `execute(context)`; `status=rejected` → `AirflowException` with reason; unknown status → `AirflowException`
+- ✅ `AqueductOperator`: `env` dict merged into subprocess env (does not replace `os.environ`); templated fields list includes `blueprint`, `run_id`, `extra_args`, `env`
+- ✅ `AqueductPatchTrigger.serialize`: returns canonical import path + every constructor kwarg (round-trips through `BaseTrigger`)
+- ✅ `AqueductPatchTrigger._check_once`: applied JSON entry matching `run_id` → `("approved", patch_id, None)`; rejected entry → `("rejected", patch_id, rationale)`; only pending entries → `("pending", None, None)`; CLI nonzero exit → `("pending", None, None)`; malformed JSON stdout → `("pending", None, None)`
+- ✅ `AqueductPatchTrigger._matches_run`: matches by substring in `file` or `rationale`; empty `run_id` matches anything
+- ✅ `AqueductPatchTrigger.run`: yields `TriggerEvent({"status": "approved", ...})` on approval; yields `TriggerEvent({"status": "rejected", ..., "reason": ...})` on rejection; sleeps `poll_interval` between pending checks (assert via `asyncio.sleep` mock)
+- ✅ `AqueductPatchSensor.execute`: defers to `AqueductPatchTrigger` with `run_id`/`blueprint`/resolved `patches_dir`/`poll_interval`; `patch_timeout=None` → `timeout=None`; numeric → `timedelta`
+- ✅ `AqueductPatchSensor.resume_from_patch`: approved → returns event dict; rejected → `AirflowException`
+- ✅ `aqueduct.integrations.airflow` module: `__getattr__` lazy-loads `AqueductOperator` / `AqueductPatchSensor` / `AqueductPatchTrigger`; unknown attribute → `AttributeError`
+- ✅ DagBag import test: example DAG using `AqueductOperator` imports without error when `[airflow]` extra installed
+- ✅ Integration (`@pytest.mark.airflow`): real DAG runs end-to-end on a tiny local blueprint; happy path → task success, 1 try
+- ✅ Integration (`@pytest.mark.airflow`): blueprint with `UNRESOLVED_COLUMN` defect → task defers (HEAL_PENDING), external `aqueduct patch apply` lands, trigger fires, task resumes, final state success, 2 tries
+- ✅ pyproject: `[airflow]` extra installs `apache-airflow>=2.7`; `[schedulers]` aggregates `[airflow]`; `[all]` includes `[schedulers]`
+- ✅ specs.md §10.7 published: exit-code table matches `aqueduct/exit_codes.py` constants exactly

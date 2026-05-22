@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aqueduct-core"
 version = "1.0.0"
-description = "Declarative, self-healing Apache Spark blueprints."
+description = "Agentic Spark — declarative, self-healing Apache Spark blueprints."
 readme = "README.md"
 authors = [
     {name = "Sadig Akhund", email = "sadigaxund@gmail.com"},
@@ -52,11 +52,18 @@ secrets = [
 # Redis is depot-only.
 postgres = ["psycopg2-binary>=2.9"]
 redis = ["redis>=5.0"]
+# Phase 31 — orchestrator integrations. Aqueduct stays engine-agnostic; each
+# integration is lazy-imported from aqueduct.integrations.<name>.
+# Use the slim per-scheduler extra in production, [schedulers] for the
+# aggregate convenience install.
+airflow = ["apache-airflow>=2.7"]
+schedulers = ["aqueduct-core[airflow]"]
 all = [
     "aqueduct-core[spark]",
     "aqueduct-core[secrets]",
     "aqueduct-core[postgres]",
     "aqueduct-core[redis]",
+    "aqueduct-core[schedulers]",
 ]
 dev = [
     "pytest>=8.0.0",
