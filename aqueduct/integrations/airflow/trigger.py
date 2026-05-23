@@ -114,14 +114,18 @@ class AqueductPatchTrigger(BaseTrigger):
         return "pending", None, None
 
     def _matches_run(self, entry: dict[str, Any]) -> bool:
-        """A patch belongs to this run if its filename / rationale references run_id.
+        """A patch belongs to this run if its ``run_id`` matches.
 
-        The CLI's JSON shape currently omits an explicit ``run_id`` field; this
-        check is intentionally loose so the contract can evolve without
-        breaking the trigger. The patch CLI is the source of truth.
+        Primary match: the CLI's JSON exposes ``run_id`` from the patch's
+        ``_aq_meta`` block. Falls back to filename / rationale substring so
+        older patches (pre-1.0.1, no ``_aq_meta.run_id`` in JSON output)
+        still resolve.
         """
         if not self.run_id:
             return True
+        entry_run_id = entry.get("run_id")
+        if entry_run_id:
+            return entry_run_id == self.run_id
         file_path = entry.get("file") or ""
         rationale = entry.get("rationale") or ""
         return self.run_id in file_path or self.run_id in rationale

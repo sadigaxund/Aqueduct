@@ -11,6 +11,13 @@ release and are marked **BREAKING**.
 ## [1.0.1] — 2026-05-23
 
 ### Fixed
+- **`aqueduct patch list --format json` now emits `run_id`,
+  `blueprint_id`, `failed_module`** (sourced from the patch file's
+  `_aq_meta` block). Without these fields downstream integrations
+  (Airflow trigger, CI gates) had no reliable way to match a patch to
+  the run that produced it. Also updates the Airflow
+  `AqueductPatchTrigger` to match by exact `run_id` first, with the old
+  substring heuristic kept as a fallback for pre-1.0.1 patches.
 - **`aqueduct run` now exits `3` (HEAL_PENDING) when `approval_mode: human`
   or `ci` stages a patch under `patches/pending/`** — previously the
   command exited `1` regardless of why the run failed, so downstream

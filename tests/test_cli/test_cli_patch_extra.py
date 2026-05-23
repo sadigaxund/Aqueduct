@@ -203,6 +203,45 @@ class TestPatchList:
         assert "Apply:" in result.output or "aqueduct patch apply" in result.output
         assert "Reject:" in result.output or "aqueduct patch reject" in result.output
 
+    def test_patch_list_json_format(self, setup):
+        """JSON output mode lists all fields including meta. Missing meta defaults to null."""
+        project, bp_path, patches_dir, patch_file = setup
+        runner = CliRunner()
+
+        # 1. First patch (from setup) has no _aq_meta
+        # 2. Write a second patch that has _aq_meta
+        meta_patch = {
+            "patch_id": "P002",
+            "rationale": "Meta patch",
+            "operations": [],
+            "_aq_meta": {
+                "run_id": "run-xyz",
+                "blueprint_id": "test_bp",
+                "failed_module": "src",
+            }
+        }
+        (patches_dir / "pending" / "P002.json").write_text(json.dumps(meta_patch))
+
+        result = runner.invoke(cli, ["patch", "list", "--blueprint", str(bp_path), "--format", "json"])
+        assert result.exit_code == 0
+
+        parsed = json.loads(result.output)
+        assert len(parsed) == 2
+
+        # P001 has no meta, run_id etc should be null
+        p1 = next(p for p in parsed if p["patch_id"] == "P001")
+        assert p1["run_id"] is None
+        assert p1["blueprint_id"] is None
+        assert p1["failed_module"] is None
+        assert p1["status"] == "pending"
+
+        # P002 has meta
+        p2 = next(p for p in parsed if p["patch_id"] == "P002")
+        assert p2["run_id"] == "run-xyz"
+        assert p2["blueprint_id"] == "test_bp"
+        assert p2["failed_module"] == "src"
+        assert p2["status"] == "pending"
+
 
 # ── _patches_root_from_blueprint unit tests ────────────────────────────────────
 
