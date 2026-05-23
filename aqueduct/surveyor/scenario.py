@@ -103,6 +103,10 @@ class ScenarioResult:
     category_match: bool | None = None     # None = assertion not configured
     soft_failures: list[str] = field(default_factory=list)  # quality misses — reported, NEVER flip passed
     diag_score: float | None = None  # fraction of configured diagnosis signals hit; None = none configured
+    # Phase 33 Part A — persistence + regression detection
+    prompt_version: str | None = None  # agent.PROMPT_VERSION at time of run; carried into benchmark_results
+    provider: str | None = None        # LLM provider used (anthropic | openai_compat)
+    base_url: str | None = None        # LLM endpoint base_url (may be None for hosted providers)
 
     @property
     def diag_correct(self) -> bool | None:
@@ -337,7 +341,7 @@ def run_scenario(
     No Spark session required — builds a FailureContext by compiling the
     referenced blueprint, injects the failure, and calls the LLM.
     """
-    from aqueduct.agent import generate_agent_patch
+    from aqueduct.agent import PROMPT_VERSION, generate_agent_patch
 
     t0 = time.monotonic()
 
@@ -354,6 +358,9 @@ def run_scenario(
             failures=[f"Failed to build FailureContext: {exc}"],
             patch=None,
             duration_seconds=time.monotonic() - t0,
+            prompt_version=PROMPT_VERSION,
+            provider=provider,
+            base_url=base_url,
         )
 
     # Call LLM
@@ -413,6 +420,9 @@ def run_scenario(
         reprompt_errors=agent_result.reprompt_errors,
         root_cause_match=root_cause_match,
         category_match=category_match,
+        prompt_version=PROMPT_VERSION,
+        provider=provider,
+        base_url=base_url,
     )
 
 

@@ -144,25 +144,6 @@ so users understand why estimates occasionally differ from expected counts.
 
 ---
 
-### `@aq.secret()` — Environment Variable Resolution Only
-
-`@aq.secret(KEY)` resolves exclusively via `os.environ.get(KEY)` at compile time
-(before SparkSession creation). There is no external secrets provider integration
-(no Vault, AWS Secrets Manager, or GCP Secret Manager client).
-
-**What this means:**
-- Secrets must be injected into the process environment before `aqueduct` is invoked
-- In Kubernetes: use `envFrom` with a Secret resource, or a Vault agent sidecar
-- In YARN/EMR: export variables in the driver bootstrap script
-- Secrets needed for SparkSession config (e.g. Databricks tokens, S3 credentials)
-  must also be in `os.environ` — they resolve at compile time and are embedded in
-  the Manifest's `spark_config` before the session is created
-
-**Error message:** If the variable is not set, Aqueduct raises immediately with a
-clear message — it does not fall back silently to an empty string.
-
----
-
 ### Read and Write Mode Defaults
 
 **Read mode** (controls behavior on malformed records):

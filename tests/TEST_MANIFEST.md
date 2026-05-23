@@ -253,6 +253,43 @@ This section tracks high-level functional verification of core features against 
 - ✅ `provider_options: null` → payload unchanged
 - ✅ old `ollama_options` key rejected at parse time (schema validation error)
 
+### Phase 33 Part A — Benchmark persistence + regression detection
+
+#### `surveyor/surveyor.py` — `healing_outcomes.prompt_version` migration
+- ⏳ Fresh DB → `healing_outcomes` table includes `prompt_version VARCHAR` column from initial DDL
+- ⏳ Pre-1.0.3 DB (no `prompt_version` column) → `Surveyor.start()` issues `ALTER TABLE healing_outcomes ADD COLUMN prompt_version VARCHAR`; existing rows preserved with NULL value
+- ⏳ Migration is idempotent — second `Surveyor.start()` on same DB does not re-issue the ALTER (column check via `information_schema.columns`)
+- ⏳ `record_healing_outcome()` with `prompt_version=None` populates the column from `agent.PROMPT_VERSION` constant
+- ⏳ `record_healing_outcome()` with explicit `prompt_version="2.0"` honors override (does NOT fall back to constant)
+
+#### `surveyor/scenario.py` — `ScenarioResult` carries Phase 33 fields
+- ⏳ `run_scenario(...)` populates `prompt_version`, `provider`, `base_url` on the returned `ScenarioResult` (both the early-exit FailureContext-build-failure branch AND the normal path)
+- ⏳ `ScenarioResult` defaults: `prompt_version=None`, `provider=None`, `base_url=None` (backward-compatible field additions)
+
+#### `surveyor/benchmark_store.py` — persistence + diff
+- ⏳ `persist_results({})` (empty results) → 0 rows written, no error
+- ⏳ `persist_results(results)` writes one row per `(scenario, model)` pair; row schema matches DDL columns including `prompt_version`, `provider`, `base_url`, JSON-serialized `failures`/`soft_failures`
+- ⏳ `persist_results` is best-effort — when `duckdb` import fails (simulate via monkeypatch) returns 0 and logs warning instead of raising
+- ⏳ `default_store_path(<dir>)` returns `<dir>/.aqueduct/benchmark.duckdb`; `default_store_path(<file.aqscenario.yml>)` returns `<file_dir>/.aqueduct/benchmark.duckdb`
+- ⏳ `diff_latest` with NO prior row for a `(scenario, model)` pair → `DiffEntry.baseline is None`, status surfaces as "NEW", no regression
+- ⏳ `diff_latest` baseline lookup prefers exact `(scenario, model, prompt_version)` triple; falls back to most recent `(scenario, model)` regardless of prompt_version with `baseline_prompt_mismatch=True`
+- ⏳ `_compare`: `passed True→False` flagged as regression; `passed False→True` flagged as improvement
+- ⏳ `_compare`: `patch_applies True→False` flagged as regression
+- ⏳ `_compare`: `diag_score` drop > 0.05 flagged as regression; drop ≤ 0.05 ignored (noise floor)
+- ⏳ `_compare`: `confidence` drop > 0.05 flagged as regression; no improvement entry for confidence (we don't reward confidence inflation)
+- ⏳ `has_regressions([])` → False; `has_regressions([entry_with_regs])` → True; `has_regressions([new_pair_entry])` → False
+
+#### `cli.py` — `benchmark` flags + `benchmark-diff` command
+- ⏳ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
+- ⏳ `aqueduct benchmark --no-persist <dir>` does NOT write; no benchmark.duckdb file is created under `<dir>/.aqueduct/`
+- ⏳ `aqueduct benchmark --store-path /tmp/x.db <dir>` writes to the override path
+- ⏳ `aqueduct benchmark --gate-on-regression <dir>` with regression → exit code 1, stderr line "regression(s) detected"
+- ⏳ `aqueduct benchmark --gate-on-regression <dir>` without regression → exit code 0
+- ⏳ `aqueduct benchmark --gate-on-regression --no-persist <dir>` → stderr note "ignored: --no-persist set", behaves as plain benchmark
+- ⏳ `aqueduct benchmark-diff --store-path /tmp/x.db` reads store, prints diff table, exits 1 if any pair has regression
+- ⏳ `aqueduct benchmark-diff --scenario sX --model mY` filters output to one pair
+- ⏳ `aqueduct benchmark-diff` with missing store file → exit 1 with "benchmark store not found"
+
 ---
 
 ## Executor (`aqueduct/executor/`)
