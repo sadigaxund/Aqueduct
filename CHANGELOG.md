@@ -8,7 +8,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [1.0.2] — 2026-05-23
 
 ### Added
 - **External secrets provider dispatch for `@aq.secret('KEY')`** (Phase 32).
