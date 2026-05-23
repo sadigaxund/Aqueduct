@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aqueduct.redaction import redact as _redact
+
 from io import StringIO
 
 from pydantic import ValidationError
@@ -347,7 +349,7 @@ def apply_patch_file(
         raw_spec = json.loads(patch_path.read_text(encoding="utf-8"))
         raw_spec["applied_at"] = applied_at
         raw_spec["blueprint_path"] = str(blueprint_path)
-        archive_path.write_text(json.dumps(raw_spec, indent=2), encoding="utf-8")
+        archive_path.write_text(json.dumps(_redact(raw_spec), indent=2), encoding="utf-8")
         # Remove from pending — patch has been applied and archived
         if patch_path.exists():
             patch_path.unlink()
@@ -405,7 +407,7 @@ def reject_patch(
 
     raw["rejected_at"] = datetime.now(tz=timezone.utc).isoformat()
     raw["rejection_reason"] = reason
-    rejected_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+    rejected_path.write_text(json.dumps(_redact(raw), indent=2), encoding="utf-8")
     pending_path.unlink()
 
     return rejected_path

@@ -1879,17 +1879,47 @@ AQ_NO_ENV_FILE=1 aqueduct run pipeline.yml          # skip discovery (CI)
 | :- | :- |
 | `${VAR}` | Replaced with `os.environ["VAR"]`; error if unset and no default |
 | `${VAR:-default}` or `${VAR:default}` | Replaced with env var if set, otherwise `default` (dash optional) |
-| `@aq.secret('KEY')` | Resolved via `os.environ["KEY"]` (always — see note below) |
+| `@aq.secret('KEY')` | Resolved via the configured `secrets.provider` (Phase 32). See provider matrix below. |
 
-> **Note on `@aq.secret()` in `aqueduct.yml`:** The secrets provider (e.g. Vault, AWS SSM) is initialized *after* `aqueduct.yml` is loaded. So `@aq.secret()` inside `aqueduct.yml` always resolves via `os.environ`, ignoring `secrets.provider`. Use `@aq.secret()` in Blueprints (where the provider is live) for Vault/AWS/GCP keys. In `aqueduct.yml`, use `${VAR:-default}` for optional fields and plain env vars for credentials.
+**`@aq.secret()` provider dispatch (Phase 32).**
+
+`load_config` is two-pass so the provider is live by the time `@aq.secret()` is resolved. Pass 1 expands `${VAR}` and validates the config, including `secrets.provider`. Pass 2 calls the configured provider for every `@aq.secret('KEY')` token, then re-validates the resulting YAML.
+
+| `secrets.provider` | Backend | Required extra | Auth chain (ambient credentials, NOT in `aqueduct.yml`) |
+| :- | :- | :- | :- |
+| `env` (default) | `os.environ[KEY]` | none | n/a |
+| `aws` | AWS Secrets Manager | `pip install aqueduct-core[aws]` | `boto3` default chain: `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`), `~/.aws/credentials` profile, IAM role on EC2/ECS/EKS/Lambda (IMDS), SSO. Set `secrets.region` for non-default region. |
+| `gcp` | GCP Secret Manager | `pip install aqueduct-core[gcp]` | Application Default Credentials: `GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json`, `gcloud auth application-default login` cache, Workload Identity on GKE, metadata server on GCE / Cloud Run. Short-name keys (no `/`) require `GCP_PROJECT` or `GOOGLE_CLOUD_PROJECT` env. |
+| `azure` | Azure Key Vault | `pip install aqueduct-core[azure]` | `DefaultAzureCredential` chain: `AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`/`AZURE_TENANT_ID`, managed identity on Azure VMs / AKS, `az login` cache, VS Code session. **Required:** `AZURE_KEYVAULT_URL` env (e.g. `https://myvault.vault.azure.net/`). |
+| `custom` | Dotted-path callable | none | `secrets.resolver: 'mypackage.secrets.fetch'`. Callable signature: `(key: str) -> str | None`. |
+
+No caching — every `@aq.secret()` resolution hits the provider so provider-side rotation takes effect immediately and the audit trail is preserved. For provider failures (key not found, SDK missing) `load_config` raises `ConfigError` with the unresolved keys listed. SDK availability is also checked eagerly at config load via `_validate_secrets_backend`.
 
 ```yaml
-# Example — LLM agent config with env-var fallback and secret lookup:
+# aqueduct.yml — AWS Secrets Manager
+secrets:
+  provider: aws
+  region: us-east-1
+
 agent:
-  provider: ${AQUEDUCT_LLM_PROVIDER:-openai_compat}
-  model: "@aq.secret('AQUEDUCT_LLM_MODEL')"        # reads os.environ["AQUEDUCT_LLM_MODEL"]
-  base_url: "@aq.secret('AQUEDUCT_LLM_BASE_URL')"  # reads os.environ["AQUEDUCT_LLM_BASE_URL"]
+  provider: anthropic
+  # ANTHROPIC_API_KEY pulled from AWS Secrets Manager at load time
+  # (env var of the same name takes precedence if set locally)
+
+webhooks:
+  on_failure:
+    url: "@aq.secret('SLACK_WEBHOOK_URL')"  # resolved via AWS
 ```
+
+**Secret redaction (Phase 32).** Every resolved `@aq.secret()` value is registered with `aqueduct.redaction` and scrubbed (replaced with `[REDACTED]`) before crossing any trust boundary or hitting persistent storage:
+
+1. Console / log output (`click.echo`, root logger)
+2. observability.db rows (`failure_contexts.context_json`, `module_results`, `manifest_json`, `provenance_json`, `blueprint_source_yaml`)
+3. Patch sidecar files (`patches/{pending,applied,rejected}/*.json`)
+4. Outbound webhook bodies (headers and URL are intentionally NOT scrubbed — they carry user-authored credentials by design)
+5. LLM agent request payloads (`system_prompt` + `messages` sent to Anthropic / OpenAI-compat endpoints)
+
+Redaction is defense-in-depth, not the primary defense. Values shorter than 8 characters or with Shannon entropy below 2.5 bits/char are NOT registered — substring removal of common short/low-entropy strings would produce too many false positives. Such values emit `AQ-WARN [secret-weak-redact]` instead. Token-boundary matching (`(?<!\w)X(?!\w)`) ensures a registered secret `hunter2` does NOT redact occurrences inside `hunter2_module`.
 
 **Three webhook scopes:**
 

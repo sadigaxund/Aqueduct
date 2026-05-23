@@ -8,6 +8,41 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+### Added
+- **External secrets provider dispatch for `@aq.secret('KEY')`** (Phase 32).
+  Previously `@aq.secret()` was a silent alias of `${KEY}` — read from
+  `os.environ` only — and `secrets.provider: aws|gcp|azure` was validated
+  at config load but never dispatched to. `aqueduct.yml` now loads in two
+  passes: pass 1 expands `${VAR}` and validates the config (including
+  `secrets.provider`); pass 2 calls the configured provider for every
+  `@aq.secret('KEY')` token and re-validates. Backends: `env` (default,
+  reads `os.environ`), `aws` (Secrets Manager via `boto3`), `gcp`
+  (Secret Manager via `google-cloud-secret-manager`), `azure` (Key Vault
+  via `azure-keyvault-secrets` + `azure-identity`), `custom` (dotted-path
+  callable). Each provider uses its cloud's ambient credential chain
+  (boto3 default chain / GCP ADC / Azure `DefaultAzureCredential`) — no
+  cloud credentials live in `aqueduct.yml`. `resolve_secret()` no longer
+  caches into `os.environ`, so provider-side rotation takes effect on the
+  next call and the per-call audit trail is preserved.
+- **Secret redaction registry (`aqueduct/redaction.py`)** scrubs every
+  resolved `@aq.secret()` value (replaced with `[REDACTED]`) from outputs
+  that cross a trust boundary or hit persistent storage. Wired at five
+  sinks: console / log output (`click.echo` + root-logger filter),
+  observability.db rows, patch sidecar files
+  (`patches/{pending,applied,rejected}/*.json`), outbound webhook
+  payloads (body only — headers and URL are intentionally untouched
+  because user-authored credentials in headers are the intended
+  transmission path), and LLM agent request payloads (`system_prompt` +
+  `messages` sent to Anthropic / OpenAI-compat endpoints). Defense-in-
+  depth, not the primary defense — values shorter than 8 chars or below
+  2.5 bits/char of Shannon entropy are NOT registered and emit
+  `AQ-WARN [secret-weak-redact]` instead, because substring removal of
+  short common identifiers produces too many false positives.
+  Token-boundary matching (`(?<!\w)X(?!\w)`) prevents a secret value
+  equal to `hunter2` from redacting occurrences inside `hunter2_module`.
+
 ## [1.0.1] — 2026-05-23
 
 ### Fixed

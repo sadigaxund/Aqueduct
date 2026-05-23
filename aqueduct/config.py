@@ -475,11 +475,15 @@ _ENV_VAR_RE = re.compile(r'\$\{([^}:]+)(?::[-]?(.*?))?\}')
 _AQ_SECRET_RE = re.compile(r"""["']?@aq\.secret\(['"]([^'"]+)['"]\)["']?""")
 
 
-def _expand_env_vars(text: str) -> tuple[str, list[str]]:
-    """Expand ${VAR}, ${VAR:-default}, and @aq.secret('KEY') in aqueduct.yml.
+def _expand_env(text: str) -> tuple[str, list[str]]:
+    """First pass — expand ``${VAR}`` and ``${VAR:-default}`` only.
 
-    Returns (expanded_text, missing_vars). Caller raises ConfigError if missing_vars
-    is non-empty. @aq.secret() resolves via os.environ only (provider not live yet).
+    ``@aq.secret()`` is deferred to the second pass because resolving it
+    requires a validated ``SecretsConfig`` (provider, region, resolver),
+    which is not available until the first pass output has been parsed.
+
+    Returns ``(expanded_text, missing_env_vars)``. Caller raises
+    ``ConfigError`` if ``missing_env_vars`` is non-empty.
     """
     missing: list[str] = []
 
@@ -493,17 +497,40 @@ def _expand_env_vars(text: str) -> tuple[str, list[str]]:
         missing.append(f"${{{var}}}")
         return ""
 
+    return _ENV_VAR_RE.sub(_replace_env, text), missing
+
+
+def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[str]]:
+    """Second pass — resolve ``@aq.secret('KEY')`` via the configured provider.
+
+    Registers every resolved value with ``aqueduct.redaction`` so it can be
+    scrubbed from downstream outputs (logs, observability rows, patch sidecar
+    files, webhook bodies, LLM request payloads).
+
+    Returns ``(expanded_text, missing_secrets)``. ``missing_secrets`` collects
+    keys the provider did not find — caller raises ``ConfigError``.
+    """
+    from aqueduct.secrets import SecretsError, resolve_secret
+    from aqueduct import redaction
+
+    missing: list[str] = []
+
     def _replace_secret(m: re.Match) -> str:
         key = m.group(1)
-        val = os.environ.get(key)
-        if val is not None:
-            return val
-        missing.append(f"@aq.secret('{key}')")
-        return ""
+        try:
+            val = resolve_secret(
+                key,
+                provider=secrets_cfg.provider,
+                region=secrets_cfg.region,
+                resolver=secrets_cfg.resolver,
+            )
+        except SecretsError:
+            missing.append(f"@aq.secret('{key}')")
+            return ""
+        redaction.register(val, key_hint=key)
+        return val
 
-    text = _ENV_VAR_RE.sub(_replace_env, text)
-    text = _AQ_SECRET_RE.sub(_replace_secret, text)
-    return text, missing
+    return _AQ_SECRET_RE.sub(_replace_secret, text), missing
 
 
 def _format_config_error(resolved: Path, exc: ValidationError) -> str:
@@ -553,16 +580,16 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     except OSError as exc:
         raise ConfigError(f"Cannot read config file {resolved}: {exc}") from exc
 
-    raw_text, missing = _expand_env_vars(raw_text)
-    if missing:
-        # One var can occur many times in aqueduct.yml — dedupe, keep first-seen order.
-        unique_missing = list(dict.fromkeys(missing))
+    # ── Pass 1: expand ${VAR} only, parse + validate to discover secrets cfg ──
+    pass1_text, missing_env = _expand_env(raw_text)
+    if missing_env:
+        unique_missing = list(dict.fromkeys(missing_env))
         raise ConfigError(
             f"Missing environment variables in {resolved}: {', '.join(unique_missing)}"
         )
 
     try:
-        data = yaml.safe_load(raw_text)
+        data = yaml.safe_load(pass1_text)
     except yaml.YAMLError as exc:
         raise ConfigError(f"Invalid YAML in {resolved}: {exc}") from exc
 
@@ -573,15 +600,45 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
     try:
-        cfg = AqueductConfig.model_validate(data)
+        cfg_pass1 = AqueductConfig.model_validate(data)
     except ValidationError as exc:
         raise ConfigError(_format_config_error(resolved, exc)) from exc
 
     # Fail fast on missing secrets-backend SDKs so the failure surface is
     # `aqueduct.yml` validation, not a generic ImportError mid-compile.
-    _validate_secrets_backend(cfg.secrets)
-    # Same pattern for store backends — fail at config load instead of
-    # mid-run when the first DuckDB / Postgres / Redis connect() fires.
-    _validate_store_backends(cfg.stores)
+    _validate_secrets_backend(cfg_pass1.secrets)
 
+    # ── Pass 2: resolve @aq.secret() via the configured provider ──────────────
+    # Short-circuit when the file has no @aq.secret() tokens — keeps the common
+    # case (no secrets) at one YAML parse and one validation.
+    if not _AQ_SECRET_RE.search(pass1_text):
+        _validate_store_backends(cfg_pass1.stores)
+        return cfg_pass1
+
+    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets)
+    if missing_secrets:
+        unique_missing = list(dict.fromkeys(missing_secrets))
+        raise ConfigError(
+            f"Unresolved secrets in {resolved} via provider "
+            f"{cfg_pass1.secrets.provider!r}: {', '.join(unique_missing)}"
+        )
+
+    try:
+        data2 = yaml.safe_load(pass2_text)
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Invalid YAML in {resolved} after secret expansion: {exc}") from exc
+
+    if data2 is None:
+        cfg = AqueductConfig()
+    else:
+        if not isinstance(data2, dict):
+            raise ConfigError(
+                f"Config file {resolved} must be a YAML mapping, not {type(data2).__name__}"
+            )
+        try:
+            cfg = AqueductConfig.model_validate(data2)
+        except ValidationError as exc:
+            raise ConfigError(_format_config_error(resolved, exc)) from exc
+
+    _validate_store_backends(cfg.stores)
     return cfg
