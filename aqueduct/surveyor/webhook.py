@@ -28,6 +28,8 @@ from typing import Any
 
 import httpx
 
+from aqueduct.redaction import redact as _redact
+
 
 # ── Template rendering ────────────────────────────────────────────────────────
 
@@ -78,11 +80,15 @@ def fire_webhook(
         **_render_dict(config.headers, vars),
     }
 
-    # Build final payload
+    # Build final payload. The body is scrubbed of registered @aq.secret() values
+    # so a resolved secret cannot leak via webhook delivery. Headers and URL are
+    # NOT scrubbed — those are user-authored config (e.g. `Authorization: Bearer
+    # @aq.secret('SLACK_TOKEN')`) and represent the intended transmission of a
+    # credential to the destination.
     if config.payload is not None:
-        body = _render_dict(config.payload, vars)
+        body = _redact(_render_dict(config.payload, vars))
     else:
-        body = full_payload
+        body = _redact(full_payload)
 
     url = config.url
     method = config.method

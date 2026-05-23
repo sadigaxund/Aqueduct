@@ -33,6 +33,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from aqueduct.patch.grammar import PatchSpec
+from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
 
 logger = logging.getLogger(__name__)
@@ -505,6 +506,13 @@ def _call_agent(
     """Call the configured LLM provider and return raw text response."""
     system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context, last_apply_error)
 
+    # Scrub registered @aq.secret() values from anything leaving the process to
+    # an external LLM API. FailureContext / blueprint YAML can incidentally
+    # embed secrets via stack traces or config strings; the model must never
+    # see them.
+    system_prompt = _redact(system_prompt)
+    messages = _redact(messages)
+
     if provider == "openai_compat":
         return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, provider_options, timeout=timeout)
     else:
@@ -832,7 +840,7 @@ def stage_patch_for_human(
         "staged_at": _utcnow(),
         "prompt_version": PROMPT_VERSION,
     }
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    out_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
     logger.info(
         "LLM patch staged for human review: %s  "
         "(apply with: aqueduct patch apply %s --blueprint <path>)",
@@ -881,7 +889,7 @@ def archive_patch(
         "approval_mode": mode,
         "prompt_version": PROMPT_VERSION,
     }
-    archive_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    archive_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
 
 
 def _utcnow() -> str:

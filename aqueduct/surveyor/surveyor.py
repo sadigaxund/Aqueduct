@@ -28,6 +28,7 @@ import logging
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult
+from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext, RunRecord
 from aqueduct.surveyor.webhook import fire_webhook
 
@@ -280,10 +281,10 @@ class Surveyor:
             raise RuntimeError("Surveyor.start() must be called before record()")
 
         finished_at = _utcnow()
-        module_results_json = json.dumps(
+        module_results_json = _redact(json.dumps(
             [{"module_id": r.module_id, "status": r.status, "error": r.error}
              for r in result.module_results]
-        )
+        ))
 
         effective_status = "patched" if (patched and result.status == "success") else result.status
         with self._observability.connect() as cur:
@@ -329,13 +330,13 @@ class Surveyor:
             run_id=result.run_id,
             blueprint_id=self._manifest.blueprint_id,
             failed_module=_first_failed_module(result),
-            error_message=_first_error_message(result, exc),
-            stack_trace=stack_trace,
-            manifest_json=json.dumps(self._manifest.to_dict()),
+            error_message=_redact(_first_error_message(result, exc)),
+            stack_trace=_redact(stack_trace),
+            manifest_json=_redact(json.dumps(self._manifest.to_dict())),
             started_at=_iso(self._started_at),  # type: ignore[arg-type]
             finished_at=_iso(finished_at),
-            provenance_json=provenance_json,
-            blueprint_source_yaml=blueprint_source_yaml,
+            provenance_json=_redact(provenance_json),
+            blueprint_source_yaml=_redact(blueprint_source_yaml),
             error_type=_first_error_type(result),
         )
 

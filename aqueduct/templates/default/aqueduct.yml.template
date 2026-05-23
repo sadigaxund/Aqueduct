@@ -245,8 +245,19 @@ metrics:
 #   ${VAR}            — os.environ["VAR"]; error if unset
 #   ${VAR:-default}   — os.environ["VAR"] if set, else "default"
 #   ${VAR:default}    — same (dash optional)
-#   @aq.secret('KEY')— reads os.environ["KEY"] directly (always env — secrets
-#                      provider is not yet live when this file is loaded)
+#   @aq.secret('KEY')— resolved via the configured secrets.provider (Phase 32).
+#                      Two-pass load: ${VAR} expands first, then secrets.provider
+#                      is validated, then @aq.secret() is dispatched to the
+#                      configured backend (env / aws / gcp / azure / custom).
+#                      No os.environ caching — every call hits the provider so
+#                      rotation + per-call audit are preserved.
+#
+# Resolved @aq.secret() values are registered with aqueduct.redaction and
+# scrubbed as [REDACTED] from console, observability rows, patch sidecar
+# files, webhook bodies (headers/URL untouched), and LLM request payloads.
+# Short / low-entropy values (len < 8 OR Shannon entropy < 2.5 bits/char)
+# are NOT registered and emit AQ-WARN [secret-weak-redact] instead — they
+# would false-match common identifiers.
 #
 # Use these to avoid hardcoding credentials in aqueduct.yml:
 #   agent:
@@ -263,8 +274,11 @@ secrets:
   # ── AWS Secrets Manager (pip install aqueduct-core[aws]) ─────────────────────
   # provider: "aws"
   # region: "us-east-1"
-  # Requires boto3. IAM role or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY in env.
-  # Secrets fetched on first @aq.secret('KEY') call, cached in os.environ.
+  # Requires boto3. boto3 default credential chain: env vars
+  # (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY [+ AWS_SESSION_TOKEN]),
+  # ~/.aws/credentials profile, IAM role on EC2/ECS/EKS/Lambda (IMDS), SSO.
+  # Secrets are fetched on every @aq.secret('KEY') call — no caching, so
+  # provider-side rotation takes effect on the next config load.
   # Short secret name (KEY) or full ARN both accepted.
 
   # ── GCP Secret Manager (pip install aqueduct-core[gcp]) ──────────────────────

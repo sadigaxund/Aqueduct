@@ -39,11 +39,20 @@ def test_env_provider_does_not_import_boto3(monkeypatch):
 
 
 def test_env_fast_path_takes_priority_over_provider(monkeypatch):
-    """os.environ always wins regardless of provider."""
+    """os.environ does NOT override non-env providers."""
     monkeypatch.setenv("FAST_PATH_KEY", "env-value")
-    # Even with provider=aws, env var should be returned directly
-    result = resolve_secret("FAST_PATH_KEY", provider="aws")
-    assert result == "env-value"
+    # Even if env var is set, provider=aws should NOT use it and should call SDK (which will fail if not mocked/available)
+    mock_boto3 = MagicMock()
+    mock_client = MagicMock()
+    mock_boto3.client.return_value = mock_client
+    mock_client.get_secret_value.return_value = {"SecretString": "sdk-value"}
+
+    mock_botocore = MagicMock()
+    mock_botocore.exceptions = MagicMock()
+
+    with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions}):
+        result = resolve_secret("FAST_PATH_KEY", provider="aws")
+    assert result == "sdk-value"
 
 
 # ── provider: aws ─────────────────────────────────────────────────────────────
@@ -55,7 +64,7 @@ def test_aws_sdk_not_installed_raises(monkeypatch):
             resolve_secret("AWS_SECRET_KEY", provider="aws")
 
 
-def test_aws_fetches_secret_and_caches_in_environ(monkeypatch, tmp_path):
+def test_aws_fetches_secret_without_caching_in_environ(monkeypatch, tmp_path):
     monkeypatch.delenv("DB_PASSWORD", raising=False)
     mock_boto3 = MagicMock()
     mock_client = MagicMock()
@@ -66,11 +75,13 @@ def test_aws_fetches_secret_and_caches_in_environ(monkeypatch, tmp_path):
     mock_botocore.exceptions = MagicMock()
 
     with patch.dict(sys.modules, {"boto3": mock_boto3, "botocore": mock_botocore, "botocore.exceptions": mock_botocore.exceptions}):
-        val = resolve_secret("DB_PASSWORD", provider="aws")
-    assert val == "s3cr3t"
-    # Should be cached in os.environ
-    assert os.environ.get("DB_PASSWORD") == "s3cr3t"
-    monkeypatch.delenv("DB_PASSWORD", raising=False)
+        val1 = resolve_secret("DB_PASSWORD", provider="aws")
+        val2 = resolve_secret("DB_PASSWORD", provider="aws")
+    assert val1 == "s3cr3t"
+    assert val2 == "s3cr3t"
+    assert mock_client.get_secret_value.call_count == 2
+    # Should NOT be cached in os.environ
+    assert os.environ.get("DB_PASSWORD") is None
 
 
 def test_aws_json_blob_unwraps_matching_key(monkeypatch):

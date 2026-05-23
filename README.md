@@ -493,7 +493,15 @@ secrets:
 | `azure` | Azure Key Vault via `azure-keyvault-secrets` | `pip install aqueduct-core[azure]` |
 | `custom` | Any callable `(key: str) -> str \| None` | built-in |
 
-All backends cache the resolved value into `os.environ` after the first fetch — subsequent calls within the same run are free.
+No caching — every `@aq.secret()` resolution hits the configured backend. This keeps provider-side rotation effective on the next config load and preserves the per-call audit trail.
+
+**Cloud authentication** uses each provider's ambient credential chain — never put cloud credentials in `aqueduct.yml`:
+
+| Provider | Ambient credential chain (any one suffices) |
+|---|---|
+| `aws` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) env vars · `~/.aws/credentials` profile · IAM role on EC2/ECS/EKS/Lambda (IMDS) · SSO |
+| `gcp` | `GOOGLE_APPLICATION_CREDENTIALS=/path/sa.json` · `gcloud auth application-default login` · Workload Identity (GKE) · metadata server (GCE / Cloud Run). Short-name keys also need `GCP_PROJECT` or `GOOGLE_CLOUD_PROJECT`. |
+| `azure` | `AZURE_CLIENT_ID` + `AZURE_CLIENT_SECRET` + `AZURE_TENANT_ID` · managed identity (Azure VMs / AKS) · `az login` cache · VS Code session. Also requires `AZURE_KEYVAULT_URL` env. |
 
 **Custom provider** — point to any Python callable:
 
@@ -503,7 +511,9 @@ secrets:
   resolver: my_org.vault.fetch_secret  # importlib path; fn(key: str) -> str | None
 ```
 
-**Note:** `aqueduct.yml` itself is loaded before the secrets provider is live, so secrets in `aqueduct.yml` always use `${VAR}` env-var syntax. Use `@aq.secret()` in Blueprint files. `aqueduct doctor` validates provider-specific SDK availability before any run.
+**Two-pass loader.** `aqueduct.yml` is loaded in two passes: pass 1 expands `${VAR}` and validates the config (including `secrets.provider`); pass 2 calls the provider for every `@aq.secret('KEY')` token and re-validates. This means `@aq.secret()` works in `aqueduct.yml` itself (provider just has to be resolvable from `${VAR}` / literal in pass 1). `aqueduct doctor` still validates provider SDK availability before any run.
+
+**Secret redaction.** Every resolved `@aq.secret()` value is registered with `aqueduct.redaction` and replaced with `[REDACTED]` before it crosses a trust boundary or hits persistent storage: console output, log records, observability rows, patch sidecar files, outbound webhook bodies (headers / URL untouched — those are intended creds for the destination), and LLM agent request payloads. Defense-in-depth, not the primary defense: values shorter than 8 characters or with Shannon entropy below 2.5 bits/char are NOT registered (substring removal would false-match common identifiers) and emit `AQ-WARN [secret-weak-redact]` so the operator can switch to a stronger secret.
 
 ### Agent Provider Options
 

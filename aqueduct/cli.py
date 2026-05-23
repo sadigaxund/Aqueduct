@@ -435,6 +435,45 @@ from aqueduct import __version__ as _aqueduct_version
 from aqueduct import exit_codes
 
 
+def _install_secret_redaction_hooks() -> None:
+    """Wrap click.echo and the logging chain so registered @aq.secret() values
+    are scrubbed from every CLI emit path.
+
+    Idempotent — the wrapped functions carry an attribute that signals they are
+    already wrapped, so re-invoking from nested commands is a no-op. Installed
+    eagerly at top-level ``cli`` invocation; commands that never resolve a
+    secret incur a tiny per-emit no-op cost (empty registry → fast path).
+    """
+    from aqueduct.redaction import redact as _redact
+    import logging as _logging
+
+    if getattr(click.echo, "_aq_redaction_wrapped", False):
+        return
+
+    _orig_echo = click.echo
+
+    def _wrapped_echo(message=None, file=None, nl=True, err=False, color=None):
+        if isinstance(message, str):
+            message = _redact(message)
+        return _orig_echo(message, file=file, nl=nl, err=err, color=color)
+
+    _wrapped_echo._aq_redaction_wrapped = True  # type: ignore[attr-defined]
+    click.echo = _wrapped_echo  # type: ignore[assignment]
+
+    class _RedactingFilter(_logging.Filter):
+        def filter(self, record: _logging.LogRecord) -> bool:
+            try:
+                record.msg = _redact(record.getMessage())
+                record.args = ()
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+
+    root = _logging.getLogger()
+    if not any(isinstance(f, _RedactingFilter) for f in root.filters):
+        root.addFilter(_RedactingFilter())
+
+
 class _AqueductJsonLogFormatter:
     """Minimal JSON log formatter for `--log-format json`.
 
@@ -526,6 +565,8 @@ def cli(
     set_default_suppress(suppress=list(suppress_warnings))
     ctx.ensure_object(dict)
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
+
+    _install_secret_redaction_hooks()
 
 
 @cli.command()

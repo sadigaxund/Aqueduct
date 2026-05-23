@@ -7,8 +7,10 @@ Supported providers:
   azure  — Azure Key Vault via azure-keyvault-secrets (pip install aqueduct-core[azure])
   custom — user-supplied callable at secrets.resolver (dotted import path)
 
-All providers cache resolved values into os.environ after first fetch so
-subsequent @aq.secret() calls for the same key are free (no network).
+Each call hits the provider directly — no in-process or os.environ cache.
+This preserves provider-side rotation (a rotated secret takes effect on the
+next call without restarting the process) and per-call audit logs. Caching
+is intentionally deferred (see TODOs.md, Phase 32 deferred items).
 """
 
 from __future__ import annotations
@@ -30,9 +32,11 @@ def resolve_secret(
 ) -> str:
     """Resolve a secret key to its string value.
 
-    Always checks os.environ first — local overrides always win.
-    On miss, delegates to the configured provider backend.
-    Caches fetched value into os.environ so repeat calls are free.
+    For provider=env, reads os.environ directly. For all other providers,
+    delegates to the configured backend on every call — no caching, so
+    rotation at the provider takes effect immediately. os.environ is NOT
+    used as a fallback for non-env providers (would defeat the audit trail
+    and let stale env values mask rotated secrets).
 
     Args:
         key:      Secret name / environment variable name.
@@ -46,11 +50,10 @@ def resolve_secret(
     Raises:
         SecretsError: Secret not found or provider misconfigured.
     """
-    val = os.environ.get(key)
-    if val is not None:
-        return val
-
     if provider == "env":
+        val = os.environ.get(key)
+        if val is not None:
+            return val
         raise SecretsError(
             f"@aq.secret: {key!r} not found in environment. "
             "Set the variable before running aqueduct, or configure a secrets provider."
@@ -75,7 +78,6 @@ def resolve_secret(
             f"@aq.secret: {key!r} not found via provider={provider!r}."
         )
 
-    os.environ[key] = fetched
     return fetched
 
 
@@ -91,13 +93,33 @@ def _fetch_aws(key: str, region: str | None) -> str | None:
     kwargs: dict[str, Any] = {}
     if region:
         kwargs["region_name"] = region
-    client = boto3.client("secretsmanager", **kwargs)
+    try:
+        client = boto3.client("secretsmanager", **kwargs)
+    except botocore.exceptions.BotoCoreError as exc:
+        raise SecretsError(
+            f"AWS Secrets Manager client init failed for key {key!r}: {exc}"
+        ) from exc
     try:
         resp = client.get_secret_value(SecretId=key)
+    except botocore.exceptions.NoCredentialsError as exc:
+        raise SecretsError(
+            f"AWS Secrets Manager: no credentials available for key {key!r}. "
+            "Provide credentials via the boto3 default chain (env vars "
+            "AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY, ~/.aws/credentials, "
+            "IAM role on EC2/ECS/EKS/Lambda, or SSO)."
+        ) from exc
+    except botocore.exceptions.EndpointConnectionError as exc:
+        raise SecretsError(
+            f"AWS Secrets Manager endpoint unreachable for key {key!r}: {exc}. "
+            "Check network connectivity and AWS_ENDPOINT_URL if you intended "
+            "to use a local emulator (e.g. LocalStack)."
+        ) from exc
     except botocore.exceptions.ClientError as exc:
         code = exc.response["Error"]["Code"]
         if code in ("ResourceNotFoundException", "SecretNotFoundException"):
             return None
+        raise SecretsError(f"AWS Secrets Manager error for {key!r}: {exc}") from exc
+    except botocore.exceptions.BotoCoreError as exc:
         raise SecretsError(f"AWS Secrets Manager error for {key!r}: {exc}") from exc
     # SecretString is a plain string or JSON blob
     secret = resp.get("SecretString")

@@ -194,7 +194,7 @@ This section tracks high-level functional verification of core features against 
 #### `secrets.py` — `resolve_secret()`
 - ✅ `provider: env`: returns `os.environ[key]`; raises `SecretsError` when key missing
 - ✅ `provider: env`: does NOT call boto3/google/azure SDK regardless of installed deps
-- ✅ `provider: aws`: fetches from Secrets Manager; result injected into `os.environ`; second call returns `os.environ` fast-path (no SDK call)
+- ✅ `provider: aws`: every call fetches from Secrets Manager — NO `os.environ` cache (Phase 32 removed the cache so provider rotation + audit are preserved; previous behavior asserted cache injection, now asserts repeat calls hit the SDK again)
 - ✅ `provider: aws`: JSON blob value → unwraps inner key matching secret name suffix
 - ✅ `provider: aws`: SDK not installed → `SecretsError` containing "boto3"
 - ✅ `provider: gcp`: short name expanded using `GCP_PROJECT` env var; full resource path assembled
@@ -212,6 +212,39 @@ This section tracks high-level functional verification of core features against 
 - ✅ `provider: azure`, SDK missing → error with `[azure]` install hint
 - ✅ `provider: custom`, `resolver=None` → error (resolver required for custom provider)
 - ✅ `provider: custom`, valid resolver → importlib load attempted; ok if callable found
+
+### Phase 32 — External Secrets Provider Dispatch + Redaction
+
+#### `config.py` — two-pass `load_config`
+- ✅ no `@aq.secret()` tokens → single-pass load (one YAML parse, one validation); `secrets.provider: env` default applies
+- ✅ `@aq.secret('KEY')` with `provider: env`, env var set → resolved to env value; appears in final `cfg`
+- ✅ `@aq.secret('KEY')` with `provider: env`, env var unset → `ConfigError` listing `@aq.secret('KEY')` as unresolved
+- ✅ `@aq.secret('KEY')` with `provider: aws` (mocked boto3) → calls `_fetch_aws`, resolved value lands in config
+- ✅ `@aq.secret('KEY')` with `provider: aws` and boto3 NOT installed → `ConfigError` at pass-1 (`_validate_secrets_backend` short-circuit) BEFORE pass-2 dispatch
+- ✅ `${VAR}` in `secrets.provider: ${PROVIDER}` resolves first; pass 2 then uses the resolved provider
+- ✅ pass-2 YAML re-validation runs after secret expansion — invalid YAML produced by an exotic resolved value raises `ConfigError`
+- ✅ resolved `@aq.secret()` values are registered with `aqueduct.redaction.register()` after pass 2
+
+#### `redaction.py` — registry + scrub
+- ✅ `register("hunter2longenough")` → returns True, `is_registered` returns True
+- ✅ `register("abc")` → returns False (below `_MIN_SECRET_LENGTH`); emits `AQ-WARN [secret-weak-redact]`
+- ✅ `register("aaaaaaaaaaaaaaaaaaaa")` → returns False (Shannon entropy below threshold); emits weak-redact warning
+- ✅ `redact("connecting to db://hunter2longenough@host")` → `connecting to db://[REDACTED]@host`
+- ✅ token-boundary: `redact("module hunter2longenough_xyz failed")` after registering `hunter2longenough` → does NOT match inside `hunter2longenough_xyz` (boundary fails)
+- ✅ `redact(dict)` → walks values recursively, scrubs strings
+- ✅ `redact(list)` / `redact(tuple)` → element-wise scrub preserving type
+- ✅ longest-first regex: two overlapping secrets `abc...` and `abc...xyz` → longer one wins, not the prefix
+
+#### CLI redaction hook (`cli.py:_install_secret_redaction_hooks`)
+- ✅ `click.echo("…hunter2longenough…")` after a registered secret → output contains `[REDACTED]`
+- ✅ idempotent: re-invoking the hook does not double-wrap (`_aq_redaction_wrapped` attr guard)
+- ✅ root logger emits a record with a registered value in `msg` → handler output contains `[REDACTED]`
+
+#### Sink coverage
+- ✅ observability `failure_contexts.stack_trace` row containing a registered secret stores `[REDACTED]` after `surveyor.record()`
+- ✅ patch sidecar pending file written via `stage_patch_for_human_review` containing a registered secret in the payload writes `[REDACTED]` to disk
+- ✅ webhook body containing a registered secret has the secret scrubbed; webhook headers and URL are NOT scrubbed
+- ✅ LLM `_call_agent` with a registered secret in `messages` → outgoing `httpx.post` JSON body shows `[REDACTED]` (capture httpx client mock)
 
 #### `agent/__init__.py` — `provider_options` dispatch
 - ✅ `provider_options` with `ollama_num_thread: 8` → `payload["options"]["num_thread"] = 8` (prefix stripped)
