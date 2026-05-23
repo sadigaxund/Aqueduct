@@ -3459,6 +3459,33 @@ def heal(
     show_default=True,
     help="Max concurrent LLM calls. Default 1 (serial); set >1 to parallelize scenario×model pairs.",
 )
+@click.option(
+    "--no-persist",
+    "no_persist",
+    is_flag=True,
+    default=False,
+    help="Skip writing results to the benchmark store (Phase 33 Part A). "
+    "Default is to persist each (scenario, model) row into "
+    "<scenarios_dir>/.aqueduct/benchmark.duckdb for future regression diffs.",
+)
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Override the benchmark store path. Default: "
+    "<scenarios_dir>/.aqueduct/benchmark.duckdb",
+)
+@click.option(
+    "--gate-on-regression",
+    "gate_on_regression",
+    is_flag=True,
+    default=False,
+    help="After persisting, diff each (scenario, model) vs the most recent "
+    "prior row in the store. Exit non-zero if any regression is detected "
+    "(passed True→False, patch_applies True→False, diag_score or confidence "
+    "drop > 5pp). Implies persistence; ignored with --no-persist.",
+)
 @_env_options
 def benchmark(
     scenarios_pos: str | None,
@@ -3471,6 +3498,9 @@ def benchmark(
     patches_dir: str,
     fmt: str,
     workers: int,
+    no_persist: bool,
+    store_path_override: str | None,
+    gate_on_regression: bool,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -3592,7 +3622,175 @@ def benchmark(
             f"detail + the generated patch)",
             err=True,
         )
-    if failed:
+
+    # ── Phase 33 Part A — persist + optional regression gate ──────────────────
+    regression_exit = False
+    if not no_persist:
+        from aqueduct.surveyor.benchmark_store import (
+            default_store_path, diff_latest, format_diff_table,
+            has_regressions, persist_results,
+        )
+        store_path = (
+            Path(store_path_override) if store_path_override
+            else default_store_path(Path(scenarios_dir))
+        )
+        written = persist_results(results, store_path)
+        if written and fmt != "json":
+            click.echo(f"↳ persisted {written} benchmark row(s) → {store_path}")
+        if gate_on_regression:
+            diff_entries = diff_latest(results, store_path)
+            if fmt == "json":
+                click.echo(json.dumps({
+                    "diff": [
+                        {
+                            "scenario_id": e.scenario_id,
+                            "model": e.model,
+                            "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                            "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                            "regressions": list(e.regressions),
+                            "improvements": list(e.improvements),
+                        }
+                        for e in diff_entries
+                    ],
+                }, indent=2))
+            else:
+                click.echo("")
+                click.echo("Regression diff vs baseline:")
+                click.echo(format_diff_table(diff_entries))
+            if has_regressions(diff_entries):
+                regression_exit = True
+                if fmt != "json":
+                    click.echo(
+                        "✗ regression(s) detected vs baseline — failing the gate",
+                        err=True,
+                    )
+    elif gate_on_regression and fmt != "json":
+        click.echo(
+            "(--gate-on-regression ignored: --no-persist set)",
+            err=True,
+        )
+
+    if failed or regression_exit:
+        sys.exit(1)
+
+
+# ── aqueduct benchmark-diff ──────────────────────────────────────────────────
+
+
+@cli.command("benchmark-diff")
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the benchmark store. Default: ./.aqueduct/benchmark.duckdb",
+)
+@click.option(
+    "--scenario",
+    "scenario_filter",
+    default=None,
+    help="Restrict the diff to a single scenario_id.",
+)
+@click.option(
+    "--model",
+    "model_filter",
+    default=None,
+    help="Restrict the diff to a single model.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+def benchmark_diff_cmd(
+    store_path_override: str | None,
+    scenario_filter: str | None,
+    model_filter: str | None,
+    fmt: str,
+) -> None:
+    """Diff the two most recent benchmark runs per (scenario, model) pair.
+
+    Reads from the benchmark store written by ``aqueduct benchmark``. Does
+    not re-run any scenarios — purely a store inspection. Exits non-zero if
+    any pair shows a regression (passed True→False, patch_applies True→False,
+    diag_score or confidence drop > 5pp).
+    """
+    from aqueduct.surveyor.benchmark_store import (
+        _connect, _fetch_baseline, _row_from_record, _SELECT_COLS,
+        DiffEntry, format_diff_table, has_regressions,
+    )
+
+    store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
+    if not store_path.exists():
+        click.echo(f"✗ benchmark store not found: {store_path}", err=True)
+        sys.exit(1)
+
+    try:
+        con = _connect(store_path)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"✗ cannot open benchmark store {store_path}: {exc}", err=True)
+        sys.exit(1)
+
+    where_parts: list[str] = []
+    params: list = []
+    if scenario_filter:
+        where_parts.append("scenario_id = ?")
+        params.append(scenario_filter)
+    if model_filter:
+        where_parts.append("model = ?")
+        params.append(model_filter)
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    try:
+        pairs = con.execute(
+            f"SELECT DISTINCT scenario_id, model FROM benchmark_results {where}",
+            params,
+        ).fetchall()
+        entries: list[DiffEntry] = []
+        for sid, model in pairs:
+            rec = con.execute(
+                f"SELECT {_SELECT_COLS} FROM benchmark_results "
+                "WHERE scenario_id = ? AND model = ? "
+                "ORDER BY recorded_at DESC LIMIT 1",
+                [sid, model],
+            ).fetchone()
+            if rec is None:
+                continue
+            current = _row_from_record(rec)
+            baseline, prompt_mismatch = _fetch_baseline(
+                con, sid, model, current.prompt_version, current.recorded_at,
+            )
+            if baseline is None:
+                entries.append(DiffEntry(sid, model, None, current, False, (), ()))
+                continue
+            from aqueduct.surveyor.benchmark_store import _compare
+            regs, imps = _compare(baseline, current)
+            entries.append(DiffEntry(sid, model, baseline, current, prompt_mismatch, tuple(regs), tuple(imps)))
+    finally:
+        con.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "diff": [
+                {
+                    "scenario_id": e.scenario_id,
+                    "model": e.model,
+                    "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                    "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                    "regressions": list(e.regressions),
+                    "improvements": list(e.improvements),
+                }
+                for e in entries
+            ],
+        }, indent=2))
+    else:
+        click.echo(format_diff_table(entries))
+
+    if has_regressions(entries):
+        if fmt != "json":
+            click.echo("✗ regression(s) detected", err=True)
         sys.exit(1)
 
 

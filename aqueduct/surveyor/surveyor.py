@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     confidence   DOUBLE PRECISION,
     patch_applied BOOLEAN,
     run_success_after_patch BOOLEAN,
-    applied_at   VARCHAR
+    applied_at   VARCHAR,
+    prompt_version VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS patch_simulation (
@@ -236,6 +237,20 @@ class Surveyor:
             except Exception:
                 pass
 
+            try:
+                # Phase 33 Part A — add prompt_version column to pre-1.0.3 DBs
+                # so the version↔heal-outcome correlation the docs promise becomes
+                # answerable. Existing rows get NULL, new rows get the value
+                # populated by record_healing_outcome() from agent.PROMPT_VERSION.
+                pv_exists = cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='healing_outcomes' AND column_name='prompt_version'"
+                ).fetchone()
+                if not pv_exists:
+                    cur.execute("ALTER TABLE healing_outcomes ADD COLUMN prompt_version VARCHAR")
+            except Exception:
+                pass
+
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
 
@@ -397,25 +412,36 @@ class Surveyor:
         confidence: float | None,
         patch_applied: bool,
         run_success_after_patch: bool,
+        prompt_version: str | None = None,
     ) -> None:
-        """Persist one LLM healing attempt to healing_outcomes table."""
+        """Persist one LLM healing attempt to healing_outcomes table.
+
+        Phase 33 Part A: `prompt_version` defaults to the current engine
+        constant (`agent.PROMPT_VERSION`) when not provided. Stored on every
+        row so the version↔outcome correlation the docs claim is finally
+        answerable in SQL.
+        """
         if self._observability is None:
             return
         import datetime as _dt
         import uuid as _uuid
+        if prompt_version is None:
+            from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
+            prompt_version = _PROMPT_VERSION
         with self._observability.connect() as cur:
             cur.execute(
                 """
                 INSERT INTO healing_outcomes
                 (id, run_id, failed_module, failure_category, model, patch_id, confidence,
-                 patch_applied, run_success_after_patch, applied_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 patch_applied, run_success_after_patch, applied_at, prompt_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     str(_uuid.uuid4()),
                     run_id, failed_module, failure_category, model, patch_id, confidence,
                     patch_applied, run_success_after_patch,
                     _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    prompt_version,
                 ],
             )
 
