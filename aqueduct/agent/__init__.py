@@ -490,6 +490,69 @@ def _build_system_prompt(
 
 # ── LLM provider dispatch ─────────────────────────────────────────────────────
 
+def _format_llm_error_hint(
+    exc: Exception,
+    *,
+    timeout: float | None,
+    base_url: str | None,
+    model: str,
+) -> str:
+    """Return an actionable hint suffix for common transient LLM failure modes.
+
+    Empty string when no specific guidance applies; the caller appends this
+    directly to the error log line. Kept dependency-light: matches on
+    exception class names + message substrings so we don't have to import
+    httpx at module top.
+    """
+    cls_name = exc.__class__.__name__
+    msg = str(exc).lower()
+
+    # httpx.ReadTimeout / ConnectTimeout / WriteTimeout all subclass TimeoutException.
+    if "timeout" in cls_name.lower() or "timed out" in msg or "timeout" in msg:
+        seconds = f"{int(timeout)}s" if timeout else "unbounded"
+        suggestion = (
+            f"\n  hint: timed out after {seconds}. "
+            f"Local model cold-start (first call after Ollama restart) can take "
+            f"30–90s extra. Options:\n"
+            f"    1. Raise the timeout:  --timeout 600  "
+            f"(or set agent.timeout in aqueduct.yml)\n"
+            f"    2. Pre-warm the model before benchmarking:"
+        )
+        if base_url:
+            ollama_url = base_url.rstrip("/").removesuffix("/v1")
+            suggestion += (
+                f"\n         curl -sS {ollama_url}/api/generate "
+                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
+            )
+        else:
+            suggestion += (
+                f'\n         curl -sS <ollama_url>/api/generate '
+                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
+            )
+        return suggestion
+
+    # Common connect-failure modes from httpx / OS-level networking.
+    if (
+        "connect" in cls_name.lower()
+        or "connection refused" in msg
+        or "no route to host" in msg
+        or "name or service not known" in msg
+    ):
+        if base_url:
+            return (
+                f"\n  hint: cannot reach {base_url}. Check the LLM server is "
+                f"running and the host is on a routable network "
+                f"(`curl -sS {base_url.rstrip('/')}/models` or "
+                f"`ping <host>`)."
+            )
+        return (
+            "\n  hint: cannot reach the LLM endpoint — verify the server is "
+            "running and reachable from this host."
+        )
+
+    return ""
+
+
 def _call_agent(
     messages: list[dict[str, Any]],
     model: str,
@@ -777,8 +840,13 @@ def generate_agent_patch(
         try:
             raw = _call_agent(messages, model, max_tokens, provider, base_url, patches_dir, provider_options, timeout=timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
         except Exception as exc:
+            # Surface an actionable hint for the two most common transient
+            # local-model failure modes (timeout, connection refused) so users
+            # don't have to read the engine source to learn the fix.
+            hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
             logger.error(
-                "LLM API call failed (attempt %d/%d): %s", attempt + 1, max_reprompts, exc
+                "LLM API call failed (attempt %d/%d): %s%s",
+                attempt + 1, max_reprompts, exc, hint,
             )
             reprompt_errors.append(f"API error: {exc}")
             break
