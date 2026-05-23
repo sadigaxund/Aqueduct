@@ -1,0 +1,29 @@
+aqueduct_config: "1.0"
+
+# Engine config shared by every blueprint in this showcase. Deployment +
+# stores only — no LLM config here. LLM provider/model belongs in the
+# blueprints that actually use healing (see etl_drift.yml `agent:` block);
+# blueprints without an `agent:` block (like etl_happy.yml) run with
+# self-healing disabled and need no LLM at all.
+
+deployment:
+  master_url: "local[2]"
+  env: local
+
+spark_config:
+  spark.sql.shuffle.partitions: "2"
+
+warnings:
+  suppress: ["*"]
+
+# All three stores write to a named Docker volume mounted at /opt/airflow/.aqueduct.
+stores:
+  observability:
+    backend: duckdb
+    path: "/opt/airflow/.aqueduct/observability.duckdb"
+  lineage:
+    backend: duckdb
+    path: "/opt/airflow/.aqueduct/lineage.duckdb"
+  depot:
+    backend: duckdb
+    path: "/opt/airflow/.aqueduct/depot.duckdb"

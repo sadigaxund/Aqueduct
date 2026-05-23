@@ -1,0 +1,60 @@
+aqueduct: "1.0"
+id: showcase.airflow.etl_happy
+name: "ETL — happy path"
+description: >
+  Reads orders.csv, filters to completed orders, writes to output/.
+  No defects — completes green even without a configured LLM. Used to
+  prove the AqueductOperator wiring works end-to-end.
+
+modules:
+  - id: raw_orders
+    type: Ingress
+    label: "Load orders CSV"
+    config:
+      format: csv
+      path: "/opt/airflow/data/orders.csv"
+      header: true
+      infer_schema: true
+
+  - id: completed_orders
+    type: Channel
+    label: "Keep only completed orders"
+    config:
+      op: sql
+      query: |
+        SELECT
+          order_id,
+          customer_id,
+          amount,
+          event_time
+        FROM raw_orders
+        WHERE status = 'completed'
+
+  - id: quality_gate
+    type: Assert
+    label: "Quality checks"
+    config:
+      rules:
+        - type: min_rows
+          min: 1
+          on_fail: abort
+        - type: null_rate
+          column: amount
+          max: 0.0
+          on_fail: abort
+
+  - id: orders_output
+    type: Egress
+    label: "Write completed orders"
+    config:
+      format: parquet
+      path: "/opt/airflow/data/output/etl_happy/"
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: completed_orders
+  - from: completed_orders
+    to: quality_gate
+  - from: quality_gate
+    to: orders_output
