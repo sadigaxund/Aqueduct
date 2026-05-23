@@ -10,6 +10,7 @@ End-to-end deployments you can stand up and operate.
 | Example | What it teaches |
 |---|---|
 | [`showcase/01-spark-cluster`](showcase/01-spark-cluster) | Deploying Aqueduct against a real distributed Spark Standalone cluster + MinIO (S3A) + Postgres-backed stores. Guided, interactive walkthrough: the driver/cluster networking contract, the S3A jar story, spillway + quality gates on a cluster, reading the run back from Postgres. |
+| [`showcase/02-airflow`](showcase/02-airflow) | Aqueduct as an Apache Airflow operator. Compose-based stack (Airflow 2.10 + Postgres + triggerer). Two DAGs: happy-path wiring (no LLM) and a `HEAL_PENDING` round-trip where the task defers on `UNRESOLVED_COLUMN`, releases the worker slot, waits for human patch approval, and resumes green. |
 
 ## Snippets
 
