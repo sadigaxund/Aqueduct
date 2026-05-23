@@ -167,29 +167,32 @@ def parse(
         deadline_seconds=rp.deadline_seconds,
     )
 
-    agent = AgentConfig(
-        approval_mode=validated.agent.approval_mode,
-        on_pending_patches=validated.agent.on_pending_patches,
-        model=validated.agent.model,
-        aggressive_max_patches=validated.agent.aggressive_max_patches,
-        provider=validated.agent.provider,
-        base_url=validated.agent.base_url,
-        provider_options=validated.agent.provider_options,
-        guardrails=GuardrailsConfig(
-            forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
-            allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
-            heal_on_errors=tuple(validated.agent.guardrails.heal_on_errors),
-            never_heal_errors=tuple(validated.agent.guardrails.never_heal_errors),
-        ),
-        prompt_context=validated.agent.prompt_context,
-        timeout=validated.agent.timeout,
-        max_reprompts=validated.agent.max_reprompts,
-        confidence_threshold=validated.agent.confidence_threshold,
-        on_heal_failure=validated.agent.on_heal_failure,
-        max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
-        patch_validation=validated.agent.patch_validation,
-        block_on_explain_regression=validated.agent.block_on_explain_regression,
-    )
+    try:
+        agent = AgentConfig(
+            approval_mode=validated.agent.approval_mode,
+            on_pending_patches=validated.agent.on_pending_patches,
+            model=resolve_value(validated.agent.model, ctx_map),
+            aggressive_max_patches=validated.agent.aggressive_max_patches,
+            provider=validated.agent.provider,
+            base_url=resolve_value(validated.agent.base_url, ctx_map),
+            provider_options=resolve_value(validated.agent.provider_options, ctx_map),
+            guardrails=GuardrailsConfig(
+                forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
+                allowed_paths=tuple(validated.agent.guardrails.allowed_paths),
+                heal_on_errors=tuple(validated.agent.guardrails.heal_on_errors),
+                never_heal_errors=tuple(validated.agent.guardrails.never_heal_errors),
+            ),
+            prompt_context=resolve_value(validated.agent.prompt_context, ctx_map),
+            timeout=validated.agent.timeout,
+            max_reprompts=validated.agent.max_reprompts,
+            confidence_threshold=validated.agent.confidence_threshold,
+            on_heal_failure=validated.agent.on_heal_failure,
+            max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
+            patch_validation=validated.agent.patch_validation,
+            block_on_explain_regression=validated.agent.block_on_explain_regression,
+        )
+    except ValueError as exc:
+        raise ParseError(f"agent config resolution failed: {exc}") from exc
 
     # Tier-0 resolution applies here too (parity with module config /
     # context_override) — ${ENV:-default} / ${ctx.*} in spark_config and

@@ -77,4 +77,4 @@ danger:
     print(f"DEBUG: CLI Output:\n{result.output}")
     assert "LLM rate-limit reached" in result.output
     assert "max_heal_attempts_per_hour=1" in result.output
-    assert result.exit_code == 1
+    assert result.exit_code == 2

@@ -432,6 +432,7 @@ def _sniff_file_kind(path: "Path") -> "str | None":
 
 
 from aqueduct import __version__ as _aqueduct_version
+from aqueduct import exit_codes
 
 
 class _AqueductJsonLogFormatter:
@@ -1377,6 +1378,7 @@ def run(
         patch_count = 0
         failure_ctx = None
         result = None
+        patch_staged_for_review = False  # set when human/ci mode writes a patch to patches/pending/
         last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
 
         while True:
@@ -1562,6 +1564,7 @@ def run(
             if effective_mode == "human":
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                patch_staged_for_review = True
                 pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
                     or patches_dir / "pending" / f"{patch.patch_id}.json"
                 rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
@@ -1595,6 +1598,7 @@ def run(
                         click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch)
+                patch_staged_for_review = True
                 click.echo(
                     f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
                     err=True,
@@ -1848,7 +1852,12 @@ def run(
                 )
             else:
                 click.echo(f"\n✗ blueprint failed  run_id={result.run_id}", err=True)
-            sys.exit(1)
+            # Exit 3 (HEAL_PENDING) when a patch was staged for human review — lets
+            # downstream orchestrators (Airflow operator, CI runners) distinguish
+            # "needs human approval" from a hard runtime failure (exit 2).
+            sys.exit(
+                exit_codes.HEAL_PENDING if patch_staged_for_review else exit_codes.DATA_OR_RUNTIME
+            )
 
         # ── on_success webhook ────────────────────────────────────────────────────
         if cfg.webhooks.on_success:

@@ -8,7 +8,28 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [1.0.1] — 2026-05-23
+
+### Fixed
+- **`aqueduct run` now exits `3` (HEAL_PENDING) when `approval_mode: human`
+  or `ci` stages a patch under `patches/pending/`** — previously the
+  command exited `1` regardless of why the run failed, so downstream
+  tooling (Airflow operator, CI gates) had no way to distinguish
+  "needs human approval" from a hard runtime fault. The exit-code
+  contract documented in `aqueduct/exit_codes.py` and
+  `docs/specs.md §10.7` was not actually emitted by the CLI; this lands
+  the missing wiring. Hard runtime fault now correctly exits `2`
+  (DATA_OR_RUNTIME). Exit `1` is reserved for config / parse errors.
+- **Tier-0 resolution now applied to the Blueprint `agent:` block**
+  (`base_url`, `model`, `provider_options`, `prompt_context`). Previously
+  these fields were passed through the parser un-resolved, so
+  `${ENV_VAR}` and `${ctx.*}` references stayed literal — for example,
+  `base_url: "${AQ_OLLAMA_URL}/v1"` reached httpx as the literal string
+  `${AQ_OLLAMA_URL}/v1` (no scheme), surfacing as a confusing URL-protocol
+  error. Resolution is wrapped in `try/except ValueError → ParseError`
+  for parity with `spark_config` / `macros` — a missing env var now
+  raises a clean `parse error: agent config resolution failed: …`
+  instead of a raw `ValueError` traceback.
 
 ### Added
 - **Apache Airflow integration** (`aqueduct.integrations.airflow`, Phase 31):

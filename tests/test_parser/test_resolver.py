@@ -225,3 +225,100 @@ class TestContextResolution:
 
         today = datetime.date.today().strftime("%Y-%m-%d")
         assert m1.config["tier1_check"] == today
+
+    def test_agent_config_ctx_resolves(self, tmp_path):
+        """Verify context references resolve in agent configurations."""
+        good = tmp_path / "agent_ctx.yml"
+        good.write_text(
+            "aqueduct: '1.0'\nid: agent_ctx\nname: AgentCtx\n"
+            "context:\n"
+            "  llm_model: 'my-custom-model'\n"
+            "  llm_base: 'http://my-endpoint:11434'\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "  model: '${ctx.llm_model}'\n"
+            "  base_url: '${ctx.llm_base}'\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(good)
+        assert bp.agent is not None
+        assert bp.agent.model == "my-custom-model"
+        assert bp.agent.base_url == "http://my-endpoint:11434"
+
+    def test_agent_base_url_env_var(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("AQ_OLLAMA_URL", "http://localhost:11434")
+        good = tmp_path / "agent_base_url.yml"
+        good.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "  base_url: '${AQ_OLLAMA_URL}/v1'\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(good)
+        assert bp.agent.base_url == "http://localhost:11434/v1"
+
+    def test_agent_model_env_var_missing(self, tmp_path, monkeypatch):
+        """Missing env var in agent.model raises ParseError at parse time
+        (consistent with module config and spark_config — ISSUE-028 resolved)."""
+        monkeypatch.delenv("MY_MODEL", raising=False)
+        bad = tmp_path / "agent_model_missing.yml"
+        bad.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "  model: '${MY_MODEL}'\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        with pytest.raises(ParseError, match=r"agent config resolution failed"):
+            parse(bad)
+
+    def test_agent_prompt_context_ctx(self, tmp_path):
+        good = tmp_path / "agent_prompt_ctx.yml"
+        good.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "context:\n"
+            "  team: 'analytics'\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "  prompt_context: 'run for ${ctx.team}'\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(good)
+        assert bp.agent.prompt_context == "run for analytics"
+
+    def test_agent_provider_options_nested(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_VERSION", "2024-02-15")
+        good = tmp_path / "agent_provider_opts.yml"
+        good.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "  provider_options:\n"
+            "    api_version: '${OPENAI_API_VERSION}'\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(good)
+        assert bp.agent.provider_options == {"api_version": "2024-02-15"}
+
+    def test_agent_unset_fields_pass_through(self, tmp_path):
+        """None agent fields (model, base_url, provider_options, prompt_context)
+        pass through resolve_value unchanged — no spurious errors or coercions."""
+        good = tmp_path / "agent_unset.yml"
+        good.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "agent:\n"
+            "  approval_mode: human\n"
+            "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(good)
+        assert bp.agent.model is None
+        assert bp.agent.base_url is None
+        assert bp.agent.provider_options is None
+        assert bp.agent.prompt_context is None
