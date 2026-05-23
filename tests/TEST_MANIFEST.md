@@ -2298,6 +2298,11 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ pyproject: `[airflow]` extra installs `apache-airflow>=2.7`; `[schedulers]` aggregates `[airflow]`; `[all]` includes `[schedulers]`
 - ✅ specs.md §10.7 published: exit-code table matches `aqueduct/exit_codes.py` constants exactly
 
+### CLI / Trigger — patch_list JSON `run_id` propagation (1.0.1 fix)
+- ✅ `aqueduct patch list --format json` JSON entries include `run_id`, `blueprint_id`, `failed_module` (from patch file's `_aq_meta`); fields are `null` when patch file lacks `_aq_meta` (older patches)
+- ✅ `AqueductPatchTrigger._matches_run`: when entry has `run_id`, exact equality wins (no substring); when entry has no `run_id`, fallback substring check on `file` / `rationale` (back-compat)
+- ✅ End-to-end: trigger DAG → approve patch via `aqueduct patch apply` → trigger fires within `poll_interval`, task resumes (the gap missed in original Phase 31 acceptance)
+
 ### CLI — HEAL_PENDING exit code wiring (1.0.1 fix)
 - ✅ ISSUE-029: `tests/test_cli/test_cli_heal_spend_cap.py::test_heal_spend_cap_blocks_loop` asserted the pre-fix buggy `exit_code == 1` — flip to `== 2` (spend-cap blocks heal → no patch staged → DATA_OR_RUNTIME is correct)
 - ✅ `aqueduct run` on a blueprint with `approval_mode: human` and an inducible failure stages a patch under `patches/pending/` and exits with code `3` (HEAL_PENDING) — not `1` or `2`

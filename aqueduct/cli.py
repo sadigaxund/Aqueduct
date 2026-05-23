@@ -2491,6 +2491,7 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
                     data = json.loads(f.read_text(encoding="utf-8"))
                 except Exception:
                     data = {}
+                meta = data.get("_aq_meta") or {}
                 payload.append({
                     "status": status_label,
                     "file": str(f),
@@ -2498,6 +2499,9 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
                     "rationale": data.get("rationale"),
                     "confidence": data.get("confidence"),
                     "category": data.get("category"),
+                    "run_id": meta.get("run_id"),
+                    "blueprint_id": meta.get("blueprint_id"),
+                    "failed_module": meta.get("failed_module"),
                 })
         click.echo(json.dumps(payload, indent=2))
         return

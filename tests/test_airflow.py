@@ -270,6 +270,14 @@ def test_trigger_matches_run():
     assert t1._matches_run({"file": "patch_1.json", "rationale": "fixes stuff"}) is True
 
     t2 = AqueductPatchTrigger(run_id="run-123", blueprint="bp.yml", patches_dir="patches")
+    
+    # 1. Exact run_id match wins
+    assert t2._matches_run({"run_id": "run-123", "file": "other.json"}) is True
+    # run_id mismatch (substring) -> False (even if file contains the string, because run_id is present)
+    assert t2._matches_run({"run_id": "run-1234", "file": "run-123_patch.json"}) is False
+    assert t2._matches_run({"run_id": "run-12", "file": "run-123_patch.json"}) is False
+
+    # 2. Fallback substring match when run_id is missing or None
     # match in file
     assert t2._matches_run({"file": "/path/to/patches/pending/run-123_patch.json"}) is True
     # match in rationale
@@ -630,3 +638,206 @@ def test_airflow_integration_defect_healing(tmp_path):
         with patch.object(op, "execute", return_value={"run_id": "run-defect-123", "exit_code": 0}):
             res = op.resume_from_patch(context={}, event={"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"})
             assert res == {"run_id": "run-defect-123", "exit_code": 0}
+
+
+@patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.executor.get_executor")
+@patch("aqueduct.agent.generate_agent_patch")
+def test_airflow_trigger_end_to_end_flow(
+    mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
+):
+    """End-to-end: operator deferral -> trigger polling -> patch apply -> operator resume."""
+    import subprocess
+    from click.testing import CliRunner
+    from aqueduct.cli import cli
+    from aqueduct.integrations.airflow.operator import AqueductOperator
+    from aqueduct.integrations.airflow.trigger import AqueductPatchTrigger
+    from aqueduct.surveyor.models import FailureContext
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+    from aqueduct.patch.grammar import PatchSpec
+
+    def _make_failure_context(run_id: str) -> FailureContext:
+        return FailureContext(
+            run_id=run_id,
+            blueprint_id="test_bp",
+            failed_module="src",
+            error_message="simulated failure",
+            stack_trace="",
+            manifest_json='{"id": "test_bp", "modules": [{"id": "src", "type": "Ingress"}]}',
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:01Z",
+        )
+
+    # 1. Write blueprint and config
+    bp = tmp_path / "bp.yml"
+    bp.write_text("""\
+aqueduct: '1.0'
+id: test_bp
+name: Test BP
+agent:
+  approval_mode: human
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: csv, path: /nonexistent/data.csv}
+edges: []
+""", encoding="utf-8")
+
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("""\
+aqueduct_config: "1.0"
+stores:
+  observability:
+    backend: duckdb
+    path: "{obs}"
+  lineage:
+    backend: duckdb
+    path: "{lin}"
+  depot:
+    backend: duckdb
+    path: "{dep}"
+""".format(
+        obs=str(tmp_path / "obs.duckdb"),
+        lin=str(tmp_path / "lin.duckdb"),
+        dep=str(tmp_path / "dep.duckdb"),
+    ), encoding="utf-8")
+
+    # 2. Setup mock return values for the CLI run invocations
+    run_id = "run-e2e-123"
+
+    # We will have two CLI runs. First fails, second succeeds.
+    fail_res = ExecutionResult(
+        blueprint_id="test_bp",
+        run_id=run_id,
+        status="error",
+        module_results=(
+            ModuleResult(module_id="src", status="error", error="simulated failure"),
+        ),
+    )
+    ok_res = ExecutionResult(
+        blueprint_id="test_bp",
+        run_id=run_id,
+        status="success",
+        module_results=(
+            ModuleResult(module_id="src", status="success", error=None),
+        ),
+    )
+
+    mock_executor_fail = MagicMock()
+    mock_executor_fail.return_value = fail_res
+
+    mock_executor_ok = MagicMock()
+    mock_executor_ok.return_value = ok_res
+
+    mock_get_exec.side_effect = [mock_executor_fail, mock_executor_ok]
+
+    # Surveyor mocks
+    mock_surveyor = MagicMock()
+    mock_surveyor.record.side_effect = [
+        _make_failure_context(run_id),
+        None,
+    ]
+    mock_surveyor_cls.return_value = mock_surveyor
+
+    # Agent generator mock
+    # The patch operation will set path to "valid.csv"
+    valid_csv_path = str(tmp_path / "valid.csv")
+    patch_spec = PatchSpec(
+        patch_id="p-e2e-001",
+        rationale="Fix path",
+        confidence=0.9,
+        category="other",
+        root_cause="test",
+        operations=[
+            {"op": "set_module_config_key", "module_id": "src", "key": "path", "value": valid_csv_path}
+        ],
+    )
+    mock_gen.return_value = MagicMock(patch=patch_spec)
+
+    # 3. Define the subprocess.run mock wrapper that runs the CLI in-process
+    def run_cli_in_process(cmd, **kwargs):
+        # cmd[0] is 'aqueduct' or path to it
+        args = cmd[1:]
+        runner = CliRunner()
+        result = runner.invoke(cli, args)
+
+        class MockCompletedProcess:
+            def __init__(self, returncode, stdout, stderr):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+            def raise_for_status(self):
+                if self.returncode != 0:
+                    raise subprocess.CalledProcessError(self.returncode, cmd, self.stdout, self.stderr)
+
+        return MockCompletedProcess(
+            returncode=result.exit_code,
+            stdout=result.output,
+            stderr=""
+        )
+
+    # 4. Instantiate and execute the operator
+    op = AqueductOperator(
+        task_id="test_task",
+        blueprint=str(bp),
+        run_id=run_id,
+        config=str(cfg),
+    )
+
+    deferred_trigger = None
+    deferred_method = None
+
+    def mock_defer(trigger, method_name, timeout=None):
+        nonlocal deferred_trigger, deferred_method
+        deferred_trigger = trigger
+        deferred_method = method_name
+
+    with patch("subprocess.run", side_effect=run_cli_in_process), \
+         patch.object(op, "defer", side_effect=mock_defer), \
+         patch("aqueduct.cli._agent_usable", return_value=True):
+
+        # This will fail, stage a patch, and call defer()
+        op.execute(context={})
+
+    assert deferred_trigger is not None
+    assert deferred_method == "resume_from_patch"
+    assert isinstance(deferred_trigger, AqueductPatchTrigger)
+    assert deferred_trigger.run_id == run_id
+
+    # 5. Check trigger polling (before applying patch)
+    with patch("subprocess.run", side_effect=run_cli_in_process):
+        status, patch_id, reason = deferred_trigger._check_once()
+        # It should see the pending patch but status is "pending" (not approved yet)
+        assert status == "pending"
+
+    # 6. Apply/Approve the patch using the CLI
+    # The staged patch should be in patches/pending/
+    patches_dir = tmp_path / "patches"
+    pending_patches = list((patches_dir / "pending").glob("*.json"))
+    assert len(pending_patches) == 1
+    staged_patch_file = pending_patches[0]
+
+    # Apply the patch using the CLI
+    runner = CliRunner()
+    apply_res = runner.invoke(cli, ["patch", "apply", str(staged_patch_file), "--blueprint", str(bp)])
+    assert apply_res.exit_code == 0
+
+    # 7. Check trigger polling again (after applying patch)
+    with patch("subprocess.run", side_effect=run_cli_in_process):
+        status, patch_id, reason = deferred_trigger._check_once()
+        assert status == "approved"
+        assert patch_id == "p-e2e-001"
+
+    # 8. Resume operator from patch event
+    event_data = {
+        "status": "approved",
+        "patch_id": "p-e2e-001",
+        "run_id": run_id,
+    }
+
+    # During resume, it calls execute() again, which should succeed now
+    with patch("subprocess.run", side_effect=run_cli_in_process):
+        res = op.resume_from_patch(context={}, event=event_data)
+
+    assert res == {"run_id": run_id, "exit_code": 0}
