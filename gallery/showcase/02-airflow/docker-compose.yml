@@ -1,0 +1,146 @@
+---
+# Airflow 2.10 (LTS) + Aqueduct showcase — single-command demo.
+#
+# LocalExecutor (no Celery/Redis), bind mounts so the demo DAG +
+# blueprints + patches/ all live in the repo (host) and are visible to
+# both the worker (inside the container) and the reviewer (on the host).
+#
+# Hardcoded secrets — demo only, never use in production.
+#
+# SELinux note (Fedora / RHEL / CentOS): every bind mount uses `:z`
+# (shared label) so the container can read/write host directories
+# without "Permission denied". On non-SELinux hosts the `:z` is a no-op.
+
+x-airflow-common:
+  &airflow-common
+  # Pre-built image from Docker Hub — Airflow 2.10.5 (python 3.12) +
+  # Aqueduct (with [airflow,spark] extras) baked in. Zero local build.
+  image: sakhund/aqueduct-airflow:2.10.5-python3.12
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: 'wTXMbFwuMSWKxKGDfGolhYJSWCHcCNTKFakdwMZhDMY='
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # Aqueduct is baked into the image via Dockerfile — no runtime pip install.
+    # LLM env vars are read by etl_drift.yml only (etl_happy needs none).
+    # Defaults assume Ollama running on the host; override in .env to swap.
+    AQ_OLLAMA_URL: ${AQ_OLLAMA_URL:-http://host.docker.internal:11434}
+    AQ_OLLAMA_MODEL: ${AQ_OLLAMA_MODEL:-qwen2.5-coder:7b}
+  volumes:
+    - ./dags:/opt/airflow/dags:z
+    - ./blueprints:/opt/airflow/blueprints:z
+    - ./data:/opt/airflow/data:z
+    - ./patches:/opt/airflow/patches:z
+    - ./aqueduct.yml:/opt/airflow/aqueduct.yml:z
+    - airflow-logs:/opt/airflow/logs
+    - airflow-aqueduct-state:/opt/airflow/.aqueduct
+  # AIRFLOW_UID lets the user override to match host uid (avoids chown noise on bind mounts).
+  # Default 50000 is the airflow image's built-in user.
+  user: "${AIRFLOW_UID:-50000}:0"
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        # Named volumes: chown so the airflow user can write logs / store state.
+        # Bind-mounted writable paths (data/output, patches): chown so the
+        # container can write back to the host without the user needing to
+        # set AIRFLOW_UID. SELinux :z relabel on the mount already grants
+        # the container the capability to chown.
+        mkdir -p /opt/airflow/logs/scheduler /opt/airflow/.aqueduct \
+                 /opt/airflow/data/output /opt/airflow/patches/pending \
+                 /opt/airflow/patches/applied /opt/airflow/patches/rejected
+        chown -R "${AIRFLOW_UID:-50000}:0" \
+            /opt/airflow/logs /opt/airflow/.aqueduct \
+            /opt/airflow/data/output /opt/airflow/patches || true
+        chmod -R 775 /opt/airflow/logs /opt/airflow/.aqueduct \
+                     /opt/airflow/data/output /opt/airflow/patches || true
+        /entrypoint airflow db migrate
+        /entrypoint airflow users create \
+          --username airflow --password airflow \
+          --firstname Air --lastname Flow \
+          --role Admin --email airflow@example.com || true
+    user: "0:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s   # cold-boot pip install can take 2-4 min
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-db-volume:
+  airflow-logs:
+  airflow-aqueduct-state:

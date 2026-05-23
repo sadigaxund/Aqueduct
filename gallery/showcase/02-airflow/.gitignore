@@ -1,0 +1,6 @@
+.env
+data/output/
+patches/pending/*.json
+patches/applied/*.json
+patches/rejected/*.json
+.aqueduct/

@@ -1,5 +1,5 @@
 # Aqueduct engine + Spark extra (pulls pyspark==4.0.x, delta-spark, py4j).
-aqueduct-core[spark]
+aqueduct-core[spark]==1.0.0
 
 # Pin pyspark to match the cluster image (4.0.0 — see docker-compose.yml).
 # Mismatched major.minor.patch breaks RPC with serialVersionUID errors.
