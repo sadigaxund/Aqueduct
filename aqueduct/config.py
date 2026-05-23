@@ -227,8 +227,15 @@ class AgentConnectionConfig(BaseModel):
     model: str = "claude-sonnet-4-6"
     provider_options: dict[str, Any] | None = None
     timeout: float = Field(
-        default=120.0,
-        description="HTTP socket timeout in seconds for agent API calls. Increase for slow local models (e.g. 600.0).",
+        default=300.0,
+        description=(
+            "HTTP socket timeout (seconds) for agent API calls. Default 300 — "
+            "tolerates local-model cold-start (model load into VRAM) plus "
+            "inference on small/medium models. Hosted APIs (Anthropic) "
+            "typically respond in <30s so the larger ceiling does not affect "
+            "them. Increase to 600+ for very large local models, or set "
+            "explicitly to 120 to restore the pre-1.0.3 behaviour."
+        ),
     )
     max_reprompts: int = Field(
         default=3,
