@@ -1898,12 +1898,18 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
     if not all_applied:
         return []
 
-    # Get ISO timestamp of last git commit touching this blueprint
-    result = subprocess.run(
-        ["git", "log", "-1", "--format=%cI", "--", str(blueprint_path)],
-        capture_output=True, text=True,
-    )
-    last_commit_ts: str | None = result.stdout.strip() if result.returncode == 0 else None
+    # Get ISO timestamp of last git commit touching this blueprint.
+    # Tolerate environments without git (containerized workers, etc.) — the
+    # check is informational; falling back to "treat all as uncommitted"
+    # preserves the safety semantics without breaking the run.
+    try:
+        result = subprocess.run(
+            ["git", "log", "-1", "--format=%cI", "--", str(blueprint_path)],
+            capture_output=True, text=True,
+        )
+        last_commit_ts: str | None = result.stdout.strip() if result.returncode == 0 else None
+    except (FileNotFoundError, PermissionError, OSError):
+        last_commit_ts = None
 
     if not last_commit_ts:
         # Not in git or never committed — treat everything as uncommitted
