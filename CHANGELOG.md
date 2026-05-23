@@ -11,6 +11,13 @@ release and are marked **BREAKING**.
 ## [1.0.1] — 2026-05-23
 
 ### Fixed
+- **`aqueduct run` no longer crashes when the `git` binary is missing**
+  from the runtime environment. The uncommitted-applied-patches check
+  shells out to `git log`; previously a missing or non-executable
+  binary raised `PermissionError` / `FileNotFoundError` before the
+  return-code branch ran, killing the run. The exception is now caught
+  and the check falls back to "treat all applied patches as
+  uncommitted" — same behavior as a `git`-less directory.
 - **`aqueduct patch list --format json` now emits `run_id`,
   `blueprint_id`, `failed_module`** (sourced from the patch file's
   `_aq_meta` block). Without these fields downstream integrations

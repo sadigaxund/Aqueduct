@@ -2298,6 +2298,11 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ pyproject: `[airflow]` extra installs `apache-airflow>=2.7`; `[schedulers]` aggregates `[airflow]`; `[all]` includes `[schedulers]`
 - ✅ specs.md §10.7 published: exit-code table matches `aqueduct/exit_codes.py` constants exactly
 
+### CLI — `_uncommitted_applied_patches` git-less tolerance (1.0.1 fix)
+- ✅ `aqueduct run` succeeds when `git` is not on `$PATH` — `_uncommitted_applied_patches` catches `FileNotFoundError` and falls back to "treat all applied as uncommitted"
+- ✅ `aqueduct run` succeeds when `git` exists but is not executable by current user (`PermissionError`) — same fallback path
+- ✅ Behavior unchanged when git is present: timestamps still drive the uncommitted classification
+
 ### CLI / Trigger — patch_list JSON `run_id` propagation (1.0.1 fix)
 - ✅ `aqueduct patch list --format json` JSON entries include `run_id`, `blueprint_id`, `failed_module` (from patch file's `_aq_meta`); fields are `null` when patch file lacks `_aq_meta` (older patches)
 - ✅ `AqueductPatchTrigger._matches_run`: when entry has `run_id`, exact equality wins (no substring); when entry has no `run_id`, fallback substring check on `file` / `rationale` (back-compat)
