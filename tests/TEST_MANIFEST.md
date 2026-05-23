@@ -888,6 +888,8 @@ Does NOT apply or stage — caller decides.
 
 - [✅] `tests/test_cli/test_cli_aggressive.py::test_aggressive_mode_invalid_patch_stops_loop`: RESOLVED. Autonomous fix-and-verify loop verified end-to-end.
 - [✅] `tests/test_parser/test_resolver.py::test_spark_config_undefined_ctx_raises_parseerror`: RESOLVED (ISSUE-027). App hoisted `spark_config`/`macros` `resolve_value()` into a guarded block raising `ParseError` on `ValueError` (mirrors `parser.py:131` module-config pattern). `xfail` marker removed; 21/21 resolver tests pass. Issue moved to `.dev/RESOLVED/ISSUE-027.md`.
+- [✅] `tests/test_parser/test_resolver.py::test_agent_model_env_var_missing` (ISSUE-028): RESOLVED. App wrapped agent block `resolve_value` calls in `try/except ValueError → ParseError` guard (mirrors spark_config pattern). Test updated to `pytest.raises(ParseError, match=r"agent config resolution failed")`. Issue moved to `.dev/RESOLVED/ISSUE-028.md`.
+- [✅] `tests/test_cli/test_cli_heal_spend_cap.py::test_heal_spend_cap_blocks_loop` (ISSUE-029): RESOLVED. Test incorrectly asserted exit code 1 (CONFIG_ERROR) instead of 2 (DATA_OR_RUNTIME). When the spend limit blocks healing, the execution fails due to the underlying failed task (no patch is staged). Updated the assertions in both spend-cap and debug spend-cap tests. Issue moved to `.dev/RESOLVED/ISSUE-029.md`.
 
 ---
 
@@ -2295,3 +2297,18 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ Integration (`@pytest.mark.airflow`): blueprint with `UNRESOLVED_COLUMN` defect → task defers (HEAL_PENDING), external `aqueduct patch apply` lands, trigger fires, task resumes, final state success, 2 tries
 - ✅ pyproject: `[airflow]` extra installs `apache-airflow>=2.7`; `[schedulers]` aggregates `[airflow]`; `[all]` includes `[schedulers]`
 - ✅ specs.md §10.7 published: exit-code table matches `aqueduct/exit_codes.py` constants exactly
+
+### CLI — HEAL_PENDING exit code wiring (1.0.1 fix)
+- ✅ ISSUE-029: `tests/test_cli/test_cli_heal_spend_cap.py::test_heal_spend_cap_blocks_loop` asserted the pre-fix buggy `exit_code == 1` — flip to `== 2` (spend-cap blocks heal → no patch staged → DATA_OR_RUNTIME is correct)
+- ✅ `aqueduct run` on a blueprint with `approval_mode: human` and an inducible failure stages a patch under `patches/pending/` and exits with code `3` (HEAL_PENDING) — not `1` or `2`
+- ✅ `aqueduct run` on a blueprint with `approval_mode: ci` stages under `patches/pending/` and exits `3`
+- ✅ `aqueduct run` on a blueprint with `approval_mode: disabled` (or no agent) and a runtime failure exits `2` (DATA_OR_RUNTIME), not `1`
+- ✅ `aqueduct run` on a blueprint with `approval_mode: auto` that applies a patch and succeeds exits `0`
+- ✅ `aqueduct run` on a parse / config error still exits `1` (CONFIG_ERROR) — no regression in the `ParseError` / `ConfigError` exit path
+
+### Parser — Tier-0 resolution in agent block (1.0.1 fix)
+- ✅ Blueprint `agent.base_url: "${AQ_OLLAMA_URL}/v1"` with env var set resolves to the real URL (not literal `${AQ_OLLAMA_URL}/v1`); httpx call goes out cleanly
+- ✅ Blueprint `agent.model: "${MY_MODEL}"` with `MY_MODEL` unset raises `ParseError("agent config resolution failed: …")` (not raw `ValueError`) — agent block now wrapped in `try/except` for parity with `spark_config` (ISSUE-028 closed)
+- ✅ Blueprint `agent.prompt_context: "${ctx.team}"` resolves from Tier-0 context block
+- ✅ Blueprint `agent.provider_options: {api_version: "${OPENAI_API_VERSION}"}` resolves nested env vars
+- ✅ None / unset agent fields pass through resolve_value unchanged (no spurious errors)

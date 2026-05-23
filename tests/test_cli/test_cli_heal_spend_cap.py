@@ -43,7 +43,7 @@ edges: []
         result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-aggressive"])
     
     assert "LLM rate-limit reached" in result.output
-    assert result.exit_code == 1
+    assert result.exit_code == 2   # DATA_OR_RUNTIME: spend-cap doesn't stage a patch
 
 @pytest.mark.spark
 @pytest.mark.integration
