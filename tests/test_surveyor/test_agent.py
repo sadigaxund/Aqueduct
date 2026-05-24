@@ -285,7 +285,7 @@ class TestGenerateLlmPatch:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
 
         def mock_llm(*_args, **_kw):
-            return _valid_patch_json()
+            return (_valid_patch_json(), 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
 
@@ -304,8 +304,8 @@ class TestGenerateLlmPatch:
         def flaky_llm(*_args, **_kw):
             call_count.append(1)
             if len(call_count) < 2:
-                return "invalid json"
-            return _valid_patch_json()
+                return ("invalid json", 100, 50)
+            return (_valid_patch_json(), 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", flaky_llm)
 
@@ -354,7 +354,7 @@ class TestGenerateLlmPatch:
             for msg in messages:
                 if msg.get("role") == "user":
                     captured_prompt = msg.get("content", "")
-            return _valid_patch_json()
+            return (_valid_patch_json(), 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
 
@@ -381,7 +381,7 @@ class TestGenerateLlmPatch:
             for msg in messages:
                 if msg.get("role") == "user":
                     captured_prompt = msg.get("content", "")
-            return _valid_patch_json()
+            return (_valid_patch_json(), 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
 
@@ -508,7 +508,7 @@ class TestLlmHelpers:
         def always_invalid(*_args, **_kw):
             nonlocal call_count
             call_count += 1
-            return "not json"
+            return ("not json", 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
 
@@ -520,17 +520,29 @@ class TestLlmHelpers:
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
         from aqueduct.agent import generate_agent_patch
+        from aqueduct.agent.budget import BudgetConfig
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
 
         call_count = 0
         def always_invalid(*_args, **_kw):
             nonlocal call_count
             call_count += 1
-            return "not json"
+            return ("not json", 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
 
-        result = generate_agent_patch(_failure_ctx(), "model", tmp_path, max_reprompts=5)
+        # Need to also widen the other budget axes so max_reprompts is the
+        # only one that trips (same_signature_overall default=3 would trip
+        # first with identical invalid responses).
+        budget = BudgetConfig(
+            max_reprompts=5,
+            same_error_consecutive=99,
+            same_signature_overall=99,
+            progress_stalled_window=99,
+        )
+        result = generate_agent_patch(
+            _failure_ctx(), "model", tmp_path, max_reprompts=5, budget=budget
+        )
 
         assert result.patch is None
         assert call_count == 5
@@ -543,7 +555,7 @@ class TestLlmHelpers:
         def mock_call_llm(*_args, **kwargs):
             nonlocal timeout_used
             timeout_used = kwargs.get("timeout")
-            return _valid_patch_json()
+            return (_valid_patch_json(), 100, 50)
 
         monkeypatch.setattr("aqueduct.agent._call_agent", mock_call_llm)
 

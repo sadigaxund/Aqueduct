@@ -699,3 +699,91 @@ def test_persist_results_writes_violated_guardrails(tmp_path):
     assert rows[0] == ("s1", None)
     assert rows[1] == ("s2", "[]")
     assert rows[2] == ("s3", '["replace_module_config"]')
+
+
+# ── Phase 34 migrations ───────────────────────────────────────────────────────
+
+def test_benchmark_migration_phase34_new_store(tmp_path):
+    """Fresh store DDL includes stop_reason, escalated, tokens_in_total, tokens_out_total."""
+    store_path = tmp_path / "bench.duckdb"
+    con = _connect(store_path)
+    cols = con.execute("SELECT column_name FROM information_schema.columns WHERE table_name='benchmark_results'").fetchall()
+    con.close()
+    
+    cnames = [c[0] for c in cols]
+    assert "stop_reason" in cnames
+    assert "escalated" in cnames
+    assert "tokens_in_total" in cnames
+    assert "tokens_out_total" in cnames
+
+def test_benchmark_migration_phase34_alter_existing(tmp_path):
+    """Pre-existing store gets ALTER; existing rows preserved with NULL/default."""
+    store_path = tmp_path / "bench.duckdb"
+    _create_legacy_benchmark_db(store_path)
+    
+    # Run migration
+    con = _connect(store_path)
+    old_row = con.execute("SELECT stop_reason, escalated, tokens_in_total FROM benchmark_results WHERE scenario_id='s-legacy'").fetchone()
+    con.close()
+    
+    assert old_row[0] is None
+    assert old_row[1] is None
+    assert old_row[2] is None
+
+def test_benchmark_migration_phase34_idempotent(tmp_path):
+    """Migration is idempotent — second _connect does not re-issue the ALTERs."""
+    store_path = tmp_path / "bench.duckdb"
+    con1 = _connect(store_path)
+    con1.close()
+    
+    con2 = _connect(store_path)
+    cols = con2.execute(
+        "SELECT COUNT(*) FROM information_schema.columns "
+        "WHERE table_name='benchmark_results' AND column_name='stop_reason'"
+    ).fetchone()[0]
+    con2.close()
+    
+    assert cols == 1
+
+def test_persist_results_writes_phase34_columns(tmp_path):
+    """persist_results writes new columns from ScenarioResult; falls back to safe defaults."""
+    store_path = tmp_path / "bench.duckdb"
+    r_full = _make_result("s1", "m1")
+    r_full.stop_reason = "stuck_signature"
+    r_full.escalated = True
+    r_full.tokens_in_total = 100
+    r_full.tokens_out_total = 50
+    
+    class OldResult:
+        scenario_id = "s2"
+        model = "m1"
+        passed = True
+        patch_valid = True
+        patch_applies = True
+        confidence = 0.9
+        duration_seconds = 1.0
+        attempts_to_parse = 1
+        diag_score = 0.8
+        root_cause_match = None
+        category_match = None
+        failures = []
+        soft_failures = []
+        prompt_version = "1.0"
+        provider = "anthropic"
+        base_url = None
+
+    results = {
+        "s1": {"m1": r_full},
+        "s2": {"m1": OldResult()},  # type: ignore[dict-item]
+    }
+    persist_results(results, store_path)
+    
+    con = duckdb.connect(str(store_path))
+    rows = con.execute(
+        "SELECT scenario_id, stop_reason, escalated, tokens_in_total, tokens_out_total "
+        "FROM benchmark_results ORDER BY scenario_id"
+    ).fetchall()
+    con.close()
+    
+    assert rows[0] == ("s1", "stuck_signature", True, 100, 50)
+    assert rows[1] == ("s2", None, False, 0, 0)
