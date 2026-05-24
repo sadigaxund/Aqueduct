@@ -1551,6 +1551,7 @@ def run(
                 engine_prompt_context=resolved_agent_engine_prompt_context,
                 blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
                 last_apply_error=last_apply_error,
+                guardrails=manifest.agent.guardrails if manifest.agent else None,
             )
             patch = agent_result.patch
             if patch is None:
@@ -3349,8 +3350,19 @@ def heal(
         finished_at=finished_at,
     )
 
+    # Extract guardrails from the persisted manifest so heal-from-store paths
+    # surface the same constraints the live run would have used.
+    _guardrails_for_prompt: Any = None
+    try:
+        _mdict = json.loads(manifest_json_raw) if isinstance(manifest_json_raw, str) else manifest_json_raw
+        if isinstance(_mdict, dict):
+            _agent_block = _mdict.get("agent") or {}
+            _guardrails_for_prompt = _agent_block.get("guardrails") or None
+    except Exception:
+        _guardrails_for_prompt = None
+
     if print_prompt:
-        prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context)
+        prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context, guardrails=_guardrails_for_prompt)
         _print_prompt(prompt, print_prompt)
         return
 
@@ -3369,6 +3381,7 @@ def heal(
         timeout=resolved_timeout,
         max_reprompts=resolved_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
+        guardrails=_guardrails_for_prompt,
     )
     patch = agent_result.patch
 
@@ -3595,6 +3608,7 @@ def benchmark(
                     "root_cause_match": r.root_cause_match,
                     "category_match": r.category_match,
                     "diag_score": r.diag_score,
+                    "violated_guardrails": r.violated_guardrails,
                     "failures": r.failures,
                     "soft_failures": r.soft_failures,
                     "patch": (
