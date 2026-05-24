@@ -13,11 +13,11 @@ inject_failure:
       at org.apache.spark.sql.execution.datasources.DataSource.resolveRelation(DataSource.scala:411)
     (Ingress users_raw — reader.format("parquet").load("data/input/users.csv"))
 
-# Op-agnostic + diagnosis. Strict op-shape pin removed — see TODOs Phase
-# 33 (`_match_op_spec`).
 expected_patch:
-  ops:
-    - module_id: users_raw   # op-agnostic gating: patch must modify the failing module
+  effect:
+    module: users_raw
+    config_contains:
+      format: "csv"   # raw substring match — bare string equality also matches
 
 assertions:
   - patch_is_valid: true

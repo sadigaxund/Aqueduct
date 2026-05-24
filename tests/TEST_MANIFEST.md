@@ -256,39 +256,94 @@ This section tracks high-level functional verification of core features against 
 ### Phase 33 Part A — Benchmark persistence + regression detection
 
 #### `surveyor/surveyor.py` — `healing_outcomes.prompt_version` migration
-- ⏳ Fresh DB → `healing_outcomes` table includes `prompt_version VARCHAR` column from initial DDL
-- ⏳ Pre-1.0.3 DB (no `prompt_version` column) → `Surveyor.start()` issues `ALTER TABLE healing_outcomes ADD COLUMN prompt_version VARCHAR`; existing rows preserved with NULL value
-- ⏳ Migration is idempotent — second `Surveyor.start()` on same DB does not re-issue the ALTER (column check via `information_schema.columns`)
-- ⏳ `record_healing_outcome()` with `prompt_version=None` populates the column from `agent.PROMPT_VERSION` constant
-- ⏳ `record_healing_outcome()` with explicit `prompt_version="2.0"` honors override (does NOT fall back to constant)
+- ✅ Fresh DB → `healing_outcomes` table includes `prompt_version VARCHAR` column from initial DDL
+- ✅ Pre-1.0.3 DB (no `prompt_version` column) → `Surveyor.start()` issues `ALTER TABLE healing_outcomes ADD COLUMN prompt_version VARCHAR`; existing rows preserved with NULL value
+- ✅ Migration is idempotent — second `Surveyor.start()` on same DB does not re-issue the ALTER (column check via `information_schema.columns`)
+- ✅ `record_healing_outcome()` with `prompt_version=None` populates the column from `agent.PROMPT_VERSION` constant
+- ✅ `record_healing_outcome()` with explicit `prompt_version="2.0"` honors override (does NOT fall back to constant)
 
 #### `surveyor/scenario.py` — `ScenarioResult` carries Phase 33 fields
-- ⏳ `run_scenario(...)` populates `prompt_version`, `provider`, `base_url` on the returned `ScenarioResult` (both the early-exit FailureContext-build-failure branch AND the normal path)
-- ⏳ `ScenarioResult` defaults: `prompt_version=None`, `provider=None`, `base_url=None` (backward-compatible field additions)
+- ✅ `run_scenario(...)` populates `prompt_version`, `provider`, `base_url` on the returned `ScenarioResult` (both the early-exit FailureContext-build-failure branch AND the normal path)
+- ✅ `ScenarioResult` defaults: `prompt_version=None`, `provider=None`, `base_url=None` (backward-compatible field additions)
 
 #### `surveyor/benchmark_store.py` — persistence + diff
-- ⏳ `persist_results({})` (empty results) → 0 rows written, no error
-- ⏳ `persist_results(results)` writes one row per `(scenario, model)` pair; row schema matches DDL columns including `prompt_version`, `provider`, `base_url`, JSON-serialized `failures`/`soft_failures`
-- ⏳ `persist_results` is best-effort — when `duckdb` import fails (simulate via monkeypatch) returns 0 and logs warning instead of raising
-- ⏳ `default_store_path(<dir>)` returns `<dir>/.aqueduct/benchmark.duckdb`; `default_store_path(<file.aqscenario.yml>)` returns `<file_dir>/.aqueduct/benchmark.duckdb`
-- ⏳ `diff_latest` with NO prior row for a `(scenario, model)` pair → `DiffEntry.baseline is None`, status surfaces as "NEW", no regression
-- ⏳ `diff_latest` baseline lookup prefers exact `(scenario, model, prompt_version)` triple; falls back to most recent `(scenario, model)` regardless of prompt_version with `baseline_prompt_mismatch=True`
-- ⏳ `_compare`: `passed True→False` flagged as regression; `passed False→True` flagged as improvement
-- ⏳ `_compare`: `patch_applies True→False` flagged as regression
-- ⏳ `_compare`: `diag_score` drop > 0.05 flagged as regression; drop ≤ 0.05 ignored (noise floor)
-- ⏳ `_compare`: `confidence` drop > 0.05 flagged as regression; no improvement entry for confidence (we don't reward confidence inflation)
-- ⏳ `has_regressions([])` → False; `has_regressions([entry_with_regs])` → True; `has_regressions([new_pair_entry])` → False
+- ✅ `persist_results({})` (empty results) → 0 rows written, no error
+- ✅ `persist_results(results)` writes one row per `(scenario, model)` pair; row schema matches DDL columns including `prompt_version`, `provider`, `base_url`, JSON-serialized `failures`/`soft_failures`
+- ✅ `persist_results` is best-effort — when `duckdb` import fails (simulate via monkeypatch) returns 0 and logs warning instead of raising
+- ✅ `default_store_path(<dir>)` returns `<dir>/.aqueduct/benchmark.duckdb`; `default_store_path(<file.aqscenario.yml>)` returns `<file_dir>/.aqueduct/benchmark.duckdb`
+- ✅ `diff_latest` with NO prior row for a `(scenario, model)` pair → `DiffEntry.baseline is None`, status surfaces as "NEW", no regression
+- ✅ `diff_latest` baseline lookup prefers exact `(scenario, model, prompt_version)` triple; falls back to most recent `(scenario, model)` regardless of prompt_version with `baseline_prompt_mismatch=True`
+- ✅ `_compare`: `passed True→False` flagged as regression; `passed False→True` flagged as improvement
+- ✅ `_compare`: `patch_applies True→False` flagged as regression
+- ✅ `_compare`: `diag_score` drop > 0.05 flagged as regression; drop ≤ 0.05 ignored (noise floor)
+- ✅ `_compare`: `confidence` is deliberately EXCLUDED from regression detection — LLM self-reported confidence is too noisy to gate on (overconfidence bias + cross-model incomparability). Value still persisted in `benchmark_results.confidence` column for inspection. A confidence-only change between runs MUST NOT produce a `REGRESS` status.
+- ✅ `has_regressions([])` → False; `has_regressions([entry_with_regs])` → True; `has_regressions([new_pair_entry])` → False
 
 #### `cli.py` — `benchmark` flags + `benchmark-diff` command
-- ⏳ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
-- ⏳ `aqueduct benchmark --no-persist <dir>` does NOT write; no benchmark.duckdb file is created under `<dir>/.aqueduct/`
-- ⏳ `aqueduct benchmark --store-path /tmp/x.db <dir>` writes to the override path
-- ⏳ `aqueduct benchmark --gate-on-regression <dir>` with regression → exit code 1, stderr line "regression(s) detected"
-- ⏳ `aqueduct benchmark --gate-on-regression <dir>` without regression → exit code 0
-- ⏳ `aqueduct benchmark --gate-on-regression --no-persist <dir>` → stderr note "ignored: --no-persist set", behaves as plain benchmark
-- ⏳ `aqueduct benchmark-diff --store-path /tmp/x.db` reads store, prints diff table, exits 1 if any pair has regression
-- ⏳ `aqueduct benchmark-diff --scenario sX --model mY` filters output to one pair
-- ⏳ `aqueduct benchmark-diff` with missing store file → exit 1 with "benchmark store not found"
+- ✅ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
+- ✅ `aqueduct benchmark --no-persist <dir>` does NOT write; no benchmark.duckdb file is created under `<dir>/.aqueduct/`
+- ✅ `aqueduct benchmark --store-path /tmp/x.db <dir>` writes to the override path
+- ✅ `aqueduct benchmark --gate-on-regression <dir>` with regression → exit code 1, stderr line "regression(s) detected"
+- ✅ `aqueduct benchmark --gate-on-regression <dir>` without regression → exit code 0
+- ✅ `aqueduct benchmark --gate-on-regression --no-persist <dir>` → stderr note "ignored: --no-persist set", behaves as plain benchmark
+- ✅ `aqueduct benchmark-diff --store-path /tmp/x.db` reads store, prints diff table, exits 1 if any pair has regression
+- ✅ `aqueduct benchmark-diff --scenario sX --model mY` filters output to one pair
+- ✅ `aqueduct benchmark-diff` with missing store file → exit 1 with "benchmark store not found"
+
+### Phase 33 Part B Scope C — Guardrail compliance chain + effect-based grader
+
+#### `agent/__init__.py` — `_build_guardrails_section` (step 1: prompt injection)
+- ✅ `_build_guardrails_section(None)` → empty string (no prompt noise)
+- ✅ `_build_guardrails_section(empty_dict)` → empty string
+- ✅ `_build_guardrails_section(GuardrailsConfig(forbidden_ops=("replace_module_config",)))` (dataclass shape — live heal path) → output contains "forbidden ops" and "replace_module_config"
+- ✅ `_build_guardrails_section({"forbidden_ops": ["x"], "allowed_paths": ["blueprints/*"]})` (dict shape — heal-from-store path) → output contains both rows
+- ✅ All four guardrail field names (`forbidden_ops`, `allowed_paths`, `heal_on_errors`, `never_heal_errors`) render under separate bullets when populated; absent fields produce no bullet
+- ✅ `generate_agent_patch(..., guardrails=g)` threads `g` into `_build_user_prompt`; resulting prompt contains the guardrail section (capture via httpx mock + `build_prompt` helper)
+- ✅ `generate_agent_patch` called with no `guardrails` kwarg (legacy callers) → no guardrail section, no exception (backward-compatible default)
+
+#### `surveyor/scenario.py` — `_try_apply_patch` (step 2: scenario enforcement)
+- ✅ Blueprint with NO `agent.guardrails` block → returns `violated_guardrails=None`, `success=True` for a clean patch (N/A path)
+- ✅ Blueprint with `forbidden_ops: [replace_module_config]`, patch uses `set_module_config_key` only → returns `violated_guardrails=[]`, `success=True` (defined-and-clean)
+- ✅ Blueprint with `forbidden_ops: [replace_module_config]`, patch uses `replace_module_config` → returns `success=False`, `error` contains "guardrails violated", `violated_guardrails` is a single-entry list naming the forbidden op
+- ✅ Blueprint with `allowed_paths: [blueprints/orders.yml]`, patch's `set_module_config_key key=path value="data/other.csv"` → guardrail rejection surfaced
+- ✅ Returns `patched_dict` on success (for the effect grader); None on guardrail violation OR on parse/compile failure
+
+#### `surveyor/scenario.py` — `ScenarioResult.violated_guardrails`
+- ✅ Default value is `None` (backward-compatible field addition, doesn't break external constructors)
+- ✅ Populated by `run_scenario` from `_try_apply_patch` result
+- ✅ `format_benchmark_table` "Guardrail-clean" row reports `—` when every result has `violated_guardrails is None`
+- ✅ "Guardrail-clean" row reports the correct percentage when mix of defined-and-clean / defined-and-violated results exists; N/A rows excluded from the denominator
+
+#### `surveyor/benchmark_store.py` — `violated_guardrails` column (step 3)
+- ✅ Fresh store has `violated_guardrails JSON` column in `benchmark_results` DDL
+- ✅ Pre-existing store (created before this column) → `_connect` issues `ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON`; existing rows preserved with NULL
+- ✅ Migration is idempotent — second `_connect` does not re-issue the ALTER
+- ✅ `persist_results` writes `violated_guardrails` as JSON-serialized list when non-None; NULL when None
+
+#### `cli.py` — benchmark JSON output
+- ✅ `aqueduct benchmark --format json` output includes `violated_guardrails` field per (scenario, model) entry
+
+#### `surveyor/scenario.py` — `_normalize_sql` (effect grader helper)
+- ✅ `_normalize_sql("SELECT  a , b  FROM  t")` collapses whitespace via sqlglot
+- ✅ `_normalize_sql("SELECT a, b FROM t")` and `_normalize_sql("select   a,b from   t")` produce equal canonical forms once both lowercased — verify substring matches across reformat
+- ✅ Falls back to `" ".join(text.lower().split())` when sqlglot raises (malformed SQL); does NOT crash the grader
+
+#### `surveyor/scenario.py` — `_check_expected_effect`
+- ✅ Empty `expected_patch` (`{}`) → returns `[]` (no failures)
+- ✅ `expected_patch.effect.module` missing → returns single failure "module: required (target module_id)"
+- ✅ `expected_patch.effect.module: "nonexistent"` against a patched dict where it's not present → failure listing modules present
+- ✅ `config_contains` SQL key with substring present (post AST normalization) → empty failures
+- ✅ `config_contains` SQL key with substring absent → failure mentioning AST-normalized expected + actual
+- ✅ `config_contains` non-SQL string key with substring present → empty failures
+- ✅ `config_contains` non-SQL string key with substring absent → failure with raw-string diff
+- ✅ `config_contains` bool / int key strict equality (True/False, integer matches)
+- ✅ `patched_dict is None` (apply failed earlier) → returns empty failures (effect grader skips so apply failure is the root-cause signal)
+- ✅ Legacy `ops:` / `forbidden_ops:` syntax → single hard failure "scenario uses the deleted `ops:`/`forbidden_ops:` syntax. Migrate to `expected_patch.effect:`"
+
+#### Gallery scenarios — migration
+- ✅ All five `gallery/aqscenarios/0[1-5]_*.aqscenario.yml` parse successfully with the new `effect:` syntax
+- ✅ Scenario 05 has no `expected_patch.effect` (multi-solution scenario) — verify `_check_expected_effect({}, patched_dict)` returns no failures
+- ✅ New scenario 06 (`06_guardrail_forbidden_op.aqscenario.yml`) blueprint declares `agent.guardrails.forbidden_ops: [replace_module_config]`; load + `_build_failure_ctx` returns a Blueprint with the guardrail populated; the guardrail surfaces in `_build_guardrails_section(bp.agent.guardrails)`
 
 ---
 

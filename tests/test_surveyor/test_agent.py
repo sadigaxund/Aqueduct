@@ -342,6 +342,59 @@ class TestGenerateLlmPatch:
         err_messages = [rec.message for rec in caplog.records if rec.levelno == logging.ERROR]
         assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in err_messages)
 
+    def test_generate_agent_patch_with_guardrails_threads_to_prompt(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from aqueduct.parser.models import GuardrailsConfig
+
+        captured_prompt = None
+
+        def mock_llm(*args, **kwargs):
+            nonlocal captured_prompt
+            messages = args[0] if args else kwargs.get("messages", [])
+            for msg in messages:
+                if msg.get("role") == "user":
+                    captured_prompt = msg.get("content", "")
+            return _valid_patch_json()
+
+        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
+
+        g = GuardrailsConfig(forbidden_ops=("replace_module_config",))
+        result = generate_agent_patch(
+            failure_ctx=_failure_ctx(),
+            model="claude-sonnet-4-6",
+            patches_dir=tmp_path / "patches",
+            guardrails=g
+        )
+        assert result.patch is not None
+        assert captured_prompt is not None
+        assert "forbidden ops" in captured_prompt
+        assert "replace_module_config" in captured_prompt
+
+    def test_generate_agent_patch_without_guardrails_kwarg(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        
+        captured_prompt = None
+
+        def mock_llm(*args, **kwargs):
+            nonlocal captured_prompt
+            messages = args[0] if args else kwargs.get("messages", [])
+            for msg in messages:
+                if msg.get("role") == "user":
+                    captured_prompt = msg.get("content", "")
+            return _valid_patch_json()
+
+        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
+
+        # Legacy caller without guardrails kwarg
+        result = generate_agent_patch(
+            failure_ctx=_failure_ctx(),
+            model="claude-sonnet-4-6",
+            patches_dir=tmp_path / "patches",
+        )
+        assert result.patch is not None
+        assert captured_prompt is not None
+        assert "Guardrails" not in captured_prompt
+
 
 # ── Surveyor integration ──────────────────────────────────────────────────────
 
@@ -714,3 +767,53 @@ class TestProviderOptionsDispatch:
 
         with pytest.raises(ValidationError):
             AgentSchema(**{"approval_mode": "disabled", "ollama_options": {"num_thread": 4}})
+
+
+# ── Guardrails ────────────────────────────────────────────────────────────────
+
+class TestGuardrailsSection:
+    def test_none_returns_empty_string(self):
+        from aqueduct.agent import _build_guardrails_section
+        assert _build_guardrails_section(None) == ""
+
+    def test_empty_dict_returns_empty_string(self):
+        from aqueduct.agent import _build_guardrails_section
+        assert _build_guardrails_section({}) == ""
+
+    def test_dataclass_shape_live_heal_path(self):
+        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.parser.models import GuardrailsConfig
+        g = GuardrailsConfig(forbidden_ops=("replace_module_config",))
+        result = _build_guardrails_section(g)
+        assert "forbidden ops" in result
+        assert "replace_module_config" in result
+
+    def test_dict_shape_heal_from_store_path(self):
+        from aqueduct.agent import _build_guardrails_section
+        g = {"forbidden_ops": ["x"], "allowed_paths": ["blueprints/*"]}
+        result = _build_guardrails_section(g)
+        assert "forbidden ops (must NOT appear in operations[]): x" in result
+        assert "allowed file paths (operations may only target these — fnmatch patterns): blueprints/*" in result
+
+    def test_all_four_fields_render(self):
+        from aqueduct.agent import _build_guardrails_section
+        g = {
+            "forbidden_ops": ["f1"],
+            "allowed_paths": ["a1"],
+            "heal_on_errors": ["h1"],
+            "never_heal_errors": ["n1"],
+        }
+        result = _build_guardrails_section(g)
+        assert "- forbidden ops (must NOT appear in operations[]): f1" in result
+        assert "- allowed file paths (operations may only target these — fnmatch patterns): a1" in result
+        assert "- heal only on these error_types: h1" in result
+        assert "- never heal these error_types (priority over heal_on): n1" in result
+
+    def test_absent_fields_produce_no_bullet(self):
+        from aqueduct.agent import _build_guardrails_section
+        g = {"forbidden_ops": ["f1"]}
+        result = _build_guardrails_section(g)
+        assert "forbidden ops" in result
+        assert "allowed file paths" not in result
+        assert "heal only" not in result
+        assert "never heal" not in result

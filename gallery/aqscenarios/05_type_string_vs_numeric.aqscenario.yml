@@ -8,7 +8,7 @@ blueprint: blueprints/05_type_string_vs_numeric.yml
 inject_failure:
   module: clean_events
   error_message: |
-    pyspark.errors.exceptions.captured.AnalysisException: [DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve "sum(event_id)" due to data type mismatch: The first parameter requires the ("NUMERIC" or "INTERVAL DAY TO SECOND" or "INTERVAL YEAR TO MONTH" or "INTERVAL") type, however "event_id" has the type "STRING". SQLSTATE: 42K09
+    pyspark.errors.exceptions.captured.AnalysisException: [DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve "sum(event_id)" due to data type mismatch: The first parameter requires the ("NUMERIC" or "INTERVAL DAY TO SECOND" or "INTERVAL") type, however "event_id" has the type "STRING". SQLSTATE: 42K09
     == SQL (line 2, position 8) ==
           SUM(event_id) AS event_id_total
           ^^^^^^^^^^^^^
@@ -16,11 +16,13 @@ inject_failure:
     +- SubqueryAlias events_raw
        +- Relation [event_id#29,user_id#30,event_time#31,event_type#32] csv
 
-# Op-agnostic + diagnosis. Strict op-shape pin removed — see TODOs Phase
-# 33 (`_match_op_spec`).
-expected_patch:
-  ops:
-    - module_id: clean_events   # op-agnostic gating: patch must modify the failing module
+# Multiple valid fixes: (a) CAST in the clean_events query, (b) typed
+# schema_hint on the events_raw ingress, (c) a stronger CSV reader option.
+# Effect-based grader pins ONE target module, so we deliberately omit
+# `effect:` here and gate on `patch_applies` only — the post-patch
+# blueprint must still parse + compile. The fix quality is captured by
+# `root_cause_contains`.
+expected_patch: {}
 
 assertions:
   - patch_is_valid: true
