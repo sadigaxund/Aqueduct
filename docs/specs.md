@@ -1479,9 +1479,9 @@ agent:
 1. Module fails. Executor exhausts its retry policy (if configured). Failure bubbles to `cli.py`.
 2. If `approval_mode: disabled` — LLM never fires. Run ends with `status=error`. **All other steps skipped.**
 3. If unreviewed patches exist in `patches/pending/` and `on_pending_patches: block` — LLM skipped, run ends.
-4. **Assembles FailureContext:** compiled module config with resolved values, **provenance map** (shows which context key or literal each config value came from), error message, truncated stack trace, doctor pre-flight hints.
+4. **Assembles FailureContext:** compiled module config with resolved values, **provenance map** (shows which context key or literal each config value came from), error message, doctor pre-flight hints, and — when the raised exception was a `PySparkException` / `Py4JJavaError` — **structured error fields** (`error_class`, `object_name`, `suggested_columns`, `sql_state`, `root_exception`). The structured block replaces the raw stack trace in the LLM prompt when present; the full trace is shown only as a fallback when structured extraction returned None.
 5. **Calls LLM** with FailureContext + PatchSpec JSON schema + optional `prompt_context` injections (engine-level, then blueprint-level appended after).
-6. **Validates response.** If LLM returns invalid JSON or schema mismatch, Aqueduct sends a reprompt showing the model its exact previous output alongside field-level error annotations (e.g. "line 8, column 3: missing comma — your output near the error: ..."). This is a real multi-turn conversation. Repeats up to `agent.max_reprompts` times (default 3, overridable per-blueprint). On network timeout the attempt fails immediately without retry. Common field name aliases (`ops`→`operations`, `description`→`rationale`, `type`→`op` in operations) are silently normalized before validation, so minor LLM naming deviations do not consume reprompt budget.
+6. **Validates response.** If LLM returns invalid JSON or schema mismatch — OR if a downstream apply gate (`guardrail_violation`, `compile_error` on the patched blueprint) rejects an otherwise-valid patch — Aqueduct sends a reprompt showing the model its exact previous output alongside field-level error annotations (e.g. "line 8, column 3: missing comma — your output near the error: ..."). This is a real multi-turn conversation. Apply-gate rejections feed back into the same loop instead of being silently dropped (Phase 34). The loop terminates on the first axis of `agent.budget` to trip — `max_reprompts` (default 5), `max_seconds` (120), `max_tokens_total` (50k), `same_error_consecutive` (2 — triggers a one-shot escalation with temperature 0.8 + skeleton-anchored reprompt before final abort), `same_signature_overall` (3), or `progress_stalled_window` (3). The terminal reason is recorded as `stop_reason` (`solved`, `exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`, `progress_stalled`, `api_error`). On network timeout the attempt fails immediately without retry. Common field name aliases (`ops`→`operations`, `description`→`rationale`, `type`→`op` in operations) are silently normalized before validation, so minor LLM naming deviations do not consume reprompt budget.
 7. **Confidence check.** If `confidence < 0.7`, the patch is forced to `human` review regardless of `approval_mode`. Low-confidence patches are never auto-applied.
 8. **Guardrails check.** If the patch touches a path outside `allowed_paths` or uses a `forbidden_ops` operation, it is staged in `patches/pending/` for human review regardless of `approval_mode`.
 9. **Approval mode routing** (after confidence + guardrail checks pass):
@@ -1539,6 +1539,21 @@ Blueprint values win on conflict. `null` (unset) means inherit from engine.
 | `applied_at` | ISO-8601 timestamp |
 
 Query with: `SELECT * FROM healing_outcomes WHERE blueprint_id = '...' ORDER BY applied_at DESC;`
+
+**`heal_attempts` table (1.1.0):** One row per LLM turn inside the unified reprompt loop — finer-grained than `healing_outcomes` (one row per healing attempt across all reprompts). Columns: `attempt_num`, `error_class`, `where_field`, `normalized_message`, `signature_hash` (stable 16-char sha1 over the normalized error tuple), `tokens_in`, `tokens_out`, `latency_ms`, `gate_that_rejected` (`schema` / `apply` / `provider` / NULL on success), `escalated` (BOOL), `stop_reason`, `prompt_version`, `recorded_at`. Lets post-mortem answer "what did attempt 2 say" — which `healing_outcomes` alone could not.
+
+**`agent.budget:` block (1.1.0):** Multi-axis budget driving the loop above. Frozen pydantic model with the six axes listed in the validation step. Same instance is consumed by `aqueduct run` self-heal AND `aqueduct benchmark` so the leaderboard cannot cheat by running under softer caps than production. Example:
+
+```yaml
+agent:
+  budget:
+    max_reprompts: 5
+    max_seconds: 120
+    max_tokens_total: 50000
+    same_error_consecutive: 2     # triggers escalation before stuck_signature abort
+    same_signature_overall: 3
+    progress_stalled_window: 3
+```
 
 **Patch file naming:** `{YYYYMMDDTHHmmss}_{slug}.json` — e.g. `20260502T143022_fix-green-path.json`. Timestamp prefix enables chronological sort without reading file contents.
 

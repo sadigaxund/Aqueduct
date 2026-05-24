@@ -54,6 +54,14 @@ class FailureContext:
     blueprint_source_yaml: str | None = None  # raw uncompiled YAML text of the blueprint file
     doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
     error_type: str | None = None             # user-defined label from Assert rule's error_type field; None for infra errors
+    # Phase 35 — structured Spark/Py4J error extraction. Populated by
+    # surveyor._extract_structured_error when the raised exception carries
+    # Spark 4.0 condition metadata. All optional; legacy callers see None.
+    error_class: str | None = None            # Spark condition name (e.g. UNRESOLVED_COLUMN.WITH_SUGGESTION) or innermost exception type
+    root_exception: dict[str, Any] | None = None  # {"type": str, "message": str} — innermost Python or Java throwable
+    sql_state: str | None = None              # Spark getSqlState() when available
+    suggested_columns: tuple[str, ...] = field(default_factory=tuple)  # extracted "did you mean" suggestions
+    object_name: str | None = None            # offending column/table/relation name from messageParameters
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +77,11 @@ class FailureContext:
             "blueprint_source_yaml": self.blueprint_source_yaml,
             "doctor_hints": list(self.doctor_hints),
             "error_type": self.error_type,
+            "error_class": self.error_class,
+            "root_exception": self.root_exception,
+            "sql_state": self.sql_state,
+            "suggested_columns": list(self.suggested_columns),
+            "object_name": self.object_name,
         }
 
     def to_json(self) -> str:

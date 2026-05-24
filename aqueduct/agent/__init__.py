@@ -26,12 +26,26 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
+from aqueduct.agent.budget import (
+    DEFAULT_BUDGET,
+    AttemptRecord,
+    BudgetConfig,
+    BudgetTracker,
+)
+from aqueduct.agent.signature import (
+    ErrorSignature,
+    from_apply_error,
+    from_exception,
+    from_json_decode_error,
+    from_validation_error,
+)
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
@@ -41,17 +55,36 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AgentPatchResult:
-    """Return value of generate_agent_patch — patch + attempt metadata."""
+    """Return value of generate_agent_patch — patch + attempt metadata.
+
+    Phase 34 adds budget/signature fields (all optional / default-safe so older
+    callers and test fixtures keep working unchanged):
+
+    * ``stop_reason`` — which BudgetConfig axis terminated the loop. Always
+      set when the loop is driven by a BudgetTracker; for the legacy code
+      path it stays None until callers migrate.
+    * ``tokens_in_total`` / ``tokens_out_total`` — provider-reported usage
+      summed across all attempts. Zero when the provider does not report.
+    * ``attempt_records`` — per-attempt structured log fed to Surveyor's
+      ``heal_attempts`` table (Task 88). Each entry carries the
+      ``ErrorSignature`` from that turn (None when the turn succeeded).
+    * ``escalated`` — True iff Task 87 escalation was applied at least once.
+    """
+
     patch: PatchSpec | None
     attempts: int              # total LLM calls made (1 = succeeded first try)
     reprompt_errors: list[str] = field(default_factory=list)  # validation errors per failed attempt
+    stop_reason: str | None = None
+    tokens_in_total: int = 0
+    tokens_out_total: int = 0
+    attempt_records: list[AttemptRecord] = field(default_factory=list)
+    escalated: bool = False
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
 PROMPT_VERSION = "1.0"
 
 MAX_REPROMPTS = 3
-_STACK_TRACE_MAX_LINES = 25
 _PATCH_HISTORY_MAX = 3
 
 
@@ -64,7 +97,7 @@ A blueprint has failed. You will receive a structured failure report describing:
 - What the blueprint does (human-readable summary)
 - The failing module and its resolved configuration
 - A "Value provenance" section showing exactly where each config value comes from in the Blueprint source
-- The error message and relevant stack trace lines
+- The error message and either a structured root-cause block (Spark error class + offending column + suggestions) OR a raw stack trace if structured extraction was unavailable
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
 
 Your task: produce a PatchSpec JSON that fixes the root cause.
@@ -151,11 +184,7 @@ _USER_PROMPT_TEMPLATE = """\
 {failed_module_config}
 ```
 
-## Stack trace (truncated)
-```
-{stack_trace}
-```
-
+{root_cause_section}
 ## Full module list (for reference when writing patch IDs)
 {module_list}
 {provenance_section}{blueprint_yaml_section}{doctor_hints_section}{guardrails_section}
@@ -175,6 +204,98 @@ Your previous response failed PatchSpec validation.
 
 Rewrite the COMPLETE PatchSpec JSON from scratch, fixing the errors above. Output ONLY valid JSON — no prose, no markdown fences.
 """
+
+# Task 85 — stronger reprompt used either (a) when the structural detector
+# fires (top-level required missing AND extra keys present) OR (b) when
+# Task 87 stuck-detection escalation triggers. Drops the echo of the bad
+# output (which biases small models toward small edits of their mistake)
+# and shows a minimal valid PatchSpec skeleton so the model has a positive
+# anchor, not just a list of negations.
+_REPROMPT_TEMPLATE_ESCALATED = """\
+Your previous response was structurally wrong. Do NOT make small edits to it.
+START FRESH from the skeleton below.
+
+## Minimal valid PatchSpec — the SHAPE your output must take
+```json
+{skeleton}
+```
+
+## Errors to fix
+{error}
+
+{structural_hint}Rewrite the COMPLETE PatchSpec JSON from scratch using the shape above.
+Replace the placeholder values with the right ones for THIS failure. Output
+ONLY valid JSON — no prose, no markdown fences.
+"""
+
+# Hard-coded minimal valid PatchSpec used as positive anchor in the escalated
+# reprompt template. Mirrors the example in the system prompt so the model
+# sees a consistent shape on both turns. The single-op shape here is the most
+# common fix; the system prompt covers multi-op composition.
+_PATCH_SKELETON = """\
+{
+  "patch_id": "fix-<short-slug>",
+  "rationale": "<one sentence — what was wrong and what this fixes>",
+  "confidence": 0.9,
+  "category": "other",
+  "root_cause": "<one sentence — the root cause>",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "<existing_module_id>",
+      "key": "<config_field>",
+      "value": "<new_value>"
+    }
+  ]
+}"""
+
+# Op-level field names that LLMs sometimes put at the TOP level of the patch,
+# forgetting the `operations[]` wrapper. When the structural detector sees
+# `operations` missing AND any of these present at top level → emits an
+# explicit "you forgot the wrapper" hint instead of the field-level negation
+# list (which small models often misread as "remove this field").
+_OP_LEVEL_FIELDS_AT_ROOT = (
+    "op", "module_id", "key", "value", "config", "label",
+    "context_key", "edge", "from_module", "to_module", "query",
+)
+
+
+def _detect_structural_error(exc: BaseException, raw: str) -> str | None:
+    """Return a one-line hint when the model put op fields at top level.
+
+    Only fires for the specific failure shape where (a) the validator says
+    ``operations`` is missing AND (b) the model's JSON has at least one
+    op-level field at the root. For any other shape → None (caller falls
+    back to the field-level error list).
+    """
+    if not isinstance(exc, ValidationError):
+        return None
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    try:
+        errors = exc.errors(include_url=False)
+    except TypeError:
+        errors = exc.errors()
+    operations_missing = any(
+        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("operations",)
+        for e in errors
+    )
+    if not operations_missing:
+        return None
+    misplaced = [k for k in _OP_LEVEL_FIELDS_AT_ROOT if k in parsed]
+    if not misplaced:
+        return None
+    return (
+        f"You put op fields ({', '.join(repr(k) for k in misplaced)}) at the "
+        "TOP level of the patch — they belong INSIDE an entry of the "
+        "`operations` list. The top level has `patch_id`, `rationale`, "
+        "`confidence`, `category`, `root_cause`, and `operations` (an "
+        "array). Each entry of `operations` carries `op`, `module_id`, etc."
+    )
 
 # Known field name mistakes the LLM commonly makes → correct name
 _FIELD_ALIASES: dict[str, str] = {
@@ -196,15 +317,45 @@ _VALID_OPS = (
 )
 
 
-def _truncate_stack(trace: str | None, max_lines: int = _STACK_TRACE_MAX_LINES) -> str:
+def _build_root_cause_section(failure_ctx: FailureContext) -> str:
+    """Render the diagnostic section between failed-config and module-list.
+
+    Phase 35 contract: structured fields (Spark error_class +
+    messageParameters, Py4J root cause, suggested columns) replace the raw
+    stack trace when present. The trace is shown verbatim ONLY when no
+    structured extraction was possible. This keeps prompt tokens focused on
+    actionable signal — a Spark error condition with the offending column
+    name and a "did you mean" list is worth more than 40 lines of JVM
+    frames the LLM has to grep through.
+    """
+    error_class = getattr(failure_ctx, "error_class", None)
+    root_exc = getattr(failure_ctx, "root_exception", None)
+    sql_state = getattr(failure_ctx, "sql_state", None)
+    suggested = getattr(failure_ctx, "suggested_columns", ()) or ()
+    object_name = getattr(failure_ctx, "object_name", None)
+
+    has_structured = any((error_class, root_exc, sql_state, suggested, object_name))
+    if has_structured:
+        lines = ["## Root cause (structured)"]
+        if error_class:
+            lines.append(f"- **Error class**: `{error_class}`")
+        if object_name:
+            lines.append(f"- **Offending object**: `{object_name}`")
+        if suggested:
+            sug = ", ".join(f"`{c}`" for c in suggested)
+            lines.append(f"- **Actual columns available**: {sug}")
+        if sql_state:
+            lines.append(f"- **SQL state**: `{sql_state}`")
+        if isinstance(root_exc, dict):
+            rtype = root_exc.get("type") or "Unknown"
+            rmsg = (root_exc.get("message") or "").strip()
+            lines.append(f"- **Root exception**: `{rtype}` — {rmsg}" if rmsg else f"- **Root exception**: `{rtype}`")
+        return "\n".join(lines) + "\n"
+
+    trace = failure_ctx.stack_trace
     if not trace:
-        return "(no stack trace)"
-    lines = trace.splitlines()
-    if len(lines) <= max_lines:
-        return trace
-    kept = lines[:max_lines]
-    kept.append(f"... ({len(lines) - max_lines} more lines truncated)")
-    return "\n".join(kept)
+        return "## Stack trace\n(no stack trace)\n"
+    return "## Stack trace\n```\n" + trace + "\n```\n"
 
 
 def _build_blueprint_summary(manifest_dict: dict) -> str:
@@ -476,7 +627,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
         failed_module=failure_ctx.failed_module,
         error_message=failure_ctx.error_message,
         failed_module_config=failed_config,
-        stack_trace=_truncate_stack(failure_ctx.stack_trace),
+        root_cause_section=_build_root_cause_section(failure_ctx),
         module_list=module_list,
         provenance_section=provenance_section,
         blueprint_yaml_section=blueprint_yaml_section,
@@ -611,8 +762,17 @@ def _call_agent(
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
-) -> str:
-    """Call the configured LLM provider and return raw text response."""
+    temperature_override: float | None = None,
+) -> tuple[str, int, int]:
+    """Call the LLM provider; return (text, tokens_in, tokens_out).
+
+    ``temperature_override`` (Task 87) lets the caller force a higher sampling
+    temperature on the escalated attempt without mutating the caller-supplied
+    provider_options. Set to None to leave provider defaults / user config
+    untouched.
+
+    Token counts come from the provider response when reported; 0 otherwise.
+    """
     system_prompt = _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context, last_apply_error)
 
     # Scrub registered @aq.secret() values from anything leaving the process to
@@ -623,9 +783,16 @@ def _call_agent(
     messages = _redact(messages)
 
     if provider == "openai_compat":
-        return _call_openai_compat(messages, model, max_tokens, base_url, system_prompt, provider_options, timeout=timeout)
+        return _call_openai_compat(
+            messages, model, max_tokens, base_url, system_prompt,
+            provider_options, timeout=timeout,
+            temperature_override=temperature_override,
+        )
     else:
-        return _call_anthropic(messages, model, max_tokens, system_prompt, timeout=timeout)
+        return _call_anthropic(
+            messages, model, max_tokens, system_prompt, timeout=timeout,
+            temperature_override=temperature_override,
+        )
 
 
 
@@ -635,7 +802,8 @@ def _call_anthropic(
     max_tokens: int,
     system_prompt: str,
     timeout: float = 120.0,
-) -> str:
+    temperature_override: float | None = None,
+) -> tuple[str, int, int]:
     import httpx
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -644,6 +812,14 @@ def _call_anthropic(
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or configure agent.provider: openai_compat in aqueduct.yml."
         )
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "system": system_prompt,
+        "messages": messages,
+    }
+    if temperature_override is not None:
+        payload["temperature"] = temperature_override
     response = httpx.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -651,16 +827,14 @@ def _call_anthropic(
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         },
-        json={
-            "model": model,
-            "max_tokens": max_tokens,
-            "system": system_prompt,
-            "messages": messages,
-        },
+        json=payload,
         timeout=timeout,
     )
     response.raise_for_status()
-    return response.json()["content"][0]["text"]
+    data = response.json()
+    text = data["content"][0]["text"]
+    usage = data.get("usage") or {}
+    return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
 
 
 def _call_openai_compat(
@@ -671,7 +845,8 @@ def _call_openai_compat(
     system_prompt: str,
     provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
-) -> str:
+    temperature_override: float | None = None,
+) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
 
@@ -697,6 +872,13 @@ def _call_openai_compat(
         if ollama_opts:
             payload["options"] = ollama_opts
         payload.update(generic_opts)
+    if temperature_override is not None:
+        # Override AFTER provider_options so escalation wins. Apply at both
+        # the top-level (standard OpenAI) and inside options (Ollama-style)
+        # since clients accept either.
+        payload["temperature"] = temperature_override
+        if "options" in payload and isinstance(payload["options"], dict):
+            payload["options"]["temperature"] = temperature_override
 
     response = httpx.post(
         url,
@@ -706,7 +888,9 @@ def _call_openai_compat(
     )
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"]["content"]
+    usage = data.get("usage") or {}
+    return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
 
 
 # ── Response parsing ──────────────────────────────────────────────────────────
@@ -849,6 +1033,50 @@ def build_prompt(
     }
 
 
+def resolve_budget(
+    pydantic_budget: Any = None,
+    *,
+    max_reprompts: int | None = None,
+) -> BudgetConfig:
+    """Build a runtime ``BudgetConfig`` from the pydantic ``AgentBudgetConfig``.
+
+    Lets the CLI keep using its existing ``max_reprompts`` resolution flow as
+    the fallback while opting users into the full multi-axis budget when the
+    ``agent.budget:`` block is present in ``aqueduct.yml``.
+
+    * ``pydantic_budget`` — an instance of ``config.AgentBudgetConfig`` (or any
+      object exposing the six axis attributes). When None, defaults derive
+      from ``max_reprompts`` (other axes use the dataclass defaults).
+    * ``max_reprompts`` — legacy single-axis fallback. Only used when
+      ``pydantic_budget`` is None.
+    """
+    if pydantic_budget is not None:
+        same_err = int(pydantic_budget.same_error_consecutive)
+        same_sig = int(pydantic_budget.same_signature_overall)
+        if same_sig < same_err and "same_signature_overall" not in getattr(pydantic_budget, "model_fields_set", set()):
+            same_sig = same_err
+        
+        return BudgetConfig(
+            max_reprompts=int(pydantic_budget.max_reprompts),
+            max_seconds=float(pydantic_budget.max_seconds),
+            max_tokens_total=pydantic_budget.max_tokens_total,
+            same_error_consecutive=same_err,
+            same_signature_overall=same_sig,
+            progress_stalled_window=int(pydantic_budget.progress_stalled_window),
+        )
+    if max_reprompts is not None:
+        return BudgetConfig(max_reprompts=max(1, int(max_reprompts)))
+    return BudgetConfig()
+
+
+# Task 87 — temperature applied to the ONE escalated attempt that follows a
+# stuck-consecutive trip. 0.8 is a deliberate jump from typical 0.0–0.2 used
+# for patch generation: forces sampling divergence so the model doesn't keep
+# regenerating the same wrong tree. One shot only; tracker.escalated_once
+# blocks repeat escalations within the same heal call.
+_ESCALATION_TEMPERATURE = 0.8
+
+
 def generate_agent_patch(
     failure_ctx: FailureContext,
     model: str,
@@ -863,15 +1091,48 @@ def generate_agent_patch(
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
     guardrails: Any = None,
+    budget: BudgetConfig | None = None,
+    apply_callback: Any = None,   # Callable[[PatchSpec], tuple[bool, str|None, str|None, str|None]] | None
+    on_attempt: Any = None,        # Callable[[AttemptRecord], None] | None
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
-    Does not apply or stage the patch — caller decides what to do with it.
+    Unified Phase 34 loop. Each iteration:
+      1. Call provider (records tokens + latency).
+      2. Parse response → on schema/JSON failure record a signature and
+         reprompt; on success continue.
+      3. If ``apply_callback`` is supplied, invoke it on the parsed PatchSpec.
+         Returning (False, error_class, error_message, where) flips the turn
+         into a "succeeded LLM, gate rejected" failure, records the apply-time
+         signature, and reprompts. Returning (True, ...) succeeds and exits.
+      4. BudgetTracker.check_stop() decides whether to continue.
+      5. If tracker.should_escalate() is True, the next attempt uses the
+         escalated reprompt template + bumped sampling temperature (Task 87).
 
-    result.patch is None if the LLM failed to produce a valid PatchSpec after
-    max_reprompts attempts. result.attempts counts all LLM calls made.
-    result.reprompt_errors lists the validation error from each failed attempt.
+    Backward compatibility:
+      - ``budget`` is optional; when omitted a BudgetConfig is synthesized
+        from ``max_reprompts`` (other axes use defaults — generous ceilings
+        that won't trip ahead of max_reprompts for typical heal calls).
+      - ``apply_callback=None`` preserves the legacy "schema-only" semantics:
+        the first valid PatchSpec exits the loop.
+      - Existing fields on AgentPatchResult retain their meaning; new fields
+        default to safe values.
+
+    ``apply_callback`` signature::
+
+        def cb(patch: PatchSpec) -> tuple[bool, str|None, str|None, str|None]:
+            return success, error_class, error_message, where
+
+      ``error_class`` is the signature error_class (e.g. "guardrail_violation",
+      "compile_error"). ``where`` may be None.
+
+    ``on_attempt`` is invoked with the AttemptRecord after each turn (success
+    or failure) — used by Surveyor to persist into ``heal_attempts``.
     """
+    if budget is None:
+        budget = BudgetConfig(max_reprompts=max(1, max_reprompts))
+    tracker = BudgetTracker(budget)
+
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -881,52 +1142,230 @@ def generate_agent_patch(
 
     patch_spec: PatchSpec | None = None
     reprompt_errors: list[str] = []
-    attempts_made = 0
+    escalate_next = False
 
-    for attempt in range(max_reprompts):
-        attempts_made = attempt + 1
+    while True:
+        attempt_num = tracker.begin_attempt()
+        temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
+        t_start = time.monotonic()
         try:
-            raw = _call_agent(messages, model, max_tokens, provider, base_url, patches_dir, provider_options, timeout=timeout, engine_prompt_context=engine_prompt_context, blueprint_prompt_context=blueprint_prompt_context, last_apply_error=last_apply_error)
+            raw, tokens_in, tokens_out = _call_agent(
+                messages, model, max_tokens, provider, base_url, patches_dir,
+                provider_options,
+                timeout=timeout,
+                engine_prompt_context=engine_prompt_context,
+                blueprint_prompt_context=blueprint_prompt_context,
+                last_apply_error=last_apply_error,
+                temperature_override=temperature_override,
+            )
         except Exception as exc:
-            # Surface an actionable hint for the two most common transient
-            # local-model failure modes (timeout, connection refused) so users
-            # don't have to read the engine source to learn the fix.
+            latency_ms = int((time.monotonic() - t_start) * 1000)
             hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s%s",
-                attempt + 1, max_reprompts, exc, hint,
+                attempt_num, budget.max_reprompts, exc, hint,
             )
             reprompt_errors.append(f"API error: {exc}")
+            sig = from_exception(exc, where="provider")
+            rec = tracker.record(
+                sig,
+                tokens_in=0, tokens_out=0, latency_ms=latency_ms,
+                gate_that_rejected="provider", escalated=escalate_next,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            tracker.mark_api_error()
             break
 
-        logger.debug("LLM raw response (attempt %d):\n%s", attempt + 1, raw)
+        latency_ms = int((time.monotonic() - t_start) * 1000)
+        logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
+
+        # ── Parse phase ────────────────────────────────────────────────
+        parse_exc: BaseException | None = None
         try:
             patch_spec = _parse_patch_spec(raw)
-            break
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
-            friendly = _format_reprompt_error(exc, raw)
+            parse_exc = exc
+
+        if parse_exc is not None:
+            friendly = _format_reprompt_error(parse_exc, raw)
             reprompt_errors.append(friendly)
             logger.warning(
                 "LLM patch response invalid (attempt %d/%d):\n%s",
-                attempt + 1, max_reprompts, friendly,
+                attempt_num, budget.max_reprompts, friendly,
             )
-            raw_lines = raw.splitlines()
-            raw_truncated = "\n".join(raw_lines[:80])
-            if len(raw_lines) > 80:
-                raw_truncated += f"\n... ({len(raw_lines) - 80} more lines truncated)"
+            if isinstance(parse_exc, ValidationError):
+                sig = from_validation_error(parse_exc)
+            elif isinstance(parse_exc, json.JSONDecodeError):
+                sig = from_json_decode_error(parse_exc)
+            else:
+                sig = from_exception(parse_exc, where="parse")
+
+            rec = tracker.record(
+                sig,
+                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                gate_that_rejected="schema", escalated=escalate_next,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+            stop = tracker.check_stop()
+            if stop is not None and stop != "solved":
+                patch_spec = None
+                break
+
+            escalate_next = tracker.should_escalate()
+            if escalate_next:
+                tracker.mark_escalated()
+                logger.info(
+                    "stuck-detection escalation triggered on attempt %d "
+                    "(temperature=%.2f, escalated template)",
+                    attempt_num, _ESCALATION_TEMPERATURE,
+                )
+
+            structural_hint = _detect_structural_error(parse_exc, raw) or ""
+            reprompt_msg = _format_reprompt_for_next_turn(
+                friendly=friendly, raw=raw, escalated=escalate_next,
+                structural_hint=structural_hint,
+            )
             messages.append({"role": "assistant", "content": raw})
-            messages.append({
-                "role": "user",
-                "content": _REPROMPT_TEMPLATE.format(error=friendly, raw_truncated=raw_truncated),
-            })
+            messages.append({"role": "user", "content": reprompt_msg})
+            continue
+
+        # ── Apply phase (optional callback) ─────────────────────────────
+        if apply_callback is not None:
+            try:
+                apply_result = apply_callback(patch_spec)
+            except Exception as cb_exc:
+                logger.debug("apply_callback raised; treating as gate rejection", exc_info=True)
+                apply_result = (False, type(cb_exc).__name__, str(cb_exc), None)
+
+            ok, err_class, err_msg, err_where = (apply_result + (None,) * 4)[:4]
+            if ok:
+                rec = tracker.record(
+                    None,
+                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                    gate_that_rejected=None, escalated=escalate_next,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                tracker.check_stop()  # sets 'solved'
+                break
+
+            # Gate rejection — record signature, reprompt with the gate's error.
+            sig = from_apply_error(
+                err_class or "apply_error",
+                err_msg or "(no message)",
+                where=err_where,
+            )
+            friendly = (
+                f"Your PatchSpec parsed but was rejected by the apply gate "
+                f"({err_class or 'apply_error'}): {err_msg or '(no message)'}"
+            )
+            reprompt_errors.append(friendly)
+            logger.warning(
+                "Patch apply gate rejected attempt %d/%d: %s",
+                attempt_num, budget.max_reprompts, friendly,
+            )
+            rec = tracker.record(
+                sig,
+                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                gate_that_rejected="apply", escalated=escalate_next,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+            stop = tracker.check_stop()
+            if stop is not None and stop != "solved":
+                patch_spec = None
+                break
+
+            escalate_next = tracker.should_escalate()
+            if escalate_next:
+                tracker.mark_escalated()
+                logger.info(
+                    "stuck-detection escalation triggered on attempt %d "
+                    "(temperature=%.2f, escalated template)",
+                    attempt_num, _ESCALATION_TEMPERATURE,
+                )
+
+            reprompt_msg = _format_reprompt_for_next_turn(
+                friendly=friendly, raw=raw, escalated=escalate_next,
+                structural_hint="",
+            )
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": reprompt_msg})
+            patch_spec = None
+            continue
+
+        # No apply_callback — legacy schema-only success exits the loop.
+        rec = tracker.record(
+            None,
+            tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+            gate_that_rejected=None, escalated=escalate_next,
+        )
+        if on_attempt is not None:
+            try:
+                on_attempt(rec)
+            except Exception:
+                logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+        tracker.check_stop()
+        break
 
     if patch_spec is None:
         logger.error(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
-            "for blueprint %r run %r",
-            attempts_made, failure_ctx.blueprint_id, failure_ctx.run_id,
+            "for blueprint %r run %r (stop_reason=%s)",
+            tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,
+            tracker.stop_reason,
         )
-    return AgentPatchResult(patch=patch_spec, attempts=attempts_made, reprompt_errors=reprompt_errors)
+    return AgentPatchResult(
+        patch=patch_spec,
+        attempts=tracker.current_attempt,
+        reprompt_errors=reprompt_errors,
+        stop_reason=tracker.stop_reason,
+        tokens_in_total=tracker.tokens_in_total,
+        tokens_out_total=tracker.tokens_out_total,
+        attempt_records=list(tracker.attempts),
+        escalated=tracker.escalated_once,
+    )
+
+
+def _format_reprompt_for_next_turn(
+    *, friendly: str, raw: str, escalated: bool, structural_hint: str,
+) -> str:
+    """Render the user-role message for the next turn of the reprompt loop.
+
+    Task 85 — when escalating OR when a structural error is detected, use the
+    skeleton-anchored template and drop the echo of the bad output (which
+    biases small models toward small edits of their mistake). Otherwise use
+    the original template with the echoed output + bullet error list.
+    """
+    use_escalated = escalated or bool(structural_hint)
+    if use_escalated:
+        hint = (structural_hint + "\n\n") if structural_hint else ""
+        return _REPROMPT_TEMPLATE_ESCALATED.format(
+            skeleton=_PATCH_SKELETON,
+            error=friendly,
+            structural_hint=hint,
+        )
+    raw_lines = raw.splitlines()
+    raw_truncated = "\n".join(raw_lines[:80])
+    if len(raw_lines) > 80:
+        raw_truncated += f"\n... ({len(raw_lines) - 80} more lines truncated)"
+    return _REPROMPT_TEMPLATE.format(error=friendly, raw_truncated=raw_truncated)
 
 
 def _patch_filename(patch_spec: PatchSpec, patches_dir: Path) -> str:

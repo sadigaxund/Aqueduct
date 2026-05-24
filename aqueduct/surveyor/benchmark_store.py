@@ -52,7 +52,11 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     category_match      BOOLEAN,
     failures            JSON,
     soft_failures       JSON,
-    violated_guardrails JSON
+    violated_guardrails JSON,
+    stop_reason         VARCHAR,
+    escalated           BOOLEAN,
+    tokens_in_total     INTEGER,
+    tokens_out_total    INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_triple
     ON benchmark_results (scenario_id, model, prompt_version, recorded_at);
@@ -96,6 +100,23 @@ def _connect(store_path: Path):
             con.execute("ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON")
     except Exception:
         pass
+    # Phase 34 Task 89: additive ALTER for stop_reason + escalation + token
+    # totals so pre-1.0.4 benchmark stores survive intact (NULL on old rows).
+    for col, ddl in (
+        ("stop_reason", "ALTER TABLE benchmark_results ADD COLUMN stop_reason VARCHAR"),
+        ("escalated", "ALTER TABLE benchmark_results ADD COLUMN escalated BOOLEAN"),
+        ("tokens_in_total", "ALTER TABLE benchmark_results ADD COLUMN tokens_in_total INTEGER"),
+        ("tokens_out_total", "ALTER TABLE benchmark_results ADD COLUMN tokens_out_total INTEGER"),
+    ):
+        try:
+            exists = con.execute(
+                "SELECT 1 FROM information_schema.columns "
+                f"WHERE table_name='benchmark_results' AND column_name='{col}'"
+            ).fetchone()
+            if not exists:
+                con.execute(ddl)
+        except Exception:
+            pass
     return con
 
 
@@ -133,8 +154,9 @@ def persist_results(
                         passed, patch_valid, patch_applies,
                         confidence, duration_seconds, attempts_to_parse,
                         diag_score, root_cause_match, category_match,
-                        failures, soft_failures, violated_guardrails
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        failures, soft_failures, violated_guardrails,
+                        stop_reason, escalated, tokens_in_total, tokens_out_total
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(uuid.uuid4()),
@@ -156,6 +178,10 @@ def persist_results(
                         json.dumps(list(r.failures)),
                         json.dumps(list(r.soft_failures)),
                         vg_json,
+                        getattr(r, "stop_reason", None),
+                        getattr(r, "escalated", False),
+                        int(getattr(r, "tokens_in_total", 0) or 0),
+                        int(getattr(r, "tokens_out_total", 0) or 0),
                     ],
                 )
                 written += 1

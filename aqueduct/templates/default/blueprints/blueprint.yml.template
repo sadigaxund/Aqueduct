@@ -172,7 +172,9 @@ agent:
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "claude-sonnet-4-6"
   # timeout: 300.0               # seconds; increase for slow local models
-  # max_reprompts: 5             # max conversation turns when the agent returns invalid PatchSpec
+  # max_reprompts: 5             # legacy single-axis cap. Multi-axis `agent.budget`
+  #                              # currently lives at engine level (aqueduct.yml) only —
+  #                              # blueprint-level `budget:` is a planned 1.0.5 item.
 
   # prompt_context: |             # Appended to LLM system prompt after engine-level prompt_context.
   #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.

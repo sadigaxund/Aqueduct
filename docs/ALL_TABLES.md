@@ -64,11 +64,16 @@ ORDER BY started_at DESC LIMIT 10;
 | `blueprint_id` | VARCHAR NOT NULL | |
 | `failed_module` | VARCHAR NOT NULL | Module ID of the first error |
 | `error_message` | VARCHAR NOT NULL | First module's `ModuleResult.error` |
-| `stack_trace` | VARCHAR | Truncated to `_STACK_TRACE_MAX_LINES` lines in LLM prompts |
+| `stack_trace` | VARCHAR | Full trace. Shown in LLM prompt only when `error_class` is NULL (Phase 35 — structured fields replace it when present) |
 | `manifest_json` | JSON | Full compiled Manifest at the moment of failure |
 | `provenance_json` | JSON | `ProvenanceMap.to_dict()` slice (added by migration) |
 | `started_at` | TIMESTAMPTZ NOT NULL | |
 | `finished_at` | TIMESTAMPTZ NOT NULL | |
+| `error_class` | VARCHAR | **(1.1.0)** Spark `PySparkException.getCondition()` or innermost Java throwable class. NULL when structured extraction failed |
+| `root_exception` | JSON | **(1.1.0)** `{"type": str, "message": str}` — innermost cause from Py4J or Python `__cause__` chain |
+| `sql_state` | VARCHAR | **(1.1.0)** Spark `getSqlState()` (e.g. `42703`) |
+| `suggested_columns` | JSON | **(1.1.0)** Parsed "Did you mean …?" list from `UNRESOLVED_COLUMN.WITH_SUGGESTION` proposals |
+| `object_name` | VARCHAR | **(1.1.0)** Offending column / table / relation from `getMessageParameters()` |
 
 ```sql
 -- Pull the error message + provenance for one run
