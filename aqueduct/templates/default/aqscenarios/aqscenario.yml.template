@@ -46,6 +46,20 @@ inject_failure:
         return self._df(self._jreader.load(path))
     AnalysisException: Unable to infer schema for Parquet.
 
+  # Optional: structured Spark error fields (1.1.0+). When present, the prompt
+  # builder renders a "Root cause (structured)" block instead of the raw stack
+  # trace — same shape that production extracts from a live PySparkException
+  # via surveyor._extract_structured_error. Lets benchmark scenarios exercise
+  # the identical prompt branch the agent sees in production.
+  # structured:
+  #   error_class: UNRESOLVED_COLUMN.WITH_SUGGESTION   # Spark condition or innermost throwable class
+  #   sql_state: "42703"                                # optional getSqlState()
+  #   object_name: event_ts                             # offending column / table / relation
+  #   suggested_columns: [event_id, event_time, user_id, event_type]
+  #   root_exception:
+  #     type: org.apache.spark.sql.AnalysisException
+  #     message: "[UNRESOLVED_COLUMN.WITH_SUGGESTION] ..."
+
 # ── Expected patch (effect-based grader, Phase 33 Part B Scope C) ─────────────
 #
 # The grader checks the EFFECT of the patch — the post-patch blueprint's

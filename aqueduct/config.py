@@ -213,6 +213,25 @@ class SecretsConfig(BaseModel):
     )
 
 
+class AgentBudgetConfig(BaseModel):
+    """Phase 34 multi-axis heal-loop budget. All fields optional with safe defaults.
+
+    Same instance is used by production heal AND benchmark — divergence would
+    silently invalidate the leaderboard. Only ``max_reprompts`` + ``max_seconds``
+    are recommended for routine tuning; the rest are advanced axes documented in
+    ``aqueduct.agent.budget``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_reprompts: int = 5
+    max_seconds: float = 120.0
+    max_tokens_total: int | None = 50_000
+    same_error_consecutive: int = 2
+    same_signature_overall: int = 3
+    progress_stalled_window: int = 3
+
+
 class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
@@ -266,6 +285,16 @@ class AgentConnectionConfig(BaseModel):
             "first, then a real Spark run against the patched Blueprint, write "
             "only if both pass. `sandbox`: sandbox replay only; write on sandbox "
             "pass. Per-blueprint override: agent.patch_validation."
+        ),
+    )
+    budget: AgentBudgetConfig | None = Field(
+        default=None,
+        description=(
+            "Phase 34 multi-axis heal-loop budget. None ⇒ synthesized from "
+            "`max_reprompts` for backward compatibility. Production heal and "
+            "`aqueduct benchmark` share the SAME budget — divergence would "
+            "make the leaderboard lie about model behaviour under the user's "
+            "real config."
         ),
     )
     block_on_explain_regression: bool = Field(

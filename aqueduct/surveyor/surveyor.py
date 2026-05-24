@@ -112,6 +112,30 @@ CREATE TABLE IF NOT EXISTS explain_snapshot (
 );
 """
 
+# Phase 34 Task 88 — per-attempt log for the unified reprompt loop.
+# One row per LLM turn (success or failure) so post-mortem can answer
+# "what did attempt 2 actually say" — which `healing_outcomes` alone could
+# not (it only carries the final patch outcome).
+_HEAL_ATTEMPTS_DDL = """
+CREATE TABLE IF NOT EXISTS heal_attempts (
+    id                    VARCHAR PRIMARY KEY,
+    run_id                VARCHAR NOT NULL,
+    attempt_num           INTEGER NOT NULL,
+    error_class           VARCHAR,
+    where_field           VARCHAR,
+    normalized_message    VARCHAR,
+    signature_hash        VARCHAR,
+    tokens_in             INTEGER NOT NULL DEFAULT 0,
+    tokens_out            INTEGER NOT NULL DEFAULT 0,
+    latency_ms            INTEGER NOT NULL DEFAULT 0,
+    gate_that_rejected    VARCHAR,
+    escalated             BOOLEAN NOT NULL DEFAULT FALSE,
+    stop_reason           VARCHAR,
+    prompt_version        VARCHAR,
+    recorded_at           VARCHAR NOT NULL
+);
+"""
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _utcnow() -> datetime:
@@ -137,6 +161,164 @@ def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
     if exc is not None:
         return str(exc)
     return "unknown error"
+
+
+_PY4J_CAUSE_HOP_LIMIT = 10
+# Spark 4.0 error-class names we recognise as carrying column-suggestion data.
+_COLUMN_SUGGEST_CLASSES = frozenset({
+    "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+    "UNRESOLVED_FIELD.WITH_SUGGESTION",
+    "UNRESOLVED_MAP_KEY.WITH_SUGGESTION",
+})
+
+
+def _parse_suggested_columns(blob: str) -> tuple[str, ...]:
+    """Parse Spark 'Did you mean one of the following? [`a`, `b`]' segment.
+
+    Spark's UNRESOLVED_COLUMN.WITH_SUGGESTION message embeds the suggestion
+    list as backtick-quoted identifiers separated by commas. Extracting them
+    explicitly lets the prompt show "actual columns: …" without asking the
+    LLM to parse the trace.
+    """
+    import re as _re
+    if not blob:
+        return ()
+    out: list[str] = []
+    for m in _re.finditer(r"`([^`]+)`", blob):
+        name = m.group(1).strip()
+        if name and name not in out:
+            out.append(name)
+    return tuple(out)
+
+
+def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | None:
+    """Return a dict of structured error fields, or None if extraction fails.
+
+    Best-effort: lazy-imports pyspark/py4j and swallows any failure so that a
+    bug in extraction can never block self-heal. Used by Surveyor.record()
+    before the exception is stringified into FailureContext.error_message.
+
+    Resolution order:
+      1. PySparkException (Spark 4.0): getCondition / getErrorClass +
+         getMessageParameters + getSqlState. Highest-fidelity path.
+      2. Py4JJavaError: walk .java_exception.getCause() up to
+         _PY4J_CAUSE_HOP_LIMIT to find innermost Java throwable.
+      3. Python cause chain: traceback.TracebackException root.
+
+    Returns mapping with keys: error_class, root_exception, sql_state,
+    suggested_columns, object_name. Any field may be None / empty tuple.
+    """
+    if exc is None:
+        return None
+    out: dict[str, Any] = {
+        "error_class": None,
+        "root_exception": None,
+        "sql_state": None,
+        "suggested_columns": (),
+        "object_name": None,
+    }
+    try:
+        # --- 1. Spark 4.0 PySparkException ---------------------------------
+        try:
+            from pyspark.errors import PySparkException  # type: ignore
+        except Exception:
+            PySparkException = None  # type: ignore[assignment]
+
+        spark_exc = None
+        if PySparkException is not None:
+            cur = exc
+            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
+                if isinstance(cur, PySparkException):
+                    spark_exc = cur
+                    break
+                cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+                if cur is None:
+                    break
+
+        if spark_exc is not None:
+            try:
+                if hasattr(spark_exc, "getCondition"):
+                    out["error_class"] = spark_exc.getCondition()
+                elif hasattr(spark_exc, "getErrorClass"):
+                    out["error_class"] = spark_exc.getErrorClass()
+            except Exception:
+                pass
+            try:
+                if hasattr(spark_exc, "getSqlState"):
+                    out["sql_state"] = spark_exc.getSqlState()
+            except Exception:
+                pass
+            params: dict[str, Any] = {}
+            try:
+                if hasattr(spark_exc, "getMessageParameters"):
+                    raw = spark_exc.getMessageParameters() or {}
+                    params = {str(k): str(v) for k, v in dict(raw).items()}
+            except Exception:
+                params = {}
+            if params:
+                for k in ("objectName", "fieldName", "tableName", "relationName", "columnName"):
+                    if k in params:
+                        out["object_name"] = params[k]
+                        break
+                if out["error_class"] in _COLUMN_SUGGEST_CLASSES:
+                    for k in ("proposal", "suggestion", "suggestions"):
+                        if k in params:
+                            out["suggested_columns"] = _parse_suggested_columns(params[k])
+                            break
+
+        # --- 2. Py4JJavaError cause chain ----------------------------------
+        if out["error_class"] is None:
+            try:
+                from py4j.protocol import Py4JJavaError  # type: ignore
+            except Exception:
+                Py4JJavaError = None  # type: ignore[assignment]
+
+            if Py4JJavaError is not None:
+                cur = exc
+                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
+                    if isinstance(cur, Py4JJavaError):
+                        java_exc = getattr(cur, "java_exception", None)
+                        if java_exc is not None:
+                            try:
+                                innermost = java_exc
+                                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
+                                    nxt = innermost.getCause()
+                                    if nxt is None or nxt is innermost:
+                                        break
+                                    innermost = nxt
+                                jclass = innermost.getClass().getName()
+                                jmsg = innermost.getMessage() or ""
+                                out["error_class"] = out["error_class"] or jclass
+                                out["root_exception"] = {"type": jclass, "message": jmsg}
+                            except Exception:
+                                pass
+                        break
+                    cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
+                    if cur is None:
+                        break
+
+        # --- 3. Python cause chain (root fallback) -------------------------
+        if out["root_exception"] is None:
+            root = exc
+            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
+                nxt = getattr(root, "__cause__", None) or getattr(root, "__context__", None)
+                if nxt is None or nxt is root:
+                    break
+                root = nxt
+            out["root_exception"] = {
+                "type": type(root).__name__,
+                "message": str(root),
+            }
+            if out["error_class"] is None:
+                out["error_class"] = type(root).__name__
+
+        if not any((out["error_class"], out["root_exception"], out["sql_state"],
+                    out["suggested_columns"], out["object_name"])):
+            return None
+        return out
+    except Exception:
+        logger.debug("_extract_structured_error failed", exc_info=True)
+        return None
 
 
 def _first_error_type(result: ExecutionResult) -> str | None:
@@ -251,8 +433,31 @@ class Surveyor:
             except Exception:
                 pass
 
+            # Phase 35 — failure_contexts gains structured Spark error fields.
+            # Mirror Phase 32/33 migration pattern: probe information_schema then
+            # conditionally ALTER so existing observability.db files upgrade in
+            # place without dropping prior failure rows.
+            for _col, _ddl in (
+                ("error_class",        "ALTER TABLE failure_contexts ADD COLUMN error_class VARCHAR"),
+                ("root_exception",     "ALTER TABLE failure_contexts ADD COLUMN root_exception JSON"),
+                ("sql_state",          "ALTER TABLE failure_contexts ADD COLUMN sql_state VARCHAR"),
+                ("suggested_columns",  "ALTER TABLE failure_contexts ADD COLUMN suggested_columns JSON"),
+                ("object_name",        "ALTER TABLE failure_contexts ADD COLUMN object_name VARCHAR"),
+            ):
+                try:
+                    exists = cur.execute(
+                        "SELECT 1 FROM information_schema.columns "
+                        "WHERE table_name='failure_contexts' AND column_name=?",
+                        [_col],
+                    ).fetchone()
+                    if not exists:
+                        cur.execute(_ddl)
+                except Exception:
+                    pass
+
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
+            cur.execute(_HEAL_ATTEMPTS_DDL)
 
             cur.execute(
                 """
@@ -317,6 +522,7 @@ class Surveyor:
 
         # ── Build FailureContext ───────────────────────────────────────────────
         stack_trace: str | None = None
+        structured = _extract_structured_error(exc)
         if exc is not None:
             stack_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
@@ -353,6 +559,11 @@ class Surveyor:
             provenance_json=_redact(provenance_json),
             blueprint_source_yaml=_redact(blueprint_source_yaml),
             error_type=_first_error_type(result),
+            error_class=(structured or {}).get("error_class"),
+            root_exception=(structured or {}).get("root_exception"),
+            sql_state=(structured or {}).get("sql_state"),
+            suggested_columns=tuple((structured or {}).get("suggested_columns") or ()),
+            object_name=(structured or {}).get("object_name"),
         )
 
         with self._observability.connect() as cur:
@@ -360,17 +571,23 @@ class Surveyor:
                 """
                 INSERT INTO failure_contexts
                     (run_id, blueprint_id, failed_module, error_message,
-                     stack_trace, manifest_json, provenance_json, started_at, finished_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     stack_trace, manifest_json, provenance_json, started_at, finished_at,
+                     error_class, root_exception, sql_state, suggested_columns, object_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
-                    blueprint_id    = EXCLUDED.blueprint_id,
-                    failed_module   = EXCLUDED.failed_module,
-                    error_message   = EXCLUDED.error_message,
-                    stack_trace     = EXCLUDED.stack_trace,
-                    manifest_json   = EXCLUDED.manifest_json,
-                    provenance_json = EXCLUDED.provenance_json,
-                    started_at      = EXCLUDED.started_at,
-                    finished_at     = EXCLUDED.finished_at
+                    blueprint_id      = EXCLUDED.blueprint_id,
+                    failed_module     = EXCLUDED.failed_module,
+                    error_message     = EXCLUDED.error_message,
+                    stack_trace       = EXCLUDED.stack_trace,
+                    manifest_json     = EXCLUDED.manifest_json,
+                    provenance_json   = EXCLUDED.provenance_json,
+                    started_at        = EXCLUDED.started_at,
+                    finished_at       = EXCLUDED.finished_at,
+                    error_class       = EXCLUDED.error_class,
+                    root_exception    = EXCLUDED.root_exception,
+                    sql_state         = EXCLUDED.sql_state,
+                    suggested_columns = EXCLUDED.suggested_columns,
+                    object_name       = EXCLUDED.object_name
                 """,
                 [
                     ctx.run_id,
@@ -382,6 +599,11 @@ class Surveyor:
                     ctx.provenance_json,
                     ctx.started_at,
                     ctx.finished_at,
+                    ctx.error_class,
+                    json.dumps(ctx.root_exception) if ctx.root_exception else None,
+                    ctx.sql_state,
+                    json.dumps(list(ctx.suggested_columns)) if ctx.suggested_columns else None,
+                    ctx.object_name,
                 ],
             )
 
@@ -444,6 +666,61 @@ class Surveyor:
                     prompt_version,
                 ],
             )
+
+    def record_heal_attempt(
+        self,
+        *,
+        run_id: str,
+        attempt_record: Any,                # agent.budget.AttemptRecord
+        stop_reason: str | None = None,
+        prompt_version: str | None = None,
+    ) -> None:
+        """Persist one row to ``heal_attempts`` (Task 88).
+
+        Called from the unified reprompt loop's ``on_attempt`` hook after
+        every LLM turn (success or failure). Best-effort — any DB-side
+        failure is swallowed so a persistence problem cannot abort an
+        otherwise-successful heal.
+        """
+        if self._observability is None:
+            return
+        import datetime as _dt
+        import uuid as _uuid
+        if prompt_version is None:
+            from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
+            prompt_version = _PROMPT_VERSION
+        sig = getattr(attempt_record, "signature", None)
+        try:
+            with self._observability.connect() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO heal_attempts
+                    (id, run_id, attempt_num, error_class, where_field,
+                     normalized_message, signature_hash, tokens_in, tokens_out,
+                     latency_ms, gate_that_rejected, escalated, stop_reason,
+                     prompt_version, recorded_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        str(_uuid.uuid4()),
+                        run_id,
+                        int(getattr(attempt_record, "attempt_num", 0) or 0),
+                        sig.error_class if sig else None,
+                        sig.where if sig else None,
+                        sig.normalized_message if sig else None,
+                        sig.hash if sig else None,
+                        int(getattr(attempt_record, "tokens_in", 0) or 0),
+                        int(getattr(attempt_record, "tokens_out", 0) or 0),
+                        int(getattr(attempt_record, "latency_ms", 0) or 0),
+                        getattr(attempt_record, "gate_that_rejected", None),
+                        bool(getattr(attempt_record, "escalated", False)),
+                        stop_reason,
+                        prompt_version,
+                        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    ],
+                )
+        except Exception:
+            logger.debug("record_heal_attempt failed", exc_info=True)
 
     def record_patch_simulation(
         self,

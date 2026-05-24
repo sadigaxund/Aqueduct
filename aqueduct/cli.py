@@ -1539,6 +1539,22 @@ def run(
             except Exception:
                 pass  # doctor errors must never block self-healing
 
+            # Phase 34 Task 88 — persist per-attempt log via the unified loop's
+            # on_attempt hook. Stop reason is recorded against the FINAL row
+            # after the loop returns (each row carries it for joinability).
+            _heal_run_id = run_id
+            from aqueduct.agent import resolve_budget as _resolve_budget
+            _budget = _resolve_budget(
+                getattr(cfg.agent, "budget", None),
+                max_reprompts=resolved_agent_max_reprompts,
+            )
+
+            def _persist_attempt(rec, _rid=_heal_run_id, _srv=surveyor):
+                try:
+                    _srv.record_heal_attempt(run_id=_rid, attempt_record=rec)
+                except Exception:
+                    pass  # never let persistence block the loop
+
             agent_result = generate_agent_patch(
                 failure_ctx,
                 model=resolved_agent_model,
@@ -1552,8 +1568,21 @@ def run(
                 blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
                 last_apply_error=last_apply_error,
                 guardrails=manifest.agent.guardrails if manifest.agent else None,
+                budget=_budget,
+                on_attempt=_persist_attempt,
             )
             patch = agent_result.patch
+            # Update the last persisted row with stop_reason so downstream
+            # joins can answer "which axis terminated this heal".
+            if agent_result.attempt_records and agent_result.stop_reason:
+                try:
+                    surveyor.record_heal_attempt(
+                        run_id=_heal_run_id,
+                        attempt_record=agent_result.attempt_records[-1],
+                        stop_reason=agent_result.stop_reason,
+                    )
+                except Exception:
+                    pass
             if patch is None:
                 click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
@@ -3371,6 +3400,11 @@ def heal(
         f"provider={resolved_provider}  model={resolved_model}"
     )
 
+    from aqueduct.agent import resolve_budget as _resolve_budget
+    _budget = _resolve_budget(
+        getattr(cfg.agent, "budget", None),
+        max_reprompts=resolved_max_reprompts,
+    )
     agent_result = generate_agent_patch(
         failure_ctx,
         model=resolved_model,
@@ -3382,12 +3416,14 @@ def heal(
         max_reprompts=resolved_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
         guardrails=_guardrails_for_prompt,
+        budget=_budget,
     )
     patch = agent_result.patch
 
     if patch is None:
         click.echo(
-            f"✗ LLM failed to produce a valid patch after {agent_result.attempts} attempt(s)",
+            f"✗ LLM failed to produce a valid patch after {agent_result.attempts} attempt(s) "
+            f"(stop_reason={agent_result.stop_reason})",
             err=True,
         )
         for err in agent_result.reprompt_errors:
@@ -3579,6 +3615,13 @@ def benchmark(
         f"models={model_list}  provider={resolved_provider}"
     )
 
+    # Phase 34 Task 89 — benchmark MUST use the same BudgetConfig as
+    # production. Reading from the same engine config block enforces parity.
+    from aqueduct.agent import resolve_budget as _resolve_budget
+    _budget = _resolve_budget(
+        getattr(cfg.agent, "budget", None),
+        max_reprompts=resolved_max_reprompts,
+    )
     results = run_benchmark(
         scenarios_dir=Path(scenarios_dir),
         models=model_list,
@@ -3590,6 +3633,7 @@ def benchmark(
         max_reprompts=resolved_max_reprompts,
         engine_prompt_context=resolved_engine_prompt_context,
         workers=workers,
+        budget=_budget,
     )
 
     if fmt == "json":

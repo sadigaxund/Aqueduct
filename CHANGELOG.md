@@ -8,6 +8,110 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased] — will ship as 1.1.0 (Phase 34 + 35 combined)
+
+### Added
+- **Unified reprompt loop with multi-axis budget** (Phase 34). The agent's
+  two disjoint loops (inner `max_reprompts` and outer aggressive retry) are
+  collapsed into a single `generate_agent_patch` loop driven by a stateful
+  `BudgetTracker`. The same loop now catches schema/JSON parse failures AND
+  apply-time gate rejections (guardrail violation, parse/compile failure on
+  the patched blueprint) when callers pass an `apply_callback`. Apply
+  rejections feed back into the next reprompt instead of being silently
+  dropped in `human` / `auto` / `ci` modes — previously a one-shot wasted
+  call.
+- **`BudgetConfig` (six axes) + `BudgetTracker`** in `aqueduct.agent.budget`:
+  `max_reprompts` (default 5), `max_seconds` (120s), `max_tokens_total`
+  (50k), `same_error_consecutive` (2), `same_signature_overall` (3),
+  `progress_stalled_window` (3). First axis to trip terminates the loop and
+  records the `stop_reason` (`solved`, `exhausted_attempts`,
+  `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
+  `progress_stalled`, `api_error`). Exposed in `aqueduct.yml` as
+  `agent.budget:` (frozen pydantic model; same instance shared between
+  production heal and benchmark — divergence would silently invalidate the
+  leaderboard).
+- **Error-signature engine** (`aqueduct.agent.signature`). Stable
+  16-char sha1 over `(error_class, where, normalized_message)`. Normalizer
+  collapses whitespace, lowercases, strips ANSI, replaces digits with `N`,
+  quoted strings with `"X"`, and `/path/like/things` with `/PATH` — two
+  failures that differ only in volatile bits hash identically. Six factory
+  helpers cover Pydantic `ValidationError`, JSON parse failures, generic
+  exceptions, apply-gate rejections, and plain reprompt text. The same
+  hashing layer is reused by Phase 33 Part C (coaching loop, post-Phase-34).
+- **Stuck-detection escalation BEFORE abort** (Phase 34 #6). When
+  `same_error_consecutive` trips (2 identical signatures in a row), the
+  loop does NOT immediately abort. Instead it bumps sampling temperature to
+  0.8 AND swaps the reprompt template to the skeleton-anchored variant for
+  one more attempt. If that attempt also produces the same signature the
+  loop terminates with `stuck_signature`. Costs one extra attempt over
+  naive abort and recovers most cases where the model would have escaped
+  with a different seed.
+- **Skeleton-anchored reprompt template** (Phase 34 #5). When the validator
+  flags a structural error (top-level `operations` missing AND op-level
+  fields at root) OR when escalation triggers, the reprompt shows a minimal
+  valid PatchSpec skeleton + a one-line "you forgot the `operations[]`
+  wrapper" hint and stops echoing the bad output — which biases small
+  models toward small edits of their mistake. Cleaner correction signal
+  measurably improves recovery on small-model stuck-signature cases.
+- **`heal_attempts` table** in `observability.db` (Phase 34 #3). One row
+  per LLM turn (success or failure) — `attempt_num`, `signature_hash`,
+  `error_class`, `where_field`, `normalized_message`, `tokens_in/out`,
+  `latency_ms`, `gate_that_rejected` (`schema` / `apply` / `provider` /
+  None), `escalated`, `stop_reason`, `prompt_version`. Wired through the
+  unified loop's `on_attempt` hook so `aqueduct run` populates it
+  automatically. Post-mortem can now answer "what did attempt 2 say" —
+  which `healing_outcomes` alone could not.
+- **`benchmark_results` gains `stop_reason`, `escalated`,
+  `tokens_in_total`, `tokens_out_total`** (Phase 34 #7 — benchmark =
+  production parity). Idempotent additive ALTER for pre-existing stores so
+  pre-1.0.4 benchmark histories survive intact. The leaderboard can now
+  distinguish "model gave up" (`stuck_signature`) from "ran out of attempts"
+  (`exhausted_attempts`).
+- **`AgentPatchResult`** gains `stop_reason`, `tokens_in_total`,
+  `tokens_out_total`, `attempt_records`, `escalated` fields. All default
+  to safe values so older callers and test fixtures keep working
+  unchanged.
+
+- **Structured Spark error extraction** (Phase 35). Surveyor now calls
+  `_extract_structured_error(exc)` before stringifying the failure: pulls
+  Spark 4.0 `PySparkException.getCondition()` / `getErrorClass()` +
+  `getMessageParameters()` + `getSqlState()`, walks `Py4JJavaError.java_exception.getCause()`
+  for the innermost JVM throwable (capped at 10 hops), and falls back to the
+  Python cause chain. Extraction is lazy-imported and best-effort — any
+  failure returns None so a buggy extractor cannot block self-heal.
+- **`FailureContext` gains optional fields** `error_class`, `root_exception`
+  (`{type, message}`), `sql_state`, `suggested_columns` (parsed from
+  `UNRESOLVED_COLUMN.WITH_SUGGESTION` proposal lists), and `object_name`.
+  All default to None / empty tuple; legacy callers see no behaviour change.
+  Idempotent ALTER on `observability.db.failure_contexts` upgrades existing
+  stores in place.
+- **Conditional prompt rendering**: structured fields replace the raw stack
+  trace block when extraction succeeded, producing a focused "Root cause
+  (structured)" section with the offending column name + actual columns
+  available. The full trace is shown only when extraction returned None.
+  Deleted `_truncate_stack` + `_STACK_TRACE_MAX_LINES` — Phase 35 makes the
+  arbitrary line-count cutoff unnecessary.
+- **`inject_failure.structured:` block** in `.aqscenario.yml` lets
+  benchmark scenarios carry the same structured fields production extracts
+  from live exceptions, so the leaderboard exercises the identical prompt
+  branch. `gallery/aqscenarios/01_schema_drift_column_rename.aqscenario.yml`
+  migrated as worked example. Legacy scenarios with no block fall through
+  to the stack-trace path.
+
+### Changed
+- **Provider calls return token usage.** `_call_anthropic` and
+  `_call_openai_compat` now return `(text, tokens_in, tokens_out)` tuples;
+  budget axes can therefore enforce real cost ceilings instead of just
+  attempt counts. Anthropic uses `usage.input_tokens`/`output_tokens`;
+  OpenAI-compatible endpoints use `usage.prompt_tokens`/`completion_tokens`.
+  Zero when the provider does not report usage.
+- **`aqueduct benchmark` shares the same `BudgetConfig` as production
+  heal** — read from `agent.budget:` in `aqueduct.yml`. Apply-gate
+  rejections (guardrail violation, compile failure on the patched
+  blueprint) now feed back into the same reprompt loop benchmark and
+  production use, closing the "leaderboard cheats" path where the
+  benchmark would silently pass on a patch production would reject.
+
 ## [1.0.3] — 2026-05-24
 
 ### Added

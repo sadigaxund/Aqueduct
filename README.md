@@ -525,12 +525,26 @@ agent:
   base_url: "http://localhost:11434/v1"
   model: "llama3.1:70b"
   timeout: 120          # HTTP socket timeout per agent call (seconds)
-  max_reprompts: 3      # retries when the agent returns invalid PatchSpec JSON
+  max_reprompts: 5      # retries when the agent returns invalid PatchSpec JSON (legacy single-axis cap)
   provider_options:
     ollama_num_thread: 8    # → payload["options"]["num_thread"]
     ollama_num_gpu: 1       # → payload["options"]["num_gpu"]
     temperature: 0.1        # → payload["temperature"]
+
+  # Multi-axis budget (1.1.0). First axis to trip terminates the loop; the
+  # terminal reason is recorded as `stop_reason` in `heal_attempts` and on
+  # benchmark rows. Same instance feeds `aqueduct run` self-heal AND
+  # `aqueduct benchmark`, so the leaderboard cannot cheat with softer caps.
+  budget:
+    max_reprompts: 5            # reprompt attempts before giving up
+    max_seconds: 120            # wall-clock cap across all attempts
+    max_tokens_total: 50000     # input+output token cap
+    same_error_consecutive: 2   # two identical signatures in a row → escalate (temp=0.8 + skeleton template) for one more shot
+    same_signature_overall: 3   # any signature repeating ≥ N times → stuck_signature
+    progress_stalled_window: 3  # last N signatures identical → progress_stalled
 ```
+
+**Structured Spark errors (1.1.0):** When the failing exception is a `PySparkException` or `Py4JJavaError`, Aqueduct extracts the Spark error class (e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`), the offending column / table name, the "Did you mean one of …?" suggestion list, and `SQLSTATE`. The LLM prompt then renders a focused "Root cause (structured)" block instead of dumping the raw JVM stack trace — substantially better recovery on small models that previously hallucinated column names. Fields are persisted in `failure_contexts.error_class / object_name / suggested_columns / sql_state / root_exception` for offline analysis.
 
 ### Agent Guardrails
 

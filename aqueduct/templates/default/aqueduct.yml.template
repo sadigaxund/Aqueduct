@@ -412,8 +412,35 @@ agent:
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
   #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
-  # max_reprompts: 3            # Retries when the agent returns invalid PatchSpec JSON.
+  # max_reprompts: 5            # Legacy single-axis cap; the unified loop also catches
+  #                             # apply-gate rejections (guardrail / compile error) and
+  #                             # feeds them back as reprompts. Use agent.budget below for
+  #                             # finer-grained, multi-axis control.
   #                             # Does NOT retry on timeout/network failure (those abort immediately).
+
+  # ── Multi-axis budget for the unified reprompt loop (1.1.0) ────────────────
+  # First axis to trip terminates the loop. The terminal axis is recorded as
+  # `stop_reason` in `heal_attempts` rows and on benchmark results — same
+  # vocabulary across production and benchmark. `aqueduct benchmark` reads
+  # this same block so the leaderboard runs under the production budget.
+  #
+  # budget:
+  #   max_reprompts: 5            # max attempts (success counts as the terminating attempt)
+  #   max_seconds: 120            # wall-clock cap across all attempts
+  #   max_tokens_total: 50000     # null disables the axis
+  #   same_error_consecutive: 2   # N identical signatures in a row → escalate (temp=0.8 + skeleton template)
+  #                               # for ONE more attempt before tripping stuck_signature
+  #   same_signature_overall: 3   # any signature repeating ≥ N times anywhere → stuck_signature
+  #   progress_stalled_window: 3  # last N signatures identical → progress_stalled
+
+  # ── Structured Spark error extraction (1.1.0) ──────────────────────────────
+  # When the raised exception is a `PySparkException` / `Py4JJavaError`, the
+  # Surveyor extracts the Spark `error_class`, offending column / table name,
+  # `Did you mean ...?` suggestion list, and `SQLSTATE`. The LLM prompt renders
+  # a focused "Root cause (structured)" block instead of the raw JVM stack
+  # trace — substantially better recovery on small models. Persisted on
+  # `failure_contexts.error_class / object_name / suggested_columns / sql_state
+  # / root_exception`. Behaviour is automatic; no config knob required.
 
   # ── Custom prompt context ─────────────────────────────────────────────────
   # prompt_context: |           # Engine-wide context appended to LLM system prompt.

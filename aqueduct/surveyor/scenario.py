@@ -111,6 +111,15 @@ class ScenarioResult:
     # None when scenario blueprint declares no agent.guardrails (excluded from
     # guardrail-clean rate); [] when defined-and-clean; non-empty when violated.
     violated_guardrails: list[str] | None = None
+    # Phase 34 — benchmark = production parity. ``stop_reason`` records which
+    # BudgetConfig axis terminated the heal loop. Same vocabulary production
+    # uses (solved, exhausted_attempts, stuck_signature, etc. — see
+    # agent.budget.STOP_REASONS). Persisted to benchmark_results so leaderboard
+    # consumers can distinguish "model gave up" from "ran out of attempts".
+    stop_reason: str | None = None
+    escalated: bool = False           # Task 87 escalation was applied
+    tokens_in_total: int = 0
+    tokens_out_total: int = 0
 
     @property
     def diag_correct(self) -> bool | None:
@@ -154,6 +163,18 @@ def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (Failure
     inj = scenario.inject_failure
     now = datetime.now(tz=timezone.utc).isoformat()
 
+    # Phase 35 — optional `structured:` block lets a scenario carry the same
+    # high-fidelity error fields that production extracts from
+    # PySparkException/Py4JJavaError, so benchmark and production exercise
+    # the identical prompt-builder branch. Legacy scenarios with no block
+    # fall through and FailureContext stays in legacy stack-trace mode.
+    structured = inj.get("structured") or {}
+    if not isinstance(structured, dict):
+        structured = {}
+    sug = structured.get("suggested_columns") or ()
+    if isinstance(sug, str):
+        sug = (sug,)
+
     ctx = FailureContext(
         run_id=f"scenario-{scenario.id}",
         blueprint_id=manifest.blueprint_id,
@@ -164,6 +185,11 @@ def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (Failure
         started_at=now,
         finished_at=now,
         blueprint_source_yaml=blueprint_path.read_text(encoding="utf-8"),
+        error_class=structured.get("error_class"),
+        root_exception=structured.get("root_exception"),
+        sql_state=structured.get("sql_state"),
+        suggested_columns=tuple(str(c) for c in sug),
+        object_name=structured.get("object_name"),
     )
     return ctx, bp
 
@@ -504,11 +530,21 @@ def run_scenario(
     timeout: float = 120.0,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
+    budget: Any = None,  # BudgetConfig | None — Phase 34
 ) -> ScenarioResult:
     """Run one scenario against the LLM and validate the response.
 
     No Spark session required — builds a FailureContext by compiling the
     referenced blueprint, injects the failure, and calls the LLM.
+
+    Phase 34 (#7 — benchmark = production parity): when ``budget`` is
+    supplied, scenario runs use the SAME BudgetConfig + escalation policy
+    that production heal uses. When None, falls back to a budget synthesized
+    from ``max_reprompts`` (preserves pre-Phase-34 behaviour). The scenario
+    also installs an ``apply_callback`` so apply-gate rejections (guardrail
+    violation, parse/compile failure on the patched blueprint) feed back
+    into the same reprompt loop — closing the leaderboard-cheating path
+    where benchmark would silently pass on a patch production would reject.
     """
     from aqueduct.agent import PROMPT_VERSION, generate_agent_patch
 
@@ -537,7 +573,23 @@ def run_scenario(
     # producing a patch production then post-hoc rejects.
     bp_guardrails = bp.agent.guardrails if (bp and bp.agent) else None
 
-    # Call LLM
+    # Resolve blueprint path eagerly so the apply_callback can reuse it.
+    blueprint_path: Path | None = None
+    if scenario.blueprint:
+        bp_candidate = (scenario.source_path.parent / scenario.blueprint).resolve()
+        if bp_candidate.exists():
+            blueprint_path = bp_candidate
+
+    apply_cb: Any = None
+    if blueprint_path is not None:
+        def apply_cb(patch_spec: Any, _bp_path: Path = blueprint_path) -> tuple:
+            ok, err, violated, _patched = _try_apply_patch(patch_spec, _bp_path)
+            if ok:
+                return True, None, None, None
+            err_class = "guardrail_violation" if violated else "compile_error"
+            return False, err_class, err or "(no message)", None
+
+    # Call LLM through the unified Phase 34 loop.
     agent_result = generate_agent_patch(
         failure_ctx,
         model=model,
@@ -549,19 +601,15 @@ def run_scenario(
         max_reprompts=max_reprompts,
         engine_prompt_context=engine_prompt_context,
         guardrails=bp_guardrails,
+        budget=budget,
+        apply_callback=apply_cb,
     )
     patch = agent_result.patch
 
     duration = time.monotonic() - t0
 
-    # Resolve blueprint path for patch_applies check
-    blueprint_path: Path | None = None
-    if scenario.blueprint:
-        bp_candidate = (scenario.source_path.parent / scenario.blueprint).resolve()
-        if bp_candidate.exists():
-            blueprint_path = bp_candidate
-
     # Check assertions — gating (correctness) vs soft (quality)
+    # blueprint_path already resolved above; reused for _check_assertions.
     (
         hard_failures, soft_failures, patch_valid, patch_applies,
         root_cause_match, category_match, violated_guardrails, patched_dict,
@@ -602,6 +650,10 @@ def run_scenario(
         provider=provider,
         base_url=base_url,
         violated_guardrails=violated_guardrails,
+        stop_reason=agent_result.stop_reason,
+        escalated=agent_result.escalated,
+        tokens_in_total=agent_result.tokens_in_total,
+        tokens_out_total=agent_result.tokens_out_total,
     )
 
 
@@ -616,6 +668,7 @@ def run_benchmark(
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     workers: int = 1,
+    budget: Any = None,  # BudgetConfig | None — Phase 34 parity
 ) -> dict[str, dict[str, ScenarioResult]]:
     """Run all scenarios in scenarios_dir against each model.
 
@@ -663,6 +716,7 @@ def run_benchmark(
             timeout=timeout,
             max_reprompts=max_reprompts,
             engine_prompt_context=engine_prompt_context,
+            budget=budget,
         )
         return scenario.id, model, r
 
