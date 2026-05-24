@@ -8,7 +8,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased] — will ship as 1.1.0 (Phase 34 + 35 combined)
+## [Unreleased]
 
 ### Added
 - **Unified reprompt loop with multi-axis budget** (Phase 34). The agent's
@@ -111,6 +111,33 @@ release and are marked **BREAKING**.
   blueprint) now feed back into the same reprompt loop benchmark and
   production use, closing the "leaderboard cheats" path where the
   benchmark would silently pass on a patch production would reject.
+
+### Fixed
+- `heal_attempts` no longer double-writes per attempt. The unified loop's
+  `on_attempt` hook INSERTs one row per attempt with `stop_reason=NULL`;
+  the post-loop terminal update now calls a new
+  `Surveyor.update_heal_attempt_stop_reason()` that UPDATEs the same row's
+  `stop_reason` instead of INSERTing a duplicate. Affects both `aqueduct run`
+  self-heal and `aqueduct heal <run_id>` heal-from-store.
+- `healing_outcomes` gained a `parent_run_id` column so cross-iteration
+  aggressive runs can be queried by the user-visible outer `run_id`.
+  In aggressive mode the existing `run_id` column held a per-iteration uuid
+  starting at iteration 2 — joins against `run_records.run_id` returned
+  partial results. New column NULL on non-aggressive paths; idempotent
+  ALTER added in `Surveyor.start()` so pre-1.1.0 stores upgrade in place.
+- `aqueduct run` final status line + `_last_run_id` Depot key + `on_success`
+  webhook payload now report the outer (user-visible) `run_id` instead of
+  the LAST aggressive iteration's per-iteration uuid. The printed run_id
+  now matches `heal_attempts.run_id` and `healing_outcomes.parent_run_id`,
+  so the value users copy from stderr can actually retrieve the heal
+  history. Also fixed `_run_patch_gates_inline` to accept the renamed
+  `iteration_run_id` kwarg (kwarg-name mismatch crashed aggressive mode
+  on the first patch).
+- Documented that `stop_reason='solved'` describes LLM loop termination
+  only (parseable PatchSpec returned), NOT whether the heal actually fixed
+  the pipeline. To check the latter, join against
+  `healing_outcomes.run_success_after_patch`. Updates to `aqueduct/agent/budget.py`
+  docstring, `docs/ALL_TABLES.md`, and `docs/CLI_REFERENCE.md`.
 
 ## [1.0.3] — 2026-05-24
 

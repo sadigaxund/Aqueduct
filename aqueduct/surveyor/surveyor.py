@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
 CREATE TABLE IF NOT EXISTS healing_outcomes (
     id           VARCHAR PRIMARY KEY,
     run_id       VARCHAR NOT NULL,
+    parent_run_id VARCHAR,
     failed_module VARCHAR,
     failure_category VARCHAR,
     model        VARCHAR,
@@ -420,6 +421,19 @@ class Surveyor:
                 pass
 
             try:
+                # Defect-fix — add parent_run_id column to healing_outcomes
+                # for pre-fix DBs so the aggressive heal loop can record the
+                # user-visible outer run_id alongside the per-iteration uuid.
+                pr_exists = cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='healing_outcomes' AND column_name='parent_run_id'"
+                ).fetchone()
+                if not pr_exists:
+                    cur.execute("ALTER TABLE healing_outcomes ADD COLUMN parent_run_id VARCHAR")
+            except Exception:
+                pass
+
+            try:
                 # Phase 33 Part A — add prompt_version column to pre-1.0.3 DBs
                 # so the version↔heal-outcome correlation the docs promise becomes
                 # answerable. Existing rows get NULL, new rows get the value
@@ -635,6 +649,7 @@ class Surveyor:
         patch_applied: bool,
         run_success_after_patch: bool,
         prompt_version: str | None = None,
+        parent_run_id: str | None = None,
     ) -> None:
         """Persist one LLM healing attempt to healing_outcomes table.
 
@@ -642,6 +657,12 @@ class Surveyor:
         constant (`agent.PROMPT_VERSION`) when not provided. Stored on every
         row so the version↔outcome correlation the docs claim is finally
         answerable in SQL.
+
+        ``parent_run_id`` (optional): the user-visible outer run_id when the
+        aggressive loop minted a per-iteration ``run_id`` for ``execute()``.
+        Lets cross-iteration queries (``WHERE parent_run_id = '<outer>'``)
+        retrieve every outcome from the same heal call. NULL when caller is
+        not in the aggressive loop.
         """
         if self._observability is None:
             return
@@ -654,14 +675,14 @@ class Surveyor:
             cur.execute(
                 """
                 INSERT INTO healing_outcomes
-                (id, run_id, failed_module, failure_category, model, patch_id, confidence,
-                 patch_applied, run_success_after_patch, applied_at, prompt_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, run_id, parent_run_id, failed_module, failure_category, model, patch_id,
+                 confidence, patch_applied, run_success_after_patch, applied_at, prompt_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     str(_uuid.uuid4()),
-                    run_id, failed_module, failure_category, model, patch_id, confidence,
-                    patch_applied, run_success_after_patch,
+                    run_id, parent_run_id, failed_module, failure_category, model, patch_id,
+                    confidence, patch_applied, run_success_after_patch,
                     _dt.datetime.now(_dt.timezone.utc).isoformat(),
                     prompt_version,
                 ],
@@ -681,6 +702,17 @@ class Surveyor:
         every LLM turn (success or failure). Best-effort — any DB-side
         failure is swallowed so a persistence problem cannot abort an
         otherwise-successful heal.
+
+        Note on ``stop_reason``: when set, the value describes WHY the LLM
+        loop terminated (e.g. ``solved`` = the model returned a parseable
+        PatchSpec). It does NOT mean the heal actually fixed the pipeline —
+        the patch can still be rejected downstream by sandbox/lineage/apply
+        gates. To check whether the heal actually worked, join against
+        ``healing_outcomes.run_success_after_patch``. In normal use the
+        ``on_attempt`` hook inserts each row with ``stop_reason=NULL`` and
+        the terminal row's stop_reason is attached afterwards via
+        ``update_heal_attempt_stop_reason`` (a second
+        ``record_heal_attempt`` call would write a duplicate row).
         """
         if self._observability is None:
             return
@@ -721,6 +753,51 @@ class Surveyor:
                 )
         except Exception:
             logger.debug("record_heal_attempt failed", exc_info=True)
+
+    def update_heal_attempt_stop_reason(
+        self,
+        *,
+        run_id: str,
+        attempt_num: int,
+        stop_reason: str,
+    ) -> None:
+        """Update the terminal `heal_attempts` row's ``stop_reason`` in place.
+
+        The unified reprompt loop's ``on_attempt`` hook INSERTs a row per
+        attempt with ``stop_reason=NULL``. After the loop returns we want to
+        attach the final stop reason to the LAST row for this ``(run_id,
+        attempt_num)`` pair — NOT insert a duplicate row (which is what
+        ``record_heal_attempt`` would do, since it always allocates a fresh
+        UUID ``id``).
+
+        ``stop_reason`` describes WHY the LLM loop terminated (e.g. it
+        returned a parseable PatchSpec → ``solved``). It does NOT mean the
+        heal actually fixed the pipeline — to answer that, join against
+        ``healing_outcomes.run_success_after_patch``.
+
+        Best-effort: swallows DB errors at DEBUG, never blocks the caller.
+        """
+        if self._observability is None:
+            return
+        try:
+            with self._observability.connect() as cur:
+                # DuckDB lacks correlated UPDATE-with-LIMIT; constrain by the
+                # most-recent recorded_at to pick the terminal row only.
+                cur.execute(
+                    """
+                    UPDATE heal_attempts
+                       SET stop_reason = ?
+                     WHERE id = (
+                         SELECT id FROM heal_attempts
+                          WHERE run_id = ? AND attempt_num = ?
+                          ORDER BY recorded_at DESC
+                          LIMIT 1
+                     )
+                    """,
+                    [stop_reason, run_id, int(attempt_num)],
+                )
+        except Exception:
+            logger.debug("update_heal_attempt_stop_reason failed", exc_info=True)
 
     def record_patch_simulation(
         self,
