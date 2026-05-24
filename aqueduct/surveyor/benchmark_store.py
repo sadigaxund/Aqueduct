@@ -34,24 +34,25 @@ logger = logging.getLogger(__name__)
 
 _BENCHMARK_DDL = """
 CREATE TABLE IF NOT EXISTS benchmark_results (
-    id                VARCHAR PRIMARY KEY,
-    recorded_at       VARCHAR NOT NULL,
-    scenario_id       VARCHAR NOT NULL,
-    model             VARCHAR NOT NULL,
-    prompt_version    VARCHAR,
-    provider          VARCHAR,
-    base_url          VARCHAR,
-    passed            BOOLEAN NOT NULL,
-    patch_valid       BOOLEAN NOT NULL,
-    patch_applies     BOOLEAN NOT NULL,
-    confidence        DOUBLE PRECISION,
-    duration_seconds  DOUBLE PRECISION,
-    attempts_to_parse INTEGER,
-    diag_score        DOUBLE PRECISION,
-    root_cause_match  BOOLEAN,
-    category_match    BOOLEAN,
-    failures          JSON,
-    soft_failures     JSON
+    id                  VARCHAR PRIMARY KEY,
+    recorded_at         VARCHAR NOT NULL,
+    scenario_id         VARCHAR NOT NULL,
+    model               VARCHAR NOT NULL,
+    prompt_version      VARCHAR,
+    provider            VARCHAR,
+    base_url            VARCHAR,
+    passed              BOOLEAN NOT NULL,
+    patch_valid         BOOLEAN NOT NULL,
+    patch_applies       BOOLEAN NOT NULL,
+    confidence          DOUBLE PRECISION,
+    duration_seconds    DOUBLE PRECISION,
+    attempts_to_parse   INTEGER,
+    diag_score          DOUBLE PRECISION,
+    root_cause_match    BOOLEAN,
+    category_match      BOOLEAN,
+    failures            JSON,
+    soft_failures       JSON,
+    violated_guardrails JSON
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_triple
     ON benchmark_results (scenario_id, model, prompt_version, recorded_at);
@@ -75,11 +76,26 @@ def default_store_path(scenarios_dir: Path) -> Path:
 # ── Connection helpers ────────────────────────────────────────────────────────
 
 def _connect(store_path: Path):
-    """Open a DuckDB connection, creating the parent dir + DDL on first use."""
+    """Open a DuckDB connection, creating the parent dir + DDL on first use.
+
+    Also runs idempotent additive migrations for pre-1.0.3 benchmark stores so
+    older rows survive (just NULL on the new columns).
+    """
     import duckdb
     store_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(store_path))
     con.execute(_BENCHMARK_DDL)
+    # Phase 33 Part B Scope C step 3: additive ALTER for pre-existing stores
+    # that were created before violated_guardrails landed.
+    try:
+        vg_exists = con.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='benchmark_results' AND column_name='violated_guardrails'"
+        ).fetchone()
+        if not vg_exists:
+            con.execute("ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON")
+    except Exception:
+        pass
     return con
 
 
@@ -107,6 +123,8 @@ def persist_results(
     try:
         for sid, by_model in results.items():
             for model, r in by_model.items():
+                vg = getattr(r, "violated_guardrails", None)
+                vg_json = json.dumps(list(vg)) if vg is not None else None
                 con.execute(
                     """
                     INSERT INTO benchmark_results (
@@ -115,8 +133,8 @@ def persist_results(
                         passed, patch_valid, patch_applies,
                         confidence, duration_seconds, attempts_to_parse,
                         diag_score, root_cause_match, category_match,
-                        failures, soft_failures
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        failures, soft_failures, violated_guardrails
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(uuid.uuid4()),
@@ -137,6 +155,7 @@ def persist_results(
                         r.category_match,
                         json.dumps(list(r.failures)),
                         json.dumps(list(r.soft_failures)),
+                        vg_json,
                     ],
                 )
                 written += 1
@@ -234,13 +253,21 @@ def _fetch_baseline(
     return _row_from_record(rec), True
 
 
-# Thresholds that flag a metric as regressed. Tuned for low false-positive
+# Threshold for flagging diag_score as regressed. Tuned for low false-positive
 # rate; small noise from a single rerun should NOT trigger gating.
 _DIAG_DROP_THRESHOLD = 0.05         # diag_score must drop by > 5pp
-_CONFIDENCE_DROP_THRESHOLD = 0.05   # confidence must drop by > 5pp
 
 
 def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], list[str]]:
+    """Compare two BenchmarkRows. Returns (regressions, improvements) lists.
+
+    LLM self-reported `confidence` is deliberately NOT part of the gate:
+    LLMs are systematically overconfident (RLHF tilts toward assertive
+    answers), confidence is a generated token not a measured posterior,
+    and absolute thresholds across runs / models produce noise rather
+    than signal. The column is still persisted on every row for
+    inspection / debugging — it just does not flip the CI gate.
+    """
     regressions: list[str] = []
     improvements: list[str] = []
 
@@ -268,13 +295,6 @@ def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], 
         elif delta > _DIAG_DROP_THRESHOLD:
             improvements.append(
                 f"diag_score: {baseline.diag_score:.2f} → {current.diag_score:.2f}"
-            )
-
-    if baseline.confidence is not None and current.confidence is not None:
-        delta = current.confidence - baseline.confidence
-        if delta < -_CONFIDENCE_DROP_THRESHOLD:
-            regressions.append(
-                f"confidence: {baseline.confidence:.2f} → {current.confidence:.2f}"
             )
 
     return regressions, improvements

@@ -158,7 +158,7 @@ _USER_PROMPT_TEMPLATE = """\
 
 ## Full module list (for reference when writing patch IDs)
 {module_list}
-{provenance_section}{blueprint_yaml_section}{doctor_hints_section}
+{provenance_section}{blueprint_yaml_section}{doctor_hints_section}{guardrails_section}
 Produce the complete PatchSpec JSON now. Remember: the `operations` list is REQUIRED — a response without it is invalid.
 """
 
@@ -355,7 +355,52 @@ def _build_provenance_section(provenance_json: str | None) -> str:
     return "\n".join(lines)
 
 
-def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
+def _build_guardrails_section(guardrails: Any) -> str:
+    """Terse, imperative guardrails block — appended to the user prompt.
+
+    Phase 33 Part B Scope C step 1: surface ``agent.guardrails`` from the
+    Blueprint to the LLM so the model knows the constraints its patch will
+    be checked against. Without this section the model burns heal attempts
+    generating patches that production then rejects post-hoc.
+
+    Returns empty string when ``guardrails`` is None or every field is empty
+    so unconstrained blueprints emit no extra prompt noise.
+    """
+    if guardrails is None:
+        return ""
+
+    # Accept either a dataclass (GuardrailsConfig) or a plain dict (decoded
+    # from the persisted manifest JSON in heal-from-store paths).
+    def _field(name: str) -> tuple:
+        if isinstance(guardrails, dict):
+            val = guardrails.get(name) or ()
+        else:
+            val = getattr(guardrails, name, ()) or ()
+        return tuple(val)
+
+    forbidden = _field("forbidden_ops")
+    allowed_paths = _field("allowed_paths")
+    heal_on = _field("heal_on_errors")
+    never_heal = _field("never_heal_errors")
+    if not (forbidden or allowed_paths or heal_on or never_heal):
+        return ""
+    lines = [
+        "",
+        "## Guardrails (your patch will be REJECTED post-generation if it violates these — follow them in your first attempt)",
+    ]
+    if forbidden:
+        lines.append(f"- forbidden ops (must NOT appear in operations[]): {', '.join(forbidden)}")
+    if allowed_paths:
+        lines.append(f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}")
+    if heal_on:
+        lines.append(f"- heal only on these error_types: {', '.join(heal_on)}")
+    if never_heal:
+        lines.append(f"- never heal these error_types (priority over heal_on): {', '.join(never_heal)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrails: Any = None) -> str:
     try:
         manifest = json.loads(failure_ctx.manifest_json)
     except Exception:
@@ -436,6 +481,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path) -> str:
         provenance_section=provenance_section,
         blueprint_yaml_section=blueprint_yaml_section,
         doctor_hints_section=doctor_hints_section,
+        guardrails_section=_build_guardrails_section(guardrails),
     )
 
 
@@ -788,6 +834,7 @@ def build_prompt(
     patches_dir: Path,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
+    guardrails: Any = None,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -798,7 +845,7 @@ def build_prompt(
     """
     return {
         "system": _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context),
-        "user": _build_user_prompt(failure_ctx, patches_dir),
+        "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }
 
 
@@ -815,6 +862,7 @@ def generate_agent_patch(
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
+    guardrails: Any = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -827,7 +875,7 @@ def generate_agent_patch(
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": _build_user_prompt(failure_ctx, patches_dir),
+            "content": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
         }
     ]
 

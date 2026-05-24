@@ -107,6 +107,10 @@ class ScenarioResult:
     prompt_version: str | None = None  # agent.PROMPT_VERSION at time of run; carried into benchmark_results
     provider: str | None = None        # LLM provider used (anthropic | openai_compat)
     base_url: str | None = None        # LLM endpoint base_url (may be None for hosted providers)
+    # Phase 33 Part B Scope C — guardrail compliance chain
+    # None when scenario blueprint declares no agent.guardrails (excluded from
+    # guardrail-clean rate); [] when defined-and-clean; non-empty when violated.
+    violated_guardrails: list[str] | None = None
 
     @property
     def diag_correct(self) -> bool | None:
@@ -123,8 +127,13 @@ class ScenarioResult:
 
 # ── Failure context builder ───────────────────────────────────────────────────
 
-def _build_failure_ctx(scenario: AqScenario) -> "Any":  # FailureContext
-    """Build a synthetic FailureContext by compiling the scenario's blueprint."""
+def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (FailureContext, Blueprint)
+    """Build a synthetic FailureContext + return parsed Blueprint.
+
+    Returns the Blueprint alongside the FailureContext so callers can extract
+    ``agent.guardrails`` (Phase 33 Part B Scope C step 2 — scenario guardrail
+    enforcement) without re-parsing the blueprint a second time.
+    """
     from datetime import datetime, timezone
     from aqueduct.surveyor.models import FailureContext
 
@@ -145,7 +154,7 @@ def _build_failure_ctx(scenario: AqScenario) -> "Any":  # FailureContext
     inj = scenario.inject_failure
     now = datetime.now(tz=timezone.utc).isoformat()
 
-    return FailureContext(
+    ctx = FailureContext(
         run_id=f"scenario-{scenario.id}",
         blueprint_id=manifest.blueprint_id,
         failed_module=inj.get("module", "_executor"),
@@ -156,67 +165,214 @@ def _build_failure_ctx(scenario: AqScenario) -> "Any":  # FailureContext
         finished_at=now,
         blueprint_source_yaml=blueprint_path.read_text(encoding="utf-8"),
     )
+    return ctx, bp
 
 
-# ── Op matching ───────────────────────────────────────────────────────────────
+# ── Effect-based grader (Phase 33 Part B Scope C) ────────────────────────────
+#
+# Old behavior (deleted): `_check_expected_patch` compared patch OPS by op-name
+# equality + substring-on-value. Marked valid alternative ops as FAIL — e.g. a
+# `replace_module_config` was rejected when scenario pinned `set_module_config_key`
+# even when the resulting blueprint was identical.
+#
+# New behavior: grade the EFFECT of the patch — does the post-patch blueprint's
+# target module have the expected config values? SQL fields normalized via
+# sqlglot AST so whitespace / quote / case differences don't trip false fails.
 
-def _match_op_spec(spec: dict[str, Any], actual_dict: dict[str, Any]) -> bool:
-    """Return True if actual_dict satisfies all fields in spec.
+# Keys whose values are SQL strings and should be compared AST-normalized
+# rather than as raw text. Extendable when new SQL-typed config keys land.
+_SQL_TYPED_KEYS = ("query", "sql")
 
-    value_contains is a substring match on the 'value' field; all other
-    fields require exact equality.
+
+def _normalize_sql(text: str) -> str:
+    """Return an AST-normalized canonical form of a SQL string.
+
+    Uses sqlglot — already a hard dep (see CLAUDE.md: never write a custom SQL
+    parser). Whitespace, quoting, alias-case differences collapse to the same
+    canonical SQL so substring matches work regardless of formatting.
+
+    Falls back to lowercased whitespace-collapsed text when sqlglot cannot
+    parse the input (LLMs occasionally emit dialect-specific oddities) —
+    matches the old string-substring behaviour rather than failing the whole
+    assertion on a parse error.
     """
-    for k, v in spec.items():
-        if k == "value_contains":
-            actual_val = str(actual_dict.get("value", ""))
-            if str(v) not in actual_val:
-                return False
-        else:
-            if actual_dict.get(k) != v:
-                return False
-    return True
+    try:
+        import sqlglot
+        parsed = sqlglot.parse_one(text)
+        return parsed.sql()
+    except Exception:
+        return " ".join(text.lower().split())
 
 
-def _check_expected_patch(
-    patch: "Any",  # PatchSpec
+def _check_expected_effect(
     expected: dict[str, Any],
+    patched_dict: dict | None,
 ) -> list[str]:
-    """Return list of failure messages from expected_patch assertions."""
+    """Verify the post-patch blueprint matches the expected effect.
+
+    ``expected`` is the scenario's ``expected_patch`` block in the new
+    ``effect:`` shape::
+
+        expected_patch:
+          effect:
+            module: clean_events
+            config_contains:
+              query: "event_time"       # SQL-typed → sqlglot-normalized substring
+              header: true               # bool / number → equality
+              path: "data/orders"        # other strings → raw substring
+
+    Returns a list of failure messages (empty = OK). ``patched_dict`` is the
+    post-patch blueprint dict produced by ``_try_apply_patch`` — None when the
+    patch failed to apply, in which case effect grading is skipped (the
+    patch_applies gate already caught it).
+
+    Old ``ops:`` / ``forbidden_ops:`` syntax was deleted in Phase 33 Part B
+    Scope C — scenarios MUST use ``effect:`` after the migration.
+    """
     failures: list[str] = []
     if not expected:
         return failures
 
-    actual_ops = [op.model_dump() for op in (patch.operations or [])]
-    actual_op_names = {d.get("op") for d in actual_ops}
-
-    # Every expected op must match at least one actual op
-    for spec in expected.get("ops", []):
-        matched = any(_match_op_spec(spec, actual) for actual in actual_ops)
-        if not matched:
+    effect = expected.get("effect")
+    if not effect:
+        # Legacy `ops:` block in a scenario that wasn't migrated yet. Surface
+        # the migration ask as a single hard failure so the user can't miss it.
+        if "ops" in expected or "forbidden_ops" in expected:
             failures.append(
-                f"expected_patch.ops: no generated op matches {spec!r}. "
-                f"Generated ops: {[d.get('op') for d in actual_ops]}"
+                "expected_patch: scenario uses the deleted `ops:`/`forbidden_ops:` "
+                "syntax. Migrate to `expected_patch.effect:` — see Phase 33 Part B "
+                "Scope C in CHANGELOG."
             )
+        return failures
 
-    # Forbidden ops must not appear
-    for forbidden in expected.get("forbidden_ops", []):
-        if forbidden in actual_op_names:
+    if not isinstance(effect, dict):
+        failures.append(
+            f"expected_patch.effect: must be a mapping, got {type(effect).__name__}"
+        )
+        return failures
+
+    module_id = effect.get("module")
+    if not module_id:
+        failures.append("expected_patch.effect.module: required (target module_id)")
+        return failures
+
+    if patched_dict is None:
+        # Apply failed earlier in the pipeline; effect grader skips so the user
+        # sees the apply failure as the root cause, not a noisy follow-up.
+        return failures
+
+    modules = patched_dict.get("modules", []) or []
+    target = next(
+        (m for m in modules if isinstance(m, dict) and m.get("id") == module_id),
+        None,
+    )
+    if target is None:
+        failures.append(
+            f"expected_patch.effect.module: {module_id!r} not found in patched "
+            f"blueprint (modules present: {[m.get('id') for m in modules if isinstance(m, dict)]})"
+        )
+        return failures
+
+    target_config = target.get("config") or {}
+    config_contains = effect.get("config_contains") or {}
+    if not isinstance(config_contains, dict):
+        failures.append(
+            f"expected_patch.effect.config_contains: must be a mapping, "
+            f"got {type(config_contains).__name__}"
+        )
+        return failures
+
+    for key, expected_val in config_contains.items():
+        actual_val = target_config.get(key)
+        if actual_val is None:
             failures.append(
-                f"expected_patch.forbidden_ops: op {forbidden!r} was generated but is forbidden"
+                f"expected_patch.effect.config_contains[{key!r}]: key not present "
+                f"in patched config (keys: {sorted(target_config.keys())})"
             )
+            continue
+
+        # Booleans / numbers → strict equality.
+        if isinstance(expected_val, (bool, int, float)) and not isinstance(expected_val, bool) is False:
+            # `isinstance(True, int)` is True in Python; the redundant check above keeps bools as bools.
+            if actual_val != expected_val:
+                failures.append(
+                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"expected {expected_val!r}, got {actual_val!r}"
+                )
+            continue
+
+        # Strings → SQL-aware substring for SQL-typed keys, raw substring otherwise.
+        expected_str = str(expected_val)
+        actual_str = str(actual_val)
+        if key in _SQL_TYPED_KEYS:
+            normalized_actual = _normalize_sql(actual_str)
+            normalized_expected = _normalize_sql(expected_str)
+            if normalized_expected not in normalized_actual:
+                failures.append(
+                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"AST-normalized expected substring {expected_str!r} not in "
+                    f"normalized actual {actual_str!r}"
+                )
+        else:
+            if expected_str not in actual_str:
+                failures.append(
+                    f"expected_patch.effect.config_contains[{key!r}]: "
+                    f"substring {expected_str!r} not in {actual_str!r}"
+                )
 
     return failures
 
 
-def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str]:
-    """Try applying patch to blueprint. Returns (success, error_message)."""
+def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, list[str] | None, dict | None]:
+    """Try applying patch to blueprint.
+
+    Returns (success, error_message, violated_guardrails, patched_dict).
+
+    ``violated_guardrails`` is:
+      - ``None`` when the blueprint defines NO ``agent.guardrails`` (so
+        guardrail compliance is N/A for this scenario)
+      - ``[]`` when guardrails are defined and the patch satisfies all of them
+      - ``[<reason>]`` (single-entry list) when at least one guardrail is
+        violated — production would reject the patch here, so we surface that
+        as ``success=False`` to keep the benchmark honest
+
+    Phase 33 Part B Scope C step 2: scenarios used to bypass
+    ``_check_guardrails`` (only called by ``apply_patch_file``), so benchmark
+    over-reported PASS vs production. This helper closes that gap.
+
+    ``patched_dict`` is the post-patch blueprint dict (after a successful
+    apply + parse + compile). Returned so the caller can re-use it for the
+    new effect-based grader without re-running the apply pipeline.
+    """
     import tempfile
     try:
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
+        from aqueduct.patch.apply import (
+            _check_guardrails, _yaml_dump, _yaml_load, apply_patch_to_dict, PatchError,
+        )
         from aqueduct.parser.parser import ParseError, parse
         from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
 
         bp_raw = _yaml_load(blueprint_path)
+
+        # Guardrail check — None when none declared, else list (empty = clean).
+        guardrails_block = (bp_raw.get("agent") or {}).get("guardrails") or {}
+        has_guardrails = bool(
+            guardrails_block.get("forbidden_ops")
+            or guardrails_block.get("allowed_paths")
+            or guardrails_block.get("heal_on_errors")
+            or guardrails_block.get("never_heal_errors")
+        )
+        violated: list[str] | None
+        if has_guardrails:
+            try:
+                _check_guardrails(patch, bp_raw, provenance_map=None)
+                violated = []
+            except PatchError as exc:
+                violated = [str(exc)]
+                return False, f"guardrails violated: {exc}", violated, None
+        else:
+            violated = None
+
         patched = apply_patch_to_dict(bp_raw, patch)
 
         with tempfile.NamedTemporaryFile(suffix=".yml", delete=False, mode="w") as tmp:
@@ -225,13 +381,13 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str]:
         try:
             bp = parse(str(tmp_path))
             compiler_compile(bp, blueprint_path=tmp_path)
-            return True, ""
+            return True, "", violated, patched
         except (ParseError, CompileError) as exc:
-            return False, str(exc)
+            return False, str(exc), violated, None
         finally:
             tmp_path.unlink(missing_ok=True)
     except Exception as exc:
-        return False, str(exc)
+        return False, str(exc), None, None
 
 
 def _check_assertions(
@@ -239,11 +395,17 @@ def _check_assertions(
     patch: "Any",  # PatchSpec | None
     blueprint_path: Path | None,
     attempts: int = 0,
-) -> tuple[list[str], list[str], bool, bool, bool | None, bool | None]:
+) -> tuple[list[str], list[str], bool, bool, bool | None, bool | None, list[str] | None, dict | None]:
     """Evaluate assertion list, split into gating vs scoring.
 
     Returns (hard_failures, soft_failures, patch_valid, patch_applies,
-    root_cause_match, category_match).
+    root_cause_match, category_match, violated_guardrails, patched_dict).
+
+    `violated_guardrails` is None when the scenario blueprint declares no
+    guardrails (excluded from guardrail-clean rate), `[]` when defined-and-
+    clean, non-empty when defined-and-violated. `patched_dict` is the post-
+    patch blueprint dict — None when apply failed, available when the new
+    effect-based grader needs to inspect the result.
 
     Gating (correctness — flips PASS/FAIL): `patch_is_valid`,
     `patch_applies`. Scoring (quality — recorded, NEVER flips PASS/FAIL):
@@ -256,6 +418,8 @@ def _check_assertions(
     soft_failures: list[str] = []   # scoring (quality, non-gating)
     patch_valid = patch is not None
     patch_applies = False
+    violated_guardrails: list[str] | None = None  # None = scenario blueprint has no guardrails
+    patched_dict: dict | None = None              # post-patch dict reused by the effect grader
     root_cause_match: bool | None = None
     category_match: bool | None = None
 
@@ -274,8 +438,10 @@ def _check_assertions(
                     failures.append("patch_applies: cannot check — patch is None")
             else:
                 if blueprint_path and blueprint_path.exists():
-                    ok, err = _try_apply_patch(patch, blueprint_path)
+                    ok, err, violated, patched = _try_apply_patch(patch, blueprint_path)
                     patch_applies = ok
+                    violated_guardrails = violated
+                    patched_dict = patched
                     if expected_val and not ok:
                         failures.append(f"patch_applies: patch failed to apply: {err}")
                     elif not expected_val and ok:
@@ -320,7 +486,10 @@ def _check_assertions(
                     f"root_cause_contains: none of {keywords!r} found in {actual_rc!r}"
                 )
 
-    return failures, soft_failures, patch_valid, patch_applies, root_cause_match, category_match
+    return (
+        failures, soft_failures, patch_valid, patch_applies,
+        root_cause_match, category_match, violated_guardrails, patched_dict,
+    )
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -347,7 +516,7 @@ def run_scenario(
 
     # Build failure context
     try:
-        failure_ctx = _build_failure_ctx(scenario)
+        failure_ctx, bp = _build_failure_ctx(scenario)
     except Exception as exc:
         return ScenarioResult(
             scenario_id=scenario.id,
@@ -363,6 +532,11 @@ def run_scenario(
             base_url=base_url,
         )
 
+    # Step 1 — surface the blueprint's agent.guardrails to the LLM so the
+    # model has a chance to satisfy them on the first attempt instead of
+    # producing a patch production then post-hoc rejects.
+    bp_guardrails = bp.agent.guardrails if (bp and bp.agent) else None
+
     # Call LLM
     agent_result = generate_agent_patch(
         failure_ctx,
@@ -374,6 +548,7 @@ def run_scenario(
         timeout=timeout,
         max_reprompts=max_reprompts,
         engine_prompt_context=engine_prompt_context,
+        guardrails=bp_guardrails,
     )
     patch = agent_result.patch
 
@@ -387,14 +562,17 @@ def run_scenario(
             blueprint_path = bp_candidate
 
     # Check assertions — gating (correctness) vs soft (quality)
-    hard_failures, soft_failures, patch_valid, patch_applies, root_cause_match, category_match = (
-        _check_assertions(scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts)
-    )
+    (
+        hard_failures, soft_failures, patch_valid, patch_applies,
+        root_cause_match, category_match, violated_guardrails, patched_dict,
+    ) = _check_assertions(scenario.assertions, patch, blueprint_path, attempts=agent_result.attempts)
 
-    # expected_patch is a correctness/effect check → gating
+    # expected_patch is a correctness/effect check → gating. Effect-based
+    # grader inspects the POST-PATCH blueprint (patched_dict) rather than
+    # comparing op-name equality on the raw patch — see _check_expected_effect.
     expected_failures: list[str] = []
     if patch is not None and scenario.expected_patch:
-        expected_failures = _check_expected_patch(patch, scenario.expected_patch)
+        expected_failures = _check_expected_effect(scenario.expected_patch, patched_dict)
 
     gating_failures = hard_failures + expected_failures
     passed = len(gating_failures) == 0  # diagnosis quality NEVER flips this
@@ -423,6 +601,7 @@ def run_scenario(
         prompt_version=PROMPT_VERSION,
         provider=provider,
         base_url=base_url,
+        violated_guardrails=violated_guardrails,
     )
 
 
@@ -566,6 +745,15 @@ def format_benchmark_table(
         ("Diag score", lambda rs: (
             f"{sum(r.diag_score for r in rs if r.diag_score is not None) / max(1, sum(1 for r in rs if r.diag_score is not None)):.0%}"
             if any(r.diag_score is not None for r in rs) else "—"
+        )),
+        # Phase 33 Part B Scope C step 3 — guardrail-clean rate. N/A when no
+        # scenario in the suite declares guardrails on its blueprint
+        # (violated_guardrails is None on every result). Otherwise: fraction
+        # of (scenario, model) pairs with violated_guardrails == [] among
+        # those where it's non-None.
+        ("Guardrail-clean", lambda rs: (
+            f"{sum(1 for r in rs if r.violated_guardrails == []) / max(1, sum(1 for r in rs if r.violated_guardrails is not None)):.0%}"
+            if any(getattr(r, 'violated_guardrails', None) is not None for r in rs) else "—"
         )),
     ]:
         cells = []

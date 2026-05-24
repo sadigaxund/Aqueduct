@@ -18,6 +18,12 @@ description: >
 # Path to the blueprint YAML, resolved relative to this scenario file.
 # Aqueduct parses + compiles it (no Spark) to produce a realistic manifest_json
 # for the LLM prompt. The blueprint does not need to run successfully.
+#
+# If the blueprint declares `agent.guardrails` (forbidden_ops, allowed_paths,
+# heal_on_errors, never_heal_errors), they are now injected into the LLM
+# prompt as constraints AND enforced by `_check_guardrails` in the scenario
+# apply path — matching production. Scenarios with no guardrails are excluded
+# from the "Guardrail-clean rate" leaderboard metric.
 blueprint: ../blueprints/pipeline.yml
 
 # ── Injected failure ──────────────────────────────────────────────────────────
@@ -40,27 +46,29 @@ inject_failure:
         return self._df(self._jreader.load(path))
     AnalysisException: Unable to infer schema for Parquet.
 
-# ── Expected patch ────────────────────────────────────────────────────────────
+# ── Expected patch (effect-based grader, Phase 33 Part B Scope C) ─────────────
+#
+# The grader checks the EFFECT of the patch — the post-patch blueprint's
+# target module config — rather than op-name equality on the raw patch.
+# Any valid op (set_module_config_key, replace_module_config, etc.) that
+# lands the right end state passes. SQL-typed fields (`query`, `sql`) are
+# compared via sqlglot AST normalization so whitespace, quoting, and
+# alias-case differences don't trip false fails.
+#
+# Omit the `expected_patch:` block entirely (or set it to {}) when the
+# scenario has multiple valid fixes that touch different modules — the
+# scenario then gates on `patch_applies` + `root_cause_contains` only.
+#
+# The legacy `expected_patch.ops:` / `expected_patch.forbidden_ops:` syntax
+# was DELETED in 1.0.3 — scenarios using it now fail with a migration hint.
 
 expected_patch:
-
-  # Ops that MUST appear in the generated patch.
-  # Each entry is a partial match — only the specified keys are checked.
-  # All entries must match at least one generated op.
-  ops:
-    - op: set_module_config_key           # required: op name must match
-      module_id: my_ingress_module        # optional: exact match on module_id
-      key: format                         # optional: exact match on key
-      value_contains: "csv"              # optional: substring match on value field
-
-    # More complex ops can be partially matched too:
-    # - op: replace_context_value
-    #   key: paths.orders_raw            # exact match on context key
-
-  # Op types that must NOT appear anywhere in the generated patch.
-  forbidden_ops:
-    - replace_module_config              # full config replacement is heavy-handed
-    - replace_context_value              # format is a literal in this blueprint, not a ctx ref
+  effect:
+    module: my_ingress_module          # post-patch must contain this module by id
+    config_contains:
+      format: "csv"                    # raw substring on string fields
+      header: true                     # equality on bool / number fields
+      # query: "event_time"            # SQL-typed key → sqlglot-AST-normalized substring
 
 # ── Assertions ────────────────────────────────────────────────────────────────
 
@@ -71,6 +79,9 @@ assertions:
   - patch_is_valid: true
 
   # Patch must be applicable to the blueprint (parse + compile with patch applied).
+  # Phase 33 Part B Scope C step 2: now also runs `_check_guardrails` when the
+  # blueprint declares `agent.guardrails`, so a guardrail-violating patch is
+  # reported as `patch_applies: false` here — matching production.
   # Disabled automatically when blueprint path not found.
   - patch_applies: true
 
