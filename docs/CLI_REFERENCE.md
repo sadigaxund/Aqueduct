@@ -139,8 +139,36 @@ Gate overrides are persistent across runs until explicitly cleared.
 | `aqueduct benchmark <path> --provider <p> --base-url <url> --timeout <s>` | Per-run agent-connection override (precedence: flag > `aqueduct.yml` agent > default). `--timeout 0` = unbounded read (connect still fails fast) |
 | `aqueduct benchmark <path> --workers <n>` | Concurrency. Default `1` (serial); `>1` parallelizes scenario×model pairs |
 | `aqueduct benchmark <path> --format json` | Per-result JSON incl. the generated `patch`, `diag_score`, `soft_failures`. Table mode prints a `(N failed — rerun with --format json …)` hint |
+| `aqueduct benchmark <path> --no-persist` | Skip writing the per-result row to `<scenarios_dir>/.aqueduct/benchmark.duckdb`. Default = persist for later regression diffs |
+| `aqueduct benchmark <path> --store-path <file>` | Override the benchmark-store DuckDB path |
+| `aqueduct benchmark <path> --gate-on-regression` | After persist, diff each (scenario, model) vs prior row; exit non-zero on any regression (drop in `passed`, `patch_applies`, > 5pp `diag_score` drop) |
+| `aqueduct benchmark-diff` | Read the benchmark store, compare the two most-recent rows per (scenario, model), print a `NEW / = same / ↑ IMPROVE / ✗ REGRESS` table; exit non-zero on regression |
+| `aqueduct benchmark-diff --scenario <id>` / `--model <id>` / `--store-path <file>` / `--format text\|json` | Filters + output shape for the diff command |
 
 Scoring is two-tier: **correctness** (`patch_is_valid`, `patch_applies`, `expected_patch`) gates PASS/FAIL; **diagnosis quality** (`root_cause_contains`, `expected_category`, `max_attempts`, `min_confidence`) is recorded as `diag_score` but never fails an otherwise-correct fix. Use `aqueduct benchmark` to compare models or catch regression after prompt changes.
+
+### Multi-axis budget (1.1.0)
+
+`aqueduct run` self-heal AND `aqueduct benchmark` share the same `agent.budget:` block in `aqueduct.yml`. Six axes, first to trip terminates the loop and the reason is recorded as `stop_reason`:
+
+| Axis | Default | `stop_reason` when tripped |
+|---|---|---|
+| `max_reprompts` | 5 | `exhausted_attempts` |
+| `max_seconds` | 120 | `budget_seconds_exceeded` |
+| `max_tokens_total` | 50000 | `budget_tokens_exceeded` |
+| `same_error_consecutive` | 2 | escalation (temp=0.8 + skeleton template) for ONE attempt, then `stuck_signature` |
+| `same_signature_overall` | 3 | `stuck_signature` |
+| `progress_stalled_window` | 3 | `progress_stalled` |
+
+`stop_reason` also `solved` (success) or `api_error` (provider raised). Every value is in `aqueduct.agent.budget.STOP_REASONS`.
+
+### `heal_attempts` table (1.1.0)
+
+`observability.db.heal_attempts` records one row per LLM turn (success or failure). Columns: `attempt_num`, `error_class`, `where_field`, `normalized_message`, `signature_hash` (stable 16-char sha1), `tokens_in`, `tokens_out`, `latency_ms`, `gate_that_rejected` (`schema` / `apply` / `provider` / NULL on success), `escalated`, `stop_reason`, `prompt_version`. Populated by `aqueduct run` self-heal. Query directly via `duckdb` to post-mortem any heal.
+
+### Structured Spark errors (1.1.0)
+
+When the failure exception is a `PySparkException` or `Py4JJavaError`, the Surveyor extracts `error_class`, `object_name`, `suggested_columns` (from `UNRESOLVED_COLUMN.WITH_SUGGESTION` proposals), `sql_state`, and `root_exception` into `failure_contexts`. The agent prompt renders a `## Root cause (structured)` block instead of the raw stack trace whenever any structured field is present. Behaviour is automatic — no CLI flag. Inspect the rendered prompt via `aqueduct heal <run_id> --print-prompt`.
 
 ---
 

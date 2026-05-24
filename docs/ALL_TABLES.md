@@ -82,6 +82,36 @@ SELECT failed_module, error_message,
 FROM failure_contexts WHERE run_id = ?;
 ```
 
+### `heal_attempts` **(1.1.0)**
+
+**Source:** `aqueduct/surveyor/surveyor.py:119` — written by `Surveyor.record_heal_attempt()` once per LLM round-trip inside the unified reprompt loop (Phase 34). Per-attempt grain — `healing_outcomes` is per-patch-decision grain. The two coexist.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR PRIMARY KEY | UUID |
+| `run_id` | VARCHAR NOT NULL | Foreign-key to `run_records.id` |
+| `attempt_num` | INTEGER NOT NULL | 1-indexed within the heal call |
+| `error_class` | VARCHAR | Spark error class or `ValidationError`/`JSONDecodeError` for schema-gate fails |
+| `where_field` | VARCHAR | Field path the error originated at (Pydantic loc) |
+| `normalized_message` | VARCHAR | Error message normalized: digits→N, quotes→"X", paths→/PATH, ANSI stripped, whitespace collapsed, 240-char truncate |
+| `signature_hash` | VARCHAR | Stable sha1[:16] over `(error_class, where, normalized_message)` — same hash = same failure |
+| `tokens_in` | INTEGER NOT NULL | Prompt tokens reported by provider this turn |
+| `tokens_out` | INTEGER NOT NULL | Completion tokens reported by provider this turn |
+| `latency_ms` | INTEGER NOT NULL | Wall-clock for this LLM call |
+| `gate_that_rejected` | VARCHAR | `schema` / `apply` / `provider` / NULL on success |
+| `escalated` | BOOLEAN NOT NULL | True if this attempt was the post-stuck-detection escalation (temp=0.8 + skeleton template) |
+| `stop_reason` | VARCHAR | Only populated on the terminal row. One of `STOP_REASONS`: `solved`, `exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`, `progress_stalled`, `api_error` |
+| `prompt_version` | VARCHAR | `aqueduct.agent.PROMPT_VERSION` at the time |
+| `recorded_at` | VARCHAR NOT NULL | ISO-8601 UTC |
+
+```sql
+-- Per-run reprompt fingerprint: what tripped, did escalation fire, where did we stop
+SELECT run_id, attempt_num, gate_that_rejected, escalated, stop_reason,
+       substr(signature_hash, 1, 8) AS sig
+FROM heal_attempts
+ORDER BY run_id, attempt_num;
+```
+
 ### `healing_outcomes`
 
 **Source:** `aqueduct/surveyor/surveyor.py:62` — written by `Surveyor.record_healing_outcome()` at every patch decision point in the self-healing loop (guardrail block, human stage, auto apply, aggressive apply).
@@ -244,6 +274,52 @@ Index: `idx_lineage_channel` on `(blueprint_id, channel_id)`.
 SELECT DISTINCT channel_id, output_column
 FROM column_lineage
 WHERE source_table = 'raw_orders' AND source_column = 'order_id';
+```
+
+---
+
+## `benchmark.duckdb` — `aqueduct benchmark` results store **(1.0.3)**
+
+**Path:** `<scenarios_dir>/.aqueduct/benchmark.duckdb` (override via `--store-path`). Anchored to the scenarios suite so each suite carries its own history. Drives `aqueduct benchmark-diff` and `--gate-on-regression`.
+
+### `benchmark_results`
+
+**Source:** `aqueduct/surveyor/benchmark_store.py:35` — one row per `(scenario, model)` per `aqueduct benchmark` invocation. Idempotent ALTER on connect — pre-1.0.3 / pre-1.1.0 stores upgrade in place (old rows NULL on new columns).
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | VARCHAR PRIMARY KEY | UUID |
+| `recorded_at` | VARCHAR NOT NULL | ISO-8601 UTC |
+| `scenario_id` | VARCHAR NOT NULL | From `.aqscenario.yml` |
+| `model` | VARCHAR NOT NULL | LLM model name |
+| `prompt_version` | VARCHAR | `agent.PROMPT_VERSION` — invalidates comparison when prompt structure changes |
+| `provider` | VARCHAR | `anthropic` / `openai_compat` |
+| `base_url` | VARCHAR | For OpenAI-compat backends |
+| `passed` | BOOLEAN NOT NULL | Two-tier correctness gate: `patch_valid` AND `patch_applies` AND `expected_patch` (if declared) |
+| `patch_valid` | BOOLEAN NOT NULL | PatchSpec schema validated |
+| `patch_applies` | BOOLEAN NOT NULL | `patch.apply()` succeeded against the blueprint |
+| `confidence` | DOUBLE PRECISION | Model self-reported 0.0–1.0 |
+| `duration_seconds` | DOUBLE PRECISION | End-to-end wall-clock |
+| `attempts_to_parse` | INTEGER | Reprompts until schema-valid JSON |
+| `diag_score` | DOUBLE PRECISION | Diagnosis-quality 0.0–1.0 — `root_cause_contains` + `expected_category` + `max_attempts` + `min_confidence`. Soft signal — does NOT gate PASS/FAIL |
+| `root_cause_match` | BOOLEAN | `root_cause_contains` regex hit |
+| `category_match` | BOOLEAN | `expected_category` literal match |
+| `failures` | JSON | List of hard-fail reason strings |
+| `soft_failures` | JSON | List of diag-only fail reason strings |
+| `violated_guardrails` | JSON | **(1.0.3)** Names of guardrails violated by the generated patch (Phase 33B) |
+| `stop_reason` | VARCHAR | **(1.1.0)** Same vocabulary as `heal_attempts.stop_reason` — production/benchmark parity (Phase 34) |
+| `escalated` | BOOLEAN | **(1.1.0)** True if the run hit the stuck-detection escalation path |
+| `tokens_in_total` | INTEGER | **(1.1.0)** Sum of prompt tokens across all attempts |
+| `tokens_out_total` | INTEGER | **(1.1.0)** Sum of completion tokens across all attempts |
+
+Index: `idx_benchmark_triple (scenario_id, model, prompt_version, recorded_at)` for fast regression-diff lookups.
+
+```sql
+-- Compare last two runs for one model on schema-drift scenarios
+SELECT scenario_id, recorded_at, passed, diag_score, stop_reason, tokens_out_total
+FROM benchmark_results
+WHERE model = 'qwen2.5-coder:7b' AND scenario_id LIKE '01_%'
+ORDER BY recorded_at DESC LIMIT 2;
 ```
 
 ---
