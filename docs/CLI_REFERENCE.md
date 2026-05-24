@@ -160,7 +160,9 @@ Scoring is two-tier: **correctness** (`patch_is_valid`, `patch_applies`, `expect
 | `same_signature_overall` | 3 | `stuck_signature` |
 | `progress_stalled_window` | 3 | `progress_stalled` |
 
-`stop_reason` also `solved` (success) or `api_error` (provider raised). Every value is in `aqueduct.agent.budget.STOP_REASONS`.
+`stop_reason` also `solved` (LLM returned a parseable PatchSpec) or `api_error` (provider raised). Every value is in `aqueduct.agent.budget.STOP_REASONS`.
+
+> **`solved` ≠ "heal worked".** `stop_reason='solved'` only means the LLM loop terminated cleanly with a parseable patch. The patch may still fail the apply / lineage / sandbox / explain gates downstream. To check whether the heal actually fixed the pipeline, query `healing_outcomes.run_success_after_patch` for the same `run_id` (or `parent_run_id` in aggressive mode).
 
 ### `heal_attempts` table (1.1.0)
 

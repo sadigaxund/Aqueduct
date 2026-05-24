@@ -25,7 +25,13 @@ abort) — when ``same_error_consecutive`` trips, the loop bumps temperature
 
 Stop reasons
 ------------
-``solved``                  LLM returned a valid PatchSpec, loop exits clean.
+``solved``                  LLM returned a parseable PatchSpec, loop exits clean.
+                            NOTE: this describes loop termination only — it does
+                            NOT mean the patch fixed the pipeline. The patch may
+                            still fail the apply / lineage / sandbox / explain
+                            gates downstream. To check whether the heal actually
+                            worked, query ``healing_outcomes.run_success_after_patch``
+                            for the same ``run_id``.
 ``exhausted_attempts``      ``max_reprompts`` reached.
 ``budget_seconds_exceeded`` ``max_seconds`` reached.
 ``budget_tokens_exceeded``  ``max_tokens_total`` reached.

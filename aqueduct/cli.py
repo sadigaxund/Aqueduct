@@ -190,7 +190,7 @@ def _run_patch_gates_inline(
     bundle,
     surveyor,
     failed_module,
-    current_run_id: str,
+    iteration_run_id: str,
     blueprint_id: str,
     sample_rows: int = 1000,
 ):
@@ -220,7 +220,7 @@ def _run_patch_gates_inline(
             status=lineage_res.status,
             detail="; ".join(w.detail for w in lineage_res.warnings) or None,
             duration_ms=lineage_res.duration_ms,
-            run_id=current_run_id,
+            run_id=iteration_run_id,
             blueprint_id=blueprint_id,
         )
     except Exception:
@@ -245,7 +245,7 @@ def _run_patch_gates_inline(
             detail=sandbox_res.detail,
             sample_rows=sandbox_res.sample_rows,
             duration_ms=sandbox_res.duration_ms,
-            run_id=current_run_id,
+            run_id=iteration_run_id,
             blueprint_id=blueprint_id,
         )
     except Exception:
@@ -263,7 +263,7 @@ def _run_patch_gates_inline(
             status=explain_res.status,
             detail=explain_res.detail or "; ".join(r.detail for r in explain_res.regressions) or None,
             duration_ms=explain_res.duration_ms,
-            run_id=current_run_id,
+            run_id=iteration_run_id,
             blueprint_id=blueprint_id,
         )
     except Exception:
@@ -1423,12 +1423,17 @@ def run(
         last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
 
         while True:
-            current_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
+            # `iteration_run_id` is the per-iteration uuid used as `run_id`
+            # for execute() and persisted on `run_records`. The user-visible
+            # outer `run_id` is captured separately as `parent_run_id` on
+            # `healing_outcomes` so cross-iteration aggregations remain
+            # joinable to the original heal call.
+            iteration_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
             execute_exc: ExecuteError | None = None
             try:
                 result = execute(
                     manifest, session,
-                    run_id=current_run_id,
+                    run_id=iteration_run_id,
                     store_dir=resolved_store_dir,
                     surveyor=surveyor,
                     depot=depot,
@@ -1445,7 +1450,7 @@ def run(
                 execute_exc = exc
                 result = ExecutionResult(
                     blueprint_id=manifest.blueprint_id,
-                    run_id=current_run_id,
+                    run_id=iteration_run_id,
                     status="error",
                     module_results=(
                         ModuleResult(module_id="_executor", status="error", error=str(exc)),
@@ -1576,9 +1581,9 @@ def run(
             # joins can answer "which axis terminated this heal".
             if agent_result.attempt_records and agent_result.stop_reason:
                 try:
-                    surveyor.record_heal_attempt(
+                    surveyor.update_heal_attempt_stop_reason(
                         run_id=_heal_run_id,
-                        attempt_record=agent_result.attempt_records[-1],
+                        attempt_num=agent_result.attempt_records[-1].attempt_num,
                         stop_reason=agent_result.stop_reason,
                     )
                 except Exception:
@@ -1623,7 +1628,8 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    parent_run_id=run_id,
                     failure_category=patch.category, model=resolved_agent_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
@@ -1646,7 +1652,8 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    parent_run_id=run_id,
                     failure_category=patch.category, model=resolved_agent_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
@@ -1661,7 +1668,7 @@ def run(
                         import httpx as _httpx
                         _httpx.post(_ci_url, json={
                             "patch": patch.model_dump(),
-                            "run_id": current_run_id,
+                            "run_id": iteration_run_id,
                             "blueprint_id": manifest.blueprint_id,
                             "failed_module": failure_ctx.failed_module,
                         }, timeout=10)
@@ -1675,7 +1682,8 @@ def run(
                     err=True,
                 )
                 surveyor.record_healing_outcome(
-                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    parent_run_id=run_id,
                     failure_category=patch.category, model=resolved_agent_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
@@ -1690,7 +1698,7 @@ def run(
                     bundle=bundle,
                     surveyor=surveyor,
                     failed_module=failure_ctx.failed_module,
-                    current_run_id=current_run_id,
+                    iteration_run_id=iteration_run_id,
                     blueprint_id=manifest.blueprint_id,
                 )
                 if _g4 is not None and _g4.status == "warn":
@@ -1702,7 +1710,8 @@ def run(
                         err=True,
                     )
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
@@ -1726,7 +1735,8 @@ def run(
                         err=True,
                     )
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
@@ -1755,7 +1765,8 @@ def run(
                 patch_success = result2.status == "success"
                 failure_ctx2 = surveyor.record(result2, patched=patch_success)
                 surveyor.record_healing_outcome(
-                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    parent_run_id=run_id,
                     failure_category=patch.category, model=resolved_agent_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
@@ -1782,7 +1793,7 @@ def run(
                     bundle=bundle,
                     surveyor=surveyor,
                     failed_module=failure_ctx.failed_module,
-                    current_run_id=current_run_id,
+                    iteration_run_id=iteration_run_id,
                     blueprint_id=manifest.blueprint_id,
                 )
                 _block_on_g4 = (
@@ -1800,7 +1811,8 @@ def run(
                     )
                     click.echo(f"  ✗ aggressive: explain gate blocked — {last_apply_error}", err=True)
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
@@ -1813,7 +1825,8 @@ def run(
                     )
                     last_apply_error = f"Patch {patch.patch_id!r} rejected by sandbox: {_g3.detail}"
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
@@ -1829,7 +1842,8 @@ def run(
                         err=True,
                     )
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
@@ -1841,7 +1855,8 @@ def run(
                     click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
                     last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
                     surveyor.record_healing_outcome(
-                        run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
                         failure_category=patch.category, model=resolved_agent_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
@@ -1865,7 +1880,8 @@ def run(
                 patch_success = result2.status == "success"
                 failure_ctx2 = surveyor.record(result2, patched=patch_success)
                 surveyor.record_healing_outcome(
-                    run_id=current_run_id, failed_module=failure_ctx.failed_module,
+                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                    parent_run_id=run_id,
                     failure_category=patch.category, model=resolved_agent_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
@@ -1901,7 +1917,7 @@ def run(
 
         # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
         try:
-            depot.put("_last_run_id", result.run_id)
+            depot.put("_last_run_id", run_id)
         except Exception:
             pass
         depot.close()
@@ -1915,14 +1931,18 @@ def run(
             click.echo(line)
 
         if result.status not in ("success", "patched"):
+            # Print the outer (user-visible) run_id — that's the join key for
+            # heal_attempts and `healing_outcomes.parent_run_id`. In aggressive
+            # mode `result.run_id` would be the LAST iteration's per-iteration
+            # uuid, which can't be used to retrieve the full heal history.
             if failure_ctx:
                 click.echo(
-                    f"\n✗ blueprint failed  run_id={result.run_id}"
+                    f"\n✗ blueprint failed  run_id={run_id}"
                     f"  failed_module={failure_ctx.failed_module}",
                     err=True,
                 )
             else:
-                click.echo(f"\n✗ blueprint failed  run_id={result.run_id}", err=True)
+                click.echo(f"\n✗ blueprint failed  run_id={run_id}", err=True)
             # Exit 3 (HEAL_PENDING) when a patch was staged for human review — lets
             # downstream orchestrators (Airflow operator, CI runners) distinguish
             # "needs human approval" from a hard runtime failure (exit 2).
@@ -1934,7 +1954,7 @@ def run(
         if cfg.webhooks.on_success:
             from aqueduct.surveyor.webhook import fire_webhook
             success_payload = {
-                "run_id": result.run_id,
+                "run_id": run_id,
                 "blueprint_id": manifest.blueprint_id,
                 "blueprint_name": manifest.name,
                 "module_count": str(len(result.module_results)),
@@ -1946,7 +1966,7 @@ def run(
             )
 
         status_label = "patched" if result.status == "patched" else "complete"
-        click.echo(f"\n✓ blueprint {status_label}  run_id={result.run_id}")
+        click.echo(f"\n✓ blueprint {status_label}  run_id={run_id}")
     finally:
         os.chdir(_original_cwd)
 

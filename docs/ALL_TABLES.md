@@ -100,7 +100,7 @@ FROM failure_contexts WHERE run_id = ?;
 | `latency_ms` | INTEGER NOT NULL | Wall-clock for this LLM call |
 | `gate_that_rejected` | VARCHAR | `schema` / `apply` / `provider` / NULL on success |
 | `escalated` | BOOLEAN NOT NULL | True if this attempt was the post-stuck-detection escalation (temp=0.8 + skeleton template) |
-| `stop_reason` | VARCHAR | Only populated on the terminal row. One of `STOP_REASONS`: `solved`, `exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`, `progress_stalled`, `api_error` |
+| `stop_reason` | VARCHAR | Only populated on the terminal row. One of `STOP_REASONS`: `solved`, `exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`, `progress_stalled`, `api_error`. **`solved` describes LLM loop termination only** (parseable PatchSpec returned) — NOT whether the patch healed the pipeline. For the latter, join against `healing_outcomes.run_success_after_patch` on `run_id` |
 | `prompt_version` | VARCHAR | `aqueduct.agent.PROMPT_VERSION` at the time |
 | `recorded_at` | VARCHAR NOT NULL | ISO-8601 UTC |
 
@@ -119,7 +119,8 @@ ORDER BY run_id, attempt_num;
 | Column | Type | Notes |
 |---|---|---|
 | `id` | VARCHAR PRIMARY KEY | UUID (was INTEGER pre-migration) |
-| `run_id` | VARCHAR NOT NULL | Run that triggered healing |
+| `run_id` | VARCHAR NOT NULL | Per-iteration `execute()` uuid. In aggressive mode this differs from the user-visible outer run_id starting at iteration 2 — use `parent_run_id` to find all outcomes from the same heal call |
+| `parent_run_id` | VARCHAR | **(1.1.0+)** The user-visible outer `run_id` (matches `run_records.run_id`). NULL for non-aggressive paths. Join key for cross-iteration queries: `WHERE parent_run_id = '<outer>'` returns every outcome from the same heal |
 | `failed_module` | VARCHAR | |
 | `failure_category` | VARCHAR | LLM-assigned, e.g. `schema_drift`, `bad_path` |
 | `model` | VARCHAR | LLM model name from `agent.model` |
