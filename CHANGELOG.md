@@ -8,57 +8,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
-
-### Added
-- **Guardrail compliance chain** (Phase 33 Part B Scope C). Three coupled
-  changes close the gap where `agent.guardrails` was defined per-blueprint
-  but never enforced uniformly:
-  1. **Step 1 — prompt injection.** A terse imperative `## Guardrails`
-     section is appended to the user prompt whenever
-     `manifest.agent.guardrails` has any non-empty field
-     (`forbidden_ops`, `allowed_paths`, `heal_on_errors`,
-     `never_heal_errors`). The model now sees the constraints upfront
-     instead of producing a patch production silently rejects. Threaded
-     through `generate_agent_patch(..., guardrails=...)` and `build_prompt`.
-  2. **Step 2 — scenario enforcement.** `_try_apply_patch` (benchmark
-     code path) now invokes `patch.apply._check_guardrails` before the
-     dict apply, matching production. Previously benchmark used
-     `apply_patch_to_dict` directly and skipped guardrail checks, which
-     made the leaderboard over-report PASS vs production reality.
-  3. **Step 3 — guardrail-clean rate metric.** `ScenarioResult` and the
-     `benchmark_results` table gain a `violated_guardrails` field
-     (`None` when scenario blueprint declares no guardrails — excluded
-     from the rate; `[]` when defined-and-clean; non-empty when violated).
-     A new leaderboard row "Guardrail-clean" reports the rate. Surfaced
-     in `benchmark --format json` and persisted with idempotent ALTER
-     migration for pre-existing benchmark stores.
-- **Effect-based grader** (Phase 33 Part B Scope C). Replaces the old
-  `expected_patch.ops` op-name-equality grader (deleted) with a
-  post-patch effect check: assert the patched blueprint's target module
-  config matches a `config_contains` map. SQL-typed fields (`query`,
-  `sql`) are compared via sqlglot AST normalization so whitespace,
-  quoting, and alias-case differences no longer trip false fails. Old
-  scenarios that still use the deleted `ops:`/`forbidden_ops:` syntax
-  produce a single hard failure pointing at the migration path.
-- **Sample guardrail scenario** at
-  `gallery/aqscenarios/06_guardrail_forbidden_op.aqscenario.yml` — same
-  column-rename failure as scenario 01, but the blueprint declares
-  `forbidden_ops: [replace_module_config]` so the model must produce a
-  surgical patch. Exercises all three guardrail-chain steps end to end.
-
-### Changed
-- **Migrated all gallery scenarios** to the new
-  `expected_patch.effect:` syntax. Each scenario's `config_contains`
-  specifies the post-patch value that the fix must land — accepts any
-  valid op (set_module_config_key, replace_module_config, etc.) that
-  reaches the same end state. Scenario 05 (type_string_vs_numeric)
-  has multiple valid fixes; its `expected_patch` is intentionally empty
-  and gates on `patch_applies` + `root_cause_contains` only.
-- **`ScenarioResult` carries `violated_guardrails`**. Backward-compatible
-  field addition (default `None`). The leaderboard renderer falls back
-  to `getattr` so older `ScenarioResult` instances from external callers
-  don't break.
+## [1.0.3] — 2026-05-24
 
 ### Added
 - **Benchmark persistence + regression detection** (Phase 33 Part A).
@@ -101,6 +51,40 @@ release and are marked **BREAKING**.
   Backward-compatible field additions (all default `None`); populated
   in both the early-exit FailureContext-build-failure branch and the
   normal path of `run_scenario`.
+- **Guardrail compliance chain** (Phase 33 Part B Scope C). Three coupled
+  changes close the gap where `agent.guardrails` was defined per-blueprint
+  but never enforced uniformly:
+  1. **Step 1 — prompt injection.** A terse imperative `## Guardrails`
+     section is appended to the user prompt whenever
+     `manifest.agent.guardrails` has any non-empty field
+     (`forbidden_ops`, `allowed_paths`, `heal_on_errors`,
+     `never_heal_errors`). The model now sees the constraints upfront
+     instead of producing a patch production silently rejects. Threaded
+     through `generate_agent_patch(..., guardrails=...)` and `build_prompt`.
+  2. **Step 2 — scenario enforcement.** `_try_apply_patch` (benchmark
+     code path) now invokes `patch.apply._check_guardrails` before the
+     dict apply, matching production. Previously benchmark used
+     `apply_patch_to_dict` directly and skipped guardrail checks, which
+     made the leaderboard over-report PASS vs production reality.
+  3. **Step 3 — guardrail-clean rate metric.** `ScenarioResult` and the
+     `benchmark_results` table gain a `violated_guardrails` field
+     (`None` when scenario blueprint declares no guardrails — excluded
+     from the rate; `[]` when defined-and-clean; non-empty when violated).
+     A new leaderboard row "Guardrail-clean" reports the rate. Surfaced
+     in `benchmark --format json` and persisted with idempotent ALTER
+     migration for pre-existing benchmark stores.
+- **Effect-based grader** (Phase 33 Part B Scope C). Replaces the old
+  `expected_patch.ops` op-name-equality grader (deleted, see Removed)
+  with a post-patch effect check: assert the patched blueprint's target
+  module config matches a `config_contains` map. SQL-typed fields
+  (`query`, `sql`) are compared via sqlglot AST normalization so
+  whitespace, quoting, and alias-case differences no longer trip false
+  fails.
+- **Sample guardrail scenario** at
+  `gallery/aqscenarios/06_guardrail_forbidden_op.aqscenario.yml` — same
+  column-rename failure as scenario 01, but the blueprint declares
+  `forbidden_ops: [replace_module_config]` so the model must produce a
+  surgical patch. Exercises all three guardrail-chain steps end to end.
 
 ### Changed
 - **`agent.timeout` default 120 → 300 seconds**. The previous default
@@ -116,6 +100,24 @@ release and are marked **BREAKING**.
     `curl` against the configured `base_url`
   - Connection failure → suggests connectivity checks against the
     configured endpoint
+- **Migrated all gallery scenarios** to the new `expected_patch.effect:`
+  syntax. Each scenario's `config_contains` specifies the post-patch
+  value the fix must land — accepts any valid op (set_module_config_key,
+  replace_module_config, etc.) that reaches the same end state. Scenario
+  05 (type_string_vs_numeric) has multiple valid fixes; its
+  `expected_patch` is intentionally empty and gates on `patch_applies` +
+  `root_cause_contains` only.
+- **`ScenarioResult` carries `violated_guardrails: list[str] | None`**.
+  Backward-compatible field addition (default `None`).
+
+### Removed
+- **`expected_patch.ops:` / `expected_patch.forbidden_ops:` scenario
+  syntax**. Op-name equality grading produced false negatives on capable
+  models that chose a valid alternative op (e.g. `replace_module_config`
+  where the scenario pinned `set_module_config_key`). Replaced by
+  effect-based grading (see Added). Old-syntax scenarios now fail with
+  a single hard error pointing at the migration path; gallery scenarios
+  have all been migrated.
 
 ## [1.0.2] — 2026-05-23
 
