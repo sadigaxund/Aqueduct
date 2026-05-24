@@ -345,6 +345,176 @@ This section tracks high-level functional verification of core features against 
 - ✅ Scenario 05 has no `expected_patch.effect` (multi-solution scenario) — verify `_check_expected_effect({}, patched_dict)` returns no failures
 - ✅ New scenario 06 (`06_guardrail_forbidden_op.aqscenario.yml`) blueprint declares `agent.guardrails.forbidden_ops: [replace_module_config]`; load + `_build_failure_ctx` returns a Blueprint with the guardrail populated; the guardrail surfaces in `_build_guardrails_section(bp.agent.guardrails)`
 
+### Phase 34 Task 83 — Foundation: signature engine + BudgetConfig
+
+#### `agent/signature.py` — `make_signature` + `ErrorSignature`
+- ✅ `make_signature("missing", "operations[0].op", "required field missing")` twice → identical `.hash`; equality + set membership work via the hash, not field-by-field
+- ✅ Volatile bits normalized: digits → `N`, double-quoted contents → `"X"`, single-quoted → `'X'`, `/foo/bar/baz.yml` → `/PATH`, ANSI escapes stripped, whitespace collapsed, lowercased
+- ✅ Same `(error_class, where)` with two messages that differ ONLY in line/column numbers → same hash; messages that differ in structural words → different hash
+- ✅ Empty/None `error_class` → "unknown"; empty/None `where` → "<root>"
+- ✅ Message longer than 240 chars is truncated before hashing (stable hash regardless of trailing noise)
+- ✅ `ErrorSignature` is a frozen dataclass; attribute mutation raises `FrozenInstanceError`
+- ✅ `to_dict()` returns the 4 expected keys (`error_class`, `where`, `normalized_message`, `hash`)
+
+#### `agent/signature.py` — factory helpers
+- ✅ `from_validation_error(exc)` on a Pydantic `ValidationError` with multiple errors → uses the FIRST error's `loc` + `type` + `msg` (stability across reprompts)
+- ✅ `from_validation_error` renders `loc` as `operations[0].op` (not `operations.0.op`)
+- ✅ `from_validation_error` on an empty-errors edge case → falls back to `make_signature("validation_error", "<root>", str(exc))` without crashing
+- ✅ `from_json_decode_error(exc)` normalizes line/column numbers out of the hash (two JSON errors at different positions but same `msg` → same hash)
+- ✅ `from_exception(exc, where="channels.clean")` uses `type(exc).__name__` as error_class
+- ✅ `from_apply_error("guardrail_violation", "op replace_module_config is forbidden", where="operations[0]")` → signature usable as dict key
+- ✅ `from_text("Some error at line 12 column 7")` → digits collapsed; `error_class` defaults to "reprompt"
+
+#### `agent/budget.py` — `BudgetConfig`
+- ✅ `BudgetConfig()` defaults match Phase 34 spec: `max_reprompts=5`, `max_seconds=120.0`, `max_tokens_total=50_000`, `same_error_consecutive=2`, `same_signature_overall=3`, `progress_stalled_window=3`
+- ✅ `BudgetConfig` is frozen — attribute mutation raises `FrozenInstanceError`
+- ✅ `BudgetConfig(max_tokens_total=None)` accepted (axis disabled); `max_tokens_total=0` rejected with "must be >= 1 or None"
+- ✅ `BudgetConfig(max_reprompts=0)` raises `ValueError` "must be >= 1"
+- ✅ `BudgetConfig(max_seconds=0)` raises `ValueError` "must be > 0"
+- ✅ `BudgetConfig(same_error_consecutive=1)` raises `ValueError` referencing "single occurrence is not yet evidence of being stuck"
+- ✅ `BudgetConfig(same_signature_overall=2, same_error_consecutive=3)` raises `ValueError` because overall must be ≥ consecutive
+- ✅ `BudgetConfig(progress_stalled_window=1)` raises `ValueError` "must be >= 2"
+- ✅ `DEFAULT_BUDGET` is a module-level singleton equal to `BudgetConfig()`
+- ✅ `to_dict()` returns the 6 axes; `None` round-trips for `max_tokens_total`
+- ✅ `STOP_REASONS` tuple contains all 7 reasons documented in the docstring; `StopReason` Literal alias mirrors the tuple
+
+### Phase 34 Tasks 84-89 — unified loop / budget / escalation / persistence / parity
+
+#### `agent/budget.py` — `BudgetTracker`
+- ✅ Lifecycle: `begin_attempt()` returns monotonically increasing counter (1, 2, 3, …)
+- ✅ `record(signature, …)` appends an `AttemptRecord`; passing `signature=None` marks a success row
+- ✅ `check_stop()` is sticky — once a reason is set, subsequent calls return the SAME reason
+- ✅ `check_stop()` returns `"solved"` when the last `AttemptRecord.signature is None`
+- ✅ `check_stop()` returns `"exhausted_attempts"` when `current_attempt >= max_reprompts` (and no success row)
+- ✅ `check_stop()` returns `"budget_tokens_exceeded"` when `tokens_in_total + tokens_out_total >= max_tokens_total`
+- ✅ `check_stop()` returns `"budget_seconds_exceeded"` when `time.monotonic() - started_at >= max_seconds` (test via monkeypatched `time.monotonic`)
+- ✅ `check_stop()` returns `"stuck_signature"` when `same_signature_overall` count reached anywhere in the run (regardless of escalation)
+- ✅ `check_stop()` returns `"stuck_signature"` when `same_error_consecutive` trips AND `escalated_once=True`
+- ✅ `check_stop()` does NOT return `"stuck_signature"` when `same_error_consecutive` trips but `escalated_once=False` (caller must escalate first)
+- ✅ `check_stop()` returns `"progress_stalled"` when the last `progress_stalled_window` signatures are all identical
+- ✅ `should_escalate()` returns True iff `same_error_consecutive` tripped AND `escalated_once=False`
+- ✅ `mark_escalated()` flips `escalated_once=True`; subsequent `should_escalate()` returns False
+- ✅ `mark_api_error()` sets stop_reason to `"api_error"`
+- ✅ `summary()` returns a dict with `attempts`, `stop_reason`, `tokens_in_total`, `tokens_out_total`, `elapsed_seconds`, `escalated_once`, `signatures` (list of dicts)
+
+#### `agent/__init__.py` — `_detect_structural_error`
+- ✅ Returns None for non-`ValidationError` exceptions
+- ✅ Returns None when `operations` is NOT missing in the validation errors
+- ✅ Returns None when no op-level field present at root
+- ✅ Returns a hint string when `operations` is missing AND any of `op`, `module_id`, `key`, `value`, `query`, … present at the JSON root
+- ✅ Hint mentions ALL misplaced fields it finds (e.g. `'op', 'module_id', 'key', 'value'`)
+
+#### `agent/__init__.py` — `_format_reprompt_for_next_turn`
+- ✅ When `escalated=False` AND `structural_hint=""` → uses `_REPROMPT_TEMPLATE` (echoes bad output, shows bullet error list)
+- ✅ When `escalated=True` → uses `_REPROMPT_TEMPLATE_ESCALATED` (skeleton-anchored, no echo of bad output)
+- ✅ When `structural_hint!=""` → uses `_REPROMPT_TEMPLATE_ESCALATED` even if `escalated=False`
+- ✅ Skeleton appears verbatim in the escalated output (`_PATCH_SKELETON`)
+
+#### `agent/__init__.py` — unified `generate_agent_patch`
+- ✅ Two-attempt success: invalid schema on attempt 1 → valid on attempt 2 → `result.patch is not None`, `attempts=2`, `stop_reason="solved"`, two `attempt_records` (first has signature, second is None)
+- ✅ Single attempt + valid first response → `attempts=1`, `stop_reason="solved"`, one attempt_record with `signature=None`
+- ✅ `budget=None` + `max_reprompts=4` → loop synthesizes a `BudgetConfig(max_reprompts=4)`; result fields populated
+- ✅ `apply_callback` returning `(True, None, None, None)` → loop exits with `stop_reason="solved"` on a parseable patch (even without re-running schema)
+- ✅ `apply_callback` returning `(False, "guardrail_violation", "msg", None)` → loop reprompts with the apply error fed back; `attempt_record.gate_that_rejected="apply"`; signature recorded with error_class="guardrail_violation"
+- ✅ `apply_callback` raising an unexpected exception → caught, treated as gate rejection, loop continues
+- ✅ Provider `_call_agent` raising → `mark_api_error()` called; loop terminates with `stop_reason="api_error"`; one attempt_record with `gate_that_rejected="provider"`
+- ✅ Stuck-consecutive trip → escalation applied on the NEXT attempt: `temperature_override=0.8` passed to `_call_agent`, escalated reprompt template used, `attempt_record.escalated=True`
+- ✅ `on_attempt` callback invoked exactly once per attempt (success or failure); exceptions inside `on_attempt` are caught and logged at DEBUG (loop continues)
+- ✅ Token totals accumulate from `_call_agent` return value across all attempts
+- ✅ Backward compat: `AgentPatchResult(patch=p, attempts=1)` (positional kwargs) still constructs without error; new fields default to safe values
+
+#### `agent/__init__.py` — `_call_anthropic` / `_call_openai_compat`
+- ✅ Both return 3-tuples `(text, tokens_in, tokens_out)`; previously returned just text
+- ✅ `temperature_override=0.8` is added to the Anthropic payload as `temperature`
+- ✅ `temperature_override=0.8` overwrites top-level + Ollama `options.temperature` for OpenAI-compat
+- ✅ Missing `usage` block in response → tokens default to 0 (no KeyError)
+
+#### `agent/__init__.py` — `resolve_budget`
+- ✅ `resolve_budget(pydantic_budget)` copies all six axes from the AgentBudgetConfig
+- ✅ `resolve_budget(None, max_reprompts=7)` → BudgetConfig(max_reprompts=7) with defaults for other axes
+- ✅ `resolve_budget(None, max_reprompts=0)` → BudgetConfig(max_reprompts=1) (clamped to minimum)
+- ✅ `resolve_budget(None, max_reprompts=None)` → BudgetConfig() (all defaults)
+
+#### `config.py` — `AgentBudgetConfig`
+- ✅ Frozen pydantic model with `extra="forbid"`; unknown keys raise
+- ✅ Defaults match the dataclass `BudgetConfig` defaults
+- ✅ `AgentConnectionConfig.budget` defaults to None (means "synthesize from max_reprompts")
+- ✅ Loading an `aqueduct.yml` with `agent.budget: {max_reprompts: 8, max_seconds: 200}` parses successfully and survives the two-pass `load_config` (`@aq.secret()` expansion + re-validation)
+
+#### `surveyor/surveyor.py` — `record_heal_attempt`
+- ✅ Fresh DB has `heal_attempts` table per `_HEAL_ATTEMPTS_DDL`; one row per call carries `attempt_num`, `signature_hash`, `tokens_in/out`, `latency_ms`, `gate_that_rejected`, `escalated`, `stop_reason`, `prompt_version`, `recorded_at`
+- ✅ Calling with `attempt_record.signature=None` (success row) writes NULL into `error_class`, `where_field`, `normalized_message`, `signature_hash`
+- ✅ Best-effort: a DB exception inside the method is swallowed (logged at DEBUG), method returns normally
+- ✅ `prompt_version` defaults to `aqueduct.agent.PROMPT_VERSION` when not supplied
+
+#### `surveyor/scenario.py` — benchmark = production parity
+- ✅ `run_scenario` accepts a `budget` kwarg; `None` synthesizes from `max_reprompts` (backward compat)
+- ✅ `run_scenario` installs an `apply_callback` whenever `blueprint_path` resolves — apply-gate rejections trigger reprompts inside the unified loop (no longer silent leaderboard pass on a patch production would reject)
+- ✅ `ScenarioResult.stop_reason` populated from `agent_result.stop_reason`
+- ✅ `ScenarioResult.escalated` mirrors `agent_result.escalated`
+- ✅ `ScenarioResult.tokens_in_total` / `tokens_out_total` mirror agent result token totals
+- ✅ `run_benchmark` forwards `budget=` to `run_scenario`
+
+#### `surveyor/benchmark_store.py` — Phase 34 columns
+- ✅ Fresh store DDL includes `stop_reason VARCHAR`, `escalated BOOLEAN`, `tokens_in_total INTEGER`, `tokens_out_total INTEGER` on `benchmark_results`
+- ✅ Pre-existing store created before Phase 34 → idempotent ALTER adds each missing column; existing rows preserved with NULL
+- ✅ Migration is idempotent — second `_connect` does not re-issue the ALTERs
+- ✅ `persist_results` writes new columns from `ScenarioResult`; falls back to safe defaults (None / False / 0) via `getattr` if the attribute is absent
+
+#### `cli.py` — heal + benchmark wire-through
+- ✅ `aqueduct run` self-heal path: each LLM turn writes one row to `heal_attempts`; FINAL row carries `stop_reason`
+- ✅ `aqueduct heal <run_id>` (heal-from-store): `--print-prompt` output unchanged; missing patch path prints `stop_reason=<reason>` in the error line
+- ✅ `aqueduct benchmark`: reads `cfg.agent.budget` → builds `BudgetConfig` → passes to `run_benchmark` so benchmark + production share the SAME budget axes
+
+### Phase 35 — Structured Spark error extraction
+
+#### `surveyor/models.py` — `FailureContext` Phase 35 fields
+- ✅ Defaults: `error_class=None`, `root_exception=None`, `sql_state=None`, `suggested_columns=()`, `object_name=None`
+- ✅ Frozen contract preserved — mutating any new field raises `FrozenInstanceError`
+- ✅ `to_dict()` round-trips the 5 new keys; `suggested_columns` serialised as list
+
+#### `surveyor/surveyor.py` — `_extract_structured_error`
+- ✅ Returns None for `exc=None`
+- ✅ Mocked `PySparkException` with `getCondition()="UNRESOLVED_COLUMN.WITH_SUGGESTION"` + `getMessageParameters()={"objectName": "event_ts", "proposal": "`event_id`, `event_time`"}` + `getSqlState()="42703"` → returns `error_class="UNRESOLVED_COLUMN.WITH_SUGGESTION"`, `object_name="event_ts"`, `suggested_columns=("event_id", "event_time")`, `sql_state="42703"`
+- ✅ Falls back to `getErrorClass()` when `getCondition()` is absent (Spark 3.x compat shim)
+- ✅ `Py4JJavaError` mock with `java_exception.getCause()` returning a deeper cause N times → walks UP TO `_PY4J_CAUSE_HOP_LIMIT` hops; reports innermost class + message
+- ✅ Py4J loop terminates when `getCause()` returns None or self-reference (no infinite loop)
+- ✅ Python-only path: `raise Exception("a") from ValueError("root")` → `root_exception={"type": "ValueError", "message": "root"}`
+- ✅ Returns None when all extracted fields are None / empty
+- ✅ Any unexpected internal exception is swallowed → returns None; never raises to caller
+- ✅ `_parse_suggested_columns("`a`, `b`")` → `("a", "b")`; deduplicates repeats
+
+#### `surveyor/surveyor.py` — Surveyor.start() Phase 35 migration
+- ✅ Fresh DB: `failure_contexts` includes the 5 new columns immediately after start()
+- ✅ Pre-existing DB without the new columns: each column added once via conditional ALTER; second `start()` is no-op
+- ✅ Migration errors per column are swallowed individually so a single bad ALTER cannot abort startup
+
+#### `surveyor/surveyor.py` — Surveyor.record() insertion
+- ✅ Failure with `PySparkException`-like exc → `failure_contexts.error_class` populated; round-trips via `SELECT *`
+- ✅ Legacy failure with plain `RuntimeError` → new columns are NULL / empty; no exception
+- ✅ `ON CONFLICT (run_id) DO UPDATE` refreshes all 5 new columns from EXCLUDED
+
+#### `agent/__init__.py` — `_build_root_cause_section`
+- ✅ With NO structured fields → emits "## Stack trace" block containing the full `failure_ctx.stack_trace`
+- ✅ With NO structured fields AND no stack trace → emits "## Stack trace\n(no stack trace)"
+- ✅ With `error_class` only → emits "## Root cause (structured)" header + `- **Error class**: ...`; OMITS stack trace
+- ✅ With `suggested_columns=("a", "b")` → renders `- **Actual columns available**: \`a\`, \`b\``
+- ✅ With `root_exception={"type": "X", "message": "msg"}` → renders both type + message; type-only when message empty
+- ✅ With `object_name` AND `sql_state` both present → both rendered as separate bullets
+
+#### `agent/__init__.py` — prompt template + removals
+- ✅ `_USER_PROMPT_TEMPLATE` no longer contains the literal substring `"Stack trace (truncated)"`
+- ✅ `_USER_PROMPT_TEMPLATE` contains the placeholder `{root_cause_section}`
+- ✅ `_truncate_stack` function and `_STACK_TRACE_MAX_LINES` constant are NOT importable from `aqueduct.agent`
+- ✅ `_build_user_prompt(ctx)` with structured FailureContext → output contains "Root cause (structured)" and does NOT contain "Stack trace"
+- ✅ `_build_user_prompt(ctx)` with legacy (no structured) FailureContext → output contains the raw stack_trace lines verbatim (no truncation marker)
+
+#### `surveyor/scenario.py` — structured propagation
+- ✅ Scenario with `inject_failure.structured: {error_class: X, suggested_columns: [a, b]}` → built `FailureContext` carries the values
+- ✅ Scenario without `structured:` block → all 5 new fields default to None / empty (backward compat)
+- ✅ `suggested_columns: "single"` (str) → normalised to `("single",)`
+- ✅ `structured:` value that is not a dict → coerced to empty dict; no exception
+
 ---
 
 ## Executor (`aqueduct/executor/`)

@@ -3,6 +3,7 @@ import json
 import pytest
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pathlib import Path
+from unittest.mock import MagicMock
 from click.testing import CliRunner
 from aqueduct.cli import cli
 
@@ -290,3 +291,181 @@ stores:
         fallback_dir = tmp_path / ".aqueduct/observability/postgres_store_test"
         assert fallback_dir.exists(), "Local scratch directory was not created under tmp_path/.aqueduct"
 
+
+# ── Phase 34 CLI Integration ──────────────────────────────────────────────────
+
+class TestPhase34CLI:
+    def test_run_self_heal_invokes_on_attempt_callback(self, tmp_path):
+        """Phase 34 Task 88: aqueduct run (self-heal) passes on_attempt hook to generator."""
+        runner = CliRunner()
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(f"""
+aqueduct: '1.0'
+id: heal_hook
+name: heal_hook
+modules:
+  - id: m1
+    type: Ingress
+    label: M1
+    config: {{format: csv, path: /missing.csv}}
+edges: []
+agent:
+  approval_mode: human
+""")
+        config_path = tmp_path / "aq.yml"
+        config_path.write_text(f"""
+aqueduct_config: "1.0"
+stores:
+  observability:
+    path: {tmp_path / 'obs.db'}
+agent:
+  provider: anthropic
+  model: claude-3
+  base_url: https://api.anthropic.example
+""")
+        import os
+        os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+        
+        from unittest.mock import patch
+        
+        with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
+            # Need to fake result so CLI succeeds after heal
+            from aqueduct.agent import AgentPatchResult
+            from aqueduct.patch.grammar import PatchSpec
+            mock_gap.return_value = AgentPatchResult(
+                patch=PatchSpec(patch_id="p1", rationale="r", operations=[{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]),
+                attempts=1, stop_reason="solved",
+            )
+            # Patch Executor to fail first, then succeed
+            with patch("aqueduct.executor.get_executor") as mock_get_exec:
+                from aqueduct.executor.models import ExecutionResult, ModuleResult
+                mock_exec = MagicMock()
+                mock_exec.side_effect = [
+                    ExecutionResult(
+                        blueprint_id="heal_hook", run_id="r1", status="error",
+                        module_results=(ModuleResult("m1", "error", error="err", error_type="E"),),
+                    ),
+                    ExecutionResult(
+                        blueprint_id="heal_hook", run_id="r1", status="success",
+                        module_results=(ModuleResult("m1", "success"),),
+                    ),
+                ]
+                mock_get_exec.return_value = mock_exec
+                
+                runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
+                
+                assert mock_gap.called
+                kwargs = mock_gap.call_args[1]
+                assert "on_attempt" in kwargs
+                assert callable(kwargs["on_attempt"])
+
+    def test_heal_command_prints_stop_reason_and_usage(self, tmp_path):
+        """Phase 34: aqueduct heal prints Phase 34 budget outputs."""
+        runner = CliRunner()
+        bp_path = tmp_path / "bp.yml"
+        bp_path.write_text(f"""
+aqueduct: '1.0'
+id: heal_cli
+name: heal_cli
+modules: []
+edges: []
+""")
+        config_path = tmp_path / "aq.yml"
+        config_path.write_text(
+            f"agent: {{model: claude-3}}\n"
+            f"stores: {{observability: {{path: {tmp_path / 'obs.db'}}}}}\n"
+        )
+
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.compiler.models import Manifest
+        s = Surveyor(
+            Manifest(
+                blueprint_id="heal_cli", name="heal_cli",
+                context={}, modules=(), edges=(), spark_config={},
+            ),
+            tmp_path,
+        )
+        s.start("run1")
+
+        from aqueduct.executor.models import ExecutionResult, ModuleResult
+        s.record(
+            ExecutionResult(
+                blueprint_id="heal_cli", run_id="run1", status="error",
+                module_results=(ModuleResult("m1", "error", error="fail"),),
+            ),
+            exc=Exception("fail"),
+        )
+
+        from unittest.mock import patch
+        with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
+            from aqueduct.agent import AgentPatchResult
+            mock_gap.return_value = AgentPatchResult(
+                patch=None, attempts=2, stop_reason="stuck_signature",
+                tokens_in_total=100, tokens_out_total=200, escalated=True,
+            )
+
+            # heal takes a run_id positional; we recorded the failure under "run1"
+            res = runner.invoke(cli, ["heal", "run1", "--config", str(config_path)])
+
+            assert "stuck_signature" in res.output
+            assert "2 attempt" in res.output  # CLI prints "after N attempt(s)"
+
+    def test_benchmark_command_wires_budget(self, tmp_path):
+        """Phase 34: aqueduct benchmark parses budget from aqueduct.yml and passes it down."""
+        runner = CliRunner()
+        scen_path = tmp_path / "scen.yml"
+        scen_path.write_text("id: s1\nengine_version: 1.0\nexpected_patch: {}\n")
+        
+        config_path = tmp_path / "aq.yml"
+        config_path.write_text("""
+agent:
+  budget:
+    max_reprompts: 9
+    max_seconds: 300.0
+stores:
+  observability: {path: /tmp/obs}
+""")
+        
+        from unittest.mock import patch
+        with patch("aqueduct.surveyor.scenario.run_benchmark") as mock_rb:
+            mock_rb.return_value = {}
+            runner.invoke(cli, ["benchmark", str(scen_path), "--config", str(config_path)])
+
+            assert mock_rb.called
+            kwargs = mock_rb.call_args[1]
+            assert "budget" in kwargs
+            b = kwargs["budget"]
+            assert b.max_reprompts == 9
+            assert b.max_seconds == 300.0
+
+    def test_benchmark_reads_agent_budget_from_config(self, tmp_path):
+        """Phase 34: budget.max_reprompts from aqueduct.yml reaches run_benchmark."""
+        from aqueduct.agent.budget import BudgetConfig
+
+        runner = CliRunner()
+        scen_path = tmp_path / "scen.yml"
+        scen_path.write_text("id: s1\nengine_version: 1.0\nexpected_patch: {}\n")
+
+        config_path = tmp_path / "aq.yml"
+        config_path.write_text(
+            "agent:\n"
+            "  budget:\n"
+            "    max_reprompts: 6\n"
+            "stores:\n"
+            "  observability: {path: /tmp/obs}\n"
+        )
+
+        from unittest.mock import patch
+        with patch("aqueduct.surveyor.scenario.run_benchmark") as mock_rb:
+            mock_rb.return_value = {}
+            runner.invoke(
+                cli,
+                ["benchmark", str(scen_path),
+                 "--model", "X", "--config", str(config_path)],
+            )
+            assert mock_rb.called
+            kwargs = mock_rb.call_args[1]
+            assert "budget" in kwargs
+            b = kwargs["budget"]
+            assert isinstance(b, BudgetConfig)
+            assert b.max_reprompts == 6

@@ -123,3 +123,64 @@ def test_failure_context_doctor_hints_empty_by_default():
     d = ctx.to_dict()
     assert d["doctor_hints"] == []
 
+
+def test_failure_context_phase35_defaults():
+    """Phase 35 defaults for structured error fields."""
+    ctx = FailureContext(
+        run_id="r1",
+        blueprint_id="p1",
+        failed_module="m1",
+        error_message="oops",
+        stack_trace=None,
+        manifest_json="{}",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+    )
+    assert ctx.error_class is None
+    assert ctx.root_exception is None
+    assert ctx.sql_state is None
+    assert ctx.suggested_columns == ()
+    assert ctx.object_name is None
+
+
+def test_failure_context_phase35_frozen():
+    """Phase 35: mutating any new field raises FrozenInstanceError."""
+    ctx = FailureContext(
+        run_id="r1",
+        blueprint_id="p1",
+        failed_module="m1",
+        error_message="oops",
+        stack_trace=None,
+        manifest_json="{}",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+    )
+    with pytest.raises(FrozenInstanceError):
+        ctx.error_class = "X"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        ctx.suggested_columns = ("a",)  # type: ignore[misc]
+
+
+def test_failure_context_phase35_to_dict():
+    """Phase 35: to_dict() round-trips the 5 new keys; suggested_columns serialized as list."""
+    ctx = FailureContext(
+        run_id="r1",
+        blueprint_id="p1",
+        failed_module="m1",
+        error_message="oops",
+        stack_trace=None,
+        manifest_json="{}",
+        started_at="2024-01-01T00:00:00Z",
+        finished_at="2024-01-01T00:01:00Z",
+        error_class="UNRESOLVED_COLUMN",
+        root_exception={"type": "AnalysisException", "message": "msg"},
+        sql_state="42000",
+        suggested_columns=("a", "b"),
+        object_name="c",
+    )
+    d = ctx.to_dict()
+    assert d["error_class"] == "UNRESOLVED_COLUMN"
+    assert d["root_exception"] == {"type": "AnalysisException", "message": "msg"}
+    assert d["sql_state"] == "42000"
+    assert d["suggested_columns"] == ["a", "b"]
+    assert d["object_name"] == "c"

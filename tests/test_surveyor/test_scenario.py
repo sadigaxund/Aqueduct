@@ -896,3 +896,186 @@ class TestGalleryScenarios:
         section = _build_guardrails_section(bp.agent.guardrails)
         assert "replace_module_config" in section
         assert "forbidden" in section.lower()
+
+
+# ── Phase 34 Benchmark = Production Parity ────────────────────────────────────
+
+class TestPhase34BenchmarkParity:
+    def test_run_scenario_budget_none_synthesizes_from_max_reprompts(self, tmp_path):
+        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        sc_path = _write_scenario(tmp_path)
+        scenario = load_scenario(sc_path)
+
+        with patch("aqueduct.agent.generate_agent_patch") as m_gap:
+            m_gap.return_value = _fake_agent_result()
+            # Pass max_reprompts=7, budget=None — run_scenario must forward both
+            # through verbatim. Synthesis (None → BudgetConfig) happens inside
+            # generate_agent_patch via resolve_budget, which is covered by
+            # TestResolveBudget. Here we only verify the wire-through.
+            run_scenario(scenario, "model", tmp_path, max_reprompts=7, budget=None)
+
+            kwargs = m_gap.call_args[1]
+            assert "budget" in kwargs and kwargs["budget"] is None
+            assert kwargs["max_reprompts"] == 7
+
+    def test_run_scenario_installs_apply_callback(self, tmp_path):
+        """If blueprint_path resolves, run_scenario installs an apply_callback on the loop."""
+        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        sc_path = _write_scenario(tmp_path)
+        scenario = load_scenario(sc_path)
+
+        with patch("aqueduct.agent.generate_agent_patch") as m_gap:
+            m_gap.return_value = _fake_agent_result()
+            # blueprint.yml is sibling of the scenario file (see _write_scenario),
+            # so run_scenario resolves blueprint_path internally and installs the
+            # apply_callback automatically.
+            run_scenario(scenario, "model", tmp_path)
+
+            kwargs = m_gap.call_args[1]
+            assert "apply_callback" in kwargs
+            assert callable(kwargs["apply_callback"])
+
+    def test_scenario_result_stop_reason_populated(self, tmp_path):
+        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+        sc_path = _write_scenario(tmp_path)
+        scenario = load_scenario(sc_path)
+
+        with patch("aqueduct.agent.generate_agent_patch") as m_gap:
+            m_gap.return_value = _fake_agent_result(stop_reason="stuck_signature", escalated=True, tin=10, tout=20)
+            res = run_scenario(scenario, "model", tmp_path)
+            
+            assert res.stop_reason == "stuck_signature"
+            assert res.escalated is True
+            assert res.tokens_in_total == 10
+            assert res.tokens_out_total == 20
+
+    def test_run_benchmark_forwards_budget(self, tmp_path):
+        from aqueduct.surveyor.scenario import run_benchmark
+        from aqueduct.agent.budget import BudgetConfig
+        
+        sc_path = _write_scenario(tmp_path)
+        b = BudgetConfig(max_reprompts=9, max_seconds=300)
+        
+        with patch("aqueduct.surveyor.scenario.run_scenario") as m_rs:
+            run_benchmark(sc_path, ["model"], tmp_path, budget=b)
+            
+            kwargs = m_rs.call_args[1]
+            assert kwargs["budget"] == b
+
+def _fake_agent_result(stop_reason="solved", escalated=False, tin=0, tout=0):
+    from aqueduct.agent import AgentPatchResult
+    return AgentPatchResult(
+        patch=None, attempts=1, stop_reason=stop_reason, escalated=escalated,
+        tokens_in_total=tin, tokens_out_total=tout
+    )
+
+
+# ── Phase 34 — ScenarioResult mirrors AgentPatchResult ──────────────────────
+
+
+class TestPhase34ScenarioResultMirror:
+    def test_scenario_result_escalated_mirrors_agent_result(self, tmp_path):
+        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+
+        sc_path = _write_scenario(tmp_path)
+        scenario = load_scenario(sc_path)
+        for esc in (True, False):
+            with patch("aqueduct.agent.generate_agent_patch") as m_gap:
+                m_gap.return_value = _fake_agent_result(escalated=esc)
+                res = run_scenario(scenario, "model", tmp_path)
+                assert res.escalated is esc
+
+    def test_scenario_result_token_totals_mirror_agent_result(self, tmp_path):
+        from aqueduct.surveyor.scenario import run_scenario, load_scenario
+
+        sc_path = _write_scenario(tmp_path)
+        scenario = load_scenario(sc_path)
+        with patch("aqueduct.agent.generate_agent_patch") as m_gap:
+            m_gap.return_value = _fake_agent_result(tin=123, tout=45)
+            res = run_scenario(scenario, "model", tmp_path)
+            assert res.tokens_in_total == 123
+            assert res.tokens_out_total == 45
+
+
+# ── Phase 35 — structured failure propagation through scenario loader ─────
+
+
+def _scenario_with_structured(structured_block: str) -> str:
+    """Build a scenario YAML body whose inject_failure carries the given
+    ``structured:`` block. The block is interpolated verbatim, so callers may
+    pass an arbitrary YAML scalar/mapping or empty string.
+    """
+    base = (
+        'aqueduct_scenario: "1.0"\n'
+        "id: structured_test\n"
+        "description: Phase 35 structured propagation\n"
+        "blueprint: blueprint.yml\n"
+        "inject_failure:\n"
+        "  module: src\n"
+        '  error_message: "fail"\n'
+    )
+    if structured_block:
+        base += structured_block
+    return base
+
+
+class TestPhase35StructuredPropagation:
+    def test_structured_block_populates_failure_context(self, tmp_path):
+        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+
+        body = _scenario_with_structured(
+            "  structured:\n"
+            '    error_class: "X"\n'
+            '    object_name: "y"\n'
+            "    suggested_columns: [\"a\", \"b\"]\n"
+            '    sql_state: "42703"\n'
+            "    root_exception: {type: \"Z\", message: \"msg\"}\n"
+        )
+        sc_path = _write_scenario(tmp_path, body)
+        scenario = load_scenario(sc_path)
+        ctx, _bp = _build_failure_ctx(scenario)
+        assert ctx.error_class == "X"
+        assert ctx.object_name == "y"
+        assert ctx.suggested_columns == ("a", "b")
+        assert ctx.sql_state == "42703"
+        assert ctx.root_exception == {"type": "Z", "message": "msg"}
+
+    def test_no_structured_block_defaults_empty(self, tmp_path):
+        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+
+        sc_path = _write_scenario(tmp_path, _scenario_with_structured(""))
+        scenario = load_scenario(sc_path)
+        ctx, _bp = _build_failure_ctx(scenario)
+        assert ctx.error_class is None
+        assert ctx.root_exception is None
+        assert ctx.sql_state is None
+        assert ctx.suggested_columns == ()
+        assert ctx.object_name is None
+
+    def test_suggested_columns_str_normalised_to_tuple(self, tmp_path):
+        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+
+        body = _scenario_with_structured(
+            "  structured:\n"
+            '    suggested_columns: "single"\n'
+        )
+        sc_path = _write_scenario(tmp_path, body)
+        scenario = load_scenario(sc_path)
+        ctx, _bp = _build_failure_ctx(scenario)
+        assert ctx.suggested_columns == ("single",)
+
+    def test_structured_value_not_dict_coerced_to_empty(self, tmp_path):
+        from aqueduct.surveyor.scenario import load_scenario, _build_failure_ctx
+
+        body = _scenario_with_structured(
+            '  structured: "not a dict"\n'
+        )
+        sc_path = _write_scenario(tmp_path, body)
+        scenario = load_scenario(sc_path)
+        # Must not raise.
+        ctx, _bp = _build_failure_ctx(scenario)
+        assert ctx.error_class is None
+        assert ctx.root_exception is None
+        assert ctx.sql_state is None
+        assert ctx.suggested_columns == ()
+        assert ctx.object_name is None
