@@ -1211,7 +1211,7 @@ def execute(
                     )
                 except AssertError as exc:
                     local_results.append(
-                        ModuleResult(module_id=module.id, status="error", error=str(exc), error_type=exc.error_type)
+                        ModuleResult(module_id=module.id, status="error", error=str(exc), error_type=exc.error_type, exception=exc)
                     )
                     _signal_fail(trigger_agent=exc.trigger_agent)
                     return
@@ -1557,7 +1557,15 @@ def _on_retry_exhausted(
         set _GATE_CLOSED in frame_store and `continue`; fail_result is None.
         If gate_closed is False, return fail_result immediately.
     """
-    module_results.append(ModuleResult(module_id=module.id, status="error", error=str(exc)))
+    # Phase 35: preserve the live exception so Surveyor.record() can hand it
+    # to `_extract_structured_error` for error_class / object_name /
+    # suggested_columns / sql_state / root_exception extraction. The
+    # IngressError / ChannelError / Py4JJavaError chains its underlying
+    # PySparkException via `raise ... from exc`, so the extractor's __cause__
+    # walk finds it from here.
+    module_results.append(ModuleResult(
+        module_id=module.id, status="error", error=str(exc), exception=exc,
+    ))
 
     # Per-module failure webhook — fires regardless of on_exhaustion action.
     if module.on_failure_webhook is not None:

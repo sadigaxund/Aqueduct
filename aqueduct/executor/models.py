@@ -13,6 +13,13 @@ class ModuleResult:
     status: str          # "success" | "error" | "skipped"
     error: str | None = None
     error_type: str | None = None  # user-defined label from Assert rule's error_type field
+    exception: BaseException | None = None
+    """Live exception object when status == "error" — preserves the original
+    PySparkException / Py4JJavaError / `__cause__` chain so
+    ``Surveyor.record()`` can hand it to ``_extract_structured_error`` for
+    Phase 35 structured fields (error_class, object_name, suggested_columns,
+    sql_state, root_exception). Stringified ``error`` alone loses the chain.
+    Not serialized to JSON — see ``ExecutionResult.to_dict``."""
 
 
 @dataclass(frozen=True)

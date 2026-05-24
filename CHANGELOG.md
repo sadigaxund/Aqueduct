@@ -125,6 +125,31 @@ release and are marked **BREAKING**.
   starting at iteration 2 — joins against `run_records.run_id` returned
   partial results. New column NULL on non-aggressive paths; idempotent
   ALTER added in `Surveyor.start()` so pre-1.1.0 stores upgrade in place.
+- Shared `_resolve_obs_db(cfg, store_dir, run_id)` helper in `cli.py` —
+  every read-side command (`runs`, `report`, `lineage`, `heal`) used to
+  reinvent observability path resolution with a naive
+  `Path(cfg.stores.observability.path).parent`, which never worked when
+  the user kept the default and per-pipeline routing put the file at
+  `.aqueduct/observability/<blueprint_id>/observability.db`. New helper
+  honours `--store-dir`, then explicit `aqueduct.yml` path, then walks the
+  per-pipeline dirs to find which DB carries the requested `run_id`,
+  falling back to the legacy shared path. Fixes `aqueduct heal <run_id>`
+  failing with `observability.db not found at .aqueduct/observability.db`
+  on a perfectly valid run_id, plus `aqueduct runs` list mode now unions
+  across per-pipeline DBs instead of silently showing zero.
+- Phase 35 structured-error extractor now fires on the common failure path.
+  The Spark executor catches `IngressError` / `ChannelError` / etc. inside
+  its module loop and reports via `ModuleResult`, so the live exception
+  never escaped to `Surveyor.record(exc=...)` — the extractor silently
+  no-op'd and `failure_contexts.error_class / object_name /
+  suggested_columns / sql_state / root_exception` stayed NULL on the
+  overwhelming majority of real failures. Fix: `ModuleResult` gained an
+  optional `exception: BaseException | None` field; the executor's
+  centralised `_on_retry_exhausted` helper + Assert error site now populate
+  it; `Surveyor.record()` falls back to the first failed module's
+  `exception` when its `exc=` kwarg is None. Chain preservation already
+  worked end-to-end (`raise IngressError(...) from exc`) — only the
+  hand-off was missing.
 - `aqueduct run` final status line + `_last_run_id` Depot key + `on_success`
   webhook payload now report the outer (user-visible) `run_id` instead of
   the LAST aggressive iteration's per-iteration uuid. The printed run_id

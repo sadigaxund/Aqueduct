@@ -109,6 +109,68 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     return True, ""
 
 
+_DEFAULT_OBS_PATH = ".aqueduct/observability.db"
+
+
+def _resolve_obs_db(
+    cfg,
+    store_dir: str | None,
+    run_id: str | None = None,
+) -> Path | None:
+    """Resolve the observability DB file path for a READ command.
+
+    Mirrors the per-pipeline routing the WRITE side (`aqueduct run`) does at
+    cli.py:1185-1290: when the user keeps the default
+    `.aqueduct/observability.db`, each blueprint writes to
+    `.aqueduct/observability/<blueprint_id>/observability.db`. READ commands
+    (`runs`, `report`, `lineage`, `heal`) need to find the right per-pipeline
+    file — historically each command reinvented this with a naive
+    `Path(cfg.stores.observability.path).parent`, which only worked when the
+    user explicitly set a non-default path.
+
+    Resolution order:
+      1. `--store-dir <path>` flag (explicit user override) → `<path>/observability.db`
+      2. User set a non-default `stores.observability.path` in aqueduct.yml → use it verbatim
+      3. Default sentinel AND `run_id` provided → glob the per-pipeline dirs
+         and return the first DB containing a row for that run_id
+      4. Default sentinel AND no run_id → return the legacy shared path
+         `.aqueduct/observability.db` (may be missing; caller decides what to do)
+
+    Returns None when no candidate file exists, so the caller can render a
+    friendlier error than `FileNotFoundError`.
+    """
+    if store_dir:
+        candidate = Path(store_dir) / "observability.db"
+        return candidate if candidate.exists() else None
+
+    obs_path = cfg.stores.observability.path
+    if obs_path != _DEFAULT_OBS_PATH:
+        explicit = Path(obs_path)
+        if explicit.is_dir():
+            explicit = explicit / "observability.db"
+        return explicit if explicit.exists() else None
+
+    if run_id:
+        import duckdb as _duckdb
+        for candidate in sorted(Path(".aqueduct/observability").glob("*/observability.db")):
+            try:
+                conn = _duckdb.connect(str(candidate), read_only=True)
+                try:
+                    hit = conn.execute(
+                        "SELECT 1 FROM run_records WHERE run_id = ? LIMIT 1",
+                        [run_id],
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if hit:
+                    return candidate
+            except Exception:
+                continue
+
+    legacy = Path(_DEFAULT_OBS_PATH)
+    return legacy if legacy.exists() else None
+
+
 def _agent_usable(provider: str, base_url: str | None) -> bool:
     """Return True if the LLM provider appears reachable without making a network call.
 
@@ -2820,10 +2882,14 @@ def report(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(1)
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
-    observability_db = resolved / "observability.db"
-    if not observability_db.exists():
-        click.echo(f"✗ observability.db not found at {observability_db}", err=True)
+    observability_db = _resolve_obs_db(cfg, store_dir, run_id=run_id)
+    if observability_db is None or not observability_db.exists():
+        click.echo(
+            f"✗ observability.db not found for run_id={run_id!r} "
+            f"(searched: --store-dir, cfg.stores.observability.path, "
+            f"and .aqueduct/observability/*/observability.db)",
+            err=True,
+        )
         sys.exit(1)
 
     conn = _duckdb.connect(str(observability_db), read_only=True)
@@ -2924,11 +2990,6 @@ def runs(
     )
     cfg = load_config(Path(config_path) if config_path else None)
     _apply_warnings_from_cfg(cfg)
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
-    observability_db = resolved / "observability.db"
-    if not observability_db.exists():
-        click.echo(f"No runs found (observability.db not at {observability_db})")
-        return
 
     blueprint_id: str | None = None
     if blueprint:
@@ -2943,31 +3004,65 @@ def runs(
         else:
             blueprint_id = blueprint
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        where_parts = []
-        params: list = []
+    # Collect candidate DBs across per-pipeline dirs + legacy shared path.
+    # When the user set an explicit obs path, honour it verbatim. When
+    # `--blueprint` is given, prefer that per-pipeline dir.
+    candidates: list[Path] = []
+    if store_dir:
+        c = Path(store_dir) / "observability.db"
+        if c.exists():
+            candidates.append(c)
+    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+        c = Path(cfg.stores.observability.path)
+        if c.is_dir():
+            c = c / "observability.db"
+        if c.exists():
+            candidates.append(c)
+    else:
         if blueprint_id:
-            where_parts.append("blueprint_id = ?")
-            params.append(blueprint_id)
-        if failed:
-            where_parts.append("status = 'error'")
-        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
-        params.append(limit)
+            c = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+            if c.exists():
+                candidates.append(c)
+        if not candidates:
+            candidates = sorted(Path(".aqueduct/observability").glob("*/observability.db"))
+        legacy = Path(_DEFAULT_OBS_PATH)
+        if legacy.exists():
+            candidates.append(legacy)
 
-        rows = conn.execute(
-            f"""
-            SELECT run_id, blueprint_id, status, started_at, finished_at,
-                   json_extract_string(module_results, '$[0].module_id') AS first_failed
-            FROM run_records
-            {where}
-            ORDER BY started_at DESC
-            LIMIT ?
-            """,
-            params,
-        ).fetchall()
-    finally:
-        conn.close()
+    if not candidates:
+        click.echo("No runs found (no observability.db files discovered)")
+        return
+
+    where_parts = []
+    params_base: list = []
+    if blueprint_id:
+        where_parts.append("blueprint_id = ?")
+        params_base.append(blueprint_id)
+    if failed:
+        where_parts.append("status = 'error'")
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    rows: list = []
+    for db in candidates:
+        try:
+            conn = _duckdb.connect(str(db), read_only=True)
+            try:
+                rows.extend(conn.execute(
+                    f"""
+                    SELECT run_id, blueprint_id, status, started_at, finished_at,
+                           json_extract_string(module_results, '$[0].module_id') AS first_failed
+                    FROM run_records
+                    {where}
+                    """,
+                    params_base,
+                ).fetchall())
+            finally:
+                conn.close()
+        except Exception:
+            continue
+    # Sort merged result by started_at DESC (col index 3), then limit
+    rows.sort(key=lambda r: (r[3] is None, r[3]), reverse=True)
+    rows = rows[:limit]
 
     if out_format.lower() == "json":
         import json as _json
@@ -3074,8 +3169,18 @@ def lineage(
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
-    lineage_db = resolved / "lineage.db"
+    # Per-pipeline routing: when on the default obs path, lineage.db lives
+    # at `.aqueduct/observability/<blueprint_id>/lineage.db` alongside its
+    # observability.db sibling.
+    if store_dir:
+        lineage_db = Path(store_dir) / "lineage.db"
+    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+        lineage_db = Path(cfg.stores.observability.path).parent / "lineage.db"
+    else:
+        lineage_db = Path(".aqueduct/observability") / blueprint_id / "lineage.db"
+        if not lineage_db.exists():
+            # Legacy fallback for pre-per-pipeline-routing installs
+            lineage_db = Path(".aqueduct/lineage.db")
     if not lineage_db.exists():
         click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
         sys.exit(1)
@@ -3353,10 +3458,14 @@ def heal(
     import duckdb as _duckdb
     from aqueduct.surveyor.models import FailureContext
 
-    resolved = Path(store_dir) if store_dir else Path(cfg.stores.observability.path).parent
-    observability_db = resolved / "observability.db"
-    if not observability_db.exists():
-        click.echo(f"✗ observability.db not found at {observability_db}", err=True)
+    observability_db = _resolve_obs_db(cfg, store_dir, run_id=run_id)
+    if observability_db is None or not observability_db.exists():
+        click.echo(
+            f"✗ observability.db not found for run_id={run_id!r} "
+            f"(searched: --store-dir, cfg.stores.observability.path, "
+            f"and .aqueduct/observability/*/observability.db)",
+            err=True,
+        )
         sys.exit(1)
 
     conn = _duckdb.connect(str(observability_db), read_only=True)

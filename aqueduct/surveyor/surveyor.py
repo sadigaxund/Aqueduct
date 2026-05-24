@@ -535,10 +535,22 @@ class Surveyor:
             return None
 
         # ── Build FailureContext ───────────────────────────────────────────────
+        # Phase 35: when execute() catches the failure internally and reports
+        # via ModuleResult (the common case), `exc` here is None — fall back
+        # to `ModuleResult.exception` for the first failed module so the
+        # structured-error extractor still has the live exception (with its
+        # __cause__ chain intact) to work with. Without this fallback, the
+        # extractor only ran for failures that escaped execute() entirely.
+        live_exc: BaseException | None = exc
+        if live_exc is None:
+            for _mr in result.module_results:
+                if _mr.status == "error" and getattr(_mr, "exception", None) is not None:
+                    live_exc = _mr.exception
+                    break
         stack_trace: str | None = None
-        structured = _extract_structured_error(exc)
-        if exc is not None:
-            stack_trace = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        structured = _extract_structured_error(live_exc)
+        if live_exc is not None:
+            stack_trace = "".join(traceback.format_exception(type(live_exc), live_exc, live_exc.__traceback__))
 
         # Build provenance slice: failed module + full context block
         provenance_json: str | None = None
