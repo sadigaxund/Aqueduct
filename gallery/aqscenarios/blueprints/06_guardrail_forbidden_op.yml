@@ -1,0 +1,41 @@
+aqueduct: "1.0"
+id: pipeline_with_guardrails
+name: Pipeline With Guardrails
+description: >
+  Same shape as the schema-drift scenario, but the blueprint declares
+  agent.guardrails.forbidden_ops to block whole-config replacement. The
+  model must use a surgical op (set_module_config_key) instead of the
+  blunt replace_module_config it might otherwise default to.
+
+# Phase 33 Part B Scope C step 1: surfaced in the LLM prompt as terse
+# imperative constraints. Step 2: enforced in the scenario apply path
+# via patch/apply.py:_check_guardrails (same code production runs).
+agent:
+  guardrails:
+    forbidden_ops:
+      - replace_module_config
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: Raw Events
+    config:
+      format: csv
+      path: data/input/events.csv
+
+  - id: clean_events
+    type: Channel
+    label: Clean Events
+    config:
+      op: sql
+      query: |
+        SELECT
+          event_id,
+          user_id,
+          CAST(event_ts AS timestamp) AS event_time,
+          event_type
+        FROM events_raw
+
+edges:
+  - from: events_raw
+    to: clean_events

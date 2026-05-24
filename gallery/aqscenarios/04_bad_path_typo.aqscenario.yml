@@ -13,11 +13,11 @@ inject_failure:
       at org.apache.spark.sql.execution.datasources.DataSource.checkAndGlobPathIfNecessary(DataSource.scala:765)
     (Ingress events_raw — reader.format("csv").load("data/input/events_raw.csv"))
 
-# Op-agnostic + diagnosis. Strict op-shape pin removed — see TODOs Phase
-# 33 (`_match_op_spec`).
 expected_patch:
-  ops:
-    - module_id: events_raw   # op-agnostic gating: patch must modify the failing module
+  effect:
+    module: events_raw
+    config_contains:
+      path: "events.csv"   # raw substring on path — accepts data/input/events.csv
 
 assertions:
   - patch_is_valid: true

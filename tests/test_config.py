@@ -13,9 +13,9 @@ from aqueduct.config import AqueductConfig, AgentConnectionConfig, load_config
 
 class TestAgentConnectionConfig:
     def test_agent_timeout_default_and_custom(self):
-        # Default is 120.0
+        # Default is 300.0
         cfg = AgentConnectionConfig()
-        assert cfg.timeout == 120.0
+        assert cfg.timeout == 300.0
 
         # Custom is respected
         cfg_custom = AgentConnectionConfig(timeout=600.0)

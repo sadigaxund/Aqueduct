@@ -16,12 +16,11 @@ inject_failure:
     +- SubqueryAlias users_raw
        +- Relation [id#10,name#11,signup_ts#12] csv
 
-# Scored op-agnostically (any valid op that corrects the column ref is
-# accepted) + diagnosis. Strict op-shape pin removed — see TODOs Phase 33
-# (`_match_op_spec`).
 expected_patch:
-  ops:
-    - module_id: clean_users   # op-agnostic gating: patch must modify the failing module
+  effect:
+    module: clean_users
+    config_contains:
+      query: "signup_ts"   # AST-normalized substring — accepts any reformat
 
 assertions:
   - patch_is_valid: true
