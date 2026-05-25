@@ -125,6 +125,14 @@ release and are marked **BREAKING**.
   starting at iteration 2 — joins against `run_records.run_id` returned
   partial results. New column NULL on non-aggressive paths; idempotent
   ALTER added in `Surveyor.start()` so pre-1.1.0 stores upgrade in place.
+- Phase 34 apply-gate guardrail check now wired into the production heal
+  loops (`aqueduct run` self-heal at `cli.py:1625`, `aqueduct heal <run_id>`
+  heal-from-store at `cli.py:3565`). Previously only the benchmark path
+  (`scenario.py`) passed `apply_callback=` — production heal exited
+  `solved` even when the patch then failed `_check_guardrails`, and the
+  outer code silently staged the blocked patch. Rejections now feed back
+  as reprompts inside the unified loop with `gate_that_rejected='apply'`,
+  matching Phase 34's "unified loop" promise on both paths.
 - Shared `_resolve_obs_db(cfg, store_dir, run_id)` helper in `cli.py` —
   every read-side command (`runs`, `report`, `lineage`, `heal`) used to
   reinvent observability path resolution with a naive
