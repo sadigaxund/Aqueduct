@@ -1622,6 +1622,33 @@ def run(
                 except Exception:
                     pass  # never let persistence block the loop
 
+            # Phase 34: apply-gate guardrail check wired INTO the unified loop.
+            # Deterministic + fast (no Spark) — runs `_check_guardrails` on the
+            # generated PatchSpec against the current Blueprint and feeds any
+            # rejection back as a reprompt instead of letting the loop exit
+            # 'solved' and then having the outer code silently stage. Slower
+            # gates (lineage / sandbox / explain) stay OUTSIDE the loop — they
+            # run once per patch in aggressive mode.
+            _bp_path_for_cb = Path(blueprint)
+            def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
+                try:
+                    from aqueduct.patch.apply import (
+                        _check_guardrails, _yaml_load, PatchError,
+                    )
+                    bp_raw = _yaml_load(_bp)
+                    gb = (bp_raw.get("agent") or {}).get("guardrails") or {}
+                    if not (gb.get("forbidden_ops") or gb.get("allowed_paths")
+                            or gb.get("heal_on_errors") or gb.get("never_heal_errors")):
+                        return True, None, None, None
+                    try:
+                        _check_guardrails(patch_spec, bp_raw, provenance_map=None)
+                        return True, None, None, None
+                    except PatchError as exc:
+                        return False, "guardrail_violation", str(exc), None
+                except Exception as exc:
+                    # Fail-open: don't let an apply-callback bug block healing.
+                    return False, "apply_error", str(exc), None
+
             agent_result = generate_agent_patch(
                 failure_ctx,
                 model=resolved_agent_model,
@@ -1637,6 +1664,7 @@ def run(
                 guardrails=manifest.agent.guardrails if manifest.agent else None,
                 budget=_budget,
                 on_attempt=_persist_attempt,
+                apply_callback=_apply_cb,
             )
             patch = agent_result.patch
             # Update the last persisted row with stop_reason so downstream
@@ -3534,6 +3562,25 @@ def heal(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
     )
+
+    # Phase 34: wire deterministic apply-gate guardrail check INTO the loop so
+    # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
+    # live blueprint path here — heal-from-store reconstructs the minimal dict
+    # `_check_guardrails` needs from the manifest_json carried in the obs DB.
+    def _apply_cb(patch_spec: Any, _gb=_guardrails_for_prompt) -> tuple:
+        if not _gb:
+            return True, None, None, None
+        try:
+            from aqueduct.patch.apply import _check_guardrails, PatchError
+            bp_raw = {"agent": {"guardrails": _gb}}
+            try:
+                _check_guardrails(patch_spec, bp_raw, provenance_map=None)
+                return True, None, None, None
+            except PatchError as exc:
+                return False, "guardrail_violation", str(exc), None
+        except Exception as exc:
+            return False, "apply_error", str(exc), None
+
     agent_result = generate_agent_patch(
         failure_ctx,
         model=resolved_model,
@@ -3546,6 +3593,7 @@ def heal(
         engine_prompt_context=resolved_engine_prompt_context,
         guardrails=_guardrails_for_prompt,
         budget=_budget,
+        apply_callback=_apply_cb,
     )
     patch = agent_result.patch
 
