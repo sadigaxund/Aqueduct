@@ -41,12 +41,13 @@ logger = logging.getLogger(__name__)
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS run_records (
-    run_id        VARCHAR PRIMARY KEY,
-    blueprint_id  VARCHAR NOT NULL,
-    status        VARCHAR NOT NULL,
-    started_at    TIMESTAMPTZ NOT NULL,
-    finished_at   TIMESTAMPTZ,
-    module_results JSON
+    run_id         VARCHAR PRIMARY KEY,
+    blueprint_id   VARCHAR NOT NULL,
+    status         VARCHAR NOT NULL,
+    started_at     TIMESTAMPTZ NOT NULL,
+    finished_at    TIMESTAMPTZ,
+    module_results JSON,
+    parent_run_id  VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS failure_contexts (
@@ -375,6 +376,7 @@ class Surveyor:
         self._stores: "StoreBundle | None" = stores
         self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
+        self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (aggressive)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -473,11 +475,23 @@ class Surveyor:
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
 
+            try:
+                # 1.1.0 fix — add parent_run_id to pre-fix DBs so aggressive-mode
+                # iteration rows can link back to the user-visible outer run_id.
+                pr_exists = cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name='run_records' AND column_name='parent_run_id'"
+                ).fetchone()
+                if not pr_exists:
+                    cur.execute("ALTER TABLE run_records ADD COLUMN parent_run_id VARCHAR")
+            except Exception:
+                pass
+
             cur.execute(
                 """
                 INSERT INTO run_records
-                    (run_id, blueprint_id, status, started_at, finished_at, module_results)
-                VALUES (?, ?, 'running', ?, NULL, '[]')
+                    (run_id, blueprint_id, status, started_at, finished_at, module_results, parent_run_id)
+                VALUES (?, ?, 'running', ?, NULL, '[]', NULL)
                 ON CONFLICT (run_id) DO UPDATE SET
                     blueprint_id   = EXCLUDED.blueprint_id,
                     status         = EXCLUDED.status,
@@ -489,6 +503,20 @@ class Surveyor:
             )
 
         self._started = True
+
+    def register_iteration(self, *, run_id: str, parent_run_id: str) -> None:
+        """Register an aggressive-mode iteration's per-execute run_id.
+
+        Aggressive heal mints a fresh ``run_id`` per ``execute()`` call from
+        iteration 1 onwards (iteration 0 reuses the outer/user-visible
+        ``run_id``). The CLI calls this before each non-first ``execute()`` so
+        the subsequent ``record()`` knows which outer ``run_id`` to stamp into
+        ``run_records.parent_run_id``. Without it, the row would write
+        ``parent_run_id=NULL`` and joins like
+        ``WHERE COALESCE(parent_run_id, run_id) = '<outer>'`` would miss
+        iteration 1+.
+        """
+        self._iteration_parents[run_id] = parent_run_id
 
     def record(
         self,
@@ -521,14 +549,34 @@ class Surveyor:
         ))
 
         effective_status = "patched" if (patched and result.status == "success") else result.status
+        # 1.1.0 fix — aggressive heal mints a new run_id per iteration. The
+        # outer run_id is INSERTed by start(); iteration 1+ never had a row
+        # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,
+        # carrying parent_run_id back to the outer (registered via
+        # register_iteration() before execute()).
+        parent_for_iter = self._iteration_parents.get(result.run_id)
         with self._observability.connect() as cur:
             cur.execute(
                 """
-                UPDATE run_records
-                SET status = ?, finished_at = ?, module_results = ?
-                WHERE run_id = ?
+                INSERT INTO run_records
+                    (run_id, blueprint_id, status, started_at, finished_at,
+                     module_results, parent_run_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    status         = EXCLUDED.status,
+                    finished_at    = EXCLUDED.finished_at,
+                    module_results = EXCLUDED.module_results,
+                    parent_run_id  = COALESCE(run_records.parent_run_id, EXCLUDED.parent_run_id)
                 """,
-                [effective_status, _iso(finished_at), module_results_json, result.run_id],
+                [
+                    result.run_id,
+                    self._manifest.blueprint_id,
+                    effective_status,
+                    _iso(self._started_at),
+                    _iso(finished_at),
+                    module_results_json,
+                    parent_for_iter,
+                ],
             )
 
         if result.status == "success":

@@ -124,6 +124,19 @@ release and are marked **BREAKING**.
   every multi-table join needs.
 
 ### Fixed
+- `run_records` now writes one row per aggressive-mode iteration, with
+  `parent_run_id` linking back to the user-visible outer `run_id`. Previously
+  `Surveyor.record()` issued a plain `UPDATE WHERE run_id = ?` against a row
+  that only existed for iteration 0 — iterations 1..N silently no-op'd, so an
+  aggressive heal with 3 attempts persisted exactly **one** `run_records`
+  row (iteration 0's). Two changes: (1) `run_records` schema grows a
+  `parent_run_id VARCHAR` column with idempotent ALTER for pre-1.1.0 DBs;
+  (2) `Surveyor.record()` switched from `UPDATE` to `INSERT … ON CONFLICT
+  DO UPDATE` so each iteration owns its row; (3) new
+  `Surveyor.register_iteration(run_id, parent_run_id)` called by the CLI
+  before each non-first `execute()` so the iteration row carries its parent.
+  Join all iterations of one heal call:
+  `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`.
 - `healing_outcomes` no longer silently empty when the unified reprompt loop
   exits with `patch=None` (every attempt rejected by `apply_callback`, or
   budget axis tripped before a valid patch landed). The aggressive-mode loop

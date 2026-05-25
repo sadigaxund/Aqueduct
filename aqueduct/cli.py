@@ -1491,6 +1491,16 @@ def run(
             # `healing_outcomes` so cross-iteration aggregations remain
             # joinable to the original heal call.
             iteration_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
+            if iteration_run_id != run_id:
+                # 1.1.0 fix — register parent linkage so record() stamps the
+                # outer run_id into run_records.parent_run_id for this
+                # iteration's row (INSERT-or-UPDATE in surveyor.record()).
+                try:
+                    surveyor.register_iteration(
+                        run_id=iteration_run_id, parent_run_id=run_id,
+                    )
+                except Exception:
+                    pass
             execute_exc: ExecuteError | None = None
             try:
                 result = execute(
