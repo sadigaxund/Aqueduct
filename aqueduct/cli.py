@@ -1686,6 +1686,31 @@ def run(
                         "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
                         err=True,
                     )
+                # Phase 35a — synthesise one healing_outcomes row per rejected
+                # attempt so the patch_applied=false trail is observable. Without
+                # this, in-loop apply_callback rejections and budget-exhausted
+                # heals leave healing_outcomes empty even though heal_attempts
+                # logged the per-attempt detail.
+                try:
+                    for _rec in (agent_result.attempt_records or ()):
+                        _fail_cat = (
+                            _rec.signature.error_class
+                            if getattr(_rec, "signature", None) is not None
+                            else None
+                        )
+                        surveyor.record_healing_outcome(
+                            run_id=iteration_run_id,
+                            parent_run_id=run_id,
+                            failed_module=failure_ctx.failed_module,
+                            failure_category=_fail_cat,
+                            model=resolved_agent_model,
+                            patch_id=None,
+                            confidence=None,
+                            patch_applied=False,
+                            run_success_after_patch=False,
+                        )
+                except Exception:
+                    pass  # never let persistence block the loop exit
                 break
 
             # ── Confidence escalation — low-confidence patches go to human ─────────

@@ -112,7 +112,29 @@ release and are marked **BREAKING**.
   production use, closing the "leaderboard cheats" path where the
   benchmark would silently pass on a patch production would reject.
 
+### Documentation
+- New `docs/QUERIES.md` — diagnostic SQL cookbook against the observability,
+  lineage, depot, and benchmark stores. Recipes organised by use case
+  (run post-mortem, token spend, stuck-signature detection, leaderboard,
+  regression diff, cross-pipeline aggregates) with reading guides for each
+  output. Cross-linked from `ALL_TABLES.md`.
+- `ALL_TABLES.md` filesystem-layout block updated for per-pipeline routing
+  (`.aqueduct/observability/<blueprint_id>/{observability,lineage}.db`);
+  added the aggressive `run_id` vs `parent_run_id` semantics note that
+  every multi-table join needs.
+
 ### Fixed
+- `healing_outcomes` no longer silently empty when the unified reprompt loop
+  exits with `patch=None` (every attempt rejected by `apply_callback`, or
+  budget axis tripped before a valid patch landed). The aggressive-mode loop
+  in `aqueduct/cli.py` now synthesises one `healing_outcomes` row per
+  `agent_result.attempt_records` entry, with `patch_applied=false`,
+  `run_success_after_patch=false`, and `failure_category` derived from the
+  attempt's signature. Previously `heal_attempts` had the per-attempt log but
+  `healing_outcomes` was blank, so `WHERE parent_run_id=<outer>` returned
+  zero rows even after 3+ in-loop rejections. Confirmed against
+  `02_guardrail_apply_reject.yml --allow-aggressive` (3 heal_attempts rows,
+  0 healing_outcomes rows pre-fix).
 - `heal_attempts` no longer double-writes per attempt. The unified loop's
   `on_attempt` hook INSERTs one row per attempt with `stop_reason=NULL`;
   the post-loop terminal update now calls a new
