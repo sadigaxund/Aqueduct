@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 
 # ── Schema error ──────────────────────────────────────────────────────────────
@@ -182,15 +182,22 @@ class ProbesConfig(BaseModel):
 
 
 class DangerConfig(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     allow_full_probe_actions: bool = Field(
         default=False,
         description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
     )
-    allow_aggressive_patching: bool = Field(
+    # 1.1.0 — `allow_multi_patch` is the canonical name. `allow_aggressive_patching`
+    # is accepted as a deprecated alias and emits a warning when the multi-patch
+    # loop is opted into (max_patches > 1).
+    allow_multi_patch: bool = Field(
         default=False,
-        description="Allow approval_mode: aggressive to auto-apply LLM patches without human review.",
+        validation_alias=AliasChoices("allow_multi_patch", "allow_aggressive_patching"),
+        description=(
+            "Allow `max_patches > 1` — the multi-patch reprompt loop. Auto-applies "
+            "successive LLM patches without human review until success or budget exhaustion."
+        ),
     )
     allow_full_preflight: bool = Field(
         default=False,

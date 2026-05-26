@@ -123,7 +123,33 @@ release and are marked **BREAKING**.
   added the aggressive `run_id` vs `parent_run_id` semantics note that
   every multi-table join needs.
 
+### Changed
+- **`approval_mode: aggressive` collapsed into `auto` + `max_patches`.** The
+  two near-duplicate self-heal modes shared a 90+ LOC code path differing only
+  in a danger gate, an explain-gate strictness flag, and the default patch
+  count. `approval_mode: auto` is now the single auto-apply mode with a new
+  `max_patches: int = 1` knob (default 1 = single-shot, the historical `auto`
+  behaviour). Setting `max_patches > 1` opts into the multi-patch reprompt
+  loop and requires `danger.allow_multi_patch: true` (alias:
+  `allow_aggressive_patching`). The explain gate's hard-block on regression
+  now fires whenever `max_patches > 1`, not based on the mode name.
+
+  Backwards compatibility: `approval_mode: aggressive` keeps parsing but
+  emits a `[deprecated]` warning at parse time and is normalised to `auto`
+  internally. `aggressive_max_patches` keeps parsing as a `validation_alias`
+  on `max_patches` and emits the same warning. `danger.allow_aggressive_patching`
+  is a `validation_alias` on `danger.allow_multi_patch`. CLI flag
+  `--allow-aggressive` is kept as a secondary form of `--allow-multi-patch`.
+  All four deprecated names are slated for removal in `aqueduct: "2.0"` schema.
+  Default `max_patches` change (5 → 1) flips behaviour for blueprints that
+  relied on the previous default; explicit values are unaffected.
+
 ### Added
+- Regulator modules now accept a `config.poll_seconds: float = 30.0` knob
+  controlling the cadence of the gate-poll loop while `timeout_seconds > 0`.
+  Replaces a hardcoded 2-second poll interval that wasted driver CPU and
+  observability-DB reads on batch-tier signals. Clamped to a minimum of 0.5s.
+  Tune lower for interactive use, higher for hour-scale external triggers.
 - `agent.sandbox_mode: sample | preflight | off` (blueprint + engine config).
   Controls patch sandbox replay fidelity. `sample` (default) keeps existing
   1000-row replay; `preflight` runs full dataset (no Egress) and requires

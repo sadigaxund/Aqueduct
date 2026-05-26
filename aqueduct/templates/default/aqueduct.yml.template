@@ -97,7 +97,12 @@ spark_config: {}
 
 # ── Stores ────────────────────────────────────────────────────────────────────
 #
-# Phase 28: each store is pluggable. Default DuckDB layout under .aqueduct/:
+# Path resolution (1.1.0+): every relative path below resolves to THIS file's
+# parent directory, never the CWD of `aqueduct`. URI values (s3://, postgresql://,
+# redis://) and absolute paths pass through unchanged. Matches Compose / k8s /
+# Terraform conventions.
+#
+# Each store is pluggable. Default DuckDB layout under .aqueduct/:
 #   observability.db      — run records, failure contexts, signal overrides, probe
 #                 signals, module + maintenance metrics, healing outcomes
 #   lineage.db  — column-level lineage
@@ -536,8 +541,10 @@ agent:
 # Aqueduct prints a startup warning for any active danger setting.
 #
 # danger:
-#   allow_aggressive_patching: false  # if true, approval_mode: aggressive is allowed
-#                                     # (agent patches Blueprint without human review)
+#   allow_multi_patch: false          # if true, max_patches > 1 is allowed
+#                                     # (multi-patch reprompt loop auto-applies patches
+#                                     # without human review). Legacy alias:
+#                                     # `allow_aggressive_patching` still parses.
 #   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
 #                                     # (null_rates, value_distribution, distinct_count)
 #                                     # adds latency; leave false in production
@@ -545,4 +552,4 @@ agent:
 #                                     # (full-dataset sandbox replay, no Egress; slow but conclusive)
 #   allow_skip_sandbox: false         # if true, agent.sandbox_mode: off is allowed
 #                                     # (skip sandbox replay entirely; patches hit real data via
-#                                     # the next execute(). Combine with aggressive at your own risk.)
+#                                     # the next execute(). Combine with max_patches > 1 at your own risk.)

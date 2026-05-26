@@ -1255,7 +1255,11 @@ def execute(
 
                 # ── Evaluate Regulator with optional timeout ───────────────
                 timeout_sec = float(module.config.get("timeout_seconds", 0))
-                poll_interval = 2.0
+                # 1.1.0 — poll_seconds exposed as Regulator config (default 30s).
+                # 2s default was wasteful CPU for batch-tier signals; 30s is sane
+                # for most pipelines. Real-time use cases can override down to
+                # 1s; long-running waits can set 300s.
+                poll_interval = max(0.5, float(module.config.get("poll_seconds", 30.0)))
                 elapsed = 0.0
                 
                 gate_open = surveyor.evaluate_regulator(module.id) if surveyor else True

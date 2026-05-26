@@ -41,9 +41,12 @@ class GuardrailsConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive"
+    approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive" (deprecated alias for auto)
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
-    aggressive_max_patches: int = 5
+    # 1.1.0 — `max_patches` is the canonical name (default 1). Multi-patch loop
+    # opt-in: set > 1 AND set `danger.allow_multi_patch: true` (alias:
+    # `allow_aggressive_patching`).
+    max_patches: int = 1
     # Connection fields — None = inherit from aqueduct.yml agent: defaults
     provider: str | None = None
     base_url: str | None = None

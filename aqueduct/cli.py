@@ -1166,10 +1166,11 @@ def _format_provenance_rows(pairs) -> str:
     help="Logical execution date for @aq.date.* functions — enables idempotent backfills",
 )
 @click.option(
-    "--allow-aggressive",
+    "--allow-multi-patch", "--allow-aggressive",
+    "allow_aggressive",
     is_flag=True,
     default=False,
-    help="Allow approval_mode: aggressive for this run (overrides danger.allow_aggressive_patching=false)",
+    help="Allow `max_patches > 1` for this run (overrides danger.allow_multi_patch=false). `--allow-aggressive` is a deprecated alias.",
 )
 @_env_options
 @click.option(
@@ -1294,8 +1295,8 @@ def run(
         danger_active = []
         if cfg.danger.allow_full_probe_actions:
             danger_active.append("allow_full_probe_actions=true")
-        if cfg.danger.allow_aggressive_patching:
-            danger_active.append("allow_aggressive_patching=true")
+        if cfg.danger.allow_multi_patch:
+            danger_active.append("allow_multi_patch=true")
         if danger_active:
             click.echo(
                 f"⚠  DANGER settings active: {', '.join(danger_active)}",
@@ -1374,12 +1375,27 @@ def run(
                 "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
             )
 
-        # ── Aggressive mode danger gate ────────────────────────────────────────────
-        if manifest.agent.approval_mode == "aggressive" and not allow_aggressive:
-            if not cfg.danger.allow_aggressive_patching:
+        # ── Multi-patch danger gate ───────────────────────────────────────────────
+        # 1.1.0 — gate now keys off `max_patches > 1`, not the legacy
+        # `approval_mode: aggressive` string. The legacy `aggressive` string
+        # is preserved on the Manifest so downstream branching that still
+        # checks for it keeps working; deprecation warning is emitted at
+        # parse time.
+        _max_patches = manifest.agent.max_patches if manifest.agent else 1
+        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
+        # Only auto / aggressive actually drive the multi-patch loop; for
+        # human / ci / disabled the `max_patches` value is inert, so don't
+        # fail closed on the danger gate just because the field is set high.
+        _is_multi_patch = (
+            _mode in ("auto", "aggressive")
+            and (_max_patches > 1 or _mode == "aggressive")
+        )
+        if _is_multi_patch and not allow_aggressive:
+            if not cfg.danger.allow_multi_patch:
                 click.echo(
-                    "✗ approval_mode: aggressive requires danger.allow_aggressive_patching: true "
-                    "in aqueduct.yml, or pass --allow-aggressive for this run.",
+                    f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
+                    "in aqueduct.yml, or pass --allow-multi-patch for this run "
+                    "(legacy alias: --allow-aggressive).",
                     err=True,
                 )
                 sys.exit(1)
@@ -1411,11 +1427,11 @@ def run(
                 err=True,
             )
         # Double-danger combo — sandbox off + aggressive auto-apply in a loop
-        if _sandbox_mode == "off" and manifest.agent.approval_mode == "aggressive":
+        if _sandbox_mode == "off" and _is_multi_patch:
             click.echo(
-                "⚠ DANGER COMBO: sandbox_mode=off + approval_mode=aggressive — every LLM patch "
-                f"applies to real data without pre-validation, up to aggressive_max_patches="
-                f"{manifest.agent.aggressive_max_patches} times per failure. Use only when you "
+                "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
+                f"applies to real data without pre-validation, up to max_patches="
+                f"{_max_patches} times per failure. Use only when you "
                 "fully trust the model and blueprint scope is tiny.",
                 err=True,
             )
@@ -1476,12 +1492,12 @@ def run(
         resolved_agent_engine_prompt_context = eng.prompt_context
         resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
 
-        # ── Aggressive mode disclaimer ────────────────────────────────────────────
+        # ── Multi-patch disclaimer ────────────────────────────────────────────────
         approval_mode = manifest.agent.approval_mode
-        max_patches = manifest.agent.aggressive_max_patches
-        if approval_mode == "aggressive":
+        max_patches = manifest.agent.max_patches
+        if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
             click.echo(
-                f"⚠  approval_mode=aggressive — LLM will attempt up to {max_patches} patch(es). "
+                f"⚠  multi-patch mode — LLM will attempt up to {max_patches} patch(es). "
                 f"Each patch is validated in-memory before being written to Blueprint. "
                 f"Review patches/applied/ after the run.",
                 err=True,
@@ -1608,7 +1624,7 @@ def run(
 
             if patch_count >= max_patches:
                 click.echo(
-                    f"⚠  LLM: aggressive_max_patches={max_patches} reached, stopping self-healing loop",
+                    f"⚠  LLM: max_patches={max_patches} reached, stopping self-healing loop",
                     err=True,
                 )
                 break
@@ -1643,7 +1659,7 @@ def run(
             from aqueduct.agent import archive_patch, generate_agent_patch, stage_patch_for_human
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}"
-                if approval_mode == "aggressive"
+                if max_patches > 1
                 else f"{patch_count + 1}"
             )
             click.echo(
