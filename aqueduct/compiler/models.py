@@ -87,7 +87,7 @@ class Manifest:
             "agent": {
                 "approval_mode": self.agent.approval_mode,
                 "model": self.agent.model,
-                "aggressive_max_patches": self.agent.aggressive_max_patches,
+                "max_patches": self.agent.max_patches,
                 "provider": self.agent.provider,
                 "base_url": self.agent.base_url,
                 "prompt_context": self.agent.prompt_context,

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 VALID_MODULE_TYPES = frozenset(
     {"Ingress", "Channel", "Egress", "Junction", "Funnel", "Probe", "Regulator", "Arcade", "Assert"}
@@ -54,11 +54,16 @@ class GuardrailsSchema(BaseModel):
 
 
 class AgentSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = "disabled"
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
-    aggressive_max_patches: int = 5
+    # 1.1.0 — `max_patches` is the canonical name. `aggressive_max_patches` is
+    # accepted as a deprecated alias and emits a warning at parse time.
+    # Default 1 = single-patch try (former `auto` mode behavior). Set > 1 to
+    # opt into the multi-patch reprompt loop; that path also requires
+    # `danger.allow_multi_patch: true` (alias: `allow_aggressive_patching`).
+    max_patches: int = Field(default=1, validation_alias=AliasChoices("max_patches", "aggressive_max_patches"))
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None

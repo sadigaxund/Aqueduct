@@ -91,14 +91,17 @@ agent:
   #   disabled   — LLM never fires (default)
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
-  #   auto       — Single-shot: patch applied in-memory → re-runs → written to disk only on success
-  #   aggressive — Looping auto: up to aggressive_max_patches attempts; each validated in-memory first
-  #                Requires danger.allow_aggressive_patching: true in aqueduct.yml
+  #   auto       — Auto-apply: patch applied in-memory → re-runs → written to disk only on success.
+  #                `max_patches: 1` (default) = single-shot. `max_patches: N` (N > 1) = multi-patch
+  #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
+  #
+  # Legacy: `approval_mode: aggressive` still parses but is deprecated → use `auto` + max_patches.
   approval_mode: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
-  aggressive_max_patches: 3          # aggressive only: max loop iterations per run
+  max_patches: 1                  # 1 = single auto patch (default); > 1 enables the multi-patch loop
+                                  # (legacy alias: aggressive_max_patches)
 
   # on_heal_failure: what to do when a patch is generated but the re-run still fails
   #   stage   — stage failed patch to patches/pending/ for human inspection (default)
@@ -115,17 +118,29 @@ agent:
   # Overrides the engine-level agent.max_heal_attempts_per_hour in aqueduct.yml.
   # max_heal_attempts_per_hour: 10
 
-  # patch_validation: Phase 29a — override the engine-level validation level.
+  # patch_validation: override the engine-level validation level.
   #   full_run — the lineage gate + the sandbox gate + full Spark run (safest)
   #   sandbox  — the lineage gate + the sandbox gate only (fastest)
   # Leave unset to inherit aqueduct.yml agent.patch_validation.
   # patch_validation: full_run
 
-  # block_on_explain_regression: Phase 29b — when true, the explain gate (post-patch
-  # `explain()` regression check) rejects patches in aggressive mode that add
-  # shuffles / Python UDF nodes or drop broadcast hints. Default false →
-  # the explain gate is warn-only. Leave unset to inherit aqueduct.yml.
+  # block_on_explain_regression: when true, the explain gate (post-patch
+  # `explain()` regression check) rejects patches in multi-patch mode
+  # (max_patches > 1) that add shuffles / Python UDF nodes or drop broadcast
+  # hints. Default false → the explain gate is warn-only. Leave unset to
+  # inherit aqueduct.yml.
   # block_on_explain_regression: false
+
+  # sandbox_mode (1.1.0+): how the sandbox gate replays a generated patch before
+  # applying it. Default sample is right for almost every project.
+  #   sample    — 1000-row replay per Ingress, Egress writes dropped (default)
+  #   preflight — full-dataset replay, Egress writes dropped. Slow but conclusive.
+  #               Requires danger.allow_full_preflight: true in aqueduct.yml.
+  #   off       — skip the sandbox gate entirely. Patches hit real data via the
+  #               next execute(). Requires danger.allow_skip_sandbox: true.
+  #               Combining off + max_patches > 1 prints a
+  #               ⚠ DANGER COMBO line at startup; use only on tiny trusted scopes.
+  # sandbox_mode: sample
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.

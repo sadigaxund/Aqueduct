@@ -90,6 +90,29 @@ def parse(
     if not isinstance(raw, dict):
         raise ParseError(f"Blueprint must be a YAML mapping, got {type(raw).__name__}")
 
+    # 1.1.0 — Deprecation warnings: `approval_mode: aggressive` and
+    # `aggressive_max_patches` are aliases that still parse but should migrate
+    # to `approval_mode: auto` + `max_patches`. Print to stderr (does not block).
+    # When both canonical and alias keys are present in the same dict, drop the
+    # alias before pydantic validation — `extra="forbid"` would otherwise reject
+    # the second key as an unknown field even though it maps to an alias.
+    _agent_raw = raw.get("agent") if isinstance(raw, dict) else None
+    if isinstance(_agent_raw, dict):
+        import sys as _sys
+        if _agent_raw.get("approval_mode") == "aggressive":
+            _sys.stderr.write(
+                "[deprecated] approval_mode: aggressive → use approval_mode: auto "
+                "with max_patches: N (and danger.allow_multi_patch: true for N > 1).\n"
+            )
+        if "aggressive_max_patches" in _agent_raw:
+            _sys.stderr.write(
+                "[deprecated] aggressive_max_patches → use max_patches "
+                "(same semantics, shorter name).\n"
+            )
+            if "max_patches" in _agent_raw:
+                # Canonical wins; drop the alias to keep the AgentSchema strict.
+                _agent_raw.pop("aggressive_max_patches", None)
+
     # ── 2. Pydantic schema validation ─────────────────────────────────────────
     try:
         validated = BlueprintSchema.model_validate(raw)
@@ -202,7 +225,7 @@ def parse(
             approval_mode=validated.agent.approval_mode,
             on_pending_patches=validated.agent.on_pending_patches,
             model=resolve_value(validated.agent.model, ctx_map),
-            aggressive_max_patches=validated.agent.aggressive_max_patches,
+            max_patches=validated.agent.max_patches,
             provider=validated.agent.provider,
             base_url=resolve_value(validated.agent.base_url, ctx_map),
             provider_options=resolve_value(validated.agent.provider_options, ctx_map),
