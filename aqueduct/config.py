@@ -192,6 +192,22 @@ class DangerConfig(BaseModel):
         default=False,
         description="Allow approval_mode: aggressive to auto-apply LLM patches without human review.",
     )
+    allow_full_preflight: bool = Field(
+        default=False,
+        description=(
+            "Allow agent.sandbox_mode: preflight — full-dataset sandbox replay "
+            "(no Egress writes). Slow but conclusive. Default false = safe."
+        ),
+    )
+    allow_skip_sandbox: bool = Field(
+        default=False,
+        description=(
+            "Allow agent.sandbox_mode: off — skip sandbox replay entirely; "
+            "patches go straight to production data via the next execute(). "
+            "Most dangerous; combine with approval_mode: aggressive only "
+            "when you fully trust the model and blueprint scope is tiny."
+        ),
+    )
 
 
 class SecretsConfig(BaseModel):
@@ -634,6 +650,25 @@ def load_config(path: Path | None = None) -> AqueductConfig:
 
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
+
+    # 1.1.0 — Anchor relative store paths to the config file's directory so
+    # `stores.observability.path: .aqueduct/observability.db` always lands
+    # next to aqueduct.yml, regardless of the CWD `aqueduct run` was invoked
+    # from. Matches the same rule applied to blueprint paths in parser.py.
+    # Skip URI-style values (s3://, postgresql://, redis://). Idempotent —
+    # absolute paths pass through unchanged.
+    _cfg_dir = resolved.parent.resolve()
+    _stores_raw = data.get("stores") if isinstance(data, dict) else None
+    if isinstance(_stores_raw, dict):
+        for _store_key, _store_val in _stores_raw.items():
+            if not isinstance(_store_val, dict):
+                continue
+            _p = _store_val.get("path")
+            if not isinstance(_p, str) or not _p or "://" in _p:
+                continue
+            _pp = Path(_p)
+            if not _pp.is_absolute():
+                _store_val["path"] = str((_cfg_dir / _pp).resolve())
 
     try:
         cfg_pass1 = AqueductConfig.model_validate(data)

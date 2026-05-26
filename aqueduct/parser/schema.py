@@ -87,6 +87,16 @@ class AgentSchema(BaseModel):
     # `explain()` regression check) is treated as blocking. Default None
     # inherits engine `agent.block_on_explain_regression` (= False).
     block_on_explain_regression: bool | None = None
+    # 1.1.0 — sandbox replay fidelity vs speed trade-off.
+    #   sample    : default. Replay every generated patch on the first
+    #               1000 rows of each Ingress (no Egress writes). Fast, low
+    #               confidence — sufficient when blueprint is small.
+    #   preflight : replay on the FULL dataset (no Egress writes). Slow but
+    #               conclusive. Requires danger.allow_full_preflight: true.
+    #   off       : skip sandbox replay entirely. Patch goes LLM → guardrail
+    #               check → apply → next execute() on real data. Most
+    #               dangerous; requires danger.allow_skip_sandbox: true.
+    sandbox_mode: Literal["sample", "preflight", "off"] = "sample"
 
 
 class ModuleSchema(BaseModel):

@@ -255,6 +255,7 @@ def _run_patch_gates_inline(
     iteration_run_id: str,
     blueprint_id: str,
     sample_rows: int = 1000,
+    sandbox_mode: str = "sample",
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
@@ -289,16 +290,30 @@ def _run_patch_gates_inline(
         pass
 
     explain_after: dict[str, dict] = {}
-    sandbox_res = run_sandbox_gate(
-        bp_after,
-        blueprint_path=blueprint_path,
-        patch_id=patch.patch_id,
-        failed_module=failed_module,
-        sample_rows=int(sample_rows),
-        observability_store=bundle.observability,
-        lineage_store=bundle.lineage,
-        explain_capture=explain_after,
-    )
+    # 1.1.0 — sandbox_mode controls replay fidelity:
+    #   sample   → sample_rows rows per Ingress, no Egress (default)
+    #   preflight → full dataset, no Egress (slow, conclusive)
+    #   off       → skip the gate entirely (synthetic pass)
+    if sandbox_mode == "off":
+        from aqueduct.patch.preview import SandboxGateResult as _SBR
+        sandbox_res = _SBR(
+            status="skip",
+            detail="sandbox_mode=off (danger.allow_skip_sandbox=true)",
+            sample_rows=0,
+            duration_ms=0,
+        )
+    else:
+        _sample_for_call = 0 if sandbox_mode == "preflight" else int(sample_rows)
+        sandbox_res = run_sandbox_gate(
+            bp_after,
+            blueprint_path=blueprint_path,
+            patch_id=patch.patch_id,
+            failed_module=failed_module,
+            sample_rows=_sample_for_call,
+            observability_store=bundle.observability,
+            lineage_store=bundle.lineage,
+            explain_capture=explain_after,
+        )
     try:
         surveyor.record_patch_simulation(
             patch_id=patch.patch_id,
@@ -1369,6 +1384,42 @@ def run(
                 )
                 sys.exit(1)
 
+        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
+        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
+            click.echo(
+                "✗ agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
+                "in aqueduct.yml (full-dataset sandbox replay).",
+                err=True,
+            )
+            sys.exit(1)
+        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
+            click.echo(
+                "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
+                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
+                err=True,
+            )
+            sys.exit(1)
+        if _sandbox_mode == "preflight":
+            click.echo(
+                "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
+                err=True,
+            )
+        elif _sandbox_mode == "off":
+            click.echo(
+                "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
+                err=True,
+            )
+        # Double-danger combo — sandbox off + aggressive auto-apply in a loop
+        if _sandbox_mode == "off" and manifest.agent.approval_mode == "aggressive":
+            click.echo(
+                "⚠ DANGER COMBO: sandbox_mode=off + approval_mode=aggressive — every LLM patch "
+                f"applies to real data without pre-validation, up to aggressive_max_patches="
+                f"{manifest.agent.aggressive_max_patches} times per failure. Use only when you "
+                "fully trust the model and blueprint scope is tiny.",
+                err=True,
+            )
+
         # ── Pending patch check ────────────────────────────────────────────────────
         patches_dir = _project_root / "patches"
         pending_dir = patches_dir / "pending"
@@ -1825,6 +1876,7 @@ def run(
                     failed_module=failure_ctx.failed_module,
                     iteration_run_id=iteration_run_id,
                     blueprint_id=manifest.blueprint_id,
+                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                 )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
@@ -1920,6 +1972,7 @@ def run(
                     failed_module=failure_ctx.failed_module,
                     iteration_run_id=iteration_run_id,
                     blueprint_id=manifest.blueprint_id,
+                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                 )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression

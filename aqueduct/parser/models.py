@@ -69,6 +69,10 @@ class AgentConfig:
     # Phase 29b: opt-in stricter Gate 4 (explain regression) for aggressive mode.
     # None = inherit from engine default (False).
     block_on_explain_regression: bool | None = None
+    # 1.1.0 — sandbox replay fidelity: "sample" (default), "preflight"
+    # (full dataset, requires danger.allow_full_preflight), "off" (skip,
+    # requires danger.allow_skip_sandbox).
+    sandbox_mode: str = "sample"
 
 
 @dataclass(frozen=True)

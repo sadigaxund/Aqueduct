@@ -108,6 +108,36 @@ def parse(
         raise ParseError(f"Context resolution failed: {exc}") from exc
 
     # ── 4. Build Module dataclasses (with config substitution) ────────────────
+    #
+    # 1.1.0 — Anchor relative path fields to the blueprint file's directory so
+    # `ingress.path`, `egress.path`, etc. resolve consistently regardless of
+    # the CWD `aqueduct run` was invoked from. Matches industry norm
+    # (Compose, k8s, Terraform): paths inside a YAML resolve to that YAML's
+    # parent. Original YAML on disk is untouched; only the in-memory
+    # `Module.config` carries the absolute form. LLM context (which receives
+    # the raw blueprint dict) is unaffected. Fixes sandbox replay's
+    # "events_raw produced no DataFrame" when blueprint lives in a sub-dir.
+    _bp_dir = path.parent.resolve()
+
+    def _anchor_path_value(val: Any) -> Any:
+        if not isinstance(val, str) or not val:
+            return val
+        if "://" in val:  # s3://, gs://, file://, etc. — leave untouched
+            return val
+        p = Path(val)
+        if p.is_absolute():
+            return val
+        return str((_bp_dir / p).resolve())
+
+    def _anchor_paths(cfg: Any) -> Any:
+        if not isinstance(cfg, dict):
+            return cfg
+        out = dict(cfg)
+        for k in ("path", "data_dir", "input_dir", "output_dir", "jar"):
+            if k in out:
+                out[k] = _anchor_path_value(out[k])
+        return out
+
     try:
         modules = tuple(
             Module(
@@ -116,7 +146,7 @@ def parse(
                 label=m.label,
                 description=m.description,
                 tags=tuple(m.tags),
-                config=resolve_value(m.config, ctx_map),
+                config=_anchor_paths(resolve_value(m.config, ctx_map)),
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
                 checkpoint=m.checkpoint,
@@ -190,6 +220,7 @@ def parse(
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,
+            sandbox_mode=validated.agent.sandbox_mode,
         )
     except ValueError as exc:
         raise ParseError(f"agent config resolution failed: {exc}") from exc
