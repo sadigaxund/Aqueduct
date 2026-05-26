@@ -268,7 +268,19 @@ def run_sandbox_gate(
 
     # ── Persist patched Blueprint to a tempfile so the standard Parser
     # ── (which reads from disk) can ingest it.
-    with tempfile.NamedTemporaryFile(suffix=".yml", delete=False, mode="w") as tmp:
+    # 1.1.0 — write the tempfile NEXT TO the original blueprint, not in
+    # /tmp/, so the parser's path-anchoring rule (relative module paths
+    # resolve to the blueprint's parent dir) still finds the real data
+    # files. Using /tmp/ would cause every relative `path:` field to
+    # resolve under /tmp/, breaking sandbox replay.
+    _bp_orig = _Path(blueprint_path) if blueprint_path else None
+    _anchor_dir = _bp_orig.parent if _bp_orig and _bp_orig.exists() else None
+    with tempfile.NamedTemporaryFile(
+        suffix=".aq-sandbox.yml",
+        delete=False,
+        mode="w",
+        dir=str(_anchor_dir) if _anchor_dir else None,
+    ) as tmp:
         tmp_path = _Path(tmp.name)
     try:
         _yaml_dump(blueprint_after, tmp_path)
@@ -355,13 +367,18 @@ def run_sandbox_gate(
         except Exception:
             from aqueduct.executor import execute as execute  # noqa: F401
         try:
+            # 1.1.0 fix — run the WHOLE patched DAG, not from `failed_module`
+            # onwards. Skipping upstream Ingress/Channels left frame_store
+            # empty for the failed module's inputs ("produced no DataFrame"
+            # false-fail). sample_rows wrapping makes the full replay cheap
+            # enough that the prior optimisation isn't worth the false
+            # negatives.
             result = execute(  # type: ignore[operator]
                 sandboxed_manifest,
                 spark_session,
                 run_id=f"sandbox-{patch_id}",
                 store_dir=None,
                 surveyor=None,
-                from_module=failed_module,
                 observability_store=observability_store,
                 lineage_store=lineage_store,
                 explain_capture=explain_capture,
