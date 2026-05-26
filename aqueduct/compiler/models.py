@@ -91,6 +91,7 @@ class Manifest:
                 "provider": self.agent.provider,
                 "base_url": self.agent.base_url,
                 "prompt_context": self.agent.prompt_context,
+                "sandbox_mode": self.agent.sandbox_mode,
                 "guardrails": {
                     "forbidden_ops": list(self.agent.guardrails.forbidden_ops),
                     "allowed_paths": list(self.agent.guardrails.allowed_paths),

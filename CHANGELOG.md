@@ -123,7 +123,26 @@ release and are marked **BREAKING**.
   added the aggressive `run_id` vs `parent_run_id` semantics note that
   every multi-table join needs.
 
+### Added
+- `agent.sandbox_mode: sample | preflight | off` (blueprint + engine config).
+  Controls patch sandbox replay fidelity. `sample` (default) keeps existing
+  1000-row replay; `preflight` runs full dataset (no Egress) and requires
+  `danger.allow_full_preflight: true`; `off` skips the gate entirely and
+  requires `danger.allow_skip_sandbox: true`. Engine prints a startup warning
+  for `preflight` / `off` and a `⚠ DANGER COMBO` line when
+  `sandbox_mode=off` + `approval_mode=aggressive` are both set.
+- `danger.allow_full_preflight` and `danger.allow_skip_sandbox` config flags.
+
 ### Fixed
+- **Path resolution.** Every relative path inside a YAML file now resolves to
+  that YAML's parent directory, not the CWD of `aqueduct run`. Affects
+  `module.config.path`, `module.config.data_dir`, `input_dir`, `output_dir`,
+  `jar`, and `stores.*.path`. URI-style values (`s3://`, `postgresql://`,
+  etc.) and absolute paths pass through unchanged. The on-disk YAML is never
+  rewritten — only the in-memory compiled `Manifest`/config carry absolute
+  paths, so LLM context (the raw blueprint dict) is unaffected. Fixes
+  sandbox replay's `"events_raw produced no DataFrame"` when the blueprint
+  is invoked from a sub-dir. Matches Compose / k8s / Terraform conventions.
 - `run_records` now writes one row per aggressive-mode iteration, with
   `parent_run_id` linking back to the user-visible outer `run_id`. Previously
   `Surveyor.record()` issued a plain `UPDATE WHERE run_id = ?` against a row

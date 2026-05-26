@@ -541,3 +541,8 @@ agent:
 #   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
 #                                     # (null_rates, value_distribution, distinct_count)
 #                                     # adds latency; leave false in production
+#   allow_full_preflight: false       # if true, agent.sandbox_mode: preflight is allowed
+#                                     # (full-dataset sandbox replay, no Egress; slow but conclusive)
+#   allow_skip_sandbox: false         # if true, agent.sandbox_mode: off is allowed
+#                                     # (skip sandbox replay entirely; patches hit real data via
+#                                     # the next execute(). Combine with aggressive at your own risk.)
