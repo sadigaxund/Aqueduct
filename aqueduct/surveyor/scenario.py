@@ -401,7 +401,16 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
 
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        with tempfile.NamedTemporaryFile(suffix=".yml", delete=False, mode="w") as tmp:
+        # 1.1.0 — tempfile must live next to the scenario's blueprint so the
+        # path-anchoring rule resolves relative module paths against the real
+        # data directory, not against /tmp/.
+        _anchor_dir = blueprint_path.parent if blueprint_path.exists() else None
+        with tempfile.NamedTemporaryFile(
+            suffix=".aq-scenario.yml",
+            delete=False,
+            mode="w",
+            dir=str(_anchor_dir) if _anchor_dir else None,
+        ) as tmp:
             tmp_path = Path(tmp.name)
         _yaml_dump(patched, tmp_path)
         try:

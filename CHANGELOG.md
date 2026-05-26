@@ -145,6 +145,12 @@ release and are marked **BREAKING**.
   relied on the previous default; explicit values are unaffected.
 
 ### Added
+- `PatchSpec._normalize_op_aliases` now auto-derives a `patch_id` slug from
+  the rationale (or a short uuid fallback) when the LLM omits the field. Also
+  silently strips common hallucinated meta fields (`id`, `name`, `applied_by`,
+  `datetime_applied`, `timestamp`, `author`, `version`, `created_at`,
+  `updated_at`) instead of bouncing the whole patch via `extra="forbid"`.
+  Saves a reprompt round-trip per missing field.
 - Regulator modules now accept a `config.poll_seconds: float = 30.0` knob
   controlling the cadence of the gate-poll loop while `timeout_seconds > 0`.
   Replaces a hardcoded 2-second poll interval that wasted driver CPU and
@@ -160,6 +166,40 @@ release and are marked **BREAKING**.
 - `danger.allow_full_preflight` and `danger.allow_skip_sandbox` config flags.
 
 ### Fixed
+- **`_apply_patch_in_memory` tempfile path anchoring.** Same class of bug as
+  `run_sandbox_gate`: the patched Blueprint was written to a `/tmp/...`
+  tempfile, so the 1.1.0 path-anchoring rule resolved any `../data/...`
+  relative path against `/tmp/`, producing absurd values like
+  `/data/input/events.csv`. The tempfile is now created in the same
+  directory as the original blueprint (`dir=blueprint_path.parent`).
+- **Failed-patch staging message** now reflects the actual on-disk filename
+  (`{YYYYMMDDTHHmmss}_{patch_id}.json`) instead of the bare `patch_id.json`,
+  matching the timestamp-prefixed name that `_patch_filename` writes.
+- **Apply-callback now compile-checks the patched Blueprint** and rejects
+  patches that drop required discriminator keys (Channel `op`, Ingress /
+  Egress `format`) BEFORE sandbox replay burns 30+ seconds proving the same
+  thing. Caught a class of LLM mistakes where `replace_module_config` was
+  used for a single-field fix and silently dropped `op: sql` from a Channel
+  module. The rejection reason ("Patch leaves Channel module 'X' without
+  required 'op' key in config. Use set_module_config_key to update one key
+  instead of replace_module_config.") feeds back to the LLM as concrete
+  reprompt context in the multi-patch loop.
+- **Sandbox replay no longer skips upstream of the failed module.** `run_sandbox_gate`
+  invoked `execute(..., from_module=failed_module)`, which made the executor
+  skip everything upstream — so the failed module saw `frame_store[upstream]
+  = None` and reported `"produced no DataFrame"` even when the patch was
+  correct. The full DAG now runs in sandbox; `sample_rows` wrapping keeps
+  replay cheap enough that the prior partial-run optimisation isn't worth
+  the false-negative rate. Caller-supplied `failed_module` is still accepted
+  for back-compat; it's no longer used to slice the run.
+- **Sandbox replay path anchoring.** `run_sandbox_gate` wrote the patched
+  Blueprint to `tempfile.NamedTemporaryFile(...)` in `/tmp/`, then re-parsed
+  it; under the 1.1.0 path-anchoring rule every relative module `path:`
+  resolved to `/tmp/...` and the sandbox failed with PATH_NOT_FOUND even when
+  the patch itself was correct. The tempfile is now created in the same
+  directory as the original blueprint (`dir=blueprint_path.parent`), so
+  relative paths resolve to the real data files. Falls back to default
+  `/tmp/` only when no original blueprint path is available.
 - **Path resolution.** Every relative path inside a YAML file now resolves to
   that YAML's parent directory, not the CWD of `aqueduct run`. Affects
   `module.config.path`, `module.config.data_dir`, `input_dir`, `output_dir`,

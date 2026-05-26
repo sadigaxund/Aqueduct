@@ -195,7 +195,17 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        with tempfile.NamedTemporaryFile(suffix=".yml", delete=False, mode="w") as tmp:
+        # 1.1.0 — write the tempfile NEXT TO the original blueprint so the
+        # 1.1.0 path-anchoring rule (relative module paths resolve to the
+        # blueprint's parent dir) still finds the real data files. Using /tmp/
+        # would resolve `../data/...` against /tmp/ and produce `/data/...`.
+        _anchor_dir = blueprint_path.parent if blueprint_path.exists() else None
+        with tempfile.NamedTemporaryFile(
+            suffix=".aq-apply.yml",
+            delete=False,
+            mode="w",
+            dir=str(_anchor_dir) if _anchor_dir else None,
+        ) as tmp:
             tmp_path = Path(tmp.name)
         _yaml_dump(patched, tmp_path)
         try:
@@ -356,8 +366,13 @@ def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, c
         from aqueduct.agent import stage_patch_for_human
         stage_patch_for_human(patch, patches_dir, failure_ctx,
                               on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+        # Reflect the actual on-disk filename (timestamp prefix added by
+        # `_patch_filename`) instead of the bare patch_id.
+        pending = patches_dir / "pending"
+        _file = next(pending.glob(f"*_{patch.patch_id}.json"), None)
+        _shown = _file.name if _file else f"{patch.patch_id}.json"
         click_mod.echo(
-            f"  ✎ Failed patch staged for review → patches/pending/{patch.patch_id}.json",
+            f"  ✎ Failed patch staged for review → patches/pending/{_shown}",
             err=True,
         )
     # discard: do nothing
@@ -1710,9 +1725,37 @@ def run(
             def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
                 try:
                     from aqueduct.patch.apply import (
-                        _check_guardrails, _yaml_load, PatchError,
+                        _check_guardrails, _yaml_load, apply_patch_to_dict,
+                        PatchError,
                     )
                     bp_raw = _yaml_load(_bp)
+                    # 1.1.0 — compile-sanity check. Catches patches that drop
+                    # discriminator fields (e.g. `replace_module_config` on a
+                    # Channel that omits `op`) before sandbox replay burns
+                    # 30+ seconds proving the same thing. Errors feed back to
+                    # the LLM as concrete reprompt context.
+                    try:
+                        bp_after = apply_patch_to_dict(bp_raw, patch_spec)
+                        for _m in (bp_after.get("modules") or []):
+                            if not isinstance(_m, dict):
+                                continue
+                            _mt = _m.get("type")
+                            _cfg = _m.get("config") or {}
+                            if _mt == "Channel" and "op" not in _cfg:
+                                return False, "schema_drift", (
+                                    f"Patch leaves Channel module {_m.get('id')!r} without "
+                                    f"required 'op' key in config. Use set_module_config_key "
+                                    f"to update one key instead of replace_module_config."
+                                ), None
+                            if _mt in ("Ingress", "Egress") and "format" not in _cfg:
+                                return False, "schema_drift", (
+                                    f"Patch leaves {_mt} module {_m.get('id')!r} without "
+                                    f"required 'format' key in config."
+                                ), None
+                    except Exception as exc:
+                        return False, "apply_error", (
+                            f"Patch failed to apply cleanly: {exc}"
+                        ), None
                     gb = (bp_raw.get("agent") or {}).get("guardrails") or {}
                     if not (gb.get("forbidden_ops") or gb.get("allowed_paths")
                             or gb.get("heal_on_errors") or gb.get("never_heal_errors")):

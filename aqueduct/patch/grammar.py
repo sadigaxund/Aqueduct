@@ -217,7 +217,8 @@ class PatchSpec(BaseModel, extra="forbid"):
 
         # All known aliases for "operations"
         _OPS_ALIASES = ("ops", "op_list", "patches", "steps", "fix", "changes",
-                        "actions", "modifications", "updates", "patch_operations")
+                        "actions", "modifications", "updates", "patch_operations",
+                        "module_updates", "module_changes", "edits", "diff")
         if "operations" not in data:
             for alias in _OPS_ALIASES:
                 if alias in data:
@@ -237,6 +238,29 @@ class PatchSpec(BaseModel, extra="forbid"):
                 ):
                     data["operations"] = data.pop(key)
                     break
+
+        # ── Synthesise missing patch_id ───────────────────────────────────────
+        # 1.1.0 — LLMs frequently omit `patch_id` even though it's required.
+        # Re-prompting wastes a full attempt. Derive a stable slug from
+        # rationale (or fall back to a short uuid) so the patch can apply
+        # cleanly without bouncing the LLM.
+        if not data.get("patch_id"):
+            import re as _re
+            import uuid as _uuid
+            _rat = (data.get("rationale") or "").strip()
+            if _rat:
+                _slug = _re.sub(r"[^a-z0-9]+", "-", _rat.lower())[:48].strip("-")
+                if _slug:
+                    data["patch_id"] = f"auto-{_slug}"
+            if not data.get("patch_id"):
+                data["patch_id"] = f"auto-{_uuid.uuid4().hex[:12]}"
+
+        # ── Strip well-known LLM-hallucinated meta fields ─────────────────────
+        # Models sometimes add `id`, `name`, `applied_by`, `datetime_applied`,
+        # etc. `extra="forbid"` would reject the whole patch — drop them quietly.
+        for _bad in ("id", "name", "applied_by", "datetime_applied", "timestamp",
+                     "author", "version", "created_at", "updated_at"):
+            data.pop(_bad, None)
 
         # ── Op name normalization inside each operation ───────────────────────
         _DISCRIMINATOR_ALIASES = ("type", "action", "operation", "method", "kind", "name")
