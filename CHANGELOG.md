@@ -10,7 +10,11 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-28
+
 ### Added
+- **`stores` aggregate extra** in `pyproject.toml` — `pip install aqueduct-core[stores]` pulls Postgres + Redis backends in one shot, mirroring the existing `secrets` / `schedulers` umbrella pattern. Individual `postgres` / `redis` extras still available. `[all]` now references `[stores]` instead of listing each backend.
+
 - **Unified reprompt loop with multi-axis budget** (Phase 34). The agent's
   two disjoint loops (inner `max_reprompts` and outer aggressive retry) are
   collapsed into a single `generate_agent_patch` loop driven by a stateful
