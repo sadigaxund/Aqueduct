@@ -376,7 +376,7 @@ class Surveyor:
         self._stores: "StoreBundle | None" = stores
         self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
-        self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (aggressive)
+        self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -424,7 +424,7 @@ class Surveyor:
 
             try:
                 # Defect-fix — add parent_run_id column to healing_outcomes
-                # for pre-fix DBs so the aggressive heal loop can record the
+                # for pre-fix DBs so the multi-patch heal loop can record the
                 # user-visible outer run_id alongside the per-iteration uuid.
                 pr_exists = cur.execute(
                     "SELECT 1 FROM information_schema.columns "
@@ -476,7 +476,7 @@ class Surveyor:
             cur.execute(_HEAL_ATTEMPTS_DDL)
 
             try:
-                # 1.1.0 fix — add parent_run_id to pre-fix DBs so aggressive-mode
+                # 1.1.0 fix — add parent_run_id to pre-fix DBs so multi-patch
                 # iteration rows can link back to the user-visible outer run_id.
                 pr_exists = cur.execute(
                     "SELECT 1 FROM information_schema.columns "
@@ -505,9 +505,9 @@ class Surveyor:
         self._started = True
 
     def register_iteration(self, *, run_id: str, parent_run_id: str) -> None:
-        """Register an aggressive-mode iteration's per-execute run_id.
+        """Register a multi-patch iteration's per-execute run_id.
 
-        Aggressive heal mints a fresh ``run_id`` per ``execute()`` call from
+        Multi-patch heal mints a fresh ``run_id`` per ``execute()`` call from
         iteration 1 onwards (iteration 0 reuses the outer/user-visible
         ``run_id``). The CLI calls this before each non-first ``execute()`` so
         the subsequent ``record()`` knows which outer ``run_id`` to stamp into
@@ -549,7 +549,7 @@ class Surveyor:
         ))
 
         effective_status = "patched" if (patched and result.status == "success") else result.status
-        # 1.1.0 fix — aggressive heal mints a new run_id per iteration. The
+        # 1.1.0 fix — multi-patch heal mints a new run_id per iteration. The
         # outer run_id is INSERTed by start(); iteration 1+ never had a row
         # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,
         # carrying parent_run_id back to the outer (registered via
@@ -719,10 +719,10 @@ class Surveyor:
         answerable in SQL.
 
         ``parent_run_id`` (optional): the user-visible outer run_id when the
-        aggressive loop minted a per-iteration ``run_id`` for ``execute()``.
+        multi-patch loop minted a per-iteration ``run_id`` for ``execute()``.
         Lets cross-iteration queries (``WHERE parent_run_id = '<outer>'``)
         retrieve every outcome from the same heal call. NULL when caller is
-        not in the aggressive loop.
+        not in the multi-patch loop.
         """
         if self._observability is None:
             return
@@ -873,7 +873,7 @@ class Surveyor:
     ) -> None:
         """Append one row to `observability.patch_simulation`.
 
-        Called by Phase 29a `aqueduct patch preview` and by the auto/aggressive
+        Called by Phase 29a `aqueduct patch preview` and by the `auto` mode
         self-healing loop after each Gate 2 (lineage diff) and Gate 3 (sandbox
         replay) evaluation. The table is the audit trail for "why we accepted
         or rejected this patch without running the full pipeline."
