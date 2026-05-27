@@ -10,6 +10,18 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- **`replace_context_value` on blueprints without a `context:` block.** The
+  LLM was pushed toward `replace_context_value` for path fixes even when the
+  blueprint declared no `context:` block; the apply gate then rejected with
+  `"Blueprint has no 'context' block."` and the LLM repeated the same op on
+  reprompt, burning the heal-attempt budget. Two changes: (1) failure prompt
+  now emits an explicit "No `context:` block" section when `prov.context` is
+  empty, telling the model to use `set_module_config_key` instead; (2) the
+  apply-gate error message names the correct alternative op with a concrete
+  example, so apply-callback reprompts steer the model toward the literal
+  fix.
+
 ## [1.1.0] — 2026-05-28
 
 ### Added
