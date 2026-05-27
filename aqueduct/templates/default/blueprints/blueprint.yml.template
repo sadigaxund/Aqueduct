@@ -105,7 +105,7 @@ agent:
 
   # on_heal_failure: what to do when a patch is generated but the re-run still fails
   #   stage   — stage failed patch to patches/pending/ for human inspection (default)
-  #   discard — silently discard, continue (aggressive) or stop (auto)
+  #   discard — silently discard, continue (multi-patch) or stop (single-patch)
   #   abort   — stop the healing loop immediately
   on_heal_failure: "stage"
 

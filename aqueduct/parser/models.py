@@ -66,10 +66,10 @@ class AgentConfig:
     # None = unlimited. When exceeded, Surveyor blocks the LLM call.
     max_heal_attempts_per_hour: int | None = None
     # Phase 29a: "full_run" | "sandbox" | None (= inherit from engine default).
-    # Controls whether auto/aggressive validates a generated patch by a full
+    # Controls whether `auto` mode validates a generated patch by a full
     # Spark run after the sandbox replay, or by sandbox replay alone.
     patch_validation: str | None = None
-    # Phase 29b: opt-in stricter Gate 4 (explain regression) for aggressive mode.
+    # Phase 29b: opt-in stricter Gate 4 (explain regression) for `auto` multi-patch mode.
     # None = inherit from engine default (False).
     block_on_explain_regression: bool | None = None
     # 1.1.0 — sandbox replay fidelity: "sample" (default), "preflight"

@@ -85,10 +85,10 @@ class AgentSchema(BaseModel):
     # Phase 29a — patch validation pyramid. Default `full_run` keeps existing
     # behaviour: a generated patch is sandbox-checked AND then validated by a
     # full Spark run before the Blueprint is written to disk. `sandbox` skips
-    # the full-run step — fastest, lowest confidence, lets aggressive mode
-    # close patch loops in seconds rather than minutes.
+    # the full-run step — fastest, lowest confidence, lets multi-patch mode
+    # (`auto` + `max_patches > 1`) close patch loops in seconds rather than minutes.
     patch_validation: Literal["full_run", "sandbox"] | None = None
-    # Phase 29b — when True (aggressive mode only), the explain gate (post-patch
+    # Phase 29b — when True (`auto` multi-patch mode only), the explain gate (post-patch
     # `explain()` regression check) is treated as blocking. Default None
     # inherits engine `agent.block_on_explain_regression` (= False).
     block_on_explain_regression: bool | None = None

@@ -6,7 +6,7 @@ webhook endpoints.  It is NOT the blueprint definition.
 
 LLM agent connection config (provider, base_url, model, provider_options) lives
 here as engine-level defaults.  Per-blueprint policy (approval_mode,
-on_pending_patches, aggressive_max_patches) lives in the Blueprint agent: block.
+on_pending_patches, max_patches) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
 
 Default behaviour (no file present):
@@ -211,8 +211,8 @@ class DangerConfig(BaseModel):
         description=(
             "Allow agent.sandbox_mode: off — skip sandbox replay entirely; "
             "patches go straight to production data via the next execute(). "
-            "Most dangerous; combine with approval_mode: aggressive only "
-            "when you fully trust the model and blueprint scope is tiny."
+            "Most dangerous; combine with approval_mode: auto + max_patches > 1 "
+            "only when you fully trust the model and blueprint scope is tiny."
         ),
     )
 
@@ -260,7 +260,7 @@ class AgentConnectionConfig(BaseModel):
 
     Sets provider, endpoint, and model used by all blueprints unless overridden
     in the Blueprint agent: block.  Policy fields (approval_mode,
-    on_pending_patches, aggressive_max_patches) belong in the Blueprint, not here.
+    on_pending_patches, max_patches) belong in the Blueprint, not here.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -304,7 +304,7 @@ class AgentConnectionConfig(BaseModel):
         default="full_run",
         description=(
             "Phase 29a — engine-wide validation level for LLM-generated patches in "
-            "auto/aggressive modes. `full_run` (default, safest): sandbox replay "
+            "`auto` mode. `full_run` (default, safest): sandbox replay "
             "first, then a real Spark run against the patched Blueprint, write "
             "only if both pass. `sandbox`: sandbox replay only; write on sandbox "
             "pass. Per-blueprint override: agent.patch_validation."
@@ -324,7 +324,7 @@ class AgentConnectionConfig(BaseModel):
         default=False,
         description=(
             "Phase 29b — when True, the explain gate (post-patch `explain()` regression "
-            "check) is treated as blocking in aggressive mode: a patch that "
+            "check) is treated as blocking in `auto` multi-patch mode: a patch that "
             "adds shuffles / Python UDF nodes or drops broadcast hints is "
             "rejected instead of merely warned. Default False — the explain gate is "
             "warn-only across all healing modes, preserving current behaviour."

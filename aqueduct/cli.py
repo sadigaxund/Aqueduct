@@ -1441,7 +1441,7 @@ def run(
                 "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
                 err=True,
             )
-        # Double-danger combo — sandbox off + aggressive auto-apply in a loop
+        # Double-danger combo — sandbox off + auto multi-patch loop
         if _sandbox_mode == "off" and _is_multi_patch:
             click.echo(
                 "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
@@ -1564,7 +1564,7 @@ def run(
         failure_ctx = None
         result = None
         patch_staged_for_review = False  # set when human/ci mode writes a patch to patches/pending/
-        last_apply_error: str | None = None  # fed back to LLM on next aggressive iteration
+        last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
@@ -1720,7 +1720,7 @@ def run(
             # rejection back as a reprompt instead of letting the loop exit
             # 'solved' and then having the outer code silently stage. Slower
             # gates (lineage / sandbox / explain) stay OUTSIDE the loop — they
-            # run once per patch in aggressive mode.
+            # run once per patch in multi-patch mode.
             _bp_path_for_cb = Path(blueprint)
             def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
                 try:
@@ -2022,7 +2022,8 @@ def run(
                 break
 
             elif effective_mode == "aggressive":
-                # Phase 29a/b — Gates 2, 3, 4 pre-filter for aggressive too.
+                # Phase 29a/b — Gates 2, 3, 4 pre-filter for the legacy
+                # `aggressive` mode (deprecated alias for `auto` + `max_patches > 1`).
                 _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
                     patch=patch,
                     blueprint_path=Path(blueprint),
@@ -2046,7 +2047,7 @@ def run(
                         f"Patch {patch.patch_id!r} rejected by the explain gate: "
                         + "; ".join(r.detail for r in _g4.regressions)
                     )
-                    click.echo(f"  ✗ aggressive: explain gate blocked — {last_apply_error}", err=True)
+                    click.echo(f"  ✗ multi-patch: explain gate blocked — {last_apply_error}", err=True)
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
@@ -2057,7 +2058,7 @@ def run(
                     continue
                 if _g3 is not None and not _g3_passed:
                     click.echo(
-                        f"  ✗ aggressive: sandbox rejected patch — {_g3.detail}",
+                        f"  ✗ multi-patch: sandbox rejected patch — {_g3.detail}",
                         err=True,
                     )
                     last_apply_error = f"Patch {patch.patch_id!r} rejected by sandbox: {_g3.detail}"
@@ -2075,7 +2076,7 @@ def run(
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
                     _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
                     click.echo(
-                        f"  ✓ aggressive: sandbox-only validated → {blueprint}",
+                        f"  ✓ multi-patch: sandbox-only validated → {blueprint}",
                         err=True,
                     )
                     surveyor.record_healing_outcome(
@@ -2169,7 +2170,7 @@ def run(
 
         if result.status not in ("success", "patched"):
             # Print the outer (user-visible) run_id — that's the join key for
-            # heal_attempts and `healing_outcomes.parent_run_id`. In aggressive
+            # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
             if failure_ctx:

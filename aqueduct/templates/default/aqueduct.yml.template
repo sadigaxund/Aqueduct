@@ -454,7 +454,7 @@ agent:
   #   Never reference local filesystem paths in config.path values.
 
   # ── Patch validation pyramid (Phase 29a) ───────────────────────────────────
-  # patch_validation controls how rigorously auto/aggressive validates a
+  # patch_validation controls how rigorously `auto` mode validates a
   # generated patch before writing it to the Blueprint on disk:
   #
   #   full_run (default, safest)
@@ -473,14 +473,14 @@ agent:
 
   # ── the explain gate strictness (Phase 29b) ──────────────────────────────────────────
   # block_on_explain_regression toggles whether the explain gate (post-patch `explain()`
-  # regression check) is a hard blocker in aggressive mode. the explain gate compares
+  # regression check) is a hard blocker in `auto` multi-patch mode. the explain gate compares
   # per-module `Exchange` / `BatchEvalPython` / `BroadcastExchange` counts in
   # the patched Manifest against the most recent baseline rolling-stored in
   # `observability.explain_snapshot`.
   #   false (default) — the explain gate prints warnings but never rejects a patch.
-  #   true            — aggressive mode rejects a patch with any regression
+  #   true            — `auto` multi-patch mode rejects a patch with any regression
   #                     (extra shuffle, extra Python UDF, lost broadcast hint).
-  # Auto/human/disabled modes ignore this flag — the explain gate is informational there.
+  # Single-patch/human/disabled modes ignore this flag — the explain gate is informational there.
   # Per-blueprint override available via the Blueprint agent: block.
   # block_on_explain_regression: false
 

@@ -8,8 +8,8 @@ and powers two surfaces:
   impact) and optionally Gate 3 (sandbox replay) against the patched
   Blueprint.
 
-- The internal `_apply_patch_in_memory` path used by `auto` and `aggressive`
-  modes — invokes `run_lineage_gate` and `run_sandbox_gate` ahead of the
+- The internal `_apply_patch_in_memory` path used by `auto` mode
+  — invokes `run_lineage_gate` and `run_sandbox_gate` ahead of the
   expensive full-pipeline re-run controlled by `agent.patch_validation`.
 
 Both gates operate on **live** lineage computed from the patched Blueprint
