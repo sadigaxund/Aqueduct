@@ -66,8 +66,6 @@ edges: []
         
         config_path = tmp_path / "aqueduct.yml"
         config_path.write_text("""
-stores:
-  observability: {path: .aqueduct/observability.db}
 danger:
   allow_aggressive_patching: true
 """, encoding="utf-8")

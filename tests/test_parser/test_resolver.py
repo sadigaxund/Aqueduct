@@ -31,7 +31,8 @@ class TestContextResolution:
         monkeypatch.delenv("AQUEDUCT_ENV", raising=False)
         bp = parse(FIXTURES / "valid_minimal.yml")
         ingress = next(m for m in bp.modules if m.id == "read_input")
-        assert ingress.config["path"] == "data/dev/input.parquet"
+        expected = str((FIXTURES / "data/dev/input.parquet").resolve())
+        assert ingress.config["path"] == expected
 
     def test_cli_overrides_take_effect(self, monkeypatch):
         monkeypatch.delenv("AQUEDUCT_ENV", raising=False)

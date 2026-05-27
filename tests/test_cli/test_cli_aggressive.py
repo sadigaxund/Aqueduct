@@ -128,7 +128,8 @@ def test_aggressive_mode_fails_then_continues(
     
     assert "✗ LLM patch did not fix the issue (1/2)" in result.output
     assert "✗ LLM patch did not fix the issue (2/2)" in result.output
-    assert "⚠  LLM: aggressive_max_patches=2 reached" in result.output
+    # 1.1.0 — renamed to max_patches in the log message.
+    assert "⚠  LLM: max_patches=2 reached" in result.output
     
     assert mock_gen_patch.call_count == 2
     assert mock_stage.call_count == 2

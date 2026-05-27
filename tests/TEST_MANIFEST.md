@@ -2617,3 +2617,83 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ Blueprint `agent.prompt_context: "${ctx.team}"` resolves from Tier-0 context block
 - ✅ Blueprint `agent.provider_options: {api_version: "${OPENAI_API_VERSION}"}` resolves nested env vars
 - ✅ None / unset agent fields pass through resolve_value unchanged (no spurious errors)
+
+### Path resolution (1.1.0)
+- ✅ Blueprint with `ingress.path: data/input/events.csv` runs from `gallery/showcase/` directory; sandbox replay finds the CSV (relative anchored to blueprint dir, not CWD).
+- ✅ Blueprint with `ingress.path: s3://bucket/key.parquet` passes through unchanged (URI not anchored).
+- ✅ Blueprint with `ingress.path: /abs/data.csv` passes through unchanged (absolute).
+- ✅ Engine config with `stores.observability.path: .aqueduct/observability.db` lands next to the config file regardless of CWD.
+- ✅ Module config keys `data_dir`, `input_dir`, `output_dir`, `jar` all resolve to blueprint-dir-anchored absolute when relative.
+
+### Sandbox modes (1.1.0)
+- ✅ `agent.sandbox_mode: sample` (default) runs 1000-row replay, drops Egress.
+- ✅ `agent.sandbox_mode: preflight` without `danger.allow_full_preflight=true` → exit 1 with helpful error pointing at the danger gate.
+- ✅ `agent.sandbox_mode: preflight` WITH danger gate → full-dataset replay, no Egress writes.
+- ✅ `agent.sandbox_mode: off` without `danger.allow_skip_sandbox=true` → exit 1.
+- ✅ `agent.sandbox_mode: off` WITH danger gate → sandbox skipped, patch applies immediately on next execute().
+- ✅ `sandbox_mode=off` + `approval_mode=aggressive` → engine prints `⚠ DANGER COMBO` line at startup.
+- ✅ Startup-time `⚠ sandbox mode: preflight` / `⚠ DANGER: sandbox mode = off` lines emit exactly once per run.
+
+### `run_records` per-iteration rows + `parent_run_id` (1.1.0)
+- ✅ Aggressive heal with 3 iterations produces 3 `run_records` rows (pre-fix produced 1). Iteration 0 row carries `parent_run_id=NULL`, iterations 1+ carry the outer (user-visible) `run_id`.
+- ✅ `Surveyor.register_iteration(run_id=<inner>, parent_run_id=<outer>)` called before each non-first `execute()` populates the row's `parent_run_id` on the subsequent `record()`.
+- ✅ `Surveyor.record()` uses `INSERT … ON CONFLICT (run_id) DO UPDATE` — re-recording the same `run_id` updates status/finished_at, no PK violation.
+- ✅ Cross-iteration join `WHERE COALESCE(parent_run_id, run_id) = '<outer>'` returns all iterations of an aggressive heal.
+- ✅ `aqueduct run` final status line + `_last_run_id` depot key + `on_success` webhook payload report the outer `run_id`, not the last iteration's per-iteration uuid.
+
+### `healing_outcomes.parent_run_id` (1.1.0)
+- ✅ Aggressive-mode healing rows carry `parent_run_id=<outer>`; non-aggressive paths leave it NULL.
+- ✅ Pre-1.1.0 store without the column: `Surveyor.start()` runs idempotent `ALTER TABLE healing_outcomes ADD COLUMN parent_run_id VARCHAR`; existing rows are NULL on the new column.
+- ✅ When the unified loop exits with `patch=None` (all attempts rejected by `apply_callback` or budget tripped), CLI synthesises one `healing_outcomes` row per `attempt_records` entry with `patch_applied=false`, `run_success_after_patch=false`, `failure_category` derived from the attempt signature. (Pre-1.1.0: `heal_attempts` had per-attempt rows but `healing_outcomes` was blank.)
+- ✅ `heal_attempts` no longer double-writes per attempt: `on_attempt` INSERTs one row with `stop_reason=NULL`; post-loop `update_heal_attempt_stop_reason()` UPDATEs the same row instead of INSERTing a duplicate.
+
+### Per-pipeline observability DB routing (1.1.0)
+- ✅ Default observability DB lands at `.aqueduct/observability/<blueprint_id>/observability.db` (not `.aqueduct/observability.db`).
+- ✅ `_resolve_obs_db(cfg, store_dir, run_id)` honours `--store-dir` first, then explicit `stores.observability.path`, then walks per-pipeline dirs to find which DB carries the requested `run_id`, falling back to the legacy shared path.
+- ✅ `aqueduct runs` list mode unions across all per-pipeline DBs (pre-fix: silently zero when default per-pipeline routing was active).
+- ✅ `aqueduct heal <run_id>` succeeds on a per-pipeline-routed run (pre-fix: failed with `observability.db not found at .aqueduct/observability.db`).
+
+### Apply-gate guardrail check wired into production heal (1.1.0)
+- ✅ `aqueduct run` self-heal: when `_check_guardrails` rejects an LLM-generated patch, the rejection feeds back into the unified loop as a reprompt with `gate_that_rejected='apply'` (pre-fix: loop exited `solved` and the blocked patch was silently staged).
+- ✅ `aqueduct heal <run_id>` heal-from-store: same apply-callback wiring as `run` self-heal.
+- ✅ `_run_patch_gates_inline(iteration_run_id=...)` accepts the renamed kwarg without TypeError on first patch in aggressive mode.
+
+### `ModuleResult.exception` carries the live exception (1.1.0)
+- ✅ Executor `_on_retry_exhausted` populates `ModuleResult.exception` with the raised `IngressError` / `ChannelError` / etc.
+- ✅ Assert error site populates `ModuleResult.exception`.
+- ✅ `Surveyor.record()` falls back to the first failed module's `exception` when its `exc=` kwarg is None — so `_extract_structured_error` fires on the common failure path and `failure_contexts.error_class / object_name / suggested_columns / sql_state / root_exception` are populated.
+
+### `stop_reason='solved'` semantics docstring (1.1.0)
+- ✅ `aqueduct/agent/budget.py` docstring explicitly states `solved` describes LLM loop termination only (parseable PatchSpec returned), NOT whether the heal actually fixed the pipeline.
+- ✅ `docs/observability_guide.md` and `docs/cli_reference.md` carry the same caveat.
+
+### Regulator poll_seconds knob (1.1.0)
+- ✅ `config.poll_seconds: 0.5` is accepted and respected (gate polled every 500ms).
+- ✅ `config.poll_seconds` omitted → default 30.0 used.
+- ✅ `config.poll_seconds: 0.1` clamps to 0.5 (minimum).
+- ✅ `config.poll_seconds: 0` clamps to 0.5.
+- ✅ With `timeout_seconds: 0` the poll loop never executes; `poll_seconds` has no observable effect.
+
+### Mode unification: `approval_mode: aggressive` → `auto` + `max_patches` (1.1.0)
+- ✅ Blueprint with `approval_mode: aggressive` parses successfully, emits `[deprecated]` warning on stderr, and the resulting `manifest.agent.approval_mode == "auto"` (normalised).
+- ✅ Blueprint with `aggressive_max_patches: 3` (no `max_patches`) populates `manifest.agent.max_patches == 3` (alias resolution).
+- ✅ Blueprint with both `max_patches: 3` and `aggressive_max_patches: 5` set → pydantic accepts whichever (`max_patches` wins; behavior governed by `validation_alias` order).
+- ✅ Engine config `danger.allow_aggressive_patching: true` is honored as alias for `allow_multi_patch: true` (cfg.danger.allow_multi_patch is True).
+- ✅ CLI `--allow-aggressive` still works (alias for `--allow-multi-patch`).
+- ✅ Default `max_patches` value is 1 (formerly 5 for `aggressive_max_patches`).
+- ✅ `max_patches: 2` without `danger.allow_multi_patch: true` and without `--allow-multi-patch` → exit 1 with the multi-patch danger-gate error pointing at the new name.
+- ✅ `sandbox_mode: off` + `max_patches: 2` (both danger gates lifted) → `⚠ DANGER COMBO` line still prints at startup (now keyed on `max_patches > 1`, not the legacy mode name).
+- ✅ Compiler manifest JSON serialisation: the `agent` block carries `max_patches`, not `aggressive_max_patches`.
+
+### PatchSpec resilience (1.1.0)
+- ⏳ LLM response missing `patch_id` field → normalizer synthesises `auto-<slug>` from rationale; PatchSpec validates cleanly.
+- ⏳ LLM response missing both `patch_id` and `rationale` → normalizer falls back to `auto-<uuid12>`; PatchSpec validates.
+- ⏳ LLM response with extra `id`, `name`, `applied_by`, `datetime_applied` fields → fields silently stripped before validation; no `extra="forbid"` failure.
+- ⏳ patch_id already provided → normalizer is a no-op (existing slug preserved).
+- ⏳ Sandbox replay tempfile is created in the blueprint's parent dir (not /tmp/), so relative `module.config.path` still anchors to the real data directory. Verify via `tempfile.gettempdir()` mock or by ensuring sandbox passes on a showcase blueprint with relative CSV paths.
+- ⏳ Sandbox replay runs the WHOLE patched DAG (not `from_module=failed_module`), so a clean patch against `clean_events` no longer false-fails with `"upstream 'events_raw' produced no DataFrame"` because upstream Ingress is now executed.
+- ⏳ `replace_module_config` on a Channel that omits `op` → apply_callback rejects with `gate='schema_drift'` and a message pointing the LLM at `set_module_config_key`.
+- ⏳ `replace_module_config` on an Ingress that omits `format` → apply_callback rejects with `gate='schema_drift'`.
+- ⏳ Apply-callback compile check skips guardrail eval when patch fails the discriminator check (returns False, "schema_drift", ...).
+- ⏳ `_apply_patch_in_memory` writes the tempfile to the blueprint's parent dir (not `/tmp/`), so relative `module.config.path` resolves to the real data files after the patch.
+- ⏳ `_stage_failed_patch` stderr message shows the actual `{ts}_{patch_id}.json` filename, not the bare `patch_id.json`.

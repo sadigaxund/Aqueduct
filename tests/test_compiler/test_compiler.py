@@ -141,7 +141,7 @@ modules:
     
     d = manifest.to_dict()
     assert "inputs_fingerprint" in d
-    assert d["inputs_fingerprint"]["m1"]["path"] == "data.parquet"
+    assert d["inputs_fingerprint"]["m1"]["path"] == str(bp_path.parent / "data.parquet")
 
 def test_compile_blueprint_path_none_builds_provenance_map(tmp_path):
     yaml_str = """

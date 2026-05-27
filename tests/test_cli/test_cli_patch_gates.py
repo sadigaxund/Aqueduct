@@ -40,7 +40,7 @@ edges: []
             bundle=mock_bundle,
             surveyor=mock_surveyor,
             failed_module="m1",
-            current_run_id="r1",
+            iteration_run_id="r1",
             blueprint_id="b1"
         )
     
@@ -81,7 +81,7 @@ def test_run_patch_gates_inline_handles_explain_failure(spark, tmp_path):
             bundle=MagicMock(),
             surveyor=mock_surveyor,
             failed_module="m1",
-            current_run_id="r1",
+            iteration_run_id="r1",
             blueprint_id="b1"
         )
     

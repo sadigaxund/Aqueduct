@@ -308,7 +308,15 @@ def test_check_storage_skipped():
 
 def test_cluster_stores_relative_duckdb_warns(tmp_path):
     """Relative DuckDB store paths in cluster mode warn (not fail) with a one-line message.
-    Real store usability is tested separately via check_store_backend.
+
+    NOTE: load_config() resolves relative store paths to absolute (relative to the config
+    file's parent directory) before returning the AqueductConfig object.  The cluster-stores
+    warn branch in run_doctor therefore never fires when using a real config file because the
+    paths are already absolute by the time the check runs.
+
+    We patch load_config inside run_doctor to return a config whose store paths are still
+    the raw relative strings, which is the state the warn branch was designed to detect
+    (e.g. a config written by hand and validated without path resolution).
     """
     config_file = tmp_path / "aqueduct.yml"
     config_file.write_text("""
@@ -324,11 +332,30 @@ stores:
   depot: {backend: duckdb, path: ".aqueduct/depot.db"}
 """, encoding="utf-8")
 
-    # In cluster mode with relative paths, cluster-stores should warn, but validation passes (0)
+    from aqueduct.config import (
+        load_config as _real_load_config,
+        RelationalStoreConfig,
+        KVStoreConfig,
+    )
+
+    def _load_with_relative_paths(path=None):
+        """Wrap real load_config but restore verbatim relative store paths."""
+        cfg = _real_load_config(path)
+        # StoresConfig is a frozen Pydantic model — rebuild it with unresolved paths.
+        from aqueduct.config import StoresConfig
+        new_stores = StoresConfig(
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
+            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
+            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+        )
+        return cfg.model_copy(update={"stores": new_stores})
+
     runner = CliRunner()
-    result = runner.invoke(cli, ["doctor", str(config_file), "--skip-spark"])
-    assert result.exit_code == 0
-    assert "⚠ cluster-stores" in result.output
+    with patch("aqueduct.config.load_config", side_effect=_load_with_relative_paths):
+        result = runner.invoke(cli, ["doctor", str(config_file), "--skip-spark"])
+
+    assert result.exit_code == 0, result.output
+    assert "⚠ cluster-stores" in result.output, result.output
     # Check the one-line warn message is present
     lines = result.output.splitlines()
     cs_line = next(line for line in lines if "cluster-stores" in line)
@@ -338,7 +365,6 @@ stores:
 
     # Check that check_store_backend runs real duckdb open / usability check
     from aqueduct.doctor import check_store_backend
-    from aqueduct.config import RelationalStoreConfig
     store_cfg = RelationalStoreConfig(backend="duckdb", path=str(tmp_path / "obs.db"))
     res = check_store_backend("observability", store_cfg)
     assert res.status == "ok"
@@ -485,15 +511,33 @@ modules: []
 edges: []
 """, encoding="utf-8")
 
+    from aqueduct.config import (
+        load_config as _real_load_config,
+        RelationalStoreConfig,
+        KVStoreConfig,
+    )
+
+    def _load_with_relative_paths(path=None):
+        """Wrap real load_config but restore verbatim relative store paths."""
+        cfg = _real_load_config(path)
+        from aqueduct.config import StoresConfig
+        new_stores = StoresConfig(
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
+            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
+            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+        )
+        return cfg.model_copy(update={"stores": new_stores})
+
     runner = CliRunner()
     
     # 1. Normal run -> warns via aqueduct.warnings.emit
-    with patch("aqueduct.warnings.emit") as mock_emit:
-        result = runner.invoke(cli, [
-            "run", str(bp_file),
-            "--config", str(config_file),
-        ])
-        assert result.exit_code == 0
-        assert mock_emit.call_count == 1
-        assert mock_emit.call_args[0][0] == "cluster_store_path_relative"
-        assert "WARNING:" not in result.output  # no raw WARNING: click.echo remains
+    with patch("aqueduct.config.load_config", side_effect=_load_with_relative_paths):
+        with patch("aqueduct.warnings.emit") as mock_emit:
+            result = runner.invoke(cli, [
+                "run", str(bp_file),
+                "--config", str(config_file),
+            ])
+            assert result.exit_code == 0
+            assert mock_emit.call_count == 1
+            assert mock_emit.call_args[0][0] == "cluster_store_path_relative"
+            assert "WARNING:" not in result.output  # no raw WARNING: click.echo remains
