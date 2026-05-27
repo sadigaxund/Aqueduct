@@ -143,7 +143,8 @@ class TestBlueprintStructure:
     def test_default_agent_config(self):
         bp = parse(FIXTURES / "valid_minimal.yml")
         assert bp.agent.approval_mode == "disabled"
-        assert bp.agent.aggressive_max_patches == 5
+        # 1.1.0 — renamed from aggressive_max_patches → max_patches, default 1.
+        assert bp.agent.max_patches == 1
 
 
 class TestCheckpointField:

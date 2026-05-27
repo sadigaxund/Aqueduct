@@ -370,10 +370,12 @@ name: heal_cli
 modules: []
 edges: []
 """)
+        # Surveyor writes to <store_dir>/observability.db. Config must point
+        # at the SAME file (not a sibling) so `_resolve_obs_db` finds it.
         config_path = tmp_path / "aq.yml"
         config_path.write_text(
             f"agent: {{model: claude-3}}\n"
-            f"stores: {{observability: {{path: {tmp_path / 'obs.db'}}}}}\n"
+            f"stores: {{observability: {{path: {tmp_path / 'observability.db'}}}}}\n"
         )
 
         from aqueduct.surveyor.surveyor import Surveyor
