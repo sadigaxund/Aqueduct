@@ -501,6 +501,16 @@ def _build_provenance_section(provenance_json: str | None) -> str:
             src = vp.get("source_type", "?")
             env_hint = f" (from env ${{{vp['env_var']}}})" if src == "env_ref" else ""
             lines.append(f"  {key} = {resolved!r}{env_hint}")
+    else:
+        # Steers the model away from `replace_context_value` when the blueprint
+        # has no `context:` block — that op would be rejected by the apply gate
+        # with "Blueprint has no 'context' block." and waste a reprompt round.
+        lines.append(
+            "\n### No `context:` block\n"
+            "This blueprint declares no `context:` block. Do NOT emit "
+            "`replace_context_value` ops — the apply gate will reject them. "
+            "Use `set_module_config_key` with a literal value on the failing module."
+        )
 
     lines.append("")
     return "\n".join(lines)

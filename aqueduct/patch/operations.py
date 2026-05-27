@@ -210,7 +210,12 @@ def apply_replace_context_value(bp: dict, op: ReplaceContextValueOp) -> dict:
     """Update a context value using dot-notation key."""
     context = bp.get("context")
     if context is None:
-        raise PatchOperationError("Blueprint has no 'context' block.")
+        raise PatchOperationError(
+            "Blueprint has no 'context' block — replace_context_value cannot be applied. "
+            "Use set_module_config_key with a literal value on the failing module instead. "
+            "Example: {'op': 'set_module_config_key', 'module_id': '<failing_module>', "
+            "'key': 'path', 'value': '<corrected_value>'}."
+        )
     _set_nested(context, op.key, op.value)
     return bp
 
