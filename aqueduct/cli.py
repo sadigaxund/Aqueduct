@@ -578,6 +578,16 @@ class _AqueductJsonLogFormatter:
     avoid pulling logging into the CLI import path unnecessarily.
     """
 
+    # Stdlib LogRecord attributes — anything NOT in this set is treated as a
+    # caller-supplied `extra=` field and merged into the JSON payload. Keeps
+    # the schema open-ended without manually enumerating every domain key.
+    _STANDARD_LOGRECORD_ATTRS = frozenset({
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+        "created", "msecs", "relativeCreated", "thread", "threadName",
+        "processName", "process", "message", "asctime", "taskName",
+    })
+
     def format(self, record) -> str:  # noqa: D401
         import json as _json
         import logging as _logging
@@ -589,6 +599,15 @@ class _AqueductJsonLogFormatter:
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        # Merge caller-supplied `extra={...}` fields (`run_id`, `blueprint_id`,
+        # `module_id`, etc.) into the payload so structured-log consumers can
+        # filter on them. Standard LogRecord attributes are skipped.
+        for key, value in record.__dict__.items():
+            if key in self._STANDARD_LOGRECORD_ATTRS or key in payload:
+                continue
+            if key.startswith("_"):
+                continue
+            payload[key] = value
         if record.exc_info:
             payload["exc"] = _logging.Formatter().formatException(record.exc_info)
         return _json.dumps(payload, default=str)
@@ -649,7 +668,7 @@ def cli(
         fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
         logging.basicConfig(level=level, format=fmt)
 
-    # Phase 30a — install AQ-WARN [rule_id] format + stash CLI suppress overrides.
+    # Install AQ-WARN [rule_id] format + stash CLI suppress overrides.
     # Engine-level `warnings.suppress` from aqueduct.yml is merged later, once a
     # command actually loads config (commands that never read config still
     # honour the CLI flag).
@@ -659,6 +678,31 @@ def cli(
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
 
     _install_secret_redaction_hooks()
+
+
+@cli.command("completion")
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion_cmd(shell: str) -> None:
+    """Print a shell-completion script for bash, zsh, or fish.
+
+    \b
+    Install — bash:
+        aqueduct completion bash > /etc/bash_completion.d/aqueduct.sh
+    Install — zsh:
+        aqueduct completion zsh > /usr/local/share/zsh/site-functions/_aqueduct
+    Install — fish:
+        aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
+
+    The completion script is auto-generated from the click command tree —
+    new subcommands and flags are picked up automatically; rerun this
+    command after upgrading Aqueduct to refresh the script.
+    """
+    from click.shell_completion import get_completion_class
+    comp_cls = get_completion_class(shell)
+    if comp_cls is None:
+        raise click.ClickException(f"Unsupported shell: {shell!r}")
+    comp = comp_cls(cli, {}, "aqueduct", "_AQUEDUCT_COMPLETE")
+    click.echo(comp.source())
 
 
 @cli.command()
@@ -1698,7 +1742,7 @@ def run(
             except Exception:
                 pass  # doctor errors must never block self-healing
 
-            # Phase 34 Task 88 — persist per-attempt log via the unified loop's
+            # Persist per-attempt log via the unified reprompt loop's
             # on_attempt hook. Stop reason is recorded against the FINAL row
             # after the loop returns (each row carries it for joinability).
             _heal_run_id = run_id
@@ -1714,7 +1758,7 @@ def run(
                 except Exception:
                     pass  # never let persistence block the loop
 
-            # Phase 34: apply-gate guardrail check wired INTO the unified loop.
+            # Apply-gate guardrail check wired INTO the unified reprompt loop.
             # Deterministic + fast (no Spark) — runs `_check_guardrails` on the
             # generated PatchSpec against the current Blueprint and feeds any
             # rejection back as a reprompt instead of letting the loop exit
@@ -1806,7 +1850,7 @@ def run(
                         "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
                         err=True,
                     )
-                # Phase 35a — synthesise one healing_outcomes row per rejected
+                # Synthesise one healing_outcomes row per rejected
                 # attempt so the patch_applied=false trail is observable. Without
                 # this, in-loop apply_callback rejections and budget-exhausted
                 # heals leave healing_outcomes empty even though heal_attempts
@@ -1943,7 +1987,7 @@ def run(
                 break
 
             elif effective_mode == "auto":
-                # Phase 29a/b — Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
+                # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
                 _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
                     patch=patch,
                     blueprint_path=Path(blueprint),
@@ -2039,7 +2083,7 @@ def run(
                 break
 
             elif effective_mode == "aggressive":
-                # Phase 29a/b — Gates 2, 3, 4 pre-filter for the legacy
+                # Patch validation pyramid Gates 2, 3, 4 pre-filter for the legacy
                 # `aggressive` mode (deprecated alias for `auto` + `max_patches > 1`).
                 _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
                     patch=patch,
@@ -3728,7 +3772,7 @@ def heal(
         max_reprompts=resolved_max_reprompts,
     )
 
-    # Phase 34: wire deterministic apply-gate guardrail check INTO the loop so
+    # Wire deterministic apply-gate guardrail check INTO the loop so
     # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
     # live blueprint path here — heal-from-store reconstructs the minimal dict
     # `_check_guardrails` needs from the manifest_json carried in the obs DB.
@@ -3971,8 +4015,9 @@ def benchmark(
         err=True,
     )
 
-    # Phase 34 Task 89 — benchmark MUST use the same BudgetConfig as
-    # production. Reading from the same engine config block enforces parity.
+    # Benchmark MUST use the same BudgetConfig as production. Reading from
+    # the same engine config block enforces parity — divergence would
+    # silently invalidate the leaderboard.
     from aqueduct.agent import resolve_budget as _resolve_budget
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),

@@ -54,7 +54,7 @@ class FailureContext:
     blueprint_source_yaml: str | None = None  # raw uncompiled YAML text of the blueprint file
     doctor_hints: tuple[str, ...] = field(default_factory=tuple)  # warn/fail results from check_blueprint_sources
     error_type: str | None = None             # user-defined label from Assert rule's error_type field; None for infra errors
-    # Phase 35 — structured Spark/Py4J error extraction. Populated by
+    # Structured Spark/Py4J error extraction. Populated by
     # surveyor._extract_structured_error when the raised exception carries
     # Spark 4.0 condition metadata. All optional; legacy callers see None.
     error_class: str | None = None            # Spark condition name (e.g. UNRESOLVED_COLUMN.WITH_SUGGESTION) or innermost exception type

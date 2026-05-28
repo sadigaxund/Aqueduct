@@ -11,57 +11,50 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Added
-- **`PatchSpec.misc: dict[str, Any]`** field — bucket for unknown top-level
-  keys. `extra="forbid"` relaxed to `extra="allow"` with a pre-validator
-  that moves unrecognised top-level keys into `misc` for post-mortem
-  visibility. Operation-level fields stay strict (`extra="forbid"` on each
-  Op model) — a typo in `key:` or `module_id:` still bounces the patch
-  because it would mutate the wrong field. Metadata fields are descriptive,
-  not load-bearing.
+- **`aqueduct completion {bash|zsh|fish}`** subcommand emits a click-generated shell-completion script. Auto-tracks the command tree — new subcommands and flags pick up without maintenance. Install: pipe the output into your shell's completion dir.
 
-- **`_METADATA_ALIASES`** maps common casing/synonym variants to canonical
-  field names: `rootCause` / `rootcause` / `cause` → `root_cause`,
-  `reasoning` / `reason` / `explanation` → `rationale`, `patchId` →
-  `patch_id`, etc. Normalised at parse-time before pydantic validation.
-  Eliminates the `"rootCause" is not a recognized field — remove it.`
-  reprompt loop seen with smaller models.
+- **`--log-format json` propagates caller-supplied `extra={...}` fields.** The previously-shipped JSON formatter only emitted `ts` / `level` / `logger` / `msg`. It now merges every non-stdlib LogRecord attribute (`run_id`, `blueprint_id`, `module_id`, anything else passed via `logger.warning(..., extra={...})`) into the JSON payload, so Loki / Splunk / Datadog can filter by domain key without grokking text.
 
-- **`AgentPatchResult.recovery_applied: list[str]`** records every
-  mechanical recovery `_parse_patch_spec` performed on the raw LLM output
-  (think-block strip, fence strip, leading-prose strip, line-comment strip,
-  json_repair fallback). Empty when the response was clean.
+- **Benchmark UX overhaul.** Serial `aqueduct benchmark` runs now print a per-pair separator block (header bar auto-sized to longest line, scenario + model name, one-line verdict with `PASS · conf · diag · duration`). Iteration order switched to model-outer / scenario-inner so Ollama keeps each model loaded across its full scenario sweep, with a one-shot `↻ switching models` hint when the model changes. Final results table redesigned with box-drawing `═`/`│`/`─` separators, `·` middle-dot subfield separators, and per-column widths fitted to content. `--format table` mirrors to stderr when stdout is redirected so `> Log.txt` shows the table in both terminal and file. Top-of-run banner: `[benchmark] N scenarios × M models = X pairs`.
 
-- **Recovered patches forfeit auto-apply privilege.** When
-  `agent_result.recovery_applied` is non-empty and `approval_mode` is
-  `auto`/`aggressive`, the CLI downgrades to `human` for that single patch
-  and prints a one-line notice listing the recoveries. Trust boundary
-  moves to the reviewer, not the regex — a patch we had to rescue is
-  inherently lower-trust even if it parsed in the end.
+- **Interrupt handling for benchmark + healing.** `KeyboardInterrupt` around `run_benchmark` prints a one-line notice and exits 130 (SIGINT convention); completed pairs already in `benchmark.duckdb` survive. Both LLM providers switched from one-shot `httpx.post(...)` to `with httpx.Client():` context managers so the socket is torn down on Ctrl+C, propagating disconnect to the server (Ollama / vLLM abort generation, frees GPU; Anthropic stops billing mid-completion).
 
-- **Fuzzy module-ID hints in apply-gate errors.** `_find_module` now
-  ranks available IDs by similarity (stdlib `difflib`) and leads with the
-  closest match in the reprompt. `Module 'clean_events_format' not found.
-  Closest match: 'clean_events'. Available: [...]`. Reprompt-side nudge
-  only — we never auto-substitute the suggested ID, since that would be
-  interpretive recovery (hallucinating model intent).
+- **`PatchSpec.misc: dict[str, Any]`** field — bucket for unknown top-level keys. `extra="forbid"` relaxed to `extra="allow"` with a pre-validator that moves unrecognised top-level keys into `misc` for post-mortem visibility. Operation-level fields stay strict (`extra="forbid"` on each Op model) — a typo in `key:` or `module_id:` still bounces the patch because it would mutate the wrong field. Metadata fields are descriptive, not load-bearing.
 
-- **Grammar-constrained JSON sampling for OpenAI-compat providers.**
-  `_call_openai_compat` now sends `response_format: {"type": "json_object"}`
-  by default. Ollama (0.1.24+), vLLM, LM Studio, and most OpenAI-compat
-  servers honour this — the model is masked at sampling time to emit only
-  valid JSON, eliminating the malformed-JSON failure modes that no amount
-  of post-processing can recover (unescaped `"` inside string values,
-  truncated objects, smart quotes). Opt out per-call via
-  `provider_options.response_format = "off"` for backends that reject the
-  field. Anthropic provider unchanged — structured output there is
-  forced-tool-use, a separate change.
+- **`_METADATA_ALIASES`** maps common casing/synonym variants to canonical field names: `rootCause` / `rootcause` / `cause` → `root_cause`, `reasoning` / `reason` / `explanation` → `rationale`, `patchId` → `patch_id`, etc. Normalised at parse-time before pydantic validation. Eliminates the `"rootCause" is not a recognized field — remove it.` reprompt loop seen with smaller models.
 
-- **Optional `json-repair` last-ditch parse pass** via new `[llm]` extra
-  (`pip install aqueduct-core[llm]`). When strict `json.loads` + the
-  built-in cleanups still fail, `_parse_patch_spec` tries `repair_json()`
-  before surfacing the error. Without the extra installed, behaviour is
-  unchanged — the strict error propagates to the reprompt loop. Bundled
-  under `[all]`.
+- **`AgentPatchResult.recovery_applied: list[str]`** records every mechanical recovery `_parse_patch_spec` performed on the raw LLM output (think-block strip, fence strip, leading-prose strip, line-comment strip, json_repair fallback). Empty when the response was clean.
+
+- **Recovered patches forfeit auto-apply privilege.** When `agent_result.recovery_applied` is non-empty and `approval_mode` is `auto`/`aggressive`, the CLI downgrades to `human` for that single patch and prints a one-line notice listing the recoveries. Trust boundary moves to the reviewer, not the regex — a patch we had to rescue is inherently lower-trust even if it parsed in the end.
+
+- **Fuzzy module-ID hints in apply-gate errors.** `_find_module` now ranks available IDs by similarity (stdlib `difflib`) and leads with the closest match in the reprompt. `Module 'clean_events_format' not found. Closest match: 'clean_events'. Available: [...]`. Reprompt-side nudge only — never auto-substitute the suggested ID, since that would be interpretive recovery (hallucinating model intent).
+
+- **Grammar-constrained JSON sampling for OpenAI-compat providers.** `_call_openai_compat` now sends `response_format: {"type": "json_object"}` by default. Ollama (0.1.24+), vLLM, LM Studio, and most OpenAI-compat servers honour this — the model is masked at sampling time to emit only valid JSON, eliminating malformed-JSON failure modes that no amount of post-processing can recover (unescaped `"` inside string values, truncated objects, smart quotes). Opt out per-call via `provider_options.response_format = "off"` for backends that reject the field. Anthropic provider unchanged — structured output there is forced-tool-use, a separate change.
+
+- **Optional `json-repair` last-ditch parse pass** via new `[llm]` extra (`pip install aqueduct-core[llm]`). When strict `json.loads` + the built-in cleanups still fail, `_parse_patch_spec` tries `repair_json()` before surfacing the error. Without the extra installed, behaviour is unchanged. Bundled under `[all]`.
+
+- **New documentation surface:**
+  - `docs/production_guide.md` — cluster deployment, env config, danger settings, Delta operational notes, production patch lifecycle, security, readiness checklist (lifted from former specs.md §14).
+  - `docs/roadmap.md` — deferred / aspirational items: streaming, resume-from semantics, MCP, ML inference, Flink, multi-pipeline orchestration (lifted from former specs.md §8.8 / §12).
+  - `docs/compatibility.md` — Python × Spark support matrix, `pyspark>=4.0,<5.0` pin rationale, cloudpickle 3.0 requirement on Python 3.13, production pinning recipe.
+  - `blueprints/hello.yml` — matches the README's Getting Started example so `aqueduct doctor blueprints/hello.yml` works as documented out of the box.
+
+### Changed
+- **External audit response pass.** Strip every `# Phase NN` scaffolding comment from production code (26 hits across parser / executor / surveyor / cli / templates / tests). Phase references stay in `CHANGELOG.md` and `TODOs.md` per CLAUDE.md; source comments now describe the *what* and *why* instead of the project-management label. Drop the dead Flink `NotImplementedError` stub from `aqueduct/executor/__init__.py` — Flink as an aspiration stays in `docs/roadmap.md` + `TODOs.md` Deferred block.
+
+- **`docs/specs.md` split into specialized guides.** The engine reference shrank from ~2,750 lines as production, CLI-duplicate, deferred-items, and roadmap content moved into the new dedicated docs above. Architecture corrected 5-layer → 4-layer — the phantom `Planner` layer never had a corresponding `planner.py` / `Planner` class / `JobSpec` type; planning (topo sort, Probe insertion, parallel-component detection) is documented as a sub-step inside the Executor. Phase-NN refs and "V1 behaviour" / "post-MVP" language stripped. `§8.5 Patch Grammar` gains a "Metadata field tolerance" subsection covering the alias table + `misc` bucket.
+
+- **`docs/cli_reference.md`** §1 documents the new `aqueduct completion {bash|zsh|fish}` subcommand with install snippets for each shell.
+
+- **`README.md` References list** updated to mirror the new doc inventory (production_guide, compatibility, roadmap).
+
+- **`CLAUDE.md` gains a Documentation Map** — table of which doc owns which surface (specs.md is no longer the catch-all). Change-Trigger Matrix routes edits to the right doc (production_guide for cluster/danger, spark_guide for tuning, compatibility for pins, roadmap for deferred items). Stale `surveyor/llm.py` LLM-provider hook corrected to `agent/__init__.py`.
+
+- **`gallery/aqscenarios/README.md`** gains an "Overnight: every scenario × every local model" recipe — tmux + multi-`--model` invocation, monitoring without attaching, post-hoc duckdb query, runtime estimate.
+
+- **Cloudpickle monkeypatch** in `aqueduct/executor/spark/udf.py` — `FIXME: TEMPORARY hack` replaced with a documented compatibility-matrix block. The patch was already version-gated (short-circuits when bundled cloudpickle ≥ system); the comment now explains *why* and *when it self-deprecates*.
+
+- **System prompt hygiene pass** + `PROMPT_VERSION` bumped `1.0` → `1.1`. Merged the "Patch op disambiguation" and "Provenance-driven op selection" sections into one table-driven block; added explicit "if `No context block` notice present, do NOT use `replace_context_value`" rule so the system prompt and per-failure provenance section stop saying opposite things. Benchmark regression diffs going forward attribute to the new prompt version.
 
 ### Fixed
 - **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,

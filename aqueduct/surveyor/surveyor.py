@@ -114,7 +114,7 @@ CREATE TABLE IF NOT EXISTS explain_snapshot (
 );
 """
 
-# Phase 34 Task 88 — per-attempt log for the unified reprompt loop.
+# Per-attempt log for the unified reprompt loop.
 # One row per LLM turn (success or failure) so post-mortem can answer
 # "what did attempt 2 actually say" — which `healing_outcomes` alone could
 # not (it only carries the final patch outcome).
@@ -436,8 +436,8 @@ class Surveyor:
                 pass
 
             try:
-                # Phase 33 Part A — add prompt_version column to pre-1.0.3 DBs
-                # so the version↔heal-outcome correlation the docs promise becomes
+                # Add prompt_version column to pre-1.0.3 DBs so the
+                # version↔heal-outcome correlation the docs promise becomes
                 # answerable. Existing rows get NULL, new rows get the value
                 # populated by record_healing_outcome() from agent.PROMPT_VERSION.
                 pv_exists = cur.execute(
@@ -449,10 +449,10 @@ class Surveyor:
             except Exception:
                 pass
 
-            # Phase 35 — failure_contexts gains structured Spark error fields.
-            # Mirror Phase 32/33 migration pattern: probe information_schema then
-            # conditionally ALTER so existing observability.db files upgrade in
-            # place without dropping prior failure rows.
+            # failure_contexts gains structured Spark error fields.
+            # Probe information_schema then conditionally ALTER so existing
+            # observability.db files upgrade in place without dropping prior
+            # failure rows.
             for _col, _ddl in (
                 ("error_class",        "ALTER TABLE failure_contexts ADD COLUMN error_class VARCHAR"),
                 ("root_exception",     "ALTER TABLE failure_contexts ADD COLUMN root_exception JSON"),
@@ -583,7 +583,7 @@ class Surveyor:
             return None
 
         # ── Build FailureContext ───────────────────────────────────────────────
-        # Phase 35: when execute() catches the failure internally and reports
+        # When execute() catches the failure internally and reports
         # via ModuleResult (the common case), `exc` here is None — fall back
         # to `ModuleResult.exception` for the first failed module so the
         # structured-error extractor still has the live exception (with its

@@ -44,7 +44,6 @@ def _ensure_project_root_on_path() -> None:
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-# FIXME: this is a TEMPORARY hack until new Spark release supports newer python version
 def _patch_pyspark_cloudpickle() -> None:
     """Replace pyspark's bundled cloudpickle 2.x with system cloudpickle 3.x.
 
@@ -52,11 +51,23 @@ def _patch_pyspark_cloudpickle() -> None:
     ``cloudpickle.dumps(obj)`` — it holds the module object, so replacing
     attributes on that module affects all subsequent calls in the same process.
 
-    Needed on Python 3.13+ where cloudpickle 2.2.1 (bundled with PySpark 3.5)
-    segfaults during function serialization. Install ``cloudpickle>=3.0`` to
-    enable. The patch is **defensive** — every failure mode emits a clear
-    warning rather than silently leaving UDFs to crash with cryptic recursion
-    errors at runtime.
+    **Tested matrix:**
+
+    | Python | PySpark | Patch needed? | Symptom without patch |
+    |---|---|---|---|
+    | 3.11   | 4.0     | No (no-op)    | n/a                   |
+    | 3.12   | 4.0     | No (no-op)    | n/a                   |
+    | 3.13   | 4.0     | **Yes**       | UDF serialization recurses or segfaults — bundled cloudpickle 2.2.1 is incompatible |
+    | 3.13+  | 4.1+    | Likely no     | Once upstream PySpark ships cloudpickle ≥ 3.0 in the bundle, this patch becomes a no-op and the function can be deleted. |
+
+    The patch fires only on Python 3.13+ — earlier versions return early. When
+    PySpark ships cloudpickle ≥ 3.0 natively (tracked upstream), revisit this
+    function: the version check below already short-circuits when the bundled
+    version is new enough, so the patch is self-deprecating.
+
+    Install ``cloudpickle>=3.0`` system-wide to enable. The patch is
+    **defensive** — every failure mode emits a clear warning rather than
+    silently leaving UDFs to crash with cryptic recursion errors at runtime.
 
     Failure modes that the warning covers:
 

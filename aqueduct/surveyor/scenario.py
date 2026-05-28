@@ -103,21 +103,21 @@ class ScenarioResult:
     category_match: bool | None = None     # None = assertion not configured
     soft_failures: list[str] = field(default_factory=list)  # quality misses — reported, NEVER flip passed
     diag_score: float | None = None  # fraction of configured diagnosis signals hit; None = none configured
-    # Phase 33 Part A — persistence + regression detection
+    # Persistence + regression detection
     prompt_version: str | None = None  # agent.PROMPT_VERSION at time of run; carried into benchmark_results
     provider: str | None = None        # LLM provider used (anthropic | openai_compat)
     base_url: str | None = None        # LLM endpoint base_url (may be None for hosted providers)
-    # Phase 33 Part B Scope C — guardrail compliance chain
+    # Guardrail compliance chain.
     # None when scenario blueprint declares no agent.guardrails (excluded from
     # guardrail-clean rate); [] when defined-and-clean; non-empty when violated.
     violated_guardrails: list[str] | None = None
-    # Phase 34 — benchmark = production parity. ``stop_reason`` records which
+    # Benchmark ↔ production parity. ``stop_reason`` records which
     # BudgetConfig axis terminated the heal loop. Same vocabulary production
     # uses (solved, exhausted_attempts, stuck_signature, etc. — see
     # agent.budget.STOP_REASONS). Persisted to benchmark_results so leaderboard
     # consumers can distinguish "model gave up" from "ran out of attempts".
     stop_reason: str | None = None
-    escalated: bool = False           # Task 87 escalation was applied
+    escalated: bool = False           # stuck-signature escalation was applied
     tokens_in_total: int = 0
     tokens_out_total: int = 0
 
@@ -163,7 +163,7 @@ def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (Failure
     inj = scenario.inject_failure
     now = datetime.now(tz=timezone.utc).isoformat()
 
-    # Phase 35 — optional `structured:` block lets a scenario carry the same
+    # Optional `structured:` block lets a scenario carry the same
     # high-fidelity error fields that production extracts from
     # PySparkException/Py4JJavaError, so benchmark and production exercise
     # the identical prompt-builder branch. Legacy scenarios with no block
@@ -865,11 +865,10 @@ def format_benchmark_table(
             f"{sum(r.diag_score for r in rs if r.diag_score is not None) / max(1, sum(1 for r in rs if r.diag_score is not None)):.0%}"
             if any(r.diag_score is not None for r in rs) else "—"
         )),
-        # Phase 33 Part B Scope C step 3 — guardrail-clean rate. N/A when no
-        # scenario in the suite declares guardrails on its blueprint
-        # (violated_guardrails is None on every result). Otherwise: fraction
-        # of (scenario, model) pairs with violated_guardrails == [] among
-        # those where it's non-None.
+        # Guardrail-clean rate. N/A when no scenario in the suite declares
+        # guardrails on its blueprint (violated_guardrails is None on every
+        # result). Otherwise: fraction of (scenario, model) pairs with
+        # violated_guardrails == [] among those where it's non-None.
         ("Guardrail-clean", lambda rs: (
             f"{sum(1 for r in rs if r.violated_guardrails == []) / max(1, sum(1 for r in rs if r.violated_guardrails is not None)):.0%}"
             if any(getattr(r, 'violated_guardrails', None) is not None for r in rs) else "—"
