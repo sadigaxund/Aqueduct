@@ -88,7 +88,7 @@ class AgentPatchResult:
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
-PROMPT_VERSION = "1.0"
+PROMPT_VERSION = "1.1"
 
 MAX_REPROMPTS = 3
 _PATCH_HISTORY_MAX = 3
@@ -113,27 +113,27 @@ Your task: produce a PatchSpec JSON that fixes the root cause.
 
 ## Rules
 
-### Patch op disambiguation (READ THIS FIRST)
-There are exactly TWO ops for changing module config. They are distinct:
-- `set_module_config_key` — sets ONE field inside an existing module config, leaving all other fields unchanged. Use for literal values only.
-- `replace_module_config` — replaces the ENTIRE config block. Use only when restructuring the whole config.
-- **THERE IS NO OP NAMED `replace_module_config_key`.** That op does not exist. Do not use it.
+### Choosing the right op (read the "Value provenance" section first)
+The provenance section tells you the `source_type` of each config value. Pick the op from this table:
 
-### Provenance-driven op selection
-- **Always read the "Value provenance" section before choosing a patch op.**
-- For a `context_ref` value: use `replace_context_value` with the dot-notation key shown. Do NOT use `set_module_config_key`.
-- For an `arcade_inherited` value with a `context_key`: the arcade inherits this value from the parent blueprint's context via context_override. Look in the "Blueprint context values" section to find which PARENT context key has the same resolved value, then use `replace_context_value` with the PARENT key. One op is the complete fix.
-- For a `literal` value: use `set_module_config_key` directly on the module.
-- For an `env_ref` value: do NOT patch the Blueprint; the value comes from an environment variable.
-- NEVER use `set_module_config_key` on a module whose ID contains `__` — those are arcade-expanded and do NOT exist in the Blueprint YAML.
-  WRONG: {{"op": "set_module_config_key", "module_id": "yellow_process__ingress", "key": "path", "value": "..."}}
-  RIGHT: {{"op": "replace_context_value", "key": "paths.yellow_path", "value": "..."}}
-- NEVER use `replace_module_config` for a single-field fix — it silently drops every key you forget to re-emit.
+| source_type | Op | Notes |
+|---|---|---|
+| `literal` | `set_module_config_key` | Targets the module directly. |
+| `context_ref` | `replace_context_value` | Use the dot-notation key shown in provenance. |
+| `arcade_inherited` (with `context_key`) | `replace_context_value` on the PARENT context key | Find the parent key in "Blueprint context values" whose resolved value matches; that is the fix. |
+| `env_ref` | (do not patch) | Value is from an environment variable; fix outside the Blueprint. |
+
+**Hard rules:**
+- `set_module_config_key` sets ONE field, leaving the rest intact. Use for literal-source fixes.
+- `replace_module_config` REPLACES the entire config block — every key you forget is silently dropped. Never use it for a single-field fix.
+- `replace_module_config_key` does NOT exist. Don't invent it.
+- Module IDs containing `__` are arcade-expanded compile artefacts. They do NOT exist in the Blueprint YAML — never target them with `set_module_config_key`. Fix the parent context key instead.
+- If the failure report contains a "No `context:` block" notice, the blueprint has no context section at all. Do NOT emit `replace_context_value` — it will be rejected. Use `set_module_config_key` with a literal value.
 
 ### Path values
-- **ALWAYS use relative paths** (e.g. `data/yellow/*.parquet`). NEVER construct absolute paths even if the provenance section shows an absolute `blueprint_path`. The blueprint_path is shown for reference only — never use it to build a config value.
-- Preserve the original path format (relative stays relative, globs stay globs).
-- **When fixing a `context_ref` path, patch the context value using template expressions** (e.g. `replace_context_value` with key `paths.foo`). Do NOT hard-code the resolved literal path into a module config — using template expressions keeps the blueprint portable and context-driven.
+- ALWAYS use relative paths (e.g. `data/yellow/*.parquet`). Never construct absolute paths even if the provenance shows an absolute `blueprint_path` — that field is for reference only.
+- Preserve the original format (relative stays relative, globs stay globs).
+- When fixing a path that's a `context_ref`, patch the context value via `replace_context_value` so the blueprint stays portable. Do not hardcode the resolved literal into a module config.
 
 ### Other rules
 - Use only module IDs and field names that appear in the failure report.

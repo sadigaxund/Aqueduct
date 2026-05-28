@@ -89,8 +89,8 @@ def _connect(store_path: Path):
     store_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(store_path))
     con.execute(_BENCHMARK_DDL)
-    # Phase 33 Part B Scope C step 3: additive ALTER for pre-existing stores
-    # that were created before violated_guardrails landed.
+    # Additive ALTER for pre-existing stores created before
+    # `violated_guardrails` landed — guardrail-compliance tracking column.
     try:
         vg_exists = con.execute(
             "SELECT 1 FROM information_schema.columns "
@@ -100,8 +100,9 @@ def _connect(store_path: Path):
             con.execute("ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON")
     except Exception:
         pass
-    # Phase 34 Task 89: additive ALTER for stop_reason + escalation + token
-    # totals so pre-1.0.4 benchmark stores survive intact (NULL on old rows).
+    # Additive ALTER for stop_reason + escalation + token totals (added
+    # by the unified reprompt loop) so pre-1.0.4 benchmark stores survive
+    # intact (NULL on old rows).
     for col, ddl in (
         ("stop_reason", "ALTER TABLE benchmark_results ADD COLUMN stop_reason VARCHAR"),
         ("escalated", "ALTER TABLE benchmark_results ADD COLUMN escalated BOOLEAN"),

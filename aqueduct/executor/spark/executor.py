@@ -1561,8 +1561,8 @@ def _on_retry_exhausted(
         set _GATE_CLOSED in frame_store and `continue`; fail_result is None.
         If gate_closed is False, return fail_result immediately.
     """
-    # Phase 35: preserve the live exception so Surveyor.record() can hand it
-    # to `_extract_structured_error` for error_class / object_name /
+    # Preserve the live exception so Surveyor.record() can hand it to
+    # `_extract_structured_error` for error_class / object_name /
     # suggested_columns / sql_state / root_exception extraction. The
     # IngressError / ChannelError / Py4JJavaError chains its underlying
     # PySparkException via `raise ... from exc`, so the extractor's __cause__

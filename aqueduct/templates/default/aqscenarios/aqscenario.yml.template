@@ -93,10 +93,10 @@ assertions:
   - patch_is_valid: true
 
   # Patch must be applicable to the blueprint (parse + compile with patch applied).
-  # Phase 33 Part B Scope C step 2: now also runs `_check_guardrails` when the
-  # blueprint declares `agent.guardrails`, so a guardrail-violating patch is
-  # reported as `patch_applies: false` here — matching production.
-  # Disabled automatically when blueprint path not found.
+  # Also runs `_check_guardrails` when the blueprint declares `agent.guardrails`,
+  # so a guardrail-violating patch is reported as `patch_applies: false`
+  # here — matching production. Disabled automatically when blueprint path
+  # not found.
   - patch_applies: true
 
   # LLM must produce a valid PatchSpec on the first call (no reprompts needed).
