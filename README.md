@@ -158,10 +158,13 @@ Full reference in [CLI Reference](docs/cli_reference.md).
 
 ## References
 
-- **[Blueprint & Engine Spec](docs/specs.md)** — Complete reference
+- **[Blueprint & Engine Spec](docs/specs.md)** — Module types, configs, architecture, healing loop
 - **[CLI Reference](docs/cli_reference.md)** — All commands and flags
 - **[Spark Guide](docs/spark_guide.md)** — Warnings, performance, tuning
 - **[Observability Guide](docs/observability_guide.md)** — Schemas + diagnostic query cookbook
+- **[Production Guide](docs/production_guide.md)** — Cluster deployment, security, Delta operations
+- **[Compatibility Matrix](docs/compatibility.md)** — Supported Python × Spark versions, pinning recipe
+- **[Roadmap](docs/roadmap.md)** — Deferred features and future plans
 - **[Gallery](gallery/)** — Real working examples
 
 ## Contributing
