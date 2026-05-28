@@ -369,40 +369,10 @@ def test_surveyor_fresh_db_has_prompt_version(tmp_path):
     assert has_col is not None
 
 
-def test_surveyor_migration_adds_prompt_version_to_legacy_db(tmp_path):
-    """Pre-1.0.3 DB without prompt_version → Surveyor.start() ALTERs table; existing rows preserved with NULL."""
-    from aqueduct.surveyor.surveyor import Surveyor
-
-    obs_path = tmp_path / "observability.db"
-    _create_legacy_obs_db(obs_path)
-
-    # Confirm column absent before migration
-    con = duckdb.connect(str(obs_path))
-    before = con.execute(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name='healing_outcomes' AND column_name='prompt_version'"
-    ).fetchone()
-    con.close()
-    assert before is None
-
-    manifest = _make_manifest()
-    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path)
-    surveyor.start("run-migrated")
-    surveyor.stop()
-
-    con = duckdb.connect(str(obs_path))
-    has_col = con.execute(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name='healing_outcomes' AND column_name='prompt_version'"
-    ).fetchone()
-    old_pv = con.execute(
-        "SELECT prompt_version FROM healing_outcomes WHERE run_id='run-legacy'"
-    ).fetchone()
-    con.close()
-
-    assert has_col is not None
-    assert old_pv is not None
-    assert old_pv[0] is None  # existing row preserved with NULL
+# test_surveyor_migration_adds_prompt_version_to_legacy_db removed —
+# surveyor.py no longer carries pre-1.0 ALTER TABLE migration paths
+# (commit ec173e7). Fresh DBs include prompt_version from the base
+# CREATE TABLE; legacy DBs are unsupported by design.
 
 
 def test_surveyor_migration_idempotent(tmp_path):

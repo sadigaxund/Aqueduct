@@ -1557,15 +1557,16 @@ class TestGetExecutor:
         fn = get_executor("spark")
         assert callable(fn)
 
-    def test_flink_engine_raises_not_implemented(self):
-        from aqueduct.executor import get_executor
-        with pytest.raises(NotImplementedError, match="Flink"):
-            get_executor("flink")
-
     def test_unknown_engine_raises_value_error(self):
         from aqueduct.executor import get_executor
+        # Flink stub was removed during the audit pass — no special-cased
+        # NotImplementedError branch. Any non-spark engine, including the
+        # former-aspiration "flink" string, falls through to the generic
+        # unknown-engine error.
         with pytest.raises(ValueError, match="Unknown execution engine"):
             get_executor("beam")
+        with pytest.raises(ValueError, match="Unknown execution engine"):
+            get_executor("flink")
 
 
 class TestExecutorBlockFullActionsParam:

@@ -429,15 +429,22 @@ def test_specs_exit_codes():
     import re
     from aqueduct import exit_codes
 
-    specs_path = Path(__file__).resolve().parents[1] / "docs" / "specs.md"
-    with open(specs_path, "r", encoding="utf-8") as f:
+    # The exit-code table lives in cli_reference.md per the documentation
+    # map (specs.md owns engine semantics; cli_reference.md owns the CLI
+    # surface, exit codes included).
+    cli_ref_path = (
+        Path(__file__).resolve().parents[1] / "docs" / "cli_reference.md"
+    )
+    with open(cli_ref_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Search for the exit-codes table or lines of the form: | `0` | `SUCCESS` | ...
-    pattern = re.compile(r"\|\s*`(\d+)`\s*\|\s*`([A-Z_]+)`\s*\|")
+    # cli_reference renders `0` | SUCCESS (number backticked, name plain) —
+    # accept either backticked-name or bare-name to stay tolerant of doc
+    # style drift.
+    pattern = re.compile(r"\|\s*`(\d+)`\s*\|\s*`?([A-Z_]+)`?\s*\|")
     matches = pattern.findall(content)
 
-    assert len(matches) > 0, "No exit-code table found in specs.md"
+    assert len(matches) > 0, "No exit-code table found in cli_reference.md"
 
     expected_codes = {
         "SUCCESS": exit_codes.SUCCESS,

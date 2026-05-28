@@ -102,18 +102,21 @@ def _valid_patch_json() -> str:
 
 class TestParsePatchSpec:
     def test_valid_json_parses(self):
-        spec = _parse_patch_spec(_valid_patch_json())
+        spec, recovery = _parse_patch_spec(_valid_patch_json())
         assert spec.patch_id == "test-fix"
+        assert recovery == []
 
     def test_markdown_fenced_json_stripped(self):
         fenced = f"```json\n{_valid_patch_json()}\n```"
-        spec = _parse_patch_spec(fenced)
+        spec, recovery = _parse_patch_spec(fenced)
         assert spec.patch_id == "test-fix"
+        assert "stripped_code_fence" in recovery
 
     def test_markdown_fenced_no_lang_stripped(self):
         fenced = f"```\n{_valid_patch_json()}\n```"
-        spec = _parse_patch_spec(fenced)
+        spec, recovery = _parse_patch_spec(fenced)
         assert spec.patch_id == "test-fix"
+        assert "stripped_code_fence" in recovery
 
     def test_invalid_json_raises(self):
         from json import JSONDecodeError
@@ -482,8 +485,15 @@ class TestLlmHelpers:
         db_path = store / "observability.db"
         conn = duckdb.connect(str(db_path))
         conn.execute(_DDL)
+        # Name columns explicitly so the test stays robust against future
+        # additions to ``failure_contexts`` (Phase 35 added 5 structured-
+        # error columns; the bare ``INSERT INTO failure_contexts VALUES (...)``
+        # form had to know the column count).
         conn.execute(
-            "INSERT INTO failure_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO failure_contexts "
+            "(run_id, blueprint_id, failed_module, error_message, stack_trace, "
+            "manifest_json, provenance_json, started_at, finished_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             ["run-1", "bp-1", "m-1", "boom", "stack", "{}", "{}", "2024-01-01", "2024-01-01"],
         )
         conn.close()
@@ -630,11 +640,16 @@ class TestFailureContextBlueprintSourceYaml:
         assert "## Original Blueprint YAML" in prompt
         assert "id: my_blueprint" in prompt
 
-    def test_llm_system_prompt_includes_template_expressions_rule(self, tmp_path):
+    def test_llm_system_prompt_includes_context_ref_rule(self, tmp_path):
+        # Prompt hygiene pass consolidated the original "using template
+        # expressions" / "Do NOT hard-code the resolved literal path"
+        # sentences into the table-driven Path-values rule block. Assert
+        # the canonical phrasing the current prompt uses.
         from aqueduct.agent import _build_system_prompt
         prompt = _build_system_prompt(patches_dir=tmp_path)
-        assert "using template expressions" in prompt
-        assert "Do NOT hard-code the resolved literal path" in prompt
+        assert "ALWAYS use relative paths" in prompt
+        assert "context_ref" in prompt
+        assert "Do not hardcode the resolved literal" in prompt
 
 
 # ── doctor_hints LLM injection ─────────────────────────────────────────────────
@@ -676,18 +691,33 @@ class TestProviderOptionsDispatch:
         mock.raise_for_status = MagicMock()
         return mock
 
-    def test_ollama_prefix_stripped_into_options(self):
-        from aqueduct.agent import _call_openai_compat
-        from unittest.mock import MagicMock
-        import httpx
+    def _patch_client(self, captured: dict):
+        """Return a context-manager-aware mock httpx.Client whose post() captures payload.
 
-        captured = {}
+        Providers switched from one-shot ``httpx.post(...)`` to
+        ``with httpx.Client(): client.post(...)``. The mock target moved
+        accordingly. Returns the patch object so callers can use it as
+        ``with self._patch_client(captured): ...``.
+        """
+        from unittest.mock import patch as _patch
 
         def fake_post(url, json=None, headers=None, timeout=None):
             captured["payload"] = json
             return self._make_mock_response()
 
-        with patch("httpx.post", side_effect=fake_post):
+        mock_client = MagicMock()
+        mock_client.post.side_effect = fake_post
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = False
+        return _patch("httpx.Client", return_value=mock_client)
+
+    def test_ollama_prefix_stripped_into_options(self):
+        from aqueduct.agent import _call_openai_compat
+        from unittest.mock import MagicMock
+        import httpx
+
+        captured: dict = {}
+        with self._patch_client(captured):
             _call_openai_compat(
                 messages=[{"role": "user", "content": "hi"}],
                 model="llama3",
@@ -705,13 +735,8 @@ class TestProviderOptionsDispatch:
         from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
-        captured = {}
-
-        def fake_post(url, json=None, headers=None, timeout=None):
-            captured["payload"] = json
-            return self._make_mock_response()
-
-        with patch("httpx.post", side_effect=fake_post):
+        captured: dict = {}
+        with self._patch_client(captured):
             _call_openai_compat(
                 messages=[],
                 model="gpt-4",
@@ -728,13 +753,8 @@ class TestProviderOptionsDispatch:
         from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
-        captured = {}
-
-        def fake_post(url, json=None, headers=None, timeout=None):
-            captured["payload"] = json
-            return self._make_mock_response()
-
-        with patch("httpx.post", side_effect=fake_post):
+        captured: dict = {}
+        with self._patch_client(captured):
             _call_openai_compat(
                 messages=[],
                 model="llama3",
@@ -752,13 +772,8 @@ class TestProviderOptionsDispatch:
         from aqueduct.agent import _call_openai_compat
         from unittest.mock import MagicMock
 
-        captured = {}
-
-        def fake_post(url, json=None, headers=None, timeout=None):
-            captured["payload"] = json
-            return self._make_mock_response()
-
-        with patch("httpx.post", side_effect=fake_post):
+        captured: dict = {}
+        with self._patch_client(captured):
             _call_openai_compat(
                 messages=[],
                 model="llama3",

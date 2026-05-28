@@ -359,7 +359,13 @@ def test_llm_redaction(tmp_path):
 
     os.environ["ANTHROPIC_API_KEY"] = "fake-key"
     try:
-        with patch("httpx.post", side_effect=mock_post):
+        # Provider switched to ``with httpx.Client(): client.post(...)``; mock
+        # target moved from module-level ``httpx.post`` to ``httpx.Client``.
+        mock_client = MagicMock()
+        mock_client.post.side_effect = mock_post
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = False
+        with patch("httpx.Client", return_value=mock_client):
             _call_agent(
                 messages=messages,
                 model="claude-sonnet",

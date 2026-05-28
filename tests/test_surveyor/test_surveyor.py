@@ -527,83 +527,10 @@ class TestPhase35SurveyorMigration:
         assert "suggested_columns" in cols
         assert "object_name" in cols
 
-    def test_migration_alters_existing_db(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
-        store_dir = tmp_path / "store"
-        store_dir.mkdir()
-        db_path = store_dir / "observability.db"
-        
-        self._create_legacy_db(db_path)
-        
-        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={}), store_dir)
-        s.start("run1")
-        
-        with s._observability.connect() as cur:
-            cols = [row[0] for row in cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='failure_contexts'").fetchall()]
-            
-        assert "error_class" in cols
-        assert "root_exception" in cols
-        
-        # Second start is a no-op
-        s.start("run2")
-        with s._observability.connect() as cur:
-            cols2 = [row[0] for row in cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='failure_contexts'").fetchall()]
-        assert cols == cols2
-
-    def test_migration_errors_are_swallowed(self, tmp_path):
-        from aqueduct.surveyor.surveyor import Surveyor
-        from aqueduct.compiler.models import Manifest
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
-        from aqueduct.stores import StoreBundle
-        from unittest.mock import patch
-        
-        store_dir = tmp_path / "store"
-        store_dir.mkdir()
-        db_path = store_dir / "observability.db"
-        self._create_legacy_db(db_path)
-        
-        obs_store = DuckDBObservabilityStore(db_path)
-        bundle = StoreBundle(observability=obs_store, lineage=None, depot=None)
-        
-        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={}), store_dir, stores=bundle)
-        
-        # Patch connect to return a wrapper whose cursor fails on the specific
-        # ALTER. The store's connect() is a @contextmanager — we must enter it
-        # to obtain the real RelationalCursor; we re-enter via a wrapping CM.
-        original_connect = s._observability.connect
-
-        class MockCursorWrapper:
-            def __init__(self, cur):
-                self.cur = cur
-
-            def execute(self, q, *args, **kwargs):
-                if "ADD COLUMN error_class" in q:
-                    raise Exception("simulated alter error")
-                return self.cur.execute(q, *args, **kwargs)
-
-            def fetchone(self):
-                return self.cur.fetchone()
-
-        class MockConnWrapper:
-            def __init__(self):
-                self._cm = original_connect()
-            def __enter__(self):
-                real_cur = self._cm.__enter__()
-                return MockCursorWrapper(real_cur)
-            def __exit__(self, *args):
-                return self._cm.__exit__(*args)
-
-        with patch.object(s._observability, "connect", side_effect=lambda: MockConnWrapper()):
-            s.start("run1") # should not raise
-
-        # Verify it continued to add other columns
-        with original_connect() as cur:
-            cols = [row[0] for row in cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='failure_contexts'").fetchall()]
-            
-        # error_class failed, but others should be present
-        assert "error_class" not in cols
-        assert "root_exception" in cols
+    # test_migration_alters_existing_db + test_migration_errors_are_swallowed
+    # removed — surveyor.py no longer carries pre-1.0 ALTER TABLE migration
+    # paths (commit ec173e7). Fresh DBs get every column from the base CREATE
+    # TABLE; legacy DBs are unsupported by design (no users yet).
 
 
 # ── Phase 35 — additional coverage gaps ──────────────────────────────────────

@@ -77,8 +77,12 @@ class TestFormatReprompt:
             friendly="ERROR", raw='{"x": 1}', escalated=True, structural_hint=""
         )
         assert "ERROR" in res
-        assert '{"x": 1}' not in res  # does not echo bad output
         assert _PATCH_SKELETON in res
+        # Raw evidence appears, but only inside the "DO NOT edit this" block —
+        # small models forget what they sent across turns without it. The
+        # skeleton remains the positive anchor.
+        assert '{"x": 1}' in res
+        assert "DO NOT edit" in res
 
     def test_structural_hint_forces_escalated_template(self):
         res = _format_reprompt_for_next_turn(
@@ -86,8 +90,10 @@ class TestFormatReprompt:
         )
         assert "ERROR" in res
         assert "HINT" in res
-        assert '{"x": 1}' not in res
         assert _PATCH_SKELETON in res
+        # Evidence echoed under the DO-NOT-edit label (see comment above).
+        assert '{"x": 1}' in res
+        assert "DO NOT edit" in res
 
 
 # ── resolve_budget ────────────────────────────────────────────────────────────
@@ -253,64 +259,82 @@ class TestGenerateAgentPatch:
 # ── _call_anthropic / _call_openai_compat ────────────────────────────────────
 
 class TestCallProviders:
-    @patch("httpx.post")
-    def test_call_anthropic_returns_tuple(self, mock_post, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    """Provider transport tests.
+
+    Both providers were switched from one-shot ``httpx.post(...)`` to
+    ``with httpx.Client(): client.post(...)`` so the socket is torn down
+    on Ctrl+C. The mock target is now ``httpx.Client`` — calls go through
+    the context manager's ``post()`` method. Per CLAUDE.md no live LLM
+    calls in pytest; all four tests are network-free.
+    """
+
+    def _mock_client(self, json_payload: dict):
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
+        mock_resp.json.return_value = json_payload
+        mock_resp.raise_for_status = MagicMock()
+        mock_client = MagicMock()
+        mock_client.post.return_value = mock_resp
+        # `with httpx.Client(...) as client:` resolves to the mock client.
+        mock_client.__enter__.return_value = mock_client
+        mock_client.__exit__.return_value = False
+        return mock_client, mock_resp
+
+    @patch("httpx.Client")
+    def test_call_anthropic_returns_tuple(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        mock_client, _ = self._mock_client({
             "content": [{"text": "hello"}],
-            "usage": {"input_tokens": 10, "output_tokens": 20}
-        }
-        mock_post.return_value = mock_resp
-        
+            "usage": {"input_tokens": 10, "output_tokens": 20},
+        })
+        mock_client_cls.return_value = mock_client
+
         from aqueduct.agent import _call_anthropic
         text, tin, tout = _call_anthropic([], "model", 100, "system")
         assert text == "hello"
         assert tin == 10
         assert tout == 20
 
-    @patch("httpx.post")
-    def test_call_anthropic_temperature_override(self, mock_post, monkeypatch):
+    @patch("httpx.Client")
+    def test_call_anthropic_temperature_override(self, mock_client_cls, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"content": [{"text": "hello"}]}
-        mock_post.return_value = mock_resp
-        
+        mock_client, _ = self._mock_client({"content": [{"text": "hello"}]})
+        mock_client_cls.return_value = mock_client
+
         from aqueduct.agent import _call_anthropic
         _call_anthropic([], "model", 100, "system", temperature_override=0.8)
-        
-        kwargs = mock_post.call_args[1]
+
+        kwargs = mock_client.post.call_args[1]
         assert kwargs["json"]["temperature"] == 0.8
 
-    @patch("httpx.post")
-    def test_call_openai_compat_returns_tuple(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {
+    @patch("httpx.Client")
+    def test_call_openai_compat_returns_tuple(self, mock_client_cls):
+        mock_client, _ = self._mock_client({
             "choices": [{"message": {"content": "hello"}}],
-            "usage": {"prompt_tokens": 15, "completion_tokens": 25}
-        }
-        mock_post.return_value = mock_resp
-        
+            "usage": {"prompt_tokens": 15, "completion_tokens": 25},
+        })
+        mock_client_cls.return_value = mock_client
+
         from aqueduct.agent import _call_openai_compat
         text, tin, tout = _call_openai_compat([], "model", 100, "http://test", "system")
         assert text == "hello"
         assert tin == 15
         assert tout == 25
 
-    @patch("httpx.post")
-    def test_call_openai_compat_temperature_override(self, mock_post):
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"choices": [{"message": {"content": "hello"}}]}
-        mock_post.return_value = mock_resp
+    @patch("httpx.Client")
+    def test_call_openai_compat_temperature_override(self, mock_client_cls):
+        mock_client, _ = self._mock_client(
+            {"choices": [{"message": {"content": "hello"}}]}
+        )
+        mock_client_cls.return_value = mock_client
 
         from aqueduct.agent import _call_openai_compat
         _call_openai_compat(
             [], "model", 100, "http://test", "system",
             provider_options={"ollama_temperature": 0.1},
-            temperature_override=0.8
+            temperature_override=0.8,
         )
 
-        kwargs = mock_post.call_args[1]
+        kwargs = mock_client.post.call_args[1]
         assert kwargs["json"]["temperature"] == 0.8
         assert kwargs["json"]["options"]["temperature"] == 0.8
 

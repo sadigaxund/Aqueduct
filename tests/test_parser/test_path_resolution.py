@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from aqueduct.parser.parser import parse
+from aqueduct.parser.parser import parse, parse_dict
 from aqueduct.config import load_config
 
 pytestmark = pytest.mark.unit
@@ -112,3 +112,167 @@ edges: []
     assert mod.config["input_dir"] == str((tmp_path / "my_input_dir").resolve())
     assert mod.config["output_dir"] == str((tmp_path / "my_output_dir").resolve())
     assert mod.config["jar"] == str((tmp_path / "my_jar.jar").resolve())
+
+
+# ── Phase 36 Part A — parse_dict() API + base_dir anchoring ─────────────────
+
+
+def _bp_dict(path_value: str) -> dict:
+    return {
+        "aqueduct": "1.0",
+        "id": "test_parse_dict",
+        "name": "Test parse_dict",
+        "modules": [
+            {
+                "id": "ingress",
+                "type": "Ingress",
+                "label": "Ingress",
+                "config": {"format": "csv", "path": path_value},
+            }
+        ],
+        "edges": [],
+    }
+
+
+def test_parse_dict_anchors_relative_to_explicit_base_dir(tmp_path):
+    """parse_dict() must anchor relative paths to the supplied base_dir,
+    not to cwd or to a tempfile location. Regression for the
+    tempfile-in-/tmp bug Phase 36 Part A removes."""
+    sub_dir = tmp_path / "blueprints" / "sub"
+    sub_dir.mkdir(parents=True)
+    data_dir = tmp_path / "blueprints" / "data"
+    data_dir.mkdir(parents=True)
+    (data_dir / "events.csv").write_text("col1\n1\n")
+
+    raw = _bp_dict("../data/events.csv")
+    bp = parse_dict(raw, base_dir=sub_dir)
+    ingress = next(m for m in bp.modules if m.id == "ingress")
+    expected = (sub_dir / "../data/events.csv").resolve()
+    assert ingress.config["path"] == str(expected)
+    assert ingress.config["path"].startswith(str(tmp_path.resolve()))
+
+
+def test_parse_dict_uri_passthrough(tmp_path):
+    raw = _bp_dict("s3://bucket/key.csv")
+    bp = parse_dict(raw, base_dir=tmp_path)
+    ingress = next(m for m in bp.modules if m.id == "ingress")
+    assert ingress.config["path"] == "s3://bucket/key.csv"
+
+
+def test_parse_dict_absolute_passthrough(tmp_path):
+    raw = _bp_dict("/abs/data.csv")
+    bp = parse_dict(raw, base_dir=tmp_path)
+    ingress = next(m for m in bp.modules if m.id == "ingress")
+    assert ingress.config["path"] == "/abs/data.csv"
+
+
+def test_parse_dict_matches_parse_for_on_disk_blueprint(tmp_path):
+    """parse(path) and parse_dict(load(path), path.parent) must produce
+    identical anchored Module configs — that equivalence is the contract
+    in-memory patch flows now rely on."""
+    import yaml as _yaml
+
+    bp_dir = tmp_path / "sub"
+    bp_dir.mkdir()
+    bp_file = bp_dir / "blueprint.yml"
+    raw = _bp_dict("../data/events.csv")
+    bp_file.write_text(_yaml.safe_dump(raw))
+
+    a = parse(bp_file)
+    b = parse_dict(_yaml.safe_load(bp_file.read_text()), base_dir=bp_dir)
+    a_ing = next(m for m in a.modules if m.id == "ingress")
+    b_ing = next(m for m in b.modules if m.id == "ingress")
+    assert a_ing.config["path"] == b_ing.config["path"]
+
+
+def test_parse_dict_rejects_non_mapping(tmp_path):
+    from aqueduct.parser.parser import ParseError
+
+    with pytest.raises(ParseError, match="Blueprint must be a mapping"):
+        parse_dict([], base_dir=tmp_path)  # type: ignore[arg-type]
+
+
+# ── Phase 36 Part B — schema-driven anchoring via path_keys registry ─────────
+
+
+def test_path_keys_registry_per_module_type():
+    """Registry returns strict tuple for audited types and legacy fallback for the rest."""
+    from aqueduct.executor.path_keys import get_path_keys
+    assert get_path_keys("Ingress") == ("path", "data_dir", "input_dir", "jar")
+    assert get_path_keys("Egress") == ("path", "output_dir", "jar")
+    assert get_path_keys("UDF") == ("jar",)
+    # Unknown / unregistered types fall back to the legacy blanket tuple.
+    legacy = ("path", "data_dir", "input_dir", "output_dir", "jar")
+    assert get_path_keys("Channel") == legacy
+    assert get_path_keys("Bogus") == legacy
+
+
+def test_parse_dict_anchors_only_registered_keys_per_type(tmp_path):
+    """An Ingress carrying ``output_dir`` (not in its registered tuple) must
+    stay untouched, while Egress with the same key anchors it. Catches the
+    regression where parser anchored a blanket tuple across all module types."""
+    raw = {
+        "aqueduct": "1.0",
+        "id": "test_registry_per_type",
+        "name": "T",
+        "modules": [
+            {
+                "id": "ing",
+                "type": "Ingress",
+                "label": "I",
+                "config": {
+                    "format": "csv",
+                    "path": "data/in.csv",
+                    "output_dir": "should-stay-relative",
+                },
+            },
+            {
+                "id": "eg",
+                "type": "Egress",
+                "label": "E",
+                "config": {
+                    "format": "parquet",
+                    "path": "out",
+                    "output_dir": "out/",
+                },
+            },
+        ],
+        "edges": [],
+    }
+    bp = parse_dict(raw, base_dir=tmp_path)
+    ing = next(m for m in bp.modules if m.id == "ing")
+    eg = next(m for m in bp.modules if m.id == "eg")
+    # Ingress: ``output_dir`` is NOT in the registered tuple — passes through.
+    assert ing.config["output_dir"] == "should-stay-relative"
+    assert ing.config["path"] == str((tmp_path / "data/in.csv").resolve())
+    # Egress: ``output_dir`` IS in the registered tuple — anchored.
+    assert eg.config["output_dir"] == str((tmp_path / "out/").resolve())
+
+
+def test_fs_path_marker_visible_on_store_fields():
+    """RelationalStoreConfig.path and KVStoreConfig.path must carry the FsPath
+    marker so the schema-driven walker in config.py picks them up."""
+    from aqueduct.config import RelationalStoreConfig, KVStoreConfig
+    from aqueduct.parser.fs_path import field_is_fs_path
+    for cls in (RelationalStoreConfig, KVStoreConfig):
+        meta = tuple(cls.model_fields["path"].metadata)
+        assert field_is_fs_path(meta) is not None, f"{cls.__name__}.path missing FsPath()"
+
+
+def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
+    """Schema-driven walker must anchor every FsPath-marked store path
+    relative to the config file's parent. Replacement test for the
+    hardcoded ``stores.*.path`` loop Phase 36 Part B removes."""
+    cfg_file = tmp_path / "aqueduct.yml"
+    cfg_file.write_text(
+        "stores:\n"
+        "  observability: { backend: duckdb, path: .aqueduct/obs.db }\n"
+        "  lineage:       { backend: duckdb, path: .aqueduct/lin.db }\n"
+        "  depot:         { backend: redis,  path: 'redis://h:6379/0' }\n"
+    )
+    from aqueduct.config import load_config
+    c = load_config(cfg_file)
+    assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs.db").resolve())
+    assert c.stores.lineage.path == str((tmp_path / ".aqueduct/lin.db").resolve())
+    # URI passthrough.
+    assert c.stores.depot.path == "redis://h:6379/0"
