@@ -72,6 +72,14 @@ release and are marked **BREAKING**.
 
 - **Removed `"root cause"` (space-containing) alias from `_METADATA_ALIASES`.** JSON keys with literal spaces are vanishingly rare from LLM output and the alias misleadingly suggested the normalizer handles free-form prose. All other casing/synonym aliases remain.
 
+- **`docs/specs.md` §5.3 — four missing `@aq.*` functions documented.** `@aq.date.offset`, `@aq.date.month_start`, `@aq.date.format`, and `@aq.runtime.prev_run_id` were implemented but absent from the function reference table. Also corrected `@aq.env` signature: the implementation does not accept a `default` parameter (unlike `${VAR:-default}` in Tier 0).
+
+- **`CLAUDE.md` gains three Change-Trigger Matrix rows** for new `@aq.*` functions, new path-key entries, and new exit codes. New `## Common Pitfalls` section captured five recurring patterns from the audit: silent depot_get, dropTempView guard, parallel frame-store scoping, Probe attach_to, and immutable dataclass mutation. **Testing workflow section expanded** with guidance on when and how to record items in `TEST_MANIFEST.md` (regression tests for bug fixes, `⏳` convention, never self-mark `✅`).
+
+- **`tmp/.prompts/DO_TESTING.md` rewritten** with project context header, 4-layer architecture summary, source-file map by layer, test-file organization table, and critical rules from CLAUDE.md — so models with no prior project knowledge can work immediately without a full codebase read.
+
+- **`tests/TEST_MANIFEST.md` — 17 new ⏳ items** covering gaps from the test audit: `--from`/`--to` selector coverage (5), Delta merge edge cases (2), `metrics_boundary` Channel config (2), `danger.*` settings gate enforcement (4), end-to-end heal flow (1), plus 3 PatchSpec resilience items bridging the original 12 to 15.
+
 - **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,
   fenced ```json``` code blocks anywhere in the response, and JS-style
   (`//`) or Python/YAML-style (`#`) line comments.** Previously the deepseek-r1 family's reasoning output starved

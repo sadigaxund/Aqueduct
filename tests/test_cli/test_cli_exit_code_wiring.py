@@ -238,7 +238,13 @@ def test_run_auto_mode_patch_succeeds_exits_0(
     ]
     mock_surveyor_cls.return_value = mock_surveyor
 
-    mock_gen.return_value = MagicMock(patch=_make_patch("p-auto-001"))
+    # Recovered-patch downgrade policy (CHANGELOG [Unreleased] Added): when
+    # ``recovery_applied`` is non-empty, auto-apply forfeits and the CLI
+    # exits 3 (HEAL_PENDING). Set the list to empty so this test exercises
+    # the clean-response auto-apply path it was written for.
+    gen_result = MagicMock(patch=_make_patch("p-auto-001"))
+    gen_result.recovery_applied = []
+    mock_gen.return_value = gen_result
 
     runner = CliRunner()
     with patch("aqueduct.cli._agent_usable", return_value=True), \

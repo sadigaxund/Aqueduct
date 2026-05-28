@@ -46,6 +46,20 @@ def mock_agent_patch():
         )
     return _make_patch
 
+
+def _mock_agent_result(patch):
+    """Wrap a PatchSpec (or None) in a MagicMock simulating AgentPatchResult.
+
+    The real result carries ``recovery_applied: list[str]``. Bare ``MagicMock``
+    leaves it as a MagicMock attribute, which (a) makes auto-apply downgrade
+    to human-review because ``len(recovery_applied)`` is truthy, and (b) leaks
+    into JSON serialization paths as a non-serialisable MagicMock. Set the
+    list explicitly so the CLI path mirrors a clean LLM response.
+    """
+    result = MagicMock(patch=patch)
+    result.recovery_applied = []
+    return result
+
 @patch("aqueduct.executor.get_executor")
 @patch("aqueduct.agent.generate_agent_patch")
 @patch("aqueduct.surveyor.surveyor.Surveyor")
@@ -69,7 +83,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     # 2. Agent returns a patch that will fail compilation (e.g. duplicate module id)
     # Actually, we can just mock _apply_patch_in_memory to return None
     invalid_patch = mock_agent_patch(patch_id="invalid-fix")
-    mock_gen_patch.return_value = MagicMock(patch=invalid_patch)
+    mock_gen_patch.return_value = _mock_agent_result(invalid_patch)
     
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, False)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
@@ -113,10 +127,10 @@ def test_aggressive_mode_fails_then_continues(
     
     # 2. Agent returns two different patches
     mock_gen_patch.side_effect = [
-        MagicMock(patch=mock_agent_patch(patch_id="fix-1")),
-        MagicMock(patch=mock_agent_patch(patch_id="fix-2")),
-        MagicMock(patch=None),
-        MagicMock(patch=None),
+        _mock_agent_result(mock_agent_patch(patch_id="fix-1")),
+        _mock_agent_result(mock_agent_patch(patch_id="fix-2")),
+        _mock_agent_result(None),
+        _mock_agent_result(None),
     ]
     
     # We need to mock _apply_patch_in_memory to return a valid manifest (mock it as MagicMock)
@@ -158,7 +172,7 @@ def test_aggressive_mode_succeeds_stops_loop(
     ]
     
     patch_obj = mock_agent_patch(patch_id="good-fix")
-    mock_gen_patch.return_value = MagicMock(patch=patch_obj)
+    mock_gen_patch.return_value = _mock_agent_result(patch_obj)
     
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
@@ -193,7 +207,7 @@ def test_trigger_agent_escalation(
                         trigger_agent=True),
     ]
     
-    mock_gen_patch.return_value = MagicMock(patch=mock_agent_patch())
+    mock_gen_patch.return_value = _mock_agent_result(mock_agent_patch())
     
     with patch("aqueduct.agent.stage_patch_for_human") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint)])

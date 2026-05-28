@@ -38,18 +38,25 @@ def test_patch_spec_empty_operations():
         PatchSpec.model_validate(raw_json)
 
 
-def test_patch_spec_extra_field_forbidden():
-    # extra="forbid" on top level
+def test_patch_spec_unknown_top_level_keys_land_in_misc():
+    # PatchSpec now allows extra top-level keys (extra="allow") and buckets
+    # them into ``misc`` via a pre-validator. Operation-level fields stay
+    # strict — a typo in ``key:`` or ``module_id:`` still bounces.
     raw_json = {
         "patch_id": "patch_123",
-        "rationale": "Extra field",
+        "rationale": "Unknown top-level keys collected",
+        "confidence": 0.9,
+        "root_cause": "test",
         "hacker_field": "exploit",
+        "rootCause": "ignored alias bucket",
         "operations": [
             {"op": "replace_module_label", "module_id": "m1", "label": "L"}
-        ]
+        ],
     }
-    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
-        PatchSpec.model_validate(raw_json)
+    spec = PatchSpec.model_validate(raw_json)
+    # The unknown top-level key lands in misc; canonical fields stay clean.
+    assert "hacker_field" in spec.misc
+    assert spec.misc["hacker_field"] == "exploit"
 
 
 def test_patch_operation_discriminator_mismatch():

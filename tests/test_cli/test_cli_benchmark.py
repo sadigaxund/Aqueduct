@@ -262,11 +262,15 @@ def test_benchmark_output_json_includes_patch(mock_run_benchmark, tmp_path):
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
     
     assert result.exit_code == 0
-    # The output might have a header line: "↻ benchmark scenarios=..."
+    # Benchmark UX overhaul added multiple banner lines on stderr/stdout
+    # (``↻ benchmark scenarios=...``, ``[benchmark] N scenarios × M models``,
+    # plus per-pair verdict separators). Strip everything before the first
+    # ``{`` so the JSON body parses regardless of how many decorative lines
+    # the CLI prints around it.
     output_text = result.output
-    if "↻ benchmark" in output_text:
-        output_text = output_text.split("\n", 1)[1]
-    data = json.loads(output_text.strip())
+    brace_pos = output_text.find("{")
+    assert brace_pos != -1, f"No JSON body in output: {output_text!r}"
+    data = json.loads(output_text[brace_pos:].strip())
     model_res = data["test_sc"]["claude-sonnet-4-6"]
     assert "patch" in model_res
     assert model_res["patch"]["patch_id"] == "dummy-fix"

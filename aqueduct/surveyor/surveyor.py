@@ -51,15 +51,24 @@ CREATE TABLE IF NOT EXISTS run_records (
 );
 
 CREATE TABLE IF NOT EXISTS failure_contexts (
-    run_id         VARCHAR PRIMARY KEY,
-    blueprint_id   VARCHAR NOT NULL,
-    failed_module  VARCHAR NOT NULL,
-    error_message  VARCHAR NOT NULL,
-    stack_trace    VARCHAR,
-    manifest_json  JSON,
-    provenance_json JSON,
-    started_at     TIMESTAMPTZ NOT NULL,
-    finished_at    TIMESTAMPTZ NOT NULL
+    run_id            VARCHAR PRIMARY KEY,
+    blueprint_id      VARCHAR NOT NULL,
+    failed_module     VARCHAR NOT NULL,
+    error_message     VARCHAR NOT NULL,
+    stack_trace       VARCHAR,
+    manifest_json     JSON,
+    provenance_json   JSON,
+    started_at        TIMESTAMPTZ NOT NULL,
+    finished_at       TIMESTAMPTZ NOT NULL,
+    -- Structured Spark-error extraction. Populated when PySparkException or
+    -- Py4JJavaError surfaces enough metadata to identify the failure class,
+    -- offending object, and suggested column names — much cheaper for the
+    -- agent to consume than a raw multi-kilobyte JVM stack trace.
+    error_class       VARCHAR,
+    root_exception    JSON,
+    sql_state         VARCHAR,
+    object_name       VARCHAR,
+    suggested_columns JSON
 );
 
 CREATE TABLE IF NOT EXISTS healing_outcomes (

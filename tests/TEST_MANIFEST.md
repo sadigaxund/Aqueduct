@@ -2697,3 +2697,27 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ Apply-callback compile check skips guardrail eval when patch fails the discriminator check (returns False, "schema_drift", ...).
 - ⏳ `_apply_patch_in_memory` writes the tempfile to the blueprint's parent dir (not `/tmp/`), so relative `module.config.path` resolves to the real data files after the patch.
 - ⏳ `_stage_failed_patch` stderr message shows the actual `{ts}_{patch_id}.json` filename, not the bare `patch_id.json`.
+
+### Executor — `--from` / `--to` selector coverage (1.1.0)
+- ⏳ `_selector_included` with `from_module` only: excludes modules not reachable forward from the specified module.
+- ⏳ `_selector_included` with `to_module` only: excludes modules not reachable backward from the specified module.
+- ⏳ `_selector_included` with both: intersection of forward and backward reachable sets.
+- ⏳ Probes whose `attach_to` target is in the included set are auto-included.
+- ⏳ Unknown `from_module` / `to_module` raises `ExecuteError`.
+
+### Egress — Delta merge edge cases (1.1.0)
+- ⏳ `_write_merge` with empty upstream DataFrame: MERGE INTO is a no-op (no rows matched, no rows inserted).
+- ⏳ `_write_merge` with `dropTempView` missing view: try/except guard prevents `AnalysisException` on first merge.
+
+### Channel — `metrics_boundary` config modifier (1.1.0)
+- ⏳ Channel with `metrics_boundary: true` inserts `df.repartition(current_partitions)` after the op result, forcing a stage boundary.
+- ⏳ Channel without `metrics_boundary` does NOT repartition (default).
+
+### Config — `danger.*` settings gate enforcement (1.1.0)
+- ⏳ `danger.allow_multi_patch: false` (default) with `max_patches > 1` and no `--allow-multi-patch` → exit 1 with danger-gate error.
+- ⏳ `danger.allow_full_preflight: false` (default) with `sandbox_mode: preflight` → exit 1.
+- ⏳ `danger.allow_skip_sandbox: false` (default) with `sandbox_mode: off` → exit 1.
+- ⏳ `danger.allow_full_probe_actions: false` (default) → `block_full_actions=True` blocks probe signals that would trigger Spark actions.
+
+### End-to-end heal flow (1.1.0)
+- ⏳ Blueprint with inducible failure → `aqueduct run --approval auto` → agent generates patch → patch applied → re-run succeeds → observability stores both run records.

@@ -561,16 +561,16 @@ class TestFormatBenchmarkTable:
             }
         }
         table = format_benchmark_table(results, models=["m1"])
-        
-        # Check cell format for PASS with d50%
-        # diag_score=0.5 -> d50%
+
+        # Benchmark table format overhaul (1.1.0): cells use middle-dot
+        # separators ``PASS · 0.90 · 50% · 1s`` instead of the old ``d50%``
+        # prefix. Diag score appears as a percentage subfield, no ``d`` glyph.
         assert "PASS" in table
-        assert "d50%" in table
-        
-        # Check cell format for FAIL with d100%
-        # diag_score=1.0 -> d100%
+        assert "50%" in table
         assert "FAIL" in table
-        assert "d100%" in table
+        assert "100%" in table
+        # Diag score summary row at the bottom.
+        assert "Diag score" in table
         
         # Check Diag score summary row: (0.5 + 1.0) / 2 = 0.75 -> 75%
         assert "Diag score" in table
