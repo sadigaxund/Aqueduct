@@ -3954,7 +3954,21 @@ def benchmark(
 
     click.echo(
         f"↻ benchmark  scenarios={scenarios_dir}  "
-        f"models={model_list}  provider={resolved_provider}"
+        f"models={model_list}  provider={resolved_provider}",
+        err=True,
+    )
+
+    # Count scenarios up-front for the banner. Cheap glob — load_scenario
+    # runs again inside run_benchmark, but we only need the count here.
+    _scn_count = (
+        1 if Path(scenarios_dir).is_file()
+        else len(list(Path(scenarios_dir).glob("**/*.aqscenario.yml")))
+    )
+    _pair_count = _scn_count * len(model_list)
+    click.echo(
+        f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
+        f"{_pair_count} pairs",
+        err=True,
     )
 
     # Phase 34 Task 89 — benchmark MUST use the same BudgetConfig as
@@ -3964,19 +3978,32 @@ def benchmark(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
     )
-    results = run_benchmark(
-        scenarios_dir=Path(scenarios_dir),
-        models=model_list,
-        patches_dir=Path(patches_dir),
-        provider=resolved_provider or "anthropic",
-        base_url=resolved_base_url,
-        provider_options=resolved_provider_options,
-        timeout=resolved_timeout,
-        max_reprompts=resolved_max_reprompts,
-        engine_prompt_context=resolved_engine_prompt_context,
-        workers=workers,
-        budget=_budget,
-    )
+    try:
+        results = run_benchmark(
+            scenarios_dir=Path(scenarios_dir),
+            models=model_list,
+            patches_dir=Path(patches_dir),
+            provider=resolved_provider or "anthropic",
+            base_url=resolved_base_url,
+            provider_options=resolved_provider_options,
+            timeout=resolved_timeout,
+            max_reprompts=resolved_max_reprompts,
+            engine_prompt_context=resolved_engine_prompt_context,
+            workers=workers,
+            budget=_budget,
+        )
+    except KeyboardInterrupt:
+        # Per-pair results persist to benchmark.duckdb inside run_scenario
+        # via Surveyor.record_benchmark_result, so completed pairs survive
+        # the interrupt. Queued pairs are dropped when the executor's
+        # __exit__ propagates the KeyboardInterrupt; in-flight HTTP calls
+        # close their socket via the `with httpx.Client():` context
+        # manager, signalling the LLM server to abort generation.
+        click.echo(
+            "\n↑ interrupted — completed pairs persisted to benchmark store",
+            err=True,
+        )
+        sys.exit(130)  # SIGINT convention
 
     if fmt == "json":
         output: dict = {}
@@ -4004,7 +4031,13 @@ def benchmark(
                 }
         click.echo(json.dumps(output, indent=2))
     else:
-        click.echo(format_benchmark_table(results, model_list))
+        _table = format_benchmark_table(results, model_list)
+        click.echo(_table)
+        # Mirror to stderr when stdout is redirected/piped so the user sees
+        # the table in the terminal AND captures it in `> file`. Skip when
+        # stdout is a TTY (avoid duplicate output in interactive runs).
+        if not sys.stdout.isatty():
+            click.echo(_table, err=True)
 
     total = sum(
         1 for model_results in results.values()
