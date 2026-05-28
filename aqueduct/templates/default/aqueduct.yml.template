@@ -22,7 +22,7 @@ aqueduct_config: "1.0"
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 deployment:
-  # engine: execution engine. Currently supported: spark. Planned: flink.
+  # engine: execution engine. Currently supported: spark.
   engine: spark
 
   # target: informational label only — never changes execution behaviour.
