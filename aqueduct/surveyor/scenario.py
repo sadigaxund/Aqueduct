@@ -713,8 +713,46 @@ def run_benchmark(
     # Pre-populate result dict to maintain scenario insertion order
     results: dict[str, dict[str, ScenarioResult]] = {s.id: {} for s in loaded}
 
+    # Iteration order: model-outer, scenario-inner. For serial runs (Ollama
+    # / vLLM with workers=1) this drastically reduces weight-swap thrash —
+    # the GPU keeps one model loaded across every scenario before switching.
+    # Order is independent of the final table layout (driven by `results`
+    # dict insertion order, not iteration order).
+    pairs = [(s, m) for m in models for s in loaded]
+    effective_workers = min(workers, len(pairs))
+    # Serial runs get rich visual grouping (separator before, verdict after,
+    # model-switch hint). Parallel runs would interleave output, so we keep
+    # the legacy single-line log for those.
+    serial = effective_workers == 1
+
+    _prev_model: dict[str, str | None] = {"v": None}
+
+    def _emit(line: str) -> None:
+        """Stderr-only — separators must never pollute --format json stdout."""
+        try:
+            import click as _click
+            _click.echo(line, err=True)
+        except Exception:
+            # click not importable from this context (shouldn't happen, but
+            # benchmark must never crash on cosmetics); fall back to logger.
+            logger.info(line)
+
     def _run_pair(scenario: Any, model: str) -> tuple[str, str, ScenarioResult]:
-        logger.info("Running scenario %r | model %r", scenario.id, model)
+        if serial:
+            if _prev_model["v"] is not None and _prev_model["v"] != model:
+                _emit(
+                    f"\n↻ switching models  prev={_prev_model['v']}  next={model}  "
+                    f"(local servers may pause to load weights, 30-120s)"
+                )
+            _prev_model["v"] = model
+            header = f"Scenario: {scenario.id}   Model: {model}"
+            bar = "═" * max(len(header), 67)
+            _emit(f"\n{bar}")
+            _emit(header)
+            _emit(bar)
+        else:
+            logger.info("Running scenario %r | model %r", scenario.id, model)
+
         r = run_scenario(
             scenario,
             model=model,
@@ -727,10 +765,17 @@ def run_benchmark(
             engine_prompt_context=engine_prompt_context,
             budget=budget,
         )
-        return scenario.id, model, r
 
-    pairs = [(s, m) for s in loaded for m in models]
-    effective_workers = min(workers, len(pairs))
+        if serial:
+            status = "PASS" if r.passed else "FAIL"
+            conf = f"conf={r.confidence:.2f}" if r.confidence is not None else "conf=—"
+            diag = f"diag={r.diag_score:.0%}" if r.diag_score is not None else "diag=—"
+            _emit(
+                f"└─ {status}  {conf}  {diag}  "
+                f"attempts={r.attempts_to_parse}  duration={r.duration_seconds:.1f}s"
+            )
+
+        return scenario.id, model, r
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = [pool.submit(_run_pair, s, m) for s, m in pairs]
@@ -754,35 +799,46 @@ def format_benchmark_table(
 
     scenario_ids = list(results.keys())
 
-    # Column widths
+    def _format_cell(r: "ScenarioResult | None") -> str:
+        if r is None:
+            return "—"
+        status = "PASS" if r.passed else "FAIL"
+        parts: list[str] = [status]
+        if r.passed and r.confidence is not None:
+            parts.append(f"{r.confidence:.2f}")
+        if r.diag_score is not None:
+            parts.append(f"{r.diag_score:.0%}")
+        parts.append(f"{r.duration_seconds:.0f}s")
+        return " · ".join(parts)
+
+    # Compute column widths AFTER pre-rendering every cell so the column
+    # exactly fits the widest content (no centred padding mismatch).
     id_col_w = max(len("Scenario"), max(len(sid) for sid in scenario_ids))
-    model_col_w = max(len(m) for m in models) + 2
-    model_col_w = max(model_col_w, 12)
+    model_col_w_by_model: dict[str, int] = {}
+    for m in models:
+        widest = len(m)
+        for sid in scenario_ids:
+            widest = max(widest, len(_format_cell(results[sid].get(m))))
+        model_col_w_by_model[m] = max(widest, 10)
 
-    sep = "-" * (id_col_w + 2) + "-+-" + "-+-".join("-" * model_col_w for _ in models)
-    header = f"{'Scenario':<{id_col_w}}  | " + " | ".join(f"{m:^{model_col_w}}" for m in models)
+    total_w = id_col_w + sum(model_col_w_by_model.values()) + 3 * len(models) + 2
+    h_heavy = "═" * total_w
+    h_light = "─" * total_w
 
-    lines: list[str] = [header, sep]
+    header = f"{'Scenario':<{id_col_w}}  │ " + " │ ".join(
+        f"{m:<{model_col_w_by_model[m]}}" for m in models
+    )
 
-    for sid, model_results in results.items():
-        cells = []
-        for model in models:
-            r = model_results.get(model)
-            if r is None:
-                cells.append(f"{'—':^{model_col_w}}")
-            else:
-                status = "PASS" if r.passed else "FAIL"
-                t = f"{r.duration_seconds:.1f}s"
-                diag = f" d{r.diag_score:.0%}" if r.diag_score is not None else ""
-                if r.passed:
-                    conf = f"{r.confidence:.2f}" if r.confidence is not None else "—"
-                    cell = f"{status} {conf}{diag} {t}"
-                else:
-                    cell = f"{status}{diag} {t}"
-                cells.append(f"{cell:^{model_col_w}}")
-        lines.append(f"{sid:<{id_col_w}}  | " + " | ".join(cells))
+    lines: list[str] = [h_heavy, header, h_heavy]
 
-    lines.append(sep)
+    for sid in scenario_ids:
+        cells = [
+            f"{_format_cell(results[sid].get(m)):<{model_col_w_by_model[m]}}"
+            for m in models
+        ]
+        lines.append(f"{sid:<{id_col_w}}  │ " + " │ ".join(cells))
+
+    lines.append(h_light)
 
     # Summary rows
     for label, fn in [
@@ -825,9 +881,10 @@ def format_benchmark_table(
                 results[sid][model] for sid in scenario_ids if model in results[sid]
             ]
             if model_results_list:
-                cells.append(f"{fn(model_results_list):^{model_col_w}}")
+                cells.append(f"{fn(model_results_list):<{model_col_w_by_model[model]}}")
             else:
-                cells.append(f"{'—':^{model_col_w}}")
-        lines.append(f"{label:<{id_col_w}}  | " + " | ".join(cells))
+                cells.append(f"{'—':<{model_col_w_by_model[model]}}")
+        lines.append(f"{label:<{id_col_w}}  │ " + " │ ".join(cells))
 
+    lines.append(h_heavy)
     return "\n".join(lines)

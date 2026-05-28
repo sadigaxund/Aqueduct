@@ -52,6 +52,11 @@ secrets = [
 # Redis is depot-only.
 postgres = ["psycopg2-binary>=2.9"]
 redis = ["redis>=5.0"]
+# Optional last-ditch JSON repair for malformed LLM responses (unescaped
+# quotes, missing commas, smart quotes). Without it, _parse_patch_spec
+# falls back to surfacing the strict JSONDecodeError to the reprompt loop —
+# no functional regression, just lower first-attempt success.
+llm = ["json-repair>=0.30"]
 # Aggregate convenience extra — pulls every networked store backend.
 stores = [
     "aqueduct-core[postgres]",
@@ -68,6 +73,7 @@ all = [
     "aqueduct-core[secrets]",
     "aqueduct-core[stores]",
     "aqueduct-core[schedulers]",
+    "aqueduct-core[llm]",
 ]
 dev = [
     "pytest>=8.0.0",

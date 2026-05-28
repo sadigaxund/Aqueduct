@@ -836,18 +836,21 @@ def _call_anthropic(
     }
     if temperature_override is not None:
         payload["temperature"] = temperature_override
-    response = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json=payload,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    data = response.json()
+    # `with httpx.Client():` so the socket is torn down by __exit__ when
+    # KeyboardInterrupt propagates — server sees disconnect, can abort
+    # generation (Anthropic billing stops mid-completion).
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
     text = data["content"][0]["text"]
     usage = data.get("usage") or {}
     return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
@@ -908,14 +911,19 @@ def _call_openai_compat(
         if "options" in payload and isinstance(payload["options"], dict):
             payload["options"]["temperature"] = temperature_override
 
-    response = httpx.post(
-        url,
-        json=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    # `with httpx.Client():` so the socket is torn down by __exit__ when
+    # KeyboardInterrupt propagates — Ollama / vLLM see disconnect and abort
+    # generation (frees GPU; on paid hosted endpoints stops billing).
+    with httpx.Client(
         timeout=httpx.Timeout(connect=15.0, read=timeout, write=30.0, pool=5.0),
-    )
-    response.raise_for_status()
-    data = response.json()
+    ) as client:
+        response = client.post(
+            url,
+            json=payload,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        data = response.json()
     text = data["choices"][0]["message"]["content"]
     usage = data.get("usage") or {}
     return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
