@@ -10,10 +10,63 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **`PatchSpec.misc: dict[str, Any]`** field — bucket for unknown top-level
+  keys. `extra="forbid"` relaxed to `extra="allow"` with a pre-validator
+  that moves unrecognised top-level keys into `misc` for post-mortem
+  visibility. Operation-level fields stay strict (`extra="forbid"` on each
+  Op model) — a typo in `key:` or `module_id:` still bounces the patch
+  because it would mutate the wrong field. Metadata fields are descriptive,
+  not load-bearing.
+
+- **`_METADATA_ALIASES`** maps common casing/synonym variants to canonical
+  field names: `rootCause` / `rootcause` / `cause` → `root_cause`,
+  `reasoning` / `reason` / `explanation` → `rationale`, `patchId` →
+  `patch_id`, etc. Normalised at parse-time before pydantic validation.
+  Eliminates the `"rootCause" is not a recognized field — remove it.`
+  reprompt loop seen with smaller models.
+
+- **`AgentPatchResult.recovery_applied: list[str]`** records every
+  mechanical recovery `_parse_patch_spec` performed on the raw LLM output
+  (think-block strip, fence strip, leading-prose strip, line-comment strip,
+  json_repair fallback). Empty when the response was clean.
+
+- **Recovered patches forfeit auto-apply privilege.** When
+  `agent_result.recovery_applied` is non-empty and `approval_mode` is
+  `auto`/`aggressive`, the CLI downgrades to `human` for that single patch
+  and prints a one-line notice listing the recoveries. Trust boundary
+  moves to the reviewer, not the regex — a patch we had to rescue is
+  inherently lower-trust even if it parsed in the end.
+
+- **Fuzzy module-ID hints in apply-gate errors.** `_find_module` now
+  ranks available IDs by similarity (stdlib `difflib`) and leads with the
+  closest match in the reprompt. `Module 'clean_events_format' not found.
+  Closest match: 'clean_events'. Available: [...]`. Reprompt-side nudge
+  only — we never auto-substitute the suggested ID, since that would be
+  interpretive recovery (hallucinating model intent).
+
+- **Grammar-constrained JSON sampling for OpenAI-compat providers.**
+  `_call_openai_compat` now sends `response_format: {"type": "json_object"}`
+  by default. Ollama (0.1.24+), vLLM, LM Studio, and most OpenAI-compat
+  servers honour this — the model is masked at sampling time to emit only
+  valid JSON, eliminating the malformed-JSON failure modes that no amount
+  of post-processing can recover (unescaped `"` inside string values,
+  truncated objects, smart quotes). Opt out per-call via
+  `provider_options.response_format = "off"` for backends that reject the
+  field. Anthropic provider unchanged — structured output there is
+  forced-tool-use, a separate change.
+
+- **Optional `json-repair` last-ditch parse pass** via new `[llm]` extra
+  (`pip install aqueduct-core[llm]`). When strict `json.loads` + the
+  built-in cleanups still fail, `_parse_patch_spec` tries `repair_json()`
+  before surfacing the error. Without the extra installed, behaviour is
+  unchanged — the strict error propagates to the reprompt loop. Bundled
+  under `[all]`.
+
 ### Fixed
 - **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,
-  fenced ```json``` code blocks anywhere in the response, and `//` line
-  comments.** Previously the deepseek-r1 family's reasoning output starved
+  fenced ```json``` code blocks anywhere in the response, and JS-style
+  (`//`) or Python/YAML-style (`#`) line comments.** Previously the deepseek-r1 family's reasoning output starved
   the parser on attempt 3 ("Your output near the error" rendered empty
   because JSON came after the think block); other models occasionally
   emitted JS-style line comments that `json.loads` rejected. Cleanup is

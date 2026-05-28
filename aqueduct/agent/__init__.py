@@ -80,6 +80,11 @@ class AgentPatchResult:
     tokens_out_total: int = 0
     attempt_records: list[AttemptRecord] = field(default_factory=list)
     escalated: bool = False
+    # List of mechanical recoveries performed during parsing (e.g.
+    # "stripped_think_block", "json_repair"). Empty when the response was
+    # clean. CLI auto-apply path downgrades approval_mode → human when this
+    # is non-empty — patches we had to rescue never silently land.
+    recovery_applied: list[str] = field(default_factory=list)
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
@@ -874,6 +879,12 @@ def _call_openai_compat(
         "model": model,
         "max_tokens": max_tokens,
         "messages": [{"role": "system", "content": system_prompt}] + messages,
+        # Grammar-constrained JSON sampling. Ollama (0.1.24+), vLLM, and most
+        # OpenAI-compat servers honour this — the model is masked to emit only
+        # valid JSON, eliminating unescaped-quote / trailing-comma / line-
+        # comment failures that no amount of postprocessing fixes. Opt out by
+        # setting provider_options.response_format to a falsy value or "off".
+        "response_format": {"type": "json_object"},
     }
     if provider_options:
         # ollama_* keys → stripped and nested under payload["options"] (Ollama-specific field)
@@ -883,6 +894,12 @@ def _call_openai_compat(
         if ollama_opts:
             payload["options"] = ollama_opts
         payload.update(generic_opts)
+        # Opt-out: provider_options.response_format = "off" / None / False
+        # disables grammar-constrained JSON mode (useful when a specific
+        # backend rejects the field; payload-level value above gets cleared).
+        rf = generic_opts.get("response_format")
+        if rf in (None, False, "off"):
+            payload.pop("response_format", None)
     if temperature_override is not None:
         # Override AFTER provider_options so escalation wins. Apply at both
         # the top-level (standard OpenAI) and inside options (Ollama-style)
@@ -1026,52 +1043,87 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
-# Strip JSON `// line comment` (LLMs frequently emit JS-style comments). We only
-# strip comments that begin at column 0 or after whitespace — never inside a
-# string literal — by requiring the comment to be preceded by whitespace OR by
-# the start of a line. A full string-aware tokenizer would be safer but is
-# overkill: a stray `//` inside a string is rare, and the strict json.loads pass
-# below still catches malformed output if our cleanup mis-fires.
-_LINE_COMMENT_RE = re.compile(r"(^|\s)//[^\n]*", re.MULTILINE)
+# Strip JSON line comments — both JS-style `//` and Python/YAML-style `#`.
+# LLMs trained mostly on Python or YAML routinely emit `#` comments; coder
+# models trained on JS emit `//`. We only strip comments that begin at column
+# 0 or after whitespace — never inside a string literal — by requiring the
+# comment to be preceded by whitespace OR by the start of a line. A full
+# string-aware tokenizer would be safer but is overkill: a stray comment
+# marker inside a string is rare, and the strict json.loads pass below still
+# catches malformed output if our cleanup mis-fires.
+_LINE_COMMENT_RE = re.compile(r"(^|\s)(?://|#)[^\n]*", re.MULTILINE)
 
 
-def _parse_patch_spec(text: str) -> PatchSpec:
+def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
     """Parse and validate LLM response as PatchSpec.
+
+    Returns ``(spec, recovery_applied)`` where ``recovery_applied`` is the
+    list of mechanical fixes performed during parsing — empty when the
+    response was clean. Used downstream to downgrade ``approval_mode: auto``
+    to ``human`` for any patch that needed recovery: we never trust a
+    patch we had to rescue.
 
     Tolerates common LLM-output artifacts before strict JSON parsing:
       * `<think>...</think>` reasoning blocks (deepseek-r1 family)
       * markdown fences anywhere in the response (not just leading)
       * `// line comments` inside otherwise-valid JSON
+      * a `json-repair` last-ditch pass when the soft-dep `[llm]` extra
+        is installed
 
-    Cleanups are conservative — a malformed pre-clean response that survives
-    will fail the strict ``json.JSONDecoder().raw_decode`` pass and surface a
-    real error to the reprompt loop.
+    Cleanups are MECHANICAL — they fix syntax, never interpret intent. The
+    LLM still wrote the patch; we only un-mangle its output.
     """
     text = text.strip()
+    recovery_applied: list[str] = []
 
     # 1. Strip <think>...</think> reasoning blocks (deepseek-r1 etc.).
-    text = _THINK_BLOCK_RE.sub("", text).strip()
+    cleaned = _THINK_BLOCK_RE.sub("", text)
+    if cleaned != text:
+        recovery_applied.append("stripped_think_block")
+    text = cleaned.strip()
 
     # 2. If the response contains a fenced ```json ... ``` block anywhere,
     # prefer its contents over the surrounding prose.
     fence_match = _FENCE_BLOCK_RE.search(text)
     if fence_match:
         text = fence_match.group(1).strip()
+        recovery_applied.append("stripped_code_fence")
 
     # 3. Find the start of the first JSON object (handles leading prose like
     # "Here is the JSON:").
     brace_idx = text.find("{")
     if brace_idx > 0:
         text = text[brace_idx:]
+        recovery_applied.append("stripped_leading_prose")
 
-    # 4. Strip `// line comments` — keep as the last cleanup so we only touch
+    # 4. Strip line comments — keep as the last cleanup so we only touch
     # the JSON region, not the upstream think block / prose we already stripped.
-    text = _LINE_COMMENT_RE.sub(r"\1", text)
+    cleaned = _LINE_COMMENT_RE.sub(r"\1", text)
+    if cleaned != text:
+        recovery_applied.append("stripped_line_comments")
+    text = cleaned
 
     # raw_decode stops at the end of the first complete JSON object, ignoring
     # any trailing prose or markdown the LLM adds after the closing brace.
-    obj, _ = json.JSONDecoder().raw_decode(text)
-    return PatchSpec.model_validate(obj)
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text)
+    except json.JSONDecodeError:
+        # Last-ditch repair pass for cases strict json + our cleanups can't
+        # recover (unescaped quotes inside string values, missing commas
+        # between fields, smart quotes, etc.). `json-repair` is an optional
+        # soft dependency — if absent, the original strict error propagates
+        # to the reprompt loop unchanged so the model still gets a chance
+        # to fix its own output.
+        try:
+            from json_repair import repair_json as _repair_json
+        except ImportError:
+            raise
+        repaired = _repair_json(text)
+        if not repaired:
+            raise
+        obj, _ = json.JSONDecoder().raw_decode(repaired)
+        recovery_applied.append("json_repair")
+    return PatchSpec.model_validate(obj), recovery_applied
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -1248,8 +1300,9 @@ def generate_agent_patch(
 
         # ── Parse phase ────────────────────────────────────────────────
         parse_exc: BaseException | None = None
+        recovery_applied: list[str] = []
         try:
-            patch_spec = _parse_patch_spec(raw)
+            patch_spec, recovery_applied = _parse_patch_spec(raw)
         except (ValidationError, json.JSONDecodeError, ValueError) as exc:
             parse_exc = exc
 
@@ -1403,6 +1456,7 @@ def generate_agent_patch(
         tokens_out_total=tracker.tokens_out_total,
         attempt_records=list(tracker.attempts),
         escalated=tracker.escalated_once,
+        recovery_applied=recovery_applied if patch_spec is not None else [],
     )
 
 

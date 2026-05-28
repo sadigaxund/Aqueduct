@@ -1842,6 +1842,23 @@ def run(
                 )
                 effective_mode = "human"
 
+            # Recovered patches never silently land. If the parser had to apply
+            # any mechanical recovery (think-block strip, json_repair fallback,
+            # etc.) we downgrade auto/aggressive → human so a reviewer sees
+            # exactly what we rescued. Trust boundary stays at the human, not
+            # the regex.
+            if (
+                agent_result.recovery_applied
+                and effective_mode in ("auto", "aggressive")
+            ):
+                click.echo(
+                    f"  ↑ LLM response needed mechanical recovery "
+                    f"({', '.join(agent_result.recovery_applied)}) — "
+                    f"downgrading to human review for safety",
+                    err=True,
+                )
+                effective_mode = "human"
+
             # ── Guardrail check (pre-staging) ─────────────────────────────────────
             try:
                 from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
