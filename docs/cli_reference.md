@@ -46,6 +46,17 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor <file>` | Validate a specific blueprint or config file |
 | `aqueduct doctor --skip-spark` | Fast check without starting Spark |
 | `aqueduct doctor --preflight` | Full Spark session + storage validation |
+| `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
+
+### Shell completion
+
+`aqueduct completion` generates a completion script for `bash`, `zsh`, or `fish` from the live click command tree — new flags pick up automatically; rerun after upgrading Aqueduct.
+
+```bash
+aqueduct completion bash > /etc/bash_completion.d/aqueduct.sh
+aqueduct completion zsh  > /usr/local/share/zsh/site-functions/_aqueduct
+aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
+```
 
 ---
 

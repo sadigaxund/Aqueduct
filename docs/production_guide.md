@@ -1,0 +1,286 @@
+# Aqueduct Production Guide
+
+**Deploying Aqueduct pipelines on Spark clusters — configuration, security, maintenance.**
+
+---
+
+## Deployment Environments
+
+Aqueduct supports three deployment environments, declared under the `deployment:` block in `aqueduct.yml`:
+
+```yaml
+deployment:
+  env: local        # default — relative paths, local Spark, local DuckDB
+  # env: cluster    # Spark standalone / YARN — shared FS, driver is persistent
+  # env: cloud      # K8s / EMR / Dataproc — ephemeral driver, object storage
+```
+
+The value affects:
+- Path validation in `aqueduct doctor` (errors on relative store paths in `cluster`/`cloud` mode)
+- Self-healing patch lifecycle guidance
+- Observability state persistence guidance
+
+---
+
+## Scheduling
+
+Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command designed to be invoked by an orchestrator:
+
+- **Simple cron**: Any OS-level cron, systemd timer, or cloud scheduler (AWS EventBridge, GCP Cloud Scheduler) invoking `aqueduct run blueprint.yml`.
+- **Complex orchestration**: An Airflow `AqueductOperator` (wrapping `aqueduct run` via the deferrable trigger pattern) for dependency management, backfill, and SLA tracking.
+- **On-demand**: Manual invocation from CI/CD pipelines or by the LLM agent via `aqueduct run` after patch application.
+
+---
+
+## Spark Cluster Configuration
+
+Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
+
+```yaml
+deployment:
+  env: cluster
+  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  master_url: "spark://master:7077"    # consumed by SparkSession.builder.master()
+
+spark_config:
+  spark.sql.shuffle.partitions: "200"
+  spark.hadoop.fs.s3a.impl: "org.apache.hadoop.fs.s3a.S3AFileSystem"
+  spark.hadoop.fs.s3a.aws.credentials.provider: "com.amazonaws.auth.InstanceProfileCredentialsProvider"
+```
+
+`spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict.
+
+Environment variable substitution works inside config values:
+
+```yaml
+deployment:
+  master_url: "${SPARK_MASTER_URL:-local[*]}"   # falls back to local if unset
+```
+
+Running on a cluster:
+```bash
+aqueduct run pipeline.yml --config aqueduct.cluster.yml
+```
+
+In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observability state and patch history survive pod restarts.
+
+---
+
+## Path Conventions
+
+**Rule: all I/O paths in production Blueprints must be cloud/HDFS URIs, never local filesystem paths.**
+
+Local paths (`data/yellow/*.parquet`) are relative to the working directory of the driver process. In a container or remote driver, that directory contains no data.
+
+**Correct pattern — context refs resolved from environment variables:**
+
+```yaml
+context:
+  paths:
+    yellow_input: "${YELLOW_DATA_PATH}"    # e.g. s3a://my-bucket/yellow/
+    output:       "${OUTPUT_PATH}"         # e.g. s3a://my-bucket/output/
+
+modules:
+  - id: yellow_ingress
+    type: Ingress
+    config:
+      path: "${ctx.paths.yellow_input}"
+      format: parquet
+```
+
+**`allowed_paths` guardrail for production:**
+
+```yaml
+agent:
+  guardrails:
+    allowed_paths:
+      - "s3a://my-bucket/**"
+      - "hdfs://namenode/**"
+      - "gs://my-gcs-bucket/**"
+    forbidden_ops:
+      - remove_module
+      - insert_module
+```
+
+In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
+
+---
+
+## Observability State Persistence
+
+`observability.db` (DuckDB) runs on the driver — always correct. Spark workers never access it.
+
+| Deployment | Driver persistence | Action required |
+|---|---|---|
+| Local / dev | Permanent | None |
+| YARN client mode | Permanent (edge node) | None |
+| Spark standalone | Permanent (driver host) | None |
+| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
+
+Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point all three at a persistent mount:
+
+```yaml
+stores:
+  observability:
+    path: "/mnt/aqueduct-state/observability.db"
+  lineage:
+    path: "/mnt/aqueduct-state/lineage.db"
+  depot:
+    path: "/mnt/aqueduct-state/depot.db"
+```
+
+The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
+
+---
+
+## LLM Service Configuration
+
+In production, LLM inference runs as a remote HTTP service.
+
+**OpenAI-compatible endpoint (vLLM, Azure OpenAI, together.ai, etc.):**
+
+```yaml
+agent:
+  provider: openai_compat
+  base_url: "${LLM_BASE_URL}"
+  model: "${LLM_MODEL}"
+  timeout: 60
+  approval_mode: human
+```
+
+**Anthropic API:**
+
+```yaml
+agent:
+  provider: anthropic
+  model: claude-opus-4-7-20251001
+  approval_mode: human
+```
+
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`.
+
+---
+
+## Danger Settings
+
+Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning.
+
+```yaml
+danger:
+  allow_multi_patch: false          # if true, approval_mode: auto + max_patches > 1 is allowed
+  allow_full_probe_actions: false   # if true, Probes may run expensive Spark actions
+  allow_full_preflight: false       # if true, sandbox_mode: preflight is allowed
+  allow_skip_sandbox: false         # if true, sandbox_mode: off is allowed (no pre-validation)
+```
+
+**Never set `danger.*: true` in a production `aqueduct.yml` checked into git.** Use environment-specific config overrides or per-run CLI flags.
+
+---
+
+## Patch Lifecycle in Production
+
+The patch lifecycle differs between development and production.
+
+**Development (local):**
+
+```
+pipeline fails → LLM generates patch → patch written to patches/pending/
+→ human reviews → aqueduct patch apply → Blueprint updated → re-run
+```
+
+`approval_mode: auto` is acceptable locally — git provides rollback.
+
+**Production (recommended):**
+
+**Rule: in production, use `approval_mode: human`. The LLM must never autonomously modify a Blueprint managed by CI/CD.**
+
+Recommended flow:
+
+```
+pipeline fails → webhook fires (alert to Slack/PagerDuty)
+→ LLM generates patch → staged to patches/pending/
+→ operator reviews patch JSON
+→ aqueduct patch apply on a git branch → PR opened
+→ CI/CD validates → human approves → merge → redeploy
+```
+
+**`approval_mode: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct fires a POST request to `agent.ci_webhook_url` with the full PatchSpec JSON. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider.
+
+**`on_patch_pending` webhook:** When a patch is staged (`approval_mode: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
+
+### `patches/rules.md`
+
+`patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt. Use it to encode project-specific repair rules:
+
+```markdown
+## Project rules
+- All I/O paths must be `s3a://my-bucket/**` globs — never local paths.
+- Never change `mode: overwrite` on any Egress — data loss risk.
+```
+
+No code change needed to add a rule. Edit the file, commit it, rules apply on next run.
+
+### `patches/` directory in production
+
+| Directory | Commit to git? | Notes |
+|---|---|---|
+| `patches/applied/` | **Yes** | Audit trail |
+| `patches/pending/` | No (`.gitignore`) | Ephemeral — human review staging area |
+| `patches/rejected/` | No (`.gitignore`) | Ephemeral |
+| `patches/rules.md` | **Yes** | Project-specific LLM repair rules |
+
+### Git rollback
+
+`aqueduct patch rollback` is a **development tool only**. In production: rollback = revert the commit in git → CI/CD redeployment.
+
+---
+
+## Security Considerations
+
+| Concern | Mitigation |
+|---|---|
+| API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
+| LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
+| `auto` mode with `max_patches > 1` in production | Requires `danger.allow_multi_patch: true` — do not set in prod config. |
+| `observability.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
+| Patch tampering | Planned: patch signature verification for `auto` multi-patch mode. |
+| `danger.*` settings in shared config | Never commit `danger.*: true` to a shared/prod `aqueduct.yml`. |
+
+---
+
+## Delta Lake Operational Notes
+
+When using `format: delta` Egress modules in production, Aqueduct handles reads and writes but does **not** run Delta maintenance operations. These must be scheduled externally:
+
+| Operation | Why it matters | When to run |
+|---|---|---|
+| `OPTIMIZE` | Compacts small files written by incremental runs into larger files | After each incremental batch, or daily |
+| `VACUUM` | Removes old file versions; controls storage growth | Daily or weekly (default retention: 7 days) |
+| `ZORDER BY (col)` | Co-locates related data for data-skipping on filter columns | Run with `OPTIMIZE` when query patterns are known |
+
+Example (run via `spark.sql()` in an external maintenance job):
+
+```sql
+OPTIMIZE delta.`s3://my-bucket/output/orders` ZORDER BY (event_date, region);
+VACUUM delta.`s3://my-bucket/output/orders` RETAIN 168 HOURS;
+```
+
+Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` will accumulate small files over time, degrading read performance significantly.
+
+---
+
+## Production Readiness Checklist
+
+Before promoting a Blueprint to production:
+
+- [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
+- [ ] `aqueduct doctor pipeline.yml` passes with `deployment.env: cluster` or `cloud`
+- [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
+- [ ] `agent.approval_mode: human` or `ci` (not `auto`)
+- [ ] No `danger.*: true` in production `aqueduct.yml`
+- [ ] API keys injected via environment (`@aq.secret()` reads `os.environ`)
+- [ ] Store directories point to persistent paths (PVC in K8s, edge node in YARN)
+- [ ] `patches/pending/` and `patches/rejected/` in `.gitignore`
+- [ ] `patches/applied/` and `patches/rules.md` committed to git
+- [ ] `agent.webhooks.on_patch_pending` configured if using `approval_mode: human` in a team setting
+- [ ] If using `format: delta`: external OPTIMIZE / VACUUM jobs scheduled
