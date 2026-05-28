@@ -24,6 +24,7 @@ Approval modes:
 from __future__ import annotations
 
 import json
+import re
 import logging
 import os
 import time
@@ -956,7 +957,26 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
             for wrong, correct in _FIELD_ALIASES.items():
                 if correct == field_name and wrong in parsed:
                     hint = f' (you used "{wrong}" — rename it to "{field_name}")'
-            lines.append(f'• {loc_str}: required field missing{hint}.')
+            # Echo the offending op block so the model can see its own omission.
+            # Without this, "operations[0].set_module_config_key.value: required
+            # field missing" lands as an opaque field name — tiny models then
+            # repeat the same omission on reprompt. Walk `loc` into `parsed` and
+            # render the partial op compactly.
+            emitted_hint = ""
+            if loc and len(loc) >= 2 and isinstance(parsed, dict):
+                try:
+                    cursor: Any = parsed
+                    for part in loc[:-1]:
+                        cursor = cursor[part]
+                    if isinstance(cursor, dict):
+                        emitted_keys = ", ".join(repr(k) for k in cursor.keys())
+                        emitted_hint = (
+                            f"\n  You emitted {emitted_keys} — add the missing "
+                            f"\"{field_name}\" field to this same op block."
+                        )
+                except (KeyError, IndexError, TypeError):
+                    pass
+            lines.append(f'• {loc_str}: required field missing{hint}.{emitted_hint}')
 
         elif etype == "extra_forbidden":
             wrong_field = str(loc[-1]) if loc else loc_str
@@ -1004,17 +1024,50 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
     return "\n".join(lines) if lines else str(exc)
 
 
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_FENCE_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
+# Strip JSON `// line comment` (LLMs frequently emit JS-style comments). We only
+# strip comments that begin at column 0 or after whitespace — never inside a
+# string literal — by requiring the comment to be preceded by whitespace OR by
+# the start of a line. A full string-aware tokenizer would be safer but is
+# overkill: a stray `//` inside a string is rare, and the strict json.loads pass
+# below still catches malformed output if our cleanup mis-fires.
+_LINE_COMMENT_RE = re.compile(r"(^|\s)//[^\n]*", re.MULTILINE)
+
+
 def _parse_patch_spec(text: str) -> PatchSpec:
-    """Parse and validate LLM response as PatchSpec."""
+    """Parse and validate LLM response as PatchSpec.
+
+    Tolerates common LLM-output artifacts before strict JSON parsing:
+      * `<think>...</think>` reasoning blocks (deepseek-r1 family)
+      * markdown fences anywhere in the response (not just leading)
+      * `// line comments` inside otherwise-valid JSON
+
+    Cleanups are conservative — a malformed pre-clean response that survives
+    will fail the strict ``json.JSONDecoder().raw_decode`` pass and surface a
+    real error to the reprompt loop.
+    """
     text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-        text = text.strip()
-    # Find the start of the first JSON object (handles leading prose like "Here is the JSON:")
+
+    # 1. Strip <think>...</think> reasoning blocks (deepseek-r1 etc.).
+    text = _THINK_BLOCK_RE.sub("", text).strip()
+
+    # 2. If the response contains a fenced ```json ... ``` block anywhere,
+    # prefer its contents over the surrounding prose.
+    fence_match = _FENCE_BLOCK_RE.search(text)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    # 3. Find the start of the first JSON object (handles leading prose like
+    # "Here is the JSON:").
     brace_idx = text.find("{")
     if brace_idx > 0:
         text = text[brace_idx:]
+
+    # 4. Strip `// line comments` — keep as the last cleanup so we only touch
+    # the JSON region, not the upstream think block / prose we already stripped.
+    text = _LINE_COMMENT_RE.sub(r"\1", text)
+
     # raw_decode stops at the end of the first complete JSON object, ignoring
     # any trailing prose or markdown the LLM adds after the closing brace.
     obj, _ = json.JSONDecoder().raw_decode(text)
