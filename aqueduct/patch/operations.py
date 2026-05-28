@@ -91,9 +91,19 @@ def _find_module(bp: dict, module_id: str) -> dict:
             f"To fix a value in this module, use replace_context_value on the context key "
             f"that the arcade injects via context_override."
         )
+    available = [m.get("id") for m in bp.get("modules", []) if m.get("id")]
+    # Rank by similarity to the (hallucinated) target so the reprompt leads
+    # with the most plausible alternative. SequenceMatcher is stdlib —
+    # deterministic, no extra dependency. We DO NOT auto-substitute; the
+    # nearest match is a hint for the model, not an interpretive recovery.
+    import difflib as _difflib
+    ranked = _difflib.get_close_matches(module_id, available, n=3, cutoff=0.4)
+    closest_hint = (
+        f" Closest match: {ranked[0]!r}." if ranked else ""
+    )
     raise PatchOperationError(
-        f"Module {module_id!r} not found in Blueprint. "
-        f"Available: {[m.get('id') for m in bp.get('modules', [])]}"
+        f"Module {module_id!r} not found in Blueprint.{closest_hint} "
+        f"Available: {available}"
     )
 
 

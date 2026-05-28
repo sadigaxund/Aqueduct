@@ -187,7 +187,47 @@ _OP_ALIASES: dict[str, str] = {
 }
 
 
-class PatchSpec(BaseModel, extra="forbid"):
+# Casing / synonym aliases for top-level metadata fields. These are
+# DESCRIPTIVE fields — they never mutate the blueprint, so we tolerate
+# naming chaos. Operation-level fields (`op`, `module_id`, `key`, `value`)
+# stay strict via `extra="forbid"` on each Op model.
+_METADATA_ALIASES: dict[str, str] = {
+    # rationale
+    "description": "rationale",
+    "summary": "rationale",
+    "reason": "rationale",
+    "explanation": "rationale",
+    "reasoning": "rationale",
+    # root_cause
+    "rootCause": "root_cause",
+    "rootcause": "root_cause",
+    "root cause": "root_cause",
+    "cause": "root_cause",
+    "rootCauseAnalysis": "root_cause",
+    # confidence
+    "Confidence": "confidence",
+    "score": "confidence",
+    # category
+    "Category": "category",
+    "failure_category": "category",
+    "failureCategory": "category",
+    # patch_id
+    "patchId": "patch_id",
+    "patchID": "patch_id",
+    # run_id
+    "runId": "run_id",
+    "runID": "run_id",
+}
+
+# Top-level fields the PatchSpec recognises. Anything else gets bucketed
+# into `misc` instead of bouncing the patch.
+_PATCHSPEC_FIELDS: frozenset[str] = frozenset({
+    "patch_id", "run_id", "rationale", "operations",
+    "confidence", "category", "root_cause", "misc",
+})
+
+
+class PatchSpec(BaseModel, extra="allow"):
     """A structured diff to a Blueprint.
 
     Validated against this schema before application.  Applied atomically —
@@ -209,11 +249,16 @@ class PatchSpec(BaseModel, extra="forbid"):
         if not isinstance(data, dict):
             return data
 
-        # ── Top-level field aliases ───────────────────────────────────────────
-        if "description" in data and "rationale" not in data:
-            data["rationale"] = data.pop("description")
-        if "summary" in data and "rationale" not in data:
-            data["rationale"] = data.pop("summary")
+        # ── Top-level metadata field aliases (casing/synonym tolerance) ───────
+        # Lenient on descriptive fields — they don't mutate the blueprint, so a
+        # cosmetic typo (`rootCause` vs `root_cause`) burning a reprompt round
+        # is pure dogma. Strict on operations[].* (each Op enforces `extra="forbid"`).
+        for alias, canonical in _METADATA_ALIASES.items():
+            if alias in data and canonical not in data:
+                data[canonical] = data.pop(alias)
+            elif alias in data and canonical in data:
+                # Both present — canonical wins, alias drops.
+                data.pop(alias)
 
         # All known aliases for "operations"
         _OPS_ALIASES = ("ops", "op_list", "patches", "steps", "fix", "changes",
@@ -257,10 +302,24 @@ class PatchSpec(BaseModel, extra="forbid"):
 
         # ── Strip well-known LLM-hallucinated meta fields ─────────────────────
         # Models sometimes add `id`, `name`, `applied_by`, `datetime_applied`,
-        # etc. `extra="forbid"` would reject the whole patch — drop them quietly.
+        # etc. They're noise; drop them so they don't end up in `misc`.
         for _bad in ("id", "name", "applied_by", "datetime_applied", "timestamp",
                      "author", "version", "created_at", "updated_at"):
             data.pop(_bad, None)
+
+        # ── Bucket unknown top-level fields into `misc` ───────────────────────
+        # Any remaining unknown key is kept for human-eye visibility but does
+        # not participate in mutation. Models trained on heterogeneous corpora
+        # often emit fields like `examples`, `notes`, `references`, `verified_by`
+        # — preserving them in `misc` is safer than dropping silently.
+        existing_misc = data.get("misc")
+        if not isinstance(existing_misc, dict):
+            existing_misc = {}
+        for _key in list(data.keys()):
+            if _key not in _PATCHSPEC_FIELDS:
+                existing_misc[_key] = data.pop(_key)
+        if existing_misc:
+            data["misc"] = existing_misc
 
         # ── Op name normalization inside each operation ───────────────────────
         _DISCRIMINATOR_ALIASES = ("type", "action", "operation", "method", "kind", "name")
@@ -298,4 +357,13 @@ class PatchSpec(BaseModel, extra="forbid"):
     root_cause: str | None = Field(
         default=None,
         description="LLM-identified root cause of the failure.",
+    )
+    misc: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Bucket for unknown top-level keys the LLM emitted. Never "
+            "participates in blueprint mutation; preserved for human-eye "
+            "review and post-mortem analytics. Common keys: `examples`, "
+            "`notes`, `verified_by`, `references`."
+        ),
     )
