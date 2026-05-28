@@ -21,7 +21,11 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: pip install -e ".[dev,spark]"
+      # ``[llm]`` pulls ``json-repair`` (failure-path recovery in the agent
+      # reprompt loop). ``[redis]`` makes ``backend: redis`` parseable so the
+      # path-resolution URI-passthrough test runs without integration markers.
+      # Both extras are single-package and cheap.
+      - run: pip install -e ".[dev,spark,llm,redis]"
       - run: pytest -m "not integration and not agent"
 
   integration-stores:

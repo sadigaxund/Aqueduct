@@ -262,7 +262,12 @@ def test_fs_path_marker_visible_on_store_fields():
 def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     """Schema-driven walker must anchor every FsPath-marked store path
     relative to the config file's parent. Replacement test for the
-    hardcoded ``stores.*.path`` loop Phase 36 Part B removes."""
+    hardcoded ``stores.*.path`` loop Phase 36 Part B removes.
+
+    The depot uses a ``redis://`` URI to exercise URI passthrough; CI
+    installs the ``aqueduct-core[redis]`` extra (see ``.github/
+    workflows/ci.yml``) so config-load succeeds in the integration run.
+    """
     cfg_file = tmp_path / "aqueduct.yml"
     cfg_file.write_text(
         "stores:\n"
@@ -274,5 +279,5 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     c = load_config(cfg_file)
     assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs.db").resolve())
     assert c.stores.lineage.path == str((tmp_path / ".aqueduct/lin.db").resolve())
-    # URI passthrough.
+    # URI passthrough — walker bails on any ``://`` value.
     assert c.stores.depot.path == "redis://h:6379/0"

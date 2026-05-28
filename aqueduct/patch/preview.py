@@ -264,7 +264,7 @@ def run_sandbox_gate(
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
-    # Phase 36 Part A — parse the patched dict in-memory, anchored to the
+    # Parse the patched dict in-memory, anchored to the
     # original Blueprint's parent. Replaces the tempfile dance whose only
     # purpose was to feed the file-only parse(path) API; that detour
     # broke 1.1.0 path anchoring whenever the tempfile landed in ``/tmp``
@@ -413,7 +413,7 @@ def run_sandbox_gate(
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
     finally:
-        # Phase 36 Part A — no tempfile to unlink; parse_dict() consumes the
+        # No tempfile to unlink; parse_dict() consumes the
         # patched Blueprint directly. Block retained for parity with previous
         # control flow in case future side-effects need teardown.
         pass
