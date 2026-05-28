@@ -4009,11 +4009,6 @@ def benchmark(
         else len(list(Path(scenarios_dir).glob("**/*.aqscenario.yml")))
     )
     _pair_count = _scn_count * len(model_list)
-    click.echo(
-        f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
-        f"{_pair_count} pairs",
-        err=True,
-    )
 
     # Benchmark MUST use the same BudgetConfig as production. Reading from
     # the same engine config block enforces parity — divergence would
@@ -4022,6 +4017,20 @@ def benchmark(
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
+    )
+
+    # Banner shows pair count + LLM-call envelope (call counts, not time).
+    # Floor = 1 call per pair (every pair succeeds first try); ceiling =
+    # pair_count × budget.max_reprompts (every pair burns the full reprompt
+    # budget). Use "floor/ceiling" instead of "min/max" so it can't be
+    # misread as minutes next to a duration.
+    _floor_calls = _pair_count
+    _ceiling_calls = _pair_count * _budget.max_reprompts
+    click.echo(
+        f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
+        f"{_pair_count} pairs · LLM calls: {_floor_calls} floor / "
+        f"{_ceiling_calls} ceiling (max_reprompts={_budget.max_reprompts})",
+        err=True,
     )
     try:
         results = run_benchmark(

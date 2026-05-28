@@ -250,7 +250,7 @@ metrics:
 #   ${VAR}            — os.environ["VAR"]; error if unset
 #   ${VAR:-default}   — os.environ["VAR"] if set, else "default"
 #   ${VAR:default}    — same (dash optional)
-#   @aq.secret('KEY')— resolved via the configured secrets.provider (Phase 32).
+#   @aq.secret('KEY')— resolved via the configured secrets.provider.
 #                      Two-pass load: ${VAR} expands first, then secrets.provider
 #                      is validated, then @aq.secret() is dispatched to the
 #                      configured backend (env / aws / gcp / azure / custom).
@@ -453,7 +453,7 @@ agent:
   #   All column names follow snake_case convention.
   #   Never reference local filesystem paths in config.path values.
 
-  # ── Patch validation pyramid (Phase 29a) ───────────────────────────────────
+  # ── Patch validation pyramid ───────────────────────────────────────────────
   # patch_validation controls how rigorously `auto` mode validates a
   # generated patch before writing it to the Blueprint on disk:
   #
@@ -471,7 +471,7 @@ agent:
   # Per-blueprint override available via the Blueprint agent: block.
   # patch_validation: full_run
 
-  # ── the explain gate strictness (Phase 29b) ──────────────────────────────────────────
+  # ── Explain gate strictness ────────────────────────────────────────────────
   # block_on_explain_regression toggles whether the explain gate (post-patch `explain()`
   # regression check) is a hard blocker in `auto` multi-patch mode. the explain gate compares
   # per-module `Exchange` / `BatchEvalPython` / `BroadcastExchange` counts in
@@ -502,13 +502,23 @@ agent:
   #   temperature: 0.7
   #   top_p: 0.9
   #   # Ollama-specific params — prefix with ollama_ → stripped and nested under payload["options"]
+  #   ollama_num_ctx: 16384      # context window; default 2048 silently truncates Aqueduct prompts
   #   ollama_num_thread: 16
   #   ollama_num_gpu: 0          # 0 = CPU only; 99 = all on GPU
   #   ollama_mlock: true         # lock weights in RAM (no swap)
   #   ollama_num_batch: 1024     # prompt eval batch size
   #   ollama_num_predict: -1     # -1 = no token limit
+  #
+  # Context window note: Ollama default num_ctx is 2048 tokens. Aqueduct
+  # prompts (system prompt + failure context + envelope skeleton + reprompt
+  # history) routinely exceed 4-6k; smaller windows silently truncate the
+  # SYSTEM prompt, causing envelope-shape failures the reprompt loop can't
+  # recover from. Set ollama_num_ctx to at least 8192 for 7B+ models (or
+  # bake into the model server-side via Modelfile `PARAMETER num_ctx 16384`
+  # + `ollama create`). VRAM cost: roughly +2-3 GB on a 7B at 16k, +15-20 GB
+  # on a 70B — don't blanket-set across cascade tiers without budgeting.
 
-# ── Warnings (Phase 30a) ──────────────────────────────────────────────────────
+# ── Warnings ──────────────────────────────────────────────────────────────────
 # Aqueduct emits compile-time and session-startup diagnostics with the format
 #     AQ-WARN [rule_id] message
 # Copy the bracketed rule_id straight from the terminal into the suppress list
@@ -520,7 +530,7 @@ agent:
 #   kafka_checkpoint_stale, nondeterministic_fanout,
 #   count_col_likely_count_star, file_format_no_repartition,
 #   jdbc_missing_partition
-# Legacy (pre-30a) compile-time rules, also suppressible:
+# Legacy compile-time rules, also suppressible:
 #   delivery_append_retry_dupes, perf_probe_sample_full_scan,
 #   perf_incremental_watermark_scan, perf_python_udf_row_at_a_time,
 #   perf_delta_append_no_partition, perf_multi_consumer_no_cache,

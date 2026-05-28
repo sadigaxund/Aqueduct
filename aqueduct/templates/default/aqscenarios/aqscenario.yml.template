@@ -60,7 +60,7 @@ inject_failure:
   #     type: org.apache.spark.sql.AnalysisException
   #     message: "[UNRESOLVED_COLUMN.WITH_SUGGESTION] ..."
 
-# ── Expected patch (effect-based grader, Phase 33 Part B Scope C) ─────────────
+# ── Expected patch (effect-based grader) ──────────────────────────────────────
 #
 # The grader checks the EFFECT of the patch — the post-patch blueprint's
 # target module config — rather than op-name equality on the raw patch.
