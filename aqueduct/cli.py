@@ -194,7 +194,7 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        # Phase 36 Part A — parse the patched dict directly with
+        # Parse the patched dict directly with
         # ``base_dir`` set to the original Blueprint's parent. Replaces the
         # tempfile dance that broke 1.1.0 path anchoring whenever the
         # tempfile landed in ``/tmp`` and relative module paths resolved

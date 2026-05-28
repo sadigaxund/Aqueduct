@@ -10,6 +10,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+(No changes yet.)
+
+## [1.1.1] - 2026-05-29
+
 ### Added
 - **`aqueduct completion {bash|zsh|fish}`** subcommand emits a click-generated shell-completion script. Auto-tracks the command tree — new subcommands and flags pick up without maintenance. Install: pipe the output into your shell's completion dir.
 
