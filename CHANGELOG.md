@@ -11,6 +11,23 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Fixed
+- **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,
+  fenced ```json``` code blocks anywhere in the response, and `//` line
+  comments.** Previously the deepseek-r1 family's reasoning output starved
+  the parser on attempt 3 ("Your output near the error" rendered empty
+  because JSON came after the think block); other models occasionally
+  emitted JS-style line comments that `json.loads` rejected. Cleanup is
+  conservative — malformed JSON that survives the pre-clean still fails
+  the strict `raw_decode` and surfaces a real reprompt error.
+
+- **`missing field` reprompt now echoes the op block the model emitted.**
+  `operations[0].set_module_config_key.value: required field missing` used
+  to be opaque to tiny models — they could not see which keys they had
+  already written. The reprompt now appends `You emitted 'op', 'module_id',
+  'key' — add the missing "value" field to this same op block.` Walks the
+  pydantic error `loc` into the parsed dict to find the partial op without
+  echoing arbitrary content.
+
 - **`replace_context_value` on blueprints without a `context:` block.** The
   LLM was pushed toward `replace_context_value` for path fixes even when the
   blueprint declared no `context:` block; the apply gate then rejected with
