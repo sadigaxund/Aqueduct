@@ -11,6 +11,7 @@ End-to-end deployments you can stand up and operate.
 |---|---|
 | [`showcase/01-spark-cluster`](showcase/01-spark-cluster) | Deploying Aqueduct against a real distributed Spark Standalone cluster + MinIO (S3A) + Postgres-backed stores. Guided, interactive walkthrough: the driver/cluster networking contract, the S3A jar story, spillway + quality gates on a cluster, reading the run back from Postgres. |
 | [`showcase/02-airflow`](showcase/02-airflow) | Aqueduct as an Apache Airflow operator. Compose-based stack (Airflow 2.10 + Postgres + triggerer). Two DAGs: happy-path wiring (no LLM) and a `HEAL_PENDING` round-trip where the task defers on `UNRESOLVED_COLUMN`, releases the worker slot, waits for human patch approval, and resumes green. |
+| [`showcase/03-self-healing-1.1.0`](showcase/03-self-healing-1.1.0) | **Remnant — not completed.** Three demo scenarios exercise the self-healing loop interactively with DuckDB inspection. Useful as a reference but the README and automation are unfinished. |
 
 ## Snippets
 
@@ -65,11 +66,19 @@ See [`aqtests/README.md`](aqtests/README.md).
 
 ## Aqscenarios
 
-[`aqscenarios/`](aqscenarios) holds self-healing scenario tests: a Blueprint plus an injected failure, run via `aqueduct benchmark` to exercise the Agent loop deterministically across models. No Spark needed. See [`aqscenarios/README.md`](aqscenarios/README.md).
+[`aqscenarios/`](aqscenarios) holds self-healing scenario tests: a Blueprint plus
+an injected failure, run via `aqueduct benchmark` to exercise the Agent loop
+deterministically across models. No Spark needed. See
+[`aqscenarios/README.md`](aqscenarios/README.md).
 
 - [`01_schema_drift_column_rename`](aqscenarios/01_schema_drift_column_rename.aqscenario.yml) — upstream renamed `event_ts` -> `event_time`, breaking downstream SQL selection.
 - [`02_sql_bad_column_ref`](aqscenarios/02_sql_bad_column_ref.aqscenario.yml) — SQL query references non-existent `signup_date` instead of `signup_ts`.
 - [`03_format_csv_read_as_parquet`](aqscenarios/03_format_csv_read_as_parquet.aqscenario.yml) — Ingress reads CSV source file declaring `format: parquet`.
 - [`04_bad_path_typo`](aqscenarios/04_bad_path_typo.aqscenario.yml) — Ingress file path has a typo (`events_raw.csv` instead of `events.csv`).
 - [`05_type_string_vs_numeric`](aqscenarios/05_type_string_vs_numeric.aqscenario.yml) — Upstream events `event_id` is parsed as a string, downstream sum aggregate fails.
+- [`06_guardrail_forbidden_op`](aqscenarios/06_guardrail_forbidden_op.aqscenario.yml) — LLM proposes a `remove_module` operation blocked by `forbidden_ops` guardrail.
+- [`07_spark_oom_shuffle`](aqscenarios/07_spark_oom_shuffle.aqscenario.yml) — Large shuffle hits executor OOM; patch adjusts `shuffle.partitions` and adds a repartition.
+- [`08_delta_schema_merge`](aqscenarios/08_delta_schema_merge.aqscenario.yml) — Delta read fails with schema mismatch; patch adds `mergeSchema: true`.
 
+**Next:** Scenarios for JDBC connection errors, partition discovery failure, and UDF serialization are ideal candidates to add — see
+[`aqscenarios/CONTRIBUTING.md`](aqscenarios/CONTRIBUTING.md).

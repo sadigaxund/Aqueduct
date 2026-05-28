@@ -1,0 +1,27 @@
+agent:
+  budget:
+    max_reprompts: 5            # max attempts (success counts as the terminating attempt)
+    max_seconds: 600            # wall-clock cap across all attempts
+    max_tokens_total: 50000     # null disables the axis
+    same_error_consecutive: 3   # N identical signatures in a row → escalate (temp=0.8 + skeleton template)
+                                # for ONE more attempt before tripping stuck_signature
+    same_signature_overall: 3   # any signature repeating ≥ N times anywhere → stuck_signature
+    progress_stalled_window: 3 
+  
+  # prompt_context: |           # Engine-wide context appended to LLM system prompt.
+  
+  # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) Options ────────────────
+  # provider: "openai_compat"
+  # base_url: "http://localhost:11434/v1"   # /v1 suffix required
+  # model: "deepseek-r1:14b"
+  timeout: 600.0              # large local models need more time
+  # provider_options:
+  #   # Standard OpenAI params — merged into payload top-level (all openai_compat providers)
+  #   temperature: 0.7
+  #   top_p: 0.9
+  #   # Ollama-specific params — prefix with ollama_ → stripped and nested under payload["options"]
+  #   ollama_num_thread: 16
+  #   ollama_num_gpu: 0          # 0 = CPU only; 99 = all on GPU
+  #   ollama_mlock: true         # lock weights in RAM (no swap)
+  #   ollama_num_batch: 1024     # prompt eval batch size
+  #   ollama_num_predict: -1     # -1 = no token limit

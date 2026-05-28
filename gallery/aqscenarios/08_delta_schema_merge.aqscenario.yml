@@ -1,0 +1,42 @@
+aqueduct_scenario: "1.0"
+
+id: delta_schema_merge
+description: >
+  Delta source table was ALTER TABLE'd to add a new column between runs.
+  The Ingress reads with mergeSchema: false, causing
+  INCONSISTENT_BEHAVIOR_CROSS_VERSION. The agent must set
+  mergeSchema: true in the Ingress options.
+blueprint: blueprints/08_delta_schema_merge.yml
+
+inject_failure:
+  module: orders_raw
+  error_message: |
+    pyspark.errors.exceptions.captured.AnalysisException:
+    [INCONSISTENT_BEHAVIOR_CROSS_VERSION] Cannot write data as the source
+    schema has changed because the DataFrame schema (order_id, customer_id,
+    amount, order_date, new_column) has been changed after reading the table.
+    Consider setting 'mergeSchema' to 'true'.
+    == SQL ==
+    SELECT * FROM orders_raw
+    -------------------------
+    at org.apache.spark.sql.delta.errors.DeltaErrors$
+  structured:
+    error_class: INCONSISTENT_BEHAVIOR_CROSS_VERSION
+    sql_state: null
+    object_name: orders_raw
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.sql.AnalysisException
+      message: "Cannot write data as the source schema has changed"
+
+expected_patch:
+  effect:
+    module: orders_raw
+    config_contains:
+      options:
+        mergeSchema: true
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["mergeSchema", "schema", "changed", "Delta"]

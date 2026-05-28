@@ -1,0 +1,62 @@
+# DEMO 1 — Phase 35: structured Spark error extraction in action.
+#
+# clean_events references column `event_ts` which does NOT exist in events.csv
+# (real column is `event_time`). Spark raises
+# `pyspark.errors.exceptions.captured.AnalysisException`
+# with condition `UNRESOLVED_COLUMN.WITH_SUGGESTION` and a proposal list
+# containing `event_time`.
+#
+# Watch:
+#   - failure_contexts.error_class      = "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+#   - failure_contexts.object_name      = "event_ts"
+#   - failure_contexts.suggested_columns includes "event_time"
+#   - LLM prompt contains "## Root cause (structured)" block, NOT "## Stack trace"
+#   - patches/pending/*.json fixes `event_ts` → `event_time`
+
+aqueduct: "1.0"
+id: schema_drift_demo
+name: "Schema Drift — column rename demo"
+description: >
+  Spark raises UNRESOLVED_COLUMN.WITH_SUGGESTION; surveyor extracts the
+  structured fields; agent gets the proposal list directly in the prompt.
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: "Raw events (CSV)"
+    config:
+      format: csv
+      path: data/input/edcsacdasascasasvents.csv
+      header: true
+      infer_schema: true
+
+  - id: clean_events
+    type: Channel
+    label: "Project event_time (refers to wrong column on purpose)"
+    config:
+      op: sql
+      query: |
+        SELECT
+          event_id,
+          user_id,
+          CAST(event_ts AS timestamp) AS event_time,
+          event_type
+        FROM events_raw
+
+  - id: out_events
+    type: Egress
+    label: "Write events parquet"
+    config:
+      format: parquet
+      path: data/output/events
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: events_raw
+    to: clean_events
+  - from: clean_events
+    to: out_events
+
+agent:
+  approval_mode: auto

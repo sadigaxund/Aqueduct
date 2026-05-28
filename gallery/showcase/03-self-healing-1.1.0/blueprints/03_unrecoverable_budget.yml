@@ -1,0 +1,49 @@
+# DEMO 3 — Phase 34: multi-axis budget actually terminates the loop.
+#
+# The failure here is unrecoverable by patching the blueprint — the path
+# points at a nonexistent S3 bucket. Spark raises a path / IO error every
+# attempt regardless of what the model does. So every attempt produces
+# (approximately) the same signature → the budget axes get a real workout:
+#
+#   - same_error_consecutive=2 trips first → escalation (temp=0.8 + skeleton)
+#   - then same_signature_overall=3 trips → stop_reason='stuck_signature'
+#   - OR max_seconds=60 / max_tokens_total=30000 trips first on a slow model
+#
+# Watch:
+#   - heal_attempts has 3–4 rows (capped by budget, not by max_reprompts alone)
+#   - exactly one row with escalated=true
+#   - final stop_reason ∈ {stuck_signature, budget_seconds_exceeded, budget_tokens_exceeded}
+#   - stderr message names the axis that tripped (no silent abort)
+
+aqueduct: "1.0"
+id: unrecoverable_budget_demo
+name: "Unrecoverable failure — multi-axis budget cuts the loop"
+description: >
+  Path points at a nonexistent bucket. Model cannot fix this from the
+  blueprint alone. Demonstrates budget axes terminating the loop with the
+  correct stop_reason instead of looping forever.
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: "Read from nonexistent bucket"
+    config:
+      format: parquet
+      path: "s3a://this-bucket-does-not-exist-aq11/events/"   # unrecoverable
+
+  - id: out_events
+    type: Egress
+    label: "Write events parquet"
+    config:
+      format: parquet
+      path: ../data/output/events
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: events_raw
+    to: out_events
+
+agent:
+  approval_mode: human
+  confidence_threshold: 0.5

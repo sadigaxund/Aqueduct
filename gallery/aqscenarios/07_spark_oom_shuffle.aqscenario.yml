@@ -1,0 +1,44 @@
+aqueduct_scenario: "1.0"
+
+id: spark_oom_shuffle
+description: >
+  Large join triggers executor OOM because shuffle partitions are set too low
+  (10 partitions for a large dataset). The agent must increase
+  spark.sql.shuffle.partitions and optionally insert a repartition step to
+  distribute the join load across more tasks.
+blueprint: blueprints/07_spark_oom_shuffle.yml
+
+inject_failure:
+  module: join_and_aggregate
+  error_message: |
+    org.apache.spark.SparkException: Job aborted due to stage failure:
+    Task 0 in stage 3.0 failed 4 times, most recent failure:
+    Lost task 0.3 in stage 3.0 (TID 7) (10.0.0.5 executor 2):
+    ExecutorLostFailure (executor 2 exited caused by one of the running tasks)
+    Reason: Container killed by YARN for exceeding memory limits.
+    10.4 GB of 10 GB physical memory used.
+    Consider boosting spark.executor.memory or enabling spark.memory.offHeap.enabled.
+    ...
+    Driver stacktrace:
+      at org.apache.spark.scheduler.DAGScheduler.failJobAndIndependentStages(DAGScheduler.scala:3083)
+    Caused by: org.apache.spark.sql.shuffle.sort.SortShuffleManager: Too large frame
+      at org.apache.spark.sql.execution.exchange.ShuffleExchangeExec.mapOutputStatistics(ShuffleExchangeExec.scala:189)
+  structured:
+    error_class: SPARK_EXECUTOR_OOM
+    object_name: null
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.SparkException
+      message: "Container killed by YARN for exceeding memory limits. 10.4 GB of 10 GB physical memory used."
+
+expected_patch:
+  effect:
+    module: join_and_aggregate
+    config_contains:
+      spark_config:
+        spark.sql.shuffle.partitions: "48"
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["OOM", "shuffle", "memory", "partitions"]
