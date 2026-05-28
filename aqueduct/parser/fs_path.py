@@ -1,4 +1,4 @@
-"""Filesystem-path marker for pydantic schemas (Phase 36 Part B).
+"""Filesystem-path marker for pydantic schemas.
 
 Annotate any pydantic ``str`` field that holds a filesystem path with
 ``Annotated[str, FsPath()]``. Schema-driven anchoring walkers consult

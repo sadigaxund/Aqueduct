@@ -1,4 +1,4 @@
-"""Declarative path-key registry per module type (Phase 36 Part B).
+"""Declarative path-key registry per module type.
 
 Replaces the hand-maintained ``("path", "data_dir", "input_dir",
 "output_dir", "jar")`` tuple in ``aqueduct/parser/parser.py``. When
@@ -32,7 +32,7 @@ from __future__ import annotations
 # ``base_dir`` during ``parse_dict`` resolution.
 #
 # Unknown module types fall through to ``_LEGACY_FALLBACK`` for backward
-# compatibility — pre-Phase-36 parser anchored a single blanket tuple for
+# compatibility — the earlier parser anchored a single blanket tuple for
 # every type. The fallback unblocks adoption; the long-term goal is a
 # row per module type and an empty fallback. Audited types: Ingress,
 # Egress, UDF. Pending audit: Arcade (when streaming lands), Probe (custom
@@ -44,8 +44,8 @@ _PATH_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 # Module types not in ``_PATH_KEYS`` fall back to this union — preserves
-# the pre-Phase-36 blanket behaviour. Shrink to ``()`` once every executor
-# module type has an explicit entry above.
+# the blanket-anchoring behaviour of earlier parser revisions. Shrink to
+# ``()`` once every executor module type has an explicit entry above.
 _LEGACY_FALLBACK: tuple[str, ...] = (
     "path", "data_dir", "input_dir", "output_dir", "jar",
 )

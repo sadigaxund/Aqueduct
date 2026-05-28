@@ -1166,20 +1166,22 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
     # any trailing prose or markdown the LLM adds after the closing brace.
     try:
         obj, _ = json.JSONDecoder().raw_decode(text)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as decode_exc:
         # Last-ditch repair pass for cases strict json + our cleanups can't
         # recover (unescaped quotes inside string values, missing commas
-        # between fields, smart quotes, etc.). `json-repair` is an optional
-        # soft dependency — if absent, the original strict error propagates
-        # to the reprompt loop unchanged so the model still gets a chance
-        # to fix its own output.
+        # between fields, smart quotes, etc.). ``json-repair`` is an optional
+        # soft dependency installed via the ``[llm]`` extra. When absent,
+        # re-raise the ORIGINAL JSONDecodeError so the reprompt loop sees a
+        # parse failure (which it knows how to handle) — never an
+        # ImportError, which would crash the loop with a stack trace
+        # mentioning a package CI doesn't have.
         try:
             from json_repair import repair_json as _repair_json
         except ImportError:
-            raise
+            raise decode_exc from None
         repaired = _repair_json(text)
         if not repaired:
-            raise
+            raise decode_exc from None
         obj, _ = json.JSONDecoder().raw_decode(repaired)
         recovery_applied.append("json_repair")
     return PatchSpec.model_validate(obj), recovery_applied

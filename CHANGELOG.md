@@ -10,6 +10,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+(No changes yet.)
+
+## [1.1.1] - 2026-05-29
+
 ### Added
 - **`aqueduct completion {bash|zsh|fish}`** subcommand emits a click-generated shell-completion script. Auto-tracks the command tree — new subcommands and flags pick up without maintenance. Install: pipe the output into your shell's completion dir.
 
@@ -23,7 +27,7 @@ release and are marked **BREAKING**.
 
 - **`_METADATA_ALIASES`** maps common casing/synonym variants to canonical field names: `rootCause` / `rootcause` / `cause` → `root_cause`, `reasoning` / `reason` / `explanation` → `rationale`, `patchId` → `patch_id`, etc. Normalised at parse-time before pydantic validation. Eliminates the `"rootCause" is not a recognized field — remove it.` reprompt loop seen with smaller models.
 
-- **`AgentPatchResult.recovery_applied: list[str]`** records every mechanical recovery `_parse_patch_spec` performed on the raw LLM output (think-block strip, fence strip, leading-prose strip, line-comment strip, json_repair fallback). Empty when the response was clean.
+- **`AgentPatchResult.recovery_applied: list[str]`** records every mechanical recovery `_parse_patch_spec` performed on the raw LLM output (json_repair fallback, etc.). Empty when the response was clean.
 
 - **Recovered patches forfeit auto-apply privilege.** When `agent_result.recovery_applied` is non-empty and `approval_mode` is `auto`/`aggressive`, the CLI downgrades to `human` for that single patch and prints a one-line notice listing the recoveries. Trust boundary moves to the reviewer, not the regex — a patch we had to rescue is inherently lower-trust even if it parsed in the end.
 
@@ -79,15 +83,6 @@ release and are marked **BREAKING**.
 - **`tmp/.prompts/DO_TESTING.md` rewritten** with project context header, 4-layer architecture summary, source-file map by layer, test-file organization table, and critical rules from CLAUDE.md — so models with no prior project knowledge can work immediately without a full codebase read.
 
 - **`tests/TEST_MANIFEST.md` — 17 new ⏳ items** covering gaps from the test audit: `--from`/`--to` selector coverage (5), Delta merge edge cases (2), `metrics_boundary` Channel config (2), `danger.*` settings gate enforcement (4), end-to-end heal flow (1), plus 3 PatchSpec resilience items bridging the original 12 to 15.
-
-- **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,
-  fenced ```json``` code blocks anywhere in the response, and JS-style
-  (`//`) or Python/YAML-style (`#`) line comments.** Previously the deepseek-r1 family's reasoning output starved
-  the parser on attempt 3 ("Your output near the error" rendered empty
-  because JSON came after the think block); other models occasionally
-  emitted JS-style line comments that `json.loads` rejected. Cleanup is
-  conservative — malformed JSON that survives the pre-clean still fails
-  the strict `raw_decode` and surfaces a real reprompt error.
 
 - **`missing field` reprompt now echoes the op block the model emitted.**
   `operations[0].set_module_config_key.value: required field missing` used

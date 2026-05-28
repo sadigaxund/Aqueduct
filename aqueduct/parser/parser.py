@@ -201,9 +201,10 @@ def parse_dict(
             return val
         return str((_bp_dir / p).resolve())
 
-    # Phase 36 Part B — keys to anchor come from
-    # ``aqueduct.executor.path_keys`` (per-type registry), not a
-    # hardcoded tuple. Unknown types fall back to the pre-Phase-36 union.
+    # Keys to anchor come from ``aqueduct.executor.path_keys`` (per-type
+    # registry), not a hardcoded tuple. Unknown types fall back to a
+    # blanket union for backward compatibility — shrink the fallback to
+    # ``()`` once every executor module type has an explicit entry there.
     from aqueduct.executor.path_keys import get_path_keys as _get_path_keys
 
     def _anchor_paths(cfg: Any, module_type: str) -> Any:

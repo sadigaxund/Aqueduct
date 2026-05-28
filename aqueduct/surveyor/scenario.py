@@ -400,7 +400,7 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
 
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        # Phase 36 Part A — parse the patched scenario dict in-memory with
+        # Parse the patched scenario dict in-memory with
         # ``base_dir`` set to the scenario blueprint's parent so relative
         # data paths (`../data/...`, `data/...`) resolve against the real
         # fixture directory, not whatever ``/tmp`` location a former

@@ -702,7 +702,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
-    # Phase 36 Part B — schema-driven anchoring. The hand-rolled
+    # Schema-driven anchoring. The hand-rolled
     # ``data["stores"][name]["path"]`` walk has been replaced with a
     # generic walker that reads ``FsPath()`` markers from each store
     # model's ``model_fields`` metadata. Adding a new filesystem-path

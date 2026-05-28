@@ -83,8 +83,12 @@ cover/
 .DS_Store
 # Windows
 Thumbs.db
-# Claude / Cursor
+# AI Assistants
 .claude/
+.deepseek/
+.understand-anything/
+.cursor/
+.antigravity/
 CLAUDE.md
 .cursorignore
 .cursorindexingignore

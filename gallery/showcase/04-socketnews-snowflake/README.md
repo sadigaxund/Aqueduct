@@ -47,7 +47,8 @@ Grafana / Superset                ← dashboards on Snowflake
 | **Aqueduct** | Pipeline orchestration + self-healing | Runs hourly, reads MinIO, writes Snowflake |
 | **Snowflake** | Cloud data warehouse | JDBC target for clean/enriched articles |
 | **Airflow** | Scheduler + DAG management | Triggers consumer + Aqueduct pipeline; handles `HEAL_PENDING` deferral |
-| **Grafana** | Dashboard / visualization | Queries Snowflake for live metrics |
+| **Superset** | Dashboard / visualization | Queries Observability DB for live metrics |
+| **Google Looker Studio** | BI / Reporting | Queries Snowflake for reporting on prepared data |
 
 ---
 
