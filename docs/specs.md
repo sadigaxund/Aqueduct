@@ -450,9 +450,13 @@ Resolution order (highest priority wins):
 | :- | :- |
 | `@aq.date.today(format="%Y-%m-%d")` | Current date (UTC). Pinned by `--execution-date` for idempotent backfills. |
 | `@aq.date.yesterday(format="%Y-%m-%d")` | Date - 1. |
+| `@aq.date.offset(base, days)` | Offset a date string by N days. Useful for backfill windows: `@aq.date.offset(base=@aq.date.today(), days=-7)`. |
+| `@aq.date.month_start(format="%Y-%m-%d")` | First day of the current month. |
+| `@aq.date.format(date_str, pattern)` | Reformat an ISO date string into a custom pattern. |
 | `@aq.runtime.run_id()` | Auto-generated UUID for this pipeline run. |
 | `@aq.runtime.timestamp()` | ISO-8601 timestamp of compilation. |
-| `@aq.env('KEY', default="...")` | Read environment variable. |
+| `@aq.runtime.prev_run_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
+| `@aq.env('KEY')` | Read environment variable. Fails fast when absent — unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
 | `@aq.depot.get('key')` | Read from Depot KV store at compile time. |
 

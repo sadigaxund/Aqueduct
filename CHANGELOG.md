@@ -42,6 +42,8 @@ release and are marked **BREAKING**.
   - `blueprints/hello.yml` — matches the README's Getting Started example so `aqueduct doctor blueprints/hello.yml` works as documented out of the box.
 
 ### Changed
+- **Phase 36 Part B — schema-driven path anchoring.** Two coupled changes kill the hand-maintained "these keys are paths" lists. **New module `aqueduct/executor/path_keys.py`** carries a declarative per-type registry (`Ingress`/`Egress`/`UDF` audited; unregistered types fall back to the pre-Phase-36 blanket tuple for backward compatibility). Parser's `_anchor_paths` consults `get_path_keys(module_type)` instead of the hardcoded `("path", "data_dir", "input_dir", "output_dir", "jar")` tuple — Ingress no longer anchors `output_dir`, Egress no longer anchors `data_dir`, etc. Adding a new module type with path-typed config keys is now one edit at `executor/path_keys.py`, no parser touch. **New marker `aqueduct/parser/fs_path.py::FsPath`** (frozen dataclass with `allow_uri: bool = True` policy slot) annotates path-typed pydantic str fields. `RelationalStoreConfig.path` and `KVStoreConfig.path` use `Annotated[str, FsPath()]`; `config.py::_anchor_fs_path_fields_under_stores` walks `StoresConfig.model_fields` then each store sub-model's `model_fields.metadata`, anchoring any FsPath-marked string field. Replaces the hardcoded `data["stores"][name]["path"]` loop; adding a new path field anywhere under `stores.*` is now one edit at the schema site. Rejected alternatives: register-on-import for path keys (would force parser to import every executor handler, breaks 4-layer rule); bare `class FsPath` marker (locks call sites if policy fields ever land — dataclass-with-empty-body costs one `()` now but stays migration-free later).
+
 - **Phase 36 Part A — `parse_dict(raw, base_dir, profile, cli_overrides) -> Blueprint`** is now the canonical entrypoint for in-memory Blueprint validation; `parse(path)` is a thin wrapper that loads YAML and delegates with `base_dir=path.parent`. Three in-memory patch flows (`cli._apply_patch_in_memory`, `patch/preview.run_sandbox_gate`, `surveyor/scenario._try_apply_patch`) previously round-tripped through `tempfile.NamedTemporaryFile` to feed the old file-only parser; that detour broke 1.1.0 path anchoring whenever the tempfile landed in `/tmp` (relative paths like `../data/events.csv` resolved against `/tmp` → absurd `/data/events.csv`). All three sites now call `parse_dict()` directly with the original Blueprint's parent as `base_dir`. `tempfile` import dropped from `cli.py`.
 
 - **External audit response pass.** Strip every `# Phase NN` scaffolding comment from production code (26 hits across parser / executor / surveyor / cli / templates / tests). Phase references stay in `CHANGELOG.md` and `TODOs.md` per CLAUDE.md; source comments now describe the *what* and *why* instead of the project-management label. Drop the dead Flink `NotImplementedError` stub from `aqueduct/executor/__init__.py` — Flink as an aspiration stays in `docs/roadmap.md` + `TODOs.md` Deferred block.
@@ -60,7 +62,16 @@ release and are marked **BREAKING**.
 
 - **System prompt hygiene pass** + `PROMPT_VERSION` bumped `1.0` → `1.1`. Merged the "Patch op disambiguation" and "Provenance-driven op selection" sections into one table-driven block; added explicit "if `No context block` notice present, do NOT use `replace_context_value`" rule so the system prompt and per-failure provenance section stop saying opposite things. Benchmark regression diffs going forward attribute to the new prompt version.
 
+### Changed
+- **Stripped 81 lines of pre-1.0 DDL migration code from `surveyor.start()`.** All `ALTER TABLE` / `information_schema` probes for `healing_outcomes`, `failure_contexts`, and `run_records` column additions are removed — no users on pre-1.0 database versions, and the fresh-DDL path is canonical. Also eliminates a data-loss risk: the `healing_outcomes.id` INTEGER→VARCHAR migration used `DROP COLUMN` + `ADD COLUMN` instead of `ALTER COLUMN TYPE`.
+
 ### Fixed
+- **`_write_merge` guards `spark.catalog.dropTempView` with try/except.** On first merge the temp view may not exist, and `dropTempView` raises `AnalysisException`. Now silently skipped — view is created fresh on the next line regardless.
+
+- **`@aq.depot.get()` emits a log warning when no depot backend is configured.** Previously returned the default (`""`) silently; incremental pipelines without a depot would re-read all source data every run with no diagnostic. The warning surfaces during compilation so misconfiguration is visible before Spark starts.
+
+- **Removed `"root cause"` (space-containing) alias from `_METADATA_ALIASES`.** JSON keys with literal spaces are vanishingly rare from LLM output and the alias misleadingly suggested the normalizer handles free-form prose. All other casing/synonym aliases remain.
+
 - **`_parse_patch_spec` tolerates `<think>...</think>` reasoning blocks,
   fenced ```json``` code blocks anywhere in the response, and JS-style
   (`//`) or Python/YAML-style (`#`) line comments.** Previously the deepseek-r1 family's reasoning output starved

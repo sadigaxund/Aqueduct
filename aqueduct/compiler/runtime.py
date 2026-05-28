@@ -121,6 +121,12 @@ class AqFunctions:
     def depot_get(self, key: str, default: str = "") -> str:
         if self._depot is not None:
             return str(self._depot.get(key, default))
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "@aq.depot.get('%s') called but no depot backend is configured — "
+            "returning default '%s'. Incremental pipelines will re-read all data.",
+            key, default,
+        )
         return default
 
 

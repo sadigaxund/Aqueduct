@@ -201,7 +201,6 @@ _METADATA_ALIASES: dict[str, str] = {
     # root_cause
     "rootCause": "root_cause",
     "rootcause": "root_cause",
-    "root cause": "root_cause",
     "cause": "root_cause",
     "rootCauseAnalysis": "root_cause",
     # confidence

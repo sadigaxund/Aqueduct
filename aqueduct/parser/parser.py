@@ -201,11 +201,16 @@ def parse_dict(
             return val
         return str((_bp_dir / p).resolve())
 
-    def _anchor_paths(cfg: Any) -> Any:
+    # Phase 36 Part B — keys to anchor come from
+    # ``aqueduct.executor.path_keys`` (per-type registry), not a
+    # hardcoded tuple. Unknown types fall back to the pre-Phase-36 union.
+    from aqueduct.executor.path_keys import get_path_keys as _get_path_keys
+
+    def _anchor_paths(cfg: Any, module_type: str) -> Any:
         if not isinstance(cfg, dict):
             return cfg
         out = dict(cfg)
-        for k in ("path", "data_dir", "input_dir", "output_dir", "jar"):
+        for k in _get_path_keys(module_type):
             if k in out:
                 out[k] = _anchor_path_value(out[k])
         return out
@@ -218,7 +223,7 @@ def parse_dict(
                 label=m.label,
                 description=m.description,
                 tags=tuple(m.tags),
-                config=_anchor_paths(resolve_value(m.config, ctx_map)),
+                config=_anchor_paths(resolve_value(m.config, ctx_map), m.type),
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
                 checkpoint=m.checkpoint,
