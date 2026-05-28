@@ -66,6 +66,13 @@ def parse(
 ) -> Blueprint:
     """Parse a Blueprint YAML file and return a validated, resolved AST.
 
+    Thin wrapper around :func:`parse_dict` — loads the YAML, then anchors
+    path resolution to ``path.parent``. All in-memory / patched-in-place
+    flows (sandbox replay, scenario apply, in-memory patch test) should
+    call :func:`parse_dict` directly with the original Blueprint's
+    ``base_dir``; routing through tempfiles breaks path anchoring because
+    the tempfile sits in ``/tmp`` and relative paths resolve there.
+
     Args:
         path:          Path to the Blueprint YAML file.
         profile:       Active context profile name (--profile flag).
@@ -78,17 +85,59 @@ def parse(
         ParseError: On any YAML, schema, context, or graph validation failure.
     """
     path = Path(path)
-
-    # ── 1. Load YAML ──────────────────────────────────────────────────────────
     try:
         raw: Any = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         raise ParseError(f"Blueprint file not found: {path}")
     except yaml.YAMLError as exc:
         raise ParseError(f"Invalid YAML in {path.name}: {exc}") from exc
-
     if not isinstance(raw, dict):
         raise ParseError(f"Blueprint must be a YAML mapping, got {type(raw).__name__}")
+    return parse_dict(
+        raw,
+        base_dir=path.parent.resolve(),
+        profile=profile,
+        cli_overrides=cli_overrides,
+    )
+
+
+def parse_dict(
+    raw: dict[str, Any],
+    base_dir: Path,
+    profile: str | None = None,
+    cli_overrides: dict[str, str] | None = None,
+) -> Blueprint:
+    """Validate + resolve an already-loaded Blueprint dict.
+
+    Canonical entrypoint for in-memory patch flows (sandbox replay,
+    scenario apply, ad-hoc tests) that previously round-tripped through
+    ``tempfile.NamedTemporaryFile``. The tempfile dance broke path
+    anchoring because it placed the YAML in ``/tmp`` — relative paths
+    like ``../data/in.csv`` then resolved against ``/tmp`` and produced
+    absurd values.
+
+    ``base_dir`` is the explicit anchor for relative path fields
+    (``path``, ``data_dir``, ``input_dir``, ``output_dir``, ``jar``) in
+    each module config. Pass the original Blueprint's parent directory
+    so anchoring matches the on-disk behaviour. Same anchoring rule as
+    1.1.0: ``s3://`` / ``gs://`` / ``file://`` and absolute paths pass
+    through untouched.
+
+    Args:
+        raw:           Already-loaded Blueprint dict (e.g. from
+                       ``yaml.safe_load`` or an in-memory patched copy).
+        base_dir:      Directory used to anchor relative path fields.
+        profile:       Active context profile name (--profile flag).
+        cli_overrides: Key=value overrides from --ctx CLI flags.
+
+    Returns:
+        A frozen Blueprint dataclass with all Tier 0 context resolved.
+
+    Raises:
+        ParseError: On any schema, context, or graph validation failure.
+    """
+    if not isinstance(raw, dict):
+        raise ParseError(f"Blueprint must be a mapping, got {type(raw).__name__}")
 
     # 1.1.0 — Deprecation warnings: `approval_mode: aggressive` and
     # `aggressive_max_patches` are aliases that still parse but should migrate
@@ -132,15 +181,15 @@ def parse(
 
     # ── 4. Build Module dataclasses (with config substitution) ────────────────
     #
-    # 1.1.0 — Anchor relative path fields to the blueprint file's directory so
+    # 1.1.0 — Anchor relative path fields to ``base_dir`` so
     # `ingress.path`, `egress.path`, etc. resolve consistently regardless of
     # the CWD `aqueduct run` was invoked from. Matches industry norm
     # (Compose, k8s, Terraform): paths inside a YAML resolve to that YAML's
-    # parent. Original YAML on disk is untouched; only the in-memory
-    # `Module.config` carries the absolute form. LLM context (which receives
-    # the raw blueprint dict) is unaffected. Fixes sandbox replay's
-    # "events_raw produced no DataFrame" when blueprint lives in a sub-dir.
-    _bp_dir = path.parent.resolve()
+    # parent. For ``parse(path)`` ``base_dir`` is ``path.parent``; for
+    # in-memory patch flows the caller passes the original Blueprint's
+    # parent directory so the patched dict behaves identically to the
+    # on-disk version.
+    _bp_dir = Path(base_dir).resolve()
 
     def _anchor_path_value(val: Any) -> Any:
         if not isinstance(val, str) or not val:
