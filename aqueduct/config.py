@@ -25,10 +25,12 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+from aqueduct.parser.fs_path import FsPath, field_is_fs_path
 
 
 # ── Schema error ──────────────────────────────────────────────────────────────
@@ -84,7 +86,7 @@ class RelationalStoreConfig(BaseModel):
             "processes. `s3 | gcs | adls` are deferred (TODOs.md Phase 28+)."
         ),
     )
-    path: str = Field(
+    path: Annotated[str, FsPath()] = Field(
         ...,
         description=(
             "DuckDB: local file path. Postgres: libpq DSN such as "
@@ -106,7 +108,7 @@ class KVStoreConfig(BaseModel):
             "lineage is rejected at config load."
         ),
     )
-    path: str = Field(
+    path: Annotated[str, FsPath()] = Field(
         ...,
         description=(
             "DuckDB: local file path. Postgres: libpq DSN. "
@@ -119,6 +121,48 @@ class KVStoreConfig(BaseModel):
 # The two new classes have identical shapes for the relational path; the
 # alias maps to `RelationalStoreConfig` so static typing keeps working.
 StoreBackendConfig = RelationalStoreConfig
+
+
+def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
+    """Anchor any ``Annotated[str, FsPath()]`` field under ``stores.*`` in-place.
+
+    Walks ``StoresConfig.model_fields`` to find each store-name → sub-model
+    pair, then walks each sub-model's ``model_fields`` to find FsPath-marked
+    string fields. For each, anchors the raw-input value against ``base_dir``
+    using the standard rule: leave URI-style values and absolute paths
+    untouched; anchor everything else relative to ``base_dir``.
+
+    Schema-driven — adding a new path field anywhere under ``stores.*`` is one
+    edit at the schema site (``Annotated[str, FsPath()]``) and the walker
+    picks it up automatically.
+    """
+    stores_raw = data.get("stores") if isinstance(data, dict) else None
+    if not isinstance(stores_raw, dict):
+        return
+
+    # Map store-name (observability / lineage / depot) → sub-model class
+    # via StoresConfig's own field annotations. Avoids a hardcoded mapping
+    # that would drift if a new store is added.
+    for store_name, field_info in StoresConfig.model_fields.items():
+        sub_model_cls = field_info.annotation
+        if not (isinstance(sub_model_cls, type) and issubclass(sub_model_cls, BaseModel)):
+            continue
+        store_val = stores_raw.get(store_name)
+        if not isinstance(store_val, dict):
+            continue
+        for sub_field_name, sub_field_info in sub_model_cls.model_fields.items():
+            marker = field_is_fs_path(tuple(sub_field_info.metadata))
+            if marker is None:
+                continue
+            raw_val = store_val.get(sub_field_name)
+            if not isinstance(raw_val, str) or not raw_val:
+                continue
+            if marker.allow_uri and "://" in raw_val:
+                continue
+            pp = Path(raw_val)
+            if pp.is_absolute():
+                continue
+            store_val[sub_field_name] = str((base_dir / pp).resolve())
 
 
 class StoresConfig(BaseModel):
@@ -658,24 +702,16 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
-    # 1.1.0 — Anchor relative store paths to the config file's directory so
-    # `stores.observability.path: .aqueduct/observability.db` always lands
-    # next to aqueduct.yml, regardless of the CWD `aqueduct run` was invoked
-    # from. Matches the same rule applied to blueprint paths in parser.py.
-    # Skip URI-style values (s3://, postgresql://, redis://). Idempotent —
-    # absolute paths pass through unchanged.
+    # Phase 36 Part B — schema-driven anchoring. The hand-rolled
+    # ``data["stores"][name]["path"]`` walk has been replaced with a
+    # generic walker that reads ``FsPath()`` markers from each store
+    # model's ``model_fields`` metadata. Adding a new filesystem-path
+    # field anywhere under ``stores.*`` is now one edit at the schema
+    # site (`Annotated[str, FsPath()]`) — no parser/config touch.
+    # Idempotent: absolute paths and URI-style values
+    # (``s3://``, ``postgresql://``, ``redis://``) pass through.
     _cfg_dir = resolved.parent.resolve()
-    _stores_raw = data.get("stores") if isinstance(data, dict) else None
-    if isinstance(_stores_raw, dict):
-        for _store_key, _store_val in _stores_raw.items():
-            if not isinstance(_store_val, dict):
-                continue
-            _p = _store_val.get("path")
-            if not isinstance(_p, str) or not _p or "://" in _p:
-                continue
-            _pp = Path(_p)
-            if not _pp.is_absolute():
-                _store_val["path"] = str((_cfg_dir / _pp).resolve())
+    _anchor_fs_path_fields_under_stores(data, _cfg_dir)
 
     try:
         cfg_pass1 = AqueductConfig.model_validate(data)

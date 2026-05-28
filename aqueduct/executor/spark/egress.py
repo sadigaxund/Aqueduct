@@ -154,7 +154,10 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
     view_name = "_aq_merge_src"
     spark = df.sparkSession
 
-    spark.catalog.dropTempView(view_name)
+    try:
+        spark.catalog.dropTempView(view_name)
+    except Exception:
+        pass  # view may not exist on first merge
     df.createTempView(view_name)
 
     on_clause = " AND ".join(

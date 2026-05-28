@@ -402,90 +402,9 @@ class Surveyor:
 
         with self._observability.connect() as cur:
             cur.execute(_DDL)
-            # Additive migrations — safe to run on existing DBs (idempotent).
-            try:
-                cur.execute(
-                    "ALTER TABLE failure_contexts ADD COLUMN IF NOT EXISTS provenance_json JSON"
-                )
-            except Exception:
-                # Older DuckDB versions may not support IF NOT EXISTS on ALTER.
-                pass
-            try:
-                # healing_outcomes.id was INTEGER pre-migration; UUID inserts need VARCHAR.
-                col_type = cur.execute(
-                    "SELECT data_type FROM information_schema.columns "
-                    "WHERE table_name='healing_outcomes' AND column_name='id'"
-                ).fetchone()
-                if col_type and col_type[0].upper() == "INTEGER":
-                    cur.execute("ALTER TABLE healing_outcomes DROP COLUMN id")
-                    cur.execute("ALTER TABLE healing_outcomes ADD COLUMN id VARCHAR")
-            except Exception:
-                pass
-
-            try:
-                # Defect-fix — add parent_run_id column to healing_outcomes
-                # for pre-fix DBs so the multi-patch heal loop can record the
-                # user-visible outer run_id alongside the per-iteration uuid.
-                pr_exists = cur.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name='healing_outcomes' AND column_name='parent_run_id'"
-                ).fetchone()
-                if not pr_exists:
-                    cur.execute("ALTER TABLE healing_outcomes ADD COLUMN parent_run_id VARCHAR")
-            except Exception:
-                pass
-
-            try:
-                # Add prompt_version column to pre-1.0.3 DBs so the
-                # version↔heal-outcome correlation the docs promise becomes
-                # answerable. Existing rows get NULL, new rows get the value
-                # populated by record_healing_outcome() from agent.PROMPT_VERSION.
-                pv_exists = cur.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name='healing_outcomes' AND column_name='prompt_version'"
-                ).fetchone()
-                if not pv_exists:
-                    cur.execute("ALTER TABLE healing_outcomes ADD COLUMN prompt_version VARCHAR")
-            except Exception:
-                pass
-
-            # failure_contexts gains structured Spark error fields.
-            # Probe information_schema then conditionally ALTER so existing
-            # observability.db files upgrade in place without dropping prior
-            # failure rows.
-            for _col, _ddl in (
-                ("error_class",        "ALTER TABLE failure_contexts ADD COLUMN error_class VARCHAR"),
-                ("root_exception",     "ALTER TABLE failure_contexts ADD COLUMN root_exception JSON"),
-                ("sql_state",          "ALTER TABLE failure_contexts ADD COLUMN sql_state VARCHAR"),
-                ("suggested_columns",  "ALTER TABLE failure_contexts ADD COLUMN suggested_columns JSON"),
-                ("object_name",        "ALTER TABLE failure_contexts ADD COLUMN object_name VARCHAR"),
-            ):
-                try:
-                    exists = cur.execute(
-                        "SELECT 1 FROM information_schema.columns "
-                        "WHERE table_name='failure_contexts' AND column_name=?",
-                        [_col],
-                    ).fetchone()
-                    if not exists:
-                        cur.execute(_ddl)
-                except Exception:
-                    pass
-
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
-
-            try:
-                # 1.1.0 fix — add parent_run_id to pre-fix DBs so multi-patch
-                # iteration rows can link back to the user-visible outer run_id.
-                pr_exists = cur.execute(
-                    "SELECT 1 FROM information_schema.columns "
-                    "WHERE table_name='run_records' AND column_name='parent_run_id'"
-                ).fetchone()
-                if not pr_exists:
-                    cur.execute("ALTER TABLE run_records ADD COLUMN parent_run_id VARCHAR")
-            except Exception:
-                pass
 
             cur.execute(
                 """
