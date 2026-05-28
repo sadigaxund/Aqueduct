@@ -1,12 +1,12 @@
-# Showcase 03 — Self-Healing 1.1.0 (Phases 34 + 35)
+# Showcase 03 — Self-Healing Tutorial
 
-Three runnable demos covering every new self-healing surface shipped in 1.1.0:
+Three interactive demos that walk you through the self-healing loop step by step. Each demo uses a different defect and agent config so you can see how the Agent behaves in different scenarios:
 
-| Demo | What it proves | Phase |
-|---|---|---|
-| `01_schema_drift.yml` | Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION` → structured fields → prompt's `Root cause (structured)` block (no stack trace) → patch lands using the actual column name | 35 |
-| `02_guardrail_apply_reject.yml` | Apply-time guardrail rejection feeds back into the reprompt loop instead of wasting the LLM call | 34 (unified loop) |
-| `03_unrecoverable_budget.yml` | Multi-axis `BudgetConfig` actually terminates the loop, records the correct `stop_reason`, fires the escalation once before abort | 34 (budget + escalation) |
+| Demo | What it proves |
+|---|---|
+| `01_schema_drift.yml` | Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION` → structured error extraction → LLM resolves the correct column name from the suggestion list |
+| `02_guardrail_apply_reject.yml` | Apply-time guardrail rejection feeds back into the reprompt loop — the LLM self-corrects instead of failing silently |
+| `03_unrecoverable_budget.yml` | Multi-axis budget (time + tokens + signatures) actually terminates runaway loops and records the correct termination reason |
 
 All three write to the same `observability.db` so a single query at the end shows the whole picture.
 
@@ -24,14 +24,14 @@ All three write to the same `observability.db` so a single query at the end show
 ## Get into the demo dir
 
 ```bash
-cd gallery/showcase/03-self-healing-1.1.0
+cd gallery/showcase/03-self-healing
 ```
 
 Everything below assumes you are inside this directory. The local `aqueduct.yml` is the engine config; the three blueprints are under `blueprints/`.
 
 ---
 
-## DEMO 1 — Structured error extraction (Phase 35)
+## DEMO 1 — Structured error extraction
 
 ```bash
 aqueduct run blueprints/01_schema_drift.yml
@@ -39,7 +39,7 @@ aqueduct run blueprints/01_schema_drift.yml
 
 Expect: run fails (status=error). Take note of the printed `run_id` — call it `R1`.
 
-### 1a. Confirm Phase 35 capture happened
+### 1a. Confirm the structured error was captured
 
 ```bash
 duckdb .aqueduct/obs/schema_drift_demo/observability.db <<'SQL'
@@ -58,7 +58,7 @@ suggested_columns   = ["event_id","event_time","user_id","event_type"]
 sql_state           = 42703
 ```
 
-If `error_class IS NULL` → Phase 35 extractor did not fire. Either the exception was not a `PySparkException` (check the stack trace), or `_extract_structured_error` threw and swallowed the error. Run `python -c "from aqueduct.surveyor.surveyor import _extract_structured_error; print('ok')"` to confirm it imports.
+If `error_class IS NULL` → the structured error extractor did not fire. Either the exception was not a `PySparkException` (check the stack trace), or `_extract_structured_error` threw and swallowed the error. Run `python -c "from aqueduct.surveyor.surveyor import _extract_structured_error; print('ok')"` to confirm it imports.
 
 ### 1b. Confirm the prompt uses the structured block
 
@@ -74,7 +74,7 @@ grep -n "Actual columns available" /tmp/prompt-R1.txt  # expect: event_id, event
 grep -nc "## Stack trace" /tmp/prompt-R1.txt           # expect: 0
 ```
 
-This is the Phase 35 conditional rendering at work. If you see `## Stack trace` → fallback path fired, meaning the structured extraction came back empty.
+If you see `## Stack trace` the structured extraction fell back to the raw stack trace — meaning the error didn't contain parseable structured fields (or `_extract_structured_error` threw).
 
 ### 1c. Confirm the patch landed
 
@@ -83,11 +83,11 @@ ls patches/pending/
 cat patches/pending/*schema_drift*.json | python -m json.tool | head -40
 ```
 
-Look at `root_cause` and the `operations[]` block — should mention `event_time` (the real column), NOT `ts` or any hallucinated name. That is the Phase 35 payoff: structured `proposal` list eliminates the column-name guess.
+Look at `root_cause` and the `operations[]` block — should mention `event_time` (the real column), NOT `ts` or any hallucinated name. The structured `proposal` list from Spark eliminates the column-name guess; the LLM never needs to invent a column name.
 
 ---
 
-## DEMO 2 — Apply-gate rejection feeds back (Phase 34)
+## DEMO 2 — Guardrail rejection with reprompt
 
 ```bash
 aqueduct run blueprints/02_guardrail_apply_reject.yml
@@ -175,20 +175,10 @@ Every `stop_reason` value should be one of: `solved`, `exhausted_attempts`, `bud
 
 ---
 
-## What I want feedback on
-
-1. **Demo 1**: did the structured block in the prompt actually help? Print the prompt to your terminal — does it read better than the old "25 lines of py4j boilerplate" form? (No need to compare against a pre-1.1.0 build — just gut-check.)
-2. **Demo 1 patch**: did the model pick `event_time` cleanly on the first attempt? If it hallucinated → the structured signal isn't enough, we need to push more fields.
-3. **Demo 2**: did the loop actually reprompt after the apply rejection, or did it give up? Either outcome is informative — give me the `heal_attempts` table dump.
-4. **Demo 3**: which axis tripped on your hardware (`stop_reason` of the final row)? Was the escalated attempt visible (one row with `escalated=true`)?
-5. **Anything that looked wrong or confusing** — odd error messages, missing data in tables, prompt sections that don't render.
-
-Bonus: if you have any 1.0.3 patches lying around, compare the `rationale` quality between then and now on a column-rename failure. That's the headline Phase 35 win — concrete column names instead of `ts`-style hallucinations.
-
-## Tear-down (optional)
+## Clean up
 
 ```bash
-rm -rf .aqueduct patches data/output
+rm -rf .aqueduct patches/pending/*
 ```
 
 Leaves the blueprints + CSV untouched so you can re-run.
