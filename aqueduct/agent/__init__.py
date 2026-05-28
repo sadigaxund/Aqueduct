@@ -229,7 +229,7 @@ START FRESH from the skeleton below.
 ## Errors to fix
 {error}
 
-{structural_hint}Rewrite the COMPLETE PatchSpec JSON from scratch using the shape above.
+{structural_hint}{raw_evidence}Rewrite the COMPLETE PatchSpec JSON from scratch using the shape above.
 Replace the placeholder values with the right ones for THIS failure. Output
 ONLY valid JSON — no prose, no markdown fences.
 """
@@ -267,12 +267,28 @@ _OP_LEVEL_FIELDS_AT_ROOT = (
 
 
 def _detect_structural_error(exc: BaseException, raw: str) -> str | None:
-    """Return a one-line hint when the model put op fields at top level.
+    """Return a one-line hint when the LLM produced a shape that won't validate.
 
-    Only fires for the specific failure shape where (a) the validator says
-    ``operations`` is missing AND (b) the model's JSON has at least one
-    op-level field at the root. For any other shape → None (caller falls
-    back to the field-level error list).
+    Catches four common shape failures small models exhibit, all of which
+    survive the field-level error list as opaque noise the model can't
+    recover from:
+
+    1. Top-level JSON is a LIST — model emitted an operations array
+       directly, no envelope. Pydantic's ``Input should be a valid
+       dictionary`` is too generic for a small model to fix.
+    2. Top-level JSON is a SCALAR (string / number / bool / null) — model
+       returned prose-as-JSON or a single value.
+    3. Top-level is a dict but ``operations`` is missing AND op-level
+       fields (``op``, ``module_id``, …) sit at the root — model forgot
+       the wrapper.
+    4. Top-level is a dict but both ``rationale`` AND ``operations`` are
+       missing AND no op-level fields are at root — model emitted some
+       other dict shape entirely (e.g. ``{"patch": {...}}`` or
+       ``{"action": "fix", "fields": [...]}``).
+
+    Returning a non-None hint signals the caller to use the escalated
+    template (skeleton + structural hint), bypassing the field-level
+    negation list that small models often misread as ``remove this field``.
     """
     if not isinstance(exc, ValidationError):
         return None
@@ -280,8 +296,27 @@ def _detect_structural_error(exc: BaseException, raw: str) -> str | None:
         parsed = json.loads(raw)
     except Exception:
         return None
+
+    # Case 1 — top-level list (operations array without envelope).
+    if isinstance(parsed, list):
+        n = len(parsed)
+        return (
+            f"You returned a JSON array with {n} item(s) at the TOP level. "
+            "PatchSpec is a JSON OBJECT, not an array. Wrap your array as "
+            "the value of the `operations` field inside an envelope with "
+            "`patch_id`, `rationale`, `confidence`, `root_cause`, and "
+            "`operations`."
+        )
+
+    # Case 2 — top-level scalar.
     if not isinstance(parsed, dict):
-        return None
+        kind = type(parsed).__name__
+        return (
+            f"You returned a JSON {kind} at the TOP level. PatchSpec is a "
+            "JSON OBJECT (dict) with `patch_id`, `rationale`, "
+            "`confidence`, `root_cause`, and `operations` fields."
+        )
+
     try:
         errors = exc.errors(include_url=False)
     except TypeError:
@@ -290,18 +325,34 @@ def _detect_structural_error(exc: BaseException, raw: str) -> str | None:
         e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("operations",)
         for e in errors
     )
-    if not operations_missing:
-        return None
-    misplaced = [k for k in _OP_LEVEL_FIELDS_AT_ROOT if k in parsed]
-    if not misplaced:
-        return None
-    return (
-        f"You put op fields ({', '.join(repr(k) for k in misplaced)}) at the "
-        "TOP level of the patch — they belong INSIDE an entry of the "
-        "`operations` list. The top level has `patch_id`, `rationale`, "
-        "`confidence`, `category`, `root_cause`, and `operations` (an "
-        "array). Each entry of `operations` carries `op`, `module_id`, etc."
+    rationale_missing = any(
+        e.get("type") == "missing" and tuple(e.get("loc") or ()) == ("rationale",)
+        for e in errors
     )
+
+    misplaced = [k for k in _OP_LEVEL_FIELDS_AT_ROOT if k in parsed]
+
+    # Case 3 — wrapper forgotten, op-level fields at root.
+    if operations_missing and misplaced:
+        return (
+            f"You put op fields ({', '.join(repr(k) for k in misplaced)}) at the "
+            "TOP level of the patch — they belong INSIDE an entry of the "
+            "`operations` list. The top level has `patch_id`, `rationale`, "
+            "`confidence`, `category`, `root_cause`, and `operations` (an "
+            "array). Each entry of `operations` carries `op`, `module_id`, etc."
+        )
+
+    # Case 4 — envelope missing entirely; some other dict shape.
+    if operations_missing and rationale_missing:
+        emitted = ", ".join(repr(k) for k in list(parsed.keys())[:10]) or "(empty)"
+        return (
+            "Your JSON is missing the PatchSpec envelope. You emitted top-level "
+            f"keys: {{{emitted}}}. Required envelope keys are `patch_id`, "
+            "`rationale`, `confidence`, `root_cause`, `operations`. Rewrite "
+            "using the skeleton below — do NOT reshape your existing keys."
+        )
+
+    return None
 
 # Known field name mistakes the LLM commonly makes → correct name
 _FIELD_ALIASES: dict[str, str] = {
@@ -1474,17 +1525,33 @@ def _format_reprompt_for_next_turn(
     """Render the user-role message for the next turn of the reprompt loop.
 
     Task 85 — when escalating OR when a structural error is detected, use the
-    skeleton-anchored template and drop the echo of the bad output (which
-    biases small models toward small edits of their mistake). Otherwise use
-    the original template with the echoed output + bullet error list.
+    skeleton-anchored template. Original Task 85 dropped the raw echo entirely
+    to avoid biasing small models toward small edits. We now show a short
+    evidence-only snippet (≤300 chars) under a label that explicitly tells the
+    model not to copy from it — small models lose track of their own output
+    across turns and stay stuck without it, but the skeleton remains the
+    positive anchor.
     """
     use_escalated = escalated or bool(structural_hint)
     if use_escalated:
         hint = (structural_hint + "\n\n") if structural_hint else ""
+        raw_stripped = (raw or "").strip()
+        if raw_stripped:
+            snippet = raw_stripped[:300]
+            if len(raw_stripped) > 300:
+                snippet += " …(truncated)"
+            raw_evidence = (
+                "## What you actually sent (evidence — DO NOT edit this; "
+                "rewrite from the skeleton above)\n"
+                f"```\n{snippet}\n```\n\n"
+            )
+        else:
+            raw_evidence = ""
         return _REPROMPT_TEMPLATE_ESCALATED.format(
             skeleton=_PATCH_SKELETON,
             error=friendly,
             structural_hint=hint,
+            raw_evidence=raw_evidence,
         )
     raw_lines = raw.splitlines()
     raw_truncated = "\n".join(raw_lines[:80])
