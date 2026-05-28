@@ -1,0 +1,62 @@
+aqueduct: "1.0"
+id: oom_shuffle_demo
+name: "OOM on large shuffle — config tuning demo"
+description: >
+  Large join and groupBy cause executor OOM. The agent must increase
+  shuffle partitions and insert a repartition Channel to reduce per-task
+  memory pressure.
+
+modules:
+  - id: transactions_raw
+    type: Ingress
+    label: "Raw transactions (CSV)"
+    config:
+      format: csv
+      path: data/input/transactions.csv
+      header: true
+      infer_schema: true
+
+  - id: users_raw
+    type: Ingress
+    label: "User metadata (CSV)"
+    config:
+      format: csv
+      path: data/input/users.csv
+      header: true
+      infer_schema: true
+
+  - id: join_and_aggregate
+    type: Channel
+    label: "Join transactions with users, group by region"
+    config:
+      op: sql
+      query: |
+        SELECT
+          u.region,
+          COUNT(*) AS tx_count,
+          SUM(t.amount) AS total_amount
+        FROM transactions_raw t
+        JOIN users_raw u ON t.user_id = u.user_id
+        GROUP BY u.region
+      spark_config:
+        spark.sql.shuffle.partitions: "10"
+
+  - id: out_aggregate
+    type: Egress
+    label: "Write results"
+    config:
+      format: parquet
+      path: data/output/aggregate
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: transactions_raw
+    to: join_and_aggregate
+  - from: users_raw
+    to: join_and_aggregate
+  - from: join_and_aggregate
+    to: out_aggregate
+
+agent:
+  approval_mode: auto

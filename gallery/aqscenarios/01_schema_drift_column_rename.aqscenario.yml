@@ -15,6 +15,17 @@ inject_failure:
     'Project [event_id#41, user_id#42, cast('event_ts as timestamp) AS event_time#48, event_type#44]
     +- SubqueryAlias events_raw
        +- Relation [event_id#41,user_id#42,event_time#43,event_type#44] csv
+  # Phase 35 — structured Spark error fields. Mirrors what
+  # surveyor._extract_structured_error pulls from a live PySparkException so the
+  # benchmark grader exercises the same prompt branch as production.
+  structured:
+    error_class: UNRESOLVED_COLUMN.WITH_SUGGESTION
+    sql_state: "42703"
+    object_name: event_ts
+    suggested_columns: [event_id, event_time, user_id, event_type]
+    root_exception:
+      type: org.apache.spark.sql.AnalysisException
+      message: "[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `event_ts` cannot be resolved."
 
 # Phase 33 Part B Scope C — effect-based grader. Graded on the POST-PATCH
 # blueprint, not op-name equality. Any valid op (set_module_config_key /

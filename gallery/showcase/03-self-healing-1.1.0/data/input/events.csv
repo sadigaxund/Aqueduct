@@ -1,0 +1,8 @@
+event_id,user_id,event_time,event_type
+e001,u01,2026-05-20T09:00:00Z,login
+e002,u02,2026-05-20T09:01:13Z,view
+e003,u01,2026-05-20T09:04:22Z,click
+e004,u03,2026-05-20T09:05:00Z,login
+e005,u02,2026-05-20T09:06:30Z,purchase
+e006,u04,2026-05-20T09:07:11Z,view
+e007,u01,2026-05-20T09:08:45Z,logout

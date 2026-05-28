@@ -1,0 +1,47 @@
+aqueduct: "1.0"
+id: delta_schema_merge_demo
+name: "Delta schema evolution — mergeSchema required"
+description: >
+  Delta table schema changed between two pipeline runs. The Ingress
+  reads without mergeSchema, causing an INCONSISTENT_BEHAVIOR_CROSS_VERSION
+  error. The agent must add options.mergeSchema: true to the Ingress config.
+
+modules:
+  - id: orders_raw
+    type: Ingress
+    label: "Read Delta orders table"
+    config:
+      format: delta
+      path: data/input/orders_delta
+      options:
+        mergeSchema: false
+
+  - id: clean_orders
+    type: Channel
+    label: "Clean and normalize"
+    config:
+      op: sql
+      query: |
+        SELECT
+          order_id,
+          customer_id,
+          amount,
+          CAST(order_date AS date) AS order_date
+        FROM orders_raw
+
+  - id: out_orders
+    type: Egress
+    label: "Write cleaned orders"
+    config:
+      format: delta
+      path: data/output/orders_clean
+      mode: append
+
+edges:
+  - from: orders_raw
+    to: clean_orders
+  - from: clean_orders
+    to: out_orders
+
+agent:
+  approval_mode: auto

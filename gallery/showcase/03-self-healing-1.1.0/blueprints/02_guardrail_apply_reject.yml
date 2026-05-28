@@ -1,0 +1,70 @@
+# DEMO 2 — Phase 34: unified loop — apply-gate rejection feeds back into reprompt.
+#
+# Same broken SQL as demo 1. This blueprint adds:
+#   agent.guardrails.forbidden_ops: [set_module_config_key, replace_module_config]
+# Both ops the model would naturally use to fix `event_ts → event_time` are forbidden.
+# So the first patch will trip `_check_guardrails` at apply time. Pre-1.1.0 that
+# rejection was thrown away (one wasted LLM call). Now the rejection is fed back
+# into the reprompt loop and the model is asked to pick a DIFFERENT op
+# (e.g. `replace_query` if available, or the run terminates with
+# stop_reason='stuck_signature' after the escalation attempt).
+#
+# Watch:
+#   - heal_attempts has ≥2 rows
+#   - first row's gate_that_rejected = 'apply'
+#   - second row uses a different op OR same op (model couldn't recover)
+#   - final stop_reason ∈ {solved, stuck_signature, exhausted_attempts}
+
+aqueduct: "1.0"
+id: guardrail_apply_reject_demo
+name: "Guardrail forces apply-gate rejection → reprompt"
+description: >
+  Forbid the obvious fix ops; verify the loop reprompts on apply-time rejection
+  instead of silently wasting the LLM call.
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: "Raw events (CSV)"
+    config:
+      format: csv
+      path: ../data/input/events.csv
+      header: true
+      infer_schema: true
+
+  - id: clean_events
+    type: Channel
+    label: "Project event_time (same bug as demo 1)"
+    config:
+      op: sql
+      query: |
+        SELECT
+          event_id,
+          user_id,
+          CAST(event_ts AS timestamp) AS event_time,   -- BUG (same as demo 1)
+          event_type
+        FROM events_raw
+
+  - id: out_events
+    type: Egress
+    label: "Write events parquet"
+    config:
+      format: parquet
+      path: ../data/output/events
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: events_raw
+    to: clean_events
+  - from: clean_events
+    to: out_events
+
+agent:
+  approval_mode: auto             # multi-patch loop opted in via max_patches below
+  max_patches: 3                  # multi-patch loop; requires danger.allow_multi_patch: true
+  confidence_threshold: 0.5
+  guardrails:
+    forbidden_ops:
+      - set_module_config_key
+      - replace_module_config

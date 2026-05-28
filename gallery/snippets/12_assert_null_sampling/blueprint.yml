@@ -27,7 +27,8 @@ modules:
           type: null_rate
           column: email
           # Allow max 6% NULLs. We generated ~5%.
-          max: 0.01
+          max: 0.06
+          # max: 0.01 # Fails
           # Evaluate on a 10% sample of the data for performance.
           fraction: 0.1
           on_fail: abort

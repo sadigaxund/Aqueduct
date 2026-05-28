@@ -1,0 +1,29 @@
+# Engine config for the 1.1.0 self-healing demo.
+# Per-blueprint policy (approval_mode, guardrails) lives in each blueprint.
+
+aqueduct_config: "1.0"
+
+# Engine-level Spark settings live under spark_config (merged with each Blueprint's spark_config).
+spark_config:
+  spark.sql.shuffle.partitions: "4"
+
+agent:
+  provider: "openai_compat"
+  base_url: "${AQ_OLLAMA_URL:-http://localhost:11434}/v1"
+  model: "qwen2.5-coder:7b"      # any small coder model works; smaller = more interesting heal_attempts
+  timeout: 300.0
+  max_reprompts: 3                # legacy single-axis cap
+
+  # Multi-axis budget (1.1.0). Three of the six axes wired to small numbers so
+  # you can SEE the loop terminate on different reasons across the three demo runs.
+  budget:
+    max_reprompts: 4
+    max_seconds: 5
+    max_tokens_total: 30000
+    same_error_consecutive: 2     # 2 identical signatures → escalation (temp=0.8 + skeleton template) for ONE more attempt
+    same_signature_overall: 3
+    progress_stalled_window: 3
+
+  prompt_context: |
+    The blueprint reads from a tiny local CSV under data/input/events.csv.
+    Prefer the smallest possible patch — change one column reference, do not rewrite the whole query.
