@@ -11,7 +11,8 @@ End-to-end deployments you can stand up and operate.
 |---|---|
 | [`showcase/01-spark-cluster`](showcase/01-spark-cluster) | Deploying Aqueduct against a real distributed Spark Standalone cluster + MinIO (S3A) + Postgres-backed stores. Guided, interactive walkthrough: the driver/cluster networking contract, the S3A jar story, spillway + quality gates on a cluster, reading the run back from Postgres. |
 | [`showcase/02-airflow`](showcase/02-airflow) | Aqueduct as an Apache Airflow operator. Compose-based stack (Airflow 2.10 + Postgres + triggerer). Two DAGs: happy-path wiring (no LLM) and a `HEAL_PENDING` round-trip where the task defers on `UNRESOLVED_COLUMN`, releases the worker slot, waits for human patch approval, and resumes green. |
-| [`showcase/03-self-healing-1.1.0`](showcase/03-self-healing-1.1.0) | **Remnant — not completed.** Three demo scenarios exercise the self-healing loop interactively with DuckDB inspection. Useful as a reference but the README and automation are unfinished. |
+| [`showcase/03-self-healing`](showcase/03-self-healing) | Self-healing tutorial — run a pipeline that fails, inspect the structured error in DuckDB, watch the LLM generate a patch, and observe guardrail rejection + budget exhaustion in action. Step-by-step with three interactive demos. |
+| [`showcase/04-socketnews-snowflake`](showcase/04-socketnews-snowflake) | **Scaffold** — Portfolio-grade stack: SocketNews API → Aqueduct/Spark → Snowflake → Grafana, scheduled by Airflow with micro-batch incremental processing. Architecture and docker-compose plan described; implementation in progress. |
 
 ## Snippets
 
