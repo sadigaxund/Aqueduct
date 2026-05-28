@@ -370,12 +370,11 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
     apply + parse + compile). Returned so the caller can re-use it for the
     new effect-based grader without re-running the apply pipeline.
     """
-    import tempfile
     try:
         from aqueduct.patch.apply import (
-            _check_guardrails, _yaml_dump, _yaml_load, apply_patch_to_dict, PatchError,
+            _check_guardrails, _yaml_load, apply_patch_to_dict, PatchError,
         )
-        from aqueduct.parser.parser import ParseError, parse
+        from aqueduct.parser.parser import ParseError, parse_dict
         from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
 
         bp_raw = _yaml_load(blueprint_path)
@@ -401,26 +400,18 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
 
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        # 1.1.0 — tempfile must live next to the scenario's blueprint so the
-        # path-anchoring rule resolves relative module paths against the real
-        # data directory, not against /tmp/.
-        _anchor_dir = blueprint_path.parent if blueprint_path.exists() else None
-        with tempfile.NamedTemporaryFile(
-            suffix=".aq-scenario.yml",
-            delete=False,
-            mode="w",
-            dir=str(_anchor_dir) if _anchor_dir else None,
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-        _yaml_dump(patched, tmp_path)
+        # Phase 36 Part A — parse the patched scenario dict in-memory with
+        # ``base_dir`` set to the scenario blueprint's parent so relative
+        # data paths (`../data/...`, `data/...`) resolve against the real
+        # fixture directory, not whatever ``/tmp`` location a former
+        # NamedTemporaryFile happened to land in.
+        base_dir = blueprint_path.parent if blueprint_path.exists() else Path.cwd()
         try:
-            bp = parse(str(tmp_path))
-            compiler_compile(bp, blueprint_path=tmp_path)
+            bp = parse_dict(patched, base_dir=base_dir)
+            compiler_compile(bp, blueprint_path=blueprint_path)
             return True, "", violated, patched
         except (ParseError, CompileError) as exc:
             return False, str(exc), violated, None
-        finally:
-            tmp_path.unlink(missing_ok=True)
     except Exception as exc:
         return False, str(exc), None, None
 

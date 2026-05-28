@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -188,33 +187,29 @@ def _agent_usable(provider: str, base_url: str | None) -> bool:
 def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
-        from aqueduct.parser.parser import ParseError, parse
+        from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
+        from aqueduct.parser.parser import ParseError, parse_dict
         from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
 
-        # 1.1.0 — write the tempfile NEXT TO the original blueprint so the
-        # 1.1.0 path-anchoring rule (relative module paths resolve to the
-        # blueprint's parent dir) still finds the real data files. Using /tmp/
-        # would resolve `../data/...` against /tmp/ and produce `/data/...`.
-        _anchor_dir = blueprint_path.parent if blueprint_path.exists() else None
-        with tempfile.NamedTemporaryFile(
-            suffix=".aq-apply.yml",
-            delete=False,
-            mode="w",
-            dir=str(_anchor_dir) if _anchor_dir else None,
-        ) as tmp:
-            tmp_path = Path(tmp.name)
-        _yaml_dump(patched, tmp_path)
+        # Phase 36 Part A — parse the patched dict directly with
+        # ``base_dir`` set to the original Blueprint's parent. Replaces the
+        # tempfile dance that broke 1.1.0 path anchoring whenever the
+        # tempfile landed in ``/tmp`` and relative module paths resolved
+        # against ``/tmp`` instead of the project root.
+        base_dir = blueprint_path.parent if blueprint_path.exists() else Path.cwd()
         try:
-            bp = parse(str(tmp_path), profile=profile, cli_overrides=cli_overrides or None)
-            return compiler_compile(bp, blueprint_path=tmp_path, depot=depot)
+            bp = parse_dict(
+                patched,
+                base_dir=base_dir,
+                profile=profile,
+                cli_overrides=cli_overrides or None,
+            )
+            return compiler_compile(bp, blueprint_path=blueprint_path, depot=depot)
         except (ParseError, CompileError):
             return None
-        finally:
-            tmp_path.unlink(missing_ok=True)
     except Exception:
         return None
 

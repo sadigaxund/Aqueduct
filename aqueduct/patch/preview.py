@@ -253,11 +253,9 @@ def run_sandbox_gate(
 
     try:
         from pathlib import Path as _Path
-        import tempfile
 
-        from aqueduct.parser.parser import ParseError, parse
+        from aqueduct.parser.parser import ParseError, parse_dict
         from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
-        from aqueduct.patch.apply import _yaml_dump
         from aqueduct.executor import ExecuteError, get_executor
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
@@ -266,27 +264,23 @@ def run_sandbox_gate(
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
-    # ── Persist patched Blueprint to a tempfile so the standard Parser
-    # ── (which reads from disk) can ingest it.
-    # 1.1.0 — write the tempfile NEXT TO the original blueprint, not in
-    # /tmp/, so the parser's path-anchoring rule (relative module paths
-    # resolve to the blueprint's parent dir) still finds the real data
-    # files. Using /tmp/ would cause every relative `path:` field to
-    # resolve under /tmp/, breaking sandbox replay.
+    # Phase 36 Part A — parse the patched dict in-memory, anchored to the
+    # original Blueprint's parent. Replaces the tempfile dance whose only
+    # purpose was to feed the file-only parse(path) API; that detour
+    # broke 1.1.0 path anchoring whenever the tempfile landed in ``/tmp``
+    # and relative module paths resolved against ``/tmp``.
     _bp_orig = _Path(blueprint_path) if blueprint_path else None
-    _anchor_dir = _bp_orig.parent if _bp_orig and _bp_orig.exists() else None
-    with tempfile.NamedTemporaryFile(
-        suffix=".aq-sandbox.yml",
-        delete=False,
-        mode="w",
-        dir=str(_anchor_dir) if _anchor_dir else None,
-    ) as tmp:
-        tmp_path = _Path(tmp.name)
+    base_dir = (
+        _bp_orig.parent if _bp_orig and _bp_orig.exists() else _Path.cwd()
+    )
     try:
-        _yaml_dump(blueprint_after, tmp_path)
-
         try:
-            bp = parse(str(tmp_path), profile=profile, cli_overrides=cli_overrides or None)
+            bp = parse_dict(
+                blueprint_after,
+                base_dir=base_dir,
+                profile=profile,
+                cli_overrides=cli_overrides or None,
+            )
         except ParseError as exc:
             return SandboxGateResult(
                 status="fail",
@@ -295,7 +289,7 @@ def run_sandbox_gate(
             )
 
         try:
-            manifest = compiler_compile(bp, blueprint_path=tmp_path)
+            manifest = compiler_compile(bp, blueprint_path=_bp_orig)
         except CompileError as exc:
             return SandboxGateResult(
                 status="fail",
@@ -419,10 +413,10 @@ def run_sandbox_gate(
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
     finally:
-        try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+        # Phase 36 Part A — no tempfile to unlink; parse_dict() consumes the
+        # patched Blueprint directly. Block retained for parity with previous
+        # control flow in case future side-effects need teardown.
+        pass
 
 
 # ── Unified diff helper ───────────────────────────────────────────────────────
