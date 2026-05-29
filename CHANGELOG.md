@@ -15,6 +15,7 @@ release and are marked **BREAKING**.
 
 ### Changed
 - **Phase 38 — lineage store merged into observability.** `column_lineage` now lives in `observability.db` instead of a separate `lineage.db`. The `stores.lineage` config block is inert — setting a different path emits a `DeprecationWarning`. `write_lineage()` writes through the observability store; no more `DuckDBLineageStore` creation. Zero impact on Spark execution (lineage extraction is driver-side, compile-time). `aqueduct lineage` reads from `observability.db`.
+- **Phase 39 — blob externalisation for fat observability columns.** `manifest_json`, `provenance_json`, and `stack_trace` are now compressed with Zstandard and stored as `.json.zst` blob files under `.aqueduct/observability/<bp>/blobs/<run_id>/`. DuckDB rows store only the relative path — row width drops ~10×. Existing inline data continues to work transparently via `blob_store.materialize()`. New dependency: `zstandard>=0.22.0`.
 
 ### Fixed
 - **Guard null LLM content in both providers.** `_call_anthropic` and `_call_openai_compat` now raise `ValueError` on null/empty content blocks instead of crashing downstream with `'NoneType' object has no attribute 'strip'`. The error is caught by the unified reprompt loop and recorded as a parse failure.

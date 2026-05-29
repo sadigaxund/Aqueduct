@@ -53,7 +53,7 @@ DuckDB files are stable and safe to query with any DuckDB CLI / library.
 
 ## Schema Reference
 
-Columns marked **(1.1.0+)** were added in 1.1.0 via idempotent additive
+Columns marked were added in 1.1.0 via idempotent additive
 `ALTER` migrations — pre-existing stores upgrade in place; rows written
 before the migration have `NULL` in those columns.
 
@@ -69,7 +69,7 @@ before the migration have `NULL` in those columns.
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
 | `module_results` | JSON                | Per-module status/error blobs |
-| `parent_run_id`  | VARCHAR             | **(1.1.0+)** User-visible outer `run_id` for multi-patch iterations. NULL on iteration 0 and on single-patch runs. Join all iterations of one heal call with `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`. |
+| `parent_run_id`  | VARCHAR             | User-visible outer `run_id` for multi-patch iterations. NULL on iteration 0 and on single-patch runs. Join all iterations of one heal call with `WHERE COALESCE(parent_run_id, run_id) = '<outer>'`. |
 
 `Surveyor.record()` writes via `INSERT … ON CONFLICT DO UPDATE`, so each
 multi-patch iteration owns its own row (the pre-1.1.0 code issued a
@@ -84,15 +84,15 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `failed_module`     | VARCHAR NOT NULL    | Module where the failure surfaced |
 | `error_message`     | VARCHAR NOT NULL    | Full error string |
 | `stack_trace`       | VARCHAR             | Used as the prompt fallback when structured extraction fails |
-| `manifest_json`     | JSON                | Compiled Manifest at failure |
-| `provenance_json`   | JSON                | Slice of the ProvenanceMap for the failed module |
+| `manifest_json`     | VARCHAR             | Blob path or inline JSON — compiled Manifest at failure |
+| `provenance_json`   | VARCHAR             | Blob path or inline JSON — ProvenanceMap slice for the failed module |
 | `started_at`        | TIMESTAMPTZ NOT NULL | |
 | `finished_at`       | TIMESTAMPTZ NOT NULL | |
-| `error_class`       | VARCHAR             | **(1.1.0+)** Spark 4.0 error condition (e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`) or JVM throwable class name |
-| `root_exception`    | JSON                | **(1.1.0+)** `{type, message}` from the innermost JVM throwable or Python cause |
-| `sql_state`         | VARCHAR             | **(1.1.0+)** ANSI SQLSTATE from `PySparkException.getSqlState()` |
-| `suggested_columns` | JSON                | **(1.1.0+)** Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
-| `object_name`       | VARCHAR             | **(1.1.0+)** Offending column / table / object |
+| `error_class`       | VARCHAR             | Spark 4.0 error condition (e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`) or JVM throwable class name |
+| `root_exception`    | JSON                | `{type, message}` from the innermost JVM throwable or Python cause |
+| `sql_state`         | VARCHAR             | ANSI SQLSTATE from `PySparkException.getSqlState()` |
+| `suggested_columns` | JSON                | Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
+| `object_name`       | VARCHAR             | Offending column / table / object |
 
 The structured fields populate from `_extract_structured_error()` —
 best-effort, lazy-imported. When extraction returned None the row carries
@@ -133,7 +133,7 @@ the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 |---------------------------|---------|-------|
 | `id`                      | VARCHAR PRIMARY KEY | UUID per healing session |
 | `run_id`                  | VARCHAR NOT NULL | Per-iteration run id |
-| `parent_run_id`           | VARCHAR | **(1.1.0+)** User-visible outer `run_id`. Use `WHERE parent_run_id = '<outer>'` to gather all iterations from one multi-patch heal. NULL on single-patch runs. |
+| `parent_run_id`           | VARCHAR | User-visible outer `run_id`. Use `WHERE parent_run_id = '<outer>'` to gather all iterations from one multi-patch heal. NULL on single-patch runs. |
 | `failed_module`           | VARCHAR | |
 | `failure_category`        | VARCHAR | LLM-assigned: `schema_drift`, `bad_path`, `format_mismatch`, etc. |
 | `model`                   | VARCHAR | LLM model id |
@@ -225,10 +225,10 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution.
 | `failures`            | JSON                | Hard assertion failures |
 | `soft_failures`       | JSON                | |
 | `violated_guardrails` | JSON                | NULL when scenario declares no guardrails; `[]` when defined-and-clean |
-| `stop_reason`         | VARCHAR             | **(1.1.0+)** Same vocabulary as `heal_attempts.stop_reason` |
-| `escalated`           | BOOLEAN             | **(1.1.0+)** |
-| `tokens_in_total`     | INTEGER             | **(1.1.0+)** |
-| `tokens_out_total`    | INTEGER             | **(1.1.0+)** |
+| `stop_reason`         | VARCHAR             | Same vocabulary as `heal_attempts.stop_reason` |
+| `escalated`           | BOOLEAN             | |
+| `tokens_in_total`     | INTEGER             | |
+| `tokens_out_total`    | INTEGER             | |
 
 ### `depot.db`
 

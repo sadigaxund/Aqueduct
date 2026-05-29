@@ -3721,6 +3721,14 @@ def heal(
         stack_trace, manifest_json_raw, started_at, finished_at,
     ) = fc_row
 
+    # Phase 39 — materialize blob-externalised columns transparently.
+    # If the DB row stores a blob path (e.g. "blobs/<run_id>/manifest.json.zst"),
+    # load and decompress; otherwise the value is inline text.
+    _store_root = observability_db.parent
+    from aqueduct.surveyor.blob_store import materialize as _mat
+    _manifest_str = _mat(manifest_json_raw if isinstance(manifest_json_raw, str) else "", _store_root)
+    _stack_str = _mat(stack_trace or "", _store_root)
+
     target_module = module_id or failed_module
 
     failure_ctx = FailureContext(
@@ -3728,8 +3736,8 @@ def heal(
         blueprint_id=blueprint_id,
         failed_module=target_module,
         error_message=error_message,
-        stack_trace=stack_trace,
-        manifest_json=manifest_json_raw if isinstance(manifest_json_raw, str) else json.dumps(manifest_json_raw),
+        stack_trace=_stack_str,
+        manifest_json=_manifest_str,
         started_at=started_at,
         finished_at=finished_at,
     )
@@ -3738,7 +3746,7 @@ def heal(
     # surface the same constraints the live run would have used.
     _guardrails_for_prompt: Any = None
     try:
-        _mdict = json.loads(manifest_json_raw) if isinstance(manifest_json_raw, str) else manifest_json_raw
+        _mdict = json.loads(_manifest_str) if _manifest_str else {}
         if isinstance(_mdict, dict):
             _agent_block = _mdict.get("agent") or {}
             _guardrails_for_prompt = _agent_block.get("guardrails") or None
