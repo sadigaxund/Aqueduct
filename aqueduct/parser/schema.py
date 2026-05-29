@@ -24,20 +24,20 @@ class BackoffSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     strategy: Literal["linear", "exponential", "fixed"] = "exponential"
-    base_seconds: int = 30
-    max_seconds: int = 600
+    base_seconds: int = Field(default=30, ge=1, description="Base backoff delay in seconds (>= 1)")
+    max_seconds: int = Field(default=600, ge=1, description="Maximum backoff delay in seconds (>= 1)")
     jitter: bool = True
 
 
 class RetryPolicySchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_attempts: int = 1
+    max_attempts: int = Field(default=1, ge=1, description="Maximum retry attempts (>= 1)")
     backoff: BackoffSchema = Field(default_factory=BackoffSchema)
     transient_errors: list[Any] = Field(default_factory=list)
     non_transient_errors: list[str] = Field(default_factory=list)
     on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] = "trigger_agent"
-    deadline_seconds: int | None = None
+    deadline_seconds: int | None = Field(default=None, gt=0, description="Retry deadline in seconds (> 0 if set)")
 
 
 class GuardrailsSchema(BaseModel):
@@ -63,25 +63,25 @@ class AgentSchema(BaseModel):
     # Default 1 = single-patch try (former `auto` mode behavior). Set > 1 to
     # opt into the multi-patch reprompt loop; that path also requires
     # `danger.allow_multi_patch: true` (alias: `allow_aggressive_patching`).
-    max_patches: int = Field(default=1, validation_alias=AliasChoices("max_patches", "aggressive_max_patches"))
+    max_patches: int = Field(default=1, ge=1, validation_alias=AliasChoices("max_patches", "aggressive_max_patches"))
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None
     model: str | None = None
     provider_options: dict[str, Any] | None = None
-    timeout: float | None = None
-    max_reprompts: int | None = None
+    timeout: float | None = Field(default=None, gt=0)
+    max_reprompts: int | None = Field(default=None, ge=1)
     # Guardrail policy — deterministically enforced in apply_patch
     guardrails: GuardrailsSchema = Field(default_factory=GuardrailsSchema)
     # Minimum LLM confidence to auto-apply patch (below threshold → escalate to human)
-    confidence_threshold: float = 0.7
+    confidence_threshold: float = Field(default=0.7, ge=0, le=1)
     # What to do when a patch is generated but fails to fix the pipeline
     on_heal_failure: Literal["stage", "discard", "abort"] = "stage"
     # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.
     # None (default) = unlimited. When exceeded, Surveyor records skip outcome and run ends.
-    max_heal_attempts_per_hour: int | None = None
+    max_heal_attempts_per_hour: int | None = Field(default=None, ge=1)
     # Patch validation pyramid: default `full_run` keeps existing
     # behaviour: a generated patch is sandbox-checked AND then validated by a
     # full Spark run before the Blueprint is written to disk. `sandbox` skips

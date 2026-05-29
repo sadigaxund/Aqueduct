@@ -219,8 +219,8 @@ class MetricsConfig(BaseModel):
 class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    max_sample_rows: int = 100
-    default_sample_fraction: float = 0.01
+    max_sample_rows: int = Field(default=100, ge=1, description="Maximum rows to sample in probes (>= 1)")
+    default_sample_fraction: float = Field(default=0.01, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
     # Note: the legacy `block_full_actions_in_prod` flag was removed in v1.0.0a3.
     # The active gate is `danger.allow_full_probe_actions` (inverted polarity).
 
@@ -314,6 +314,7 @@ class AgentConnectionConfig(BaseModel):
     provider_options: dict[str, Any] | None = None
     timeout: float = Field(
         default=300.0,
+        gt=0,
         description=(
             "HTTP socket timeout (seconds) for agent API calls. Default 300 — "
             "tolerates local-model cold-start (model load into VRAM) plus "
@@ -325,6 +326,7 @@ class AgentConnectionConfig(BaseModel):
     )
     max_reprompts: int = Field(
         default=3,
+        ge=1,
         description="Max reprompt attempts when the agent returns invalid PatchSpec JSON.",
     )
     prompt_context: str | None = Field(
@@ -337,6 +339,7 @@ class AgentConnectionConfig(BaseModel):
     )
     max_heal_attempts_per_hour: int | None = Field(
         default=None,
+        ge=1,
         description=(
             "Engine-wide spend-cap on LLM self-healing. When set, every blueprint's "
             "Surveyor counts rows in `healing_outcomes` within the last 60 minutes "
@@ -410,7 +413,7 @@ class WebhookEndpointConfig(BaseModel):
             "If null, the full FailureContext JSON is sent as-is."
         ),
     )
-    timeout: int = Field(default=10, description="HTTP socket timeout in seconds")
+    timeout: int = Field(default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)")
 
 
 class WebhooksConfig(BaseModel):
