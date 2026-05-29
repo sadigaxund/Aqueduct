@@ -19,24 +19,9 @@ Limitations:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS column_lineage (
-    blueprint_id   VARCHAR NOT NULL,
-    run_id         VARCHAR NOT NULL,
-    channel_id     VARCHAR NOT NULL,
-    output_column  VARCHAR NOT NULL,
-    source_table   VARCHAR NOT NULL,
-    source_column  VARCHAR NOT NULL,
-    captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_lineage_channel
-    ON column_lineage (blueprint_id, channel_id);
-"""
 
 
 def _extract_sql_lineage(
@@ -131,23 +116,21 @@ def write_lineage(
     run_id: str,
     modules: tuple[Any, ...],
     edges: tuple[Any, ...],
-    store_dir: Path,
-    lineage_store: Any = None,
+    observability_store: Any = None,
 ) -> None:
     """Extract and persist column-level lineage for all Channel modules.
 
-    Args:
-        blueprint_id:  Blueprint ID (from Manifest).
-        run_id:        Run UUID.
-        modules:       Compiled module list (flat, post-expansion).
-        edges:         Compiled edge list.
-        store_dir:     Root observability store directory (used to derive a
-                       DuckDB lineage path when no `lineage_store` is supplied).
-        lineage_store: Optional Phase 28 `LineageStore` backend. When None,
-                       falls back to a DuckDB file at ``store_dir/lineage.db``
-                       for backwards-compatible direct callers.
+    Writes to the observability store's ``column_lineage`` table (merged from
+    the former ``lineage.db`` in Phase 38).  No exception propagates — lineage
+    failure must never block compilation or execution.
 
-    No exception propagates — lineage failure must never block compilation.
+    Args:
+        blueprint_id:        Blueprint ID (from Manifest).
+        run_id:              Run UUID.
+        modules:             Compiled module list (flat, post-expansion).
+        edges:               Compiled edge list.
+        observability_store: ObservabilityStore backend. When None, lineage
+                             extraction is skipped (no fallback).
     """
     try:
         from datetime import datetime, timezone
@@ -174,15 +157,12 @@ def write_lineage(
         if not all_rows:
             return
 
-        if lineage_store is None:
-            from aqueduct.stores.duckdb_ import DuckDBLineageStore
-            store_dir.mkdir(parents=True, exist_ok=True)
-            lineage_store = DuckDBLineageStore(store_dir / "lineage.db")
+        if observability_store is None:
+            return  # no store backend configured, skip lineage
 
         now = datetime.now(tz=timezone.utc).isoformat()
 
-        with lineage_store.connect() as cur:
-            cur.execute(_DDL)
+        with observability_store.connect() as cur:
             cur.executemany(
                 """
                 INSERT INTO column_lineage

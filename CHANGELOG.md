@@ -10,7 +10,15 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
-(No changes yet.)
+### Added
+- **Phase 37 — numeric field bounds on all config/schema models.** Every `int`/`float` field in `parser/schema.py` and `config.py` now carries pydantic `Field(ge=…)` / `Field(gt=…)` / `Field(le=…)` bounds. Malformed blueprints (`max_attempts: 0`, `confidence_threshold: 1.5`, `max_sample_rows: -1`) fail `aqueduct validate` with one error per bad field. BudgetConfig fields already validated via `__post_init__` in `agent/budget.py`.
+
+### Changed
+- **Phase 38 — lineage store merged into observability.** `column_lineage` now lives in `observability.db` instead of a separate `lineage.db`. The `stores.lineage` config block is inert — setting a different path emits a `DeprecationWarning`. `write_lineage()` writes through the observability store; no more `DuckDBLineageStore` creation. Zero impact on Spark execution (lineage extraction is driver-side, compile-time). `aqueduct lineage` reads from `observability.db`.
+
+### Fixed
+- **Guard null LLM content in both providers.** `_call_anthropic` and `_call_openai_compat` now raise `ValueError` on null/empty content blocks instead of crashing downstream with `'NoneType' object has no attribute 'strip'`. The error is caught by the unified reprompt loop and recorded as a parse failure.
+- **Unwrap single-key PatchSpec wrappers.** Models sometimes emit `{"patch": {rationale, operations}}` instead of the bare envelope. `_parse_patch_spec` now mechanically unwraps single-key dict wrappers before validation, saving a reprompt round for strong models that get the content right but the nesting wrong.
 
 ## [1.1.1] - 2026-05-29
 

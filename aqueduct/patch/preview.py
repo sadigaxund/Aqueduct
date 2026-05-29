@@ -228,7 +228,6 @@ def run_sandbox_gate(
     profile: str | None = None,
     spark_session: Any = None,
     observability_store: Any = None,
-    lineage_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
@@ -374,7 +373,6 @@ def run_sandbox_gate(
                 store_dir=None,
                 surveyor=None,
                 observability_store=observability_store,
-                lineage_store=lineage_store,
                 explain_capture=explain_capture,
             )
         except ExecuteError as exc:

@@ -316,7 +316,6 @@ def _run_patch_gates_inline(
             failed_module=failed_module,
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
-            lineage_store=bundle.lineage,
             explain_capture=explain_after,
         )
     try:
@@ -1567,14 +1566,13 @@ def run(
         if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
             from aqueduct.stores.duckdb_ import (
                 DuckDBDepotStore,
-                DuckDBLineageStore,
                 DuckDBObservabilityStore,
             )
             from aqueduct.stores import StoreBundle
             bundle = StoreBundle(
                 observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
-                lineage=DuckDBLineageStore(resolved_store_dir / "lineage.db"),
-                depot=bundle.depot,  # depot path stays user-configured
+                lineage=None,  # Phase 38: lineage merged into observability
+                depot=bundle.depot,
             )
             depot = DepotStore(backend=bundle.depot)
         surveyor = Surveyor(
@@ -1637,7 +1635,6 @@ def run(
                     parallel=parallel,
                     use_observe=cfg.metrics.use_observe,
                     observability_store=bundle.observability,
-                    lineage_store=bundle.lineage,
                 )
             except ExecuteError as exc:
                 execute_exc = exc
@@ -2477,7 +2474,6 @@ def patch_preview(
             failed_module=failed_module,
             sample_rows=int(sample_rows),
             observability_store=bundle.observability,
-            lineage_store=bundle.lineage,
             explain_capture=explain_after,
         )
         # Explain gate — baseline read directly from the observability store.
@@ -3401,20 +3397,18 @@ def lineage(
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    # Per-pipeline routing: when on the default obs path, lineage.db lives
-    # at `.aqueduct/observability/<blueprint_id>/lineage.db` alongside its
-    # observability.db sibling.
+    # Phase 38: lineage merged into observability — column_lineage lives in
+    # observability.db alongside all other observability tables.
     if store_dir:
-        lineage_db = Path(store_dir) / "lineage.db"
+        obs_db = Path(store_dir) / "observability.db"
     elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        lineage_db = Path(cfg.stores.observability.path).parent / "lineage.db"
+        obs_db = Path(cfg.stores.observability.path)
     else:
-        lineage_db = Path(".aqueduct/observability") / blueprint_id / "lineage.db"
-        if not lineage_db.exists():
-            # Legacy fallback for pre-per-pipeline-routing installs
-            lineage_db = Path(".aqueduct/lineage.db")
-    if not lineage_db.exists():
-        click.echo(f"✗ lineage.db not found at {lineage_db}", err=True)
+        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+        if not obs_db.exists():
+            obs_db = Path(".aqueduct/observability.db")
+    if not obs_db.exists():
+        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
         sys.exit(1)
 
     params: list[Any] = [blueprint_id]
@@ -3434,7 +3428,7 @@ def lineage(
         ORDER BY channel_id, output_column
     """
 
-    conn = _duckdb.connect(str(lineage_db), read_only=True)
+    conn = _duckdb.connect(str(obs_db), read_only=True)
     try:
         rows = conn.execute(query, params).fetchall()
     finally:

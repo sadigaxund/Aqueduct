@@ -98,6 +98,20 @@ CREATE TABLE IF NOT EXISTS patch_simulation (
     duration_ms  BIGINT,
     recorded_at  VARCHAR NOT NULL
 );
+
+-- Column-level lineage extracted at compile time (driver-side, zero Spark actions).
+-- Merged from the former lineage.db in Phase 38.
+CREATE TABLE IF NOT EXISTS column_lineage (
+    blueprint_id   VARCHAR NOT NULL,
+    run_id         VARCHAR NOT NULL,
+    channel_id     VARCHAR NOT NULL,
+    output_column  VARCHAR NOT NULL,
+    source_table   VARCHAR NOT NULL,
+    source_column  VARCHAR NOT NULL,
+    captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_lineage_channel
+    ON column_lineage (blueprint_id, channel_id);
 """
 
 _SIGNAL_OVERRIDES_DDL = """

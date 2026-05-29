@@ -193,6 +193,30 @@ class StoresConfig(BaseModel):
         ),
     )
 
+    @model_validator(mode="after")
+    def _deprecate_lineage_store(self) -> "StoresConfig":
+        """Phase 38 — lineage merged into observability.
+        
+        The `lineage` config block is now inert.  ``column_lineage`` lives in
+        the observability store.  Emit a deprecation warning when the lineage
+        path is explicitly set to a different value, and normalise it so
+        downstream code sees one canonical path.
+        """
+        import warnings as _warnings
+        obs_path = self.observability.path
+        lin_path = self.lineage.path
+        if lin_path != obs_path:
+            _warnings.warn(
+                f"stores.lineage.path ({lin_path!r}) differs from "
+                f"stores.observability.path ({obs_path!r}). "
+                "Phase 38 merged lineage into the observability store — "
+                "the lineage config block is now inert. "
+                "Set only stores.observability.path.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return self
+
 
 class MetricsConfig(BaseModel):
     """Per-module observability tuning.
