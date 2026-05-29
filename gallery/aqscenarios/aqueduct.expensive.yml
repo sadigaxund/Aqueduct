@@ -2,7 +2,7 @@ agent:
   budget:
     max_reprompts: 5            # max attempts (success counts as the terminating attempt)
     max_seconds: 600            # wall-clock cap across all attempts
-    max_tokens_total: 50000     # null disables the axis
+    max_tokens_total: 60000     # null disables the axis
     same_error_consecutive: 3   # N identical signatures in a row → escalate (temp=0.8 + skeleton template)
                                 # for ONE more attempt before tripping stuck_signature
     same_signature_overall: 3   # any signature repeating ≥ N times anywhere → stuck_signature

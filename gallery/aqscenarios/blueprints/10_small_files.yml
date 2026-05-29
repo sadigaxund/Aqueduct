@@ -1,0 +1,43 @@
+aqueduct: "1.0"
+id: small_files_demo
+name: "Too Many Small Files — Egress compaction demo"
+description: >
+  Pipeline writes output with default partition count (200),
+  producing 200 tiny files from a small input dataset. The agent
+  must add `coalesce: 1` to the Egress config so the output is
+  a single file.
+
+modules:
+  - id: events_raw
+    type: Ingress
+    label: "Raw events (CSV)"
+    config:
+      format: csv
+      path: data/input/events.csv
+      header: true
+      infer_schema: true
+
+  - id: dedup_events
+    type: Channel
+    label: "Deduplicate by event_id"
+    config:
+      op: deduplicate
+      columns:
+        - event_id
+
+  - id: out_events
+    type: Egress
+    label: "Write deduplicated events"
+    config:
+      format: parquet
+      path: data/output/events
+      mode: overwrite
+
+edges:
+  - from: events_raw
+    to: dedup_events
+  - from: dedup_events
+    to: out_events
+
+agent:
+  approval_mode: auto

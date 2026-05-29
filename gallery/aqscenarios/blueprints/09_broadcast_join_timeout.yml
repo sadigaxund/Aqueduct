@@ -1,0 +1,57 @@
+aqueduct: "1.0"
+id: broadcast_join_timeout
+name: "Broadcast Join Timeout — config tuning demo"
+description: >
+  Channel joins two tables and hints a broadcast on the large table.
+  The broadcast fails because the large table exceeds the threshold.
+  The agent must remove the broadcast hint or lower
+  autoBroadcastJoinThreshold in spark_config.
+
+modules:
+  - id: orders_raw
+    type: Ingress
+    label: "Orders (CSV — large)"
+    config:
+      format: csv
+      path: data/input/orders.csv
+      header: true
+      infer_schema: true
+
+  - id: customers_raw
+    type: Ingress
+    label: "Customers (CSV — small)"
+    config:
+      format: csv
+      path: data/input/customers.csv
+      header: true
+      infer_schema: true
+
+  - id: join_enriched
+    type: Channel
+    label: "Enrich orders with customer names"
+    config:
+      op: sql
+      query: |
+        SELECT /*+ BROADCAST(customers_raw) */ o.*, c.name, c.email
+        FROM orders_raw o
+        JOIN customers_raw c ON o.customer_id = c.customer_id
+
+  - id: out_enriched
+    type: Egress
+    label: "Write enriched orders"
+    config:
+      format: parquet
+      path: data/output/enriched
+      mode: overwrite
+      coalesce: 1
+
+edges:
+  - from: orders_raw
+    to: join_enriched
+  - from: customers_raw
+    to: join_enriched
+  - from: join_enriched
+    to: out_enriched
+
+agent:
+  approval_mode: auto
