@@ -56,8 +56,8 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
     failed_module     VARCHAR NOT NULL,
     error_message     VARCHAR NOT NULL,
     stack_trace       VARCHAR,
-    manifest_json     JSON,
-    provenance_json   JSON,
+    manifest_json     VARCHAR,     -- Phase 39: blob path or inline JSON
+    provenance_json   VARCHAR,     -- Phase 39: blob path or inline JSON
     started_at        TIMESTAMPTZ NOT NULL,
     finished_at       TIMESTAMPTZ NOT NULL,
     -- Structured Spark-error extraction. Populated when PySparkException or
@@ -563,16 +563,29 @@ class Surveyor:
             except OSError:
                 pass
 
+        # Phase 39 — externalise fat columns to compressed blobs so the DB
+        # row stores only a relative path (DuckDB row width drops ~10×).
+        # Postgres is unaffected — TOAST handles large JSON natively.
+        _blob_root = self._store_dir if self._store_dir is not None else None
+        _manifest_json = _redact(json.dumps(self._manifest.to_dict()))
+        _stack_trace_str = _redact(stack_trace) or ""
+        _prov_json = _redact(provenance_json) or ""
+        if _blob_root is not None:
+            from aqueduct.surveyor.blob_store import externalise as _blob_ext
+            _manifest_json = _blob_ext(_manifest_json, _blob_root, result.run_id, "manifest")
+            _stack_trace_str = _blob_ext(_stack_trace_str, _blob_root, result.run_id, "stack")
+            _prov_json = _blob_ext(_prov_json, _blob_root, result.run_id, "prov")
+
         ctx = FailureContext(
             run_id=result.run_id,
             blueprint_id=self._manifest.blueprint_id,
             failed_module=_first_failed_module(result),
             error_message=_redact(_first_error_message(result, exc)),
-            stack_trace=_redact(stack_trace),
-            manifest_json=_redact(json.dumps(self._manifest.to_dict())),
+            stack_trace=_stack_trace_str,
+            manifest_json=_manifest_json,
             started_at=_iso(self._started_at),  # type: ignore[arg-type]
             finished_at=_iso(finished_at),
-            provenance_json=_redact(provenance_json),
+            provenance_json=_prov_json,
             blueprint_source_yaml=_redact(blueprint_source_yaml),
             error_type=_first_error_type(result),
             error_class=(structured or {}).get("error_class"),

@@ -835,6 +835,15 @@ This section tracks high-level functional verification of core features against 
 - ✅ webhook fired on failure when `webhook_url` configured (mock server)
 - ✅ webhook NOT fired when `webhook_url=None`
 
+### Phase 39 — Blob externalisation (`aqueduct/surveyor/blob_store.py`)
+- ⏳ `externalise(value, store_dir, run_id, "manifest")` writes a compressed `.json.zst` blob and returns a relative path like `blobs/<run_id>/manifest.json.zst`
+- ⏳ `externalise("", ...)` returns `""` unchanged (empty strings stay inline)
+- ⏳ `materialize("blobs/<run_id>/manifest.json.zst", store_dir)` decompresses and returns the original JSON text
+- ⏳ `materialize("not a blob path", ...)` returns the value unchanged (inline data passthrough)
+- ⏳ `materialize("blobs/missing.json.zst", store_dir)` returns the path string unchanged (blob not found, graceful fallback)
+- ⏳ `surveyor.record()` on failure: `manifest_json` / `provenance_json` / `stack_trace` columns in `failure_contexts` contain blob paths, not raw JSON
+- ⏳ `aqueduct heal <run_id>` materializes blob paths transparently; FailureContext fields contain the original decompressed text
+
 ---
 
 ## Patch Grammar (`aqueduct/patch/`)
