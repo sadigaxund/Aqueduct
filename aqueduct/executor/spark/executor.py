@@ -706,7 +706,6 @@ def execute(
     parallel: bool = False,
     use_observe: bool = True,
     observability_store: Any = None,
-    lineage_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
@@ -1486,7 +1485,7 @@ def execute(
     if store_dir is not None:
         try:
             from aqueduct.compiler.lineage import write_lineage
-            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, store_dir, lineage_store=lineage_store)
+            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, observability_store=observability_store)
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
 

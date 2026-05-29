@@ -968,6 +968,25 @@ This section tracks high-level functional verification of core features against 
 - ✅ partial config (only `deployment` section) → other sections use defaults
 - ✅ `spark_config` dict entries preserved in returned config
 
+### Numeric field bounds (Phase 37)
+- ⏳ `BackoffSchema.base_seconds: 0` → ValidationError (must be >= 1)
+- ⏳ `BackoffSchema.max_seconds: 0` → ValidationError (must be >= 1)
+- ⏳ `RetryPolicySchema.max_attempts: 0` → ValidationError (must be >= 1)
+- ⏳ `RetryPolicySchema.deadline_seconds: 0` → ValidationError (must be > 0 if set)
+- ⏳ `AgentSchema.max_patches: 0` → ValidationError (must be >= 1)
+- ⏳ `AgentSchema.timeout: 0` → ValidationError (must be > 0 if set)
+- ⏳ `AgentSchema.max_reprompts: 0` → ValidationError (must be >= 1 if set)
+- ⏳ `AgentSchema.confidence_threshold: -0.1` → ValidationError (must be >= 0)
+- ⏳ `AgentSchema.confidence_threshold: 1.5` → ValidationError (must be <= 1)
+- ⏳ `AgentSchema.max_heal_attempts_per_hour: 0` → ValidationError (must be >= 1 if set)
+- ⏳ `ProbesConfig.max_sample_rows: 0` → ValidationError (must be >= 1)
+- ⏳ `ProbesConfig.default_sample_fraction: 0` → ValidationError (must be > 0)
+- ⏳ `ProbesConfig.default_sample_fraction: 1.5` → ValidationError (must be <= 1)
+- ⏳ `AgentConnectionConfig.timeout: 0` → ValidationError (must be > 0)
+- ⏳ `AgentConnectionConfig.max_reprompts: 0` → ValidationError (must be >= 1)
+- ⏳ `AgentConnectionConfig.max_heal_attempts_per_hour: 0` → ValidationError (must be >= 1 if set)
+- ⏳ `WebhookEndpointConfig.timeout: 0` → ValidationError (must be >= 1)
+
 ## Remote Spark (`aqueduct/executor/session.py`)
 
 ### `make_spark_session()` — master_url parameter
@@ -1132,18 +1151,20 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 ### Lineage Writer (`aqueduct/compiler/lineage.py`)
 
 **`_extract_sql_lineage(channel_id, sql, upstream_ids)`:** returns list of `{channel_id, output_column, source_table, source_column}` dicts. Uses sqlglot to parse SparkSQL.
-**`write_lineage(blueprint_id, run_id, modules, edges, store_dir)`:** writes to `store_dir/lineage.db`, table `column_lineage`. Non-fatal — swallows all exceptions.
+**`write_lineage(blueprint_id, run_id, modules, edges, observability_store)`:** writes to the observability store's `column_lineage` table (Phase 38 merge). Non-fatal — swallows all exceptions.
 
 - ✅ `_extract_sql_lineage`: `SELECT a, b FROM tbl` → two rows with `source_column=a/b`, `source_table=tbl`
 - ✅ `_extract_sql_lineage`: `SELECT a * 2 AS doubled FROM tbl` → output_column=`doubled`, source_column=`a`
 - ✅ `_extract_sql_lineage`: `SELECT * FROM tbl` → row with `output_column="*"`, `source_column="*"`
 - ✅ `_extract_sql_lineage`: invalid SQL → returns `[]` (no exception raised)
 - ✅ `_extract_sql_lineage`: single upstream → source_table inferred when column has no table qualifier
-- ✅ `write_lineage`: creates `lineage.db` and `column_lineage` table when not present
-- ✅ `write_lineage`: inserts one row per output_column/source_column pair for each Channel
+- ✅ `write_lineage`: inserts one row per output_column/source_column pair per Channel into observability store
+- ⏳ `write_lineage`: `observability_store=None` → returns silently (no crash, no file created)
+- ⏳ `write_lineage`: `column_lineage` rows appear in `observability.db` (not `lineage.db`)
+- ⏳ `aqueduct lineage` reads from `observability.db` (not `lineage.db`)
 - ✅ `write_lineage`: non-Channel modules (Ingress, Egress) do not produce lineage rows
 - ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
-- ✅ `write_lineage`: called after successful blueprint execution with `store_dir` set; `lineage.db` written
+- ✅ `write_lineage`: called after successful blueprint execution; `column_lineage` written to observability store
 
 ### Agent Self-Healing (`aqueduct/agent/__init__.py`)
 
@@ -2169,8 +2190,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `Surveyor(stores=bundle)` honours the supplied bundle — `record_healing_outcome()` writes against `bundle.obs` — `tests/test_surveyor/test_surveyor.py::test_surveyor_uses_injected_stores`
 - ✅ `Surveyor()` without `stores=` falls back to a `DuckDBObservabilityStore` at `store_dir/observability.db` — `tests/test_surveyor/test_surveyor.py::test_surveyor_default_store`
 - ✅ `DepotStore(backend=Redis...)` round-trips a watermark via `kv_put`/`kv_get` [DuckDB param always runs; Redis param needs `AQ_REDIS_URL`] — `tests/test_stores/test_wired_backends.py`
-- ✅ `write_lineage(..., lineage_store=postgres_store)` writes rows into the `column_lineage` table [DuckDB param always runs; Postgres param needs `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
-- ✅ `execute(..., observability_store=postgres_store, lineage_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres [integration — skips without `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
+- ✅ `write_lineage(..., observability_store=postgres_store)` writes column_lineage rows into the observability store [DuckDB param always runs; Postgres param needs `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
+- ✅ `execute(..., observability_store=postgres_store)` end-to-end run persists `run_records`, `module_metrics`, `column_lineage`, `probe_signals` rows into Postgres [integration — skips without `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
 - ✅ `aqueduct signal <id>` with the Postgres backend reads/writes the `observability.signal_overrides` schema-qualified table [integration — skips without `AQ_PG_DSN`] — `tests/test_stores/test_wired_backends.py`
 
 ### `aqueduct stores` CLI
