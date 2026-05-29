@@ -902,7 +902,18 @@ def _call_anthropic(
         )
         response.raise_for_status()
         data = response.json()
-    text = data["content"][0]["text"]
+    content = data.get("content") or []
+    if not content:
+        raise ValueError(
+            "Anthropic returned empty content block. "
+            "The model may have refused the request or been interrupted."
+        )
+    text = content[0].get("text")
+    if text is None:
+        raise ValueError(
+            "Anthropic returned null/empty text in content block. "
+            "The model may have refused the request or been interrupted."
+        )
     usage = data.get("usage") or {}
     return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
 
@@ -975,7 +986,13 @@ def _call_openai_compat(
         )
         response.raise_for_status()
         data = response.json()
-    text = data["choices"][0]["message"]["content"]
+    text = data["choices"][0]["message"].get("content")
+    if text is None:
+        raise ValueError(
+            "LLM returned null/empty content from OpenAI-compatible endpoint. "
+            "The model may have refused the request, hit a content filter, "
+            "or been interrupted mid-generation."
+        )
     usage = data.get("usage") or {}
     return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
 
@@ -1132,6 +1149,11 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
     Cleanups are MECHANICAL — they fix syntax, never interpret intent. The
     LLM still wrote the patch; we only un-mangle its output.
     """
+    if not isinstance(text, str):
+        raise ValueError(
+            f"LLM returned non-string response: {type(text).__name__}. "
+            "The model may have been interrupted or returned an empty payload."
+        )
     text = text.strip()
     recovery_applied: list[str] = []
 
@@ -1184,6 +1206,17 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
             raise decode_exc from None
         obj, _ = json.JSONDecoder().raw_decode(repaired)
         recovery_applied.append("json_repair")
+    # 5. Unwrap single-key wrappers: models sometimes emit
+    #    {"patch": {rationale: ..., operations: [...]}} or
+    #    {"patch_spec": {...}} instead of the bare envelope.
+    #    If the top-level dict has exactly one key whose value is a dict
+    #    containing "operations", unwrap it.
+    if isinstance(obj, dict) and len(obj) == 1:
+        (wrapper_key, inner) = next(iter(obj.items()))
+        if isinstance(inner, dict) and "operations" in inner:
+            obj = inner
+            recovery_applied.append(f"unwrapped_{wrapper_key}")
+
     return PatchSpec.model_validate(obj), recovery_applied
 
 
