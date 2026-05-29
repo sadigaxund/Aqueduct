@@ -1,0 +1,42 @@
+aqueduct_scenario: "1.0"
+
+id: broadcast_join_timeout
+description: >
+  Channel joins two tables and hints a broadcast on the large
+  table (orders). The broadcast fails because the table exceeds the
+  threshold. The agent must remove the broadcast hint or adjust
+  spark.sql.autoBroadcastJoinThreshold.
+blueprint: blueprints/09_broadcast_join_timeout.yml
+
+inject_failure:
+  module: join_enriched
+  error_message: |
+    org.apache.spark.SparkException: Could not execute broadcast in 300 secs.
+    You can increase the timeout for broadcasts via spark.sql.broadcastTimeout
+    or disable broadcast join by setting spark.sql.autoBroadcastJoinThreshold to -1.
+    Cannot broadcast the table that is larger than 8GB: 12.4 GB.
+    at org.apache.spark.sql.execution.exchange.BroadcastExchangeExec$$anon$1.run(BroadcastExchangeExec.scala:134)
+    at org.apache.spark.sql.execution.exchange.BroadcastExchangeExec$$anon$1.run(BroadcastExchangeExec.scala:128)
+    ...
+    Driver stacktrace:
+      at org.apache.spark.scheduler.DAGScheduler.failJobAndIndependentStages(DAGScheduler.scala:3083)
+    Caused by: java.util.concurrent.TimeoutException
+      at java.util.concurrent.FutureTask.get(FutureTask.java:205)
+  structured:
+    error_class: SPARK_BROADCAST_TIMEOUT
+    object_name: null
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.SparkException
+      message: "Cannot broadcast the table that is larger than 8GB: 12.4 GB"
+
+expected_patch:
+  effect:
+    module: join_enriched
+    config_contains:
+      query: ""
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["broadcast", "timeout", "hint"]

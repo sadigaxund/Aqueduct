@@ -1,0 +1,39 @@
+aqueduct_scenario: "1.0"
+
+id: small_files
+description: >
+  Pipeline writes output with default partition count (200), producing
+  200 tiny files from a small input dataset. The agent must add
+  `coalesce: 1` to reduce output to a single file.
+blueprint: blueprints/10_small_files.yml
+
+inject_failure:
+  module: out_events
+  error_message: |
+    org.apache.spark.SparkException: Job aborted due to stage failure.
+    Driver log: "Listing leaf files for 200 paths in data/output/events..."
+    Task 0 in stage 2.0 failed: ExecutorLostFailure due to metadata
+    overload on object store. 200 partitions produced 200 small files
+    (avg 12 KB each). Total listing time: 480 seconds.
+    Consider coalescing before write.
+    at org.apache.spark.scheduler.DAGScheduler.failJobAndIndependentStages(DAGScheduler.scala:3083)
+    Caused by: org.apache.hadoop.fs.FileNotFoundException: Too many
+    small files overwhelming the name node. Listing 200 files.
+  structured:
+    error_class: SPARK_EXECUTOR_LOST
+    object_name: data/output/events
+    suggested_columns: []
+    root_exception:
+      type: org.apache.spark.SparkException
+      message: "200 partitions produced 200 small files"
+
+expected_patch:
+  effect:
+    module: out_events
+    config_contains:
+      coalesce: ""
+
+assertions:
+  - patch_is_valid: true
+  - patch_applies: true
+  - root_cause_contains: ["small files", "coalesce", "partition", "write"]

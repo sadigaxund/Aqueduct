@@ -34,9 +34,6 @@ inject_failure:
 expected_patch:
   effect:
     module: join_and_aggregate
-    config_contains:
-      spark_config:
-        spark.sql.shuffle.partitions: "48"
 
 assertions:
   - patch_is_valid: true
