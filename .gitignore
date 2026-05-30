@@ -158,4 +158,7 @@ __pypackages__/
 tmp/
 patches/
 **/data/output/**
-!**/data/input/*
+!**/data/input/**
+
+.snippet_runs/
+.dev/
