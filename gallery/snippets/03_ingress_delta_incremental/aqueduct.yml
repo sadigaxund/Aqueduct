@@ -8,8 +8,10 @@ deployment:
 
 spark_config:
   # Hardcoded due to ISSUE-027: ENV vars not supported in spark_config block yet.
-  # Use io.delta:delta-spark_4.1_2.13:4.2.0 for Spark 4.1.x
-  spark.jars.packages: "io.delta:delta-spark_4.1_2.13:4.2.0"
+  # Delta ↔ Spark artifact matrix (matches populate_delta.py logic):
+  #   Spark 4.0.x → io.delta:delta-spark_4.0_2.13:4.2.0
+  #   Spark 4.1.x → io.delta:delta-spark_4.1_2.13:4.2.0
+  spark.jars.packages: "io.delta:delta-spark_4.0_2.13:4.2.0"
   spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
   spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 
