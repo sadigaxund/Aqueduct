@@ -110,19 +110,31 @@ def restore_cwd():
 
 
 @pytest.fixture(scope="session")
-def spark() -> SparkSession:
-    """Session-scoped SparkSession for fast testing, with health check."""
+def spark(tmp_path_factory) -> SparkSession:
+    """Session-scoped SparkSession for fast testing, with health check.
+
+    Warehouse, derby error log, and shuffle scratch all live under a
+    pytest-managed temp dir (``tmp_path_factory``) so they: (a) get cleaned by
+    the ``tmp_path_retention_*`` policy in pyproject.toml instead of piling up
+    in ``/tmp`` run-over-run, and (b) follow ``TMPDIR`` / ``--basetemp`` when
+    the suite is pointed off tmpfs. Previously these were hardcoded
+    ``/tmp/aqueduct_test_*`` paths that accumulated and exhausted the tmpfs
+    quota on the full suite.
+    """
     if not _spark_is_healthy():
         pytest.skip("Spark Java gateway is unstable in this environment")
 
     from aqueduct.executor.spark.session import make_spark_session
-    
+
+    scratch = tmp_path_factory.mktemp("spark_scratch")
+
     session = make_spark_session(
         blueprint_id="aqueduct-tests",
         spark_config={
-            "spark.sql.warehouse.dir": "/tmp/aqueduct_test_spark_warehouse",
+            "spark.sql.warehouse.dir": str(scratch / "warehouse"),
+            "spark.local.dir": str(scratch / "local"),
             "javax.jdo.option.ConnectionURL": "jdbc:derby:memory:aqueduct_test_metastore;create=true",
-            "derby.stream.error.file": "/tmp/aqueduct_test_derby.log"
+            "derby.stream.error.file": str(scratch / "derby.log"),
         },
         master_url=_spark_master(),
         quiet=True

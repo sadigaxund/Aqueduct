@@ -254,19 +254,34 @@ def test_chained_channels(spark: SparkSession, sample_data, tmp_path):
 
 
 def test_lineage_written_after_channel_run(spark: SparkSession, sample_data, tmp_path):
-    """lineage.db created in store_dir after a blueprint with Channel modules."""
-    out = tmp_path / "out"
+    """column_lineage written to observability.db after a blueprint with Channel modules.
+
+    Phase 38 merged lineage into the observability store. The ``execute()``
+    path calls ``write_lineage()`` against the bare ``DuckDBObservabilityStore``
+    (without a Surveyor), so we run the ``column_lineage`` DDL upfront.
+    """
+    # Run the DDL first so write_lineage() can INSERT into column_lineage
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
     store = tmp_path / "store"
+    store.mkdir(parents=True, exist_ok=True)
+    obs_store = DuckDBObservabilityStore(store / "observability.db")
+    from aqueduct.surveyor.surveyor import _DDL
+    with obs_store.connect() as cur:
+        cur.execute(_DDL)
+
+    out = tmp_path / "out"
     result = _run("bp_channel_filter.yml", {
         "input_path": str(sample_data / "orders.parquet"),
         "output_path": str(out),
     }, spark, store_dir=store)
 
     assert result.status == "success", result.module_results
-    assert (store / "lineage.db").exists(), "lineage.db must be written after channel run"
+    obs_db = store / "observability.db"
+    assert obs_db.exists(), "observability.db must be written after channel run"
 
     import duckdb
-    conn = duckdb.connect(str(store / "lineage.db"))
+    conn = duckdb.connect(str(obs_db))
     count = conn.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
     conn.close()
     assert count > 0, "At least one lineage row must be recorded"

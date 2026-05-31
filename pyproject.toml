@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqueduct-core"
-version = "1.1.1"
+version = "1.1.2"
 description = "Agentic Spark — declarative, self-healing Apache Spark blueprints."
 readme = "README.md"
 authors = [
@@ -114,16 +114,28 @@ target-version = "py311"
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
 
+# `--basetemp` pins ONE fixed temp root that pytest WIPES at the start of every
+# session and recreates fresh. This is the key anti-accumulation knob: per-test
+# `tmp_path` dirs, the Spark warehouse / scratch (routed through tmp_path_factory
+# in tests/conftest.py), and duckdb scratch all land under it and never pile up
+# run-over-run — the tmpfs-quota exhaustion (Errno 122) and the stale-lock
+# `pytest-of-<user>/pytest-N` basetemp races both go away because each run starts
+# from a clean, freshly-locked dir. WARNING: pytest deletes this dir wholesale at
+# startup — it must stay dedicated (never point it at a dir holding other files).
+# tmp_path_retention_* still trims within a session as a belt-and-braces measure.
 [tool.pytest.ini_options]
-addopts   = "--cov=aqueduct --cov-report=term-missing"
+addopts   = "--cov=aqueduct --cov-report=term-missing --basetemp=/tmp/aqueduct-pytest"
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
+tmp_path_retention_count = 1
+tmp_path_retention_policy = "failed"
 markers = [
     "unit: Fast unit tests that can run on every commit (no external services).",
     "integration: Tests that require a local Spark cluster, database, or long runtimes.",
     "slow: Tests that take > 2 seconds to complete.",
     "agent: Tests that require a live agent/LLM endpoint (Anthropic, Ollama).",
     "spark: Tests that require a SparkSession (local[1] ok).",
+    "airflow: Tests that require apache-airflow (orchestrator integration).",
 ]
 
 [tool.coverage.run]

@@ -70,8 +70,8 @@ edges: []
     def mock_patch(*a, **k):
         nonlocal patch_called
         patch_called = True
-        from aqueduct.agent.agent import AgentResult
-        return AgentResult(patch=None, confidence=0, raw_response="{}")
+        from aqueduct.agent import AgentPatchResult
+        return AgentPatchResult(patch=None, attempts=1, stop_reason="defer_to_human")
 
     with monkeypatch.context() as m:
         m.setattr("aqueduct.cli._agent_usable", lambda *a: True)

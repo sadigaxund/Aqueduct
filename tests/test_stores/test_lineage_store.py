@@ -1,4 +1,20 @@
+"""Unit tests for DuckDBLineageStore low-level operations.
+
+Phase 38 merged lineage into the observability store. The ``lineage_store``
+fixture was removed from conftest; provide a local DuckDBLineageStore.
+"""
+
 import pytest
+from pathlib import Path
+
+pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def lineage_store(tmp_path: Path):
+    from aqueduct.stores.duckdb_ import DuckDBLineageStore
+    return DuckDBLineageStore(tmp_path / "lineage.db")
+
 
 def test_lineage_store_roundtrip(lineage_store):
     with lineage_store.connect() as cur:

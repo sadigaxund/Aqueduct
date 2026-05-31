@@ -207,7 +207,7 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
             result = execute(
                 manifest, spark, run_id=run_id, store_dir=tmp_path,
                 surveyor=surveyor, depot=depot_store,
-                observability_store=obs_store, lineage_store=lin_store,
+                observability_store=obs_store,
             )
             assert result.status == "success"
         surveyor.record(result)

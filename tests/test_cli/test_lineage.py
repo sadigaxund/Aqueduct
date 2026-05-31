@@ -8,9 +8,23 @@ import pytest
 pytestmark = pytest.mark.integration
 
 from aqueduct.compiler.lineage import _extract_sql_lineage, write_lineage
+from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+
+_COLUMN_LINEAGE_DDL = """
+    CREATE TABLE IF NOT EXISTS column_lineage (
+        blueprint_id   VARCHAR NOT NULL,
+        run_id         VARCHAR NOT NULL,
+        channel_id     VARCHAR NOT NULL,
+        output_column  VARCHAR NOT NULL,
+        source_table   VARCHAR NOT NULL,
+        source_column  VARCHAR NOT NULL,
+        captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+"""
 
 
 def _mod(mid, mtype, config):
@@ -27,6 +41,12 @@ def _edge(from_id, to_id, port="main"):
     e.to_id = to_id
     e.port = port
     return e
+
+
+def _ensure_column_lineage_table(store) -> None:
+    """Run DDL so column_lineage table exists before write_lineage()."""
+    with store.connect() as cur:
+        cur.execute(_COLUMN_LINEAGE_DDL)
 
 
 # ── _extract_sql_lineage ──────────────────────────────────────────────────────
@@ -72,25 +92,29 @@ class TestExtractSqlLineage:
 
 
 class TestWriteLineage:
-    def test_creates_lineage_db(self, tmp_path):
+    def test_writes_to_observability_store(self, tmp_path):
+        obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
+        _ensure_column_lineage_table(obs_store)
         modules = (
             _mod("src", "Ingress", {}),
             _mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),
         )
         edges = (_edge("src", "ch1"),)
-        write_lineage("pipe1", "run1", modules, edges, tmp_path)
-        assert (tmp_path / "lineage.db").exists()
+        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
+        assert (tmp_path / "observability.db").exists()
 
     def test_inserts_rows_for_channel(self, tmp_path):
         import duckdb
 
+        obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
+        _ensure_column_lineage_table(obs_store)
         modules = (
             _mod("src", "Ingress", {}),
             _mod("ch1", "Channel", {"op": "sql", "query": "SELECT x, y FROM src"}),
         )
         edges = (_edge("src", "ch1"),)
-        write_lineage("pipe1", "run1", modules, edges, tmp_path)
-        conn = duckdb.connect(str(tmp_path / "lineage.db"))
+        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
+        conn = duckdb.connect(str(tmp_path / "observability.db"))
         rows = conn.execute(
             "SELECT output_column FROM column_lineage WHERE channel_id = 'ch1'"
         ).fetchall()
@@ -102,13 +126,15 @@ class TestWriteLineage:
     def test_non_channel_modules_produce_no_rows(self, tmp_path):
         import duckdb
 
+        obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
+        _ensure_column_lineage_table(obs_store)
         modules = (
             _mod("src", "Ingress", {}),
             _mod("sink", "Egress", {}),
         )
         edges = (_edge("src", "sink"),)
-        write_lineage("pipe1", "run1", modules, edges, tmp_path)
-        db = tmp_path / "lineage.db"
+        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
+        db = tmp_path / "observability.db"
         if db.exists():
             conn = duckdb.connect(str(db))
             count = conn.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
@@ -116,16 +142,23 @@ class TestWriteLineage:
             assert count == 0
 
     def test_internal_exception_does_not_propagate(self, tmp_path, monkeypatch):
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+        obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
+
         def bad_extract(*_args):
             raise RuntimeError("sqlglot exploded")
 
         monkeypatch.setattr("aqueduct.compiler.lineage._extract_sql_lineage", bad_extract)
         modules = (_mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),)
         edges = (_edge("src", "ch1"),)
-        write_lineage("pipe1", "run1", modules, edges, tmp_path)  # must not raise
+        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
 
     def test_duckdb_failure_does_not_propagate(self, tmp_path, monkeypatch):
         import duckdb as _duckdb
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+        obs_store = DuckDBObservabilityStore(tmp_path / "observability.db")
 
         def bad_connect(*_args, **_kw):
             raise RuntimeError("DB unavailable")
@@ -136,27 +169,32 @@ class TestWriteLineage:
             _mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),
         )
         edges = (_edge("src", "ch1"),)
-        write_lineage("pipe1", "run1", modules, edges, tmp_path)  # must not raise
+        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
 
 
 class TestCliLineage:
-    """Tests for `aqueduct lineage` command."""
+    """Tests for `aqueduct lineage` command.
+
+    Phase 38 merged lineage into the observability store. The CLI now reads
+    ``<store_dir>/observability.db`` instead of ``<store_dir>/lineage.db``.
+    """
 
     def _make_lineage_db(self, tmp_path: Path) -> Path:
         import duckdb
         store = tmp_path / "lineage_store"
         store.mkdir()
-        db_path = store / "lineage.db"
+        db_path = store / "observability.db"
         conn = duckdb.connect(str(db_path))
         conn.execute("""
             CREATE TABLE column_lineage (
-                blueprint_id VARCHAR, channel_id VARCHAR,
-                output_column VARCHAR, source_table VARCHAR, source_column VARCHAR
+                blueprint_id VARCHAR, run_id VARCHAR,
+                channel_id VARCHAR, output_column VARCHAR,
+                source_table VARCHAR, source_column VARCHAR
             )
         """)
         conn.execute(
-            "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?)",
-            ["pipe.a", "ch1", "amount", "orders", "total"],
+            "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?, ?)",
+            ["pipe.a", "run1", "ch1", "amount", "orders", "total"],
         )
         conn.close()
         return store

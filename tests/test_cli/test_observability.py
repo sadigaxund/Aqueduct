@@ -24,25 +24,29 @@ def obs_db(tmp_path):
     db_path = tmp_path / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE run_records (run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR, started_at TIMESTAMP, finished_at TIMESTAMP, module_results JSON)")
-    conn.execute("CREATE TABLE failure_contexts (run_id VARCHAR PRIMARY KEY, blueprint_id VARCHAR, failed_module VARCHAR, error_message VARCHAR, stack_trace VARCHAR, manifest_json JSON, provenance_json JSON, started_at TIMESTAMP, finished_at TIMESTAMP)")
+    conn.execute("CREATE TABLE failure_contexts (run_id VARCHAR PRIMARY KEY, blueprint_id VARCHAR, failed_module VARCHAR, error_message VARCHAR, stack_trace VARCHAR, manifest_json VARCHAR, provenance_json VARCHAR, started_at TIMESTAMP, finished_at TIMESTAMP)")
     conn.execute(_SIGNAL_OVERRIDES_DDL)
     conn.close()
     return db_path
 
 
 @pytest.fixture
-def lineage_db(tmp_path):
-    db_path = tmp_path / "lineage.db"
+def lineage_obs_db(tmp_path):
+    """Phase 38: lineage merged into observability. CLI reads from observability.db."""
+    store_dir = tmp_path / "obs_store"
+    store_dir.mkdir()
+    db_path = store_dir / "observability.db"
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE column_lineage (blueprint_id VARCHAR, run_id VARCHAR, channel_id VARCHAR, output_column VARCHAR, source_table VARCHAR, source_column VARCHAR)")
+    conn.execute("INSERT INTO column_lineage VALUES ('bp1', 'run1', 'chan1', 'col1', 'src1', 'scol1')")
     conn.close()
-    return db_path
+    return store_dir
 
 
 @pytest.fixture
-def aq_config(tmp_path, obs_db, lineage_db):
+def aq_config(tmp_path, obs_db):
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  observability: {{ path: {obs_db} }}\n  lineage: {{ path: {lineage_db} }}\n")
+    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  observability: {{ path: {obs_db} }}\n")
     return config_path
 
 
@@ -57,12 +61,10 @@ class TestReportCommand:
 
 
 class TestLineageCommand:
-    def test_lineage_output(self, cli_runner, lineage_db, aq_config):
-        conn = duckdb.connect(str(lineage_db))
-        conn.execute("INSERT INTO column_lineage VALUES ('bp1', 'run1', 'chan1', 'col1', 'src1', 'scol1')")
-        conn.close()
-        result = cli_runner.invoke(cli, ["lineage", "bp1", "--config", str(aq_config)])
-        assert result.exit_code == 0
+    def test_lineage_output(self, cli_runner, lineage_obs_db, aq_config):
+        """CLI reads from <store_dir>/observability.db (Phase 38)."""
+        result = cli_runner.invoke(cli, ["lineage", "bp1", "--store-dir", str(lineage_obs_db)])
+        assert result.exit_code == 0, result.output
         assert "chan1" in result.output
 
 

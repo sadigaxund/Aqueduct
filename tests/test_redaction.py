@@ -184,7 +184,12 @@ def test_cli_redaction_hook_logging(caplog):
 # ── 4. Observability and Surveyor ────────────────────────────────────────────
 
 def test_observability_redaction_surveyor(tmp_path):
-    """observability failure_contexts.stack_trace row containing a registered secret stores [REDACTED] after surveyor.record()."""
+    """observability failure_contexts.stack_trace row containing a registered secret stores [REDACTED] after surveyor.record().
+
+    Phase 39 externalizes stack_trace/manifest_json/provenance_json as blob paths
+    (``blobs/<run_id>/*.json.zst``) when store_dir is set.  Check the blob content
+    for redaction; error_message stays inline.
+    """
     secret = "hunter2longenough"
     redaction.register(secret)
 
@@ -229,9 +234,13 @@ def test_observability_redaction_surveyor(tmp_path):
     conn.close()
 
     assert res is not None
-    err_msg, stack, manifest_json = res
+    err_msg, stack_path, manifest_path = res
+    # error_message is stored inline — check redaction directly
     assert "[REDACTED]" in err_msg
     assert secret not in err_msg
+    # stack_trace is a blob path (Phase 39) — materialize it
+    from aqueduct.surveyor.blob_store import materialize
+    stack = materialize(stack_path, tmp_path)
     assert "[REDACTED]" in stack
     assert secret not in stack
 
