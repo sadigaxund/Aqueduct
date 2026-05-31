@@ -10,16 +10,32 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
-### Added
-- **Phase 37 — numeric field bounds on all config/schema models.** Every `int`/`float` field in `parser/schema.py` and `config.py` now carries pydantic `Field(ge=…)` / `Field(gt=…)` / `Field(le=…)` bounds. Malformed blueprints (`max_attempts: 0`, `confidence_threshold: 1.5`, `max_sample_rows: -1`) fail `aqueduct validate` with one error per bad field. BudgetConfig fields already validated via `__post_init__` in `agent/budget.py`.
+### Fixed
+- **Lineage skipped on the surveyor-less `execute()` path.** The post-run lineage write in `executor/spark/executor.py` passed the raw `observability_store` (often `None` when only `store_dir` is supplied), so `write_lineage()` silently no-op'd and no `column_lineage` rows were recorded. It now resolves the store via `_resolve_observability_store(store_dir, observability_store)`, matching every sibling metric writer. Real `aqueduct run` was unaffected (a Surveyor supplies the store); the gap only hit programmatic `execute(..., store_dir=...)` callers.
 
 ### Changed
-- **Phase 38 — lineage store merged into observability.** `column_lineage` now lives in `observability.db` instead of a separate `lineage.db`. The `stores.lineage` config block is inert — setting a different path emits a `DeprecationWarning`. `write_lineage()` writes through the observability store; no more `DuckDBLineageStore` creation. Zero impact on Spark execution (lineage extraction is driver-side, compile-time). `aqueduct lineage` reads from `observability.db`.
-- **Phase 39 — blob externalisation for fat observability columns.** `manifest_json`, `provenance_json`, and `stack_trace` are now compressed with Zstandard and stored as `.json.zst` blob files under `.aqueduct/observability/<bp>/blobs/<run_id>/`. DuckDB rows store only the relative path — row width drops ~10×. Existing inline data continues to work transparently via `blob_store.materialize()`. New dependency: `zstandard>=0.22.0`.
+- **`aqueduct/doctor.py` split into the `aqueduct/doctor/` package.** Leaf connectivity checks (config, depot, observability, webhook, agent, secrets, aqtest/aqscenario) moved to `doctor/checks_io.py`; the spark / network / blueprint-source checks and `run_doctor` stay in `doctor/__init__.py` (they call each other by bare name and are monkeypatched via `aqueduct.doctor.<name>`); `CheckResult`/`_ms` live in `doctor/base.py`. All public names re-export from `__init__` — `from aqueduct.doctor import …` and `aqueduct.doctor.<name>` patch targets are unchanged. No behaviour change.
+
+## [1.1.2] - 2026-05-30
+
+### Added
+- **Numeric field bounds on all config/schema models.** Every `int`/`float` field in `parser/schema.py` and `config.py` now carries pydantic `Field(ge=…)` / `Field(gt=…)` / `Field(le=…)` bounds. Malformed blueprints (`max_attempts: 0`, `confidence_threshold: 1.5`, `max_sample_rows: -1`) fail `aqueduct validate` with one error per bad field.
+- **`scripts/run_snippets.sh`** — automated gallery snippet runner. Copies all snippets to an isolated workspace, creates a shared Python 3.12 venv (reused across runs), and executes each non-live snippet through its full lifecycle: `requirements.txt` install → `populate*.py` → `aqueduct run` → `inspect_results.py`. Prints inline pass/fail per snippet and a final count. Skips snippets requiring live external services (S3, JDBC/Postgres).
+- **`gallery/snippets/20_arcade_reusable/populate_data.py`** — creates `data/input/sales.csv` so the Arcade snippet runs without manual setup.
+- **`gallery/snippets/03_ingress_delta_incremental/requirements.txt`** — pins compatible `pyspark` and `delta-spark` versions with a Delta ↔ Spark artifact matrix comment.
+
+### Changed
+- **Lineage store merged into observability.** `column_lineage` now lives in `observability.db` instead of a separate `lineage.db`. The `stores.lineage` config block is inert — setting a different path emits a `DeprecationWarning`. `write_lineage()` writes through the observability store. `aqueduct lineage` reads from `observability.db`.
+- **Blob externalisation for fat observability columns.** `manifest_json`, `provenance_json`, and `stack_trace` are now Zstandard-compressed `.json.zst` blobs stored under `.aqueduct/observability/<bp>/blobs/<run_id>/`. DuckDB rows store only the relative path — row width drops ~10×. Existing inline data continues to work transparently via `blob_store.materialize()`. New dependency: `zstandard>=0.22.0`.
+- **Delta artifact for snippet 03** corrected to `delta-spark_4.0_2.13:4.2.0` (was `4.1` artifact, incompatible with PySpark 4.0).
 
 ### Fixed
-- **Guard null LLM content in both providers.** `_call_anthropic` and `_call_openai_compat` now raise `ValueError` on null/empty content blocks instead of crashing downstream with `'NoneType' object has no attribute 'strip'`. The error is caught by the unified reprompt loop and recorded as a parse failure.
-- **Unwrap single-key PatchSpec wrappers.** Models sometimes emit `{"patch": {rationale, operations}}` instead of the bare envelope. `_parse_patch_spec` now mechanically unwraps single-key dict wrappers before validation, saving a reprompt round for strong models that get the content right but the nesting wrong.
+- **Guard null LLM content in both providers.** `_call_anthropic` and `_call_openai_compat` now raise `ValueError` on null/empty content blocks instead of crashing with `'NoneType' object has no attribute 'strip'`.
+- **Unwrap single-key PatchSpec wrappers.** `_parse_patch_spec` unwraps `{"patch": {…}}` envelopes before validation, saving a reprompt round for models that get content right but nesting wrong.
+- **`test_heal_spend_cap_skipped_when_none`** — mock returned stale `AgentResult` from non-existent `aqueduct.agent.agent` module; fixed to return `AgentPatchResult` from `aqueduct.agent`.
+- **`test_run_patch_gates_inline_preflight_and_sample`** — `assert_called_with` included phantom `lineage_store` arg that `run_sandbox_gate` never accepted; removed.
+- **`json_repair` ImportError in reprompt loop.** On `json.JSONDecodeError`, the `except ImportError: raise` re-raised the wrong exception type; now re-raises the original `JSONDecodeError`.
+- **CI quick-gate** now installs `[llm,redis]` extras so `json_repair` and Redis-backed config tests are available without integration markers.
 
 ## [1.1.1] - 2026-05-29
 

@@ -229,6 +229,7 @@ def run_sandbox_gate(
     spark_session: Any = None,
     observability_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
+    sandbox_master_url: str | None = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -344,6 +345,7 @@ def run_sandbox_gate(
                 spark_session = make_spark_session(
                     f"aqueduct.sandbox.{patch_id}",
                     sandboxed_manifest.spark_config,
+                    master_url=sandbox_master_url or "local[*]",
                     quiet=True,
                 )
             except Exception as exc:

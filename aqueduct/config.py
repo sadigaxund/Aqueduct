@@ -401,6 +401,16 @@ class AgentConnectionConfig(BaseModel):
             "warn-only across all healing modes, preserving current behaviour."
         ),
     )
+    sandbox_master_url: str | None = Field(
+        default=None,
+        description=(
+            "Spark master URL for sandbox replay (patch preview). When None "
+            "(default), sandbox uses the default 'local[*]' — 1000 sampled rows "
+            "fit in any driver's memory. Set to 'spark://host:7077' or 'yarn' "
+            "to run sandbox on a cluster when your blueprint is too large for "
+            "a single driver node."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):
