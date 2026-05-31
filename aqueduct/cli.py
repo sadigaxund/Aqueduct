@@ -317,6 +317,7 @@ def _run_patch_gates_inline(
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
             explain_capture=explain_after,
+            sandbox_master_url=None,  # TODO: thread resolved_sandbox_master_url when cfg is accessible
         )
     try:
         surveyor.record_patch_simulation(
@@ -1544,6 +1545,7 @@ def run(
         resolved_agent_max_reprompts = bp_agent.max_reprompts or eng.max_reprompts
         resolved_agent_engine_prompt_context = eng.prompt_context
         resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
+        resolved_sandbox_master_url = cfg.agent.sandbox_master_url
 
         # ── Multi-patch disclaimer ────────────────────────────────────────────────
         approval_mode = manifest.agent.approval_mode
@@ -2475,6 +2477,7 @@ def patch_preview(
             sample_rows=int(sample_rows),
             observability_store=bundle.observability,
             explain_capture=explain_after,
+            sandbox_master_url=cfg.agent.sandbox_master_url,
         )
         # Explain gate — baseline read directly from the observability store.
         try:

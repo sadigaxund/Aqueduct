@@ -1485,7 +1485,10 @@ def execute(
     if store_dir is not None:
         try:
             from aqueduct.compiler.lineage import write_lineage
-            write_lineage(manifest.blueprint_id, run_id, manifest.modules, manifest.edges, observability_store=observability_store)
+            write_lineage(
+                manifest.blueprint_id, run_id, manifest.modules, manifest.edges,
+                observability_store=_resolve_observability_store(store_dir, observability_store),
+            )
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
 
