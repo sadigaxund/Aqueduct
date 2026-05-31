@@ -36,20 +36,20 @@ def obs_store(request, tmp_path):
     "duckdb",
     pytest.param("postgres", marks=pytest.mark.integration)
 ])
-def lineage_store(request, tmp_path):
+def observability_store(request, tmp_path):
     backend = request.param
     if backend == "duckdb":
-        from aqueduct.stores.duckdb_ import DuckDBLineageStore
-        store_path = tmp_path / "lineage.db"
-        yield DuckDBLineageStore(store_path)
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        store_path = tmp_path / "observability.db"
+        yield DuckDBObservabilityStore(store_path)
     elif backend == "postgres":
         if not _pg_is_reachable():
             pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
             
         dsn = _pg_dsn()
-        from aqueduct.stores.postgres import PostgresLineageStore
-        schema_name = f"lineage_test_{uuid.uuid4().hex[:8]}"
-        store = PostgresLineageStore(dsn)
+        from aqueduct.stores.postgres import PostgresObservabilityStore
+        schema_name = f"obs_test_{uuid.uuid4().hex[:8]}"
+        store = PostgresObservabilityStore(dsn)
         store._SCHEMA = schema_name
         yield store
         # Teardown

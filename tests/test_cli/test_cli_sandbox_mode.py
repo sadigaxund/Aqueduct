@@ -203,10 +203,10 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             failed_module="m1",
             sample_rows=0,
             observability_store=mock_bundle.observability,
-            lineage_store=mock_bundle.lineage,
-            explain_capture={}
+            explain_capture={},
+            sandbox_master_url=None
         )
-        
+
         # Test sample -> forwards 100
         mock_run_sandbox.reset_mock()
         _run_patch_gates_inline(
@@ -227,6 +227,121 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             failed_module="m1",
             sample_rows=100,
             observability_store=mock_bundle.observability,
-            lineage_store=mock_bundle.lineage,
-            explain_capture={}
+            explain_capture={},
+            sandbox_master_url=None
         )
+
+
+@patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.executor.get_executor")
+def test_multi_patch_blocks_without_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
+    """max_patches > 1 without danger.allow_multi_patch -> exits 1 with helpful message."""
+    bp = tmp_path / "bp.yml"
+    bp.write_text(
+        "aqueduct: '1.0'\n"
+        "id: test_bp\n"
+        "name: Test BP\n"
+        "agent:\n"
+        "  approval_mode: auto\n"
+        "  max_patches: 2\n"
+        "modules:\n"
+        "  - id: src\n"
+        "    type: Ingress\n"
+        "    label: Src\n"
+        "    config: {format: csv, path: /nonexistent/data.csv}\n"
+        "edges: []\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text(
+        "aqueduct_config: \"1.0\"\n"
+        "danger:\n"
+        "  allow_multi_patch: false\n"
+        "  allow_full_preflight: false\n"
+        "  allow_skip_sandbox: false\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
+    assert result.exit_code == 1
+    assert "requires danger.allow_multi_patch: true" in result.output
+
+
+@patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.executor.get_executor")
+def test_multi_patch_allowed_with_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
+    """max_patches > 1 WITH danger.allow_multi_patch -> proceeds (executor mock handles it)."""
+    bp = tmp_path / "bp.yml"
+    bp.write_text(
+        "aqueduct: '1.0'\n"
+        "id: test_bp\n"
+        "name: Test BP\n"
+        "agent:\n"
+        "  approval_mode: auto\n"
+        "  max_patches: 2\n"
+        "modules:\n"
+        "  - id: src\n"
+        "    type: Ingress\n"
+        "    label: Src\n"
+        "    config: {format: csv, path: /nonexistent/data.csv}\n"
+        "edges: []\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text(
+        "aqueduct_config: \"1.0\"\n"
+        "danger:\n"
+        "  allow_multi_patch: true\n"
+        "  allow_full_preflight: false\n"
+        "  allow_skip_sandbox: false\n",
+        encoding="utf-8",
+    )
+
+    mock_exec = MagicMock()
+    mock_exec.return_value = MagicMock(status="success")
+    mock_get_exec.return_value = mock_exec
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", str(bp), "--config", str(cfg)])
+    # Should proceed (not exit 1)
+    assert result.exit_code == 0
+
+
+@patch("aqueduct.surveyor.surveyor.Surveyor")
+@patch("aqueduct.executor.get_executor")
+def test_multi_patch_cli_flag_overrides_danger_gate(mock_get_exec, mock_surveyor_cls, tmp_path):
+    """--allow-multi-patch flag overrides danger.allow_multi_patch=false."""
+    bp = tmp_path / "bp.yml"
+    bp.write_text(
+        "aqueduct: '1.0'\n"
+        "id: test_bp\n"
+        "name: Test BP\n"
+        "agent:\n"
+        "  approval_mode: auto\n"
+        "  max_patches: 2\n"
+        "modules:\n"
+        "  - id: src\n"
+        "    type: Ingress\n"
+        "    label: Src\n"
+        "    config: {format: csv, path: /nonexistent/data.csv}\n"
+        "edges: []\n",
+        encoding="utf-8",
+    )
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text(
+        "aqueduct_config: \"1.0\"\n"
+        "danger:\n"
+        "  allow_multi_patch: false\n",
+        encoding="utf-8",
+    )
+
+    mock_exec = MagicMock()
+    mock_exec.return_value = MagicMock(status="success")
+    mock_get_exec.return_value = mock_exec
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli, ["run", str(bp), "--config", str(cfg), "--allow-multi-patch"]
+    )
+    assert result.exit_code == 0

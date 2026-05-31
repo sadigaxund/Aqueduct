@@ -176,6 +176,7 @@ def test_build_provenance_section_context_block_lists_all_keys():
 # ── Surveyor builds provenance_json via record() ──────────────────────────────
 
 from aqueduct.executor.models import ExecutionResult, ModuleResult
+from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
 
 
 def _make_execution_result(blueprint_id="test.bp", status="error", run_id="r1", failed_module="m1", error="err"):
@@ -200,7 +201,11 @@ def _make_manifest(blueprint_id="test.bp", provenance_map=None):
 
 
 def test_surveyor_no_provenance_map_sets_provenance_json_none(tmp_path):
-    """Manifest has no provenance_map → failure_ctx.provenance_json is None."""
+    """Manifest has no provenance_map → failure_ctx.provenance_json is None.
+
+    Phase 39 externalises provenance_json as a blob path when store_dir is set;
+    materialize to check the actual content.
+    """
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = _make_manifest(provenance_map=None)
@@ -208,13 +213,20 @@ def test_surveyor_no_provenance_map_sets_provenance_json_none(tmp_path):
     surveyor.start("r1")
     ctx = surveyor.record(_make_execution_result())
     assert ctx is not None
-    assert ctx.provenance_json is None
+    # When provenance_map is None, provenance_json is an empty string (stayed
+    # inline since Phase 39 blob externalisation skips empty values). Treat as falsy.
+    assert not ctx.provenance_json
 
 
 def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
-    """Manifest has provenance_map → failure_ctx.provenance_json is valid JSON."""
+    """Manifest has provenance_map → failure_ctx.provenance_json is valid JSON
+    (materialised from blob path where applicable).
+
+    Phase 39 externalises provenance_json as a blob path when store_dir is set;
+    materialize to read the actual content.
+    """
     from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
+    from aqueduct.surveyor.blob_store import materialize
 
     pmap = ProvenanceMap(
         blueprint_id="test.bp",
@@ -236,14 +248,20 @@ def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
     ctx = surveyor.record(_make_execution_result())
     assert ctx is not None
     assert ctx.provenance_json is not None
-    prov_data = json.loads(ctx.provenance_json)
+    raw = materialize(ctx.provenance_json, tmp_path)
+    prov_data = json.loads(raw)
     assert isinstance(prov_data, dict)
     assert prov_data.get("blueprint_id") == "test.bp"
 
 
 def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_path):
-    """provenance slice contains failed module + full context block (not all modules)."""
+    """provenance slice contains failed module + full context block (not all modules).
+
+    Phase 39 externalises provenance_json as a blob path when store_dir is set;
+    materialize to read the actual content.
+    """
     from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.surveyor.blob_store import materialize
     from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
 
     pmap = ProvenanceMap(
@@ -269,7 +287,8 @@ def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_p
     ctx = surveyor.record(_make_execution_result(failed_module="m1"))
     assert ctx is not None
     assert ctx.provenance_json is not None
-    prov = json.loads(ctx.provenance_json)
+    raw = materialize(ctx.provenance_json, tmp_path)
+    prov = json.loads(raw)
     # Only the failed module should be in failed_module key
     assert prov.get("failed_module") is not None
     assert prov["failed_module"]["module_id"] == "m1"

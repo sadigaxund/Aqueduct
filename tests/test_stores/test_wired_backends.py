@@ -37,8 +37,18 @@ def test_depot_store_watermark_roundtrip(depot_store):
 
 # ── 1839: write_lineage() writes rows into column_lineage ─────────────────────
 
-def test_write_lineage_into_configured_store(lineage_store, tmp_path):
-    """write_lineage(..., lineage_store=...) inserts column_lineage rows."""
+def test_write_lineage_into_configured_store(observability_store, tmp_path):
+    """write_lineage(..., observability_store=...) inserts column_lineage rows.
+
+    Phase 38 merged lineage into the observability store. The ``column_lineage``
+    DDL must exist before ``write_lineage()`` can INSERT.
+    """
+    # Phase 38: column_lineage lives in observability. Run the surveyor DDL
+    # to ensure the table exists before write_lineage() attempts to INSERT.
+    from aqueduct.surveyor.surveyor import _DDL
+    with observability_store.connect() as cur:
+        cur.execute(_DDL)
+
     from aqueduct.compiler.lineage import write_lineage
 
     modules = (
@@ -52,10 +62,10 @@ def test_write_lineage_into_configured_store(lineage_store, tmp_path):
     edges = (Edge(from_id="src", to_id="ch", port="main"),)
 
     run_id = uuid.uuid4().hex
-    write_lineage("bp_lineage", run_id, modules, edges, tmp_path,
-                  lineage_store=lineage_store)
+    write_lineage("bp_lineage", run_id, modules, edges,
+                  observability_store=observability_store)
 
-    with lineage_store.connect() as cur:
+    with observability_store.connect() as cur:
         rows = cur.execute(
             "SELECT channel_id, output_column, source_column "
             "FROM column_lineage WHERE run_id = ?",
@@ -71,14 +81,14 @@ def test_write_lineage_into_configured_store(lineage_store, tmp_path):
 @pytest.mark.spark
 @pytest.mark.integration
 def test_execute_persists_into_postgres(spark, tmp_path):
-    """execute(..., observability_store=pg, lineage_store=pg) persists rows."""
+    """execute(..., observability_store=pg) persists rows."""
     from tests.conftest import _pg_is_reachable, _pg_dsn
     if not _pg_is_reachable():
         pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
 
     import psycopg2
     from aqueduct.stores.postgres import (
-        PostgresObservabilityStore, PostgresLineageStore, PostgresDepotStore,
+        PostgresObservabilityStore, PostgresDepotStore,
     )
     from aqueduct.stores.base import StoreBundle
     from aqueduct.surveyor.surveyor import Surveyor
@@ -89,11 +99,8 @@ def test_execute_persists_into_postgres(spark, tmp_path):
 
     dsn = _pg_dsn()
     obs_schema = f"obs_e2e_{uuid.uuid4().hex[:8]}"
-    lin_schema = f"lin_e2e_{uuid.uuid4().hex[:8]}"
     obs_store = PostgresObservabilityStore(dsn)
     obs_store._SCHEMA = obs_schema
-    lin_store = PostgresLineageStore(dsn)
-    lin_store._SCHEMA = lin_schema
     depot_store = PostgresDepotStore(dsn)
     depot_store._SCHEMA = obs_schema
 
@@ -123,7 +130,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
         ),
     )
 
-    bundle = StoreBundle(observability=obs_store, lineage=lin_store, depot=depot_store)
+    bundle = StoreBundle(observability=obs_store, lineage=None, depot=depot_store)
     surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
@@ -132,7 +139,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
         result = execute(
             manifest, spark, run_id=run_id, store_dir=tmp_path,
             surveyor=surveyor, depot=depot_store,
-            observability_store=obs_store, lineage_store=lin_store,
+            observability_store=obs_store,
         )
         assert result.status == "success"
         surveyor.record(result)
@@ -145,7 +152,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
             assert cur.fetchone()[0] >= 1
             cur.execute(f'SELECT COUNT(*) FROM "{obs_schema}".module_metrics')
             assert cur.fetchone()[0] >= 1
-            cur.execute(f'SELECT COUNT(*) FROM "{lin_schema}".column_lineage')
+            cur.execute(f'SELECT COUNT(*) FROM "{obs_schema}".column_lineage')
             assert cur.fetchone()[0] >= 1
             cur.execute(f'SELECT COUNT(*) FROM "{obs_schema}".probe_signals')
             assert cur.fetchone()[0] >= 1
@@ -155,7 +162,6 @@ def test_execute_persists_into_postgres(spark, tmp_path):
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS "{obs_schema}" CASCADE')
-            cur.execute(f'DROP SCHEMA IF EXISTS "{lin_schema}" CASCADE')
         conn.close()
 
 

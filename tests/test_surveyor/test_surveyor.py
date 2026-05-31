@@ -505,8 +505,8 @@ class TestPhase35SurveyorMigration:
                 failed_module  VARCHAR NOT NULL,
                 error_message  VARCHAR NOT NULL,
                 stack_trace    VARCHAR,
-                manifest_json  JSON,
-                provenance_json JSON,
+                manifest_json  VARCHAR,
+                provenance_json VARCHAR,
                 started_at     TIMESTAMPTZ NOT NULL,
                 finished_at    TIMESTAMPTZ NOT NULL
             )
