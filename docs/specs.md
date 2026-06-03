@@ -99,7 +99,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | Store | Description |
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
-| **Lineage Store** | Column lineage graphs and Flow Reports. Per-pipeline routing at `.aqueduct/observability/<blueprint_id>/lineage.db` (1.1.0+). |
+| **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is inert. |
 | **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. |
 
 ## **3.3 Component Interaction Flow**
@@ -481,7 +481,7 @@ Three UDF execution models: Python (row-at-a-time via JVM bridge), Pandas (vecto
 
 See the dedicated **[Observability Guide](observability_guide.md)** for:
 
-- Full schema reference for `observability.db`, `lineage.db`, and `benchmark.duckdb`
+- Full schema reference for `observability.db` and `benchmark.duckdb`
 - Diagnostic query cookbook (run post-mortem, heal-loop forensics, cost analysis)
 - Probe signal reference and cost model
 - Store backend configuration (DuckDB / Postgres / Redis)
@@ -503,7 +503,7 @@ All observability is governed by one rule: **no Spark actions may be added to th
 
 ## **7.2 Structural Lineage**
 
-Structural lineage is computed at parse time by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in `lineage.db` under the `column_lineage` table. Used by:
+Structural lineage is computed at parse time by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in the `column_lineage` table inside `observability.db`. Used by:
 
 - **Lineage gate:** Before a patch is applied, the lineage of the patched Blueprint is compared to the original. Lost columns or broken references are flagged.
 - **LLM context:** The structural lineage for the failed module's neighbourhood is included in the FailureContext, allowing the agent to trace column origins without accessing the original Spark session.
