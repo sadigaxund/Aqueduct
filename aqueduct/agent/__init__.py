@@ -28,6 +28,7 @@ import re
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1228,16 +1229,25 @@ def build_prompt(
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     guardrails: Any = None,
+    last_apply_error: str | None = None,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
     Useful for debugging, prompt tuning, or cost estimation.
 
+    Args:
+        last_apply_error: When set, includes the "previous patch failed" section
+            in the system prompt so the debug view matches what the model sees
+            on a re-prompt turn.
+
     Returns:
         {"system": <system prompt>, "user": <user prompt>}
     """
     return {
-        "system": _build_system_prompt(patches_dir, engine_prompt_context, blueprint_prompt_context),
+        "system": _build_system_prompt(
+            patches_dir, engine_prompt_context, blueprint_prompt_context,
+            last_apply_error=last_apply_error,
+        ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }
 
@@ -1301,8 +1311,8 @@ def generate_agent_patch(
     last_apply_error: str | None = None,
     guardrails: Any = None,
     budget: BudgetConfig | None = None,
-    apply_callback: Any = None,   # Callable[[PatchSpec], tuple[bool, str|None, str|None, str|None]] | None
-    on_attempt: Any = None,        # Callable[[AttemptRecord], None] | None
+    apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
+    on_attempt: Callable[[AttemptRecord], None] | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -1648,7 +1658,8 @@ def stage_patch_for_human(
                 },
             )
         except Exception:
-            pass  # webhook errors must never block staging
+            logger.debug("Webhook fire failed", exc_info=True)
+            # webhook errors must never block staging
 
 
 def archive_patch(
