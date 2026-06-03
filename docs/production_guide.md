@@ -117,17 +117,17 @@ In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains 
 | Spark standalone | Permanent (driver host) | None |
 | Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
 
-Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point all three at a persistent mount:
+Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point both stores at a persistent mount:
 
 ```yaml
 stores:
   observability:
     path: "/mnt/aqueduct-state/observability.db"
-  lineage:
-    path: "/mnt/aqueduct-state/lineage.db"
   depot:
     path: "/mnt/aqueduct-state/depot.db"
 ```
+
+> The `stores.lineage` config block is **inert** as of 1.1.2 — `column_lineage` lives in `observability.db`. Setting it emits a `DeprecationWarning` and is ignored.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 

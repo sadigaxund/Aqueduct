@@ -18,8 +18,10 @@ or DuckDB file locks:
       observability.db     ← run_records, heal_attempts, healing_outcomes,
                              failure_contexts, probe_signals, module_metrics,
                              maintenance_metrics, patch_simulation,
-                             signal_overrides, explain_snapshot
-      lineage.db           ← column_lineage
+                             signal_overrides, explain_snapshot,
+                             column_lineage
+      blobs/               ← Zstandard-compressed manifest_json, provenance_json,
+                             stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
       snapshots/           ← schema_snapshot JSON files (one per probe per run)
       checkpoints/         ← Parquet checkpoints written by --resume
       watermarks/          ← incremental-Channel watermark sidecars
@@ -41,12 +43,13 @@ Each store is independently pluggable in `aqueduct.yml`:
 
 | Store           | Backends                       | Notes |
 |-----------------|--------------------------------|-------|
-| `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. |
-| `lineage`       | `duckdb` (default) \| `postgres` | Relational. |
+| `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
+| `lineage`       | _(inert — merged into `observability`)_ | Setting `stores.lineage.path` emits a `DeprecationWarning` and is ignored. |
 | `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. |
 
-With `postgres`, tables live in named schemas (`observability`, `lineage`,
-`depot`). With `redis`, depot keys live directly in the configured Redis DB.
+With `postgres`, tables live in named schemas (`observability`, `depot`).
+With `redis`, depot keys live directly in the configured Redis DB.
+Column lineage tables live inside the `observability` schema.
 DuckDB files are stable and safe to query with any DuckDB CLI / library.
 
 ---
@@ -184,9 +187,14 @@ Delta `OPTIMIZE` / `VACUUM` timings (`optimize_ms`, `vacuum_ms`) per module.
 | `payload`     | JSON | Signal-type-specific data |
 | `captured_at` | TIMESTAMPTZ | |
 
-### `lineage.db`
+### Blob externalisation (1.1.2+)
 
-#### `column_lineage`
+Large payloads (`manifest_json`, `provenance_json`, `stack_trace`) are stored as
+Zstandard-compressed `.json.zst` files under `.aqueduct/observability/<bp>/blobs/<run_id>/`
+instead of inline in the DuckDB row. The DB column stores only the relative blob
+path. `blob_store.materialize()` transparently resolves blob paths to content on read.
+
+### `column_lineage`
 
 | Column          | Type    | Notes |
 |-----------------|---------|-------|
