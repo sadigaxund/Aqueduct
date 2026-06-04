@@ -54,7 +54,7 @@ def test_to_dict_provenance_json_set():
 
 # ── _build_provenance_section ──────────────────────────────────────────────────
 
-from aqueduct.agent import _build_provenance_section
+from aqueduct.agent.prompts import _build_provenance_section
 
 
 def test_build_provenance_section_none_returns_empty():

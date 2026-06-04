@@ -11,15 +11,21 @@ from pydantic import ValidationError
 
 pytestmark = pytest.mark.unit
 
+# Private names moved to sub-modules during the agent/ split.
+# Exported public API stays under aqueduct.agent.
 from aqueduct.agent import (
     AgentPatchResult,
+    generate_agent_patch,
+    resolve_budget,
+)
+from aqueduct.agent.parse import (
     _detect_structural_error,
     _format_reprompt_for_next_turn,
+)
+from aqueduct.agent.prompts import (
     _PATCH_SKELETON,
     _REPROMPT_TEMPLATE,
     _REPROMPT_TEMPLATE_ESCALATED,
-    generate_agent_patch,
-    resolve_budget,
 )
 from aqueduct.agent.budget import BudgetConfig
 from aqueduct.config import AgentBudgetConfig, AgentConnectionConfig
@@ -145,7 +151,7 @@ class TestAgentBudgetConfig:
 class TestGenerateAgentPatch:
     @pytest.fixture
     def mock_call(self):
-        with patch("aqueduct.agent._call_agent") as m:
+        with patch("aqueduct.agent.loop._call_agent") as m:
             yield m
 
     @pytest.fixture
@@ -288,7 +294,7 @@ class TestCallProviders:
         })
         mock_client_cls.return_value = mock_client
 
-        from aqueduct.agent import _call_anthropic
+        from aqueduct.agent.providers import _call_anthropic
         text, tin, tout = _call_anthropic([], "model", 100, "system")
         assert text == "hello"
         assert tin == 10
@@ -300,7 +306,7 @@ class TestCallProviders:
         mock_client, _ = self._mock_client({"content": [{"text": "hello"}]})
         mock_client_cls.return_value = mock_client
 
-        from aqueduct.agent import _call_anthropic
+        from aqueduct.agent.providers import _call_anthropic
         _call_anthropic([], "model", 100, "system", temperature_override=0.8)
 
         kwargs = mock_client.post.call_args[1]
@@ -314,7 +320,7 @@ class TestCallProviders:
         })
         mock_client_cls.return_value = mock_client
 
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.providers import _call_openai_compat
         text, tin, tout = _call_openai_compat([], "model", 100, "http://test", "system")
         assert text == "hello"
         assert tin == 15
@@ -327,7 +333,7 @@ class TestCallProviders:
         )
         mock_client_cls.return_value = mock_client
 
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.providers import _call_openai_compat
         _call_openai_compat(
             [], "model", 100, "http://test", "system",
             provider_options={"ollama_temperature": 0.1},
@@ -379,7 +385,7 @@ class TestGenerateAgentPatchPhase34Extra:
         # the other axes. Verify by: (a) solving on attempt 1 — confirms the
         # synthesized budget did not abort prematurely; (b) inspecting that
         # the stop reason is "solved" and only 1 LLM call was made.
-        with patch("aqueduct.agent._call_agent") as mock_call:
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
             res = generate_agent_patch(
                 fctx, "model", tmp_path, budget=None, max_reprompts=4
@@ -395,7 +401,7 @@ class TestGenerateAgentPatchPhase34Extra:
             cb_calls += 1
             return (True, None, None, None)
 
-        with patch("aqueduct.agent._call_agent") as mock_call:
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
             res = generate_agent_patch(
                 fctx, "model", tmp_path, apply_callback=_cb, max_reprompts=3
@@ -407,7 +413,7 @@ class TestGenerateAgentPatchPhase34Extra:
 
     def test_token_totals_accumulate_across_attempts(self, fctx, tmp_path):
         invalid_json = '{"patch_id": "p"}'
-        with patch("aqueduct.agent._call_agent") as mock_call:
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.side_effect = [
                 (invalid_json, 100, 50),
                 (_VALID_PATCH_JSON, 80, 60),
@@ -450,7 +456,7 @@ class TestBuildRootCauseSection:
     """Coverage for aqueduct.agent._build_root_cause_section (Phase 35)."""
 
     def test_no_structured_fields_renders_stack_trace(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(stack_trace="Traceback line\n  at foo.bar(Foo.java:42)")
         out = _build_root_cause_section(ctx)
@@ -459,7 +465,7 @@ class TestBuildRootCauseSection:
         assert "at foo.bar(Foo.java:42)" in out
 
     def test_no_structured_and_no_stack_trace_renders_placeholder(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(stack_trace=None)
         out = _build_root_cause_section(ctx)
@@ -467,7 +473,7 @@ class TestBuildRootCauseSection:
         assert "(no stack trace)" in out
 
     def test_error_class_only_omits_stack_trace(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(
             stack_trace="should-not-appear",
@@ -480,14 +486,14 @@ class TestBuildRootCauseSection:
         assert "## Stack trace" not in out
 
     def test_suggested_columns_rendered_as_backticked_list(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(suggested_columns=("a", "b"))
         out = _build_root_cause_section(ctx)
         assert "- **Actual columns available**: `a`, `b`" in out
 
     def test_root_exception_renders_type_and_message(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(root_exception={"type": "ValueError", "message": "boom"})
         out = _build_root_cause_section(ctx)
@@ -502,7 +508,7 @@ class TestBuildRootCauseSection:
         assert "— " not in out2.split("ValueError", 1)[1].splitlines()[0]
 
     def test_object_name_and_sql_state_both_rendered(self):
-        from aqueduct.agent import _build_root_cause_section
+        from aqueduct.agent.prompts import _build_root_cause_section
 
         ctx = _make_fctx(object_name="event_ts", sql_state="42703")
         out = _build_root_cause_section(ctx)
@@ -512,11 +518,11 @@ class TestBuildRootCauseSection:
 
 class TestUserPromptTemplate:
     def test_user_prompt_template_lacks_truncated_marker(self):
-        from aqueduct.agent import _USER_PROMPT_TEMPLATE
+        from aqueduct.agent.prompts import _USER_PROMPT_TEMPLATE
         assert "Stack trace (truncated)" not in _USER_PROMPT_TEMPLATE
 
     def test_user_prompt_template_has_root_cause_placeholder(self):
-        from aqueduct.agent import _USER_PROMPT_TEMPLATE
+        from aqueduct.agent.prompts import _USER_PROMPT_TEMPLATE
         assert "{root_cause_section}" in _USER_PROMPT_TEMPLATE
 
     def test_truncate_stack_and_constant_not_importable(self):
@@ -527,7 +533,7 @@ class TestUserPromptTemplate:
         assert not hasattr(agent_mod, "_STACK_TRACE_MAX_LINES")
 
     def test_build_user_prompt_with_structured_ctx_uses_root_cause_block(self, tmp_path):
-        from aqueduct.agent import _build_user_prompt
+        from aqueduct.agent.prompts import _build_user_prompt
 
         ctx = _make_fctx(
             error_class="X",
@@ -538,7 +544,7 @@ class TestUserPromptTemplate:
         assert "## Stack trace" not in out
 
     def test_build_user_prompt_with_legacy_ctx_uses_raw_trace(self, tmp_path):
-        from aqueduct.agent import _build_user_prompt
+        from aqueduct.agent.prompts import _build_user_prompt
 
         trace = "line1\nline2\nline3"
         ctx = _make_fctx(stack_trace=trace)

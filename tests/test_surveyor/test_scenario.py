@@ -889,7 +889,7 @@ class TestGalleryScenarios:
 
     def test_scenario_06_guardrails_surface_in_guardrails_section(self):
         """The guardrail surfaces in _build_guardrails_section(bp.agent.guardrails)."""
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.parser.parser import parse
         bp_path = _GALLERY_DIR / "blueprints" / "06_guardrail_forbidden_op.yml"
         bp = parse(str(bp_path))

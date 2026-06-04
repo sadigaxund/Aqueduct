@@ -18,7 +18,8 @@ from aqueduct import redaction
 from aqueduct.cli import _install_secret_redaction_hooks
 from aqueduct.surveyor.webhook import fire_webhook
 from aqueduct.surveyor.surveyor import Surveyor
-from aqueduct.agent import stage_patch_for_human, _call_agent
+from aqueduct.agent import stage_patch_for_human
+from aqueduct.agent.providers import _call_agent
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.surveyor.models import FailureContext
@@ -375,15 +376,13 @@ def test_llm_redaction(tmp_path):
         mock_client.__enter__.return_value = mock_client
         mock_client.__exit__.return_value = False
         with patch("httpx.Client", return_value=mock_client):
-            _call_agent(
-                messages=messages,
-                model="claude-sonnet",
-                max_tokens=1000,
-                provider="anthropic",
-                base_url=None,
-                patches_dir=tmp_path,
-                timeout=5.0,
+            from aqueduct.agent.providers import _ProviderConfig
+            _cfg = _ProviderConfig(
+                model="claude-sonnet", max_tokens=1000,
+                provider="anthropic", base_url=None,
+                timeout=5.0, patches_dir=tmp_path,
             )
+            _call_agent(messages, _cfg, patches_dir=tmp_path)
     finally:
         os.environ.pop("ANTHROPIC_API_KEY", None)
 
