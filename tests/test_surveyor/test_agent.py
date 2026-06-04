@@ -10,14 +10,16 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from aqueduct.patch.grammar import PatchSpec
-from aqueduct.agent import (
-    MAX_REPROMPTS,
-    PROMPT_VERSION,
-    _parse_patch_spec,
-    archive_patch,
-    generate_agent_patch,
-    stage_patch_for_human,
-)
+
+
+from aqueduct.agent import MAX_REPROMPTS, PROMPT_VERSION
+from aqueduct.agent.loop import archive_patch, generate_agent_patch, stage_patch_for_human
+from aqueduct.agent.parse import _parse_patch_spec
+from aqueduct.agent.prompts import _build_guardrails_section
+
+
+
+
 from aqueduct.surveyor.models import FailureContext
 
 
@@ -166,16 +168,17 @@ class TestStageForHuman:
 
 class TestPatchFilename:
     def test_patch_filename_includes_timestamp(self, tmp_path):
-        from aqueduct.agent import _patch_filename
+        from aqueduct.agent.prompts import _build_guardrails_section
+        from aqueduct.agent.loop import _patch_filename
         spec = _patch_spec(patch_id="test")
-        patches_dir = tmp_path / "patches"
-        filename = _patch_filename(spec, patches_dir)
+        filename = _patch_filename(spec)
         import re
         assert re.match(r"^\d{8}T\d{6}_test\.json$", filename)
         assert "_test.json" in filename
 
     def test_patch_filename_ignores_seq_logic(self, tmp_path):
-        from aqueduct.agent import _patch_filename
+        from aqueduct.agent.prompts import _build_guardrails_section
+        from aqueduct.agent.loop import _patch_filename
         spec = _patch_spec(patch_id="test")
         patches_dir = tmp_path / "patches"
         
@@ -193,7 +196,7 @@ class TestPatchFilename:
         (rejected_dir / "00004_123_d.json").write_text("{}")
         
         # It should just use timestamp now, disregarding existing sequence numbers
-        filename = _patch_filename(spec, patches_dir)
+        filename = _patch_filename(spec)
         assert not filename.startswith("00005_")
         import re
         assert re.match(r"^\d{8}T\d{6}_test\.json$", filename)
@@ -275,7 +278,7 @@ class TestGenerateLlmPatch:
         def bad_llm(*_args, **_kw):
             return "not valid json {{{"
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", bad_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", bad_llm)
 
         result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
@@ -290,7 +293,7 @@ class TestGenerateLlmPatch:
         def mock_llm(*_args, **_kw):
             return (_valid_patch_json(), 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", mock_llm)
 
         result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
@@ -310,7 +313,7 @@ class TestGenerateLlmPatch:
                 return ("invalid json", 100, 50)
             return (_valid_patch_json(), 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", flaky_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", flaky_llm)
 
         result = generate_agent_patch(
             failure_ctx=_failure_ctx(),
@@ -327,7 +330,7 @@ class TestGenerateLlmPatch:
         def failing_llm(*_args, **_kw):
             raise RuntimeError("API timeout or disconnect")
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", failing_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", failing_llm)
 
         with caplog.at_level(logging.ERROR):
             result = generate_agent_patch(
@@ -359,7 +362,7 @@ class TestGenerateLlmPatch:
                     captured_prompt = msg.get("content", "")
             return (_valid_patch_json(), 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", mock_llm)
 
         g = GuardrailsConfig(forbidden_ops=("replace_module_config",))
         result = generate_agent_patch(
@@ -386,7 +389,7 @@ class TestGenerateLlmPatch:
                     captured_prompt = msg.get("content", "")
             return (_valid_patch_json(), 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", mock_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", mock_llm)
 
         # Legacy caller without guardrails kwarg
         result = generate_agent_patch(
@@ -511,7 +514,9 @@ class TestLlmHelpers:
         assert extract_failure_context("ghost", tmp_path / "obs") is None
 
     def test_reprompt_limit_exceeded(self, monkeypatch, tmp_path):
-        from aqueduct.agent import generate_agent_patch, MAX_REPROMPTS
+        from aqueduct.agent import MAX_REPROMPTS
+        from aqueduct.agent.loop import generate_agent_patch 
+
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
 
         call_count = 0
@@ -520,7 +525,7 @@ class TestLlmHelpers:
             call_count += 1
             return ("not json", 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", always_invalid)
 
         result = generate_agent_patch(_failure_ctx(), "model", tmp_path)
 
@@ -529,7 +534,9 @@ class TestLlmHelpers:
         assert call_count == MAX_REPROMPTS
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
-        from aqueduct.agent import generate_agent_patch
+        from aqueduct.agent.prompts import _build_guardrails_section
+        from aqueduct.agent.loop import generate_agent_patch
+        
         from aqueduct.agent.budget import BudgetConfig
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
 
@@ -539,7 +546,7 @@ class TestLlmHelpers:
             call_count += 1
             return ("not json", 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", always_invalid)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", always_invalid)
 
         # Need to also widen the other budget axes so max_reprompts is the
         # only one that trips (same_signature_overall default=3 would trip
@@ -558,16 +565,18 @@ class TestLlmHelpers:
         assert call_count == 5
 
     def test_generate_llm_patch_uses_llm_timeout(self, monkeypatch, tmp_path):
-        from aqueduct.agent import generate_agent_patch
+        from aqueduct.agent.prompts import _build_guardrails_section
+        from aqueduct.agent.loop import generate_agent_patch
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
 
         timeout_used = None
         def mock_call_llm(*_args, **kwargs):
             nonlocal timeout_used
-            timeout_used = kwargs.get("timeout")
+            # _args[1] is the _ProviderConfig dataclass
+            timeout_used = _args[1].timeout if len(_args) > 1 else None
             return (_valid_patch_json(), 100, 50)
 
-        monkeypatch.setattr("aqueduct.agent._call_agent", mock_call_llm)
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", mock_call_llm)
 
         generate_agent_patch(_failure_ctx(), "model", tmp_path, timeout=600.0)
 
@@ -576,7 +585,8 @@ class TestLlmHelpers:
 
 class TestBuildSystemPrompt:
     def test_engine_prompt_context_included(self, tmp_path):
-        from aqueduct.agent import _build_system_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.prompts import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context="Engine rule 1.",
@@ -585,7 +595,8 @@ class TestBuildSystemPrompt:
         assert "Engine rule 1." in prompt
 
     def test_blueprint_prompt_context_included(self, tmp_path):
-        from aqueduct.agent import _build_system_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.prompts import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context=None,
@@ -594,7 +605,8 @@ class TestBuildSystemPrompt:
         assert "Blueprint rule 2." in prompt
 
     def test_both_contexts_included(self, tmp_path):
-        from aqueduct.agent import _build_system_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.prompts import _build_system_prompt
         prompt = _build_system_prompt(
             patches_dir=tmp_path,
             engine_prompt_context="Engine rule 1.",
@@ -623,7 +635,7 @@ class TestFailureContextBlueprintSourceYaml:
         assert ctx.blueprint_source_yaml == "id: test"
         assert ctx.to_dict()["blueprint_source_yaml"] == "id: test"
     def test_llm_user_prompt_includes_blueprint_source_yaml(self):
-        from aqueduct.agent import _build_user_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
         from aqueduct.surveyor.models import FailureContext
         ctx = FailureContext(
             run_id="r1",
@@ -645,7 +657,8 @@ class TestFailureContextBlueprintSourceYaml:
         # expressions" / "Do NOT hard-code the resolved literal path"
         # sentences into the table-driven Path-values rule block. Assert
         # the canonical phrasing the current prompt uses.
-        from aqueduct.agent import _build_system_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.prompts import _build_system_prompt
         prompt = _build_system_prompt(patches_dir=tmp_path)
         assert "ALWAYS use relative paths" in prompt
         assert "context_ref" in prompt
@@ -657,7 +670,7 @@ class TestFailureContextBlueprintSourceYaml:
 class TestDoctorHintsInLLMPrompt:
     def test_doctor_hints_non_empty_includes_section(self, tmp_path):
         """doctor_hints non-empty → user prompt contains 'Blueprint issues detected' section."""
-        from aqueduct.agent import _build_user_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=("warn: bad path /tmp/missing",),
@@ -669,7 +682,7 @@ class TestDoctorHintsInLLMPrompt:
 
     def test_doctor_hints_empty_section_absent(self, tmp_path):
         """doctor_hints empty → 'Blueprint issues detected' section absent."""
-        from aqueduct.agent import _build_user_prompt
+        from aqueduct.agent.prompts import _build_guardrails_section, _build_user_prompt
 
         ctx = _failure_ctx(
             doctor_hints=(),
@@ -712,7 +725,7 @@ class TestProviderOptionsDispatch:
         return _patch("httpx.Client", return_value=mock_client)
 
     def test_ollama_prefix_stripped_into_options(self):
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.providers import _call_openai_compat
         from unittest.mock import MagicMock
         import httpx
 
@@ -732,7 +745,9 @@ class TestProviderOptionsDispatch:
         assert "ollama_num_thread" not in captured["payload"]
 
     def test_generic_key_merged_top_level(self):
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.providers import _call_openai_compat
+        
         from unittest.mock import MagicMock
 
         captured: dict = {}
@@ -750,7 +765,8 @@ class TestProviderOptionsDispatch:
         assert "options" not in captured["payload"]
 
     def test_mixed_ollama_and_generic_both_dispatched(self):
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.providers import _call_openai_compat
         from unittest.mock import MagicMock
 
         captured: dict = {}
@@ -769,7 +785,8 @@ class TestProviderOptionsDispatch:
         assert payload["temperature"] == 0.7
 
     def test_provider_options_none_payload_unchanged(self):
-        from aqueduct.agent import _call_openai_compat
+        from aqueduct.agent.prompts import _build_guardrails_section 
+        from aqueduct.agent.providers import _call_openai_compat
         from unittest.mock import MagicMock
 
         captured: dict = {}
@@ -800,15 +817,15 @@ class TestProviderOptionsDispatch:
 
 class TestGuardrailsSection:
     def test_none_returns_empty_string(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         assert _build_guardrails_section(None) == ""
 
     def test_empty_dict_returns_empty_string(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         assert _build_guardrails_section({}) == ""
 
     def test_dataclass_shape_live_heal_path(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         from aqueduct.parser.models import GuardrailsConfig
         g = GuardrailsConfig(forbidden_ops=("replace_module_config",))
         result = _build_guardrails_section(g)
@@ -816,14 +833,14 @@ class TestGuardrailsSection:
         assert "replace_module_config" in result
 
     def test_dict_shape_heal_from_store_path(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         g = {"forbidden_ops": ["x"], "allowed_paths": ["blueprints/*"]}
         result = _build_guardrails_section(g)
         assert "forbidden ops (must NOT appear in operations[]): x" in result
         assert "allowed file paths (operations may only target these — fnmatch patterns): blueprints/*" in result
 
     def test_all_four_fields_render(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         g = {
             "forbidden_ops": ["f1"],
             "allowed_paths": ["a1"],
@@ -837,7 +854,7 @@ class TestGuardrailsSection:
         assert "- never heal these error_types (priority over heal_on): n1" in result
 
     def test_absent_fields_produce_no_bullet(self):
-        from aqueduct.agent import _build_guardrails_section
+        from aqueduct.agent.prompts import _build_guardrails_section
         g = {"forbidden_ops": ["f1"]}
         result = _build_guardrails_section(g)
         assert "forbidden ops" in result
