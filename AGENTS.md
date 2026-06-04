@@ -1,4 +1,4 @@
-# CLAUDE.md — Aqueduct Development Guidebook
+# AGENTS.md — Aqueduct Development Guidebook
 
 ## Project Context
 Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
@@ -17,7 +17,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 | `docs/compatibility.md` | Python × Spark support matrix, cloudpickle constraint, production pinning | Changing version pins in `pyproject.toml`, or answering "does X version combo work" |
 | `docs/roadmap.md` | Deferred / aspirational items removed from specs.md: streaming, resume-from, MCP, ML inference, Flink, multi-pipeline orchestration | Discussing scope or future direction; never write fresh "deferred" prose into specs.md — push to roadmap.md instead |
 
-CLAUDE.md itself is process and constraint guidance only.
+AGENTS.md itself is process and constraint guidance only.
 
 ## Tech Stack
 - **Language**: Python 3.11+. Monolithic CLI — runs on the Spark driver. No servers.
@@ -89,6 +89,34 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 
 This section documents the internal module structure of key packages. Updated
 whenever a package is restructured — use it as the first filter before grepping.
+
+### `aqueduct/compiler/` — Blueprint AST → fully-resolved Manifest
+
+| Module | What it owns |
+|--------|--------------|
+| `compiler.py` | Main orchestrator — 8-step pipeline: Tier 1 resolution, Arcade expansion, Probe/Spillway validation, Regulator compile-away, Manifest assembly |
+| `models.py` | `Manifest` frozen dataclass + `to_dict()` serialization |
+| `expander.py` | Arcade → flat namespaced module list, edge rewiring, depth-limited recursion (max 10) |
+| `lineage.py` | `sqlglot`-based column-level lineage extraction (compile-time only, zero Spark actions) |
+| `macros.py` | `{{ macros.name }}` token expansion, parameterized macros, no nesting |
+| `provenance.py` | ValueProvenance, ModuleProvenance, ProvenanceMap — tracks source of every resolved config value |
+| `runtime.py` | `AqFunctions` registry + `_DISPATCH` table — resolves `@aq.*` Tier 1 tokens via `ast.literal_eval` |
+| `wirer.py` | Probe attach_to validation, spillway edge validation, Regulator compile-away bypass logic |
+| `warnings/` | Modular compiler warning rules — one file per check, registered in `RULES` list |
+
+### `aqueduct/parser/` — Blueprint YAML → validated AST
+
+| Module | What it owns |
+|--------|--------------|
+| `__init__.py` | Re-exports: `parse`, `parse_dict`, `ParseError`, `Blueprint`, `Module`, `Edge`, `ContextRegistry` |
+| `parser.py` | Orchestration: YAML load → Pydantic validation → context resolution → graph validation → AST assembly |
+| `schema.py` | Pydantic v2 models for Blueprint validation (`extra="forbid"` on all types) |
+| `models.py` | Immutable dataclasses (`Blueprint`, `Module`, `Edge`, `AgentConfig`, etc.) |
+| `resolver.py` | Tier 0 context resolution (`${ENV}`, `${ctx.*}`, profiles, CLI overrides) |
+| `graph.py` | Cycle detection (Kahn's algorithm) + topological ordering + spillway validation |
+| `fs_path.py` | `FsPath` annotation marker for pydantic path fields |
+
+**Cross-layer note:** `parser/parser.py` imports `get_path_keys` from `aqueduct/executor/path_keys.py`. This is an accepted architectural exception — the path-keys registry lives in the executor layer because path fields are defined per executor module type, not per parser schema. No Spark imports are involved; the file is a pure field-name registry.
 
 ### `aqueduct/agent/` — LLM agent loop
 

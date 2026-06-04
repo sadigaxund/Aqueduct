@@ -11,7 +11,10 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Added
-- **Source Code Navigation Map to CLAUDE.md.** Documents internal module structure of `aqueduct/agent/` and `aqueduct/executor/spark/`, updated alongside package refactors. Acts as a first-filter for grepping — each package table shows which module owns what, with "when adding a feature" guidance per package.
+- **Source Code Navigation Map to AGENTS.md.** Documents internal module structure of `aqueduct/agent/`, `aqueduct/executor/spark/`, and `aqueduct/parser/`, updated alongside package refactors. Acts as a first-filter for grepping — each package table shows which module owns what, with "when adding a feature" guidance per package.
+- **Parser `UdfSchema` duplicate `model_config` removed.** `aqueduct/parser/schema.py` had two `model_config` lines in `UdfSchema`; the first was overwritten by the second and dead. Consolidated to a single `ConfigDict(extra="forbid", populate_by_name=True)`.
+- **Compiler source map to AGENTS.md.** `aqueduct/compiler/` now documented with module roles and ownership.
+- **`compiler.py` and `expander.py` warning logs added.** Silent `except: pass` on YAML provenance load failures replaced with `logger.warning()` — same pattern as the agent/ fixes.
 
 ### Changed
 - **`aqueduct/agent/__init__.py` split into 5 focused modules.** The 1679-line file was restructured into: `prompts.py` (templates + prompt builders), `providers.py` (HTTP dispatch), `parse.py` (response parsing + reprompt formatting), `loop.py` (orchestration loop + patch I/O), and a thin `__init__.py` re-exporting the public API. Internal `_call_agent` collapsed 11 positional params into a `_ProviderConfig` dataclass. All external imports (`from aqueduct.agent import X`) unchanged.

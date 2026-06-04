@@ -163,7 +163,7 @@ class EdgeSchema(BaseModel):
 
 
 class UdfSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
     label: str
@@ -174,8 +174,6 @@ class UdfSchema(BaseModel):
     entry: str | None = None
     jar: str | None = None
     class_name: str | None = Field(default=None, alias="class")
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class BlueprintSchema(BaseModel):

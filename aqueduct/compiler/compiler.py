@@ -17,12 +17,15 @@ The Compiler does NOT:
 from __future__ import annotations
 
 import dataclasses
+import logging
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
@@ -144,7 +147,7 @@ def compile(  # noqa: A001
                     if isinstance(m_raw, dict) and "id" in m_raw:
                         raw_module_configs[m_raw["id"]] = m_raw.get("config") or {}
         except Exception:
-            pass  # Fall back to empty raw configs if load fails
+            logger.warning("Failed to load raw YAML for provenance from %s", blueprint_path)
 
     context_provenance: dict[str, ValueProvenance] = build_config_provenance(raw_context, resolved_ctx)
     

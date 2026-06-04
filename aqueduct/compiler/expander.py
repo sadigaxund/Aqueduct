@@ -16,8 +16,11 @@ Edge rewiring:
 from __future__ import annotations
 
 import dataclasses
+import logging
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from aqueduct.parser.models import Blueprint, Edge, Module
 
@@ -62,6 +65,7 @@ def _load_raw_module_configs(sub_path: Path) -> dict[str, dict]:
             if isinstance(m, dict) and "id" in m
         }
     except Exception:
+        logger.warning("Failed to load raw sub-blueprint config from %s", sub_path)
         return {}
 
 
