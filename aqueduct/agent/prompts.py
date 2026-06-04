@@ -1,0 +1,642 @@
+"""Prompt templates and construction helpers for the LLM patch loop.
+
+This module owns everything related to what the model sees:
+  - Template strings (system prompt, user prompt, reprompts)
+  - Prompt construction functions (_build_user_prompt, _build_system_prompt)
+  - LLM-facing metadata (_FIELD_ALIASES, _VALID_OPS, etc.)
+  - Provenance, guardrails, and root-cause section builders
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any
+
+from aqueduct.patch.grammar import PatchSpec
+from aqueduct.surveyor.models import FailureContext
+
+logger = logging.getLogger(__name__)
+
+_PATCH_HISTORY_MAX = 3
+
+
+# ── System-level constants exposed to the reprompt / alias machinery ───────
+
+# Known field name mistakes the LLM commonly makes → correct name
+_FIELD_ALIASES: dict[str, str] = {
+    "description":   "rationale",
+    "ops":           "operations",
+    "op_list":       "operations",
+    "patches":       "operations",
+    "steps":         "operations",
+    "fix":           "operations",
+}
+
+# Wrong discriminator keys LLM uses instead of "op"
+_OP_DISCRIMINATOR_ALIASES = (
+    "type",
+    "action",
+    "operation",
+    "method",
+    "kind",
+    "name"
+)
+
+_VALID_OPS = (
+    "replace_module_config",
+    "set_module_config_key",
+    "replace_module_label",
+    "insert_module",
+    "remove_module",
+    "replace_context_value",
+    "add_probe",
+    "replace_edge",
+    "set_module_on_failure",
+    "replace_retry_policy",
+    "add_arcade_ref",
+)
+
+# Op-level field names that LLMs sometimes put at the TOP level of the patch,
+# forgetting the `operations[]` wrapper. Used by _detect_structural_error.
+_OP_LEVEL_FIELDS_AT_ROOT = (
+    "op",
+    "module_id",
+    "key",
+    "value",
+    "config",
+    "label",
+    "context_key",
+    "edge",
+    "from_module",
+    "to_module",
+    "query",
+)
+
+# Hard-coded minimal valid PatchSpec used as positive anchor in the escalated
+# reprompt template. Mirrors the example in the system prompt so the model
+# sees a consistent shape on both turns.
+_PATCH_SKELETON = """\
+{
+  "patch_id": "fix-<short-slug>",
+  "rationale": "<one sentence — what was wrong and what this fixes>",
+  "confidence": 0.9,
+  "category": "other",
+  "root_cause": "<one sentence — the root cause>",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "<existing_module_id>",
+      "key": "<config_field>",
+      "value": "<new_value>"
+    }
+  ]
+}"""
+
+
+# ── Template strings ─────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT_TEMPLATE = """\
+You are an expert Apache Spark blueprint repair agent for the Aqueduct blueprint engine.
+
+A blueprint has failed. You will receive a structured failure report describing:
+- What the blueprint does (human-readable summary)
+- The failing module and its resolved configuration
+- A "Value provenance" section showing exactly where each config value comes from in the Blueprint source
+- The error message and either a structured root-cause block (Spark error class + offending column + suggestions) OR a raw stack trace if structured extraction was unavailable
+- Previous patch attempts (if any) — do NOT repeat a fix that was already tried
+
+Your task: produce a PatchSpec JSON that fixes the root cause.
+
+## PatchSpec Schema
+{patch_schema}
+
+## Rules
+
+### Choosing the right op (read the "Value provenance" section first)
+The provenance section tells you the `source_type` of each config value. Pick the op from this table:
+
+| source_type | Op | Notes |
+|---|---|---|
+| `literal` | `set_module_config_key` | Targets the module directly. |
+| `context_ref` | `replace_context_value` | Use the dot-notation key shown in provenance. |
+| `arcade_inherited` (with `context_key`) | `replace_context_value` on the PARENT context key | Find the parent key in "Blueprint context values" whose resolved value matches; that is the fix. |
+| `env_ref` | (do not patch) | Value is from an environment variable; fix outside the Blueprint. |
+
+**Hard rules:**
+- `set_module_config_key` sets ONE field, leaving the rest intact. Use for literal-source fixes.
+- `replace_module_config` REPLACES the entire config block — every key you forget is silently dropped. Never use it for a single-field fix.
+- `replace_module_config_key` does NOT exist. Don't invent it.
+- Module IDs containing `__` are arcade-expanded compile artefacts. They do NOT exist in the Blueprint YAML — never target them with `set_module_config_key`. Fix the parent context key instead.
+- If the failure report contains a "No `context:` block" notice, the blueprint has no context section at all. Do NOT emit `replace_context_value` — it will be rejected. Use `set_module_config_key` with a literal value.
+
+### Path values
+- ALWAYS use relative paths (e.g. `data/yellow/*.parquet`). Never construct absolute paths even if the provenance shows an absolute `blueprint_path` — that field is for reference only.
+- Preserve the original format (relative stays relative, globs stay globs).
+- When fixing a path that's a `context_ref`, patch the context value via `replace_context_value` so the blueprint stays portable. Do not hardcode the resolved literal into a module config.
+
+### Other rules
+- Use only module IDs and field names that appear in the failure report.
+- Prefer the simplest fix: correct a config value before adding new modules.
+- SQL query wrong → `set_module_config_key` with key="query".
+- SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
+- If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
+
+## Required output — complete example
+Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.
+
+```json
+{{
+  "patch_id": "fix-example-path",
+  "rationale": "One sentence: what was wrong and what the fix does.",
+  "confidence": 0.9,
+  "category": "bad_path",
+  "root_cause": "One sentence: root cause.",
+  "operations": [
+    {{
+      "op": "set_module_config_key",
+      "module_id": "my_ingress",
+      "key": "format",
+      "value": "csv"
+    }}
+  ]
+}}
+```
+
+Field rules:
+- patch_id: short slug (e.g. "fix-yellow-taxi-path")
+- rationale: field is named "rationale" — do NOT use "description"
+- confidence: float 0.0–1.0 — required
+- category: one of: schema_drift, bad_path, format_mismatch, oom_config, sql_column_not_found, type_mismatch, missing_context, permission_error, other
+- root_cause: one-sentence diagnosis
+- operations: list of patch ops — use "op" as the key (NOT "type" or "action")
+
+Respond with ONLY valid JSON. No prose, no markdown fences, no explanation outside the JSON object.
+{previous_patches_section}{custom_context_section}"""
+
+
+_USER_PROMPT_TEMPLATE = """\
+## Blueprint: {blueprint_name}
+{blueprint_description}
+
+## Execution flow
+{blueprint_summary}
+
+## Failure
+- **Failed module**: `{failed_module}`
+- **Error**: {error_message}
+
+## Failed module config (compiled — all expressions resolved)
+```json
+{failed_module_config}
+```
+
+{root_cause_section}
+## Full module list (for reference when writing patch IDs)
+{module_list}
+{provenance_section}{blueprint_yaml_section}{doctor_hints_section}{guardrails_section}
+Produce the complete PatchSpec JSON now. Remember: the `operations` list is REQUIRED — a response without it is invalid.
+"""
+
+
+_REPROMPT_TEMPLATE = """\
+Your previous response failed PatchSpec validation.
+
+## Your previous output (what you sent)
+```json
+{raw_truncated}
+```
+
+## Errors to fix
+{error}
+
+Rewrite the COMPLETE PatchSpec JSON from scratch, fixing the errors above. Output ONLY valid JSON — no prose, no markdown fences.
+"""
+
+
+# Task 85 — stronger reprompt used either (a) when the structural detector
+# fires (top-level required missing AND extra keys present) OR (b) when
+# Task 87 stuck-detection escalation triggers. Drops the echo of the bad
+# output (which biases small models toward small edits of their mistake)
+# and shows a minimal valid PatchSpec skeleton so the model has a positive
+# anchor, not just a list of negations.
+_REPROMPT_TEMPLATE_ESCALATED = """\
+Your previous response was structurally wrong. Do NOT make small edits to it.
+START FRESH from the skeleton below.
+
+## Minimal valid PatchSpec — the SHAPE your output must take
+```json
+{skeleton}
+```
+
+## Errors to fix
+{error}
+
+{structural_hint}{raw_evidence}Rewrite the COMPLETE PatchSpec JSON from scratch using the shape above.
+Replace the placeholder values with the right ones for THIS failure. Output
+ONLY valid JSON — no prose, no markdown fences.
+"""
+
+
+# ── Prompt construction helpers ───────────────────────────────────────────
+
+
+def _build_root_cause_section(failure_ctx: FailureContext) -> str:
+    """Render the diagnostic section between failed-config and module-list.
+
+    Structured fields (Spark error_class + messageParameters, Py4J root cause,
+    suggested columns) replace the raw stack trace when present. The trace is
+    shown verbatim ONLY when no structured extraction was possible.
+    """
+    error_class = getattr(failure_ctx, "error_class", None)
+    root_exc = getattr(failure_ctx, "root_exception", None)
+    sql_state = getattr(failure_ctx, "sql_state", None)
+    suggested = getattr(failure_ctx, "suggested_columns", ()) or ()
+    object_name = getattr(failure_ctx, "object_name", None)
+
+    has_structured = any((error_class, root_exc, sql_state, suggested, object_name))
+
+    if has_structured:
+        lines = ["## Root cause (structured)"]
+        if error_class:
+            lines.append(f"- **Error class**: `{error_class}`")
+        if object_name:
+            lines.append(f"- **Offending object**: `{object_name}`")
+        if suggested:
+            sug = ", ".join(f"`{c}`" for c in suggested)
+            lines.append(f"- **Actual columns available**: {sug}")
+        if sql_state:
+            lines.append(f"- **SQL state**: `{sql_state}`")
+        if isinstance(root_exc, dict):
+            rtype = root_exc.get("type") or "Unknown"
+            rmsg = (root_exc.get("message") or "").strip()
+            lines.append(f"- **Root exception**: `{rtype}` — {rmsg}" if rmsg else f"- **Root exception**: `{rtype}`")
+        return "\n".join(lines) + "\n"
+
+    trace = failure_ctx.stack_trace
+    if not trace:
+        return "## Stack trace\n(no stack trace)\n"
+    return "## Stack trace\n```\n" + trace + "\n```\n"
+
+
+def _build_blueprint_summary(manifest_dict: dict) -> str:
+    """One-line human description of the execution flow."""
+    modules = manifest_dict.get("modules", [])
+    edges = manifest_dict.get("edges", [])
+    if not modules:
+        return "(no modules)"
+
+    # Build adjacency for simple chain detection
+    successors: dict[str, list[str]] = {m["id"]: [] for m in modules}
+    predecessors: dict[str, list[str]] = {m["id"]: [] for m in modules}
+    for e in edges:
+        if e.get("port", "main") == "main":
+            successors[e["from"]].append(e["to"])
+            predecessors[e["to"]].append(e["from"])
+
+    # Walk from root(s) to build a simple summary
+    roots = [m for m in modules if not predecessors[m["id"]]]
+    parts: list[str] = []
+    visited: set[str] = set()
+
+    def _walk(mid: str) -> None:
+        if mid in visited:
+            return
+        visited.add(mid)
+        m = next((x for x in modules if x["id"] == mid), None)
+        if m:
+            parts.append(f"{m['type']}({m['id']})")
+        for succ in successors.get(mid, []):
+            _walk(succ)
+
+    for r in roots:
+        _walk(r["id"])
+
+    return " → ".join(parts) if parts else "(complex graph)"
+
+
+def _load_previous_patches(patches_dir: Path, limit: int = _PATCH_HISTORY_MAX) -> list[dict]:
+    """Read most-recent applied patches for the 'do not repeat' section.
+
+    Uses ``os.scandir`` for bounded stat overhead on large directories.
+    Unreadable or malformed files are skipped at DEBUG log level.
+    """
+    applied_dir = patches_dir / "applied"
+    if not applied_dir.exists():
+        return []
+    patches: list[dict] = []
+    entries = [
+        e for e in os.scandir(applied_dir)
+        if e.name.endswith(".json") and e.is_file()
+    ]
+    for e in sorted(entries, key=lambda e: e.stat().st_mtime, reverse=True)[:limit]:
+        try:
+            data = json.loads(Path(e.path).read_text(encoding="utf-8"))
+            patches.append({
+                "patch_id": data.get("patch_id", Path(e.name).stem),
+                "description": data.get("description", ""),
+                "ops": [op.get("op", "?") for op in data.get("operations", [])],
+            })
+        except Exception:
+            logger.debug("Skipping unreadable patch history file %s", e.path, exc_info=True)
+    return patches
+
+
+def _build_provenance_section(provenance_json: str | None) -> str:
+    """Build the value provenance section for the LLM user prompt.
+
+    Shows where each config value of the failing module came from in the Blueprint
+    source, with actionable patch op guidance per source type.
+    """
+    if not provenance_json:
+        return ""
+    try:
+        prov = json.loads(provenance_json)
+    except Exception:
+        logger.warning("Failed to parse provenance_json — LLM will see no provenance context")
+        return ""
+
+    lines: list[str] = ["\n## Value provenance (where each config value originates in the Blueprint source)"]
+    bp_path_raw = prov.get("blueprint_path", "?")
+    bp_path_display = Path(bp_path_raw).name if bp_path_raw and bp_path_raw != "?" else "?"
+    lines.append(f"Blueprint: {bp_path_display}  (paths shown are for reference; always use relative paths in patch ops)")
+
+    failed_mod = prov.get("failed_module")
+    if failed_mod:
+        mid = failed_mod.get("module_id", "?")
+        mtype = failed_mod.get("module_type", "?")
+        lines.append(f"\n### Failed module: {mid} ({mtype})")
+        if failed_mod.get("arcade_module_id"):
+            lines.append(
+                f"  **Arcade-expanded** from arcade module `{failed_mod['arcade_module_id']}` "
+                f"(sub-blueprint: {failed_mod.get('sub_blueprint_path', '?')})"
+            )
+            lines.append(
+                f"  Original sub-module ID inside sub-blueprint: `{failed_mod.get('original_module_id', '?')}`"
+            )
+            lines.append(
+                "  **This module does NOT exist in the Blueprint YAML.** "
+                "Do not use set_module_config_key on this module_id."
+            )
+
+        for key, vp in (failed_mod.get("config") or {}).items():
+            src = vp.get("source_type", "?")
+            orig = vp.get("original_expression", "?")
+            resolved = vp.get("resolved_value")
+            ctx_key = vp.get("context_key")
+
+            if src == "context_ref":
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← context_ref  →  use replace_context_value(key={ctx_key!r}, value=<fix>)"
+                )
+            elif src == "arcade_inherited":
+                if ctx_key:
+                    lines.append(
+                        f"  config.{key} = {resolved!r}"
+                        f"  ← arcade_inherited via context_override key {ctx_key!r}"
+                        f"  →  find parent context key with this resolved value and use replace_context_value"
+                    )
+                else:
+                    lines.append(
+                        f"  config.{key} = {resolved!r}"
+                        f"  ← arcade_inherited (expr: {orig!r})"
+                        f"  →  fix the arcade module's context_override in the parent Blueprint"
+                    )
+            elif src == "env_ref":
+                env_var = vp.get("env_var", "?")
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← env_ref ${{{env_var}}}  →  change the environment variable, do NOT patch the Blueprint"
+                )
+            elif src == "tier1":
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← @aq.* expression: {orig!r}"
+                )
+            else:
+                lines.append(
+                    f"  config.{key} = {resolved!r}"
+                    f"  ← literal  →  use set_module_config_key(module_id={mid!r}, key={key!r}, value=<fix>)"
+                )
+
+    # Context block — helps LLM find the parent context key for arcade_inherited values
+    ctx_block = prov.get("context") or {}
+    if ctx_block:
+        lines.append("\n### Blueprint context values (all resolved — editable via replace_context_value)")
+        for key, vp in ctx_block.items():
+            resolved = vp.get("resolved_value")
+            src = vp.get("source_type", "?")
+            env_hint = f" (from env ${{{vp['env_var']}}})" if src == "env_ref" else ""
+            lines.append(f"  {key} = {resolved!r}{env_hint}")
+    else:
+        lines.append(
+            "\n### No `context:` block\n"
+            "This blueprint declares no `context:` block. Do NOT emit "
+            "`replace_context_value` ops — the apply gate will reject them. "
+            "Use `set_module_config_key` with a literal value on the failing module."
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_guardrails_section(guardrails: Any) -> str:
+    """Terse, imperative guardrails block — appended to the user prompt.
+
+    Surfaces ``agent.guardrails`` from the Blueprint to the LLM so the model
+    knows the constraints its patch will be checked against.
+
+    Returns empty string when ``guardrails`` is None or every field is empty.
+    """
+    if guardrails is None:
+        return ""
+
+    def _field(name: str) -> tuple:
+        if isinstance(guardrails, dict):
+            val = guardrails.get(name) or ()
+        else:
+            val = getattr(guardrails, name, ()) or ()
+        return tuple(val)
+
+    forbidden = _field("forbidden_ops")
+    allowed_paths = _field("allowed_paths")
+    heal_on = _field("heal_on_errors")
+    never_heal = _field("never_heal_errors")
+    if not (forbidden or allowed_paths or heal_on or never_heal):
+        return ""
+    lines = [
+        "",
+        "## Guardrails (your patch will be REJECTED post-generation if it violates these — follow them in your first attempt)",
+    ]
+    if forbidden:
+        lines.append(f"- forbidden ops (must NOT appear in operations[]): {', '.join(forbidden)}")
+    if allowed_paths:
+        lines.append(f"- allowed file paths (operations may only target these — fnmatch patterns): {', '.join(allowed_paths)}")
+    if heal_on:
+        lines.append(f"- heal only on these error_types: {', '.join(heal_on)}")
+    if never_heal:
+        lines.append(f"- never heal these error_types (priority over heal_on): {', '.join(never_heal)}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrails: Any = None) -> str:
+    try:
+        manifest = json.loads(failure_ctx.manifest_json)
+    except Exception:
+        logger.warning("Failed to parse manifest_json — LLM prompt will have empty module context")
+        manifest = {}
+
+    modules = manifest.get("modules", [])
+    blueprint_name = manifest.get("name") or failure_ctx.blueprint_id
+    blueprint_desc = manifest.get("description", "")
+
+    # Failed module config (compiled — resolved values)
+    failed_mod = next((m for m in modules if m["id"] == failure_ctx.failed_module), None)
+    failed_config = json.dumps(failed_mod.get("config", {}) if failed_mod else {}, indent=2)
+
+    # Module list summary
+    module_list = "\n".join(
+        f"  - {m['id']} ({m['type']}): {m.get('label', '')}" for m in modules
+    ) or "  (none)"
+
+    # Provenance section (replaces raw Blueprint YAML dump)
+    provenance_section = _build_provenance_section(getattr(failure_ctx, "provenance_json", None))
+
+    # Doctor pre-flight hints
+    hints = getattr(failure_ctx, "doctor_hints", None) or ()
+    if hints:
+        hint_lines = "\n".join(f"- {h}" for h in hints)
+        doctor_hints_section = (
+            "\n## Blueprint issues detected before run (may explain the failure)\n"
+            f"{hint_lines}\n"
+        )
+    else:
+        doctor_hints_section = ""
+
+    # Original Blueprint YAML — gives LLM the authoring-level view
+    blueprint_yaml_section = ""
+    raw_yaml = getattr(failure_ctx, "blueprint_source_yaml", None)
+    if isinstance(raw_yaml, str) and raw_yaml.strip():
+        blueprint_yaml_section = (
+            "\n## Original Blueprint YAML (unresolved — authoring view)\n"
+            "```yaml\n"
+            f"{raw_yaml.strip()}\n"
+            "```\n"
+        )
+        # Soft macro-preservation hint
+        macros_defined: list[str] = []
+        try:
+            import yaml as _yaml
+            _doc = _yaml.safe_load(raw_yaml) or {}
+            _mac = _doc.get("macros") if isinstance(_doc, dict) else None
+            if isinstance(_mac, dict):
+                macros_defined = [str(k) for k in _mac]
+        except Exception:
+            pass
+        if macros_defined:
+            blueprint_yaml_section += (
+                "\n**Macros in scope:** "
+                + ", ".join(f"`{{{{ macros.{m} }}}}`" for m in macros_defined)
+                + ". When editing a query that used a macro, keep the "
+                "`{{ macros.NAME }}` reference instead of inlining the "
+                "expanded SQL — the engine re-expands it at compile time.\n"
+            )
+
+    return _USER_PROMPT_TEMPLATE.format(
+        blueprint_name=blueprint_name,
+        blueprint_description=f"> {blueprint_desc}" if blueprint_desc else "",
+        blueprint_summary=_build_blueprint_summary(manifest),
+        failed_module=failure_ctx.failed_module,
+        error_message=failure_ctx.error_message,
+        failed_module_config=failed_config,
+        root_cause_section=_build_root_cause_section(failure_ctx),
+        module_list=module_list,
+        provenance_section=provenance_section,
+        blueprint_yaml_section=blueprint_yaml_section,
+        doctor_hints_section=doctor_hints_section,
+        guardrails_section=_build_guardrails_section(guardrails),
+    )
+
+
+def _build_system_prompt(
+    patches_dir: Path,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
+    last_apply_error: str | None = None,
+) -> str:
+    schema = json.dumps(PatchSpec.model_json_schema(), indent=2)
+    prev = _load_previous_patches(patches_dir)
+    if prev:
+        lines = ["\n## Previous patch attempts (do NOT repeat these)"]
+        for p in prev:
+            lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
+        if last_apply_error:
+            lines.append(
+                f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
+            )
+        prev_section = "\n".join(lines)
+    elif last_apply_error:
+        prev_section = f"\n## Last patch apply error\n{last_apply_error}"
+    else:
+        prev_section = ""
+
+    # Merge engine-level and blueprint-level prompt_context
+    ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
+
+    # Load operator-managed rules file: patches/rules.md (if present)
+    # Capped at 4096 chars to prevent context overflow from an accidentally-large file.
+    rules_file = patches_dir / "rules.md"
+    if rules_file.exists():
+        try:
+            rules_content = rules_file.read_text(encoding="utf-8").strip()
+            if rules_content:
+                if len(rules_content) > 4096:
+                    rules_content = rules_content[:4096] + "\n…(truncated at 4096 chars)"
+                    logger.warning("patches/rules.md exceeds 4096 chars — truncated")
+                ctx_parts.append(rules_content)
+        except Exception:
+            logger.debug("Could not read patches/rules.md at %s", rules_file, exc_info=True)
+
+    if ctx_parts:
+        custom_context_section = "\n\n## Additional context (operator-supplied)\n" + "\n\n".join(ctx_parts)
+    else:
+        custom_context_section = ""
+
+    return _SYSTEM_PROMPT_TEMPLATE.format(
+        patch_schema=schema,
+        previous_patches_section=prev_section,
+        custom_context_section=custom_context_section,
+    )
+
+
+def build_prompt(
+    failure_ctx: FailureContext,
+    patches_dir: Path,
+    engine_prompt_context: str | None = None,
+    blueprint_prompt_context: str | None = None,
+    guardrails: Any = None,
+    last_apply_error: str | None = None,
+) -> dict[str, str]:
+    """Return the system and user prompts without calling the LLM.
+
+    Useful for debugging, prompt tuning, or cost estimation.
+
+    Args:
+        last_apply_error: When set, includes the "previous patch failed" section
+            in the system prompt so the debug view matches what the model sees
+            on a re-prompt turn.
+
+    Returns:
+        {"system": <system prompt>, "user": <user prompt>}
+    """
+    return {
+        "system": _build_system_prompt(
+            patches_dir, engine_prompt_context, blueprint_prompt_context,
+            last_apply_error=last_apply_error,
+        ),
+        "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
+    }
