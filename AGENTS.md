@@ -90,6 +90,69 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 This section documents the internal module structure of key packages. Updated
 whenever a package is restructured — use it as the first filter before grepping.
 
+### `aqueduct/surveyor/` — Observability, benchmarking, webhooks
+
+| Module | What it owns |
+|--------|--------------|
+| `surveyor.py` | Main Surveyor class: start/record/stop lifecycle, DDL, structured error extraction |
+| `models.py` | Frozen dataclasses: `RunRecord`, `FailureContext` (the LLM agent's input) |
+| `scenario.py` | Scenario benchmark framework: `load_scenario`, `_build_failure_ctx`, effect-based grader |
+| `webhook.py` | HTTP dispatch in daemon thread, `${VAR}` template rendering, redaction |
+| `benchmark_store.py` | DuckDB persistence + regression detection for benchmark results |
+| `blob_store.py` | Zstd externalisation of fat columns (manifest_json, provenance_json, stack_trace) |
+
+### `aqueduct/patch/` — PatchSpec grammar + apply + validation gates
+
+| Module | What it owns |
+|--------|--------------|
+| `grammar.py` | `PatchSpec` Pydantic v2 model, 11 operation types, discriminated union |
+| `operations.py` | Per-op implementations against Blueprint dict, ruamel YAML round-trip |
+| `apply.py` | Apply orchestrator: load → deep-copy → apply ops → re-parse → archive |
+| `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
+| `explain_gate.py` | Plan regression gate (Gate 4): compare Exchange/Broadcast counts before vs after |
+| `__init__.py` | Module description only |
+
+### `aqueduct/stores/` — Pluggable store backends
+
+| Module | What it owns |
+|--------|--------------|
+| `base.py` | ABCs for `ObservabilityStore`, `LineageStore`, `DepotStore` + `RelationalCursor` (`?` → `%s`), `StoreBundle` factory |
+| `duckdb_.py` | DuckDB implementations (single-file embeddable) |
+| `postgres.py` | Postgres implementations (connection-pool dedup, schema-per-store) |
+| `redis_.py` | Redis depot KV (high-QPS watermark reads) |
+
+### `aqueduct/depot/` — Cross-run KV state
+
+| Module | What it owns |
+|--------|--------------|
+| `depot.py` | `DepotStore` façade — delegates to whichever store backend is configured |
+| `__init__.py` | Empty |
+
+### `aqueduct/doctor/` — Pre-flight health checks
+
+| Module | What it owns |
+|--------|--------------|
+| `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor` |
+| `base.py` | `CheckResult` dataclass |
+| `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario |
+
+### `aqueduct/executor/spark/` — Spark execution
+
+| Module | What it owns |
+|--------|--------------|
+| `executor.py` | Main loop: topo sort, component detection, module dispatch, parallel mode |
+| `ingress.py` | Read: Parquet, Delta, CSV, JSON, JDBC |
+| `channel.py` | Transform: SQL, deduplicate, filter, select, rename, cast, repartition, union, sort |
+| `egress.py` | Write: overwrite, append, error, merge (Delta MERGE INTO) |
+| `junction.py` | Fan-out: conditional, broadcast, partition |
+| `funnel.py` | Fan-in: union_all, union, coalesce, zip |
+| `probe.py` | Signals: schema, null_rates, distribution, distinct, freshness, row_count |
+| `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
+| `session.py` | SparkSession management, Delta conf, cloudpickle patch |
+| `udf.py` | UDF registry, cloudpickle compatibility |
+| `metrics.py` | Zero-extra-action observe() wrapper, Hadoop FS byte count |
+| `test_runner.py` | Isolated module test framework (aqueduct test CLI) |
+
 ### `aqueduct/compiler/` — Blueprint AST → fully-resolved Manifest
 
 | Module | What it owns |
@@ -136,21 +199,6 @@ whenever a package is restructured — use it as the first filter before greppin
 - New recovery pattern → add to `_parse_patch_spec()` in `parse.py`
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
-
-### `aqueduct/executor/spark/` — Spark execution
-
-| Module | What it owns |
-|--------|--------------|
-| `executor.py` | Main loop: topo sort, component detection, module dispatch, parallel mode |
-| `ingress.py` | Read: Parquet, Delta, CSV, JSON, JDBC |
-| `channel.py` | Transform: SQL, deduplicate, filter, select, rename, cast, repartition, union, sort |
-| `egress.py` | Write: overwrite, append, error, merge (Delta MERGE INTO) |
-| `junction.py` | Fan-out: conditional, broadcast, partition |
-| `funnel.py` | Fan-in: union_all, union, coalesce, zip |
-| `probe.py` | Signals: schema, null_rates, distribution, distinct, freshness, row_count |
-| `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
-| `session.py` | SparkSession management, Delta conf, cloudpickle patch |
-| `udf.py` | UDF registry, cloudpickle compatibility |
 
 ## Common Pitfalls
 
