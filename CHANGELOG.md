@@ -10,6 +10,24 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Source Code Navigation Map to CLAUDE.md.** Documents internal module structure of `aqueduct/agent/` and `aqueduct/executor/spark/`, updated alongside package refactors. Acts as a first-filter for grepping — each package table shows which module owns what, with "when adding a feature" guidance per package.
+
+### Changed
+- **`aqueduct/agent/__init__.py` split into 5 focused modules.** The 1679-line file was restructured into: `prompts.py` (templates + prompt builders), `providers.py` (HTTP dispatch), `parse.py` (response parsing + reprompt formatting), `loop.py` (orchestration loop + patch I/O), and a thin `__init__.py` re-exporting the public API. Internal `_call_agent` collapsed 11 positional params into a `_ProviderConfig` dataclass. All external imports (`from aqueduct.agent import X`) unchanged.
+- **`build_prompt()` now forwards `last_apply_error`.** Debug prompt view matches what the model sees on re-prompt turns.
+- **`apply_callback` and `on_attempt` parameters typed** with `Callable` instead of `Any`.
+- **`_patch_filename` dropped unused `patches_dir` param.** Cleaner signature.
+- **`on_patch_pending_webhook` typed** as `WebhookEndpointConfig | None` (was bare `None` default in comment only).
+- **`patches/rules.md` content capped at 4096 chars.** Prevents context overflow from an accidentally-large rules file.
+- **`_load_previous_patches` uses `os.scandir` instead of `glob`.** More efficient on directories with thousands of applied patches.
+- **Warning logs added** for silent JSON parse failures in `_build_provenance_section` and `_build_user_prompt` (previously returned empty defaults silently).
+- **Webhook fire failure now logged at DEBUG** instead of bare `except: pass`.
+- **CLAUDE.md agent references updated.** LLM provider addition instructions point to `providers.py` (was `__init__.py`); `PROMPT_VERSION` bump policy points to `loop.py` (was `__init__.py`).
+
+### Documentation
+- **Docs lineage references updated.** `docs/observability_guide.md`, `docs/specs.md`, and `docs/production_guide.md` cleaned of stale `lineage.db` references — the lineage store was merged into `observability.db` (1.1.2). Blob externalisation documented in filesystem layout. `stores.lineage` marked as inert with deprecation note in all three docs.
+
 ### Fixed
 - **Lineage skipped on the surveyor-less `execute()` path.** The post-run lineage write in `executor/spark/executor.py` passed the raw `observability_store` (often `None` when only `store_dir` is supplied), so `write_lineage()` silently no-op'd and no `column_lineage` rows were recorded. It now resolves the store via `_resolve_observability_store(store_dir, observability_store)`, matching every sibling metric writer. Real `aqueduct run` was unaffected (a Surveyor supplies the store); the gap only hit programmatic `execute(..., store_dir=...)` callers.
 
