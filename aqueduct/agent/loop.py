@@ -245,6 +245,7 @@ def generate_agent_patch(
     while True:
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
+        logger.info("── Heal attempt %d/%d ──", attempt_num, budget.max_reprompts)
 
         # Phase 40: per-call deadline for mid-call budget enforcement.
         # Uses min(agent.timeout, remaining budget seconds) so neither
@@ -325,6 +326,10 @@ def generate_agent_patch(
             break
 
         latency_ms = int((time.monotonic() - t_start) * 1000)
+        logger.info(
+            "  ⚡ LLM: %d → %d tokens, %dms",
+            tokens_in, tokens_out, latency_ms,
+        )
         logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
 
         # ── Parse phase ────────────────────────────────────────────────
@@ -382,6 +387,20 @@ def generate_agent_patch(
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": reprompt_msg})
             continue
+
+        # Log successful parse with confidence and op summary
+        _ops_summary = ", ".join(
+            f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
+            for o in patch_spec.operations
+        )
+        logger.info(
+            "  ✓ Parsed: %s (confidence %.2f, %d op%s: %s)",
+            patch_spec.patch_id,
+            patch_spec.confidence,
+            len(patch_spec.operations),
+            "s" if len(patch_spec.operations) != 1 else "",
+            _ops_summary or "(none)",
+        )
 
         # ── Phase 41: defer_to_human detection ─────────────────────────────
         # Runs before the apply callback — defer makes zero Blueprint
@@ -505,6 +524,10 @@ def generate_agent_patch(
                 patch_spec = None
                 continue
 
+            # Validation passed — only reached when deep_loop + validate_callback
+            # returned (True, "").
+            logger.info("  ✓ Validation: PASS")
+
         # ── Apply phase (optional callback) ─────────────────────────────
         if apply_callback is not None:
             try:
@@ -526,6 +549,7 @@ def generate_agent_patch(
                     except Exception:
                         logger.debug("on_attempt callback raised; ignoring", exc_info=True)
                 tracker.check_stop()  # sets 'solved'
+                logger.info("  ✓ Applied: patch accepted by guardrails + apply")
                 break
 
             # Gate rejection — record signature, reprompt with the gate's error.
@@ -592,11 +616,23 @@ def generate_agent_patch(
         break
 
     if patch_spec is None:
+        logger.info(
+            "── Heal complete: no patch (%d attempts, stop_reason=%s, %d tokens in, %d out) ──",
+            tracker.current_attempt, tracker.stop_reason,
+            tracker.tokens_in_total, tracker.tokens_out_total,
+        )
         logger.error(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r (stop_reason=%s)",
             tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,
             tracker.stop_reason,
+        )
+    else:
+        logger.info(
+            "── Heal complete: %s (confidence %.2f, %d ops, stop_reason=%s, %d tokens in, %d out) ──",
+            patch_spec.patch_id, patch_spec.confidence,
+            len(patch_spec.operations), tracker.stop_reason,
+            tracker.tokens_in_total, tracker.tokens_out_total,
         )
     return AgentPatchResult(
         patch=patch_spec,

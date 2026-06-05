@@ -520,6 +520,8 @@ Generated post-run from Probe signals. Shows per-column, per-Module status (OK /
 
 The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer.
 
+**Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 13 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback, Phase 43) and multi-model cascading (Phase 44) for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
+
 ## **8.2 The Healing Flow**
 
 ```
