@@ -604,7 +604,7 @@ A PatchSpec is a JSON document with the following structure:
 ```json
 {
   "patch_id": "fix-yellow-taxi-path",
-  "rationale": "One sentence: what was wrong and what the fix does.",
+  "description": "One sentence: what was wrong and what the fix does.",
   "confidence": 0.9,
   "category": "schema_drift | bad_path | format_mismatch | oom_config | sql_column_not_found | type_mismatch | missing_context | permission_error | other",
   "root_cause": "One sentence: root cause.",
@@ -615,7 +615,9 @@ A PatchSpec is a JSON document with the following structure:
 }
 ```
 
-Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `insert_module`, `remove_module`, `insert_edge`, `remove_edge`.
+Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `replace_module_label`, `insert_module`, `remove_module`, `add_probe`, `replace_edge`, `set_module_on_failure`, `replace_retry_policy`, `add_arcade_ref`, `defer_to_human`.
+
+`defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true` — when false (default), the op is hidden from the LLM prompt.
 
 ### Metadata field tolerance
 

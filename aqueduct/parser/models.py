@@ -60,6 +60,10 @@ class AgentConfig:
     confidence_threshold: float = 0.7
     # What to do when patch is generated but fails to fix the pipeline: stage | discard | abort
     on_heal_failure: str = "stage"
+    # Phase 41: allow the LLM to emit defer_to_human when the failure is not
+    # healable at the Blueprint level. Default False — the LLM must always produce
+    # a real patch unless explicitly permitted to defer.
+    allow_defer: bool = False
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max LLM healing attempts per rolling 60-minute window for this blueprint.

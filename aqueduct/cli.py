@@ -81,7 +81,13 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     never_heal_errors takes priority over heal_on_errors.
     Matching uses error_type from FailureContext (Assert label) or the
     exception class name extracted from the stack trace (infra errors).
+
+    Phase 41: never_heal_errors patterns are regex — e.g.
+    ``"IllegalStateException.*offsets"`` matches any error class
+    containing "IllegalStateException" and "offsets".
     """
+    import re
+
     error_type: str | None = getattr(failure_ctx, "error_type", None)
     stack_class: str | None = _extract_stack_class(getattr(failure_ctx, "stack_trace", None))
 
@@ -94,9 +100,15 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     never_heal: tuple = tuple(getattr(guardrails, "never_heal_errors", ()))
     heal_on: tuple = tuple(getattr(guardrails, "heal_on_errors", ()))
 
-    for et in never_heal:
-        if et in candidates:
-            return False, f"error_type {et!r} matched never_heal_errors"
+    for pattern in never_heal:
+        for candidate in candidates:
+            try:
+                if re.search(pattern, candidate):
+                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
+            except re.error:
+                # Degrade gracefully on malformed regex: fall back to exact match
+                if pattern == candidate:
+                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
 
     if heal_on:
         for et in heal_on:
@@ -1821,6 +1833,7 @@ def run(
                 last_apply_error=last_apply_error,
                 guardrails=manifest.agent.guardrails if manifest.agent else None,
                 budget=_budget,
+                allow_defer=manifest.agent.allow_defer if manifest.agent else False,
                 on_attempt=_persist_attempt,
                 apply_callback=_apply_cb,
             )
@@ -3745,14 +3758,17 @@ def heal(
         finished_at=finished_at,
     )
 
-    # Extract guardrails from the persisted manifest so heal-from-store paths
-    # surface the same constraints the live run would have used.
+    # Extract guardrails and allow_defer from the persisted manifest so
+    # heal-from-store paths surface the same constraints the live run would
+    # have used.
     _guardrails_for_prompt: Any = None
+    _allow_defer: bool = False
     try:
         _mdict = json.loads(_manifest_str) if _manifest_str else {}
         if isinstance(_mdict, dict):
             _agent_block = _mdict.get("agent") or {}
             _guardrails_for_prompt = _agent_block.get("guardrails") or None
+            _allow_defer = bool(_agent_block.get("allow_defer", False))
     except Exception:
         _guardrails_for_prompt = None
 
@@ -3802,6 +3818,7 @@ def heal(
         engine_prompt_context=resolved_engine_prompt_context,
         guardrails=_guardrails_for_prompt,
         budget=_budget,
+        allow_defer=_allow_defer,
         apply_callback=_apply_cb,
     )
     patch = agent_result.patch

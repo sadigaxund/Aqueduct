@@ -109,6 +109,11 @@ agent:
   #   abort   — stop the healing loop immediately
   on_heal_failure: "stage"
 
+  # allow_defer: permit the LLM to emit defer_to_human when the failure is
+  # not healable at the Blueprint level (Phase 41). Default false — the LLM
+  # must always produce a real patch unless explicitly permitted to defer.
+  # allow_defer: true
+
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
 

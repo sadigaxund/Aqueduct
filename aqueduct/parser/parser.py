@@ -295,6 +295,7 @@ def parse_dict(
             max_reprompts=validated.agent.max_reprompts,
             confidence_threshold=validated.agent.confidence_threshold,
             on_heal_failure=validated.agent.on_heal_failure,
+            allow_defer=validated.agent.allow_defer,
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,

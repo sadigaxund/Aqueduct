@@ -449,13 +449,43 @@ def _check_assertions(
     root_cause_match: bool | None = None
     category_match: bool | None = None
 
+    # Phase 41: detect defer_to_human in the patch
+    did_defer = patch is not None and any(
+        getattr(op, "op", None) == "defer_to_human" for op in (patch.operations or [])
+    )
+    allow_defer = any(a.get("allow_defer") is True for a in assertions)
+
     for assertion in assertions:
         if "patch_is_valid" in assertion:
             expected_val = bool(assertion["patch_is_valid"])
-            if expected_val and not patch_valid:
+            if did_defer:
+                # defer_to_human means the model gave up — this is a gating
+                # failure unless the scenario explicitly allows deferral.
+                if not allow_defer:
+                    failures.append(
+                        "patch_is_valid: LLM deferred to human "
+                        "(add allow_defer: true to accept deferral)"
+                    )
+                elif not expected_val:
+                    failures.append(
+                        "patch_is_valid: expected invalid patch but LLM deferred "
+                        "(which is valid under allow_defer)"
+                    )
+            elif expected_val and not patch_valid:
                 failures.append("patch_is_valid: patch is None (LLM failed to produce valid PatchSpec)")
             elif not expected_val and patch_valid:
                 failures.append("patch_is_valid: expected invalid patch but got a valid one")
+
+        if "allow_defer" in assertion:
+            expected_defer = bool(assertion["allow_defer"])
+            if expected_defer and not did_defer:
+                failures.append(
+                    "allow_defer: expected defer_to_human but LLM produced a regular patch"
+                )
+            elif not expected_defer and did_defer:
+                failures.append(
+                    "allow_defer: LLM deferred when a fix was expected"
+                )
 
         if "patch_applies" in assertion:
             expected_val = bool(assertion["patch_applies"])
@@ -568,10 +598,11 @@ def run_scenario(
             base_url=base_url,
         )
 
-    # Step 1 — surface the blueprint's agent.guardrails to the LLM so the
-    # model has a chance to satisfy them on the first attempt instead of
-    # producing a patch production then post-hoc rejects.
+    # Step 1 — surface the blueprint's agent.guardrails and allow_defer to
+    # the LLM so the model has a chance to satisfy them on the first attempt
+    # instead of producing a patch production then post-hoc rejects.
     bp_guardrails = bp.agent.guardrails if (bp and bp.agent) else None
+    bp_allow_defer = bp.agent.allow_defer if (bp and bp.agent) else False
 
     # Resolve blueprint path eagerly so the apply_callback can reuse it.
     blueprint_path: Path | None = None
@@ -602,6 +633,7 @@ def run_scenario(
         engine_prompt_context=engine_prompt_context,
         guardrails=bp_guardrails,
         budget=budget,
+        allow_defer=bp_allow_defer,
         apply_callback=apply_cb,
     )
     patch = agent_result.patch

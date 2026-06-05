@@ -47,6 +47,7 @@ class _ProviderConfig:
     patches_dir: Path = Path()
     engine_prompt_context: str | None = None
     blueprint_prompt_context: str | None = None
+    allow_defer: bool = False
 
 
 def _format_llm_error_hint(
@@ -135,6 +136,7 @@ def _call_agent(
         cfg.engine_prompt_context,
         cfg.blueprint_prompt_context,
         last_apply_error,
+        allow_defer=cfg.allow_defer,
     )
 
     # Scrub registered @aq.secret() values from anything leaving the process.

@@ -59,6 +59,7 @@ def _to_ruamel(data: Any) -> Any:
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
+    DeferToHumanOp,
     InsertModuleOp,
     RemoveModuleOp,
     ReplaceContextValueOp,
@@ -324,6 +325,16 @@ def apply_add_arcade_ref(bp: dict, op: AddArcadeRefOp) -> dict:
     return bp
 
 
+def apply_defer_to_human(bp: dict, op: DeferToHumanOp) -> dict:
+    """No-op — defer_to_human makes zero Blueprint changes (Phase 41).
+
+    The orchestration loop detects this op and terminates with
+    ``stop_reason='deferred'``; the full diagnosis is staged for
+    human review as a pending patch file.
+    """
+    return bp
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
@@ -338,6 +349,7 @@ _DISPATCH = {
     "set_module_on_failure":  apply_set_module_on_failure,
     "replace_retry_policy":   apply_replace_retry_policy,
     "add_arcade_ref":         apply_add_arcade_ref,
+    "defer_to_human":         apply_defer_to_human,
 }
 
 

@@ -190,6 +190,7 @@ def generate_agent_patch(
     last_apply_error: str | None = None,
     guardrails: Any = None,
     budget: BudgetConfig | None = None,
+    allow_defer: bool = False,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
 ) -> AgentPatchResult:
@@ -225,6 +226,7 @@ def generate_agent_patch(
         patches_dir=patches_dir,
         engine_prompt_context=engine_prompt_context,
         blueprint_prompt_context=blueprint_prompt_context,
+        allow_defer=allow_defer,
     )
 
     messages: list[dict[str, Any]] = [
@@ -378,6 +380,75 @@ def generate_agent_patch(
             messages.append({"role": "assistant", "content": raw})
             messages.append({"role": "user", "content": reprompt_msg})
             continue
+
+        # ── Phase 41: defer_to_human detection ─────────────────────────────
+        # Runs before the apply callback — defer makes zero Blueprint
+        # changes, so there is nothing to guardrail, compile-check, or sandbox.
+        has_defer = any(op.op == "defer_to_human" for op in patch_spec.operations)
+        if has_defer:
+            if not allow_defer:
+                # Model produced defer when not allowed (should be rare — the
+                # prompt hides defer when allow_defer=False). Reprompt so it
+                # produces a real fix.
+                friendly = (
+                    "defer_to_human is not enabled for this blueprint. "
+                    "Produce a real PatchSpec with Blueprint-mutating operations."
+                )
+                reprompt_errors.append(friendly)
+                logger.warning(
+                    "LLM deferred when allow_defer=False (attempt %d/%d)",
+                    attempt_num, budget.max_reprompts,
+                )
+                sig = from_apply_error(
+                    "defer_rejected", friendly, where="loop",
+                )
+                rec = tracker.record(
+                    sig,
+                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                    gate_that_rejected="defer_rejected", escalated=escalate_next,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+                stop = tracker.check_stop()
+                if stop is not None and stop != "solved":
+                    patch_spec = None
+                    break
+
+                escalate_next = tracker.should_escalate()
+                if escalate_next:
+                    tracker.mark_escalated()
+                    logger.info(
+                        "stuck-detection escalation triggered on attempt %d "
+                        "(temperature=%.2f, escalated template)",
+                        attempt_num, _ESCALATION_TEMPERATURE,
+                    )
+
+                reprompt_msg = _format_reprompt_for_next_turn(
+                    friendly=friendly, raw=raw, escalated=escalate_next,
+                    structural_hint="",
+                )
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": reprompt_msg})
+                patch_spec = None
+                continue
+
+            # Defer is allowed — terminate the loop cleanly.
+            rec = tracker.record(
+                None,
+                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                gate_that_rejected=None, escalated=escalate_next,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            tracker._stop_reason = "deferred"
+            break
 
         # ── Apply phase (optional callback) ─────────────────────────────
         if apply_callback is not None:

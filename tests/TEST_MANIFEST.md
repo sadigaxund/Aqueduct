@@ -398,6 +398,8 @@ This section tracks high-level functional verification of core features against 
 - ⏳ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
 - ⏳ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
 - ⏳ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
+- ⏳ `StopReason` Literal includes `"deferred"` (Phase 41)
+- ⏳ `STOP_REASONS` tuple includes `"deferred"` (Phase 41)
 - ✅ `summary()` returns a dict with `attempts`, `stop_reason`, `tokens_in_total`, `tokens_out_total`, `elapsed_seconds`, `escalated_once`, `signatures` (list of dicts)
 
 #### `agent/__init__.py` — `_detect_structural_error`
@@ -434,6 +436,11 @@ This section tracks high-level functional verification of core features against 
 - ⏳ `_call_anthropic(deadline=5.0)` → `httpx.Client(timeout=5.0)` (deadline overrides static timeout) (Phase 40)
 - ⏳ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
 - ⏳ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
+
+#### `agent/loop.py` — Phase 41 defer_to_human
+- ⏳ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
+- ⏳ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
+- ⏳ `PatchSpec` with mixed ops (defer + real) → `_reject_mixed_defer_ops` raises `ValueError`
 
 #### `agent/loop.py` — Phase 40 mid-call budget enforcement
 - ⏳ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
@@ -1346,6 +1353,8 @@ Does NOT apply or stage — caller decides.
 - ✅ `never_heal_errors=[]` (default) → no restriction
 - ✅ `_check_heal_guardrails()` with `failure_ctx.error_type=None` → falls back to stack trace class
 - ✅ `_check_heal_guardrails()` with both `error_type` and stack class → either match is sufficient
+- ⏳ `never_heal_errors` with regex pattern `"IllegalState.*offsets"` matches `"IllegalStateException"` candidates via `re.search` (Phase 41)
+- ⏳ Malformed regex in `never_heal_errors` degrades gracefully to exact match (Phase 41)
 
 ### Doctor guardrail typo detection — `aqueduct/doctor.py`
 - ✅ `heal_on_errors` entry matches known Assert `error_type` → no warning
@@ -1918,6 +1927,9 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `_check_assertions`: patch_is_valid=true + patch=None → failure
 - ✅ `_check_assertions`: patch_applies=true + apply succeeds → patch_applies=True
 - ✅ `_check_assertions`: patch_applies=true + apply fails → failure with error detail
+- ⏳ `_check_assertions`: `allow_defer: true` in scenario, LLM defers → PASS (gating), `allow_defer` assertion satisfied (Phase 41)
+- ⏳ `_check_assertions`: no `allow_defer` assertion, LLM defers → FAIL with "add allow_defer: true to accept deferral" message (Phase 41)
+- ⏳ `_check_assertions`: `allow_defer: true`, LLM produces real patch → FAIL with "expected defer_to_human" (Phase 41)
 - ✅ `run_scenario`: bad blueprint path → ScenarioResult(passed=False, failures=[...])
 - ✅ `run_scenario`: LLM returns None → ScenarioResult(passed=False, patch_valid=False)
 - ✅ `format_benchmark_table`: single model single scenario → correct table shape

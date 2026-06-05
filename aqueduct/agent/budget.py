@@ -38,6 +38,8 @@ Stop reasons
 ``stuck_signature``         same-signature axis tripped (post-escalation).
 ``progress_stalled``        no new distinct signatures across the window.
 ``api_error``               provider call raised (non-recoverable).
+``deferred``                LLM deferred to human — failure not healable at the
+                            Blueprint level (Phase 41).
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ StopReason = Literal[
     "stuck_signature",
     "progress_stalled",
     "api_error",
+    "deferred",
 ]
 
 STOP_REASONS: tuple[StopReason, ...] = (
@@ -76,6 +79,7 @@ STOP_REASONS: tuple[StopReason, ...] = (
     "stuck_signature",
     "progress_stalled",
     "api_error",
+    "deferred",
 )
 
 
