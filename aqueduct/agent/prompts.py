@@ -58,6 +58,7 @@ _VALID_OPS = (
     "replace_retry_policy",
     "add_arcade_ref",
     "defer_to_human",
+    "set_spark_config",
 )
 
 # Op-level field names that LLMs sometimes put at the TOP level of the patch,

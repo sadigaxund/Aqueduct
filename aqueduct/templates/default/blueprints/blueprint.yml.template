@@ -168,9 +168,12 @@ agent:
   #     set_module_on_failure     set per-module retry policy
   #     replace_retry_policy      replace the blueprint-level RetryPolicy
   #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
+  #     defer_to_human            signal unhealable failure (requires allow_defer: true)
+  #     set_spark_config          change a spark_config value (recommended: block in auto mode)
   # forbidden_ops:
   #   - remove_module
   #   - replace_retry_policy
+  #   - set_spark_config          # recommended: spark config changes affect cluster resources
 
   # heal_on_errors: LLM only triggers when the failure matches one of these labels.
   #   Labels come from Assert rules' error_type field, or infrastructure exception class

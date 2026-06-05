@@ -437,6 +437,12 @@ This section tracks high-level functional verification of core features against 
 - ⏳ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
 - ⏳ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
 
+#### `patch/grammar.py` — Phase 42 set_spark_config
+- ⏳ `SetSparkConfigOp` model validates with `{op: "set_spark_config", key: "spark.sql.shuffle.partitions", value: 200}`
+- ⏳ `apply_set_spark_config` sets `bp["spark_config"]["spark.sql.shuffle.partitions"] = 200`
+- ⏳ `apply_set_spark_config` auto-creates `spark_config` block when absent
+- ⏳ `"set_spark_config_key"` alias normalised to `"set_spark_config"`
+
 #### `agent/loop.py` — Phase 41 defer_to_human
 - ⏳ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
 - ⏳ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
