@@ -395,6 +395,9 @@ This section tracks high-level functional verification of core features against 
 - ✅ `should_escalate()` returns True iff `same_error_consecutive` tripped AND `escalated_once=False`
 - ✅ `mark_escalated()` flips `escalated_once=True`; subsequent `should_escalate()` returns False
 - ✅ `mark_api_error()` sets stop_reason to `"api_error"`
+- ⏳ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
+- ⏳ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
+- ⏳ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
 - ✅ `summary()` returns a dict with `attempts`, `stop_reason`, `tokens_in_total`, `tokens_out_total`, `elapsed_seconds`, `escalated_once`, `signatures` (list of dicts)
 
 #### `agent/__init__.py` — `_detect_structural_error`
@@ -428,6 +431,16 @@ This section tracks high-level functional verification of core features against 
 - ✅ `temperature_override=0.8` is added to the Anthropic payload as `temperature`
 - ✅ `temperature_override=0.8` overwrites top-level + Ollama `options.temperature` for OpenAI-compat
 - ✅ Missing `usage` block in response → tokens default to 0 (no KeyError)
+- ⏳ `_call_anthropic(deadline=5.0)` → `httpx.Client(timeout=5.0)` (deadline overrides static timeout) (Phase 40)
+- ⏳ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
+- ⏳ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
+
+#### `agent/loop.py` — Phase 40 mid-call budget enforcement
+- ⏳ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
+- ⏳ `generate_agent_patch` with `budget.max_seconds=5` + `timeout=300` → `deadline = min(300, remaining_seconds())` computed correctly; httpx `ReadTimeout` when `deadline < timeout` → `budget_seconds_exceeded` (Phase 40)
+- ⏳ `generate_agent_patch` with `budget.max_seconds=600` + `timeout=5` → timeout fires first; `deadline == timeout` so treated as `api_error`, not budget (Phase 40)
+- ⏳ Budget exhausted between iterations (no remaining seconds) → loop records a zero-token attempt with `gate_that_rejected="budget"` and terminates with `budget_seconds_exceeded` without calling LLM (Phase 40)
+- ⏳ `deadline` param threaded through `_call_agent` → provider functions (Phase 40)
 
 #### `agent/__init__.py` — `resolve_budget`
 - ✅ `resolve_budget(pydantic_budget)` copies all six axes from the AgentBudgetConfig

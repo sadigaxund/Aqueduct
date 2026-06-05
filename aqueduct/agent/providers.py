@@ -116,12 +116,17 @@ def _call_agent(
     patches_dir: Path,
     last_apply_error: str | None = None,
     temperature_override: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[str, int, int]:
     """Call the LLM provider; return (text, tokens_in, tokens_out).
 
     ``temperature_override`` lets the caller force a higher sampling
     temperature on the escalated attempt without mutating the caller-supplied
     configuration.
+
+    ``deadline`` (Phase 40) overrides the per-call HTTP timeout to enforce
+    the budget's ``max_seconds`` mid-call. When set, it replaces the static
+    ``cfg.timeout`` for this single call.
 
     Token counts come from the provider response when reported; 0 otherwise.
     """
@@ -141,12 +146,14 @@ def _call_agent(
             messages, cfg.model, cfg.max_tokens, cfg.base_url, system_prompt,
             cfg.provider_options, timeout=cfg.timeout,
             temperature_override=temperature_override,
+            deadline=deadline,
         )
     else:
         return _call_anthropic(
             messages, cfg.model, cfg.max_tokens, system_prompt,
             timeout=cfg.timeout,
             temperature_override=temperature_override,
+            deadline=deadline,
         )
 
 
@@ -157,6 +164,7 @@ def _call_anthropic(
     system_prompt: str,
     timeout: float = 120.0,
     temperature_override: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[str, int, int]:
     import httpx
 
@@ -174,7 +182,8 @@ def _call_anthropic(
     }
     if temperature_override is not None:
         payload["temperature"] = temperature_override
-    with httpx.Client(timeout=timeout) as client:
+    effective_timeout = float(deadline if deadline is not None else timeout)
+    with httpx.Client(timeout=effective_timeout) as client:
         response = client.post(
             "https://api.anthropic.com/v1/messages",
             headers={
@@ -211,6 +220,7 @@ def _call_openai_compat(
     provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
     temperature_override: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -244,8 +254,9 @@ def _call_openai_compat(
         if "options" in payload and isinstance(payload["options"], dict):
             payload["options"]["temperature"] = temperature_override
 
+    effective_read = float(deadline if deadline is not None else timeout)
     with httpx.Client(
-        timeout=httpx.Timeout(connect=15.0, read=timeout, write=30.0, pool=5.0),
+        timeout=httpx.Timeout(connect=15.0, read=effective_read, write=30.0, pool=5.0),
     ) as client:
         response = client.post(
             url,

@@ -241,15 +241,65 @@ def generate_agent_patch(
     while True:
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
+
+        # Phase 40: per-call deadline for mid-call budget enforcement.
+        # Uses min(agent.timeout, remaining budget seconds) so neither
+        # constraint is violated — the tighter one wins.
+        deadline = min(cfg.timeout, tracker.remaining_seconds())
+        if deadline <= 0:
+            # Budget exhausted before this call — record a zero-token
+            # attempt and terminate with budget_seconds_exceeded.
+            rec = tracker.record(
+                None,
+                tokens_in=0, tokens_out=0, latency_ms=0,
+                gate_that_rejected="budget", escalated=escalate_next,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            tracker.mark_budget_seconds_exceeded()
+            break
+
         t_start = time.monotonic()
         try:
             raw, tokens_in, tokens_out = _call_agent(
                 messages, cfg, patches_dir,
                 last_apply_error=last_apply_error,
                 temperature_override=temperature_override,
+                deadline=deadline,
             )
         except Exception as exc:
             latency_ms = int((time.monotonic() - t_start) * 1000)
+
+            # Phase 40: distinguish budget-driven timeout from API timeout.
+            # When the per-call deadline was constrained by the budget
+            # (deadline < cfg.timeout), any TimeoutException means the
+            # budget ran out mid-call — terminate with budget_seconds_exceeded
+            # instead of a generic api_error.
+            import httpx
+            if isinstance(exc, httpx.TimeoutException) and deadline < cfg.timeout:
+                logger.warning(
+                    "LLM API call timed out on budget deadline %.1fs "
+                    "(attempt %d/%d): %s",
+                    deadline, attempt_num, budget.max_reprompts, exc,
+                )
+                reprompt_errors.append(f"Budget seconds exceeded: {exc}")
+                sig = from_exception(exc, where="provider")
+                rec = tracker.record(
+                    sig,
+                    tokens_in=0, tokens_out=0, latency_ms=latency_ms,
+                    gate_that_rejected="budget", escalated=escalate_next,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                tracker.mark_budget_seconds_exceeded()
+                break
+
             hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s%s",

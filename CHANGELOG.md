@@ -11,6 +11,7 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Added
+- **Phase 40 — Mid-call budget enforcement.** `BudgetTracker.max_seconds` is now enforced during LLM calls, not just at iteration boundaries. The orchestration loop computes a per-call HTTP deadline (`min(agent.timeout, remaining_seconds)`) and threads it through `_call_agent` → provider functions as the httpx timeout. When the deadline fires mid-call, `httpx.TimeoutException` is caught and distinguished from a generic API error: if `deadline < agent.timeout` (budget was the binding constraint), the loop terminates with `stop_reason='budget_seconds_exceeded'`. Pre-call budget exhaustion records a zero-token attempt with `gate_that_rejected='budget'`. New methods: `BudgetTracker.remaining_seconds()`, `BudgetTracker.mark_budget_seconds_exceeded()`.
 - **Source Code Navigation Map to AGENTS.md.** Documents internal module structure of `aqueduct/agent/`, `aqueduct/executor/spark/`, and `aqueduct/parser/`, updated alongside package refactors. Acts as a first-filter for grepping — each package table shows which module owns what, with "when adding a feature" guidance per package.
 - **Parser `UdfSchema` duplicate `model_config` removed.** `aqueduct/parser/schema.py` had two `model_config` lines in `UdfSchema`; the first was overwritten by the second and dead. Consolidated to a single `ConfigDict(extra="forbid", populate_by_name=True)`.
 - **Compiler source map to AGENTS.md.** `aqueduct/compiler/` now documented with module roles and ownership.

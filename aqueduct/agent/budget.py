@@ -270,6 +270,21 @@ class BudgetTracker:
         """Caller invokes when the provider raises — terminates with api_error."""
         self._stop_reason = "api_error"
 
+    def mark_budget_seconds_exceeded(self) -> None:
+        """Caller invokes when the mid-call budget deadline fires — terminates
+        with ``budget_seconds_exceeded`` (Phase 40)."""
+        self._stop_reason = "budget_seconds_exceeded"
+
+    def remaining_seconds(self) -> float:
+        """Seconds remaining in the wall-clock budget, floored at 0 (Phase 40).
+
+        Used by the orchestration loop to compute a per-call HTTP deadline
+        so that ``max_seconds`` is enforced mid-call, not just at iteration
+        boundaries.
+        """
+        elapsed = time.monotonic() - self.started_at
+        return max(0.0, self.config.max_seconds - elapsed)
+
     def signatures(self) -> list[ErrorSignature]:
         return [a.signature for a in self.attempts if a.signature is not None]
 
