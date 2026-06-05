@@ -114,6 +114,11 @@ agent:
   # must always produce a real patch unless explicitly permitted to defer.
   # allow_defer: true
 
+  # deep_loop: run sandbox/lineage/explain gates inside the LLM conversation
+  # so the model sees rejection feedback and retries in-context (Phase 43).
+  # Default false — gates run post-hoc outside the conversation.
+  # deep_loop: true
+
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
 

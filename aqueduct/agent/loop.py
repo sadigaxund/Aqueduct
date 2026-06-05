@@ -191,6 +191,8 @@ def generate_agent_patch(
     guardrails: Any = None,
     budget: BudgetConfig | None = None,
     allow_defer: bool = False,
+    deep_loop: bool = False,
+    validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
 ) -> AgentPatchResult:
@@ -449,6 +451,59 @@ def generate_agent_patch(
                     logger.debug("on_attempt callback raised; ignoring", exc_info=True)
             tracker._stop_reason = "deferred"
             break
+
+        # ── Phase 43: in-conversation validation (deep_loop) ────────────────
+        # When deep_loop is enabled, sandbox / lineage / explain gates run
+        # INSIDE the LLM conversation.  If the patch fails validation, the
+        # rejection feedback is injected as a user message and the model
+        # retries immediately — same conversation, learned context.
+        # Without deep_loop: gates run only in the apply_callback (post-hoc).
+        if deep_loop and validate_callback is not None:
+            try:
+                validated, vfeedback = validate_callback(patch_spec)
+            except Exception as vcb_exc:
+                logger.debug("validate_callback raised; treating as validation fail", exc_info=True)
+                validated, vfeedback = False, f"Validation error: {vcb_exc}"
+
+            if not validated:
+                logger.info(
+                    "Deep-loop validation rejected patch (attempt %d/%d): %s",
+                    attempt_num, budget.max_reprompts,
+                    vfeedback[:200] if vfeedback else "(no detail)",
+                )
+                reprompt_errors.append(f"Validation rejected: {vfeedback}")
+                sig = from_apply_error(
+                    "validation_rejected", vfeedback or "(no detail)", where="validate",
+                )
+                rec = tracker.record(
+                    sig,
+                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                    gate_that_rejected="validate", escalated=escalate_next,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+                stop = tracker.check_stop()
+                if stop is not None and stop != "solved":
+                    patch_spec = None
+                    break
+
+                escalate_next = tracker.should_escalate()
+                if escalate_next:
+                    tracker.mark_escalated()
+
+                reprompt_msg = _format_reprompt_for_next_turn(
+                    friendly=vfeedback or "Validation rejected your patch.",
+                    raw=raw, escalated=escalate_next,
+                    structural_hint="",
+                )
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": reprompt_msg})
+                patch_spec = None
+                continue
 
         # ── Apply phase (optional callback) ─────────────────────────────
         if apply_callback is not None:

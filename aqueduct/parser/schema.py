@@ -81,6 +81,10 @@ class AgentSchema(BaseModel):
     # healable at the Blueprint level. Default False — the LLM must always produce
     # a real patch unless explicitly permitted to defer.
     allow_defer: bool = Field(default=False)
+    # Phase 43: run sandbox/lineage/explain gates inside the LLM conversation
+    # so the model sees rejection feedback and retries in-context. Default False
+    # preserves the current behaviour (gates run post-hoc via apply_callback).
+    deep_loop: bool = Field(default=False)
     # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.

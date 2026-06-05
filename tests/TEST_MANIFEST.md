@@ -437,6 +437,12 @@ This section tracks high-level functional verification of core features against 
 - ⏳ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
 - ⏳ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
 
+#### `agent/loop.py` — Phase 43 deep_loop / in-conversation validation
+- ⏳ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(False, "sandbox fail")` → feedback injected as user message, model retries in same conversation
+- ⏳ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(True, "")` → proceeds to apply_callback normally
+- ⏳ `generate_agent_patch(deep_loop=False)` (default) → validate_callback never called, apply_callback runs post-hoc
+- ⏳ `validate_callback` raises exception → treated as validation failure, feedback includes error message
+
 #### `patch/grammar.py` — Phase 42 set_spark_config
 - ⏳ `SetSparkConfigOp` model validates with `{op: "set_spark_config", key: "spark.sql.shuffle.partitions", value: 200}`
 - ⏳ `apply_set_spark_config` sets `bp["spark_config"]["spark.sql.shuffle.partitions"] = 200`

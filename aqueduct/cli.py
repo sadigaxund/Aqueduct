@@ -1819,6 +1819,51 @@ def run(
                     # Fail-open: don't let an apply-callback bug block healing.
                     return False, "apply_error", str(exc), None
 
+            # Phase 43: when deep_loop is enabled, build a validate_callback
+            # that runs sandbox/lineage/explain gates inside the LLM conversation.
+            # The model sees rejection feedback and retries in-context.
+            _deep_loop = manifest.agent.deep_loop if manifest.agent else False
+            _validate_cb = None
+            if _deep_loop:
+                _bp_path_for_vc = Path(blueprint)
+                _vc_bundle = bundle
+                _vc_surveyor = surveyor
+                _vc_failed_module = failure_ctx.failed_module
+                _vc_rid = iteration_run_id
+                _vc_bid = manifest.blueprint_id
+                _vc_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+
+                def _validate_cb(patch_spec: Any) -> tuple:
+                    try:
+                        _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
+                            patch=patch_spec,
+                            blueprint_path=_bp_path_for_vc,
+                            bundle=_vc_bundle,
+                            surveyor=_vc_surveyor,
+                            failed_module=_vc_failed_module,
+                            iteration_run_id=_vc_rid,
+                            blueprint_id=_vc_bid,
+                            sandbox_mode=_vc_sandbox_mode,
+                        )
+                        failures: list[str] = []
+                        if _g2 is not None and _g2.status == "fail":
+                            failures.append(
+                                f"Lineage gate: {_g2.detail or 'column impact detected'}"
+                            )
+                        if _g3 is not None and _g3.status == "fail":
+                            failures.append(
+                                f"Sandbox gate: {_g3.detail}"
+                            )
+                        if _g4 is not None and _g4.status == "fail":
+                            failures.append(
+                                f"Explain gate: {_g4.detail or 'plan regression detected'}"
+                            )
+                        if failures:
+                            return False, " | ".join(failures)
+                        return True, ""
+                    except Exception as exc:
+                        return False, f"Validation error: {exc}"
+
             agent_result = generate_agent_patch(
                 failure_ctx,
                 model=resolved_agent_model,
@@ -1834,6 +1879,8 @@ def run(
                 guardrails=manifest.agent.guardrails if manifest.agent else None,
                 budget=_budget,
                 allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                deep_loop=_deep_loop,
+                validate_callback=_validate_cb,
                 on_attempt=_persist_attempt,
                 apply_callback=_apply_cb,
             )
@@ -1995,16 +2042,22 @@ def run(
 
             elif effective_mode == "auto":
                 # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
-                _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
-                    patch=patch,
-                    blueprint_path=Path(blueprint),
-                    bundle=bundle,
-                    surveyor=surveyor,
-                    failed_module=failure_ctx.failed_module,
-                    iteration_run_id=iteration_run_id,
-                    blueprint_id=manifest.blueprint_id,
-                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                )
+                # Phase 43: when deep_loop is enabled, these gates already ran
+                # inside the LLM conversation — skip the redundant post-hoc run.
+                if _deep_loop:
+                    _g3_passed = True
+                    _g2, _g3, _g4 = None, None, None
+                else:
+                    _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
+                        patch=patch,
+                        blueprint_path=Path(blueprint),
+                        bundle=bundle,
+                        surveyor=surveyor,
+                        failed_module=failure_ctx.failed_module,
+                        iteration_run_id=iteration_run_id,
+                        blueprint_id=manifest.blueprint_id,
+                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                    )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
                         click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
