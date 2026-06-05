@@ -18,6 +18,7 @@ from aqueduct.parser.graph import detect_cycles, validate_spillway_targets
 from aqueduct.parser.models import (
     AgentConfig,
     Blueprint,
+    CascadeTierConfig,
     ContextRegistry,
     Edge,
     GuardrailsConfig,
@@ -30,6 +31,27 @@ from aqueduct.parser.schema import BlueprintSchema
 
 class ParseError(Exception):
     """Raised for any Blueprint parse, validation, or resolution failure."""
+
+
+def _build_cascade(raw: list | None) -> tuple | None:
+    """Phase 44 — Convert Pydantic ``CascadeTierSchema`` list to frozen configs."""
+    if not raw:
+        return None
+    tiers: list[CascadeTierConfig] = []
+    for t in raw:
+        tiers.append(CascadeTierConfig(
+            model=t.model,
+            provider=t.provider,
+            base_url=t.base_url,
+            provider_options=t.provider_options,
+            timeout=t.timeout,
+            max_tokens=t.max_tokens,
+            max_reprompts=t.max_reprompts,
+            max_seconds=float(t.max_seconds) if t.max_seconds is not None else None,
+            deep_loop=t.deep_loop,
+            allow_defer=t.allow_defer,
+        ))
+    return tuple(tiers)
 
 
 def _format_validation_error(exc: ValidationError, raw: dict | None = None) -> str:
@@ -297,6 +319,7 @@ def parse_dict(
             on_heal_failure=validated.agent.on_heal_failure,
             allow_defer=validated.agent.allow_defer,
             deep_loop=validated.agent.deep_loop,
+            cascade=_build_cascade(validated.agent.cascade),
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,

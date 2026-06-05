@@ -1864,26 +1864,48 @@ def run(
                     except Exception as exc:
                         return False, f"Validation error: {exc}"
 
-            agent_result = generate_agent_patch(
-                failure_ctx,
-                model=resolved_agent_model,
-                patches_dir=patches_dir,
-                provider=resolved_agent_provider,
-                base_url=resolved_agent_base_url,
-                provider_options=resolved_agent_provider_options,
-                timeout=resolved_agent_timeout,
-                max_reprompts=resolved_agent_max_reprompts,
-                engine_prompt_context=resolved_agent_engine_prompt_context,
-                blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-                last_apply_error=last_apply_error,
-                guardrails=manifest.agent.guardrails if manifest.agent else None,
-                budget=_budget,
-                allow_defer=manifest.agent.allow_defer if manifest.agent else False,
-                deep_loop=_deep_loop,
-                validate_callback=_validate_cb,
-                on_attempt=_persist_attempt,
-                apply_callback=_apply_cb,
-            )
+            # Phase 44: multi-model cascade takes priority over single-model loop.
+            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
+            if _cascade_tiers:
+                from aqueduct.agent.cascade import generate_cascade_patch
+                agent_result = generate_cascade_patch(
+                    tiers=list(_cascade_tiers),
+                    failure_ctx=failure_ctx,
+                    patches_dir=patches_dir,
+                    provider=resolved_agent_provider,
+                    base_url=resolved_agent_base_url,
+                    provider_options=resolved_agent_provider_options,
+                    timeout=resolved_agent_timeout,
+                    max_tokens=4096,
+                    max_reprompts=resolved_agent_max_reprompts,
+                    engine_prompt_context=resolved_agent_engine_prompt_context,
+                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                    guardrails=manifest.agent.guardrails if manifest.agent else None,
+                    apply_callback=_apply_cb,
+                    validate_callback=_validate_cb,
+                    on_attempt=_persist_attempt,
+                )
+            else:
+                agent_result = generate_agent_patch(
+                    failure_ctx,
+                    model=resolved_agent_model,
+                    patches_dir=patches_dir,
+                    provider=resolved_agent_provider,
+                    base_url=resolved_agent_base_url,
+                    provider_options=resolved_agent_provider_options,
+                    timeout=resolved_agent_timeout,
+                    max_reprompts=resolved_agent_max_reprompts,
+                    engine_prompt_context=resolved_agent_engine_prompt_context,
+                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                    last_apply_error=last_apply_error,
+                    guardrails=manifest.agent.guardrails if manifest.agent else None,
+                    budget=_budget,
+                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                    deep_loop=_deep_loop,
+                    validate_callback=_validate_cb,
+                    on_attempt=_persist_attempt,
+                    apply_callback=_apply_cb,
+                )
             patch = agent_result.patch
             # Update the last persisted row with stop_reason so downstream
             # joins can answer "which axis terminated this heal".

@@ -119,6 +119,19 @@ agent:
   # Default false — gates run post-hoc outside the conversation.
   # deep_loop: true
 
+  # cascade: multi-model healing cascade (Phase 44). Each tier tries a
+  # different model; escalates on stuck_signature / exhausted_attempts /
+  # deferred. Cheaper model first, expensive model as fallback.
+  # cascade:
+  #   - model: qwen2.5-coder:7b
+  #     max_reprompts: 2
+  #     max_seconds: 30
+  #   - model: claude-sonnet-4-20250514
+  #     max_reprompts: 3
+  #     max_seconds: 120
+  #     deep_loop: true
+  #     allow_defer: true
+
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
 

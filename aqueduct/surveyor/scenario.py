@@ -635,6 +635,7 @@ def run_scenario(
         budget=budget,
         allow_defer=bp_allow_defer,
         deep_loop=False,  # scenarios don't use deep_loop
+        model_cascade_position=None,  # scenarios don't use cascade
         apply_callback=apply_cb,
     )
     patch = agent_result.patch

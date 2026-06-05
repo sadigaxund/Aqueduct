@@ -195,6 +195,7 @@ def generate_agent_patch(
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
+    model_cascade_position: int | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -258,6 +259,7 @@ def generate_agent_patch(
                 None,
                 tokens_in=0, tokens_out=0, latency_ms=0,
                 gate_that_rejected="budget", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -296,6 +298,7 @@ def generate_agent_patch(
                     sig,
                     tokens_in=0, tokens_out=0, latency_ms=latency_ms,
                     gate_that_rejected="budget", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
                 )
                 if on_attempt is not None:
                     try:
@@ -316,6 +319,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=0, tokens_out=0, latency_ms=latency_ms,
                 gate_that_rejected="provider", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -358,6 +362,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                 gate_that_rejected="schema", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -427,6 +432,7 @@ def generate_agent_patch(
                     sig,
                     tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                     gate_that_rejected="defer_rejected", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
                 )
                 if on_attempt is not None:
                     try:
@@ -462,6 +468,7 @@ def generate_agent_patch(
                 None,
                 tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                 gate_that_rejected=None, escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -498,6 +505,7 @@ def generate_agent_patch(
                     sig,
                     tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                     gate_that_rejected="validate", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
                 )
                 if on_attempt is not None:
                     try:
@@ -542,6 +550,7 @@ def generate_agent_patch(
                     None,
                     tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                     gate_that_rejected=None, escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
                 )
                 if on_attempt is not None:
                     try:
@@ -571,6 +580,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                 gate_that_rejected="apply", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -606,6 +616,7 @@ def generate_agent_patch(
             None,
             tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
             gate_that_rejected=None, escalated=escalate_next,
+            model_cascade_position=model_cascade_position,
         )
         if on_attempt is not None:
             try:

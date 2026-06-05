@@ -149,6 +149,7 @@ class AttemptRecord:
     latency_ms: int = 0
     gate_that_rejected: str | None = None    # 'schema' | 'apply' | 'guardrail' | 'runtime' | None
     escalated: bool = False                   # was Task 87 escalation applied on this attempt?
+    model_cascade_position: int | None = None  # Phase 44: tier index (0-based) in multi-model cascade
 
     def to_dict(self) -> dict:
         return {
@@ -159,6 +160,7 @@ class AttemptRecord:
             "latency_ms": self.latency_ms,
             "gate_that_rejected": self.gate_that_rejected,
             "escalated": self.escalated,
+            "model_cascade_position": self.model_cascade_position,
         }
 
 
@@ -209,6 +211,7 @@ class BudgetTracker:
         latency_ms: int = 0,
         gate_that_rejected: str | None = None,
         escalated: bool = False,
+        model_cascade_position: int | None = None,
     ) -> AttemptRecord:
         rec = AttemptRecord(
             attempt_num=self._current_attempt,
@@ -218,6 +221,7 @@ class BudgetTracker:
             latency_ms=latency_ms,
             gate_that_rejected=gate_that_rejected,
             escalated=escalated,
+            model_cascade_position=model_cascade_position,
         )
         self.attempts.append(rec)
         self.tokens_in_total += tokens_in

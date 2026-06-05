@@ -522,6 +522,8 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 13 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback, Phase 43) and multi-model cascading (Phase 44) for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
+**Multi-model cascade (Phase 44).** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults. The cascade records `model_cascade_position` on every attempt for observability.
+
 ## **8.2 The Healing Flow**
 
 ```
