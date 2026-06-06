@@ -10,6 +10,8 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-06-06
+
 ### Added
 - **Verbose healing flow logging.** Structured `INFO`-level log lines at each healing step (attempt header, LLM token/latency, parse result with op summary, validation/apply status, final completion summary). Visible with `--verbose` flag (sets `logging.DEBUG` → INFO messages appear). Added to `generate_agent_patch` loop.
 - **Model-agnostic positioning in README and specs.md §8.1.** Surfaces Aqueduct's small-model compatibility as a deliberate architectural advantage — constrained PatchSpec grammar (13 ops, no codegen) means even 7B local models heal ~70% of common Spark failures in a single attempt. Larger models unlock `deep_loop` and multi-model cascades for complex cases.
@@ -22,6 +24,9 @@ release and are marked **BREAKING**.
 - **Parser `UdfSchema` duplicate `model_config` removed.** `aqueduct/parser/schema.py` had two `model_config` lines in `UdfSchema`; the first was overwritten by the second and dead. Consolidated to a single `ConfigDict(extra="forbid", populate_by_name=True)`.
 - **Compiler source map to AGENTS.md.** `aqueduct/compiler/` now documented with module roles and ownership.
 - **`compiler.py` and `expander.py` warning logs added.** Silent `except: pass` on YAML provenance load failures replaced with `logger.warning()` — same pattern as the agent/ fixes.
+- **Feature-split CI with path-based auto-skip.** CI now runs 9 parallel jobs (parser, compiler, executor, surveyor, agent, patch, CLI, config, stores) instead of a monolithic quick-gate. A `changes` job detects which areas were touched; on branches only matching jobs fire. On `main` every job runs unconditionally. Spark tests are no longer silently deselected — they run in a dedicated executor job.
+- **Compatibility matrix CI workflow.** New `.github/workflows/compatibility.yml` tests 3 curated version combos (Latest: Python 3.13 + PySpark 4.1.2 + Postgres 18; LTS: Python 3.11 + Spark 4.1.2 + Postgres 17; Legacy: Python 3.12 + Spark 3.5.8 + Postgres 17) on every main merge. Results are auto-pushed back to `docs/compatibility.md` with per-combo pass/fail status and build reference.
+- **Lazy pyspark import in `aqueduct/executor/__init__.py`.** Replaced the eager module-level `from aqueduct.executor.spark.executor import execute` with a `__getattr__` lazy resolver. This prevents ImportError crashes when any executor submodule (path_keys, models) is imported without Spark installed — the parser, surveyor, and patch modules all import from executor and previously failed at collection time in non-Spark CI jobs.
 
 ### Changed
 - **`aqueduct/agent/__init__.py` split into 5 focused modules.** The 1679-line file was restructured into: `prompts.py` (templates + prompt builders), `providers.py` (HTTP dispatch), `parse.py` (response parsing + reprompt formatting), `loop.py` (orchestration loop + patch I/O), and a thin `__init__.py` re-exporting the public API. Internal `_call_agent` collapsed 11 positional params into a `_ProviderConfig` dataclass. All external imports (`from aqueduct.agent import X`) unchanged.

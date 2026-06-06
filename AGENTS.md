@@ -223,7 +223,7 @@ Every new feature, bug fix, or behavioral change that is testable should add a `
 
 When fixing a bug, add a regression test entry that captures the *broken* behavior (what was happening before the fix) and the *expected* behavior (what happens after). This prevents the same bug from recurring without a test catching it.
 
-### CI workflow (`.github/workflows/ci.yml`)
+### CI workflow (`.github/workflows/test-suite.yml`)
 
 CI runs 9 parallel jobs, each scoped to a feature area.  A `changes` job
 (using `dorny/paths-filter@v3`) detects which files changed; on branches

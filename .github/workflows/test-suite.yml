@@ -1,10 +1,10 @@
-name: Aqueduct CI
+name: Test Suite
 
 on:
   push:
-    branches: [main, feat/LLM_Healing_v2]
+    branches: [feat/**]
   pull_request:
-    branches: [main, feat/LLM_Healing_v2]
+    branches: [main, feat/**]
 
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
