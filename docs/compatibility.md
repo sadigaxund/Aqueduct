@@ -5,7 +5,7 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 <!-- COMPAT_RESULTS_START -->
 ## Latest run
 
-**Build:** `cb6a7fe` — commit `cb6a7fe`
+**Build:** `87dc70f` — commit `87dc70f`
 
 | Combo | Python | Spark | Delta | Postgres | Java | Status |
 |---|---|---|---|---|---|---|
