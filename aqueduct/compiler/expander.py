@@ -181,6 +181,9 @@ def expand_arcades(
         modules:  Module list from the parsed Blueprint.
         edges:    Edge list from the parsed Blueprint.
         base_dir: Directory of the parent Blueprint file (ref paths are relative).
+                  Used as the anchor for path resolution INSIDE the sub-blueprint
+                  so that context_override values (expressed relative to the parent)
+                  resolve to the correct filesystem location.
 
     Returns:
         (expanded_modules, rewired_edges, arcade_provenance_map)
@@ -223,12 +226,32 @@ def _expand_recursive(
         # Load raw YAML first (for provenance original expressions)
         raw_module_configs = _load_raw_module_configs(sub_path)
 
-        # Inline import to avoid circular deps (parser → compiler → parser)
-        from aqueduct.parser.parser import parse, ParseError  # noqa: PLC0415
+        # Parse sub-blueprint with the PARENT's base_dir so that
+        # context_override values (e.g. src_path: data/input/sales.csv)
+        # are anchored relative to the parent blueprint, not the arcade
+        # file's subdirectory. Using parse() default base_dir=path.parent
+        # would anchor them to <parent>/arcades/ — breaking the path.
+        import yaml  # noqa: PLC0415 — plain load, no side effects
+        from aqueduct.parser.parser import parse_dict, ParseError  # noqa: PLC0415
 
         try:
-            sub_bp = parse(
-                sub_path,
+            raw_sub = yaml.safe_load(sub_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            raise ExpandError(f"Arcade {m.id!r}: sub-Blueprint not found at {sub_path}")
+        except yaml.YAMLError as exc:
+            raise ExpandError(
+                f"Arcade {m.id!r}: sub-Blueprint {sub_path} has invalid YAML: {exc}"
+            ) from exc
+        if not isinstance(raw_sub, dict):
+            raise ExpandError(
+                f"Arcade {m.id!r}: sub-Blueprint must be a YAML mapping, "
+                f"got {type(raw_sub).__name__}"
+            )
+
+        try:
+            sub_bp = parse_dict(
+                raw_sub,
+                base_dir=base_dir,
                 cli_overrides=m.context_override or {},
             )
         except ParseError as exc:

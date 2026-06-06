@@ -110,16 +110,16 @@ agent:
   on_heal_failure: "stage"
 
   # allow_defer: permit the LLM to emit defer_to_human when the failure is
-  # not healable at the Blueprint level (Phase 41). Default false — the LLM
+  # not healable at the Blueprint level. Default false — the LLM
   # must always produce a real patch unless explicitly permitted to defer.
   # allow_defer: true
 
   # deep_loop: run sandbox/lineage/explain gates inside the LLM conversation
-  # so the model sees rejection feedback and retries in-context (Phase 43).
+  # so the model sees rejection feedback and retries in-context.
   # Default false — gates run post-hoc outside the conversation.
   # deep_loop: true
 
-  # cascade: multi-model healing cascade (Phase 44). Each tier tries a
+  # cascade: multi-model healing cascade. Each tier tries a
   # different model; escalates on stuck_signature / exhausted_attempts /
   # deferred. Cheaper model first, expensive model as fallback.
   # cascade:
@@ -176,6 +176,7 @@ agent:
   # forbidden_ops: PatchSpec ops the LLM may never use.
   #   Empty (default) = all ops permitted.
   #   Complete op list:
+  #     set_module_config_key     update a single key in a module's config block
   #     replace_module_config     overwrite a module's entire config block
   #     replace_module_label      rename a module's display label
   #     insert_module             add a new module and rewire edges
@@ -213,9 +214,16 @@ agent:
   # base_url: "http://10.0.0.39:11434/v1"
   # model: "claude-sonnet-4-6"
   # timeout: 300.0               # seconds; increase for slow local models
-  # max_reprompts: 5             # legacy single-axis cap. Multi-axis `agent.budget`
-  #                              # currently lives at engine level (aqueduct.yml) only —
-  #                              # blueprint-level `budget:` is a planned 1.0.5 item.
+  # max_reprompts: 5             # legacy single-axis cap — prefer `budget:` below
+  #                              
+  # Multi-axis budget (available at both engine and blueprint level):
+  # budget:
+  #   max_reprompts: 5
+  #   max_seconds: 120
+  #   max_tokens_total: 50000
+  #   same_error_consecutive: 2
+  #   same_signature_overall: 3
+  #   progress_stalled_window: 3
 
   # prompt_context: |             # Appended to LLM system prompt after engine-level prompt_context.
   #   Green taxi schema uses lpep_* columns; yellow uses tpep_* columns.

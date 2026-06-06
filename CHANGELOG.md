@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- **Arcade path anchoring uses parent blueprint's base directory.** When expanding arcade modules, `context_override` path values (e.g. `src_path: data/input/sales.csv`) were anchored relative to the arcade file's directory (`arcades/`) instead of the parent blueprint's directory, producing nonexistent paths like `arcades/data/input/sales.csv`. The expander now parses sub-blueprints via `parse_dict(raw, base_dir=base_dir, …)` with the parent's `base_dir`, so context_override paths resolve correctly.
+
+
 ## [1.2.0] — 2026-06-06
 
 ### Added
