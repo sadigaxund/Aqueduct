@@ -128,7 +128,7 @@ for snippet_path in "$WORK_DIR/snippets"/*/; do
 
     if is_skipped "$SNIPPET_NAME"; then
         echo -e "${YELLOW}SKIP${RESET}  $SNIPPET_NAME"
-        (( SKIP_COUNT++ ))
+        SKIP_COUNT=$(( SKIP_COUNT + 1 ))
         continue
     fi
 
@@ -167,10 +167,10 @@ for snippet_path in "$WORK_DIR/snippets"/*/; do
 
     if $SNIPPET_OK; then
         echo -e "  ${GREEN}→ PASS${RESET}  $SNIPPET_NAME"
-        (( PASS_COUNT++ ))
+        PASS_COUNT=$(( PASS_COUNT + 1 ))
     else
         echo -e "  ${RED}→ FAIL${RESET}  $SNIPPET_NAME  (logs: $WORK_DIR/logs/)"
-        (( FAIL_COUNT++ ))
+        FAIL_COUNT=$(( FAIL_COUNT + 1 ))
     fi
     echo ""
 

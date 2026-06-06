@@ -38,6 +38,8 @@ Stop reasons
 ``stuck_signature``         same-signature axis tripped (post-escalation).
 ``progress_stalled``        no new distinct signatures across the window.
 ``api_error``               provider call raised (non-recoverable).
+``deferred``                LLM deferred to human — failure not healable at the
+                            Blueprint level (Phase 41).
 """
 
 from __future__ import annotations
@@ -66,6 +68,7 @@ StopReason = Literal[
     "stuck_signature",
     "progress_stalled",
     "api_error",
+    "deferred",
 ]
 
 STOP_REASONS: tuple[StopReason, ...] = (
@@ -76,6 +79,7 @@ STOP_REASONS: tuple[StopReason, ...] = (
     "stuck_signature",
     "progress_stalled",
     "api_error",
+    "deferred",
 )
 
 
@@ -145,6 +149,7 @@ class AttemptRecord:
     latency_ms: int = 0
     gate_that_rejected: str | None = None    # 'schema' | 'apply' | 'guardrail' | 'runtime' | None
     escalated: bool = False                   # was Task 87 escalation applied on this attempt?
+    model_cascade_position: int | None = None  # Phase 44: tier index (0-based) in multi-model cascade
 
     def to_dict(self) -> dict:
         return {
@@ -155,6 +160,7 @@ class AttemptRecord:
             "latency_ms": self.latency_ms,
             "gate_that_rejected": self.gate_that_rejected,
             "escalated": self.escalated,
+            "model_cascade_position": self.model_cascade_position,
         }
 
 
@@ -205,6 +211,7 @@ class BudgetTracker:
         latency_ms: int = 0,
         gate_that_rejected: str | None = None,
         escalated: bool = False,
+        model_cascade_position: int | None = None,
     ) -> AttemptRecord:
         rec = AttemptRecord(
             attempt_num=self._current_attempt,
@@ -214,6 +221,7 @@ class BudgetTracker:
             latency_ms=latency_ms,
             gate_that_rejected=gate_that_rejected,
             escalated=escalated,
+            model_cascade_position=model_cascade_position,
         )
         self.attempts.append(rec)
         self.tokens_in_total += tokens_in
@@ -269,6 +277,21 @@ class BudgetTracker:
     def mark_api_error(self) -> None:
         """Caller invokes when the provider raises — terminates with api_error."""
         self._stop_reason = "api_error"
+
+    def mark_budget_seconds_exceeded(self) -> None:
+        """Caller invokes when the mid-call budget deadline fires — terminates
+        with ``budget_seconds_exceeded`` (Phase 40)."""
+        self._stop_reason = "budget_seconds_exceeded"
+
+    def remaining_seconds(self) -> float:
+        """Seconds remaining in the wall-clock budget, floored at 0 (Phase 40).
+
+        Used by the orchestration loop to compute a per-call HTTP deadline
+        so that ``max_seconds`` is enforced mid-call, not just at iteration
+        boundaries.
+        """
+        elapsed = time.monotonic() - self.started_at
+        return max(0.0, self.config.max_seconds - elapsed)
 
     def signatures(self) -> list[ErrorSignature]:
         return [a.signature for a in self.attempts if a.signature is not None]

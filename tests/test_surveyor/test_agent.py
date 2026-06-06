@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.patch.grammar import PatchSpec
 

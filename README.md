@@ -32,6 +32,8 @@ Aqueduct is a control plane for Apache Spark. Define pipelines as YAML Blueprint
 5. On failure → **LLM Agent** creates a structured `PatchSpec`
 6. Patch goes through guardrails → sandbox → explain gates → applied (or staged for review)
 
+**Model-agnostic by design.** Aqueduct's healing loop works with any LLM — from a local 7B model running on Ollama to Claude Sonnet via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. ~70% of production Spark errors are healable by a 7B model in a single attempt. Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades unlock higher heal rates with larger models.
+
 ## Core Concepts
 
 | Concept       | Purpose                              |

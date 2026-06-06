@@ -5,10 +5,13 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 import pytest
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from unittest.mock import MagicMock, patch
 
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 from aqueduct.config import WebhookEndpointConfig
 

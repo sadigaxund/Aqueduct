@@ -81,7 +81,13 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     never_heal_errors takes priority over heal_on_errors.
     Matching uses error_type from FailureContext (Assert label) or the
     exception class name extracted from the stack trace (infra errors).
+
+    Phase 41: never_heal_errors patterns are regex — e.g.
+    ``"IllegalStateException.*offsets"`` matches any error class
+    containing "IllegalStateException" and "offsets".
     """
+    import re
+
     error_type: str | None = getattr(failure_ctx, "error_type", None)
     stack_class: str | None = _extract_stack_class(getattr(failure_ctx, "stack_trace", None))
 
@@ -94,9 +100,15 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     never_heal: tuple = tuple(getattr(guardrails, "never_heal_errors", ()))
     heal_on: tuple = tuple(getattr(guardrails, "heal_on_errors", ()))
 
-    for et in never_heal:
-        if et in candidates:
-            return False, f"error_type {et!r} matched never_heal_errors"
+    for pattern in never_heal:
+        for candidate in candidates:
+            try:
+                if re.search(pattern, candidate):
+                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
+            except re.error:
+                # Degrade gracefully on malformed regex: fall back to exact match
+                if pattern == candidate:
+                    return False, f"error {candidate!r} matched never_heal_errors pattern {pattern!r}"
 
     if heal_on:
         for et in heal_on:
@@ -1807,23 +1819,93 @@ def run(
                     # Fail-open: don't let an apply-callback bug block healing.
                     return False, "apply_error", str(exc), None
 
-            agent_result = generate_agent_patch(
-                failure_ctx,
-                model=resolved_agent_model,
-                patches_dir=patches_dir,
-                provider=resolved_agent_provider,
-                base_url=resolved_agent_base_url,
-                provider_options=resolved_agent_provider_options,
-                timeout=resolved_agent_timeout,
-                max_reprompts=resolved_agent_max_reprompts,
-                engine_prompt_context=resolved_agent_engine_prompt_context,
-                blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-                last_apply_error=last_apply_error,
-                guardrails=manifest.agent.guardrails if manifest.agent else None,
-                budget=_budget,
-                on_attempt=_persist_attempt,
-                apply_callback=_apply_cb,
-            )
+            # Phase 43: when deep_loop is enabled, build a validate_callback
+            # that runs sandbox/lineage/explain gates inside the LLM conversation.
+            # The model sees rejection feedback and retries in-context.
+            _deep_loop = manifest.agent.deep_loop if manifest.agent else False
+            _validate_cb = None
+            if _deep_loop:
+                _bp_path_for_vc = Path(blueprint)
+                _vc_bundle = bundle
+                _vc_surveyor = surveyor
+                _vc_failed_module = failure_ctx.failed_module
+                _vc_rid = iteration_run_id
+                _vc_bid = manifest.blueprint_id
+                _vc_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+
+                def _validate_cb(patch_spec: Any) -> tuple:
+                    try:
+                        _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
+                            patch=patch_spec,
+                            blueprint_path=_bp_path_for_vc,
+                            bundle=_vc_bundle,
+                            surveyor=_vc_surveyor,
+                            failed_module=_vc_failed_module,
+                            iteration_run_id=_vc_rid,
+                            blueprint_id=_vc_bid,
+                            sandbox_mode=_vc_sandbox_mode,
+                        )
+                        failures: list[str] = []
+                        if _g2 is not None and _g2.status == "fail":
+                            failures.append(
+                                f"Lineage gate: {_g2.detail or 'column impact detected'}"
+                            )
+                        if _g3 is not None and _g3.status == "fail":
+                            failures.append(
+                                f"Sandbox gate: {_g3.detail}"
+                            )
+                        if _g4 is not None and _g4.status == "fail":
+                            failures.append(
+                                f"Explain gate: {_g4.detail or 'plan regression detected'}"
+                            )
+                        if failures:
+                            return False, " | ".join(failures)
+                        return True, ""
+                    except Exception as exc:
+                        return False, f"Validation error: {exc}"
+
+            # Phase 44: multi-model cascade takes priority over single-model loop.
+            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
+            if _cascade_tiers:
+                from aqueduct.agent.cascade import generate_cascade_patch
+                agent_result = generate_cascade_patch(
+                    tiers=list(_cascade_tiers),
+                    failure_ctx=failure_ctx,
+                    patches_dir=patches_dir,
+                    provider=resolved_agent_provider,
+                    base_url=resolved_agent_base_url,
+                    provider_options=resolved_agent_provider_options,
+                    timeout=resolved_agent_timeout,
+                    max_tokens=4096,
+                    max_reprompts=resolved_agent_max_reprompts,
+                    engine_prompt_context=resolved_agent_engine_prompt_context,
+                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                    guardrails=manifest.agent.guardrails if manifest.agent else None,
+                    apply_callback=_apply_cb,
+                    validate_callback=_validate_cb,
+                    on_attempt=_persist_attempt,
+                )
+            else:
+                agent_result = generate_agent_patch(
+                    failure_ctx,
+                    model=resolved_agent_model,
+                    patches_dir=patches_dir,
+                    provider=resolved_agent_provider,
+                    base_url=resolved_agent_base_url,
+                    provider_options=resolved_agent_provider_options,
+                    timeout=resolved_agent_timeout,
+                    max_reprompts=resolved_agent_max_reprompts,
+                    engine_prompt_context=resolved_agent_engine_prompt_context,
+                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                    last_apply_error=last_apply_error,
+                    guardrails=manifest.agent.guardrails if manifest.agent else None,
+                    budget=_budget,
+                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                    deep_loop=_deep_loop,
+                    validate_callback=_validate_cb,
+                    on_attempt=_persist_attempt,
+                    apply_callback=_apply_cb,
+                )
             patch = agent_result.patch
             # Update the last persisted row with stop_reason so downstream
             # joins can answer "which axis terminated this heal".
@@ -1982,16 +2064,22 @@ def run(
 
             elif effective_mode == "auto":
                 # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
-                _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
-                    patch=patch,
-                    blueprint_path=Path(blueprint),
-                    bundle=bundle,
-                    surveyor=surveyor,
-                    failed_module=failure_ctx.failed_module,
-                    iteration_run_id=iteration_run_id,
-                    blueprint_id=manifest.blueprint_id,
-                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                )
+                # Phase 43: when deep_loop is enabled, these gates already ran
+                # inside the LLM conversation — skip the redundant post-hoc run.
+                if _deep_loop:
+                    _g3_passed = True
+                    _g2, _g3, _g4 = None, None, None
+                else:
+                    _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
+                        patch=patch,
+                        blueprint_path=Path(blueprint),
+                        bundle=bundle,
+                        surveyor=surveyor,
+                        failed_module=failure_ctx.failed_module,
+                        iteration_run_id=iteration_run_id,
+                        blueprint_id=manifest.blueprint_id,
+                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                    )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
                         click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
@@ -3745,14 +3833,17 @@ def heal(
         finished_at=finished_at,
     )
 
-    # Extract guardrails from the persisted manifest so heal-from-store paths
-    # surface the same constraints the live run would have used.
+    # Extract guardrails and allow_defer from the persisted manifest so
+    # heal-from-store paths surface the same constraints the live run would
+    # have used.
     _guardrails_for_prompt: Any = None
+    _allow_defer: bool = False
     try:
         _mdict = json.loads(_manifest_str) if _manifest_str else {}
         if isinstance(_mdict, dict):
             _agent_block = _mdict.get("agent") or {}
             _guardrails_for_prompt = _agent_block.get("guardrails") or None
+            _allow_defer = bool(_agent_block.get("allow_defer", False))
     except Exception:
         _guardrails_for_prompt = None
 
@@ -3802,6 +3893,7 @@ def heal(
         engine_prompt_context=resolved_engine_prompt_context,
         guardrails=_guardrails_for_prompt,
         budget=_budget,
+        allow_defer=_allow_defer,
         apply_callback=_apply_cb,
     )
     patch = agent_result.patch

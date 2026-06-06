@@ -57,6 +57,8 @@ _VALID_OPS = (
     "set_module_on_failure",
     "replace_retry_policy",
     "add_arcade_ref",
+    "defer_to_human",
+    "set_spark_config",
 )
 
 # Op-level field names that LLMs sometimes put at the TOP level of the patch,
@@ -150,7 +152,7 @@ Every response MUST be a single JSON object with ALL of these fields. The `opera
 ```json
 {{
   "patch_id": "fix-example-path",
-  "rationale": "One sentence: what was wrong and what the fix does.",
+  "description": "One sentence: what was wrong and what the fix does.",
   "confidence": 0.9,
   "category": "bad_path",
   "root_cause": "One sentence: root cause.",
@@ -167,13 +169,13 @@ Every response MUST be a single JSON object with ALL of these fields. The `opera
 
 Field rules:
 - patch_id: short slug (e.g. "fix-yellow-taxi-path")
-- rationale: field is named "rationale" — do NOT use "description"
+- description: one sentence — what was wrong and what the fix does (you can also use "rationale", "summary", "reason")
 - confidence: float 0.0–1.0 — required
 - category: one of: schema_drift, bad_path, format_mismatch, oom_config, sql_column_not_found, type_mismatch, missing_context, permission_error, other
 - root_cause: one-sentence diagnosis
 - operations: list of patch ops — use "op" as the key (NOT "type" or "action")
 
-Respond with ONLY valid JSON. No prose, no markdown fences, no explanation outside the JSON object.
+Respond with ONLY valid JSON. No prose, no markdown fences, no explanation outside the JSON object.{defer_rules}
 {previous_patches_section}{custom_context_section}"""
 
 
@@ -567,8 +569,50 @@ def _build_system_prompt(
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
+    allow_defer: bool = False,
 ) -> str:
-    schema = json.dumps(PatchSpec.model_json_schema(), indent=2)
+    raw_schema = PatchSpec.model_json_schema()
+
+    # Phase 41: when allow_defer is False, hide DeferToHumanOp from the
+    # schema the LLM sees. The model can't produce an op it doesn't know
+    # exists. The grammar still accepts it (Pydantic needs the full union),
+    # but the prompt shows only the real ops.
+    if not allow_defer:
+        # Strip DeferToHumanOp from the operations anyOf
+        op_items = raw_schema.get("$defs", {}).get("PatchSpec", {}).get("properties", {}).get("operations", {}).get("items", {})
+        if "anyOf" in op_items:
+            op_items["anyOf"] = [
+                ref for ref in op_items["anyOf"]
+                if not (isinstance(ref, dict) and "$ref" in ref and "DeferToHumanOp" in ref["$ref"])
+            ]
+        # Also remove the $defs entry
+        raw_schema.get("$defs", {}).pop("DeferToHumanOp", None)
+
+    schema = json.dumps(raw_schema, indent=2)
+
+    # Phase 41: defer rules — only shown when allow_defer is True so the
+    # model doesn't see an easy way out on normal heals.
+    defer_rules = ""
+    if allow_defer:
+        defer_rules = (
+            "\n\n### When to defer to a human\n"
+            "Use `defer_to_human` when NO PatchSpec operation can fix the root cause:\n"
+            "- **Infrastructure failures**: checkpoint corruption, S3 consistency, "
+            "Hive metastore locks, cluster config — these are not Blueprint-level fixes.\n"
+            "- **Upstream schema changes** requiring human judgment: ambiguous column "
+            "renames, new required columns with unclear defaults.\n"
+            "- **UDF body bugs**: PatchSpec cannot modify Python/Scala UDF code.\n"
+            "- **Error class has no module-config knob**: the failure is in Spark "
+            "internals, not Blueprint fields.\n"
+            "\n"
+            "When deferring, include:\n"
+            "- `diagnosis`: detailed explanation of why this cannot be patched automatically\n"
+            "- `suggestions`: actionable next steps for the human operator\n"
+            "- `confidence_reason`: why you're confident deferral is correct, not just uncertain\n"
+            "\n"
+            "Do NOT mix `defer_to_human` with other operations. If you defer, defer completely."
+        )
+
     prev = _load_previous_patches(patches_dir)
     if prev:
         lines = ["\n## Previous patch attempts (do NOT repeat these)"]
@@ -610,6 +654,7 @@ def _build_system_prompt(
         patch_schema=schema,
         previous_patches_section=prev_section,
         custom_context_section=custom_context_section,
+        defer_rules=defer_rules,
     )
 
 
@@ -620,6 +665,7 @@ def build_prompt(
     blueprint_prompt_context: str | None = None,
     guardrails: Any = None,
     last_apply_error: str | None = None,
+    allow_defer: bool = False,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -629,6 +675,8 @@ def build_prompt(
         last_apply_error: When set, includes the "previous patch failed" section
             in the system prompt so the debug view matches what the model sees
             on a re-prompt turn.
+        allow_defer: When True, includes defer_to_human in the schema and defer
+            rules in the prompt (Phase 41).
 
     Returns:
         {"system": <system prompt>, "user": <user prompt>}
@@ -637,6 +685,7 @@ def build_prompt(
         "system": _build_system_prompt(
             patches_dir, engine_prompt_context, blueprint_prompt_context,
             last_apply_error=last_apply_error,
+            allow_defer=allow_defer,
         ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }

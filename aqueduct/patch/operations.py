@@ -59,6 +59,7 @@ def _to_ruamel(data: Any) -> Any:
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
+    DeferToHumanOp,
     InsertModuleOp,
     RemoveModuleOp,
     ReplaceContextValueOp,
@@ -68,6 +69,7 @@ from aqueduct.patch.grammar import (
     ReplaceRetryPolicyOp,
     SetModuleConfigKeyOp,
     SetModuleOnFailureOp,
+    SetSparkConfigOp,
 )
 
 
@@ -324,6 +326,30 @@ def apply_add_arcade_ref(bp: dict, op: AddArcadeRefOp) -> dict:
     return bp
 
 
+def apply_defer_to_human(bp: dict, op: DeferToHumanOp) -> dict:
+    """No-op — defer_to_human makes zero Blueprint changes (Phase 41).
+
+    The orchestration loop detects this op and terminates with
+    ``stop_reason='deferred'``; the full diagnosis is staged for
+    human review as a pending patch file.
+    """
+    return bp
+
+
+def apply_set_spark_config(bp: dict, op: SetSparkConfigOp) -> dict:
+    """Set a key in the Blueprint's ``spark_config`` block (Phase 42).
+
+    Auto-creates the ``spark_config`` block if absent.  Seven of the
+    20 most common Spark errors (OOM, container kills, shuffle fetch
+    failures, Kryo overflow, dynamic allocation thrashing, GC issues,
+    driver MaxResultSize) are fixed purely by changing spark config
+    values — this operation makes those healable.
+    """
+    bp.setdefault("spark_config", {})
+    bp["spark_config"][op.key] = op.value
+    return bp
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
@@ -338,6 +364,8 @@ _DISPATCH = {
     "set_module_on_failure":  apply_set_module_on_failure,
     "replace_retry_policy":   apply_replace_retry_policy,
     "add_arcade_ref":         apply_add_arcade_ref,
+    "defer_to_human":         apply_defer_to_human,
+    "set_spark_config":       apply_set_spark_config,
 }
 
 

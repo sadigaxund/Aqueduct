@@ -16,7 +16,10 @@ import duckdb
 import pytest
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.surveyor.surveyor import Surveyor
+try:
+    from aqueduct.surveyor.surveyor import Surveyor
+except ImportError:
+    pytest.skip("pyspark required by Surveyor's executor dependency", allow_module_level=True)
 
 pytestmark = pytest.mark.unit
 

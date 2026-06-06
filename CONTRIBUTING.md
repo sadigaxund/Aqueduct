@@ -19,6 +19,10 @@ pip install -e ".[dev]"
 pytest tests/
 ```
 
+CI runs jobs per feature area (parser, compiler, executor, agent, etc.).
+Only jobs whose files changed fire on branches — don't worry if unrelated
+jobs skip your PR.  See AGENTS.md for the full job table.
+
 ## Code style
 
 ```bash

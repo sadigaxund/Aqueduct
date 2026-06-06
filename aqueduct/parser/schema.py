@@ -53,6 +53,26 @@ class GuardrailsSchema(BaseModel):
     never_heal_errors: list[str] = Field(default_factory=list)
 
 
+class CascadeTierSchema(BaseModel):
+    """Phase 44 — Per-tier config in a multi-model healing cascade.
+
+    Every field is optional. Missing fields inherit from the top-level
+    ``agent.*`` defaults.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    provider: Literal["anthropic", "openai_compat"] | None = None
+    base_url: str | None = None
+    provider_options: dict[str, Any] | None = None
+    timeout: float | None = Field(default=None, gt=0)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_reprompts: int | None = Field(default=None, ge=1)
+    max_seconds: int | None = Field(default=None, ge=1)
+    deep_loop: bool | None = None
+    allow_defer: bool | None = None
+
+
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -77,6 +97,17 @@ class AgentSchema(BaseModel):
     confidence_threshold: float = Field(default=0.7, ge=0, le=1)
     # What to do when a patch is generated but fails to fix the pipeline
     on_heal_failure: Literal["stage", "discard", "abort"] = "stage"
+    # Phase 41: allow the LLM to emit defer_to_human when the failure is not
+    # healable at the Blueprint level. Default False — the LLM must always produce
+    # a real patch unless explicitly permitted to defer.
+    allow_defer: bool = Field(default=False)
+    # Phase 43: run sandbox/lineage/explain gates inside the LLM conversation
+    # so the model sees rejection feedback and retries in-context. Default False
+    # preserves the current behaviour (gates run post-hoc via apply_callback).
+    deep_loop: bool = Field(default=False)
+    # Phase 44: multi-model healing cascade — each tier tries a different model,
+    # escalating on stuck_signature / exhausted_attempts / deferred.
+    cascade: list[CascadeTierSchema] | None = None
     # Extra context appended to LLM system prompt for this blueprint (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max successful LLM healing attempts per rolling 60-minute window for this blueprint.

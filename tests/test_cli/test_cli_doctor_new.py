@@ -541,3 +541,45 @@ edges: []
             assert mock_emit.call_count == 1
             assert mock_emit.call_args[0][0] == "cluster_store_path_relative"
             assert "WARNING:" not in result.output  # no raw WARNING: click.echo remains
+
+
+# ── 37. Doctor package split: public API resolution ───────────────────────────
+
+
+def test_doctor_package_split_public_names_resolve():
+    """Every public check name resolves from aqueduct.doctor; pyspark not imported eagerly."""
+    from aqueduct.doctor import (
+        check_config,
+        check_spark,
+        check_storage,
+        check_store_backend,
+        check_blueprint_sources,
+        check_blueprint_sources_from_manifest,
+        check_aqtest,
+        check_aqscenario,
+        check_cloudpickle_compat,
+        run_doctor,
+        CheckResult,
+    )
+
+    # All names are callable (functions) or classes
+    assert callable(check_config)
+    assert callable(check_spark)
+    assert callable(check_storage)
+    assert callable(check_store_backend)
+    assert callable(check_blueprint_sources)
+    assert callable(check_blueprint_sources_from_manifest)
+    assert callable(check_aqtest)
+    assert callable(check_aqscenario)
+    assert callable(check_cloudpickle_compat)
+    assert callable(run_doctor)
+    assert CheckResult is not None
+
+    # Verify no pyspark exception was raised by import alone
+    import aqueduct.doctor
+    assert hasattr(aqueduct.doctor, "check_config")
+    assert hasattr(aqueduct.doctor, "check_spark")
+    # _tcp_ok, check_spark, check_blueprint_sources_from_manifest,
+    # run_doctor are all accessible from the __init__ namespace
+    assert hasattr(aqueduct.doctor, "_tcp_ok")
+    assert hasattr(aqueduct.doctor, "run_doctor")

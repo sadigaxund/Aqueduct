@@ -40,6 +40,21 @@ class GuardrailsConfig:
 
 
 @dataclass(frozen=True)
+class CascadeTierConfig:
+    """Phase 44 — Per-tier config in a multi-model healing cascade."""
+    model: str
+    provider: str | None = None
+    base_url: str | None = None
+    provider_options: dict | None = None
+    timeout: float | None = None
+    max_tokens: int | None = None
+    max_reprompts: int | None = None
+    max_seconds: float | None = None
+    deep_loop: bool | None = None
+    allow_defer: bool | None = None
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive" (deprecated alias for auto)
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
@@ -60,6 +75,17 @@ class AgentConfig:
     confidence_threshold: float = 0.7
     # What to do when patch is generated but fails to fix the pipeline: stage | discard | abort
     on_heal_failure: str = "stage"
+    # Phase 41: allow the LLM to emit defer_to_human when the failure is not
+    # healable at the Blueprint level. Default False — the LLM must always produce
+    # a real patch unless explicitly permitted to defer.
+    allow_defer: bool = False
+    # Phase 43: run sandbox/lineage/explain gates inside the LLM conversation
+    # so the model sees rejection feedback and retries in-context instead of
+    # starting a fresh conversation each time. Default False preserves the
+    # current behaviour (gates run post-hoc via apply_callback).
+    deep_loop: bool = False
+    # Phase 44: multi-model healing cascade
+    cascade: tuple[CascadeTierConfig, ...] | None = None
     # Extra context appended to LLM system prompt for this blueprint only (after engine-level prompt_context)
     prompt_context: str | None = None
     # Spend-cap: max LLM healing attempts per rolling 60-minute window for this blueprint.
