@@ -1,5 +1,11 @@
 # Changelog
 
+*June 2026 — history rewritten from a single 211-commit main branch into
+7 feature-phase branches with per-commit surgical splits, preserving
+all file content, release tags, and GPG signatures. Original history
+preserved at `backup/2026-06-06-original`.*
+
+
 All notable, consumer-facing changes to Aqueduct (`aqueduct-core`) are
 recorded here.
 

@@ -200,6 +200,32 @@ whenever a package is restructured — use it as the first filter before greppin
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
 
+## Git & Commit Conventions
+
+### Commit message format
+All commits must follow: `type(scope): message` where type is one of: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `release`. Scope refers to the module/area (e.g., `parser`, `executor`, `agent`). Enforced via `pre-commit commit-msg` hook.
+
+Run once per clone: `pre-commit install --hook-type commit-msg`
+
+### Git safety rules
+- NEVER `git push` unless explicitly asked.
+- NEVER `--amend`, `--force-push`, or create empty commits.
+- Stage only intended files; inspect with `git status` + `git diff` before commit.
+
+### Branch conventions (phase branches)
+- Use `phase/NNN-NNN-name` naming (NNN ranges are feature-set phase numbers).
+- Each commit represents one logical change — no squashing unrelated work.
+- Fast-forward merge to main when a phase completes; preserve the branch ref.
+- Never rebase or squash-merge — maintain linear history.
+
+### Committing methodology
+When building a phase from a sequence of changes:
+
+1. Create branch: `git checkout -b phase/NNN-NNN-name main`
+2. For each logical change in sequence: apply files, `git add -A`, `git commit -m "type(scope): message"`
+3. When phase is complete: `git checkout main && git merge phase/NNN-NNN-name --ff-only`
+4. Preserve branch: `git branch phase/NNN-NNN-name HEAD`
+
 ## Common Pitfalls
 
 - **Silent `@aq.depot.get()` when depot is unconfigured.** If a Blueprint references `@aq.depot.get('watermark')` but no depot backend is configured, the call returns `""` silently. Incremental pipelines will re-read all source data every run. Always configure a depot when using incremental Channels, and verify with `aqueduct doctor`.
