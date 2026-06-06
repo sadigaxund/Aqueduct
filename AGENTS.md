@@ -223,6 +223,30 @@ Every new feature, bug fix, or behavioral change that is testable should add a `
 
 When fixing a bug, add a regression test entry that captures the *broken* behavior (what was happening before the fix) and the *expected* behavior (what happens after). This prevents the same bug from recurring without a test catching it.
 
+### CI workflow (`.github/workflows/ci.yml`)
+
+CI runs 9 parallel jobs, each scoped to a feature area.  A `changes` job
+(using `dorny/paths-filter@v3`) detects which files changed; on branches
+only matching jobs fire.  On `main` every job runs unconditionally.
+
+| Job | Runs when | Command |
+|---|---|---|
+| `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/` |
+| `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/` |
+| `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, or `tests/test_blueprints.py` | `pytest ... -m spark` |
+| `surveyor-tests` | `aqueduct/surveyor/**` or `tests/test_surveyor/**` | `pytest tests/test_surveyor/ tests/test_benchmark_store.py` |
+| `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
+| `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
+| `cli-tests` | `aqueduct/cli.py` or `tests/test_cli/**` | `pytest tests/test_cli/` |
+| `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
+| `stores-tests` | `aqueduct/stores/**` or `tests/test_stores/**` (PG + Redis services) | `pytest ... -m integration` |
+
+**Branch workflow**: push a change touching only `aqueduct/agent/` → only
+`agent-tests` fires (~30s).  Merge to `main` → all 9 jobs run (full gate).
+
+**New area**: if you add a new top-level directory under `aqueduct/`, add
+its path glob to the `changes` job filter and add a corresponding test job.
+
 ### Testing constraints (reminder)
 - **No live LLM calls in pytest.** Agent tests mock `httpx.post` or `_call_agent`. Live-model evaluation belongs to `.aqscenario.yml` scenarios.
 - **No mocking the SparkSession** for executor tests — use the real `spark` fixture.

@@ -1,14 +1,17 @@
 """Tests for the Probe executor."""
 
 import json
-from pathlib import Path
-
 import duckdb
-import pytest
+from pathlib import Path
+from unittest.mock import MagicMock, patch, PropertyMock
 
+import pytest
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
-from pyspark.sql import SparkSession
+try:
+    from pyspark.sql import SparkSession
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 
 from aqueduct.executor.spark.probe import execute_probe
 from aqueduct.parser.models import Module

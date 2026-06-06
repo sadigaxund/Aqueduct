@@ -3,10 +3,13 @@ import duckdb
 from pathlib import Path
 from unittest.mock import MagicMock
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 @pytest.fixture
 def manifest():

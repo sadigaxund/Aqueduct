@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.surveyor.models import FailureContext
 
@@ -175,7 +175,10 @@ def test_build_provenance_section_context_block_lists_all_keys():
 
 # ── Surveyor builds provenance_json via record() ──────────────────────────────
 
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.compiler.provenance import ProvenanceMap, ModuleProvenance, ValueProvenance
 
 

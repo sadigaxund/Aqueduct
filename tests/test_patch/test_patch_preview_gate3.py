@@ -8,7 +8,10 @@ from unittest.mock import MagicMock, patch
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.patch.preview import run_sandbox_gate
-from aqueduct.executor.spark.ingress import read_ingress
+try:
+    from aqueduct.executor.spark.ingress import read_ingress
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 
 
 def test_gate3_pass_on_valid_blueprint(spark, sample_data, tmp_path):

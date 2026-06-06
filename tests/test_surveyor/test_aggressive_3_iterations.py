@@ -10,10 +10,13 @@ import duckdb
 import pytest
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 
 def test_three_iterations_produce_three_rows_linked_by_parent_run_id(tmp_path):

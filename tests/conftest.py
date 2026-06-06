@@ -1,6 +1,10 @@
 import os
 import pytest
-from pyspark.sql import SparkSession
+
+try:
+    from pyspark.sql import SparkSession
+except ImportError:
+    SparkSession = None  # type: ignore[assignment,misc]
 
 # Signals short-lived CLI commands (`aqueduct test` / `doctor`) NOT to call
 # SparkSession.stop() — under pytest make_spark_session().getOrCreate() returns
@@ -93,6 +97,8 @@ def _spark_master() -> str:
 
 
 def _spark_is_healthy():
+    if SparkSession is None:
+        return False
     try:
         spark = SparkSession.builder.master(_spark_master()).getOrCreate()
         spark.range(1).count()
