@@ -344,6 +344,49 @@ class TestCallProviders:
         assert kwargs["json"]["temperature"] == 0.8
         assert kwargs["json"]["options"]["temperature"] == 0.8
 
+    # ── Phase 40: deadline parameter ──────────────────────────────────────────
+
+    @patch("httpx.Client")
+    def test_call_anthropic_deadline_overrides_timeout(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        mock_client, _ = self._mock_client({"content": [{"text": "hi"}]})
+        mock_client_cls.return_value = mock_client
+
+        from aqueduct.agent.providers import _call_anthropic
+        _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=5.0)
+
+        call_kwargs = mock_client_cls.call_args[1]
+        assert call_kwargs["timeout"] == 5.0
+
+    @patch("httpx.Client")
+    def test_call_anthropic_deadline_none_uses_static_timeout(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        mock_client, _ = self._mock_client({"content": [{"text": "hi"}]})
+        mock_client_cls.return_value = mock_client
+
+        from aqueduct.agent.providers import _call_anthropic
+        _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=None)
+
+        call_kwargs = mock_client_cls.call_args[1]
+        assert call_kwargs["timeout"] == 120.0
+
+    @patch("httpx.Client")
+    def test_call_openai_compat_deadline_slot(self, mock_client_cls):
+        mock_client, _ = self._mock_client({"choices": [{"message": {"content": "hi"}}]})
+        mock_client_cls.return_value = mock_client
+
+        from aqueduct.agent.providers import _call_openai_compat
+        _call_openai_compat(
+            [], "model", 100, "http://test", "system",
+            timeout=120.0, deadline=3.0,
+        )
+
+        call_kwargs = mock_client_cls.call_args[1]
+        timeout_obj = call_kwargs["timeout"]
+        assert timeout_obj.read == 3.0
+        assert timeout_obj.connect == 15.0
+        assert timeout_obj.write == 30.0
+
 
 # ── Phase 34/35 coverage additions ────────────────────────────────────────────
 
@@ -423,6 +466,211 @@ class TestGenerateAgentPatchPhase34Extra:
             )
         assert res.tokens_in_total == 180
         assert res.tokens_out_total == 110
+
+
+# ── Phase 43: deep_loop ───────────────────────────────────────────────────────
+
+
+class TestDeepLoop:
+    """Phase 43 — in-conversation validation via validate_callback."""
+
+    @pytest.fixture
+    def fctx(self):
+        return _make_fctx()
+
+    def test_deep_loop_validation_fails_reprompts(self, fctx, tmp_path):
+        """validate_callback returning (False, msg) injects feedback, model retries."""
+        cb_calls = 0
+
+        def _validate(p):
+            nonlocal cb_calls
+            cb_calls += 1
+            return (False, "sandbox fail")
+
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            budget = BudgetConfig(
+                max_reprompts=5, max_seconds=120, max_tokens_total=50000,
+                same_error_consecutive=10, same_signature_overall=10,
+                progress_stalled_window=10,
+            )
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                deep_loop=True, validate_callback=_validate,
+                budget=budget, max_reprompts=5,
+            )
+
+        # Validation kept failing until exhausted_attempts (budget disables stuck detection)
+        assert res.stop_reason == "exhausted_attempts"
+        assert cb_calls == 5
+        assert all(r.gate_that_rejected == "validate" for r in res.attempt_records)
+
+    def test_deep_loop_validation_passes_proceeds_to_apply(self, fctx, tmp_path):
+        """validate_callback returning (True, "") proceeds to apply_callback normally."""
+        def _validate(p):
+            return (True, "")
+
+        def _apply(p):
+            return (True, None, None, None)
+
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                deep_loop=True, validate_callback=_validate,
+                apply_callback=_apply,
+            )
+
+        assert res.stop_reason == "solved"
+        assert res.attempts == 1
+
+    def test_deep_loop_default_never_calls_validate_callback(self, fctx, tmp_path):
+        """deep_loop=False (default) means validate_callback is never called."""
+        cb_calls = 0
+
+        def _validate(p):
+            nonlocal cb_calls
+            cb_calls += 1
+            return (True, "")
+
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            generate_agent_patch(
+                fctx, "model", tmp_path,
+                deep_loop=False, validate_callback=_validate,
+            )
+
+        assert cb_calls == 0
+
+    def test_deep_loop_validate_callback_raises_treated_as_failure(self, fctx, tmp_path):
+        """validate_callback raising an exception is treated as validation failure."""
+
+        def _validate(p):
+            raise RuntimeError("unexpected validate error")
+
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                deep_loop=True, validate_callback=_validate,
+                max_reprompts=3,
+            )
+
+        assert res.stop_reason == "exhausted_attempts"
+        assert res.attempt_records[0].gate_that_rejected == "validate"
+
+
+# ── Phase 41: defer_to_human ──────────────────────────────────────────────────
+
+
+class TestDeferToHuman:
+    """Phase 41 — LLM defers when it cannot heal at the Blueprint level."""
+
+    @pytest.fixture
+    def fctx(self):
+        return _make_fctx()
+
+    _DEFER_PATCH_JSON = (
+        '{"patch_id": "d1", "rationale": "cannot fix", '
+        '"operations": [{"op": "defer_to_human", '
+        '"diagnosis": "UDF logic is out of scope"}]}'
+    )
+
+    def test_allow_defer_true_returns_deferred(self, fctx, tmp_path):
+        """allow_defer=True + model returns defer_to_human → stop_reason='deferred'."""
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (self._DEFER_PATCH_JSON, 10, 20)
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                allow_defer=True, max_reprompts=3,
+            )
+        assert res.stop_reason == "deferred"
+        assert res.patch is not None
+        assert res.patch.operations[0].op == "defer_to_human"
+
+    def test_allow_defer_false_reprompts(self, fctx, tmp_path):
+        """allow_defer=False + model returns defer_to_human → reprompt, loop continues."""
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.side_effect = [
+                (self._DEFER_PATCH_JSON, 10, 20),
+                (self._DEFER_PATCH_JSON, 10, 20),
+                (_VALID_PATCH_JSON, 15, 25),
+            ]
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                allow_defer=False, max_reprompts=5,
+            )
+        assert res.stop_reason == "solved"
+        assert res.attempts == 3
+
+
+class TestDeferMixedOps:
+    """PatchSpec with mixed defer + real ops raises ValueError."""
+
+    def test_mixed_defer_and_real_ops_raises(self):
+        from aqueduct.patch.grammar import PatchSpec
+        with pytest.raises(ValueError, match=r"defer_to_human cannot be mixed"):
+            PatchSpec(
+                patch_id="p", rationale="mixed",
+                operations=[
+                    {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"},
+                    {"op": "defer_to_human", "diagnosis": "cannot fix"},
+                ],
+            )
+
+
+# ── Phase 40: mid-call budget enforcement ─────────────────────────────────────
+
+
+class TestPhase40BudgetEnforcement:
+    """Phase 40 — mid-call budget enforcement via deadline in generate_agent_patch."""
+
+    @pytest.fixture
+    def fctx(self):
+        return _make_fctx()
+
+    def test_budget_seconds_exceeded_mid_call(self, fctx, tmp_path):
+        """budget.max_seconds=5 + mocked call that sets elapsed > max → stop_reason."""
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            budget = BudgetConfig(max_seconds=5, max_reprompts=5)
+            from aqueduct.agent.budget import time as btime
+            import time as real_time
+
+            original_monotonic = btime.monotonic
+            start = real_time.monotonic()
+
+            def _fast_time():
+                return start + 999.0
+
+            btime.monotonic = _fast_time
+            try:
+                res = generate_agent_patch(
+                    fctx, "model", tmp_path,
+                    budget=budget, max_reprompts=5,
+                )
+            finally:
+                btime.monotonic = original_monotonic
+
+        assert res.stop_reason == "budget_seconds_exceeded"
+
+    def test_deadline_threaded_to_provider(self, fctx, tmp_path):
+        """deadline param is threaded through to _call_agent."""
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            budget = BudgetConfig(max_seconds=30, max_reprompts=3)
+            generate_agent_patch(fctx, "model", tmp_path, budget=budget)
+
+            # deadline should be min(timeout, remaining_seconds())
+            call_kwargs = mock_call.call_args[1]
+            assert "deadline" in call_kwargs
+            assert call_kwargs["deadline"] > 0
 
 
 class TestAgentPatchResultBackwardCompat:

@@ -153,6 +153,58 @@ class AddArcadeRefOp(BaseModel, extra="forbid"):
     edges_to_remove: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DeferToHumanOp(BaseModel, extra="forbid"):
+    """Signal that the failure cannot be patched at the Blueprint level.
+
+    Infrastructure failures, upstream schema changes, or fundamental
+    data-shape changes that Aqueduct's PatchSpec grammar cannot repair
+    should use this op instead of hallucinating a patch.
+
+    Makes zero Blueprint changes.  The loop terminates with
+    ``stop_reason='deferred'`` and the full diagnosis is staged for
+    human review.
+    """
+    op: Literal["defer_to_human"]
+    diagnosis: str = Field(
+        ...,
+        description="Detailed explanation of why this cannot be patched automatically",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list,
+        description="Actionable next steps for the human operator",
+    )
+    confidence_reason: str = Field(
+        default="",
+        description="Why the model is confident deferral is correct (vs uncertain)",
+    )
+
+
+class SetSparkConfigOp(BaseModel, extra="forbid"):
+    """Set a single key in the Blueprint's ``spark_config`` block (Phase 42).
+
+    Seven of the 20 most common Spark errors are fixed purely by changing
+    spark config values: OOM, container kills, shuffle fetch failures,
+    Kryo buffer overflow, dynamic allocation thrashing, GC/heartbeat
+    issues, driver MaxResultSize.  This operation makes those healable.
+
+    Auto-creates the ``spark_config`` block if absent.
+
+    Guardrail: ``set_spark_config`` is **default-forbidden in auto mode**
+    via ``guardrails.forbidden_ops``.  The LLM can always propose it —
+    it just lands in ``patches/pending/`` unless the operator removes
+    it from ``forbidden_ops``.
+    """
+    op: Literal["set_spark_config"]
+    key: str = Field(
+        ...,
+        description="Dot-notation spark config key, e.g. 'spark.sql.shuffle.partitions'",
+    )
+    value: Any = Field(
+        ...,
+        description="New value (string, integer, float, or boolean)",
+    )
+
+
 # ── Discriminated union ───────────────────────────────────────────────────────
 
 PatchOperation = Annotated[
@@ -168,6 +220,8 @@ PatchOperation = Annotated[
         SetModuleOnFailureOp,
         ReplaceRetryPolicyOp,
         AddArcadeRefOp,
+        DeferToHumanOp,
+        SetSparkConfigOp,
     ],
     Field(discriminator="op"),
 ]
@@ -184,6 +238,12 @@ _OP_ALIASES: dict[str, str] = {
     "patch_module_config": "replace_module_config",
     "update_module_config_key": "set_module_config_key",
     "patch_module_config_key": "set_module_config_key",
+    # Phase 41: defer_to_human variants
+    "defer": "defer_to_human",
+    "defer_to_user": "defer_to_human",
+    "human_review": "defer_to_human",
+    # Phase 42: set_spark_config variants
+    "set_spark_config_key": "set_spark_config",
 }
 
 
@@ -240,6 +300,25 @@ class PatchSpec(BaseModel, extra="allow"):
         operations: Ordered list of operations to apply.  Applied left-to-right;
                     later operations see the Blueprint state left by earlier ones.
     """
+
+    @model_validator(mode="after")
+    def _reject_mixed_defer_ops(self) -> "PatchSpec":
+        """Phase 41: defer_to_human must be the ONLY operation.
+
+        Mixing deferral with Blueprint-mutating ops is ambiguous — the
+        model is hedging. Reject it explicitly so the reprompt can
+        force a clear choice.
+        """
+        ops = self.operations
+        has_defer = any(o.op == "defer_to_human" for o in ops)
+        has_mutation = any(o.op != "defer_to_human" for o in ops)
+        if has_defer and has_mutation:
+            raise ValueError(
+                "defer_to_human cannot be mixed with other operations. "
+                "If you defer, defer completely — do NOT include any "
+                "Blueprint-mutating ops in the same PatchSpec."
+            )
+        return self
 
     @model_validator(mode="before")
     @classmethod

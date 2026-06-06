@@ -7,10 +7,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.surveyor import Surveyor
 
 

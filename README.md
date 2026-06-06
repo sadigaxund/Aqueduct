@@ -13,7 +13,8 @@
 <p align="center">
   <a href="https://pypi.org/project/aqueduct-core/"><img src="https://img.shields.io/pypi/v/aqueduct-core?style=flat-square" alt="PyPI" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-blue?style=flat-square" alt="Python" /></a>
-  <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/ci.yml?branch=main&style=flat-square" alt="CI" /></a>
+  <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/test-suite.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/test-suite.yml?branch=main&style=flat-square" alt="Test Suite" /></a>
+  <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/version-matrix.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/version-matrix.yml?branch=main&style=flat-square&label=compatibility" alt="Compatibility Matrix" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="License" /></a>
 </p>
 
@@ -31,6 +32,8 @@ Aqueduct is a control plane for Apache Spark. Define pipelines as YAML Blueprint
 4. **Surveyor** observes everything
 5. On failure → **LLM Agent** creates a structured `PatchSpec`
 6. Patch goes through guardrails → sandbox → explain gates → applied (or staged for review)
+
+**Model-agnostic by design.** Aqueduct's healing loop works with any LLM — from a local 7B model running on Ollama to Claude Sonnet via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. ~70% of production Spark errors are healable by a 7B model in a single attempt. Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades unlock higher heal rates with larger models.
 
 ## Core Concepts
 

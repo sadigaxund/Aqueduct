@@ -197,6 +197,7 @@ def test_parse_dict_rejects_non_mapping(tmp_path):
 
 def test_path_keys_registry_per_module_type():
     """Registry returns strict tuple for audited types and legacy fallback for the rest."""
+    pytest.importorskip("pyspark")
     from aqueduct.executor.path_keys import get_path_keys
     assert get_path_keys("Ingress") == ("path", "data_dir", "input_dir", "jar")
     assert get_path_keys("Egress") == ("path", "output_dir", "jar")

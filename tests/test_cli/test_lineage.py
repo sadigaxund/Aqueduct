@@ -123,6 +123,15 @@ class TestWriteLineage:
         assert "x" in out_cols
         assert "y" in out_cols
 
+    def test_observability_store_none_returns_silently(self):
+        """write_lineage with observability_store=None returns without error."""
+        modules = (
+            _mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),
+        )
+        edges = (_edge("src", "ch1"),)
+        # Should not raise despite no store
+        write_lineage("pipe1", "run1", modules, edges, observability_store=None)
+
     def test_non_channel_modules_produce_no_rows(self, tmp_path):
         import duckdb
 

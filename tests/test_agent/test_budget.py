@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import FrozenInstanceError
+from unittest.mock import patch
 
 import pytest
 
@@ -86,13 +87,14 @@ class TestDefaultBudget:
     def test_is_module_level_singleton(self):
         assert DEFAULT_BUDGET == BudgetConfig()
 
-    def test_stop_reasons_tuple_has_seven_entries(self):
-        assert len(STOP_REASONS) == 7
+    def test_stop_reasons_tuple_has_eight_entries(self):
+        assert len(STOP_REASONS) == 8
 
     def test_stop_reasons_contains_all_documented(self):
         expected = {
             "solved", "exhausted_attempts", "budget_seconds_exceeded",
             "budget_tokens_exceeded", "stuck_signature", "progress_stalled", "api_error",
+            "deferred",
         }
         assert set(STOP_REASONS) == expected
 
@@ -278,6 +280,25 @@ class TestBudgetTracker:
         assert t.stop_reason == "api_error"
 
     # summary
+        # mark_budget_seconds_exceeded (Phase 40)
+    def test_mark_budget_seconds_exceeded_sets_stop_reason(self):
+        t = self._tracker()
+        assert t.stop_reason is None
+        t.mark_budget_seconds_exceeded()
+        assert t.stop_reason == "budget_seconds_exceeded"
+
+    # remaining_seconds (Phase 40)
+    def test_remaining_seconds_normal(self):
+        t = self._tracker(max_seconds=60.0)
+        # Started just now — remaining should be ~60
+        remaining = t.remaining_seconds()
+        assert 55.0 <= remaining <= 60.0
+
+    def test_remaining_seconds_exhausted(self):
+        t = self._tracker(max_seconds=1.0)
+        with patch("aqueduct.agent.budget.time.monotonic", return_value=t.started_at + 999.0):
+            assert t.remaining_seconds() == 0.0
+
     def test_summary_keys(self):
         t = self._tracker()
         t.begin_attempt()

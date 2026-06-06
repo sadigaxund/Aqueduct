@@ -121,3 +121,31 @@ def test_error_type_and_stack_class_either_match():
     g = _make_guardrails(heal_on=["SparkException"])
     should_heal, reason = _check_heal_guardrails(ctx, g)
     assert should_heal
+
+
+# ── Phase 41: regex in never_heal_errors ─────────────────────────────────────
+
+
+def test_never_heal_regex_pattern_matches():
+    """regex pattern 'IllegalState.*Exception' matches 'IllegalStateException'."""
+    ctx = _make_ctx(error_type="IllegalStateException")
+    g = _make_guardrails(never_heal=["IllegalState.*Exception"])
+    should_heal, reason = _check_heal_guardrails(ctx, g)
+    assert not should_heal
+    assert "never_heal_errors" in reason
+
+
+def test_never_heal_malformed_regex_degrades_to_exact_match():
+    """Malformed regex pattern degrades gracefully to exact match."""
+    ctx = _make_ctx(error_type="ExactlyThis")
+    g = _make_guardrails(never_heal=["ExactlyThis"])
+    should_heal, reason = _check_heal_guardrails(ctx, g)
+    assert not should_heal
+
+
+def test_never_heal_malformed_regex_exact_no_match_does_not_block():
+    """Malformed regex that does not exactly match the error_type does not block."""
+    ctx = _make_ctx(error_type="DifferentError")
+    g = _make_guardrails(never_heal=["[invalid regex"])
+    should_heal, reason = _check_heal_guardrails(ctx, g)
+    assert should_heal

@@ -190,8 +190,12 @@ def generate_agent_patch(
     last_apply_error: str | None = None,
     guardrails: Any = None,
     budget: BudgetConfig | None = None,
+    allow_defer: bool = False,
+    deep_loop: bool = False,
+    validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
+    model_cascade_position: int | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -225,6 +229,7 @@ def generate_agent_patch(
         patches_dir=patches_dir,
         engine_prompt_context=engine_prompt_context,
         blueprint_prompt_context=blueprint_prompt_context,
+        allow_defer=allow_defer,
     )
 
     messages: list[dict[str, Any]] = [
@@ -241,15 +246,68 @@ def generate_agent_patch(
     while True:
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
+        logger.info("── Heal attempt %d/%d ──", attempt_num, budget.max_reprompts)
+
+        # Phase 40: per-call deadline for mid-call budget enforcement.
+        # Uses min(agent.timeout, remaining budget seconds) so neither
+        # constraint is violated — the tighter one wins.
+        deadline = min(cfg.timeout, tracker.remaining_seconds())
+        if deadline <= 0:
+            # Budget exhausted before this call — record a zero-token
+            # attempt and terminate with budget_seconds_exceeded.
+            rec = tracker.record(
+                None,
+                tokens_in=0, tokens_out=0, latency_ms=0,
+                gate_that_rejected="budget", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            tracker.mark_budget_seconds_exceeded()
+            break
+
         t_start = time.monotonic()
         try:
             raw, tokens_in, tokens_out = _call_agent(
                 messages, cfg, patches_dir,
                 last_apply_error=last_apply_error,
                 temperature_override=temperature_override,
+                deadline=deadline,
             )
         except Exception as exc:
             latency_ms = int((time.monotonic() - t_start) * 1000)
+
+            # Phase 40: distinguish budget-driven timeout from API timeout.
+            # When the per-call deadline was constrained by the budget
+            # (deadline < cfg.timeout), any TimeoutException means the
+            # budget ran out mid-call — terminate with budget_seconds_exceeded
+            # instead of a generic api_error.
+            import httpx
+            if isinstance(exc, httpx.TimeoutException) and deadline < cfg.timeout:
+                logger.warning(
+                    "LLM API call timed out on budget deadline %.1fs "
+                    "(attempt %d/%d): %s",
+                    deadline, attempt_num, budget.max_reprompts, exc,
+                )
+                reprompt_errors.append(f"Budget seconds exceeded: {exc}")
+                sig = from_exception(exc, where="provider")
+                rec = tracker.record(
+                    sig,
+                    tokens_in=0, tokens_out=0, latency_ms=latency_ms,
+                    gate_that_rejected="budget", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                tracker.mark_budget_seconds_exceeded()
+                break
+
             hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
             logger.error(
                 "LLM API call failed (attempt %d/%d): %s%s",
@@ -261,6 +319,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=0, tokens_out=0, latency_ms=latency_ms,
                 gate_that_rejected="provider", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -271,6 +330,10 @@ def generate_agent_patch(
             break
 
         latency_ms = int((time.monotonic() - t_start) * 1000)
+        logger.info(
+            "  ⚡ LLM: %d → %d tokens, %dms",
+            tokens_in, tokens_out, latency_ms,
+        )
         logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
 
         # ── Parse phase ────────────────────────────────────────────────
@@ -299,6 +362,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                 gate_that_rejected="schema", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -329,6 +393,149 @@ def generate_agent_patch(
             messages.append({"role": "user", "content": reprompt_msg})
             continue
 
+        # Log successful parse with confidence and op summary
+        _ops_summary = ", ".join(
+            f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
+            for o in patch_spec.operations
+        )
+        logger.info(
+            "  ✓ Parsed: %s (confidence %.2f, %d op%s: %s)",
+            patch_spec.patch_id,
+            patch_spec.confidence,
+            len(patch_spec.operations),
+            "s" if len(patch_spec.operations) != 1 else "",
+            _ops_summary or "(none)",
+        )
+
+        # ── Phase 41: defer_to_human detection ─────────────────────────────
+        # Runs before the apply callback — defer makes zero Blueprint
+        # changes, so there is nothing to guardrail, compile-check, or sandbox.
+        has_defer = any(op.op == "defer_to_human" for op in patch_spec.operations)
+        if has_defer:
+            if not allow_defer:
+                # Model produced defer when not allowed (should be rare — the
+                # prompt hides defer when allow_defer=False). Reprompt so it
+                # produces a real fix.
+                friendly = (
+                    "defer_to_human is not enabled for this blueprint. "
+                    "Produce a real PatchSpec with Blueprint-mutating operations."
+                )
+                reprompt_errors.append(friendly)
+                logger.warning(
+                    "LLM deferred when allow_defer=False (attempt %d/%d)",
+                    attempt_num, budget.max_reprompts,
+                )
+                sig = from_apply_error(
+                    "defer_rejected", friendly, where="loop",
+                )
+                rec = tracker.record(
+                    sig,
+                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                    gate_that_rejected="defer_rejected", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+                stop = tracker.check_stop()
+                if stop is not None and stop != "solved":
+                    patch_spec = None
+                    break
+
+                escalate_next = tracker.should_escalate()
+                if escalate_next:
+                    tracker.mark_escalated()
+                    logger.info(
+                        "stuck-detection escalation triggered on attempt %d "
+                        "(temperature=%.2f, escalated template)",
+                        attempt_num, _ESCALATION_TEMPERATURE,
+                    )
+
+                reprompt_msg = _format_reprompt_for_next_turn(
+                    friendly=friendly, raw=raw, escalated=escalate_next,
+                    structural_hint="",
+                )
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": reprompt_msg})
+                patch_spec = None
+                continue
+
+            # Defer is allowed — terminate the loop cleanly.
+            rec = tracker.record(
+                None,
+                tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                gate_that_rejected=None, escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
+            )
+            if on_attempt is not None:
+                try:
+                    on_attempt(rec)
+                except Exception:
+                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            tracker._stop_reason = "deferred"
+            break
+
+        # ── Phase 43: in-conversation validation (deep_loop) ────────────────
+        # When deep_loop is enabled, sandbox / lineage / explain gates run
+        # INSIDE the LLM conversation.  If the patch fails validation, the
+        # rejection feedback is injected as a user message and the model
+        # retries immediately — same conversation, learned context.
+        # Without deep_loop: gates run only in the apply_callback (post-hoc).
+        if deep_loop and validate_callback is not None:
+            try:
+                validated, vfeedback = validate_callback(patch_spec)
+            except Exception as vcb_exc:
+                logger.debug("validate_callback raised; treating as validation fail", exc_info=True)
+                validated, vfeedback = False, f"Validation error: {vcb_exc}"
+
+            if not validated:
+                logger.info(
+                    "Deep-loop validation rejected patch (attempt %d/%d): %s",
+                    attempt_num, budget.max_reprompts,
+                    vfeedback[:200] if vfeedback else "(no detail)",
+                )
+                reprompt_errors.append(f"Validation rejected: {vfeedback}")
+                sig = from_apply_error(
+                    "validation_rejected", vfeedback or "(no detail)", where="validate",
+                )
+                rec = tracker.record(
+                    sig,
+                    tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
+                    gate_that_rejected="validate", escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
+                )
+                if on_attempt is not None:
+                    try:
+                        on_attempt(rec)
+                    except Exception:
+                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+                stop = tracker.check_stop()
+                if stop is not None and stop != "solved":
+                    patch_spec = None
+                    break
+
+                escalate_next = tracker.should_escalate()
+                if escalate_next:
+                    tracker.mark_escalated()
+
+                reprompt_msg = _format_reprompt_for_next_turn(
+                    friendly=vfeedback or "Validation rejected your patch.",
+                    raw=raw, escalated=escalate_next,
+                    structural_hint="",
+                )
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({"role": "user", "content": reprompt_msg})
+                patch_spec = None
+                continue
+
+            # Validation passed — only reached when deep_loop + validate_callback
+            # returned (True, "").
+            logger.info("  ✓ Validation: PASS")
+
         # ── Apply phase (optional callback) ─────────────────────────────
         if apply_callback is not None:
             try:
@@ -343,6 +550,7 @@ def generate_agent_patch(
                     None,
                     tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                     gate_that_rejected=None, escalated=escalate_next,
+                    model_cascade_position=model_cascade_position,
                 )
                 if on_attempt is not None:
                     try:
@@ -350,6 +558,7 @@ def generate_agent_patch(
                     except Exception:
                         logger.debug("on_attempt callback raised; ignoring", exc_info=True)
                 tracker.check_stop()  # sets 'solved'
+                logger.info("  ✓ Applied: patch accepted by guardrails + apply")
                 break
 
             # Gate rejection — record signature, reprompt with the gate's error.
@@ -371,6 +580,7 @@ def generate_agent_patch(
                 sig,
                 tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
                 gate_that_rejected="apply", escalated=escalate_next,
+                model_cascade_position=model_cascade_position,
             )
             if on_attempt is not None:
                 try:
@@ -406,6 +616,7 @@ def generate_agent_patch(
             None,
             tokens_in=tokens_in, tokens_out=tokens_out, latency_ms=latency_ms,
             gate_that_rejected=None, escalated=escalate_next,
+            model_cascade_position=model_cascade_position,
         )
         if on_attempt is not None:
             try:
@@ -416,11 +627,23 @@ def generate_agent_patch(
         break
 
     if patch_spec is None:
+        logger.info(
+            "── Heal complete: no patch (%d attempts, stop_reason=%s, %d tokens in, %d out) ──",
+            tracker.current_attempt, tracker.stop_reason,
+            tracker.tokens_in_total, tracker.tokens_out_total,
+        )
         logger.error(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r (stop_reason=%s)",
             tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,
             tracker.stop_reason,
+        )
+    else:
+        logger.info(
+            "── Heal complete: %s (confidence %.2f, %d ops, stop_reason=%s, %d tokens in, %d out) ──",
+            patch_spec.patch_id, patch_spec.confidence,
+            len(patch_spec.operations), tracker.stop_reason,
+            tracker.tokens_in_total, tracker.tokens_out_total,
         )
     return AgentPatchResult(
         patch=patch_spec,

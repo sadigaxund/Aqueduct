@@ -237,6 +237,38 @@ class TestCheckAssertions:
         assert failures == []
         assert soft_failures == []
 
+    def _defer_patch(self):
+        p = _fake_patch()
+        op = MagicMock()
+        op.op = "defer_to_human"
+        p.operations = [op]
+        return p
+
+    def test_allow_defer_true_defer_passes(self):
+        """allow_defer: true + LLM defers → PASS (gating satisfied)."""
+        failures, soft_failures, *_ = _check_assertions(
+            [{"patch_is_valid": True, "allow_defer": True}],
+            patch=self._defer_patch(), blueprint_path=None,
+        )
+        assert failures == []
+
+    def test_no_allow_defer_defer_fails(self):
+        """no allow_defer assertion + LLM defers → FAIL with guidance message."""
+        failures, soft_failures, *_ = _check_assertions(
+            [{"patch_is_valid": True}],
+            patch=self._defer_patch(), blueprint_path=None,
+        )
+        assert any("add allow_defer: true" in f for f in failures)
+
+    def test_allow_defer_true_regular_patch_fails(self):
+        """allow_defer: true + LLM produces real patch → FAIL."""
+        p = _fake_patch()
+        failures, soft_failures, *_ = _check_assertions(
+            [{"allow_defer": True}],
+            patch=p, blueprint_path=None,
+        )
+        assert any("expected defer_to_human" in f for f in failures)
+
 
 # ── run_scenario ──────────────────────────────────────────────────────────────
 

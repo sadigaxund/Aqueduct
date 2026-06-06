@@ -15,6 +15,7 @@ from aqueduct.patch.grammar import (
     ReplaceModuleLabelOp,
     ReplaceRetryPolicyOp,
     SetModuleOnFailureOp,
+    SetSparkConfigOp,
 )
 from aqueduct.patch.operations import (
     PatchOperationError,
@@ -175,3 +176,30 @@ def test_replace_retry_policy(base_bp):
     op = ReplaceRetryPolicyOp(op="replace_retry_policy", retry_policy=policy)
     patched = apply_operation(base_bp, op)
     assert patched["retry_policy"] == policy
+
+
+# ── Phase 42: set_spark_config ────────────────────────────────────────────────
+
+
+def test_apply_set_spark_config_sets_value(base_bp):
+    """apply_set_spark_config sets the key/value in spark_config."""
+    op = SetSparkConfigOp(
+        op="set_spark_config",
+        key="spark.sql.shuffle.partitions",
+        value=200,
+    )
+    patched = apply_operation(base_bp, op)
+    assert patched["spark_config"]["spark.sql.shuffle.partitions"] == 200
+
+
+def test_apply_set_spark_config_auto_creates_block(base_bp):
+    """apply_set_spark_config auto-creates spark_config block when absent."""
+    bp = {"aqueduct": "1.0", "id": "t", "modules": []}
+    op = SetSparkConfigOp(
+        op="set_spark_config",
+        key="spark.sql.shuffle.partitions",
+        value=200,
+    )
+    patched = apply_operation(bp, op)
+    assert "spark_config" in patched
+    assert patched["spark_config"]["spark.sql.shuffle.partitions"] == 200

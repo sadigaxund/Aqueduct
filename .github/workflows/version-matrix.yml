@@ -1,0 +1,241 @@
+name: Compatibility Matrix
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  RESULTS_DIR: /tmp/compat-results
+
+jobs:
+  unit-tests:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,postgres,redis]"
+      - run: pytest -m "not spark and not integration and not agent" --no-cov -q
+
+  compat:
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - combo: Latest
+            python: "3.13"
+            pyspark: "4.1.2"
+            delta: "4.2.0"
+            postgres: "18.4"
+            java: "21"
+          - combo: LTS
+            python: "3.11"
+            pyspark: "4.1.2"
+            delta: "4.1.0"
+            postgres: "17.10"
+            java: "17"
+          - combo: Legacy
+            python: "3.12"
+            pyspark: "3.5.8"
+            delta: "3.3.0"
+            postgres: "17.10"
+            java: "17"
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: aq
+          POSTGRES_PASSWORD: aq
+          POSTGRES_DB: aq_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ matrix.java }}
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev,postgres,redis]"
+          if [ "${{ matrix.pyspark }}" = "3.5.8" ]; then
+            pip install pyspark==${{ matrix.pyspark }} delta-spark==${{ matrix.delta }}
+          else
+            pip install -e ".[spark]"
+          fi
+
+      - name: Run tests
+        id: tests
+        env:
+          AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
+          AQ_SPARK_MASTER: "local[1]"
+        run: |
+          mkdir -p ${{ env.RESULTS_DIR }}
+          LOGFILE=$(mktemp)
+          set +e
+          pytest \
+            tests/test_executor/ \
+            tests/test_compiler/test_blueprints.py \
+            tests/test_stores/ \
+            -m "spark" \
+            --tb=short \
+            --no-cov \
+            -q \
+            --junitxml=${{ env.RESULTS_DIR }}/${{ matrix.combo }}.xml \
+            2>&1 | tee "$LOGFILE"
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          # Extract a short summary line
+          SUMMARY=$(grep -E "^[0-9]+ passed|^[0-9]+ failed|^[0-9]+ skipped" "$LOGFILE" | tail -1 || echo "no summary")
+          echo "summary<<EOF" >> $GITHUB_OUTPUT
+          echo "$SUMMARY" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          # Count failures
+          FAIL_COUNT=$(grep -c "^FAILED " "$LOGFILE" || true)
+          echo "fail_count=$FAIL_COUNT" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
+        continue-on-error: true
+
+      - name: Save result artifact
+        run: |
+          cat > ${{ env.RESULTS_DIR }}/${{ matrix.combo }}.json << JSONEOF
+          {
+            "combo": "${{ matrix.combo }}",
+            "python": "${{ matrix.python }}",
+            "pyspark": "${{ matrix.pyspark }}",
+            "delta": "${{ matrix.delta }}",
+            "postgres": "${{ matrix.postgres }}",
+            "java": "${{ matrix.java }}",
+            "exit_code": ${{ steps.tests.outputs.exit_code }},
+            "fail_count": ${{ steps.tests.outputs.fail_count }},
+            "summary": $(echo "${{ steps.tests.outputs.summary }}" | jq -Rs .)
+          }
+          JSONEOF
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: result-${{ matrix.combo }}
+          path: ${{ env.RESULTS_DIR }}/${{ matrix.combo }}.json
+
+  aggregate:
+    needs: compat
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: result-*
+          merge-multiple: true
+          path: ${{ env.RESULTS_DIR }}
+
+      - name: Check results exist
+        run: |
+          COUNT=$(ls "${{ env.RESULTS_DIR }}"/*.json 2>/dev/null | wc -l)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No results to aggregate — compat job was skipped"
+            exit 0
+          fi
+          echo "Found $COUNT result(s)"
+
+      - name: Build results table
+        id: build
+        run: |
+          if ! ls "${{ env.RESULTS_DIR }}"/*.json 2>/dev/null; then
+            echo "No results files — skipping"
+            exit 0
+          fi
+          VERSION_LINE=$(git describe --tags --always 2>/dev/null || echo "untagged")
+          COMMIT_HASH=$(git rev-parse --short HEAD)
+
+          TABLE_FILE=/tmp/compat_table.md
+          > "$TABLE_FILE"
+          echo "## Latest run" >> "$TABLE_FILE"
+          echo "" >> "$TABLE_FILE"
+          echo "**Build:** \`$VERSION_LINE\` — commit \`$COMMIT_HASH\`" >> "$TABLE_FILE"
+          echo "" >> "$TABLE_FILE"
+          echo "| Combo | Python | Spark | Delta | Postgres | Java | Status |" >> "$TABLE_FILE"
+          echo "|---|---|---|---|---|---|---|" >> "$TABLE_FILE"
+
+          for f in "${{ env.RESULTS_DIR }}"/*.json; do
+            NAME=$(jq -r '.combo' "$f")
+            PY=$(jq -r '.python' "$f")
+            SP=$(jq -r '.pyspark' "$f")
+            DL=$(jq -r '.delta' "$f")
+            PG=$(jq -r '.postgres' "$f")
+            JV=$(jq -r '.java' "$f")
+            RC=$(jq -r '.exit_code' "$f")
+            FC=$(jq -r '.fail_count' "$f")
+
+            if [ "$RC" = "0" ]; then
+              STATUS="✅"
+            elif [ "$FC" != "0" ]; then
+              STATUS="❌ $FC failure(s)"
+            else
+              STATUS="⚠ infra error"
+            fi
+
+            echo "| $NAME | $PY | $SP | $DL | $PG | $JV | $STATUS |" >> "$TABLE_FILE"
+          done
+
+          echo "table_file=$TABLE_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Update compatibility.md
+        if: steps.build.outputs.table_file != ''
+        run: |
+          python3 << 'PYEOF'
+          import re, sys
+
+          MARKER_START = '<!-- COMPAT_RESULTS_START -->'
+          MARKER_END   = '<!-- COMPAT_RESULTS_END -->'
+
+          with open('docs/compatibility.md') as f:
+              content = f.read()
+
+          with open('/tmp/compat_table.md') as f:
+              table = f.read()
+
+          result = re.sub(
+              re.escape(MARKER_START) + '.*?' + re.escape(MARKER_END),
+              f'{MARKER_START}\n{table.rstrip()}\n{MARKER_END}',
+              content,
+              flags=re.DOTALL,
+          )
+
+          with open('docs/compatibility.md', 'w') as f:
+              f.write(result)
+          print("compatibility.md updated")
+          PYEOF
+
+      - name: Commit results
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
+          git add docs/compatibility.md
+          git diff --staged --quiet || \
+            git commit -m "docs: update compatibility matrix [skip ci]" && \
+            git push

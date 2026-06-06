@@ -12,16 +12,22 @@ from unittest.mock import MagicMock, patch
 import click
 import pytest
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
 from aqueduct import redaction
 from aqueduct.cli import _install_secret_redaction_hooks
 from aqueduct.surveyor.webhook import fire_webhook
-from aqueduct.surveyor.surveyor import Surveyor
+try:
+    from aqueduct.surveyor.surveyor import Surveyor
+except ImportError:
+    pytest.skip("pyspark required by Surveyor's executor dependency", allow_module_level=True)
 from aqueduct.agent import stage_patch_for_human
 from aqueduct.agent.providers import _call_agent
 from aqueduct.compiler.models import Manifest
-from aqueduct.executor.models import ExecutionResult, ModuleResult
+try:
+    from aqueduct.executor.models import ExecutionResult, ModuleResult
+except ImportError:
+    pytest.skip("pyspark required", allow_module_level=True)
 from aqueduct.surveyor.models import FailureContext
 from aqueduct.patch.grammar import PatchSpec
 

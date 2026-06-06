@@ -234,6 +234,7 @@ edges: []
 def test_cli_run_postgres_observability_no_bogus_dir(tmp_path):
     """Verify that using postgres as the stores.observability.backend does NOT create a postgresql:/... directory.
     It should fall back to a safe per-pipeline local path (.aqueduct/observability/<blueprint_id>) for scratch work."""
+    pytest.importorskip("psycopg2")
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
     input_fixture = (FIXTURES / "valid_minimal.yml").resolve()

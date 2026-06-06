@@ -120,6 +120,7 @@ def test_compiler_manifest_serialises_max_patches_not_aggressive_max(tmp_path):
     json.dumps(agent_dump)
 
 
+@pytest.mark.spark
 def test_cli_allow_aggressive_flag_still_works(tmp_path):
     """CLI --allow-aggressive still works as alias for --allow-multi-patch (no exit-1 on max_patches > 1)."""
     from click.testing import CliRunner
@@ -157,6 +158,7 @@ def test_cli_allow_aggressive_flag_still_works(tmp_path):
     assert "requires danger.allow_multi_patch: true" not in result.output
 
 
+@pytest.mark.spark
 def test_max_patches_gt_one_blocks_without_danger_or_flag(tmp_path):
     """`max_patches: 2` without danger gate AND without --allow-multi-patch → exit 1 with new-name error."""
     from click.testing import CliRunner

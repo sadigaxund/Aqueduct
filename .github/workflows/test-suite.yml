@@ -1,0 +1,241 @@
+name: Test Suite
+
+on:
+  push:
+    branches: [feat/**]
+  pull_request:
+    branches: [main, feat/**]
+
+concurrency:
+  group: ${{ github.ref }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      parser:    ${{ steps.filter.outputs.parser }}
+      compiler:  ${{ steps.filter.outputs.compiler }}
+      executor:  ${{ steps.filter.outputs.executor }}
+      surveyor:  ${{ steps.filter.outputs.surveyor }}
+      agent:     ${{ steps.filter.outputs.agent }}
+      patch:     ${{ steps.filter.outputs.patch }}
+      stores:    ${{ steps.filter.outputs.stores }}
+      cli:       ${{ steps.filter.outputs.cli }}
+      config:    ${{ steps.filter.outputs.config }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            parser:
+              - 'aqueduct/parser/**'
+              - 'tests/test_parser/**'
+            compiler:
+              - 'aqueduct/compiler/**'
+              - 'tests/test_compiler/**'
+            executor:
+              - 'aqueduct/executor/**'
+              - 'tests/test_executor/**'
+              - 'tests/test_blueprints.py'
+              - 'gallery/snippets/**'
+            surveyor:
+              - 'aqueduct/surveyor/**'
+              - 'tests/test_surveyor/**'
+            agent:
+              - 'aqueduct/agent/**'
+              - 'tests/test_agent/**'
+            patch:
+              - 'aqueduct/patch/**'
+              - 'tests/test_patch/**'
+            stores:
+              - 'aqueduct/stores/**'
+              - 'tests/test_stores/**'
+              - 'tests/test_depot/**'
+            cli:
+              - 'aqueduct/cli.py'
+              - 'tests/test_cli/**'
+            config:
+              - 'aqueduct/config.py'
+              - 'aqueduct/redaction.py'
+              - 'aqueduct/secrets.py'
+              - 'aqueduct/warnings.py'
+              - 'tests/test_config.py'
+              - 'tests/test_parser/test_config.py'
+              - 'tests/test_redaction.py'
+              - 'tests/test_secrets.py'
+              - 'tests/test_warnings.py'
+
+  # ── Unit-test layer — fast, no Spark needed ──────────────────────────
+
+  parser-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.parser == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_parser/ -m "not spark"
+
+  compiler-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.compiler == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_compiler/ -m "not spark"
+
+  surveyor-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.surveyor == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_surveyor/ tests/test_benchmark_store.py -m "not spark"
+
+  agent-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.agent == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_agent/ -m "not spark"
+
+  patch-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.patch == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_patch/ -m "not spark"
+
+  cli-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.cli == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm,redis]"
+      - run: pytest tests/test_cli/
+
+  config-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.config == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark"
+
+  # ── Spark layer — needs local[1] via setup-java ──────────────────────
+
+  executor-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.executor == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm,redis]"
+      - run: pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark
+
+  snippets:
+    needs: changes
+    if: ${{ needs.changes.outputs.executor == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm]"
+      - run: bash scripts/run_snippets.sh
+
+  # ── Store integration layer — needs PG + Redis ───────────────────────
+
+  stores-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.stores == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: aq
+          POSTGRES_PASSWORD: aq
+          POSTGRES_DB: aq_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,postgres,redis]"
+      - name: Run Integration Tests
+        env:
+          AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
+          AQ_REDIS_URL: "redis://localhost:6379/15"
+        run: pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py -m integration

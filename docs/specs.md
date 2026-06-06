@@ -520,6 +520,10 @@ Generated post-run from Probe signals. Shows per-column, per-Module status (OK /
 
 The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer.
 
+**Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 13 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback, Phase 43) and multi-model cascading (Phase 44) for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
+
+**Multi-model cascade (Phase 44).** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults. The cascade records `model_cascade_position` on every attempt for observability.
+
 ## **8.2 The Healing Flow**
 
 ```
@@ -604,7 +608,7 @@ A PatchSpec is a JSON document with the following structure:
 ```json
 {
   "patch_id": "fix-yellow-taxi-path",
-  "rationale": "One sentence: what was wrong and what the fix does.",
+  "description": "One sentence: what was wrong and what the fix does.",
   "confidence": 0.9,
   "category": "schema_drift | bad_path | format_mismatch | oom_config | sql_column_not_found | type_mismatch | missing_context | permission_error | other",
   "root_cause": "One sentence: root cause.",
@@ -615,7 +619,11 @@ A PatchSpec is a JSON document with the following structure:
 }
 ```
 
-Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `insert_module`, `remove_module`, `insert_edge`, `remove_edge`.
+Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `replace_module_label`, `insert_module`, `remove_module`, `add_probe`, `replace_edge`, `set_module_on_failure`, `replace_retry_policy`, `add_arcade_ref`, `defer_to_human`, `set_spark_config`.
+
+`defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true` — when false (default), the op is hidden from the LLM prompt.
+
+`set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize — seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply. **Phase 43 `deep_loop`:** when `agent.deep_loop: true`, sandbox/lineage/explain gates run inside the LLM conversation so the model sees rejection feedback and retries in-context before `apply_callback` runs. Default false preserves the current post-hoc gate behavior.
 
 ### Metadata field tolerance
 
