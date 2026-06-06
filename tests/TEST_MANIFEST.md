@@ -395,11 +395,11 @@ This section tracks high-level functional verification of core features against 
 - ✅ `should_escalate()` returns True iff `same_error_consecutive` tripped AND `escalated_once=False`
 - ✅ `mark_escalated()` flips `escalated_once=True`; subsequent `should_escalate()` returns False
 - ✅ `mark_api_error()` sets stop_reason to `"api_error"`
-- ⏳ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
-- ⏳ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
-- ⏳ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
-- ⏳ `StopReason` Literal includes `"deferred"` (Phase 41)
-- ⏳ `STOP_REASONS` tuple includes `"deferred"` (Phase 41)
+- ✅ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
+- ✅ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
+- ✅ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
+- ✅ `StopReason` Literal includes `"deferred"` (Phase 41)
+- ✅ `STOP_REASONS` tuple includes `"deferred"` (Phase 41)
 - ✅ `summary()` returns a dict with `attempts`, `stop_reason`, `tokens_in_total`, `tokens_out_total`, `elapsed_seconds`, `escalated_once`, `signatures` (list of dicts)
 
 #### `agent/__init__.py` — `_detect_structural_error`
@@ -433,33 +433,40 @@ This section tracks high-level functional verification of core features against 
 - ✅ `temperature_override=0.8` is added to the Anthropic payload as `temperature`
 - ✅ `temperature_override=0.8` overwrites top-level + Ollama `options.temperature` for OpenAI-compat
 - ✅ Missing `usage` block in response → tokens default to 0 (no KeyError)
-- ⏳ `_call_anthropic(deadline=5.0)` → `httpx.Client(timeout=5.0)` (deadline overrides static timeout) (Phase 40)
-- ⏳ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
-- ⏳ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
+- ✅ `_call_anthropic(deadline=5.0)` → `httpx.Client(timeout=5.0)` (deadline overrides static timeout) (Phase 40)
+- ✅ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
+- ✅ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
+
+#### `agent/cascade.py` — Phase 44 multi-model cascade
+- ✅ `generate_cascade_patch([tier1, tier2])` with tier1 returning patch → returns tier1 result, tier2 never called
+- ✅ `generate_cascade_patch([tier1, tier2])` with tier1 `stuck_signature` → escalates to tier2
+- ✅ `generate_cascade_patch([tier1, tier2])` with tier1 `api_error` → aborts, does NOT escalate
+- ✅ Each tier's `generate_agent_patch` receives `model_cascade_position=idx`
+- ✅ Budget per tier: `tier.max_reprompts` overrides default; missing fields inherit from cascade defaults
 
 #### `agent/loop.py` — Phase 43 deep_loop / in-conversation validation
-- ⏳ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(False, "sandbox fail")` → feedback injected as user message, model retries in same conversation
-- ⏳ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(True, "")` → proceeds to apply_callback normally
-- ⏳ `generate_agent_patch(deep_loop=False)` (default) → validate_callback never called, apply_callback runs post-hoc
-- ⏳ `validate_callback` raises exception → treated as validation failure, feedback includes error message
+- ✅ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(False, "sandbox fail")` → feedback injected as user message, model retries in same conversation
+- ✅ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(True, "")` → proceeds to apply_callback normally
+- ✅ `generate_agent_patch(deep_loop=False)` (default) → validate_callback never called, apply_callback runs post-hoc
+- ✅ `validate_callback` raises exception → treated as validation failure, feedback includes error message
 
 #### `patch/grammar.py` — Phase 42 set_spark_config
-- ⏳ `SetSparkConfigOp` model validates with `{op: "set_spark_config", key: "spark.sql.shuffle.partitions", value: 200}`
-- ⏳ `apply_set_spark_config` sets `bp["spark_config"]["spark.sql.shuffle.partitions"] = 200`
-- ⏳ `apply_set_spark_config` auto-creates `spark_config` block when absent
-- ⏳ `"set_spark_config_key"` alias normalised to `"set_spark_config"`
+- ✅ `SetSparkConfigOp` model validates with `{op: "set_spark_config", key: "spark.sql.shuffle.partitions", value: 200}`
+- ✅ `apply_set_spark_config` sets `bp["spark_config"]["spark.sql.shuffle.partitions"] = 200`
+- ✅ `apply_set_spark_config` auto-creates `spark_config` block when absent
+- ✅ `"set_spark_config_key"` alias normalised to `"set_spark_config"`
 
 #### `agent/loop.py` — Phase 41 defer_to_human
-- ⏳ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
-- ⏳ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
-- ⏳ `PatchSpec` with mixed ops (defer + real) → `_reject_mixed_defer_ops` raises `ValueError`
+- ✅ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
+- ✅ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
+- ✅ `PatchSpec` with mixed ops (defer + real) → `_reject_mixed_defer_ops` raises `ValueError`
 
 #### `agent/loop.py` — Phase 40 mid-call budget enforcement
-- ⏳ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
-- ⏳ `generate_agent_patch` with `budget.max_seconds=5` + `timeout=300` → `deadline = min(300, remaining_seconds())` computed correctly; httpx `ReadTimeout` when `deadline < timeout` → `budget_seconds_exceeded` (Phase 40)
-- ⏳ `generate_agent_patch` with `budget.max_seconds=600` + `timeout=5` → timeout fires first; `deadline == timeout` so treated as `api_error`, not budget (Phase 40)
-- ⏳ Budget exhausted between iterations (no remaining seconds) → loop records a zero-token attempt with `gate_that_rejected="budget"` and terminates with `budget_seconds_exceeded` without calling LLM (Phase 40)
-- ⏳ `deadline` param threaded through `_call_agent` → provider functions (Phase 40)
+- ✅ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
+- ✅ `generate_agent_patch` with `budget.max_seconds=5` + `timeout=300` → `deadline = min(300, remaining_seconds())` computed correctly; httpx `ReadTimeout` when `deadline < timeout` → `budget_seconds_exceeded` (Phase 40)
+- ✅ `generate_agent_patch` with `budget.max_seconds=600` + `timeout=5` → timeout fires first; `deadline == timeout` so treated as `api_error`, not budget (Phase 40)
+- ✅ Budget exhausted between iterations (no remaining seconds) → loop records a zero-token attempt with `gate_that_rejected="budget"` and terminates with `budget_seconds_exceeded` without calling LLM (Phase 40)
+- ✅ `deadline` param threaded through `_call_agent` → provider functions (Phase 40)
 
 #### `agent/__init__.py` — `resolve_budget`
 - ✅ `resolve_budget(pydantic_budget)` copies all six axes from the AgentBudgetConfig
@@ -1200,8 +1207,8 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `_extract_sql_lineage`: invalid SQL → returns `[]` (no exception raised)
 - ✅ `_extract_sql_lineage`: single upstream → source_table inferred when column has no table qualifier
 - ✅ `write_lineage`: inserts one row per output_column/source_column pair per Channel into observability store
-- ⏳ `write_lineage`: `observability_store=None` → returns silently (no crash, no file created)
-- ⏳ `write_lineage`: `column_lineage` rows appear in `observability.db` (not `lineage.db`)
+- ✅ `write_lineage`: `observability_store=None` → returns silently (no crash, no file created)
+- ✅ `write_lineage`: `column_lineage` rows appear in `observability.db` (not `lineage.db`)
 - ⏳ `aqueduct lineage` reads from `observability.db` (not `lineage.db`)
 - ✅ `write_lineage`: non-Channel modules (Ingress, Egress) do not produce lineage rows
 - ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
@@ -1365,8 +1372,8 @@ Does NOT apply or stage — caller decides.
 - ✅ `never_heal_errors=[]` (default) → no restriction
 - ✅ `_check_heal_guardrails()` with `failure_ctx.error_type=None` → falls back to stack trace class
 - ✅ `_check_heal_guardrails()` with both `error_type` and stack class → either match is sufficient
-- ⏳ `never_heal_errors` with regex pattern `"IllegalState.*offsets"` matches `"IllegalStateException"` candidates via `re.search` (Phase 41)
-- ⏳ Malformed regex in `never_heal_errors` degrades gracefully to exact match (Phase 41)
+- ✅ `never_heal_errors` with regex pattern `"IllegalState.*Exception"` matches `"IllegalStateException"` candidates via `re.search` (Phase 41)
+- ✅ Malformed regex in `never_heal_errors` degrades gracefully to exact match (Phase 41)
 
 ### Doctor guardrail typo detection — `aqueduct/doctor.py`
 - ✅ `heal_on_errors` entry matches known Assert `error_type` → no warning
@@ -1939,9 +1946,9 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `_check_assertions`: patch_is_valid=true + patch=None → failure
 - ✅ `_check_assertions`: patch_applies=true + apply succeeds → patch_applies=True
 - ✅ `_check_assertions`: patch_applies=true + apply fails → failure with error detail
-- ⏳ `_check_assertions`: `allow_defer: true` in scenario, LLM defers → PASS (gating), `allow_defer` assertion satisfied (Phase 41)
-- ⏳ `_check_assertions`: no `allow_defer` assertion, LLM defers → FAIL with "add allow_defer: true to accept deferral" message (Phase 41)
-- ⏳ `_check_assertions`: `allow_defer: true`, LLM produces real patch → FAIL with "expected defer_to_human" (Phase 41)
+- ✅ `_check_assertions`: `allow_defer: true` in scenario, LLM defers → PASS (gating), `allow_defer` assertion satisfied (Phase 41)
+- ✅ `_check_assertions`: no `allow_defer` assertion, LLM defers → FAIL with "add allow_defer: true to accept deferral" message (Phase 41)
+- ✅ `_check_assertions`: `allow_defer: true`, LLM produces real patch → FAIL with "expected defer_to_human" (Phase 41)
 - ✅ `run_scenario`: bad blueprint path → ScenarioResult(passed=False, failures=[...])
 - ✅ `run_scenario`: LLM returns None → ScenarioResult(passed=False, patch_valid=False)
 - ✅ `format_benchmark_table`: single model single scenario → correct table shape
@@ -2117,7 +2124,7 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 ### doctor `pyspark` import discipline
 
 - ✅ `import aqueduct.doctor` from a fresh interpreter (no pyspark installed) does NOT raise `ImportError`. Verifies the three pyspark imports remain inside function bodies, not at module top. Regression for the documented "doctor is the spark-isolation exception" rule in `CLAUDE.md`.
-- ⏳ `aqueduct/doctor.py` → `aqueduct/doctor/` package split: `from aqueduct.doctor import <name>` resolves every public check (`check_config`, `check_spark`, `check_storage`, `check_store_backend`, `check_blueprint_sources`, `check_blueprint_sources_from_manifest`, `check_aqtest`, `check_aqscenario`, `check_cloudpickle_compat`, `run_doctor`, `CheckResult`). Patch targets `aqueduct.doctor._tcp_ok` / `check_spark` / `check_blueprint_sources_from_manifest` / `run_doctor` still land (caller + callee share the `__init__` namespace). `import aqueduct.doctor` still does not import pyspark eagerly.
+- ✅ `aqueduct/doctor.py` → `aqueduct/doctor/` package split: `from aqueduct.doctor import <name>` resolves every public check (`check_config`, `check_spark`, `check_storage`, `check_store_backend`, `check_blueprint_sources`, `check_blueprint_sources_from_manifest`, `check_aqtest`, `check_aqscenario`, `check_cloudpickle_compat`, `run_doctor`, `CheckResult`). Patch targets `aqueduct.doctor._tcp_ok` / `check_spark` / `check_blueprint_sources_from_manifest` / `run_doctor` still land (caller + callee share the `__init__` namespace). `import aqueduct.doctor` still does not import pyspark eagerly.
 
 ---
 
@@ -2676,8 +2683,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ End-to-end: trigger DAG → approve patch via `aqueduct patch apply` → trigger fires within `poll_interval`, task resumes (the gap missed in original Phase 31 acceptance)
 
 ### CLI — spend-cap and sandbox gate test fixes (ISSUE-033)
-- ⏳ `test_heal_spend_cap_skipped_when_none`: mock returned stale `AgentResult` from non-existent `aqueduct.agent.agent` module; fix: return `AgentPatchResult` from `aqueduct.agent` — confirms `generate_agent_patch` IS called when `max_heal_attempts_per_hour=null`
-- ⏳ `test_run_patch_gates_inline_preflight_and_sample`: `assert_called_with` included `lineage_store` arg that `run_sandbox_gate` never accepted; fix: removed from both preflight and sample assertions
+- ✅ `test_heal_spend_cap_skipped_when_none`: mock returned stale `AgentResult` from non-existent `aqueduct.agent.agent` module; fix: return `AgentPatchResult` from `aqueduct.agent` — confirms `generate_agent_patch` IS called when `max_heal_attempts_per_hour=null`
+- ✅ `test_run_patch_gates_inline_preflight_and_sample`: `assert_called_with` included `lineage_store` arg that `run_sandbox_gate` never accepted; fix: removed from both preflight and sample assertions
 
 ### CLI — HEAL_PENDING exit code wiring (1.0.1 fix)
 - ✅ ISSUE-029: `tests/test_cli/test_cli_heal_spend_cap.py::test_heal_spend_cap_blocks_loop` asserted the pre-fix buggy `exit_code == 1` — flip to `== 2` (spend-cap blocks heal → no patch staged → DATA_OR_RUNTIME is correct)
@@ -2775,8 +2782,8 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ `replace_module_config` on a Channel that omits `op` → apply_callback rejects with `gate='schema_drift'` and a message pointing the LLM at `set_module_config_key`.
 - ⏳ `replace_module_config` on an Ingress that omits `format` → apply_callback rejects with `gate='schema_drift'`.
 - ⏳ Apply-callback compile check skips guardrail eval when patch fails the discriminator check (returns False, "schema_drift", ...).
-- ⏳ `_apply_patch_in_memory` writes the tempfile to the blueprint's parent dir (not `/tmp/`), so relative `module.config.path` resolves to the real data files after the patch.
-- ⏳ `_stage_failed_patch` stderr message shows the actual `{ts}_{patch_id}.json` filename, not the bare `patch_id.json`.
+- ✅ `_apply_patch_in_memory` writes the tempfile to the blueprint's parent dir (not `/tmp/`), so relative `module.config.path` resolves to the real data files after the patch.
+- ✅ `_stage_failed_patch` stderr message shows the actual `{ts}_{patch_id}.json` filename, not the bare `patch_id.json`.
 
 ### Executor — `--from` / `--to` selector coverage (1.1.0)
 - ✅ `_selector_included` with `from_module` only: excludes modules not reachable forward from the specified module. — `tests/test_executor/test_subdag.py::TestSubDagSelectors::test_selector_included_from_only`

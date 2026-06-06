@@ -6,7 +6,7 @@ import json
 import pytest
 pytestmark = pytest.mark.unit
 from pydantic import ValidationError
-from aqueduct.patch.grammar import PatchSpec
+from aqueduct.patch.grammar import PatchSpec, SetSparkConfigOp
 
 
 def test_valid_patch_spec_parsing():
@@ -241,3 +241,29 @@ class TestPatchSpecResilience:
         assert len(slug) <= 48
         # Ensure no trailing hyphen
         assert not slug.endswith("-")
+
+
+# ── Phase 42: SetSparkConfigOp ────────────────────────────────────────────────
+
+
+def test_set_spark_config_op_validates():
+    """SetSparkConfigOp validates with op, key, and value."""
+    op = SetSparkConfigOp(
+        op="set_spark_config",
+        key="spark.sql.shuffle.partitions",
+        value=200,
+    )
+    assert op.key == "spark.sql.shuffle.partitions"
+    assert op.value == 200
+
+
+def test_set_spark_config_alias_normalised():
+    """'set_spark_config_key' alias normalises to 'set_spark_config'."""
+    spec = PatchSpec(
+        patch_id="p", rationale="r",
+        operations=[
+            {"op": "set_spark_config_key",
+             "key": "spark.sql.shuffle.partitions", "value": 200},
+        ],
+    )
+    assert spec.operations[0].op == "set_spark_config"
