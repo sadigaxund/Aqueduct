@@ -740,7 +740,7 @@ def validate(
             targets = [default_cfg]
         else:
             click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
     any_fail = False
     for path in targets:
@@ -825,13 +825,13 @@ def schema(target: str, output: str) -> None:
         model = PatchSpec
     else:  # pragma: no cover — Click already validates
         click.echo(f"✗ unknown target: {target}", err=True)
-        sys.exit(5)
+        sys.exit(exit_codes.USAGE_ERROR)
 
     try:
         js = model.model_json_schema()
     except Exception as exc:
         click.echo(f"✗ schema generation failed: {exc}", err=True)
-        sys.exit(2)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     text = _json.dumps(js, indent=2, sort_keys=True)
     if output == "-":
@@ -930,7 +930,7 @@ def doctor(
                 "aqueduct_scenario header)",
                 err=True,
             )
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
     else:
         default_cfg = Path.cwd() / "aqueduct.yml"
         if default_cfg.exists():
@@ -994,7 +994,7 @@ def doctor(
     click.echo()
     if any_fail:
         click.echo(click.style("✗ one or more checks failed", fg="red"), err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
     else:
         click.echo(click.style("✓ all checks passed", fg="green"))
 
@@ -1059,7 +1059,7 @@ def compile(
     for item in ctx:
         if "=" not in item:
             click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.USAGE_ERROR)
         k, _, v = item.partition("=")
         cli_overrides[k.strip()] = v
 
@@ -1070,13 +1070,13 @@ def compile(
             execution_date = _date.fromisoformat(execution_date_str)
         except ValueError:
             click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.USAGE_ERROR)
 
     try:
         bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
     except ParseError as exc:
         click.echo(f"✗ {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         manifest = _compile_with_warnings(
@@ -1084,7 +1084,7 @@ def compile(
         )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     rendered = _render_compile_show(manifest, show.lower())
 
@@ -1324,7 +1324,7 @@ def run(
             _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
             click.echo(f"✗ config error: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
         # CLI flags override config file; config file overrides built-in defaults
         # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
@@ -1374,13 +1374,13 @@ def run(
             execute = get_executor(engine)
         except (NotImplementedError, ValueError) as exc:
             click.echo(f"✗ engine error: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
         cli_overrides: dict[str, str] = {}
         for item in ctx:
             if "=" not in item:
                 click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-                sys.exit(1)
+                sys.exit(exit_codes.USAGE_ERROR)
             k, _, v = item.partition("=")
             cli_overrides[k.strip()] = v
 
@@ -1392,7 +1392,7 @@ def run(
                 execution_date = _date.fromisoformat(execution_date_str)
             except ValueError:
                 click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
-                sys.exit(1)
+                sys.exit(exit_codes.USAGE_ERROR)
 
         # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
         # Depot must be ready before compile() so @aq.depot.get() in the
@@ -1406,7 +1406,7 @@ def run(
             bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
         except ParseError as exc:
             click.echo(f"✗ parse error: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Compile ────────────────────────────────────────────────────────────────
         try:
@@ -1422,7 +1422,7 @@ def run(
             )
         except CompileError as exc:
             click.echo(f"✗ compile error: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
         if resolved_store_dir is None:
@@ -1464,7 +1464,7 @@ def run(
                     "(legacy alias: --allow-aggressive).",
                     err=True,
                 )
-                sys.exit(1)
+                sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Sandbox-mode danger gates ─────────────────────────────────────────────
         _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
@@ -1474,14 +1474,14 @@ def run(
                 "in aqueduct.yml (full-dataset sandbox replay).",
                 err=True,
             )
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
         if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
             click.echo(
                 "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
                 "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
                 err=True,
             )
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
         if _sandbox_mode == "preflight":
             click.echo(
                 "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
@@ -1516,7 +1516,7 @@ def run(
             )
             if policy == "block":
                 click.echo(f"✗ blocked — {msg}", err=True)
-                sys.exit(1)
+                sys.exit(exit_codes.CONFIG_ERROR)
             elif policy == "warn":
                 click.echo(msg, err=True)
 
@@ -1615,6 +1615,7 @@ def run(
         failure_ctx = None
         result = None
         patch_staged_for_review = False  # set when human/ci mode writes a patch to patches/pending/
+        patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
         while True:
@@ -2084,6 +2085,8 @@ def run(
                     for _r in _g4.regressions:
                         click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
                 if _g3 is not None and not _g3_passed:
+                    # Non-interactive (auto) gate rejection → exit VALIDATION_GATE(4).
+                    patch_rejected_by_gate = True
                     click.echo(
                         f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
                         err=True,
@@ -2324,12 +2327,16 @@ def run(
                 )
             else:
                 click.echo(f"\n✗ blueprint failed  run_id={run_id}", err=True)
-            # Exit 3 (HEAL_PENDING) when a patch was staged for human review — lets
-            # downstream orchestrators (Airflow operator, CI runners) distinguish
-            # "needs human approval" from a hard runtime failure (exit 2).
-            sys.exit(
-                exit_codes.HEAL_PENDING if patch_staged_for_review else exit_codes.DATA_OR_RUNTIME
-            )
+            # Distinguish the three non-success terminal states for downstream
+            # orchestrators (Airflow operator, CI runners):
+            #   HEAL_PENDING(3)   — a patch was staged for human/ci review
+            #   VALIDATION_GATE(4)— auto-mode patch rejected by a validation gate
+            #   DATA_OR_RUNTIME(2)— hard runtime failure, no actionable patch
+            if patch_staged_for_review:
+                sys.exit(exit_codes.HEAL_PENDING)
+            if patch_rejected_by_gate:
+                sys.exit(exit_codes.VALIDATION_GATE)
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
 
         # ── on_success webhook ────────────────────────────────────────────────────
         if cfg.webhooks.on_success:
@@ -2518,7 +2525,7 @@ def patch_preview(
         spec = load_patch_spec(_Path(patch_file))
     except PatchError as exc:
         click.echo(f"✗ patch schema error: {exc}", err=True)
-        sys.exit(2)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     # Guardrails gate — deterministic. Identical enforcement used by
     # `patch apply`; surfaced here so reviewers see violations up front.
@@ -2526,13 +2533,13 @@ def patch_preview(
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
         click.echo(f"✗ Guardrails gate blocked: {exc}", err=True)
-        sys.exit(2)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
         bp_after = apply_patch_to_dict(bp_raw, spec)
     except PatchError as exc:
         click.echo(f"✗ patch could not be applied in memory: {exc}", err=True)
-        sys.exit(2)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     diff = render_unified_diff(bp_raw, bp_after)
     lineage_res = run_lineage_gate(bp_raw, bp_after, spec)
@@ -2551,7 +2558,7 @@ def patch_preview(
             _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
             click.echo(f"✗ config error (needed for sandbox): {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
         from aqueduct.stores import get_stores
         bundle = get_stores(cfg)
         failed_module = None
@@ -2703,7 +2710,7 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     click.echo(f"✓ patch applied  id={result.patch_id}")
     click.echo(f"  blueprint  → {result.blueprint_path}")
@@ -2753,7 +2760,7 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     click.echo(f"✓ patch rejected  id={patch_id}")
     click.echo(f"  archived → {rejected_path}")
@@ -2838,7 +2845,7 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     add = subprocess.run(["git", "add", blueprint_path.name], capture_output=True, cwd=blueprint_path.parent or None)
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.decode().strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     commit = subprocess.run(
         ["git", "commit", "-m", commit_msg],
@@ -2846,7 +2853,7 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     short_hash = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
@@ -2890,7 +2897,7 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     )
     if restore.returncode != 0:
         click.echo(f"✗ git checkout failed: {restore.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     click.echo(f"✓ blueprint restored to HEAD: {blueprint_path}")
 
@@ -3096,7 +3103,7 @@ def test_cmd(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     merged_spark_config = dict(cfg.spark_config)
 
@@ -3131,7 +3138,7 @@ def test_cmd(
         )
     except TestSchemaError as exc:
         click.echo(f"✗ test file error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         stop_spark_session(spark)
 
@@ -3151,7 +3158,7 @@ def test_cmd(
     click.echo()
     if suite.failed > 0:
         click.echo(f"✗ {suite.failed} test(s) failed", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
     else:
         click.echo(f"✓ all {suite.passed} test(s) passed")
 
@@ -3199,7 +3206,7 @@ def report(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     observability_db = _resolve_obs_db(cfg, store_dir, run_id=run_id)
     if observability_db is None or not observability_db.exists():
@@ -3209,7 +3216,7 @@ def report(
             f"and .aqueduct/observability/*/observability.db)",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
@@ -3228,7 +3235,7 @@ def report(
 
     if row is None:
         click.echo(f"✗ run {run_id!r} not found in {observability_db}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
     module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
@@ -3473,7 +3480,7 @@ def lineage(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     # Accept blueprint file path — extract blueprint id from it
     arg_path = Path(blueprint_id_or_blueprint)
@@ -3484,7 +3491,7 @@ def lineage(
             blueprint_id = bp.id
         except Exception as exc:
             click.echo(f"✗ could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.CONFIG_ERROR)
     else:
         blueprint_id = blueprint_id_or_blueprint
 
@@ -3500,7 +3507,7 @@ def lineage(
             obs_db = Path(".aqueduct/observability.db")
     if not obs_db.exists():
         click.echo(f"✗ observability.db not found at {obs_db}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     params: list[Any] = [blueprint_id]
     where_parts = ["blueprint_id = ?"]
@@ -3611,7 +3618,7 @@ def signal(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
 
@@ -3634,7 +3641,7 @@ def signal(
 
     if error_msg is not None and value_str == "true":
         click.echo("✗ --error implies gate closed; cannot combine with --value true", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.USAGE_ERROR)
 
     # Resolve passed value
     passed = value_str == "true"
@@ -3739,7 +3746,7 @@ def heal(
 
     if not run_id:
         click.echo("✗ provide a run_id argument", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.USAGE_ERROR)
 
     try:
         _resolve_and_load_env(
@@ -3751,7 +3758,7 @@ def heal(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
     resolved_provider = eng.provider
@@ -3767,7 +3774,7 @@ def heal(
             "✗ no LLM agent configured — set agent.model in aqueduct.yml",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     patches_path = Path(patches_dir)
 
@@ -3783,7 +3790,7 @@ def heal(
             f"and .aqueduct/observability/*/observability.db)",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
@@ -3805,7 +3812,7 @@ def heal(
             "  (Only failed runs have a FailureContext stored.)",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     (
         fc_run_id, blueprint_id, failed_module, error_message,
@@ -3906,7 +3913,7 @@ def heal(
         )
         for err in agent_result.reprompt_errors:
             click.echo(f"  · {err}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     stage_patch_for_human(patch, patches_path, failure_ctx)
     click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
@@ -4048,7 +4055,7 @@ def benchmark(
             "✗ provide a scenario file or directory (positional, or --scenarios)",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.USAGE_ERROR)
     scenarios_dir = target
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
@@ -4063,7 +4070,7 @@ def benchmark(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
     # Precedence: CLI flag > cfg.agent > built-in default. Connection identity
@@ -4086,7 +4093,7 @@ def benchmark(
             "✗ no models specified — use --model <model> or set agent.model in aqueduct.yml",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     click.echo(
         f"↻ benchmark  scenarios={scenarios_dir}  "
@@ -4250,7 +4257,7 @@ def benchmark(
         )
 
     if failed or regression_exit:
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
 
 # ── aqueduct benchmark-diff ──────────────────────────────────────────────────
@@ -4304,13 +4311,13 @@ def benchmark_diff_cmd(
     store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
     if not store_path.exists():
         click.echo(f"✗ benchmark store not found: {store_path}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
         con = _connect(store_path)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"✗ cannot open benchmark store {store_path}: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     where_parts: list[str] = []
     params: list = []
@@ -4370,7 +4377,7 @@ def benchmark_diff_cmd(
     if has_regressions(entries):
         if fmt != "json":
             click.echo("✗ regression(s) detected", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
 
 # ── aqueduct log ─────────────────────────────────────────────────────────────
@@ -4401,7 +4408,7 @@ def log_cmd(blueprint: str, fmt: str) -> None:
     )
     if result.returncode != 0:
         click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     raw = result.stdout.strip()
     if not raw:
@@ -4487,7 +4494,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     if result.returncode != 0:
         click.echo(f"✗ git log failed: {result.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     target_hash: str | None = None
     for commit_raw in result.stdout.split("\x1eENDCOMMIT"):
@@ -4506,7 +4513,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
             "  Use 'aqueduct log <blueprint>' to list available patch_ids.",
             err=True,
         )
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     # Resolve the commit immediately before the patch
     parent = subprocess.run(
@@ -4515,7 +4522,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     if parent.returncode != 0:
         click.echo(f"✗ could not resolve parent commit: {parent.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
     parent_hash = parent.stdout.strip()
 
     # Discover all blueprint files touched by the patch commit (handles arcades)
@@ -4525,12 +4532,12 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     if diff_files.returncode != 0:
         click.echo(f"✗ could not list files in commit: {diff_files.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     touched_files = [f.strip() for f in diff_files.stdout.splitlines() if f.strip()]
     if not touched_files:
         click.echo(f"✗ commit {target_hash[:8]} has no file changes", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     # Restore each file to its pre-patch state (file-scoped, non-destructive)
     for rel_path in touched_files:
@@ -4540,7 +4547,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
         )
         if restore.returncode != 0:
             click.echo(f"✗ git checkout {rel_path} failed: {restore.stderr.strip()}", err=True)
-            sys.exit(1)
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     # Stage restored files and create a forward revert commit
     add = subprocess.run(
@@ -4549,7 +4556,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     if add.returncode != 0:
         click.echo(f"✗ git add failed: {add.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     commit_msg = (
         f"revert(aqueduct): roll back patch {patch_id!r}\n\n"
@@ -4561,7 +4568,7 @@ def rollback_cmd(blueprint: str, patch_id: str) -> None:
     )
     if commit.returncode != 0:
         click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     short = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
@@ -4605,7 +4612,7 @@ def stores_info(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg)
     rows = [
@@ -4664,7 +4671,7 @@ def stores_migrate(
 
     if store.lower() != "depot":
         click.echo(f"✗ unsupported --store: {store}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         _resolve_and_load_env(
@@ -4674,26 +4681,26 @@ def stores_migrate(
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg)
     target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
     if bundle.depot.backend == "duckdb" and Path(bundle.depot.location_label) == Path(from_path).resolve():
         click.echo("✗ source and target depot are the same DuckDB file; nothing to migrate", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         import duckdb as _duckdb
     except ImportError as exc:
         click.echo(f"✗ duckdb not installed: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
 
     conn = _duckdb.connect(str(Path(from_path).resolve()), read_only=True)
     try:
         rows = conn.execute("SELECT key, value FROM depot_kv").fetchall()
     except Exception as exc:
         click.echo(f"✗ could not read depot_kv from {from_path}: {exc}", err=True)
-        sys.exit(1)
+        sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         conn.close()
 

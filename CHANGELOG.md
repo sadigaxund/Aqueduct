@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Changed
+- **`VALIDATION_GATE` (exit 4) is now emitted.** Previously defined and documented but never raised. When `aqueduct run` is in `auto` (non-interactive) mode and a generated patch is rejected by the validation pyramid (sandbox replay), the command now exits `4` (`VALIDATION_GATE`) instead of `2` (`DATA_OR_RUNTIME`) — letting orchestrators distinguish "a patch was produced but failed validation" from a plain runtime failure. Human/CI staging still exits `3` (`HEAL_PENDING`); precedence is staged → `3`, gate-rejected → `4`, else → `2`.
+- **CLI exit codes now honor the documented `exit_codes` contract.** Many CLI failures previously exited `1` (`CONFIG_ERROR`) regardless of cause. They now emit the semantically correct code per `aqueduct/exit_codes.py`: runtime/data failures — git-subprocess errors (`patch commit`/`discard`/`log`/`rollback`), missing observability stores or run records (`report`/`heal`/`lineage`), `test`-suite failures, `heal` failing to produce a patch, benchmark failures/regressions — now exit `2` (`DATA_OR_RUNTIME`); bad-flag/missing-argument cases (malformed `--ctx`/`--execution-date`, missing `run_id`/scenario arg, conflicting `--error`/`--value`) now exit `5` (`USAGE_ERROR`). **Behavior change:** downstream tooling that keyed off the old `1` for these paths (e.g. Airflow retry rules) should re-check against the corrected codes. All `sys.exit()` calls in `cli.py` now use named `exit_codes.*` constants instead of magic numbers (`130` SIGINT excepted).
+
 ### Fixed
 - **Arcade path anchoring uses parent blueprint's base directory.** When expanding arcade modules, `context_override` path values (e.g. `src_path: data/input/sales.csv`) were anchored relative to the arcade file's directory (`arcades/`) instead of the parent blueprint's directory, producing nonexistent paths like `arcades/data/input/sales.csv`. The expander now parses sub-blueprints via `parse_dict(raw, base_dir=base_dir, …)` with the parent's `base_dir`, so context_override paths resolve correctly.
 
