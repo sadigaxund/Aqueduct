@@ -338,7 +338,9 @@ def _load_previous_patches(patches_dir: Path, limit: int = _PATCH_HISTORY_MAX) -
             data = json.loads(Path(e.path).read_text(encoding="utf-8"))
             patches.append({
                 "patch_id": data.get("patch_id", Path(e.name).stem),
-                "description": data.get("description", ""),
+                # Archived patches dump the canonical `rationale` key;
+                # `description` is the alias older / hand-written patches use.
+                "description": data.get("rationale") or data.get("description", ""),
                 "ops": [op.get("op", "?") for op in data.get("operations", [])],
             })
         except Exception:
@@ -578,14 +580,21 @@ def _build_system_prompt(
     # exists. The grammar still accepts it (Pydantic needs the full union),
     # but the prompt shows only the real ops.
     if not allow_defer:
-        # Strip DeferToHumanOp from the operations anyOf
-        op_items = raw_schema.get("$defs", {}).get("PatchSpec", {}).get("properties", {}).get("operations", {}).get("items", {})
-        if "anyOf" in op_items:
-            op_items["anyOf"] = [
-                ref for ref in op_items["anyOf"]
-                if not (isinstance(ref, dict) and "$ref" in ref and "DeferToHumanOp" in ref["$ref"])
-            ]
-        # Also remove the $defs entry
+        # Strip DeferToHumanOp from the operations union. The PatchSpec model
+        # itself sits at the TOP level of model_json_schema() (only nested
+        # models land in $defs), and pydantic v2 renders the discriminated
+        # union as `oneOf` + a discriminator mapping — scrub all three places
+        # so the model sees no trace of the op and no dangling $ref.
+        op_items = raw_schema.get("properties", {}).get("operations", {}).get("items", {})
+        for union_key in ("oneOf", "anyOf"):
+            if union_key in op_items:
+                op_items[union_key] = [
+                    ref for ref in op_items[union_key]
+                    if not (isinstance(ref, dict) and "DeferToHumanOp" in str(ref.get("$ref", "")))
+                ]
+        mapping = op_items.get("discriminator", {}).get("mapping")
+        if isinstance(mapping, dict):
+            mapping.pop("defer_to_human", None)
         raw_schema.get("$defs", {}).pop("DeferToHumanOp", None)
 
     schema = json.dumps(raw_schema, indent=2)
