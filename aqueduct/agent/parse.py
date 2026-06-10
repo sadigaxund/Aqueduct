@@ -34,9 +34,10 @@ logger = logging.getLogger(__name__)
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _FENCE_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL | re.IGNORECASE)
 # Strip JSON line comments — both JS-style `//` and Python/YAML-style `#`.
-# We only strip comments that begin at column 0 or after whitespace — never
-# inside a string literal — by requiring the comment to be preceded by
-# whitespace OR by the start of a line.
+# The regex cannot tell a comment from `//` or `#` INSIDE a string value
+# (e.g. SQL `a // 2`, a path containing `#`), so it is applied only as a
+# recovery pass AFTER strict JSON parsing has already failed — valid JSON
+# never contains comments, so valid string values are never touched.
 _LINE_COMMENT_RE = re.compile(r"(^|\s)(?://|#)[^\n]*", re.MULTILINE)
 
 
@@ -272,28 +273,37 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
         text = text[brace_idx:]
         recovery_applied.append("stripped_leading_prose")
 
-    # 4. Strip line comments — keep as the last cleanup so we only touch
-    #    the JSON region, not the upstream think block / prose.
-    cleaned = _LINE_COMMENT_RE.sub(r"\1", text)
-    if cleaned != text:
-        recovery_applied.append("stripped_line_comments")
-    text = cleaned
-
     # raw_decode stops at the end of the first complete JSON object.
     try:
         obj, _ = json.JSONDecoder().raw_decode(text)
     except json.JSONDecodeError as decode_exc:
-        try:
-            from json_repair import repair_json as _repair_json
-        except ImportError:
-            raise decode_exc from None
-        repaired = _repair_json(text)
-        if not repaired:
-            raise decode_exc from None
-        obj, _ = json.JSONDecoder().raw_decode(repaired)
-        recovery_applied.append("json_repair")
+        # 4. Strip line comments and retry — only after strict parsing
+        #    failed. Running the regex on valid JSON would corrupt string
+        #    values containing ` // ` or ` # ` (see _LINE_COMMENT_RE note).
+        recovered = False
+        cleaned = _LINE_COMMENT_RE.sub(r"\1", text)
+        if cleaned != text:
+            try:
+                obj, _ = json.JSONDecoder().raw_decode(cleaned)
+                recovery_applied.append("stripped_line_comments")
+                recovered = True
+            except json.JSONDecodeError:
+                pass
 
-    # 5. Unwrap single-key wrappers (e.g. {"patch": {operations: [...]}})
+        # 5. json-repair last-ditch pass — on the ORIGINAL text, so a bad
+        #    comment-strip can never compound into a silently mangled patch.
+        if not recovered:
+            try:
+                from json_repair import repair_json as _repair_json
+            except ImportError:
+                raise decode_exc from None
+            repaired = _repair_json(text)
+            if not repaired:
+                raise decode_exc from None
+            obj, _ = json.JSONDecoder().raw_decode(repaired)
+            recovery_applied.append("json_repair")
+
+    # 6. Unwrap single-key wrappers (e.g. {"patch": {operations: [...]}})
     if isinstance(obj, dict) and len(obj) == 1:
         (wrapper_key, inner) = next(iter(obj.items()))
         if isinstance(inner, dict) and "operations" in inner:
