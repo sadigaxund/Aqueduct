@@ -82,6 +82,17 @@ spark_config:
 #     - "AnalysisException"
 
 
+# ── Checkpointing ──────────────────────────────────────────────────────────────
+#
+# When true, every module's output is materialized to Parquet under
+# <store_dir>/checkpoints/<run_id>/. Enables `aqueduct run --resume <run_id>`
+# (modules with a valid checkpoint are reloaded and skipped) and avoids DAG
+# re-computation for multi-consumer / incremental Channels. For finer control,
+# set `checkpoint: true` on an individual module instead of blueprint-wide.
+
+# checkpoint: false
+
+
 # ── LLM self-healing policy ───────────────────────────────────────────────────
 #
 # Per-blueprint. Connection defaults (provider, model) come from aqueduct.yml.

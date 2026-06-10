@@ -86,19 +86,23 @@ flowchart LR
 5. On failure, the **LLM Agent** emits a structured `PatchSpec`.
 6. The patch clears guardrail → lineage → sandbox gates, then re-runs — or stages for review.
 
-**Model-agnostic by design.** The healing loop works with any LLM — a local 7B on Ollama up to a frontier model via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. Around **70% of production Spark errors are healable by a 7B model in a single attempt.** Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades push heal rates higher with larger models.
+**Model-agnostic by design.** The healing loop works with any LLM — a local 7B on Ollama up to a frontier model via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. <!-- TODO(claim): verify the 70% figure against a published `aqueduct benchmark` run and link the results here. --> Around **70% of production Spark errors are healable by a 7B model in a single attempt.** Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades push heal rates higher with larger models.
 
 ## Core Concepts
 
-| Concept       | Purpose                              |
-|---------------|--------------------------------------|
-| **Blueprint** | Your pipeline definition             |
-| **Channel**   | Transformations (SQL or native ops)  |
-| **Spillway**  | Routes bad rows to error sink        |
-| **Probe**     | Non-blocking observability taps      |
-| **Assert**    | Inline quality gates                 |
-| **Depot**     | Cross-run state & watermarks         |
-| **Arcade**    | Reusable sub-pipelines               |
+| Concept       | Purpose                                       |
+|---------------|-----------------------------------------------|
+| **Blueprint** | Your pipeline definition                      |
+| **Ingress**   | Reads sources (CSV, Parquet, Delta, JDBC)     |
+| **Channel**   | Transformations (SQL or native ops)           |
+| **Egress**    | Writes sinks (overwrite, append, Delta merge) |
+| **Junction**  | Fan-out (conditional, broadcast, partition)   |
+| **Funnel**    | Fan-in (unions, coalesce, zip)                |
+| **Spillway**  | Routes bad rows to error sink                 |
+| **Probe**     | Non-blocking observability taps               |
+| **Assert**    | Inline quality gates                          |
+| **Depot**     | Cross-run state & watermarks                  |
+| **Arcade**    | Reusable sub-pipelines                        |
 
 Full details in the [References](#references).
 
@@ -135,6 +139,30 @@ Who applies a generated patch. Deterministic guardrails — allowed paths, forbi
 | `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run | Trusted environments — dev, scoped pipelines. |
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
+
+<details>
+<summary><strong>What a patch looks like</strong> (click to expand)</summary>
+
+Every patch is a `PatchSpec` — a structured, Git-diffable JSON document staged under `patches/pending/`. No code, no shell, just declarative operations against the Blueprint:
+
+```jsonc
+// patches/pending/hello-pipeline-20260611T031412.json (abridged)
+{
+  "patch_id": "hello-pipeline-20260611T031412",
+  "run_id": "9f3c2e1a",
+  "category": "config_error",
+  "root_cause": "Ingress 'load' reads data/in.csv, but the upstream job renamed the file to data/input.csv.",
+  "confidence": 0.92,
+  "rationale": "PATH_NOT_FOUND on data/in.csv; a sibling data/input.csv exists with a matching schema, so the path is stale rather than the data missing.",
+  "operations": [
+    { "op": "set_module_config_key", "module_id": "load", "key": "path", "value": "data/input.csv" }
+  ]
+}
+```
+
+Review it, then `aqueduct patch apply` — or let `auto` mode validate and apply it for you.
+
+</details>
 
 ### Why it holds up
 
@@ -174,6 +202,9 @@ flowchart LR
 ```bash
 pip install aqueduct-core[spark]
 ```
+
+> **Requirements:** Python 3.11+ · Java 17 for the `spark` extra (`JAVA_HOME` must point to it).
+> Every release is CI-tested against three pinned combos — **LTS** (Python 3.11 · Spark 4.1), **Latest** (Python 3.13 · Spark 4.1), **Legacy** (Python 3.12 · Spark 3.5). Live results in the [Compatibility Matrix](docs/compatibility.md).
 
 Compose extras as needed — `pip install aqueduct-core[spark,airflow,aws]`:
 

@@ -46,6 +46,8 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor <file>` | Validate a specific blueprint or config file |
 | `aqueduct doctor --skip-spark` | Fast check without starting Spark |
 | `aqueduct doctor --preflight` | Full Spark session + storage validation |
+| `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
+| `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 
 ### Shell completion
@@ -68,6 +70,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `aqueduct compile <blueprint>` | Output the fully resolved Manifest |
 | `aqueduct run <blueprint>` | Compile and execute the pipeline |
 | `aqueduct test <file.aqtest.yml>` | Run isolated module unit tests |
+| `aqueduct schema [--target blueprint\|config\|patch] [-o <file>]` | Emit the Pydantic-derived JSON Schema for a Blueprint, `aqueduct.yml`, or PatchSpec — enables IDE autocomplete and CI schema gates. Writes to stdout by default. |
 
 ### Important `aqueduct run` Flags
 
@@ -181,7 +184,20 @@ caps than production.
 | `aqueduct patch apply <file>` | Apply a patch |
 | `aqueduct patch reject <file>` | Reject a patch |
 | `aqueduct patch commit` | Git commit all applied patches |
-| `aqueduct patch rollback` | Revert to previous state |
+| `aqueduct patch discard --blueprint <file>` | Restore Blueprint to last git commit (`git checkout HEAD`) and move uncommitted applied patches back to `patches/pending/` |
+| `aqueduct patch log <blueprint> [--format table\|json]` | Show the Blueprint's git history with parsed Aqueduct patch metadata (patch ids, ops, run_id); manual edits show as `(manual change)` |
+| `aqueduct patch rollback <blueprint> --to <patch_id>` | Revert the git commit containing this patch_id |
+
+---
+
+## 6. Store Management
+
+| Command | Description |
+|---------|-------------|
+| `aqueduct stores info` | Print each store's (observability / lineage / depot) resolved backend and location label |
+| `aqueduct stores migrate --from-duckdb <file> [--store depot]` | Copy depot KV rows from a source DuckDB file into the configured target backend (Postgres/Redis). Idempotent. v1 migrates `depot` only. |
+
+The target backend is read from `aqueduct.yml` (`stores.*`) — set it to `postgres`/`redis` **before** running `migrate`. See [Production Guide](production_guide.md) for promoting a DuckDB project to a server backend.
 
 ---
 
