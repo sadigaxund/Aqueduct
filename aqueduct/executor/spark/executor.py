@@ -400,6 +400,28 @@ def _apply_spillway_filter(val: Any, edge: "Edge") -> Any:
     return val.filter(F.col("_aq_error_type").isin(list(edge.error_types)))
 
 
+def _cache_if_multi_spillway(df: Any, module_id: str, edges: tuple["Edge", ...]) -> Any:
+    """Cache the quarantine frame when >1 spillway consumer exists.
+
+    Each spillway consumer (typed `error_types` filter or catch-all) is a
+    separate Spark action over the same quarantine frame — without caching,
+    the parent DAG re-executes per consumer, which is exactly what our own
+    ``perf_multi_consumer_no_cache`` warn rule tells users not to do.
+    Quarantine frames are small error-row subsets, so in-memory ``cache()``
+    is appropriate (see spark_guide caching-strategy). No explicit
+    unpersist — frames are run-scoped and released when the session stops.
+    """
+    n_consumers = sum(
+        1 for e in edges if e.from_id == module_id and e.port == "spillway"
+    )
+    if n_consumers > 1:
+        logger.debug(
+            "[%s] %d spillway consumers — caching quarantine frame", module_id, n_consumers,
+        )
+        return df.cache()
+    return df
+
+
 def _is_gate_closed(value: Any) -> bool:
     return value is _GATE_CLOSED
 
@@ -1033,7 +1055,9 @@ def execute(
                               .withColumn("_aq_error_ts", F.current_timestamp())
                         )
                         frame_store[module.id] = good_df
-                        frame_store[f"{module.id}.spillway"] = error_df
+                        frame_store[f"{module.id}.spillway"] = _cache_if_multi_spillway(
+                            error_df, module.id, manifest.edges,
+                        )
                     elif spillway_condition and not has_spillway_edge:
                         logger.warning(
                             "Channel %r has spillway_condition but no spillway edge; "
@@ -1231,7 +1255,9 @@ def execute(
 
                 frame_store[module.id] = passing_df
                 if quarantine_df is not None and has_spillway_edge:
-                    frame_store[f"{module.id}.spillway"] = quarantine_df
+                    frame_store[f"{module.id}.spillway"] = _cache_if_multi_spillway(
+                        quarantine_df, module.id, manifest.edges,
+                    )
                 elif quarantine_df is not None:
                     logger.warning(
                         "[%s] Assert quarantine rows produced but no spillway edge; discarded.",

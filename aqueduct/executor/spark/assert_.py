@@ -431,9 +431,15 @@ def _apply_row_rule(
         failing = df.filter(f"NOT ({expr_str})")
 
         if min_pass_rate is not None:
-            # Need a count — one action, but user explicitly requested pass-rate check
-            total = df.count()
-            pass_count = passing.count()
+            # User explicitly requested a pass-rate check — needs an action.
+            # One agg job (count(*) + count_if) instead of two full count()
+            # passes over df and passing.
+            _counts = df.agg(
+                F.count("*").alias("_total"),
+                F.expr(f"count_if({expr_str})").alias("_pass"),
+            ).collect()[0]
+            total = _counts["_total"]
+            pass_count = _counts["_pass"] or 0
             actual_rate = pass_count / total if total > 0 else 1.0
             if actual_rate < float(min_pass_rate):
                 _handle_fail(

@@ -231,7 +231,7 @@ agent:
 
   # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
-  # base_url: "http://10.0.0.39:11434/v1"
+  # base_url: "http://ollama.internal:11434/v1"
   # model: "claude-sonnet-4-6"
   # timeout: 300.0               # seconds; increase for slow local models
   # provider_options: {}         # extra payload keys for openai_compat endpoints

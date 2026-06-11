@@ -552,7 +552,7 @@ agent:
 
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"
-  # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
+  # base_url: "http://ollama.internal:11434/v1"   # /v1 suffix required
   # model: "deepseek-r1:14b"
   # timeout: 600.0              # large local models need more time
   # provider_options:
