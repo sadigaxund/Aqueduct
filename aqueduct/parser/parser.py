@@ -14,7 +14,11 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from aqueduct.parser.graph import detect_cycles, validate_spillway_targets
+from aqueduct.parser.graph import (
+    detect_cycles,
+    validate_edge_error_types,
+    validate_spillway_targets,
+)
 from aqueduct.parser.models import (
     AgentConfig,
     Blueprint,
@@ -280,6 +284,7 @@ def parse_dict(
                 f"Cycle detected in module graph. Involved modules: {cycle_nodes}"
             )
         validate_spillway_targets(list(modules))
+        validate_edge_error_types(list(edges))
     except ValueError as exc:
         raise ParseError(str(exc)) from exc
 

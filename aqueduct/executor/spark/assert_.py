@@ -148,6 +148,7 @@ def execute_assert(
                     passing_df.filter(~passing_filter)
                     .withColumn("_aq_error_module", F.lit(module.id))
                     .withColumn("_aq_error_rule", F.lit("freshness"))
+                    .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "freshness"))
                     .withColumn("_aq_error_msg", F.lit(f"column {col!r} failed freshness check"))
                     .withColumn("_aq_error_ts", F.current_timestamp())
                 )
@@ -446,6 +447,7 @@ def _apply_row_rule(
                 failing
                 .withColumn("_aq_error_module", F.lit(module_id))
                 .withColumn("_aq_error_rule", F.lit("sql_row"))
+                .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "sql_row"))
                 .withColumn("_aq_error_msg", F.lit(f"failed: {expr_str}"))
                 .withColumn("_aq_error_ts", F.current_timestamp())
             )
@@ -481,6 +483,7 @@ def _apply_row_rule(
                     q_df
                     .withColumn("_aq_error_module", F.lit(module_id))
                     .withColumn("_aq_error_rule", F.lit("custom"))
+                    .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "custom"))
                     .withColumn("_aq_error_msg", F.lit(msg))
                     .withColumn("_aq_error_ts", F.current_timestamp())
                 )

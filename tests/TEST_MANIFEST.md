@@ -1150,6 +1150,17 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `_SIGNAL_PORTS` no longer contains `"spillway"` — spillway edge participates in topo-sort
 - ✅ end-to-end: Channel with spillway_condition → two Egress (main + spillway) both succeed
 
+#### Typed spillway routing (`edges.error_types`)
+
+- ⏳ Spillway edge with `error_types: [SpillwayCondition]` → Egress receives only rows whose `_aq_error_type` matches; edge without `error_types` receives all quarantine rows (catch-all, previous behavior unchanged)
+- ⏳ Two spillway edges from one Assert — `error_types: [DataQualityViolation]` and catch-all — route disjoint vs full row sets respectively from the SAME shared spillway frame (filter applied per-edge at consumption, not at publish)
+- ⏳ `_apply_spillway_filter` is a no-op for main-port edges, `_GATE_CLOSED` sentinel, and `None` values
+- ⏳ Funnel consuming a spillway edge with `error_types` gets the filtered frame
+- ⏳ Assert quarantine rows now stamp `_aq_error_type` = rule's `error_type` label when set, else the rule name (`freshness` / `sql_row` / `custom`) — regression: previously only `_aq_error_rule` was stamped, so custom error labels were not addressable
+- ⏳ Parser: `error_types` on a non-spillway edge → `ParseError` mentioning port='spillway' (previously accepted and silently ignored)
+- ⏳ Parser: `error_types` on a spillway edge parses; `Edge.error_types` tuple preserved through arcade expansion
+- ⏳ Doctor `_check_spillway_error_types`: entry matching no Assert `error_type` / rule name / `SpillwayCondition` → `spillway_error_type_typo` warn; declared label → no warning
+
 ### Depot KV Store (`aqueduct/depot/depot.py`)
 
 #### `DepotStore`

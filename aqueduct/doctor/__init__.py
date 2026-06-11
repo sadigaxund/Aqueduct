@@ -353,6 +353,45 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                 ))
 
     results.extend(_check_heal_guardrail_typos(manifest))
+    results.extend(_check_spillway_error_types(manifest))
+    return results
+
+
+def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
+    """Warn if a spillway edge's error_types filter can never match.
+
+    Quarantined rows carry an ``_aq_error_type`` label: the Assert rule's
+    ``error_type`` (falling back to the rule name — freshness / sql_row /
+    custom) or ``SpillwayCondition`` for Channel spillway rows. An edge
+    filter naming a label declared nowhere routes zero rows — almost always
+    a typo.
+    """
+    results: list[CheckResult] = []
+
+    known: set[str] = {"SpillwayCondition", "freshness", "sql_row", "custom"}
+    for module in getattr(manifest, "modules", []):
+        if getattr(module, "type", "") != "Assert":
+            continue
+        for rule in (module.config or {}).get("rules", []):
+            et = rule.get("error_type")
+            if et:
+                known.add(et)
+
+    for edge in getattr(manifest, "edges", []):
+        if getattr(edge, "port", "main") != "spillway":
+            continue
+        for entry in getattr(edge, "error_types", ()) or ():
+            if entry not in known:
+                results.append(CheckResult(
+                    name=f"spillway_error_type_typo:{edge.from_id}->{edge.to_id}",
+                    status="warn",
+                    detail=(
+                        f"Spillway edge {edge.from_id!r} -> {edge.to_id!r} filters on "
+                        f"error_types entry {entry!r}, which matches no Assert rule "
+                        f"error_type and no built-in label. Known labels here: "
+                        f"{sorted(known)}. Rows will never route down this edge."
+                    ),
+                ))
     return results
 
 

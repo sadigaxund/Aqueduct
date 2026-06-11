@@ -201,9 +201,27 @@ Every Module regardless of type shares these fields:
 | Port | Carries | Where it's produced | Where it's consumed |
 | :- | :- | :- | :- |
 | `main` (default) | Successful DataFrame | Every module type | Every module type |
-| `spillway` | Row-level error DataFrame | Channel, Assert | Egress (quarantine sink) |
+| `spillway` | Row-level error DataFrame | Channel, Assert | Egress / Funnel (quarantine sink) |
 | `signal` | Control signal, not a DataFrame | Probe (threshold signal) | Regulator (gate evaluation) |
 | `<branch_id>` | One subset of the upstream Junction's branches | Junction | Any downstream module |
+
+### Typed spillway routing (`error_types`)
+
+A spillway edge may declare an `error_types` filter — a typed catch block. Only quarantined rows whose `_aq_error_type` label matches flow down that edge:
+
+```yaml
+edges:
+  - from: orders_quality_gate
+    to: write_quarantine
+    port: spillway
+    error_types:                   # optional filter — only route these error types
+      - DataQualityViolation
+      - SchemaError
+```
+
+The label comes from the Assert rule's `error_type` field (falling back to the rule name — `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation — zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
+
+Every spillway row carries the system columns `_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts` (Assert rows additionally `_aq_error_rule`).
 
 ## **4.4 Module Types — Full Specification**
 
@@ -307,11 +325,11 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark write format. Standard: parquet, delta, csv, json, orc, avro, jdbc. |
-| **mode** | Write mode: `overwrite`, `append`, `error`, `ignore`, `merge` (Delta `MERGE INTO`, requires `key`). |
-| **path** | Output path or URL. |
+| **format** | Spark write format. Standard: parquet, delta, csv, json, orc, avro, jdbc. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
+| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`). |
+| **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
-| **key** | Required for `mode: merge`. Column(s) for upsert match. |
+| **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
 
 ### Junction (Fan-out)
@@ -351,12 +369,13 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 ```yaml
 - id: schema_check
   type: Probe
+  attach_to: dedup_orders          # module-level field, NOT inside config
   config:
-    attach_to: dedup_orders
-    signal: schema_snapshot        # schema_snapshot | null_rates | value_distribution | row_count_estimate | distinct_count | freshness | partition_stats
+    signals:
+      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold
 ```
 
-Probes are non-blocking observability taps. They do not execute on the Spark critical path. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`) require explicit opt-in via `danger.allow_full_probe_actions`.
+Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
 
 See the [Observability Guide](observability_guide.md) for full signal reference and cost model.
 
@@ -411,7 +430,7 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
         on_fail: quarantine
 ```
 
-Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `min_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `custom`.
+Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
 
 ---
 
@@ -498,12 +517,12 @@ All observability is governed by one rule: **no Spark actions may be added to th
 
 | Layer | Computed at | Purpose |
 | :- | :- | :- |
-| **Structural Lineage** | Parse time (static) | Column-level DAG of the Blueprint. Used by the lineage gate and the LLM. |
+| **Structural Lineage** | Compile time (static) | Column-level DAG of the Blueprint. Used by the lineage gate and the LLM. |
 | **Runtime Flow Report** | Post-run | Per-column quality metrics from Probe signals. |
 
 ## **7.2 Structural Lineage**
 
-Structural lineage is computed at parse time by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in the `column_lineage` table inside `observability.db`. Used by:
+Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py`, zero Spark actions) by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in the `column_lineage` table inside `observability.db`. Used by:
 
 - **Lineage gate:** Before a patch is applied, the lineage of the patched Blueprint is compared to the original. Lost columns or broken references are flagged.
 - **LLM context:** The structural lineage for the failed module's neighbourhood is included in the FailureContext, allowing the agent to trace column origins without accessing the original Spark session.

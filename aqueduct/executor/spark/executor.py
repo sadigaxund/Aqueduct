@@ -386,6 +386,20 @@ def _frame_key(from_id: str, port: str) -> str:
     return from_id if port == "main" else f"{from_id}.{port}"
 
 
+def _apply_spillway_filter(val: Any, edge: "Edge") -> Any:
+    """Typed catch: on a spillway edge with ``error_types``, keep only rows
+    whose ``_aq_error_type`` label matches. Lazy transformation — zero Spark
+    actions. An edge without ``error_types`` is a catch-all (unfiltered);
+    rows matching no spillway edge are simply never delivered anywhere.
+    """
+    if edge.port != "spillway" or not edge.error_types:
+        return val
+    if val is None or _is_gate_closed(val):
+        return val
+    from pyspark.sql import functions as F
+    return val.filter(F.col("_aq_error_type").isin(list(edge.error_types)))
+
+
 def _is_gate_closed(value: Any) -> bool:
     return value is _GATE_CLOSED
 
@@ -1141,7 +1155,7 @@ def execute(
                         )
                         _signal_fail()
                         return
-                    funnel_upstream[store_key] = val
+                    funnel_upstream[store_key] = _apply_spillway_filter(val, edge)
 
                 if skipped:
                     frame_store[module.id] = _GATE_CLOSED
@@ -1339,6 +1353,7 @@ def execute(
                     )
                     _signal_fail()
                     return
+                val = _apply_spillway_filter(val, edge)
 
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
                 _obs_df, _obs = observe_df(val, f"{module.id}_egress", "records_written", enabled=use_observe)
