@@ -1823,9 +1823,15 @@ def run(
             # Phase 43: when deep_loop is enabled, build a validate_callback
             # that runs sandbox/lineage/explain gates inside the LLM conversation.
             # The model sees rejection feedback and retries in-context.
+            # Cascade tiers can opt into deep_loop individually, so the
+            # callback must exist whenever ANY tier (or the top level) wants it.
             _deep_loop = manifest.agent.deep_loop if manifest.agent else False
+            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
+            _any_deep_loop = _deep_loop or any(
+                bool(t.deep_loop) for t in (_cascade_tiers or [])
+            )
             _validate_cb = None
-            if _deep_loop:
+            if _any_deep_loop:
                 _bp_path_for_vc = Path(blueprint)
                 _vc_bundle = bundle
                 _vc_surveyor = surveyor
@@ -1866,7 +1872,6 @@ def run(
                         return False, f"Validation error: {exc}"
 
             # Phase 44: multi-model cascade takes priority over single-model loop.
-            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
             if _cascade_tiers:
                 from aqueduct.agent.cascade import generate_cascade_patch
                 agent_result = generate_cascade_patch(
@@ -1881,7 +1886,11 @@ def run(
                     max_reprompts=resolved_agent_max_reprompts,
                     engine_prompt_context=resolved_agent_engine_prompt_context,
                     blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                    last_apply_error=last_apply_error,
                     guardrails=manifest.agent.guardrails if manifest.agent else None,
+                    budget=_budget,
+                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                    deep_loop=_deep_loop,
                     apply_callback=_apply_cb,
                     validate_callback=_validate_cb,
                     on_attempt=_persist_attempt,
