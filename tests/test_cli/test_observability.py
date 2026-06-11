@@ -99,7 +99,8 @@ class TestSignalCommand:
 
     def test_conflicting_flags_exit_1(self, cli_runner, aq_config):
         result = cli_runner.invoke(cli, ["signal", "p", "--value", "true", "--error", "x", "--config", str(aq_config)])
-        assert result.exit_code == 1
+        from aqueduct.exit_codes import USAGE_ERROR
+        assert result.exit_code == USAGE_ERROR
 
     def test_no_flags_shows_status(self, cli_runner, aq_config):
         result = cli_runner.invoke(cli, ["signal", "my_probe", "--config", str(aq_config)])

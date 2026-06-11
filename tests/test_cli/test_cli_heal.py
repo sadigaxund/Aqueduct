@@ -96,9 +96,10 @@ agent:
     assert "## SYSTEM PROMPT" in result.output
 
 
-def test_heal_no_args_exit_1():
+def test_heal_no_args_exit_5():
+    from aqueduct.exit_codes import USAGE_ERROR
     runner = CliRunner()
     result = runner.invoke(cli, ["heal"])
-    assert result.exit_code == 1
+    assert result.exit_code == USAGE_ERROR
     assert "✗ provide a run_id argument" in result.output
 

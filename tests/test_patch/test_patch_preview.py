@@ -218,3 +218,115 @@ def test_patch_validation_override_logic():
     assert ac_over.patch_validation == "sandbox"
     effective_over = ac_over.patch_validation or cfg.agent.patch_validation
     assert effective_over == "sandbox"
+
+
+# ── Sandbox gate ───────────────────────────────────────────────────────────────
+
+class TestSandboxGateBaseDir:
+    """Phase 29a — run_sandbox_gate uses blueprint_path.parent as base_dir (not /tmp/)."""
+
+    def test_sandbox_gate_uses_blueprint_parent_as_base_dir(self, tmp_path):
+        """run_sandbox_gate passes base_dir=blueprint_parent to parse_dict."""
+        bp_file = tmp_path / "blueprints" / "pipe.yml"
+        bp_file.parent.mkdir(parents=True)
+        bp_file.write_text("""\
+aqueduct: '1.0'
+id: test.bp
+name: Test
+modules: []
+edges: []
+""")
+        bp_after = {
+            "aqueduct": "1.0",
+            "id": "test.bp",
+            "name": "Test",
+            "modules": [],
+            "edges": [],
+        }
+
+        from unittest.mock import patch, MagicMock
+
+        with patch("aqueduct.executor.ExecuteError", Exception), \
+             patch("aqueduct.executor.get_executor") as mock_get_exec, \
+             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
+             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+            from aqueduct.compiler.models import Manifest
+            real_manifest = Manifest(
+                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+            )
+            mock_compile.return_value = real_manifest
+            mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
+            mock_get_exec.return_value = mock_exec_fn
+
+            from aqueduct.patch.preview import run_sandbox_gate
+            result = run_sandbox_gate(
+                bp_after,
+                blueprint_path=bp_file,
+                patch_id="p1",
+                failed_module=None,
+                spark_session=MagicMock(),
+                sample_rows=0,
+            )
+
+        assert result.status == "pass"
+        call_kwargs = mock_parse.call_args[1]
+        assert call_kwargs["base_dir"] == bp_file.parent
+
+    def test_sandbox_gate_runs_whole_dag_not_from_failed_module(self, tmp_path):
+        """run_sandbox_gate calls execute() without from_module — runs entire DAG."""
+        bp_file = tmp_path / "blueprints" / "pipe.yml"
+        bp_file.parent.mkdir(parents=True)
+        bp_file.write_text("""\
+aqueduct: '1.0'
+id: test.bp
+name: Test
+modules:
+  - id: src
+    type: Ingress
+    config: {format: parquet, path: data/in.parquet}
+  - id: ch1
+    type: Channel
+    config: {op: sql, query: SELECT * FROM src}
+edges:
+  - {from: src, to: ch1}
+""")
+        bp_after = {
+            "aqueduct": "1.0",
+            "id": "test.bp",
+            "name": "Test",
+            "modules": [
+                {"id": "src", "type": "Ingress", "config": {"format": "parquet", "path": "data/in.parquet"}},
+                {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT * FROM src"}},
+            ],
+            "edges": [{"from": "src", "to": "ch1"}],
+        }
+
+        from unittest.mock import patch, MagicMock
+
+        with patch("aqueduct.executor.ExecuteError", Exception), \
+             patch("aqueduct.executor.get_executor") as mock_get_exec, \
+             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
+             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+            from aqueduct.compiler.models import Manifest
+            real_manifest = Manifest(
+                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+            )
+            mock_compile.return_value = real_manifest
+            mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
+            mock_get_exec.return_value = mock_exec_fn
+
+            from aqueduct.patch.preview import run_sandbox_gate
+            result = run_sandbox_gate(
+                bp_after,
+                blueprint_path=bp_file,
+                patch_id="p1",
+                failed_module="ch1",
+                spark_session=MagicMock(),
+                sample_rows=0,
+            )
+
+        assert result.status == "pass"
+        # Verify execute() was called without from_module
+        _, call_kwargs = mock_exec_fn.call_args
+        assert "from_module" not in call_kwargs,\
+            "sandbox must run the WHOLE DAG, not from failed_module"

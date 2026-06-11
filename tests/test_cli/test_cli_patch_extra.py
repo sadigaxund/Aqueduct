@@ -92,7 +92,8 @@ class TestPatchDiscard:
         monkeypatch.setattr(subprocess, "run", mock_run)
         result = runner.invoke(cli, ["patch", "discard", "--blueprint", str(bp_path)])
 
-        assert result.exit_code == 1
+        from aqueduct.exit_codes import DATA_OR_RUNTIME
+        assert result.exit_code == DATA_OR_RUNTIME
 
     def test_patches_moved_count_printed(self, setup, monkeypatch):
         """After discard with applied patches → 'moved N applied patch(es) back' in output."""

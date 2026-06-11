@@ -281,14 +281,15 @@ This section tracks high-level functional verification of core features against 
 
 #### `cli.py` — `benchmark` flags + `benchmark-diff` command
 - ✅ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
+- ✅ `aqueduct benchmark` with no target → exit `USAGE_ERROR(5)`, error message — `test_cli/test_cli_benchmark.py::test_benchmark_no_target_exits_5`
 - ✅ `aqueduct benchmark --no-persist <dir>` does NOT write; no benchmark.duckdb file is created under `<dir>/.aqueduct/`
 - ✅ `aqueduct benchmark --store-path /tmp/x.db <dir>` writes to the override path
 - ✅ `aqueduct benchmark --gate-on-regression <dir>` with regression → exit code 1, stderr line "regression(s) detected"
 - ✅ `aqueduct benchmark --gate-on-regression <dir>` without regression → exit code 0
 - ✅ `aqueduct benchmark --gate-on-regression --no-persist <dir>` → stderr note "ignored: --no-persist set", behaves as plain benchmark
-- ✅ `aqueduct benchmark-diff --store-path /tmp/x.db` reads store, prints diff table, exits 1 if any pair has regression
+- ✅ `aqueduct benchmark-diff --store-path /tmp/x.db` reads store, prints diff table, exits `DATA_OR_RUNTIME(2)` if any pair has regression — `test_cli/test_cli_benchmark.py::test_benchmark_diff_reads_store_exits_1_on_regression`
 - ✅ `aqueduct benchmark-diff --scenario sX --model mY` filters output to one pair
-- ✅ `aqueduct benchmark-diff` with missing store file → exit 1 with "benchmark store not found"
+- ✅ `aqueduct benchmark-diff` with missing store file → exit `DATA_OR_RUNTIME(2)` with "benchmark store not found" — `test_cli/test_cli_benchmark.py::test_benchmark_diff_missing_store_exits_2`
 
 ### Phase 33 Part B Scope C — Guardrail compliance chain + effect-based grader
 
@@ -396,7 +397,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ `mark_escalated()` flips `escalated_once=True`; subsequent `should_escalate()` returns False
 - ✅ `mark_api_error()` sets stop_reason to `"api_error"`
 - ✅ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
-- ⏳ `mark_deferred()` sets stop_reason to `"deferred"` (replaces the loop's direct `_stop_reason` write)
+- ✅ `mark_deferred()` sets stop_reason to `"deferred"` (replaces the loop's direct `_stop_reason` write) — `tests/test_agent/test_budget.py::TestBudgetTracker::test_mark_deferred_sets_stop_reason`
 - ✅ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
 - ✅ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
 - ✅ `StopReason` Literal includes `"deferred"` (Phase 41)
@@ -444,11 +445,11 @@ This section tracks high-level functional verification of core features against 
 - ✅ `generate_cascade_patch([tier1, tier2])` with tier1 `api_error` → aborts, does NOT escalate
 - ✅ Each tier's `generate_agent_patch` receives `model_cascade_position=idx`
 - ✅ Budget per tier: `tier.max_reprompts` overrides default; missing fields inherit from cascade defaults
-- ⏳ Regression: tier1 `stop_reason="deferred"` (patch non-None) with tier2 present → escalates to tier2, defer diagnosis discarded (was: returned immediately because the patch-presence check ran before the escalation check, making `deferred` escalation dead code)
-- ⏳ Final-tier `deferred` → defer result (patch + stop_reason) returned to caller for staging
-- ⏳ Regression: top-level `allow_defer=True` / `deep_loop=True` inherited by tiers whose own field is None (was: hardcoded `False` fallback, contradicting specs §8 inheritance)
-- ⏳ `budget=BudgetConfig(max_tokens_total=N, ...)` passed to cascade → every tier budget keeps `max_tokens_total=N` and stuck/stall axes; `tier.max_reprompts` / `tier.max_seconds` override only those two axes
-- ⏳ Regression: `last_apply_error` forwarded to every tier's `generate_agent_patch` (was: dropped in cascade mode)
+- ✅ Regression: tier1 `stop_reason="deferred"` (patch non-None) with tier2 present → escalates to tier2, defer diagnosis discarded — `tests/test_agent/test_cascade.py::TestGenerateCascadePatch::test_tier1_deferred_escalates_to_tier2`
+- ✅ Final-tier `deferred` → defer result (patch + stop_reason) returned to caller for staging — `tests/test_agent/test_cascade.py::TestGenerateCascadePatch::test_final_tier_deferred_returned_to_caller`
+- ✅ Regression: top-level `allow_defer=True` / `deep_loop=True` inherited by tiers whose own field is None — `tests/test_agent/test_cascade.py::TestGenerateCascadePatch::test_allow_defer_deep_loop_inherited_by_tiers`
+- ✅ `budget=BudgetConfig(max_tokens_total=N, ...)` passed to cascade → every tier budget keeps `max_tokens_total=N` and stuck/stall axes; `tier.max_reprompts` / `tier.max_seconds` override only those two axes — `tests/test_agent/test_cascade.py::TestGenerateCascadePatch::test_budget_passed_to_cascade_preserves_non_overridden_axes`
+- ✅ Regression: `last_apply_error` forwarded to every tier's `generate_agent_patch` — `tests/test_agent/test_cascade.py::TestGenerateCascadePatch::test_last_apply_error_forwarded_to_tiers`
 
 #### `agent/loop.py` — Phase 43 deep_loop / in-conversation validation
 - ✅ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(False, "sandbox fail")` → feedback injected as user message, model retries in same conversation
@@ -466,20 +467,20 @@ This section tracks high-level functional verification of core features against 
 - ✅ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
 - ✅ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
 - ✅ `PatchSpec` with mixed ops (defer + real) → `_reject_mixed_defer_ops` raises `ValueError`
-- ⏳ Regression: `_build_system_prompt(allow_defer=False)` → rendered schema contains NO `DeferToHumanOp` (`$defs` entry, `oneOf` `$ref`, or `discriminator.mapping` key all removed) (was: strip targeted nonexistent `$defs.PatchSpec` path + `anyOf` key — no-op — while `$defs.pop` left a dangling `$ref`)
-- ⏳ `_build_system_prompt(allow_defer=True)` → `DeferToHumanOp` present in schema and defer rules section rendered
+- ✅ Regression: `_build_system_prompt(allow_defer=False)` → rendered schema contains NO `DeferToHumanOp` — `tests/test_surveyor/test_agent.py::TestFailureContextBlueprintSourceYaml::test_allow_defer_false_removes_defer_op_from_schema`
+- ✅ `_build_system_prompt(allow_defer=True)` → `DeferToHumanOp` present in schema and defer rules section rendered — `tests/test_surveyor/test_agent.py::TestFailureContextBlueprintSourceYaml::test_allow_defer_true_includes_defer_op_in_schema`
 
 #### `agent/parse.py` — `_parse_patch_spec` recovery passes
-- ⏳ Regression: valid JSON whose string value contains ` // ` or ` # ` (e.g. `"value": "SELECT a // 2 FROM t"`) parses with `recovery_applied == []` and the value byte-identical (was: comment regex ate the value to end-of-line, then json_repair "fixed" the broken JSON by silently truncating the string — a valid patch was corrupted)
-- ⏳ JSON with real line comments (`// note` / `# note` on their own lines) still parses with `recovery_applied == ["stripped_line_comments"]`
-- ⏳ Comment-strip runs only AFTER strict parse fails; json_repair fallback operates on the original (not comment-stripped) text
+- ✅ Regression: valid JSON whose string value contains ` // ` or ` # ` parses with `recovery_applied == []` and the value byte-identical — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_string_containing_comment_chars_not_mangled`
+- ✅ JSON with real line comments (`// note` / `# note` on their own lines) still parses with `recovery_applied == ["stripped_line_comments"]` — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_line_comments_stripped_only_after_strict_fails`
+- ✅ Comment-strip runs only AFTER strict parse fails; json_repair fallback operates on the original (not comment-stripped) text — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_json_repair_fallback_on_original_not_comment_stripped`
 
 #### `agent/prompts.py` — `_load_previous_patches`
-- ⏳ Regression: archived patch dumped via `model_dump()` (canonical `rationale` key) → history entry `description` is the rationale text (was: read `data["description"]`, always empty)
-- ⏳ Hand-written archived patch with legacy `description` key → still picked up via fallback
+- ✅ Regression: archived patch dumped via `model_dump()` (canonical `rationale` key) → history entry `description` is the rationale text — `tests/test_surveyor/test_agent.py::TestLoadPreviousPatches::test_archived_patch_uses_rationale_key`
+- ✅ Hand-written archived patch with legacy `description` key → still picked up via fallback — `tests/test_surveyor/test_agent.py::TestLoadPreviousPatches::test_legacy_patch_uses_description_key`
 
 #### `agent/loop.py` — optional confidence logging
-- ⏳ Regression: patch with `confidence: None` (field omitted by model) → parse-success and heal-complete log lines render confidence as `n/a` without raising in the logging layer (was: `%.2f` applied to None)
+- ✅ Regression: patch with `confidence: None` (field omitted by model) → parse-success and heal-complete log lines render confidence as `n/a` without raising — `tests/test_surveyor/test_agent.py::TestConfidenceLogging::test_patch_with_confidence_none_renders_as_n_a`
 
 #### `agent/loop.py` — Phase 40 mid-call budget enforcement
 - ✅ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
@@ -900,8 +901,8 @@ This section tracks high-level functional verification of core features against 
 - ✅ `materialize("blobs/<run_id>/manifest.json.zst", store_dir)` decompresses and returns the original JSON text — `tests/test_surveyor/test_blob_store.py::TestMaterialize::test_decompresses_blob_and_returns_original_text`
 - ✅ `materialize("not a blob path", ...)` returns the value unchanged (inline data passthrough) — `tests/test_surveyor/test_blob_store.py::TestMaterialize::test_inline_data_passthrough`
 - ✅ `materialize("blobs/missing.json.zst", store_dir)` returns the path string unchanged (blob not found, graceful fallback) — `tests/test_surveyor/test_blob_store.py::TestMaterialize::test_blob_not_found_returns_path_string`
-- ⏳ `surveyor.record()` on failure: `manifest_json` / `provenance_json` / `stack_trace` columns in `failure_contexts` contain blob paths, not raw JSON
-- ⏳ `aqueduct heal <run_id>` materializes blob paths transparently; FailureContext fields contain the original decompressed text
+- ✅ `surveyor.record()` on failure: `manifest_json` / `provenance_json` / `stack_trace` columns in `failure_contexts` contain blob paths, not raw JSON — `tests/test_surveyor/test_agent.py::TestBlobExternalisationIntegration::test_surveyor_record_stores_blob_path_in_db`
+- ✅ `aqueduct heal` materializes blob paths transparently; FailureContext fields contain the original decompressed text — `tests/test_surveyor/test_agent.py::TestBlobExternalisationIntegration::test_surveyor_ctx_manifest_json_is_valid_json`
 
 ---
 
@@ -1229,7 +1230,7 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ `write_lineage`: inserts one row per output_column/source_column pair per Channel into observability store
 - ✅ `write_lineage`: `observability_store=None` → returns silently (no crash, no file created)
 - ✅ `write_lineage`: `column_lineage` rows appear in `observability.db` (not `lineage.db`)
-- ⏳ `aqueduct lineage` reads from `observability.db` (not `lineage.db`)
+- ✅ `aqueduct lineage` reads from `observability.db` (not `lineage.db`) — `tests/test_cli/test_cli.py::test_lineage_reads_from_observability_db`
 - ✅ `write_lineage`: non-Channel modules (Ingress, Egress) do not produce lineage rows
 - ✅ `write_lineage`: sqlglot exception does not propagate (non-fatal)
 - ✅ `write_lineage`: called after successful blueprint execution; `column_lineage` written to observability store
@@ -1270,6 +1271,7 @@ Does NOT apply or stage — caller decides.
 
 ## Failure Report
 
+- [✅] **ISSUE-034 (exit code drift):** RESOLVED. All 16 exit-code assertions across `test_cli_benchmark.py` (6), `test_cli_heal.py` (1), `test_cli_log_rollback.py` (2), `test_cli_patch.py` (2), `test_cli_patch_extra.py` (1), `test_cli_test.py` (3), `test_lineage.py` (1), `test_observability.py` (1) updated to use `exit_codes` constants — `USAGE_ERROR(5)` for missing args / conflicting flags, `DATA_OR_RUNTIME(2)` for runtime/subprocess/not-found failures. Issue file moved to `.dev/RESOLVED/ISSUE-034.md`.
 - [✅] `tests/test_cli/test_cli_aggressive.py::test_aggressive_mode_invalid_patch_stops_loop`: RESOLVED. Autonomous fix-and-verify loop verified end-to-end.
 - [✅] `tests/test_parser/test_resolver.py::test_spark_config_undefined_ctx_raises_parseerror`: RESOLVED (ISSUE-027). App hoisted `spark_config`/`macros` `resolve_value()` into a guarded block raising `ParseError` on `ValueError` (mirrors `parser.py:131` module-config pattern). `xfail` marker removed; 21/21 resolver tests pass. Issue moved to `.dev/RESOLVED/ISSUE-027.md`.
 - [✅] `tests/test_parser/test_resolver.py::test_agent_model_env_var_missing` (ISSUE-028): RESOLVED. App wrapped agent block `resolve_value` calls in `try/except ValueError → ParseError` guard (mirrors spark_config pattern). Test updated to `pytest.raises(ParseError, match=r"agent config resolution failed")`. Issue moved to `.dev/RESOLVED/ISSUE-028.md`.
@@ -2797,11 +2799,11 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ Special characters in rationale sanitised to alphanumeric slug — `tests/test_patch/test_patch_grammar.py::TestPatchSpecResilience::test_rationale_with_special_chars_produces_clean_slug`
 - ✅ Long rationale truncated to 48 chars in slug — `tests/test_patch/test_patch_grammar.py::TestPatchSpecResilience::test_rationale_long_text_truncated_at_48_chars`
 - ✅ timestamp/author/version/created_at/updated_at hallucinated fields also stripped — `tests/test_patch/test_patch_grammar.py::TestPatchSpecResilience::test_hallucinated_timestamp_author_version_stripped`
-- ⏳ Sandbox replay tempfile is created in the blueprint's parent dir (not /tmp/), so relative `module.config.path` still anchors to the real data directory. Verify via `tempfile.gettempdir()` mock or by ensuring sandbox passes on a showcase blueprint with relative CSV paths.
-- ⏳ Sandbox replay runs the WHOLE patched DAG (not `from_module=failed_module`), so a clean patch against `clean_events` no longer false-fails with `"upstream 'events_raw' produced no DataFrame"` because upstream Ingress is now executed.
-- ⏳ `replace_module_config` on a Channel that omits `op` → apply_callback rejects with `gate='schema_drift'` and a message pointing the LLM at `set_module_config_key`.
-- ⏳ `replace_module_config` on an Ingress that omits `format` → apply_callback rejects with `gate='schema_drift'`.
-- ⏳ Apply-callback compile check skips guardrail eval when patch fails the discriminator check (returns False, "schema_drift", ...).
+- ✅ Sandbox replay tempfile is created in the blueprint's parent dir (not /tmp/), so relative `module.config.path` still anchors to the real data directory — `test_patch/test_patch_preview.py::TestSandboxGateBaseDir::test_sandbox_gate_uses_blueprint_parent_as_base_dir` + `test_cli/test_cli_apply_in_memory.py::test_apply_patch_in_memory_uses_blueprint_parent_dir`
+- ✅ Sandbox replay runs the WHOLE patched DAG (not `from_module=failed_module`), so a clean patch against `clean_events` no longer false-fails with `"upstream 'events_raw' produced no DataFrame"` because upstream Ingress is now executed — `test_patch/test_patch_preview.py::TestSandboxGateBaseDir::test_sandbox_gate_runs_whole_dag_not_from_failed_module`
+- ✅ `replace_module_config` on a Channel that omits `op` → apply_callback rejects with `gate='schema_drift'` and a message pointing the LLM at `set_module_config_key` — `tests/test_cli/test_cli_heal_apply_callback.py::test_apply_patch_to_dict_channel_missing_op_detected`
+- ✅ `replace_module_config` on an Ingress that omits `format` → apply_callback rejects with `gate='schema_drift'` — `tests/test_cli/test_cli_heal_apply_callback.py::test_apply_patch_to_dict_ingress_missing_format_detected`
+- ✅ Apply-callback compile check skips guardrail eval when patch fails the discriminator check (returns False, "schema_drift", ...) — `tests/test_cli/test_cli_heal_apply_callback.py::test_apply_patch_to_dict_skips_guardrail_after_schema_drift`
 - ✅ `_apply_patch_in_memory` writes the tempfile to the blueprint's parent dir (not `/tmp/`), so relative `module.config.path` resolves to the real data files after the patch.
 - ✅ `_stage_failed_patch` stderr message shows the actual `{ts}_{patch_id}.json` filename, not the bare `patch_id.json`.
 
@@ -2829,6 +2831,3 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `danger.allow_full_preflight: false` (default) with `sandbox_mode: preflight` → exit 1. — `tests/test_cli/test_cli_sandbox_mode.py::test_sandbox_mode_preflight_blocks_without_danger_gate`
 - ✅ `danger.allow_skip_sandbox: false` (default) with `sandbox_mode: off` → exit 1. — `tests/test_cli/test_cli_sandbox_mode.py::test_sandbox_mode_off_blocks_without_danger_gate`
 - ✅ `danger.allow_full_probe_actions: false` (default) → `block_full_actions=True` blocks probe signals that would trigger Spark actions. — `tests/test_cli/test_cli_aggressive.py::test_block_full_actions_propagation`
-
-### End-to-end heal flow (1.1.0)
-- ⏳ Blueprint with inducible failure → `aqueduct run --approval auto` → agent generates patch → patch applied → re-run succeeds → observability stores both run records.

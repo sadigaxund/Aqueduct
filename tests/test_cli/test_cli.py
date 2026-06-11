@@ -231,6 +231,57 @@ edges: []
         assert "Invalid value for '--show'" in result.output
 
 
+def test_lineage_reads_from_observability_db(tmp_path):
+    """aqueduct lineage reads from observability.db (not lineage.db)."""
+    import duckdb
+    runner = CliRunner()
+    bp_id = "lineage_test"
+
+    # Create a minimal aqueduct config that points to the observability store
+    config_path = tmp_path / "aqueduct.yml"
+    config_path.write_text(f"""
+aqueduct_config: "1.0"
+stores:
+  observability:
+    backend: duckdb
+    path: "{tmp_path / '.aqueduct' / 'observability' / bp_id / 'observability.db'}"
+""")
+
+    # Create observability.db with column_lineage data
+    obs_dir = tmp_path / ".aqueduct" / "observability" / bp_id
+    obs_dir.mkdir(parents=True)
+    db_path = obs_dir / "observability.db"
+    conn = duckdb.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE column_lineage (
+            blueprint_id VARCHAR,
+            channel_id VARCHAR,
+            output_column VARCHAR,
+            source_table VARCHAR,
+            source_column VARCHAR
+        )
+    """)
+    conn.execute(
+        "INSERT INTO column_lineage VALUES (?, ?, ?, ?, ?)",
+        [bp_id, "ch1", "user_id", "users", "id"],
+    )
+    conn.close()
+
+    # Ensure legacy lineage.db does NOT exist
+    legacy_lineage = tmp_path / ".aqueduct" / "lineage.db"
+    assert not legacy_lineage.exists()
+
+    result = runner.invoke(cli, [
+        "lineage", bp_id,
+        "--config", str(config_path),
+    ])
+    # Should exit 0 and find the data
+    assert result.exit_code == 0, result.output
+    assert "ch1" in result.output
+    assert "user_id" in result.output
+    assert "users" in result.output
+
+
 def test_cli_run_postgres_observability_no_bogus_dir(tmp_path):
     """Verify that using postgres as the stores.observability.backend does NOT create a postgresql:/... directory.
     It should fall back to a safe per-pipeline local path (.aqueduct/observability/<blueprint_id>) for scratch work."""

@@ -10,10 +10,11 @@ from aqueduct.surveyor.scenario import ScenarioResult
 pytestmark = pytest.mark.integration
 
 
-def test_benchmark_no_target_exits_1():
+def test_benchmark_no_target_exits_5():
+    from aqueduct.exit_codes import USAGE_ERROR
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark"])
-    assert result.exit_code == 1
+    assert result.exit_code == USAGE_ERROR
     assert "✗ provide a scenario file or directory" in result.output
 
 
@@ -309,7 +310,8 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path)])
     
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "(1 failed — rerun with --format json" in result.stderr
 
     # 2. With all pass in table mode -> warning NOT printed
@@ -357,7 +359,8 @@ def test_benchmark_table_failure_stderr(mock_run_benchmark, tmp_path):
         }
     }
     result = runner.invoke(cli, ["benchmark", str(scenario_path), "--config", str(config_path), "--format", "json"])
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "rerun with --format json" not in result.stderr
 
 
@@ -474,7 +477,8 @@ def test_benchmark_gate_on_regression_with_regression_exits_1(mock_run, tmp_path
         "benchmark", str(scenarios_dir), "--config", str(cfg), "--gate-on-regression",
     ])
 
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
 
 
@@ -517,12 +521,13 @@ def test_benchmark_gate_on_regression_with_no_persist_is_ignored(mock_run, tmp_p
     assert "--no-persist set" in result.stderr
 
 
-def test_benchmark_diff_missing_store_exits_1(tmp_path, monkeypatch):
-    """aqueduct benchmark-diff with missing store → exit 1 + 'benchmark store not found'."""
+def test_benchmark_diff_missing_store_exits_2(tmp_path, monkeypatch):
+    """aqueduct benchmark-diff with missing store → exit 2 + 'benchmark store not found'."""
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
     monkeypatch.chdir(tmp_path)
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark-diff"])
-    assert result.exit_code == 1
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "benchmark store not found" in result.output
 
 
@@ -556,7 +561,8 @@ def test_benchmark_diff_reads_store_exits_1_on_regression(mock_run, tmp_path):
                         "--store-path", str(store)])
 
     result = runner.invoke(cli, ["benchmark-diff", "--store-path", str(store)])
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
 
 

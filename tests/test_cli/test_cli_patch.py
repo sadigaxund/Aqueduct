@@ -102,7 +102,8 @@ def test_patch_reject_not_found_with_pending_parent(cli_setup):
     ghost_path = project / "patches" / "pending" / "ghost.json"
     result = runner.invoke(cli, ["patch", "reject", str(ghost_path), "--reason", "Test"])
     
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "✗ reject failed: Patch 'ghost' not found" in result.output
 
 def test_patch_reject_bare_slug(cli_setup):
@@ -222,7 +223,8 @@ def test_patch_commit_not_in_git(cli_setup, monkeypatch):
     
     monkeypatch.setattr(subprocess, "run", mock_run)
     result = runner.invoke(cli, ["patch", "commit", "--blueprint", str(bp_path)])
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "fatal: not a git repository" in result.output
 
 def test_patch_discard_mock_git(cli_setup, monkeypatch):

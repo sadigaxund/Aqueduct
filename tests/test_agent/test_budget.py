@@ -279,6 +279,18 @@ class TestBudgetTracker:
         t.mark_api_error()
         assert t.stop_reason == "api_error"
 
+    def test_mark_deferred_sets_stop_reason(self):
+        t = self._tracker()
+        assert t.stop_reason is None
+        t.mark_deferred()
+        assert t.stop_reason == "deferred"
+
+    def test_mark_deferred_sticky(self):
+        """Once deferred is set, check_stop returns 'deferred'."""
+        t = self._tracker()
+        t.mark_deferred()
+        assert t.check_stop() == "deferred"
+
     # summary
         # mark_budget_seconds_exceeded (Phase 40)
     def test_mark_budget_seconds_exceeded_sets_stop_reason(self):

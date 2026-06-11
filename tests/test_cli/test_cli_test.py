@@ -83,7 +83,8 @@ def test_cli_test_pass(test_setup):
 def test_cli_test_fail(test_setup):
     runner = CliRunner()
     result = runner.invoke(cli, ["test", str(test_setup / "fail.aqtest.yml")])
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "0 passed" in result.output
     assert "1 failed" in result.output
     assert "t_fail" in result.output
@@ -135,7 +136,8 @@ edges: []
 """)
     runner = CliRunner()
     result = runner.invoke(cli, ["test", str(test_setup / "pass.aqtest.yml"), "--blueprint", str(bp2)])
-    assert result.exit_code == 1
+    from aqueduct.exit_codes import DATA_OR_RUNTIME
+    assert result.exit_code == DATA_OR_RUNTIME
     assert "0 passed" in result.output
 
 

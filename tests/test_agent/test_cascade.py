@@ -150,6 +150,131 @@ class TestGenerateCascadePatch:
         assert calls[1][1]["max_reprompts"] == 5
 
 
+    def test_tier1_deferred_escalates_to_tier2(self, fctx, patches_dir):
+        """tier1 stop_reason='deferred' (patch non-None) with tier2 present → escalates to tier2."""
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            defer_result = AgentPatchResult(
+                patch=None, attempts=2, stop_reason="deferred",
+            )
+            mock_gen.side_effect = [
+                defer_result,
+                self._success_result(model_num=2),
+            ]
+
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+            )
+
+        assert result.patch is not None
+        assert result.patch.patch_id == "p2"
+        assert mock_gen.call_count == 2
+
+    def test_final_tier_deferred_returned_to_caller(self, fctx, patches_dir):
+        """Final-tier 'deferred' → defer result (patch + stop_reason) returned to caller for staging."""
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            defer_result = AgentPatchResult(
+                patch=None, attempts=1, stop_reason="deferred",
+            )
+            mock_gen.return_value = defer_result
+
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+            )
+
+        assert result.stop_reason == "deferred"
+        assert result.patch is None
+        assert mock_gen.call_count == 1
+
+    def test_allow_defer_deep_loop_inherited_by_tiers(self, fctx, patches_dir):
+        """Top-level allow_defer=True / deep_loop=True inherited by tiers whose own field is None."""
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._stuck_result(),
+                self._success_result(model_num=2),
+            ]
+
+            generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+                allow_defer=True,
+                deep_loop=True,
+            )
+
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["allow_defer"] is True
+        assert calls[0][1]["deep_loop"] is True
+        assert calls[1][1]["allow_defer"] is True
+        assert calls[1][1]["deep_loop"] is True
+
+    def test_tier_allow_defer_overrides_default(self, fctx, patches_dir):
+        """Tier's own allow_defer=False overrides top-level True."""
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._stuck_result(),
+                self._success_result(model_num=2),
+            ]
+
+            generate_cascade_patch(
+                tiers=[_tier("model-a", allow_defer=False), _tier("model-b")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+                allow_defer=True,
+            )
+
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["allow_defer"] is False
+        assert calls[1][1]["allow_defer"] is True
+
+    def test_budget_passed_to_cascade_preserves_non_overridden_axes(self, fctx, patches_dir):
+        """budget=BudgetConfig(max_tokens_total=N) passed to cascade — every tier budget keeps max_tokens_total=N."""
+        from aqueduct.agent.budget import BudgetConfig
+
+        base_budget = BudgetConfig(max_tokens_total=9999, same_error_consecutive=2, same_signature_overall=3, progress_stalled_window=3)
+
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._stuck_result(),
+                self._success_result(model_num=2),
+            ]
+
+            generate_cascade_patch(
+                tiers=[_tier("model-a", max_reprompts=2), _tier("model-b")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+                budget=base_budget,
+            )
+
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["budget"].max_tokens_total == 9999
+        assert calls[0][1]["budget"].max_reprompts == 2  # tier override
+        assert calls[1][1]["budget"].max_tokens_total == 9999
+        assert calls[1][1]["budget"].max_reprompts == 5  # fallback
+
+    def test_last_apply_error_forwarded_to_tiers(self, fctx, patches_dir):
+        """last_apply_error forwarded to every tier's generate_agent_patch."""
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._stuck_result(),
+                self._success_result(model_num=2),
+            ]
+
+            generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b")],
+                failure_ctx=fctx,
+                patches_dir=patches_dir,
+                last_apply_error="previous patch failed: UNRESOLVED_COLUMN",
+            )
+
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["last_apply_error"] == "previous patch failed: UNRESOLVED_COLUMN"
+        assert calls[1][1]["last_apply_error"] == "previous patch failed: UNRESOLVED_COLUMN"
+
+
 class TestCascadeTierConfigImmutability:
     def test_frozen(self):
         t = CascadeTierConfig(model="m")

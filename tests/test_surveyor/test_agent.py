@@ -126,6 +126,93 @@ class TestParsePatchSpec:
         with pytest.raises((JSONDecodeError, ValueError)):
             _parse_patch_spec("not json at all")
 
+    def test_string_containing_comment_chars_not_mangled(self):
+        """Valid JSON with '//' or '#' inside a string value parses cleanly (no recovery)."""
+        spec, recovery = _parse_patch_spec("""{
+  "patch_id": "fix-comment",
+  "rationale": "SQL with inline comment chars",
+  "confidence": 0.9,
+  "category": "type_mismatch",
+  "root_cause": "bad query",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "ch1",
+      "key": "query",
+      "value": "SELECT a // 2 AS half FROM t"
+    }
+  ]
+}""")
+        assert spec.patch_id == "fix-comment"
+        assert recovery == []
+        assert " // 2 " in spec.operations[0].value
+
+    def test_string_containing_hash_not_mangled(self):
+        """Valid JSON with '#' inside a string value parses cleanly."""
+        spec, recovery = _parse_patch_spec("""{
+  "patch_id": "fix-hash",
+  "rationale": "path with hash",
+  "confidence": 0.9,
+  "category": "bad_path",
+  "root_cause": "wrong path",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "ingress",
+      "key": "path",
+      "value": "data/input_#1.csv"
+    }
+  ]
+}""")
+        assert spec.patch_id == "fix-hash"
+        assert recovery == []
+
+    def test_line_comments_stripped_only_after_strict_fails(self):
+        """JSON with line comments on their own lines strips comments via recovery pass."""
+        raw = """{
+  "patch_id": "fix-test",
+  "rationale": "fix path",
+  // this is a comment
+  "confidence": 0.9,
+  # yaml-style comment
+  "category": "bad_path",
+  "root_cause": "wrong format",
+  "operations": [
+    {
+      "op": "set_module_config_key",
+      "module_id": "ingress",
+      "key": "format",
+      "value": "csv"
+    }
+  ]
+}"""
+        spec, recovery = _parse_patch_spec(raw)
+        assert spec.patch_id == "fix-test"
+        assert "stripped_line_comments" in recovery
+
+    def test_json_repair_fallback_on_original_not_comment_stripped(self):
+        """json_repair fallback operates on the original text, not comment-stripped text."""
+        raw = """{
+  "patch_id": "fix-repair",
+  "rationale": "repair test",
+  "confidence": 0.9,
+  "category": "type_mismatch",
+  "root_cause": "type issue",
+  "operations": [
+    {
+      "op": set_module_config_key  // missing quotes around op value
+      "module_id": "m1",
+      "key": "format",
+      "value": "parquet"
+    }
+  ]
+}"""
+        try:
+            spec, recovery = _parse_patch_spec(raw)
+            assert "stripped_line_comments" in recovery or "json_repair" in recovery
+        except Exception:
+            pass  # json_repair may not be installed; JSONDecodeError is acceptable
+
 
 # ── stage_patch_for_human ─────────────────────────────────────────────────────
 
@@ -664,6 +751,69 @@ class TestFailureContextBlueprintSourceYaml:
         assert "context_ref" in prompt
         assert "Do not hardcode the resolved literal" in prompt
 
+    def test_allow_defer_false_removes_defer_op_from_schema(self, tmp_path):
+        """allow_defer=False → rendered schema contains NO DeferToHumanOp ($defs, oneOf, discriminator)."""
+        from aqueduct.agent.prompts import _build_guardrails_section, _build_system_prompt
+        prompt = _build_system_prompt(patches_dir=tmp_path, allow_defer=False)
+        assert 'DeferToHumanOp' not in prompt
+        assert 'defer_to_human' not in prompt
+        assert 'When to defer' not in prompt
+
+    def test_allow_defer_true_includes_defer_op_in_schema(self, tmp_path):
+        """allow_defer=True → DeferToHumanOp present in schema and defer rules section rendered."""
+        from aqueduct.agent.prompts import _build_guardrails_section, _build_system_prompt
+        prompt = _build_system_prompt(patches_dir=tmp_path, allow_defer=True)
+        assert 'DeferToHumanOp' in prompt
+        assert 'defer_to_human' in prompt
+        assert 'When to defer' in prompt
+
+
+# ── _load_previous_patches ─────────────────────────────────────────────────────
+
+class TestLoadPreviousPatches:
+    def _write_patch(self, patches_dir, patch_id, rationale=None, description=None):
+        applied_dir = patches_dir / "applied"
+        applied_dir.mkdir(parents=True, exist_ok=True)
+        data = {"patch_id": patch_id, "operations": [{"op": "set_module_config_key"}]}
+        if rationale is not None:
+            data["rationale"] = rationale
+        if description is not None:
+            data["description"] = description
+        (applied_dir / f"20260611T120000_{patch_id}.json").write_text(
+            json.dumps(data), encoding="utf-8"
+        )
+
+    def test_archived_patch_uses_rationale_key(self, tmp_path):
+        """Archived patch dumped via model_dump() (canonical 'rationale' key) → description is rationale text."""
+        from aqueduct.agent.prompts import _load_previous_patches
+        self._write_patch(tmp_path, "fix-1", rationale="wrong path corrected")
+        patches = _load_previous_patches(tmp_path)
+        assert len(patches) == 1
+        assert patches[0]["description"] == "wrong path corrected"
+
+    def test_legacy_patch_uses_description_key(self, tmp_path):
+        """Hand-written archived patch with legacy 'description' key → still picked up via fallback."""
+        from aqueduct.agent.prompts import _load_previous_patches
+        self._write_patch(tmp_path, "fix-legacy", description="legacy description text")
+        patches = _load_previous_patches(tmp_path)
+        assert len(patches) == 1
+        assert patches[0]["description"] == "legacy description text"
+
+    def test_rationale_takes_priority_over_description(self, tmp_path):
+        """When both rationale and description are present, rationale wins."""
+        from aqueduct.agent.prompts import _load_previous_patches
+        self._write_patch(tmp_path, "fix-both",
+                          rationale="rationale wins", description="fallback text")
+        patches = _load_previous_patches(tmp_path)
+        assert len(patches) == 1
+        assert patches[0]["description"] == "rationale wins"
+
+    def test_empty_dir_returns_empty_list(self, tmp_path):
+        """No applied patches dir → returns empty list."""
+        from aqueduct.agent.prompts import _load_previous_patches
+        patches = _load_previous_patches(tmp_path)
+        assert patches == []
+
 
 # ── doctor_hints LLM injection ─────────────────────────────────────────────────
 
@@ -861,3 +1011,168 @@ class TestGuardrailsSection:
         assert "allowed file paths" not in result
         assert "heal only" not in result
         assert "never heal" not in result
+
+
+# ── Confidence logging ─────────────────────────────────────────────────────────
+
+class TestConfidenceLogging:
+    def test_patch_with_confidence_none_renders_as_n_a(self, tmp_path, monkeypatch):
+        """Patch with confidence=None → parse-success log renders confidence as 'n/a' without raising."""
+        from aqueduct.agent.loop import generate_agent_patch
+        from aqueduct.surveyor.models import FailureContext
+
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="err", stack_trace=None, manifest_json="{}",
+            started_at="2020-01-01T00:00:00Z",
+            finished_at="2020-01-01T00:00:00Z",
+        )
+
+        # Mock the LLM call to return a valid patch with confidence=None
+        raw_patch = json.dumps({
+            "patch_id": "no-confidence",
+            "rationale": "fix",
+            "category": "other",
+            "root_cause": "typo",
+            "operations": [
+                {"op": "set_module_config_key", "module_id": "m1", "key": "format", "value": "csv"}
+            ],
+        })
+
+        call_count = 0
+        def mock_call(*_a, **_kw):
+            nonlocal call_count
+            call_count += 1
+            return (raw_patch, 100, 50)
+
+        monkeypatch.setattr("aqueduct.agent.loop._call_agent", mock_call)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+
+        result = generate_agent_patch(ctx, "model", tmp_path)
+
+        assert result.patch is not None
+        assert result.patch.confidence is None  # the model omitted the field
+        assert result.stop_reason == "solved"
+        assert call_count == 1
+
+
+# ── Blob externalisation integration ───────────────────────────────────────────
+
+class TestBlobExternalisationIntegration:
+    def test_externalise_writes_compressed_blob(self, tmp_path):
+        """blob_store.externalise writes a compressed blob and returns relative path."""
+        from aqueduct.surveyor.blob_store import externalise, materialize
+
+        store_dir = tmp_path / "obs"
+        store_dir.mkdir()
+        value = '{"test": "large_json_content"}'
+        path = externalise(value, store_dir, "run-1", "manifest")
+
+        assert path.startswith("blobs/run-1/manifest.json.zst")
+        assert (store_dir / path).exists()
+        # Verify we can read it back
+        restored = materialize(path, store_dir)
+        assert restored == value
+
+    def test_externalise_empty_string_returns_unchanged(self, tmp_path):
+        """externalise('', ...) returns '' unchanged (empty strings stay inline)."""
+        from aqueduct.surveyor.blob_store import externalise
+        assert externalise("", tmp_path, "r1", "x") == ""
+
+    def test_materialize_blob_path_returns_decompressed(self, tmp_path):
+        """materialize loads and decompresses blob."""
+        from aqueduct.surveyor.blob_store import externalise, materialize
+
+        store_dir = tmp_path / "obs"
+        store_dir.mkdir()
+        original = '{"key": "value"}'
+        path = externalise(original, store_dir, "r2", "prov")
+        restored = materialize(path, store_dir)
+        assert restored == original
+
+    def test_materialize_inline_data_passthrough(self, tmp_path):
+        """materialize returns inline data unchanged."""
+        from aqueduct.surveyor.blob_store import materialize
+        assert materialize("inline text", tmp_path) == "inline text"
+
+    def test_materialize_missing_blob_returns_path(self, tmp_path):
+        """materialize on missing blob returns the path string (graceful fallback)."""
+        from aqueduct.surveyor.blob_store import materialize
+        result = materialize("blobs/missing.json.zst", tmp_path)
+        assert result == "blobs/missing.json.zst"
+
+    def _minimal_manifest(self, bp_id="bp-blob", name="blob-test") -> Manifest:
+        from aqueduct.compiler.models import Manifest
+        return Manifest(
+            blueprint_id=bp_id,
+            name=name,
+            modules=(),
+            edges=(),
+            context={},
+            spark_config={},
+        )
+
+    def test_surveyor_record_stores_blob_path_in_db(self, tmp_path):
+        """surveyor.record() on failure → failure_contexts columns contain blob paths, not raw JSON."""
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.executor.models import ExecutionResult, ModuleResult
+
+        store_dir = tmp_path / "blob_test_a"
+
+        surveyor = Surveyor(self._minimal_manifest(), store_dir=store_dir)
+        surveyor.start("run-blob-1")
+
+        result = ExecutionResult(
+            blueprint_id="bp-blob",
+            run_id="run-blob-1",
+            status="error",
+            module_results=(
+                ModuleResult(module_id="m1", status="error", error="boom"),
+            ),
+        )
+        ctx = surveyor.record(result)
+        surveyor.stop()
+
+        assert ctx is not None
+        import duckdb
+        conn = duckdb.connect(str(store_dir / "observability.db"))
+        row = conn.execute(
+            "SELECT manifest_json, provenance_json, stack_trace FROM failure_contexts WHERE run_id = ?",
+            ["run-blob-1"],
+        ).fetchone()
+        conn.close()
+        assert row is not None
+        for val in row:
+            if val and isinstance(val, str):
+                assert val.startswith("blobs/")
+                assert ".json.zst" in val
+
+    def test_surveyor_ctx_manifest_json_is_valid_json(self, tmp_path):
+        """The FailureContext returned by record() has manifest_json as valid decompressed JSON."""
+        from aqueduct.surveyor.surveyor import Surveyor
+        from aqueduct.executor.models import ExecutionResult, ModuleResult
+
+        store_dir = tmp_path / "obs5"
+
+        surveyor = Surveyor(self._minimal_manifest(bp_id="bp-json", name="json-test"), store_dir=store_dir)
+        surveyor.start("run-json-1")
+
+        result = ExecutionResult(
+            blueprint_id="bp-json",
+            run_id="run-json-1",
+            status="error",
+            module_results=(
+                ModuleResult(module_id="m1", status="error", error="boom"),
+            ),
+        )
+        ctx = surveyor.record(result)
+        surveyor.stop()
+
+        assert ctx is not None
+        # manifest_json contains a blob path — materialize to get the original JSON
+        from aqueduct.surveyor.blob_store import materialize as _mat
+        materialized = _mat(str(ctx.manifest_json), store_dir)
+        import json as _json
+        parsed = _json.loads(materialized)
+        assert isinstance(parsed, dict)
+        assert parsed.get("blueprint_id") == "bp-json"

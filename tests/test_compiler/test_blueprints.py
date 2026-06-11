@@ -20,21 +20,34 @@ import pytest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration, pytest.mark.slow]
 
-from pyspark.sql import SparkSession
+try:
+    from pyspark.sql import SparkSession
+except ImportError:
+    SparkSession = None  # type: ignore[assignment]
 
-from aqueduct.compiler.compiler import compile as compiler_compile
-from aqueduct.executor.spark.executor import execute
 from aqueduct.parser.parser import parse
 
 BLUEPRINTS = Path(__file__).parent.parent / "fixtures" / "blueprints"
+
+
+def _compile(bp, bp_path):
+    """Lazy compiler import to avoid pyspark at collection time."""
+    from aqueduct.compiler.compiler import compile as compiler_compile
+    return compiler_compile(bp, blueprint_path=bp_path)
+
+
+def _exec(manifest, spark, store_dir=None):
+    """Lazy executor import to avoid pyspark at collection time."""
+    from aqueduct.executor.spark.executor import execute
+    return execute(manifest, spark, store_dir=store_dir)
 
 
 def _run(blueprint_name: str, overrides: dict, spark: SparkSession, store_dir=None):
     """Parse, compile, and execute a blueprint fixture. Returns ExecutionResult."""
     bp_path = BLUEPRINTS / blueprint_name
     bp = parse(str(bp_path), cli_overrides=overrides)
-    manifest = compiler_compile(bp, blueprint_path=bp_path)
-    return execute(manifest, spark, store_dir=store_dir)
+    manifest = _compile(bp, bp_path)
+    return _exec(manifest, spark, store_dir=store_dir)
 
 
 # ── Baseline ──────────────────────────────────────────────────────────────────

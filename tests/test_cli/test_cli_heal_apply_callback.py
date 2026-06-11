@@ -263,3 +263,88 @@ def test_cli_heal_wires_apply_callback(
     success, err_class, msg, _ = apply_cb(invalid_patch)
     assert success is False
     assert err_class == "guardrail_violation"
+
+
+@pytest.mark.unit
+def test_apply_patch_to_dict_channel_missing_op_detected(tmp_path):
+    """replace_module_config on a Channel that omits 'op' → patched dict has Channel without op (schema_drift)."""
+    from aqueduct.patch.apply import apply_patch_to_dict
+    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+
+    bp_raw = {
+        "aqueduct": "1.0",
+        "id": "test_bp",
+        "modules": [
+            {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}},
+        ],
+        "edges": [],
+    }
+    patch_spec = PatchSpec(
+        patch_id="p1", rationale="replace without op",
+        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"})],
+    )
+    bp_after = apply_patch_to_dict(bp_raw, patch_spec)
+    for _m in (bp_after.get("modules") or []):
+        if _m.get("type") == "Channel":
+            assert "op" not in (_m.get("config") or {}), "Channel should have no 'op' after replace_module_config"
+            return
+    pytest.fail("No Channel module found")
+
+
+@pytest.mark.unit
+def test_apply_patch_to_dict_ingress_missing_format_detected(tmp_path):
+    """replace_module_config on an Ingress that omits 'format' → patched dict has Ingress without format (schema_drift)."""
+    from aqueduct.patch.apply import apply_patch_to_dict
+    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+
+    bp_raw = {
+        "aqueduct": "1.0",
+        "id": "test_bp",
+        "modules": [
+            {"id": "m1", "type": "Ingress", "config": {"format": "csv", "path": "data.csv"}},
+        ],
+        "edges": [],
+    }
+    patch_spec = PatchSpec(
+        patch_id="p1", rationale="replace without format",
+        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="m1", config={"path": "data.csv"})],
+    )
+    bp_after = apply_patch_to_dict(bp_raw, patch_spec)
+    for _m in (bp_after.get("modules") or []):
+        if _m.get("type") == "Ingress":
+            assert "format" not in (_m.get("config") or {}), "Ingress should have no 'format' after replace_module_config"
+            return
+    pytest.fail("No Ingress module found")
+
+
+@pytest.mark.unit
+def test_apply_patch_to_dict_skips_guardrail_after_schema_drift(tmp_path):
+    """ReplaceModuleConfigOp on a Channel without 'op' is a schema issue, not a guardrails issue."""
+    from aqueduct.patch.apply import apply_patch_to_dict, _check_guardrails, PatchError
+    from aqueduct.patch.grammar import ReplaceModuleConfigOp, PatchSpec
+
+    bp_raw = {
+        "aqueduct": "1.0",
+        "id": "test_bp",
+        "modules": [
+            {"id": "ch1", "type": "Channel", "config": {"op": "sql", "query": "SELECT 1"}},
+        ],
+        "edges": [],
+        "agent": {"guardrails": {"forbidden_ops": ["replace_module_config"]}},
+    }
+    patch_spec = PatchSpec(
+        patch_id="p1", rationale="replace without op",
+        operations=[ReplaceModuleConfigOp(op="replace_module_config", module_id="ch1", config={"query": "SELECT 1"})],
+    )
+    bp_after = apply_patch_to_dict(bp_raw, patch_spec)
+
+    # Confirm schema_drift condition in patched blueprint
+    for _m in (bp_after.get("modules") or []):
+        if _m.get("type") == "Channel":
+            assert "op" not in (_m.get("config") or {})
+    # Guardrail check would raise PatchError independently — confirm it catches
+    # the forbidden op when schema is intact
+    with pytest.raises(PatchError):
+        # Test guardrails on the ORIGINAL (unpatched) bp — should catch the
+        # forbidden op. This confirms guardrails work when schema is valid.
+        _check_guardrails(patch_spec, bp_raw, provenance_map=None)

@@ -141,7 +141,7 @@ class TestRollbackCmd:
         assert any("git checkout def5678" in c for c in cmds)
         assert any("git commit" in c for c in cmds)
 
-    def test_patch_id_not_found_exits_1_with_hint(self, bp_file, monkeypatch):
+    def test_patch_id_not_found_exits_2_with_hint(self, bp_file, monkeypatch):
         """patch_id not in git log → error with hint to run aqueduct log; exits 1."""
         def mock_run(args, **kwargs):
             if "log" in args:
@@ -152,7 +152,8 @@ class TestRollbackCmd:
         runner = CliRunner()
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "GHOST_PATCH"])
 
-        assert result.exit_code == 1
+        from aqueduct.exit_codes import DATA_OR_RUNTIME
+        assert result.exit_code == DATA_OR_RUNTIME
         assert "GHOST_PATCH" in result.output
         assert "aqueduct log" in result.output
 
@@ -165,7 +166,7 @@ class TestRollbackCmd:
         assert "no such option" in result.output.lower()
         assert "--hard" in result.output
 
-    def test_git_checkout_failure_exits_1(self, bp_file, monkeypatch):
+    def test_git_checkout_failure_exits_2(self, bp_file, monkeypatch):
         """git checkout fails → exits 1 with stderr content."""
         def mock_run(args, **kwargs):
             if "log" in args:
@@ -184,5 +185,6 @@ class TestRollbackCmd:
         runner = CliRunner()
         result = runner.invoke(cli, ["patch", "rollback", str(bp_file), "--to", "P001"])
 
-        assert result.exit_code == 1
+        from aqueduct.exit_codes import DATA_OR_RUNTIME
+        assert result.exit_code == DATA_OR_RUNTIME
         assert "error: pathspec" in result.output

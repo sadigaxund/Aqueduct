@@ -251,4 +251,5 @@ class TestCliLineage:
         store = tmp_path / "empty"
         store.mkdir()
         result = CliRunner().invoke(cli, ["lineage", "pipe.a", "--store-dir", str(store)])
-        assert result.exit_code == 1
+        from aqueduct.exit_codes import DATA_OR_RUNTIME
+        assert result.exit_code == DATA_OR_RUNTIME
