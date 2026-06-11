@@ -149,12 +149,13 @@ whenever a package is restructured — use it as the first filter before greppin
 | `egress.py` | Write: overwrite, append, error, merge (Delta MERGE INTO) |
 | `junction.py` | Fan-out: conditional, broadcast, partition |
 | `funnel.py` | Fan-in: union_all, union, coalesce, zip |
-| `probe.py` | Signals: schema, null_rates, distribution, distinct, freshness, row_count |
+| `probe.py` | Signals: schema_snapshot, row_count_estimate, null_rates, sample_rows, value_distribution, distinct_count, data_freshness, partition_stats, threshold |
 | `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
 | `session.py` | SparkSession management, Delta conf, cloudpickle patch |
 | `udf.py` | UDF registry, cloudpickle compatibility |
 | `metrics.py` | Zero-extra-action observe() wrapper, Hadoop FS byte count |
 | `test_runner.py` | Isolated module test framework (aqueduct test CLI) |
+| `warnings/` | Session-startup warning rules (jar_availability), registered in `RULES` list |
 
 ### `aqueduct/compiler/` — Blueprint AST → fully-resolved Manifest
 
@@ -234,7 +235,7 @@ When building a phase from a sequence of changes:
 
 - **Silent `@aq.depot.get()` when depot is unconfigured.** If a Blueprint references `@aq.depot.get('watermark')` but no depot backend is configured, the call returns `""` silently. Incremental pipelines will re-read all source data every run. Always configure a depot when using incremental Channels, and verify with `aqueduct doctor`.
 
-- **`spark.catalog.dropTempView` in `_write_merge`.** The Delta merge path in `egress.py` drops a temp view before creating it. On first merge the view doesn't exist — the call raises `AnalysisException`. Always guard `dropTempView` with try/except or check `tableExists()` first.
+- **`spark.catalog.dropTempView` in `_write_merge`.** The Delta merge path in `egress.py` drops its temp view before creating it; on first merge the view doesn't exist. The current code guards the drop with try/except — keep that guard (or a `tableExists()` check) when touching this path, or first-merge runs raise `AnalysisException`.
 
 - **Frame store is scoped per parallel component.** In `--parallel` mode, modules in different connected components cannot access each other's frame-store keys. Cross-component data flow requires explicit Depot writes or an Egress→Ingress pair.
 

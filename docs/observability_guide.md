@@ -68,7 +68,7 @@ before the migration have `NULL` in those columns.
 |------------------|---------------------|-------|
 | `run_id`         | VARCHAR PRIMARY KEY | UUID; in multi-patch heal (auto + `max_patches > 1`) this is the per-iteration id from iteration 1+ |
 | `blueprint_id`   | VARCHAR NOT NULL    | Blueprint identifier |
-| `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`, `skipped` |
+| `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`. (`skipped` exists only as a per-module status inside `module_results`, never at run level.) |
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
 | `module_results` | JSON                | Per-module status/error blobs |
@@ -155,8 +155,10 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 
 #### `patch_simulation`
 
-One row per gate the patch went through. `gate` vocabulary: `guardrail`,
-`lineage`, `sandbox`, `explain`. `status` is `pass` or `fail`.
+One row per gate the patch went through. `gate` vocabulary: `lineage`,
+`sandbox`, `explain` (guardrail rejections are recorded in `heal_attempts`,
+not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
+`sandbox_mode: off` synthesises a pass-through row).
 
 #### `signal_overrides`
 
@@ -242,7 +244,9 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution.
 
 #### `depot_kv`
 
-Cross-run KV state (`@aq.depot.*`). Keyed by `(blueprint_id, key)`.
+Cross-run KV state (`@aq.depot.*`). Keyed by `key` alone — the depot is
+project-wide, so two blueprints reading the same key share state (prefix
+keys per pipeline, e.g. `sales.watermark`, if you need isolation).
 
 ---
 
@@ -399,7 +403,7 @@ ORDER BY pass_rate DESC;
 
 ### Sandbox replay diagnostics (1.1.0+)
 
-**When** a patch passed `aqueduct.sandbox_mode: sample` but failed once
+**When** a patch passed `agent.sandbox_mode: sample` but failed once
 applied to production.
 **What you learn** Whether the sample skipped the offending row shape.
 Re-run with `sandbox_mode: preflight` (requires `danger.allow_full_preflight`)

@@ -48,6 +48,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor --preflight` | Full Spark session + storage validation |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
+| `aqueduct doctor --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 
 ### Shell completion
@@ -152,6 +153,14 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `aqueduct benchmark <path>` | Evaluate scenarios against models |
 | `aqueduct benchmark-diff` | Compare benchmark results for regressions |
 
+**Key flags for `heal`:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--module <module_id>` | failed module from the run record | Scope healing to a specific module |
+| `--print-prompt [text\|json]` | — (bare flag = `text`) | Print the LLM prompt that would be sent and exit without calling the model |
+| `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
+
 **Key flags for `benchmark`:**
 
 | Flag | Default | Description |
@@ -159,7 +168,7 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. |
 | `--provider anthropic\|openai_compat` | `agent.provider` | One-shot override |
 | `--base-url <url>` | `agent.base_url` | One-shot override |
-| `--timeout <seconds>` | 300 | Per-call HTTP timeout; `0` = unbounded read |
+| `--timeout <seconds>` | `agent.timeout` (300) | Per-call HTTP timeout; `0` = unbounded read |
 | `--workers <N>` | 1 | Parallel scenario×model pairs |
 | `--format table\|json` | `table` | |
 | `--no-persist` | off | Skip writing to `<scenarios_dir>/.aqueduct/benchmark.duckdb` |

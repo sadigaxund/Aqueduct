@@ -214,6 +214,7 @@ Compose extras as needed — `pip install aqueduct-core[spark,airflow,aws]`:
 | `airflow` | Apache Airflow operator shim | Scheduler / worker host; the box submitting jobs to Spark. |
 | `secrets` | AWS + GCP + Azure secret-manager SDKs (or pick `aws` / `gcp` / `azure` individually) | Resolving `@aq.secret('KEY')` against a cloud vault. |
 | `stores` | Postgres + Redis backends (or pick `postgres` / `redis` individually) | Replacing single-writer DuckDB defaults for obs / lineage / depot. |
+| `llm` | `json-repair` — last-ditch recovery of malformed LLM patch JSON | Healing with small local models that emit imperfect JSON. |
 | `all` | Everything above | Single-laptop dev. |
 
 ### A first blueprint

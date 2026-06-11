@@ -308,9 +308,13 @@ secrets:
 # Blueprint-level push notifications. Delivery is best-effort (daemon thread);
 # failures are logged and do not affect run outcome.
 #
-# Two hooks:
-#   on_failure — fires when a run ends with status="error"
-#   on_success — fires when a run ends with status="success"
+# Four hooks:
+#   on_failure       — fires when a run ends with status="error"
+#   on_success       — fires when a run ends with status="success"
+#   on_patch_pending — fires when a patch is staged to patches/pending/
+#   on_ci_patch      — fires for approval_mode: ci; receives the patch JSON
+#                      for external PR creation (full-config alternative to
+#                      agent.ci_webhook_url)
 #
 # Per-module webhook: set on_failure_webhook on any module in the Blueprint.
 #   Fires when that module's retry policy is exhausted, regardless of whether
@@ -491,6 +495,19 @@ agent:
   # Default null = unlimited. Per-blueprint override available via the
   # Blueprint agent: block (Blueprint value wins).
   # max_heal_attempts_per_hour: 10
+
+  # ── CI patch hand-off (approval_mode: ci) ──────────────────────────────────
+  # POST target for external CI to receive the staged patch JSON and open a
+  # PR. Only used when approval_mode: ci. See also webhooks.on_ci_patch for
+  # the full-config (method/headers/payload) variant.
+  # ci_webhook_url: "https://ci.example.com/hooks/aqueduct-patch"
+
+  # ── Sandbox Spark master ───────────────────────────────────────────────────
+  # Spark master URL for sandbox replay (patch preview). Default null uses
+  # local[*] — 1000 sampled rows fit in any driver's memory. Set to
+  # "spark://host:7077" or "yarn" when the blueprint is too large for a
+  # single driver node.
+  # sandbox_master_url: null
 
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"

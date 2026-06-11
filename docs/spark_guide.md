@@ -12,6 +12,25 @@ pitfalls, transformation reference).
 
 Every warning links to an anchor here. Warnings are informational unless marked **[ERROR]**.
 
+Each warning prints as `AQ-WARN [<rule_id>] …`; silence one with
+`aqueduct --suppress-warning <rule_id> <command>` (repeatable, `'*'` = all)
+or `warnings.suppress:` in `aqueduct.yml`. Current rule ids:
+
+| Rule id | Flags | Detail |
+|---|---|---|
+| `perf_probe_sample_full_scan` | Probe sample-based signal — `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
+| `perf_incremental_watermark_scan` | `materialize: incremental` re-scans output for `MAX(watermark_column)` | [incremental-watermark-scan](#incremental-watermark-scan) |
+| `perf_python_udf_row_at_a_time` | Python UDF bypasses Arrow/vectorized execution | [python-udf-performance](#python-udf-performance) |
+| `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [delivery-semantics-append-retry](#delivery-semantics-append-retry) |
+| `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
+| `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration — use `spark_config:` | — |
+| `count_col_likely_count_star` | `COUNT(col)` silently skips NULLs — likely meant `COUNT(*)` | — |
+| `file_format_no_repartition` | parquet/json/csv Egress without repartition/`partition_by` → one file per task | — |
+| `jdbc_missing_partition` | JDBC Ingress without `partitionColumn`/bounds reads through one connection | [jdbc-ingress-parallelism](#jdbc-ingress-parallelism) |
+| `kafka_checkpoint_stale` | Checkpointing a Kafka-fed Channel freezes a stale snapshot for other consumers | — |
+| `nondeterministic_fanout` | `rand()`/`uuid()`/`current_timestamp()` diverges across consumer branches | — |
+| `jar_availability` | Declared format (jdbc/kafka/delta/…) has no matching JAR on the session classpath (session-startup check) | — |
+
 #### `probe-sample-cost`
 
 **Triggered when:** A Probe has a signal of type `null_rates`, `row_count_estimate`
@@ -184,7 +203,7 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 
 ---
 
-### JDBC Ingress: Parallelism Requires Explicit Partition Config
+### JDBC Ingress: Parallelism Requires Explicit Partition Config {#jdbc-ingress-parallelism}
 
 `numPartitions` alone on a JDBC Ingress does **not** create multiple parallel read tasks. Spark opens a single connection and reads the full table unless you also provide:
 
