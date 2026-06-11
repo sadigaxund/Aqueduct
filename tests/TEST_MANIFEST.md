@@ -526,6 +526,48 @@ This section tracks high-level functional verification of core features against 
 - ✅ `aqueduct heal <run_id>` (heal-from-store): `--print-prompt` output unchanged; missing patch path prints `stop_reason=<reason>` in the error line
 - ✅ `aqueduct benchmark`: reads `cfg.agent.budget` → builds `BudgetConfig` → passes to `run_benchmark` so benchmark + production share the SAME budget axes
 
+### Phase 45 — Signature memory (heal cache + coaching)
+
+#### `agent/signature.py` — `from_failure_context`
+- ✅ Returns `(exact, coarse)` pair; exact `where` = `failed_module`, coarse `where` = `<any>`; same ctx → different hashes — `test_signature.py::TestFromFailureContext::test_returns_exact_and_coarse_pair`
+- ✅ Error-class priority: Spark `error_class` wins over Assert `error_type` wins over `root_exception["type"]` wins over `"unknown"`; message prefers `root_exception["message"]` over `error_message` — `test_signature.py::TestFromFailureContext` (5 tests)
+- ✅ Duck-typed/mock contexts (non-str attrs, non-dict `root_exception`) never raise — `test_signature.py::TestFromFailureContext::test_duck_typed_context_never_raises`
+
+- ✅ `stage_patch_for_human` writes `_aq_meta.failure_signature` (full 4-key dict), `_aq_meta.failure_signature_coarse` (hash str), `_aq_meta.source` (default `"llm"`, `"replay"` when passed) — `test_surveyor/test_agent.py::TestStageForHuman`
+- ✅ `archive_patch` writes the same `failure_signature` + `failure_signature_coarse` keys — `test_surveyor/test_agent.py::TestArchivePatch::test_applied_file_contains_failure_signature`
+
+- ✅ `find_pending(hash, dir)`: newest matching pending patch returned; no match → None; pre-Phase-45 files without signature → None — `tests/test_agent/test_memory.py::TestFindPending`
+- ✅ `find_replay_candidate(hash, dir, successful_ids)`: match returned only when in success set; empty set → None; signature match without success → None — `tests/test_agent/test_memory.py::TestFindReplayCandidate`
+- ✅ `find_coaching_examples(exact, coarse, error_class, dir)`: tier ordering, dedup, cap, legacy files in tier 4 — `tests/test_agent/test_memory.py::TestFindCoachingExamples`
+- ✅ `_sig_meta` tolerates `failure_signature` as dict AND bare hash string — `tests/test_agent/test_memory.py::TestFindCoachingExamples::test_sig_meta_tolerates_bare_hash_string`
+
+- ✅ `_build_coaching_section`: renders "Past validated fixes" with tier labels; empty applied/ dir → "" — `tests/test_agent/test_coaching.py::TestBuildCoachingSection`
+- ✅ `_build_system_prompt(coaching=False)` or `failure_ctx=None` → legacy chronological section used; `last_apply_error` appended in BOTH paths — `tests/test_agent/test_coaching.py::TestBuildSystemPromptCoaching`
+- ✅ `build_prompt(...)` threads `failure_ctx` + `coaching` through to the system prompt — `tests/test_agent/test_coaching.py::TestBuildPromptCoaching`
+
+- ✅ Orphan `</think>` (no opener): prose before the closer stripped, NOT stripped when no `{` survives — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_orphan_think_*`
+- ✅ Fence selection prefers the first fenced block containing `"operations"` — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_fence_selection_prefers_operations_block`
+- ✅ Multi-key wrapper `{"patch": {…operations…}, "explanation": "…"}` unwraps; ambiguous case falls through — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_multi_key_wrapper_unwrapped`
+- ✅ Non-escalated reprompt raw echo capped at 4000 chars — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_non_escalated_reprompt_capped_at_4000_chars`
+- ✅ Clean envelope still parses with `recovery_applied == []` — `tests/test_surveyor/test_agent.py::TestParsePatchSpec::test_clean_envelope_no_recovery`
+
+#### `surveyor/surveyor.py` — schema + recorder
+- ✅ `healing_outcomes` DDL has `failure_signature` + `resolution` columns; `_PHASE45_MIGRATION_DDL` is idempotent on both fresh and pre-Phase-45 DBs — `tests/test_surveyor/test_surveyor_models.py::test_healing_outcomes_ddl_has_phase45_columns`
+- ✅ `record_healing_outcome(failure_signature=…, resolution=…)` persists both; defaults `resolution="llm"` — `tests/test_surveyor/test_surveyor_models.py::test_record_healing_outcome_persists_failure_signature`
+- ✅ `successful_patch_ids()`: returns distinct patch_ids with `run_success_after_patch=true`; empty set when `_observability is None` — `tests/test_surveyor/test_surveyor_models.py::test_successful_patch_ids_returns_matching_patches`
+
+#### `config.py` — `AgentMemoryConfig`
+- ✅ `AgentConnectionConfig().memory` defaults to `replay=True, coaching=True`; frozen; `extra="forbid"` rejects unknown keys; `agent.memory.replay: false` round-trips from YAML — `tests/test_config.py::TestAgentMemoryConfig`
+
+#### `cli.py` — heal-cache wiring (run loop)
+- ⏳ Pending hit: matching `_aq_meta.failure_signature.hash` in `patches/pending/` → LLM NOT called, "heal cache: pending patch … skipping LLM" message, exit `HEAL_PENDING(3)`, `healing_outcomes` row with `resolution='cached'` + synthetic `heal_attempts` row `stop_reason='cached'`
+- ⏳ Replay hit (auto mode): archived patch with matching signature + success record → gates run on candidate; pass → patch applied with zero LLM calls, `resolution='replayed'`, downstream gate rerun skipped (`_replay_gates_done`)
+- ⏳ Replay gate-fail: candidate failing sandbox falls through to the LLM in the SAME iteration ("falling through to LLM" message); candidate patch_id not retried again this run (`_replay_tried` guard, no infinite loop in multi-patch mode)
+- ⏳ Replay hit (human/ci mode): candidate staged to pending with `_aq_meta.source='replay'` without gates or LLM call, exit `HEAL_PENDING(3)`
+- ⏳ `agent.memory.replay: false` → pending/replay lookups skipped entirely, straight to LLM; `agent.memory.coaching: false` → `memory_coaching=False` reaches `generate_agent_patch`/cascade
+- ⏳ LLM-resolution heals stamp `healing_outcomes.failure_signature` with the exact hash + `resolution='llm'` (all loop record sites)
+- ⏳ `aqueduct runs --heal-coverage`: aggregates `COALESCE(resolution,'llm')` counts across discovered obs DBs; text shows per-resolution counts + zero-token %; `--format json` returns `{total_heals, by_resolution, zero_token_heals, zero_token_coverage}`; no DBs → "No runs found"; empty table → "No healing outcomes recorded yet."
+
 ### Phase 35 — Structured Spark error extraction
 
 #### `surveyor/models.py` — `FailureContext` Phase 35 fields
@@ -1152,14 +1194,14 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 
 #### Typed spillway routing (`edges.error_types`)
 
-- ⏳ Spillway edge with `error_types: [SpillwayCondition]` → Egress receives only rows whose `_aq_error_type` matches; edge without `error_types` receives all quarantine rows (catch-all, previous behavior unchanged)
-- ⏳ Two spillway edges from one Assert — `error_types: [DataQualityViolation]` and catch-all — route disjoint vs full row sets respectively from the SAME shared spillway frame (filter applied per-edge at consumption, not at publish)
-- ⏳ `_apply_spillway_filter` is a no-op for main-port edges, `_GATE_CLOSED` sentinel, and `None` values
-- ⏳ Funnel consuming a spillway edge with `error_types` gets the filtered frame
-- ⏳ Assert quarantine rows now stamp `_aq_error_type` = rule's `error_type` label when set, else the rule name (`freshness` / `sql_row` / `custom`) — regression: previously only `_aq_error_rule` was stamped, so custom error labels were not addressable
-- ⏳ Parser: `error_types` on a non-spillway edge → `ParseError` mentioning port='spillway' (previously accepted and silently ignored)
-- ⏳ Parser: `error_types` on a spillway edge parses; `Edge.error_types` tuple preserved through arcade expansion
-- ⏳ Doctor `_check_spillway_error_types`: entry matching no Assert `error_type` / rule name / `SpillwayCondition` → `spillway_error_type_typo` warn; declared label → no warning
+- ✅ `_apply_spillway_filter` is a no-op for main-port edges, `_GATE_CLOSED` sentinel, and `None` values — `tests/test_executor/test_spillway_error_types.py`
+- ✅ Assert quarantine rows stamp `_aq_error_type` = rule's `error_type` label when set — `tests/test_executor/test_spillway_error_types.py::test_assert_quarantine_stamps_aq_error_type`
+- ✅ Parser: `error_types` on a non-spillway edge → `ParseError` mentioning port='spillway' — `tests/test_parser/test_schema.py::TestErrorTypesValidation::test_error_types_on_non_spillway_edge_raises`
+- ✅ Parser: `error_types` on a spillway edge parses; `Edge.error_types` tuple preserved through arcade expansion — `tests/test_parser/test_schema.py::TestErrorTypesValidation::test_error_types_on_spillway_edge_parses`
+- ⏳ Spillway edge with `error_types: [SpillwayCondition]` → Egress receives only rows whose `_aq_error_type` matches — *requires Spark integration test*
+- ⏳ Two spillway edges from one Assert — *requires Spark integration test*
+- ⏳ Funnel consuming a spillway edge with `error_types` gets the filtered frame — *requires Spark integration test*
+- ⏳ Doctor `_check_spillway_error_types` — *requires manifest with modules*
 
 ### Depot KV Store (`aqueduct/depot/depot.py`)
 

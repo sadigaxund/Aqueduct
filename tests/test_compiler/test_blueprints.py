@@ -36,10 +36,10 @@ def _compile(bp, bp_path):
     return compiler_compile(bp, blueprint_path=bp_path)
 
 
-def _exec(manifest, spark, store_dir=None):
+def _exec(manifest, spark, store_dir=None, **kwargs):
     """Lazy executor import to avoid pyspark at collection time."""
     from aqueduct.executor.spark.executor import execute
-    return execute(manifest, spark, store_dir=store_dir)
+    return execute(manifest, spark, store_dir=store_dir, **kwargs)
 
 
 def _run(blueprint_name: str, overrides: dict, spark: SparkSession, store_dir=None):
@@ -203,8 +203,8 @@ def test_regulator_closed_gate_skips_downstream(spark: SparkSession, sample_data
         "input_path": str(sample_data / "orders.parquet"),
         "output_path": str(out),
     })
-    manifest = compiler_compile(bp, blueprint_path=bp_path)
-    result = execute(manifest, spark, surveyor=_ClosedSurveyor())
+    manifest = _compile(bp, bp_path)
+    result = _exec(manifest, spark, surveyor=_ClosedSurveyor())
 
     assert result.status == "success"  # blueprint itself didn't error
     statuses = {r.module_id: r.status for r in result.module_results}

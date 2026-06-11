@@ -184,3 +184,146 @@ def test_failure_context_phase35_to_dict():
     assert d["sql_state"] == "42000"
     assert d["suggested_columns"] == ["a", "b"]
     assert d["object_name"] == "c"
+
+
+# ── Phase 45 — healing_outcomes DDL + record + successful_patch_ids ───────────
+
+def test_healing_outcomes_ddl_has_phase45_columns():
+    """Fresh DB DDL includes failure_signature + resolution columns."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import _DDL
+    conn = duckdb.connect(":memory:")
+    conn.execute(_DDL)
+    cols = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'").fetchall()}
+    assert "failure_signature" in cols
+    assert "resolution" in cols
+    conn.close()
+
+
+def test_phase45_migration_idempotent_on_fresh_db():
+    """_PHASE45_MIGRATION_DDL runs without error on a fresh DB."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import _DDL, _PHASE45_MIGRATION_DDL
+    conn = duckdb.connect(":memory:")
+    conn.execute(_DDL)
+    conn.execute(_PHASE45_MIGRATION_DDL)
+    conn.execute(_PHASE45_MIGRATION_DDL)  # second call must not raise
+    conn.close()
+
+
+def test_phase45_migration_adds_missing_columns():
+    """Pre-Phase-45 DB (no columns) → migration adds them idempotently."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import _PHASE45_MIGRATION_DDL
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE healing_outcomes (
+            id VARCHAR PRIMARY KEY,
+            run_id VARCHAR, blueprint_id VARCHAR, failed_module VARCHAR,
+            failure_category VARCHAR, model VARCHAR, patch_id VARCHAR,
+            confidence FLOAT, patch_applied BOOLEAN,
+            run_success_after_patch BOOLEAN, applied_at TIMESTAMPTZ,
+            prompt_version VARCHAR
+        )
+    """)
+    cols_before = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'").fetchall()}
+    assert "failure_signature" not in cols_before
+    conn.execute(_PHASE45_MIGRATION_DDL)
+    cols_after = {r[0] for r in conn.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'").fetchall()}
+    assert "failure_signature" in cols_after
+    assert "resolution" in cols_after
+    conn.execute(_PHASE45_MIGRATION_DDL)  # idempotent
+    conn.close()
+
+
+def test_record_healing_outcome_persists_failure_signature(tmp_path):
+    """record_healing_outcome persists failure_signature and resolution."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import Surveyor, _DDL
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-fs-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-fs-1", failed_module="m1", failure_category="test",
+        model="claude", patch_id="fix-1", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+        failure_signature="abc123hash", resolution="llm",
+    )
+    surveyor.stop()
+
+    conn = duckdb.connect(str(store_dir / "observability.db"))
+    row = conn.execute("SELECT failure_signature, resolution FROM healing_outcomes WHERE patch_id = 'fix-1'").fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "abc123hash"
+    assert row[1] == "llm"
+
+
+def test_record_healing_outcome_defaults_resolution_llm(tmp_path):
+    """record_healing_outcome defaults resolution to 'llm'."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import Surveyor, _DDL
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs2"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-dflt-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-dflt-1", failed_module="m1", failure_category="test",
+        model="claude", patch_id="fix-dflt", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+    )
+    surveyor.stop()
+
+    conn = duckdb.connect(str(store_dir / "observability.db"))
+    row = conn.execute("SELECT resolution FROM healing_outcomes WHERE patch_id = 'fix-dflt'").fetchone()
+    conn.close()
+    assert row[0] == "llm"
+
+
+def test_successful_patch_ids_returns_matching_patches(tmp_path):
+    """successful_patch_ids returns patch_ids with run_success_after_patch=true."""
+    from aqueduct.surveyor.surveyor import Surveyor, _DDL
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs3"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-sp-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-sp-1", failed_module="m1", failure_category="test",
+        model="claude", patch_id="success-1", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+    )
+    surveyor.record_healing_outcome(
+        run_id="run-sp-2", failed_module="m1", failure_category="test",
+        model="claude", patch_id="failed-1", confidence=0.9,
+        patch_applied=True, run_success_after_patch=False,
+    )
+    surveyor.stop()
+
+    ids = surveyor.successful_patch_ids()
+    assert "success-1" in ids
+    assert "failed-1" not in ids
+
+
+def test_successful_patch_ids_empty_on_store_error(tmp_path):
+    """successful_patch_ids returns empty set when store is down."""
+    from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    surveyor = Surveyor(manifest, store_dir=tmp_path / "missing")
+    # start() never called → _observability is None
+    ids = surveyor.successful_patch_ids()
+    assert ids == set()

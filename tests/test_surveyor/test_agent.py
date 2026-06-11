@@ -213,8 +213,95 @@ class TestParsePatchSpec:
         except Exception:
             pass  # json_repair may not be installed; JSONDecodeError is acceptable
 
+    def test_orphan_think_closing_stripped(self):
+        """Orphan </think> without opener: prose before closer stripped."""
+        raw = """Some reasoning text without the opening tag</think>
+{
+  "patch_id": "fix-orphan",
+  "rationale": "fix",
+  "confidence": 0.9,
+  "category": "other",
+  "root_cause": "issue",
+  "operations": [
+    {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+  ]
+}"""
+        spec, recovery = _parse_patch_spec(raw)
+        assert spec.patch_id == "fix-orphan"
+        assert "stripped_orphan_think_close" in recovery
 
-# ── stage_patch_for_human ─────────────────────────────────────────────────────
+    def test_orphan_think_not_stripped_when_no_brace_survives(self):
+        """Orphan </think> NOT stripped when no '{' survives after the closer."""
+        raw = """</think>
+just text, no json object after it"""
+        from json import JSONDecodeError
+        with pytest.raises((JSONDecodeError, ValueError)):
+            _parse_patch_spec(raw)
+
+    def test_fence_selection_prefers_operations_block(self):
+        """Multi-fence: prefers the block containing 'operations' over earlier echoed-junk fence."""
+        raw = """```json
+{"patch_id": "echo", "rationale": "junk"}
+```
+Some text
+```json
+{
+  "patch_id": "fix-real",
+  "rationale": "real patch",
+  "confidence": 0.9,
+  "category": "other",
+  "root_cause": "x",
+  "operations": [
+    {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+  ]
+}
+```"""
+        spec, recovery = _parse_patch_spec(raw)
+        assert spec.patch_id == "fix-real"
+        assert "stripped_code_fence" in recovery
+
+    def test_multi_key_wrapper_unwrapped(self):
+        """{'patch': {operations}, 'explanation': '...'} → unwraps the patch key."""
+        raw = """{
+  "patch": {
+    "patch_id": "fix-wrap",
+    "rationale": "wrapper",
+    "confidence": 0.9,
+    "category": "other",
+    "root_cause": "x",
+    "operations": [
+      {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+    ]
+  },
+  "explanation": "This patch fixes the issue"
+}"""
+        spec, recovery = _parse_patch_spec(raw)
+        assert spec.patch_id == "fix-wrap"
+        assert "unwrapped_patch" in recovery
+
+    def test_clean_envelope_no_recovery(self):
+        """Clean envelope still parses with recovery_applied == []."""
+        spec, recovery = _parse_patch_spec("""{
+  "patch_id": "clean",
+  "rationale": "clean",
+  "confidence": 0.9,
+  "category": "other",
+  "root_cause": "x",
+  "operations": [
+    {"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}
+  ]
+}""")
+        assert spec.patch_id == "clean"
+        assert recovery == []
+
+    def test_non_escalated_reprompt_capped_at_4000_chars(self, tmp_path):
+        """Non-escalated reprompt raw echo capped at 4000 chars."""
+        from aqueduct.agent.parse import _format_reprompt_for_next_turn
+        long_raw = "x" * 10000
+        result = _format_reprompt_for_next_turn(
+            friendly="ERROR", raw=long_raw, escalated=False, structural_hint="",
+        )
+        assert len(result) < 10000  # truncated, not the full 10000
 
 
 class TestStageForHuman:
@@ -252,6 +339,43 @@ class TestStageForHuman:
         spec = _patch_spec()
         result = stage_patch_for_human(spec, tmp_path / "patches", _failure_ctx())
         assert result is None
+
+    def test_pending_file_contains_failure_signature(self, tmp_path):
+        from aqueduct.agent.signature import from_failure_context
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec()
+        ctx = _failure_ctx(error_class="UNRESOLVED_COLUMN")
+        stage_patch_for_human(spec, patches_dir, ctx)
+        matches = list((patches_dir / "pending").glob("*_test-fix.json"))
+        data = json.loads(matches[0].read_text())
+        assert "_aq_meta" in data
+        assert "failure_signature" in data["_aq_meta"]
+        fs = data["_aq_meta"]["failure_signature"]
+        assert isinstance(fs, dict)
+        assert "hash" in fs
+        assert "failure_signature_coarse" in data["_aq_meta"]
+        # Verify the signature matches the failure context
+        exact, _ = from_failure_context(ctx)
+        assert fs["hash"] == exact.hash
+
+    def test_pending_file_contains_source_llm_by_default(self, tmp_path):
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec()
+        ctx = _failure_ctx()
+        stage_patch_for_human(spec, patches_dir, ctx)
+        matches = list((patches_dir / "pending").glob("*_test-fix.json"))
+        data = json.loads(matches[0].read_text())
+        assert data["_aq_meta"].get("source") == "llm"
+
+
+class TestArchivePatch:
+    def test_creates_applied_file(self, tmp_path):
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec()
+        ctx = _failure_ctx()
+        archive_patch(spec, patches_dir, ctx, mode="auto")
+        matches = list((patches_dir / "applied").glob("*_test-fix.json"))
+        assert len(matches) == 1
 
 class TestPatchFilename:
     def test_patch_filename_includes_timestamp(self, tmp_path):
@@ -316,13 +440,30 @@ class TestArchivePatch:
 
     def test_applied_file_contains_prompt_version(self, tmp_path):
         patches_dir = tmp_path / "patches"
-        spec = _patch_spec(patch_id="archive-me")
+        spec = _patch_spec()
         ctx = _failure_ctx()
         archive_patch(spec, patches_dir, ctx, mode="auto")
-        matches = list((patches_dir / "applied").glob("*_archive-me.json"))
+        matches = list((patches_dir / "applied").glob("*_test-fix.json"))
         data = json.loads(matches[0].read_text())
         assert "_aq_meta" in data
         assert data["_aq_meta"]["prompt_version"] == PROMPT_VERSION
+
+    def test_applied_file_contains_failure_signature(self, tmp_path):
+        from aqueduct.agent.signature import from_failure_context
+        patches_dir = tmp_path / "patches"
+        spec = _patch_spec()
+        ctx = _failure_ctx(error_class="UNRESOLVED_COLUMN")
+        archive_patch(spec, patches_dir, ctx, mode="auto")
+        matches = list((patches_dir / "applied").glob("*_test-fix.json"))
+        data = json.loads(matches[0].read_text())
+        assert "_aq_meta" in data
+        assert "failure_signature" in data["_aq_meta"]
+        fs = data["_aq_meta"]["failure_signature"]
+        assert isinstance(fs, dict)
+        assert "hash" in fs
+        assert "failure_signature_coarse" in data["_aq_meta"]
+        exact, _ = from_failure_context(ctx)
+        assert fs["hash"] == exact.hash
 
     def test_apply_patch_file_modifies_blueprint(self, tmp_path):
         from aqueduct.patch.apply import apply_patch_file

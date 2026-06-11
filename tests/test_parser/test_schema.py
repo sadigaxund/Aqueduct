@@ -233,3 +233,58 @@ class TestPromptContext:
         assert "agent" in m_dict
         assert "prompt_context" in m_dict["agent"]
         assert m_dict["agent"]["prompt_context"] == "Contextual info"
+
+
+class TestErrorTypesValidation:
+    def test_error_types_on_non_spillway_edge_raises(self, tmp_path):
+        """error_types on a main-port edge → ParseError mentioning port='spillway'."""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text("""
+aqueduct: '1.0'
+id: test
+name: Test
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: data}
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: src
+    to: sink
+    error_types: ["DataQualityViolation"]
+""")
+        from aqueduct.parser.parser import ParseError, parse
+        with pytest.raises(ParseError, match="spillway"):
+            parse(str(bp_file))
+
+    def test_error_types_on_spillway_edge_parses(self, tmp_path):
+        """error_types on a spillway edge parses successfully."""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text("""
+aqueduct: '1.0'
+id: test
+name: Test
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: data}
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: src
+    to: sink
+    port: spillway
+    error_types: ["DataQualityViolation"]
+""")
+        from aqueduct.parser.parser import parse
+        bp = parse(str(bp_file))
+        assert len(bp.edges) == 1
+        assert bp.edges[0].port == "spillway"
+        assert bp.edges[0].error_types == ("DataQualityViolation",)
