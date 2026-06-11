@@ -13,10 +13,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aqueduct.agent.prompts import _build_system_prompt
 from aqueduct.redaction import redact as _redact
@@ -27,6 +28,67 @@ logger = logging.getLogger(__name__)
 # stuck-consecutive trip. 0.8 forces sampling divergence so the model
 # doesn't keep regenerating the same wrong tree.
 _ESCALATION_TEMPERATURE = 0.8
+
+# Phase 46 — transient provider errors worth retrying. 429 rate limit,
+# 503 service unavailable, 529 Anthropic "overloaded".
+_RETRYABLE_STATUS = frozenset({429, 503, 529})
+
+_ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+
+
+def _retry_after_seconds(response: Any) -> float | None:
+    """Parse a Retry-After header (delta-seconds form only) — None when absent/invalid."""
+    raw = response.headers.get("retry-after")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _post_with_retry(
+    do_post: "Callable[[float], Any]",
+    *,
+    total_seconds: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> Any:
+    """POST with bounded retry on 429/503/529 (Phase 46).
+
+    ``do_post(read_timeout)`` performs one HTTP request and returns the
+    response. ``total_seconds`` is the budget for the WHOLE call including
+    retries and sleeps — the same per-call deadline Phase 40 derives from
+    ``min(agent.timeout, remaining budget seconds)`` — so a retry can delay
+    an attempt but never overrun ``agent.budget.max_seconds``. Sleep is the
+    server's ``Retry-After`` when sent, else exponential backoff with jitter.
+    When the next sleep would not leave at least 1s to actually retry, the
+    retryable response is raised as-is.
+    """
+    t0 = time.monotonic()
+    attempt = 0
+    while True:
+        remaining = total_seconds - (time.monotonic() - t0)
+        response = do_post(max(1.0, remaining))
+        if response.status_code not in _RETRYABLE_STATUS:
+            response.raise_for_status()
+            return response
+        if attempt >= max_retries:
+            response.raise_for_status()
+            return response  # unreachable for >=400, keeps type-checkers happy
+        attempt += 1
+        sleep = _retry_after_seconds(response)
+        if sleep is None:
+            sleep = backoff_seconds * (2 ** (attempt - 1)) * (1.0 + random.random() * 0.25)
+        remaining = total_seconds - (time.monotonic() - t0)
+        if sleep >= remaining - 1.0:
+            response.raise_for_status()
+            return response
+        logger.warning(
+            "LLM provider returned %d — retry %d/%d in %.1fs",
+            response.status_code, attempt, max_retries, sleep,
+        )
+        time.sleep(sleep)
 
 
 @dataclass
@@ -53,6 +115,9 @@ class _ProviderConfig:
     # (or coaching=False) falls back to the chronological patch-history section.
     failure_ctx: Any = None
     coaching: bool = True
+    # Phase 46 — transient-error retry (429/503/529), from agent.retry config.
+    retry_max_retries: int = 2
+    retry_backoff_seconds: float = 2.0
 
 
 def _format_llm_error_hint(
@@ -156,6 +221,8 @@ def _call_agent(
             cfg.provider_options, timeout=cfg.timeout,
             temperature_override=temperature_override,
             deadline=deadline,
+            max_retries=cfg.retry_max_retries,
+            backoff_seconds=cfg.retry_backoff_seconds,
         )
     else:
         return _call_anthropic(
@@ -163,6 +230,10 @@ def _call_agent(
             timeout=cfg.timeout,
             temperature_override=temperature_override,
             deadline=deadline,
+            base_url=cfg.base_url,
+            provider_options=cfg.provider_options,
+            max_retries=cfg.retry_max_retries,
+            backoff_seconds=cfg.retry_backoff_seconds,
         )
 
 
@@ -174,6 +245,10 @@ def _call_anthropic(
     timeout: float = 120.0,
     temperature_override: float | None = None,
     deadline: float | None = None,
+    base_url: str | None = None,
+    provider_options: dict[str, Any] | None = None,
+    max_retries: int = 2,
+    backoff_seconds: float = 2.0,
 ) -> tuple[str, int, int]:
     import httpx
 
@@ -183,26 +258,43 @@ def _call_anthropic(
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or configure agent.provider: openai_compat in aqueduct.yml."
         )
+    # Phase 46 — agent.base_url is honored for anthropic too (gateways,
+    # LLM proxies, regional endpoints). Default unchanged.
+    url = (base_url or _ANTHROPIC_DEFAULT_BASE_URL).rstrip("/") + "/v1/messages"
     payload: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": messages,
     }
+    if provider_options:
+        # Same config block is shared with openai_compat — drop its
+        # ollama_-prefixed keys rather than corrupting the Anthropic payload.
+        payload.update({
+            k: v for k, v in provider_options.items()
+            if not k.startswith("ollama_") and k != "response_format"
+        })
     if temperature_override is not None:
         payload["temperature"] = temperature_override
     effective_timeout = float(deadline if deadline is not None else timeout)
-    with httpx.Client(timeout=effective_timeout) as client:
-        response = client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json=payload,
+    with httpx.Client() as client:
+        def _do_post(read_timeout: float) -> httpx.Response:
+            return client.post(
+                url,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=min(effective_timeout, read_timeout),
+            )
+        response = _post_with_retry(
+            _do_post,
+            total_seconds=effective_timeout,
+            max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
         )
-        response.raise_for_status()
         data = response.json()
     content = data.get("content") or []
     if not content:
@@ -230,6 +322,8 @@ def _call_openai_compat(
     timeout: float = 120.0,
     temperature_override: float | None = None,
     deadline: float | None = None,
+    max_retries: int = 2,
+    backoff_seconds: float = 2.0,
 ) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -264,15 +358,23 @@ def _call_openai_compat(
             payload["options"]["temperature"] = temperature_override
 
     effective_read = float(deadline if deadline is not None else timeout)
-    with httpx.Client(
-        timeout=httpx.Timeout(connect=15.0, read=effective_read, write=30.0, pool=5.0),
-    ) as client:
-        response = client.post(
-            url,
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    with httpx.Client() as client:
+        def _do_post(read_timeout: float) -> httpx.Response:
+            return client.post(
+                url,
+                json=payload,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                timeout=httpx.Timeout(
+                    connect=15.0, read=min(effective_read, read_timeout),
+                    write=30.0, pool=5.0,
+                ),
+            )
+        response = _post_with_retry(
+            _do_post,
+            total_seconds=effective_read,
+            max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
         )
-        response.raise_for_status()
         data = response.json()
     text = data["choices"][0]["message"].get("content")
     if text is None:

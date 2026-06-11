@@ -54,23 +54,43 @@ def _render_dict(template: dict[str, Any], vars: dict[str, str]) -> dict[str, An
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+# Delivery statuses worth one retry — transient by nature. 4xx other than
+# 429 means the request itself is wrong; retrying it identically is noise.
+_RETRYABLE_DELIVERY_STATUS = frozenset({429, 500, 502, 503, 504})
+_DELIVERY_ATTEMPTS = 2          # total tries per webhook fire
+_DELIVERY_BACKOFF_SECONDS = 2.0
+
+
 def fire_webhook(
     config: "WebhookEndpointConfig",  # type: ignore[name-defined]  # noqa: F821
     full_payload: dict[str, Any],
     template_vars: dict[str, str] | None = None,
+    event: str | None = None,
 ) -> threading.Thread:
     """POST/PUT/PATCH a payload to a configured endpoint in a background thread.
 
     Args:
         config:        WebhookEndpointConfig with url, method, headers, payload, timeout.
-        full_payload:  Fallback payload sent when config.payload is None (full FailureContext).
+        full_payload:  Event data sent when config.payload is None — wrapped in the
+                       standardized envelope when ``event`` is given (see below).
         template_vars: Built-in variables available for ${VAR} substitution in
                        config.payload values and config.headers values.
                        Keys: run_id, blueprint_id, blueprint_name, failed_module,
-                       error_message, error_type, started_at, attempt.
+                       error_message, error_type, started_at, attempt — plus, on
+                       patch events (Phase 46): patch_id, root_cause, rationale,
+                       confidence, category.
+        event:         Event name (``on_failure`` / ``on_success`` /
+                       ``on_patch_pending`` / ``on_ci_patch``). Phase 46: when set
+                       and ``config.payload`` is None, the default body is the
+                       standardized envelope ``{event, timestamp, run_id,
+                       blueprint_id, data}`` with the event-specific payload under
+                       ``data``. ``None`` preserves the legacy raw-payload body.
 
     Returns:
         The daemon thread that was started (callers may join() if needed).
+
+    Delivery is best-effort with ONE in-thread retry on transient statuses
+    (429/5xx) or network errors — never blocks the run, never raises.
     """
     vars: dict[str, str] = template_vars or {}
 
@@ -87,6 +107,15 @@ def fire_webhook(
     # credential to the destination.
     if config.payload is not None:
         body = _redact(_render_dict(config.payload, vars))
+    elif event is not None:
+        from datetime import datetime, timezone
+        body = _redact({
+            "event": event,
+            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "run_id": vars.get("run_id"),
+            "blueprint_id": vars.get("blueprint_id"),
+            "data": full_payload,
+        })
     else:
         body = _redact(full_payload)
 
@@ -95,29 +124,41 @@ def fire_webhook(
     timeout = config.timeout
 
     def _send() -> None:
-        try:
-            resp = httpx.request(
-                method,
-                url,
-                json=body,
-                headers=rendered_headers,
-                timeout=timeout,
-            )
-            if resp.status_code >= 400:
+        import time as _time
+        for attempt in range(1, _DELIVERY_ATTEMPTS + 1):
+            retryable = False
+            try:
+                resp = httpx.request(
+                    method,
+                    url,
+                    json=body,
+                    headers=rendered_headers,
+                    timeout=timeout,
+                )
+                if resp.status_code < 400:
+                    return
+                retryable = resp.status_code in _RETRYABLE_DELIVERY_STATUS
                 print(
-                    f"[surveyor] webhook {method} {url!r} returned HTTP {resp.status_code}",
+                    f"[surveyor] webhook {method} {url!r} returned HTTP {resp.status_code}"
+                    + (f" — retrying ({attempt}/{_DELIVERY_ATTEMPTS})" if retryable and attempt < _DELIVERY_ATTEMPTS else ""),
                     file=sys.stderr,
                 )
-        except httpx.RequestError as exc:
-            print(
-                f"[surveyor] webhook {method} {url!r} failed: {exc}",
-                file=sys.stderr,
-            )
-        except Exception as exc:  # noqa: BLE001
-            print(
-                f"[surveyor] webhook {method} {url!r} raised unexpected error: {exc}",
-                file=sys.stderr,
-            )
+            except httpx.RequestError as exc:
+                retryable = True
+                print(
+                    f"[surveyor] webhook {method} {url!r} failed: {exc}"
+                    + (f" — retrying ({attempt}/{_DELIVERY_ATTEMPTS})" if attempt < _DELIVERY_ATTEMPTS else ""),
+                    file=sys.stderr,
+                )
+            except Exception as exc:  # noqa: BLE001
+                print(
+                    f"[surveyor] webhook {method} {url!r} raised unexpected error: {exc}",
+                    file=sys.stderr,
+                )
+                return
+            if not retryable or attempt >= _DELIVERY_ATTEMPTS:
+                return
+            _time.sleep(_DELIVERY_BACKOFF_SECONDS)
 
     thread = threading.Thread(target=_send, daemon=True, name="surveyor-webhook")
     thread.start()

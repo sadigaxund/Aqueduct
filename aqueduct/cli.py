@@ -2021,6 +2021,8 @@ def run(
                     validate_callback=_validate_cb,
                     on_attempt=_persist_attempt,
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                    retry_max_retries=cfg.agent.retry.max_retries,
+                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                 )
             else:
                 agent_result = generate_agent_patch(
@@ -2043,8 +2045,17 @@ def run(
                     on_attempt=_persist_attempt,
                     apply_callback=_apply_cb,
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                    retry_max_retries=cfg.agent.retry.max_retries,
+                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                 )
             patch = agent_result.patch
+            # Phase 46 — record the model that actually produced this result
+            # (under cascade the producing tier's model, not the top-level
+            # agent.model) and its tier index. None on replay (no LLM ran).
+            _outcome_model = agent_result.model or (
+                None if _patch_source == "replay" else resolved_agent_model
+            )
+            _cascade_pos = agent_result.model_cascade_position
             # Update the last persisted row with stop_reason so downstream
             # joins can answer "which axis terminated this heal".
             if agent_result.attempt_records and agent_result.stop_reason:
@@ -2081,12 +2092,13 @@ def run(
                             parent_run_id=run_id,
                             failed_module=failure_ctx.failed_module,
                             failure_category=_fail_cat,
-                            model=resolved_agent_model,
+                            model=_outcome_model,
                             patch_id=None,
                             confidence=None,
                             patch_applied=False,
                             run_success_after_patch=False,
                             failure_signature=_sig_exact.hash, resolution="llm",
+                            model_cascade_position=getattr(_rec, "model_cascade_position", None),
                         )
                 except Exception:
                     pass  # never let persistence block the loop exit
@@ -2142,10 +2154,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
                     failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2168,10 +2181,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
                     failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2191,7 +2205,8 @@ def run(
                         click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
-                                      source=_patch_source)
+                                      source=_patch_source,
+                                      webhook_event="on_ci_patch")
                 patch_staged_for_review = True
                 click.echo(
                     f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
@@ -2200,10 +2215,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
                     failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2240,10 +2256,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     _stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
@@ -2266,10 +2283,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
 
@@ -2297,10 +2315,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
                     failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
                     _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
@@ -2352,10 +2371,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     continue
                 if _g3 is not None and not _g3_passed:
@@ -2367,10 +2387,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     continue  # try next patch iteration
 
@@ -2385,10 +2406,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
 
@@ -2399,10 +2421,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
                         failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
                 try:
@@ -2425,10 +2448,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
                     failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
                     _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
@@ -2511,6 +2535,7 @@ def run(
                 cfg.webhooks.on_success,
                 full_payload=success_payload,
                 template_vars=success_payload,
+                event="on_success",
             )
 
         status_label = "patched" if result.status == "patched" else "complete"

@@ -76,6 +76,31 @@ class CascadeTierSchema(BaseModel):
 class AgentSchema(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _model_list_sugar(cls, data: Any) -> Any:
+        """Phase 46 — ``agent.model: [cheap, expensive]`` is cascade shorthand.
+
+        A list of model names expands to ``cascade:`` tiers with all-default
+        tier settings (provider/base_url/budget inherit normally). Mutually
+        exclusive with an explicit ``cascade:`` block. A single-item list
+        collapses to a plain ``model:`` string (no cascade overhead).
+        """
+        if isinstance(data, dict) and isinstance(data.get("model"), list):
+            models = data["model"]
+            if not models or not all(isinstance(m, str) and m.strip() for m in models):
+                raise ValueError("agent.model list must contain non-empty model name strings")
+            if data.get("cascade"):
+                raise ValueError(
+                    "agent.model as a list and agent.cascade are mutually exclusive — "
+                    "use the list shorthand OR the explicit cascade block, not both"
+                )
+            data = dict(data)
+            data["model"] = models[0]
+            if len(models) > 1:
+                data["cascade"] = [{"model": m} for m in models]
+        return data
+
     approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = "disabled"
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
     # 1.1.0 — `max_patches` is the canonical name. `aggressive_max_patches` is

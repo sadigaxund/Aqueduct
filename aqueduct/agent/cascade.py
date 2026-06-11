@@ -49,6 +49,8 @@ def generate_cascade_patch(
     deep_loop: bool = False,
     last_apply_error: str | None = None,
     memory_coaching: bool = True,
+    retry_max_retries: int = 2,
+    retry_backoff_seconds: float = 2.0,
     # ── Callbacks shared across all tiers ───────────────────────────
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
@@ -72,14 +74,35 @@ def generate_cascade_patch(
     base_budget = budget if budget is not None else BudgetConfig(
         max_reprompts=max(1, max_reprompts),
     )
+    # Phase 46 — `max_tokens_total` spans the WHOLE cascade, not each tier.
+    # Each tier's budget gets the remaining allowance; when a tier exhausts
+    # it, the cascade stops instead of handing the next tier a fresh cap.
+    tokens_spent = 0
 
     for idx, tier in enumerate(tiers, start=1):
         logger.info("── Cascade tier %d/%d: %s ──", idx, n, tier.model)
+
+        remaining_tokens = None
+        if base_budget.max_tokens_total is not None:
+            remaining_tokens = base_budget.max_tokens_total - tokens_spent
+            if remaining_tokens < 1:
+                logger.warning(
+                    "── Cascade stopped before tier %d/%d: cascade-wide token cap "
+                    "exhausted (%d/%d tokens spent) ──",
+                    idx, n, tokens_spent, base_budget.max_tokens_total,
+                )
+                if result is not None:
+                    result.stop_reason = "budget_tokens_exceeded"
+                    return result
+                return AgentPatchResult(
+                    patch=None, attempts=0, stop_reason="budget_tokens_exceeded",
+                )
 
         budget_cfg = dataclasses.replace(
             base_budget,
             max_reprompts=tier.max_reprompts if tier.max_reprompts is not None else base_budget.max_reprompts,
             max_seconds=float(tier.max_seconds) if tier.max_seconds is not None else base_budget.max_seconds,
+            max_tokens_total=remaining_tokens,
         )
 
         result = generate_agent_patch(
@@ -104,7 +127,11 @@ def generate_cascade_patch(
             on_attempt=on_attempt,
             model_cascade_position=idx - 1,
             memory_coaching=memory_coaching,
+            retry_max_retries=retry_max_retries,
+            retry_backoff_seconds=retry_backoff_seconds,
         )
+
+        tokens_spent += result.tokens_in_total + result.tokens_out_total
 
         # Escalation check runs BEFORE the patch check: a defer result carries
         # a non-None patch (the diagnosis), and on any non-final tier that

@@ -323,6 +323,28 @@ class AgentBudgetConfig(BaseModel):
     progress_stalled_window: int = 3
 
 
+class AgentRetryConfig(BaseModel):
+    """Phase 46 — transient-error retry for agent LLM calls.
+
+    Applies to rate-limit/overload responses (HTTP 429, 503, 529) from both
+    providers. Sleeps are exponential with jitter, honor a server-sent
+    ``Retry-After`` header, and are always capped by the heal budget's
+    remaining per-call deadline — a retry can delay an attempt but never
+    overrun ``agent.budget.max_seconds``. Shared by production heal and
+    ``aqueduct benchmark`` (same provider path).
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_retries: int = Field(
+        default=2, ge=0,
+        description="Extra attempts after the first call on 429/503/529. 0 disables retry.",
+    )
+    backoff_seconds: float = Field(
+        default=2.0, gt=0,
+        description="Base backoff; attempt N sleeps ~backoff_seconds * 2^N (+ jitter), capped by the remaining budget deadline.",
+    )
+
+
 class AgentMemoryConfig(BaseModel):
     """Phase 45 signature memory — zero-token heal paths.
 
@@ -440,6 +462,13 @@ class AgentConnectionConfig(BaseModel):
         description=(
             "Phase 45 signature memory: zero-token patch reuse/replay and "
             "signature-matched coaching. Both sub-flags default on."
+        ),
+    )
+    retry: AgentRetryConfig = Field(
+        default_factory=AgentRetryConfig,
+        description=(
+            "Phase 46 — retry on transient provider errors (429/503/529) with "
+            "exponential backoff, capped by the heal budget deadline."
         ),
     )
 

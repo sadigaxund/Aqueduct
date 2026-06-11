@@ -153,6 +153,7 @@ without calling the LLM at all.
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
 | `failure_signature`       | VARCHAR | Phase 45 — exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
 | `resolution`              | VARCHAR | Phase 45 — `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on pre-Phase-45 rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `model_cascade_position`  | INTEGER | Phase 46 — 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
 `resolution` counts across discovered observability DBs.

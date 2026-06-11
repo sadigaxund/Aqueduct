@@ -568,6 +568,42 @@ This section tracks high-level functional verification of core features against 
 - ⏳ LLM-resolution heals stamp `healing_outcomes.failure_signature` with the exact hash + `resolution='llm'` (all loop record sites)
 - ⏳ `aqueduct runs --heal-coverage`: aggregates `COALESCE(resolution,'llm')` counts across discovered obs DBs; text shows per-resolution counts + zero-token %; `--format json` returns `{total_heals, by_resolution, zero_token_heals, zero_token_coverage}`; no DBs → "No runs found"; empty table → "No healing outcomes recorded yet."
 
+### Phase 46 — Provider + budget hardening
+
+#### `agent/providers.py` — `_post_with_retry` + provider plumbing
+- ⏳ 2xx first try → returned, no retry; non-retryable 4xx (400/401) → raises immediately, no sleep
+- ⏳ 429/503/529 → retried up to `max_retries`, then the retryable response raises; `Retry-After: <seconds>` header overrides exponential backoff; malformed Retry-After ignored (falls back to backoff)
+- ⏳ Deadline cap: when the computed sleep would not leave ≥1s of `total_seconds`, the retryable response raises WITHOUT sleeping (budget never overrun by retry)
+- ⏳ `_call_anthropic` honors `base_url` (`{base}/v1/messages`; default `https://api.anthropic.com` unchanged) and merges `provider_options` into the payload top-level, dropping `ollama_*`-prefixed keys and `response_format` (config block shared with openai_compat)
+- ⏳ `_call_openai_compat` passes through the same retry helper; per-request read timeout = min(deadline, remaining)
+- ⏳ `agent.retry {max_retries, backoff_seconds}` threads cli → generate_agent_patch/cascade → `_ProviderConfig.retry_*` (defaults 2 / 2.0; `max_retries: 0` disables)
+
+#### `agent/budget.py` — gate-time exclusion
+- ⏳ `pause_clock()` context manager: time inside the block excluded from `check_stop()`'s `budget_seconds_exceeded` axis and from `remaining_seconds()`; `summary()` gains `excluded_gate_seconds`, `elapsed_seconds` stays wall time
+- ⏳ loop wraps the deep-loop `validate_callback` in `pause_clock()` — a sandbox sleep longer than `max_seconds` no longer trips the budget
+
+#### `agent/cascade.py` — cascade-spanning token cap
+- ⏳ `max_tokens_total` is consumed cumulatively: tier 2's budget = base cap − tier 1's spend; when remaining < 1 the cascade stops with `stop_reason='budget_tokens_exceeded'` before calling the next tier
+- ⏳ `max_tokens_total: null` (axis disabled) → tiers unconstrained as before
+
+#### `healing_outcomes` — producing model + tier
+- ⏳ DDL + Phase-45/46 migration add `model_cascade_position INTEGER`; `record_healing_outcome(model_cascade_position=…)` persists it
+- ⏳ `AgentPatchResult.model` / `.model_cascade_position` set by `generate_agent_patch`; CLI records the producing tier's model (not the top-level `agent.model`) and tier index; replay resolutions record `model=NULL`
+
+#### `doctor` — `check_cascade_tiers`
+- ⏳ anthropic tier without `ANTHROPIC_API_KEY` → warn naming the tier index + model; with key → ok
+- ⏳ openai_compat tier without base_url (tier AND engine) → warn; tier-level or engine-level base_url → ok; unknown provider → warn
+- ⏳ no cascade block or unparseable blueprint → no results (other checks own blueprint errors); wired into `run_doctor` only when a blueprint path is given
+
+#### `parser/schema.py` — `agent.model: list[str]` sugar
+- ⏳ `model: [a, b]` → `model='a'` + synthesized `cascade: [{model: a}, {model: b}]`; single-item list collapses to plain string with no cascade; empty list or non-string items → validation error
+- ⏳ list form combined with explicit `cascade:` → validation error (mutually exclusive)
+
+#### `surveyor/webhook.py` — envelope + delivery retry
+- ⏳ `payload: null` + `event=` → standardized envelope `{event, timestamp, run_id, blueprint_id, data}`; `event=None` (legacy caller) → raw payload unchanged; explicit `payload:` template wins over both
+- ⏳ Delivery retry: one retry on 429/5xx or network error (2 attempts total); non-retryable 4xx → single attempt; success → no retry; never raises, never blocks
+- ⏳ `stage_patch_for_human` webhook payload + template vars carry `patch_id`/`root_cause`/`rationale`/`confidence`/`category` (+ `diagnosis`/`suggestions` for defer patches, `source` for replay); ci staging fires `event='on_ci_patch'`, human staging `'on_patch_pending'`
+
 ### Phase 35 — Structured Spark error extraction
 
 #### `surveyor/models.py` — `FailureContext` Phase 35 fields
