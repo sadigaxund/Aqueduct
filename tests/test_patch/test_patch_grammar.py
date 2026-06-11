@@ -111,6 +111,11 @@ def test_patch_spec_json_schema():
     ops_schema = schema["$defs"]
     assert "ReplaceModuleConfigOp" in ops_schema
     assert "ReplaceModuleLabelOp" in ops_schema
+    # Phase 47 – replace_macro op should be present in the schema
+    assert "ReplaceMacroOp" in ops_schema
+    # The discriminator mapping for operations must include the canonical name
+    mapping = schema["properties"]["operations"]["items"].get("discriminator", {}).get("mapping", {})
+    assert "replace_macro" in mapping
 
 
 # ── PatchSpec resilience (1.1.0) ──────────────────────────────────────────────
@@ -267,3 +272,17 @@ def test_set_spark_config_alias_normalised():
         ],
     )
     assert spec.operations[0].op == "set_spark_config"
+
+
+def test_macro_alias_normalised():
+    """Aliases for replace_macro are normalized to 'replace_macro'."""
+    spec = PatchSpec(
+        patch_id="p", rationale="r",
+        operations=[
+            {"op": "set_macro", "name": "m", "value": "SELECT 1"},
+            {"op": "update_macro", "name": "m", "value": "SELECT 2"},
+            {"op": "replace_macro_body", "name": "m", "value": "SELECT 3"},
+        ],
+    )
+    assert all(op.op == "replace_macro" for op in spec.operations)
+

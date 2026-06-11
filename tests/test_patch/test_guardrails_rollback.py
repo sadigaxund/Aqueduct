@@ -46,6 +46,12 @@ class TestGuardrails:
         with pytest.raises(PatchError, match="remove_module"):
             _check_guardrails(spec, bp)
 
+    def test_forbidden_replace_macro_blocks(self):
+        bp = _bp_with_guardrails(forbidden_ops=("replace_macro",))
+        spec = _patch({"op": "replace_macro", "name": "m", "value": "SELECT 1"})
+        with pytest.raises(PatchError, match="replace_macro"):
+            _check_guardrails(spec, bp)
+
     # ── set_module_config_key path enforcement ────────────────────────────────
     def test_set_key_path_matching_passes(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))

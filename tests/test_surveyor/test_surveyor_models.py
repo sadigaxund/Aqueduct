@@ -327,3 +327,133 @@ def test_successful_patch_ids_empty_on_store_error(tmp_path):
     # start() never called → _observability is None
     ids = surveyor.successful_patch_ids()
     assert ids == set()
+
+
+# ── Phase 46 — model_cascade_position ──────────────────────────────────────────
+
+def test_healing_outcomes_ddl_has_model_cascade_position():
+    """Fresh DB DDL includes model_cascade_position column."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import _DDL
+    conn = duckdb.connect(":memory:")
+    conn.execute(_DDL)
+    cols = {r[0] for r in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
+    ).fetchall()}
+    assert "model_cascade_position" in cols
+    conn.close()
+
+
+def test_phase46_migration_adds_model_cascade_position():
+    """Pre-Phase-46 DB gets model_cascade_position via _PHASE45_MIGRATION_DDL."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import _PHASE45_MIGRATION_DDL
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE healing_outcomes (
+            id VARCHAR PRIMARY KEY,
+            run_id VARCHAR, blueprint_id VARCHAR, failed_module VARCHAR,
+            failure_category VARCHAR, model VARCHAR, patch_id VARCHAR,
+            confidence FLOAT, patch_applied BOOLEAN,
+            run_success_after_patch BOOLEAN, applied_at TIMESTAMPTZ,
+            prompt_version VARCHAR, failure_signature VARCHAR, resolution VARCHAR
+        )
+    """)
+    cols_before = {r[0] for r in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
+    ).fetchall()}
+    assert "model_cascade_position" not in cols_before
+    conn.execute(_PHASE45_MIGRATION_DDL)
+    cols_after = {r[0] for r in conn.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = 'healing_outcomes'"
+    ).fetchall()}
+    assert "model_cascade_position" in cols_after
+    conn.execute(_PHASE45_MIGRATION_DDL)  # idempotent
+    conn.close()
+
+
+def test_record_healing_outcome_persists_model_cascade_position(tmp_path):
+    """record_healing_outcome persists model_cascade_position."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import Surveyor, _DDL
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs_cp"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-cp-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-cp-1", failed_module="m1", failure_category="test",
+        model="claude", patch_id="fix-cp-1", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+        model_cascade_position=1,
+    )
+    surveyor.stop()
+
+    conn = duckdb.connect(str(store_dir / "observability.db"))
+    row = conn.execute(
+        "SELECT model_cascade_position FROM healing_outcomes WHERE patch_id = 'fix-cp-1'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == 1
+
+
+def test_record_healing_outcome_defaults_model_cascade_position_none(tmp_path):
+    """record_healing_outcome defaults model_cascade_position to None."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs_cp_dflt"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-cp-dflt-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-cp-dflt-1", failed_module="m1", failure_category="test",
+        model="claude", patch_id="fix-cp-dflt", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+    )
+    surveyor.stop()
+
+    conn = duckdb.connect(str(store_dir / "observability.db"))
+    row = conn.execute(
+        "SELECT model_cascade_position FROM healing_outcomes WHERE patch_id = 'fix-cp-dflt'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] is None
+
+
+def test_record_healing_outcome_persists_cascade_model(tmp_path):
+    """record_healing_outcome persists model + model_cascade_position for cascade tiers."""
+    import duckdb
+    from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.compiler.models import Manifest
+
+    manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
+    store_dir = tmp_path / "obs_cp"
+    store_dir.mkdir()
+    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor.start("run-tm-1")
+
+    surveyor.record_healing_outcome(
+        run_id="run-tm-1", failed_module="m1", failure_category="test",
+        model="gpt4", patch_id="fix-tm-1", confidence=0.9,
+        patch_applied=True, run_success_after_patch=True,
+        model_cascade_position=1,
+    )
+    surveyor.stop()
+
+    conn = duckdb.connect(str(store_dir / "observability.db"))
+    row = conn.execute(
+        "SELECT model, model_cascade_position FROM healing_outcomes WHERE patch_id = 'fix-tm-1'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row[0] == "gpt4"
+    assert row[1] == 1

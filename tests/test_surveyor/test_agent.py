@@ -367,6 +367,102 @@ class TestStageForHuman:
         data = json.loads(matches[0].read_text())
         assert data["_aq_meta"].get("source") == "llm"
 
+    # ── Phase 46: stage_patch_for_human webhook ─────────────────────────────
+
+    def test_stage_patch_webhook_fires_on_patch_pending_event(self, tmp_path):
+        """stage_patch_for_human with webhook → fire_webhook called with event='on_patch_pending'."""
+        from aqueduct.config import WebhookEndpointConfig
+
+        with patch("aqueduct.surveyor.webhook.fire_webhook") as mock_fw:
+            wh = WebhookEndpointConfig(url="http://hook.test")
+            spec = _patch_spec(patch_id="wh-1", rationale="fix it", confidence=0.85, category="config")
+            ctx = _failure_ctx(run_id="r1", blueprint_id="bp1", failed_module="m1")
+
+            stage_patch_for_human(
+                spec, tmp_path / "patches", ctx,
+                on_patch_pending_webhook=wh,
+                source="llm",
+                webhook_event="on_patch_pending",
+            )
+
+        mock_fw.assert_called_once()
+        _args, _kwargs = mock_fw.call_args
+        assert _kwargs["event"] == "on_patch_pending"
+        assert _kwargs["full_payload"]["patch_id"] == "wh-1"
+        assert _kwargs["full_payload"]["source"] == "llm"
+        assert _kwargs["full_payload"]["root_cause"] == ""
+        assert _kwargs["full_payload"]["rationale"] == "fix it"
+        assert _kwargs["full_payload"]["confidence"] == 0.85
+        assert _kwargs["full_payload"]["category"] == "config"
+        assert _kwargs["template_vars"]["patch_id"] == "wh-1"
+        assert _kwargs["template_vars"]["root_cause"] == ""
+        assert _kwargs["template_vars"]["rationale"] == "fix it"
+
+    def test_stage_patch_webhook_sets_ci_event(self, tmp_path):
+        """CI staging fires event='on_ci_patch'."""
+        from aqueduct.config import WebhookEndpointConfig
+
+        with patch("aqueduct.surveyor.webhook.fire_webhook") as mock_fw:
+            wh = WebhookEndpointConfig(url="http://ci.test")
+            spec = _patch_spec(patch_id="ci-1")
+            ctx = _failure_ctx()
+
+            stage_patch_for_human(
+                spec, tmp_path / "patches", ctx,
+                on_patch_pending_webhook=wh,
+                source="replay",
+                webhook_event="on_ci_patch",
+            )
+
+        mock_fw.assert_called_once()
+        assert mock_fw.call_args[1]["event"] == "on_ci_patch"
+        assert mock_fw.call_args[1]["full_payload"]["source"] == "replay"
+
+    def test_stage_patch_webhook_defer_carries_diagnosis(self, tmp_path):
+        """Defer patches include diagnosis + suggestions in webhook."""
+        from aqueduct.config import WebhookEndpointConfig
+        from aqueduct.patch.grammar import PatchSpec
+
+        spec = PatchSpec(
+            patch_id="defer-1", rationale="out of scope",
+            operations=[{"op": "defer_to_human", "diagnosis": "UDF bug", "suggestions": ["check python"]}],
+        )
+        ctx = _failure_ctx()
+
+        with patch("aqueduct.surveyor.webhook.fire_webhook") as mock_fw:
+            wh = WebhookEndpointConfig(url="http://defer.test")
+            stage_patch_for_human(
+                spec, tmp_path / "patches", ctx,
+                on_patch_pending_webhook=wh,
+                webhook_event="on_patch_pending",
+            )
+
+        payload = mock_fw.call_args[1]["full_payload"]
+        assert payload["diagnosis"] == "UDF bug"
+        assert payload["suggestions"] == ["check python"]
+
+    def test_stage_patch_webhook_error_swallowed(self, tmp_path, capsys):
+        """Webhook fire failure is swallowed — staging never blocks."""
+        from aqueduct.config import WebhookEndpointConfig
+
+        with patch("aqueduct.surveyor.webhook.fire_webhook", side_effect=RuntimeError("boom")):
+            wh = WebhookEndpointConfig(url="http://fail.test")
+            spec = _patch_spec(patch_id="fail-1")
+            ctx = _failure_ctx()
+            # Must not raise
+            stage_patch_for_human(
+                spec, tmp_path / "patches", ctx,
+                on_patch_pending_webhook=wh,
+            )
+
+    def test_stage_patch_no_webhook_no_fire(self, tmp_path):
+        """on_patch_pending_webhook=None → fire_webhook not called."""
+        with patch("aqueduct.surveyor.webhook.fire_webhook") as mock_fw:
+            spec = _patch_spec()
+            ctx = _failure_ctx()
+            stage_patch_for_human(spec, tmp_path / "patches", ctx, on_patch_pending_webhook=None)
+            mock_fw.assert_not_called()
+
 
 class TestArchivePatch:
     def test_creates_applied_file(self, tmp_path):

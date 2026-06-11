@@ -108,3 +108,103 @@ def test_fire_webhook_environ_fallback(monkeypatch):
         fire_webhook(config, {}).join(timeout=2)
 
         assert mock_req.call_args[1]["json"]["key"] == "env-value"
+
+
+# ── Phase 46 — envelope format + delivery retry ──────────────────────────────
+
+def test_fire_webhook_envelope_format():
+    """payload: null + event= → standardized envelope."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        fire_webhook(
+            _cfg("http://env.test"),
+            full_payload={"run_id": "abc", "status": "error"},
+            template_vars={"run_id": "abc"},
+            event="on_failure",
+        ).join(timeout=2)
+
+        _, kwargs = mock_req.call_args
+        body = kwargs["json"]
+        assert body["event"] == "on_failure"
+        assert "timestamp" in body
+        assert body["run_id"] == "abc"
+        assert body["data"]["run_id"] == "abc"
+        assert body["data"]["status"] == "error"
+
+
+def test_fire_webhook_no_event_legacy_raw_payload():
+    """event=None → raw payload sent as-is (no envelope)."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        fire_webhook(
+            _cfg("http://raw.test"),
+            full_payload={"run_id": "abc", "status": "error"},
+        ).join(timeout=2)
+
+        _, kwargs = mock_req.call_args
+        assert kwargs["json"] == {"run_id": "abc", "status": "error"}
+        assert "event" not in kwargs["json"]
+
+
+def test_fire_webhook_custom_payload_wins_over_envelope():
+    """Explicit payload: template wins — no envelope wrapping."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        config = WebhookEndpointConfig(
+            url="http://custom.test",
+            payload={"custom": "data", "run_id": "${run_id}"},
+        )
+        fire_webhook(config, {"ignored": "payload"}, template_vars={"run_id": "r-1"}, event="on_failure").join(timeout=2)
+
+        _, kwargs = mock_req.call_args
+        body = kwargs["json"]
+        assert body["custom"] == "data"
+        assert body["run_id"] == "r-1"
+        assert "event" not in body
+
+
+def test_fire_webhook_retry_429(capsys):
+    """429 → retried once (2 total attempts)."""
+    with patch("httpx.request") as mock_req:
+        mock_req.side_effect = [
+            MagicMock(status_code=429, headers={}),
+            MagicMock(status_code=200),
+        ]
+        fire_webhook(_cfg("http://retry.test"), {"a": 1}).join(timeout=5)
+        assert mock_req.call_count == 2
+        captured = capsys.readouterr()
+        assert "retrying" in captured.err
+
+
+def test_fire_webhook_retry_500(capsys):
+    """500 → retried once."""
+    with patch("httpx.request") as mock_req:
+        mock_req.side_effect = [
+            MagicMock(status_code=500, headers={}),
+            MagicMock(status_code=200),
+        ]
+        fire_webhook(_cfg("http://retry500.test"), {"a": 1}).join(timeout=5)
+        assert mock_req.call_count == 2
+
+
+def test_fire_webhook_non_retryable_4xx_no_retry(capsys):
+    """400 → single attempt, no retry."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=400)
+        fire_webhook(_cfg("http://badreq.test"), {"a": 1}).join(timeout=5)
+        assert mock_req.call_count == 1
+        captured = capsys.readouterr()
+        assert "400" in captured.err
+
+
+def test_fire_webhook_network_error_retried(capsys):
+    """httpx.RequestError → retried once."""
+    with patch("httpx.request") as mock_req:
+        mock_req.side_effect = [
+            httpx.ConnectError("DNS fail"),
+            MagicMock(status_code=200),
+        ]
+        fire_webhook(_cfg("http://network.test"), {"a": 1}).join(timeout=5)
+        assert mock_req.call_count == 2
+        captured = capsys.readouterr()
+        assert "retrying" in captured.err

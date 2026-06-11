@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from aqueduct.doctor import (
     CheckResult,
     check_agent,
+    check_cascade_tiers,
     check_storage,
     _host_port,
     _tcp_ok,
@@ -549,6 +550,7 @@ edges: []
 def test_doctor_package_split_public_names_resolve():
     """Every public check name resolves from aqueduct.doctor; pyspark not imported eagerly."""
     from aqueduct.doctor import (
+        check_cascade_tiers,
         check_config,
         check_spark,
         check_storage,
@@ -563,6 +565,7 @@ def test_doctor_package_split_public_names_resolve():
     )
 
     # All names are callable (functions) or classes
+    assert callable(check_cascade_tiers)
     assert callable(check_config)
     assert callable(check_spark)
     assert callable(check_storage)
@@ -583,3 +586,132 @@ def test_doctor_package_split_public_names_resolve():
     # run_doctor are all accessible from the __init__ namespace
     assert hasattr(aqueduct.doctor, "_tcp_ok")
     assert hasattr(aqueduct.doctor, "run_doctor")
+
+
+# ── 38. Phase 46 — check_cascade_tiers ──────────────────────────────────────
+
+class TestCheckCascadeTiers:
+    def _blueprint(self, tmp_path, agent_block: str) -> Path:
+        bp = tmp_path / "blueprint.yml"
+        bp.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            + agent_block
+            + "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            + "edges: []\n"
+        )
+        return bp
+
+    def test_no_cascade_block_returns_empty(self, tmp_path):
+        bp = self._blueprint(tmp_path, "")
+        results = check_cascade_tiers(bp)
+        assert results == []
+
+    def test_unparseable_blueprint_returns_empty(self, tmp_path):
+        bp = tmp_path / "bad.yml"
+        bp.write_text("not: valid: yaml: [")
+        results = check_cascade_tiers(bp)
+        assert results == []
+
+    def test_anthropic_tier_missing_key_warns(self, tmp_path):
+        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
+        with patch.dict(os.environ, {}, clear=True):
+            results = check_cascade_tiers(bp)
+        assert any("ANTHROPIC_API_KEY" in r.detail for r in results)
+        assert all(r.status == "warn" for r in results if "ANTHROPIC_API_KEY" in r.detail)
+
+    def test_anthropic_tier_with_key_ok(self, tmp_path):
+        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
+            results = check_cascade_tiers(bp)
+        assert any(r.status == "ok" for r in results)
+
+    def test_openai_compat_tier_no_base_url_warns(self, tmp_path):
+        bp = self._blueprint(tmp_path,
+            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n")
+        results = check_cascade_tiers(bp)
+        assert any("base_url" in r.detail for r in results)
+        assert all(r.status == "warn" for r in results if "base_url" in r.detail)
+
+    def test_openai_compat_tier_with_tier_base_url_ok(self, tmp_path):
+        bp = self._blueprint(tmp_path,
+            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n"
+            "      base_url: https://tier.test/v1\n")
+        results = check_cascade_tiers(bp)
+        assert any(r.status == "ok" for r in results)
+
+    def test_openai_compat_tier_with_engine_base_url_ok(self, tmp_path):
+        bp = self._blueprint(tmp_path,
+            "agent:\n  cascade:\n    - model: gpt4\n      provider: openai_compat\n")
+        results = check_cascade_tiers(bp, engine_provider="openai_compat", engine_base_url="https://engine.test/v1")
+        assert any(r.status == "ok" for r in results)
+
+    def test_unknown_provider_warns(self, tmp_path):
+        bp = self._blueprint(tmp_path, "agent:\n  cascade:\n    - model: claude\n")
+        results = check_cascade_tiers(bp, engine_provider="custom")
+        assert any("unknown provider" in r.detail for r in results)
+        assert all(r.status == "warn" for r in results if "unknown provider" in r.detail)
+
+
+# ── 39. Phase 35 — doctor _check_spillway_error_types ──────────────────────────
+
+class TestCheckSpillwayErrorTypes:
+    def _manifest(self, modules=None, edges=None):
+        """Build a manifest-like object with modules and edges."""
+        return type("Manifest", (), {
+            "modules": modules or (),
+            "edges": edges or (),
+        })()
+
+    def test_no_spillway_edges_no_warnings(self):
+        from aqueduct.doctor import _check_spillway_error_types
+        from aqueduct.parser.models import Module
+        m = self._manifest(
+            modules=(Module(id="a1", type="Assert", label="A1",
+                            config={"rules": [{"error_type": "DQ"}]}),),
+            edges=(),
+        )
+        results = _check_spillway_error_types(m)
+        assert results == []
+
+    def test_spillway_edge_matching_error_type_no_warning(self):
+        from aqueduct.doctor import _check_spillway_error_types
+        from aqueduct.parser.models import Module, Edge
+        m = self._manifest(
+            modules=(Module(id="a1", type="Assert", label="A1",
+                            config={"rules": [{"error_type": "MyCheck"}]}),),
+            edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=("MyCheck",)),),
+        )
+        results = _check_spillway_error_types(m)
+        assert results == []
+
+    def test_spillway_edge_unknown_error_type_warns(self):
+        from aqueduct.doctor import _check_spillway_error_types
+        from aqueduct.parser.models import Edge
+        m = self._manifest(
+            modules=(),
+            edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=("BogusLabel",)),),
+        )
+        results = _check_spillway_error_types(m)
+        assert len(results) == 1
+        assert "BogusLabel" in results[0].detail
+        assert results[0].status == "warn"
+
+    def test_main_port_edge_ignored(self):
+        from aqueduct.doctor import _check_spillway_error_types
+        from aqueduct.parser.models import Edge
+        m = self._manifest(
+            edges=(Edge(from_id="a", to_id="b", port="main", error_types=("X",)),),
+        )
+        results = _check_spillway_error_types(m)
+        assert results == []
+
+    def test_builtin_labels_known(self):
+        """SpillwayCondition, freshness, sql_row, custom are always known."""
+        from aqueduct.doctor import _check_spillway_error_types
+        from aqueduct.parser.models import Edge
+        for label in ("SpillwayCondition", "freshness", "sql_row", "custom"):
+            m = self._manifest(
+                edges=(Edge(from_id="a1", to_id="sink", port="spillway", error_types=(label,)),),
+            )
+            results = _check_spillway_error_types(m)
+            assert results == [], f"builtin label {label!r} falsely flagged as unknown"

@@ -89,7 +89,7 @@ requires_redis = pytest.mark.skipif(
 
 # ── Spark ─────────────────────────────────────────────────────────────────────
 # Set AQ_SPARK_MASTER in your environment to run tests against a remote cluster.
-# Example: export AQ_SPARK_MASTER=spark://10.0.0.39:7077
+# Example: export AQ_SPARK_MASTER=spark://spark-master.internal:7077
 # Defaults to local[1] when unset.
 
 def _spark_master() -> str:

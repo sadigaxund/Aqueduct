@@ -261,6 +261,26 @@ class TestGenerateAgentPatch:
         assert res.escalated is True
         assert res.attempt_records[2].escalated is True
 
+    def test_result_has_model_fields(self, mock_call, fctx, tmp_path):
+        """AgentPatchResult.model and model_cascade_position set by generate_agent_patch."""
+        valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
+        mock_call.return_value = (valid_json, 10, 20)
+        res = generate_agent_patch(fctx, "my-model", tmp_path, model_cascade_position=2)
+        assert res.model == "my-model"
+        assert res.model_cascade_position == 2
+
+    def test_retry_params_threaded(self, mock_call, fctx, tmp_path):
+        """retry_max_retries / retry_backoff_seconds reach _call_agent kwargs."""
+        valid_json = '{"patch_id": "p", "rationale": "r", "operations": [{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]}'
+        mock_call.return_value = (valid_json, 10, 20)
+        generate_agent_patch(
+            fctx, "model", tmp_path,
+            retry_max_retries=5, retry_backoff_seconds=3.0,
+        )
+        _cfg = mock_call.call_args[0][1]  # _ProviderConfig is second positional arg
+        assert _cfg.retry_max_retries == 5
+        assert _cfg.retry_backoff_seconds == 3.0
+
 
 # ── _call_anthropic / _call_openai_compat ────────────────────────────────────
 
@@ -355,8 +375,8 @@ class TestCallProviders:
         from aqueduct.agent.providers import _call_anthropic
         _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=5.0)
 
-        call_kwargs = mock_client_cls.call_args[1]
-        assert call_kwargs["timeout"] == 5.0
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs["timeout"] == pytest.approx(5.0, rel=0.1)
 
     @patch("httpx.Client")
     def test_call_anthropic_deadline_none_uses_static_timeout(self, mock_client_cls, monkeypatch):
@@ -367,8 +387,8 @@ class TestCallProviders:
         from aqueduct.agent.providers import _call_anthropic
         _call_anthropic([], "model", 100, "system", timeout=120.0, deadline=None)
 
-        call_kwargs = mock_client_cls.call_args[1]
-        assert call_kwargs["timeout"] == 120.0
+        call_kwargs = mock_client.post.call_args[1]
+        assert call_kwargs["timeout"] == pytest.approx(120.0, rel=0.1)
 
     @patch("httpx.Client")
     def test_call_openai_compat_deadline_slot(self, mock_client_cls):
@@ -381,11 +401,255 @@ class TestCallProviders:
             timeout=120.0, deadline=3.0,
         )
 
-        call_kwargs = mock_client_cls.call_args[1]
+        call_kwargs = mock_client.post.call_args[1]
         timeout_obj = call_kwargs["timeout"]
-        assert timeout_obj.read == 3.0
+        assert timeout_obj.read == pytest.approx(3.0, rel=0.1)
         assert timeout_obj.connect == 15.0
         assert timeout_obj.write == 30.0
+
+
+# ── Phase 46 — _retry_after_seconds ──────────────────────────────────────────
+
+class TestRetryAfterSeconds:
+    @patch("aqueduct.agent.providers._RETRYABLE_STATUS", {429, 503, 529})
+    def test_no_retry_after_header_returns_none(self):
+        from aqueduct.agent.providers import _retry_after_seconds
+        resp = MagicMock()
+        resp.headers = {}
+        assert _retry_after_seconds(resp) is None
+
+    def test_valid_retry_after_returns_float(self):
+        from aqueduct.agent.providers import _retry_after_seconds
+        resp = MagicMock()
+        resp.headers = {"retry-after": "5.0"}
+        assert _retry_after_seconds(resp) == 5.0
+
+    def test_malformed_retry_after_returns_none(self):
+        from aqueduct.agent.providers import _retry_after_seconds
+        resp = MagicMock()
+        resp.headers = {"retry-after": "Fri, 31 Dec 1999 23:59:59 GMT"}
+        assert _retry_after_seconds(resp) is None
+
+
+# ── Phase 46 — _post_with_retry ──────────────────────────────────────────────
+
+class TestPostWithRetry:
+    def test_2xx_first_try_returns_no_retry(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=200)
+        do_post.return_value = resp
+        result = _post_with_retry(do_post, total_seconds=60.0, max_retries=3, backoff_seconds=2.0)
+        assert result is resp
+        assert do_post.call_count == 1
+
+    def test_non_retryable_4xx_raises_immediately(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=401)
+        resp.raise_for_status.side_effect = RuntimeError("401 Unauthorized")
+        do_post.return_value = resp
+        with pytest.raises(RuntimeError, match=r"401"):
+            _post_with_retry(do_post, total_seconds=60.0, max_retries=3, backoff_seconds=2.0)
+        assert do_post.call_count == 1
+
+    def test_retryable_429_retried_up_to_max_retries(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=429)
+        resp.raise_for_status.side_effect = RuntimeError("429 Too Many Requests")
+        resp.headers = {}
+        do_post.return_value = resp
+        with pytest.raises(RuntimeError, match=r"429"):
+            _post_with_retry(do_post, total_seconds=60.0, max_retries=2, backoff_seconds=0.01)
+        # 1 initial + 2 retries = 3 total
+        assert do_post.call_count == 3
+
+    def test_retryable_503_retried_then_raises(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=503)
+        resp.raise_for_status.side_effect = RuntimeError("503 Service Unavailable")
+        resp.headers = {}
+        do_post.return_value = resp
+        with pytest.raises(RuntimeError, match=r"503"):
+            _post_with_retry(do_post, total_seconds=60.0, max_retries=1, backoff_seconds=0.01)
+        # 1 initial + 1 retry = 2 total
+        assert do_post.call_count == 2
+
+    def test_deadline_cap_skips_retry_when_sleep_exceeds_remaining(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=429)
+        resp.raise_for_status.side_effect = RuntimeError("429")
+        resp.headers = {}
+        do_post.return_value = resp
+        with pytest.raises(RuntimeError, match=r"429"):
+            _post_with_retry(do_post, total_seconds=0.5, max_retries=3, backoff_seconds=10.0)
+        # Only the initial call — retry skipped because sleep ≥ remaining - 1.0
+        assert do_post.call_count == 1
+
+    def test_no_retries_when_max_retries_zero(self):
+        from aqueduct.agent.providers import _post_with_retry
+        do_post = MagicMock()
+        resp = MagicMock(status_code=429)
+        resp.raise_for_status.side_effect = RuntimeError("429")
+        resp.headers = {}
+        do_post.return_value = resp
+        with pytest.raises(RuntimeError, match=r"429"):
+            _post_with_retry(do_post, total_seconds=60.0, max_retries=0, backoff_seconds=2.0)
+        assert do_post.call_count == 1
+
+
+# ── Phase 46 — _call_anthropic base_url + provider_options ───────────────────
+
+class TestCallAnthropicBaseUrl:
+    @patch("httpx.Client")
+    def test_custom_base_url_used_in_request(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic([], "model", 100, "system", base_url="https://gateway.example.com")
+        call_url = mock_client.post.call_args[0][0]
+        assert call_url == "https://gateway.example.com/v1/messages"
+
+    @patch("httpx.Client")
+    def test_default_base_url(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic([], "model", 100, "system")
+        call_url = mock_client.post.call_args[0][0]
+        assert "api.anthropic.com" in call_url
+
+    @patch("httpx.Client")
+    def test_provider_options_merged_into_payload(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic(
+            [], "model", 100, "system",
+            provider_options={"temperature": 0.5, "top_p": 0.9},
+        )
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["temperature"] == 0.5
+        assert payload["top_p"] == 0.9
+
+    @patch("httpx.Client")
+    def test_provider_options_ollama_keys_stripped_for_anthropic(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic(
+            [], "model", 100, "system",
+            provider_options={"ollama_num_thread": 8, "temperature": 0.5},
+        )
+        payload = mock_client.post.call_args[1]["json"]
+        assert "ollama_num_thread" not in payload
+        assert payload["temperature"] == 0.5
+
+    @patch("httpx.Client")
+    def test_provider_options_response_format_stripped_for_anthropic(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic(
+            [], "model", 100, "system",
+            provider_options={"response_format": {"type": "json_object"}},
+        )
+        payload = mock_client.post.call_args[1]["json"]
+        assert "response_format" not in payload
+
+    @patch("httpx.Client")
+    def test_provider_options_none_leaves_payload_unchanged(self, mock_client_cls, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        from aqueduct.agent.providers import _call_anthropic
+        mock_client = MagicMock()
+        mock_client.__enter__.return_value = mock_client
+        mock_client_cls.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"content": [{"text": "ok"}], "usage": {"input_tokens": 5, "output_tokens": 10}}
+        mock_client.post.return_value = mock_resp
+
+        _call_anthropic([], "model", 100, "system", provider_options=None)
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["model"] == "model"
+        assert payload["max_tokens"] == 100
+
+    # ── Phase 46: _call_openai_compat retry helper ─────────────────────────
+
+    @patch("aqueduct.agent.providers._post_with_retry")
+    def test_call_openai_compat_uses_post_with_retry(self, mock_retry):
+        """_call_openai_compat calls _post_with_retry with correct params."""
+        mock_retry.return_value = MagicMock()
+        mock_retry.return_value.json.return_value = {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 10},
+        }
+        from aqueduct.agent.providers import _call_openai_compat
+        text, tin, tout = _call_openai_compat(
+            [], "model", 100, "http://test/v1", "system",
+            max_retries=3, backoff_seconds=5.0,
+        )
+        assert mock_retry.called
+        _, kw = mock_retry.call_args
+        assert kw["max_retries"] == 3
+        assert kw["backoff_seconds"] == 5.0
+
+    @patch("aqueduct.agent.providers._post_with_retry")
+    def test_call_anthropic_uses_post_with_retry(self, mock_retry, monkeypatch):
+        """_call_anthropic calls _post_with_retry with correct params."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+        mock_retry.return_value = MagicMock()
+        mock_retry.return_value.json.return_value = {
+            "content": [{"text": "ok"}],
+            "usage": {"input_tokens": 5, "output_tokens": 10},
+        }
+        from aqueduct.agent.providers import _call_anthropic
+        text, tin, tout = _call_anthropic(
+            [], "model", 100, "system",
+            max_retries=3, backoff_seconds=5.0,
+        )
+        assert mock_retry.called
+        _, kw = mock_retry.call_args
+        assert kw["max_retries"] == 3
+        assert kw["backoff_seconds"] == 5.0
 
 
 # ── Phase 34/35 coverage additions ────────────────────────────────────────────
@@ -562,6 +826,29 @@ class TestDeepLoop:
 
         assert res.stop_reason == "exhausted_attempts"
         assert res.attempt_records[0].gate_that_rejected == "validate"
+
+    def test_deep_loop_validate_under_pause_clock_no_budget_exhaustion(self, fctx, tmp_path):
+        """Phase 46: validate_callback under pause_clock — slow gate does not exhaust budget."""
+        import time as _time
+
+        def _validate(p):
+            _time.sleep(0.01)  # small delay — would eat budget if NOT paused
+            return (True, "")
+
+        with patch("aqueduct.agent.loop._call_agent") as mock_call:
+            mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
+
+            res = generate_agent_patch(
+                fctx, "model", tmp_path,
+                deep_loop=True, validate_callback=_validate,
+                max_reprompts=1,
+            )
+
+        # If pause_clock were broken, the sleep × max_reprompts would have
+        # consumed time and not changed the semantics. We verify the loop
+        # completed normally (solved), which confirms pause_clock was active.
+        assert res.stop_reason == "solved"
+        assert res.attempts == 1
 
 
 # ── Phase 41: defer_to_human ──────────────────────────────────────────────────

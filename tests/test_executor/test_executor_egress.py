@@ -205,8 +205,16 @@ def test_egress_register_as_table_absent(spark: SparkSession, tmp_path):
     assert spark.read.parquet(path).count() == 4
 
 
-def test_write_merge_sql_backticks_and_keys(spark: SparkSession):
-    """_write_merge generates MERGE SQL with backticks and handles reserved-word keys."""
+def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
+    """_write_merge generates MERGE SQL with backticks and handles reserved-word keys.
+
+    The `spark` fixture is session-scoped and shared by the whole suite —
+    fakes MUST go through monkeypatch so they are restored after this test.
+    A bare `spark.sql = fake_sql` here once poisoned every later Spark test
+    (None DataFrames + leaked temp views → 40+ cascading failures). The real
+    catalog stays in place: dropTempView is safe on missing views and cleans
+    up the `_aq_merge_src` temp view this test registers.
+    """
     from pyspark.sql import functions as F
     # Create a DataFrame with a reserved-word column 'order'
     df = spark.range(1).withColumn("order", F.lit(1))
@@ -221,12 +229,7 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession):
     captured = {}
     def fake_sql(sql):
         captured["sql"] = sql
-    spark.sql = fake_sql
-
-    # Provide dummy catalog with dropTempView method
-    class DummyCatalog:
-        def dropTempView(self, name): pass
-    spark.catalog = DummyCatalog()
+    monkeypatch.setattr(spark, "sql", fake_sql)
 
     # Execute the merge write
     from aqueduct.executor.spark.egress import _write_merge

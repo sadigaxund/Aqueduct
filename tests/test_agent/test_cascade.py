@@ -275,6 +275,75 @@ class TestGenerateCascadePatch:
         assert calls[1][1]["last_apply_error"] == "previous patch failed: UNRESOLVED_COLUMN"
 
 
+# ── Phase 46 — cascade-wide token cap ──────────────────────────────────────────
+
+class TestCascadeSpanningBudget:
+    def _result_with_tokens(self, tokens: int) -> AgentPatchResult:
+        return AgentPatchResult(patch=None, attempts=1, stop_reason="stuck_signature",
+                                tokens_in_total=tokens, tokens_out_total=0)
+
+    def _success(self, model_num: int = 1) -> AgentPatchResult:
+        from aqueduct.patch.grammar import PatchSpec
+        return AgentPatchResult(
+            patch=PatchSpec(patch_id=f"p{model_num}", rationale="fix",
+                            operations=[{"op": "set_module_config_key",
+                                         "module_id": "m1", "key": "k", "value": "v"}]),
+            attempts=1, stop_reason="solved",
+        )
+
+    def test_tier2_gets_remaining_tokens(self, tmp_path):
+        """max_tokens_total spans cascade: tier 2 gets remaining after tier 1."""
+        from aqueduct.agent.budget import BudgetConfig
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._result_with_tokens(tokens=300),
+                self._success(model_num=2),
+            ]
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b")],
+                failure_ctx=_fctx(), patches_dir=tmp_path,
+                budget=BudgetConfig(max_tokens_total=1000),
+            )
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["budget"].max_tokens_total == 1000
+        assert calls[1][1]["budget"].max_tokens_total == 700
+        assert result.patch is not None
+
+    def test_cascade_stops_when_token_cap_exhausted(self, tmp_path):
+        """When remaining < 1, cascade stops with budget_tokens_exceeded."""
+        from aqueduct.agent.budget import BudgetConfig
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._result_with_tokens(tokens=1000),
+            ]
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b"), _tier("model-c")],
+                failure_ctx=_fctx(), patches_dir=tmp_path,
+                budget=BudgetConfig(max_tokens_total=1000),
+            )
+        assert mock_gen.call_count == 1
+        assert result.stop_reason == "budget_tokens_exceeded"
+        assert result.patch is None
+
+    def test_null_tokens_total_unconstrained(self, tmp_path):
+        """max_tokens_total: null → tiers unconstrained."""
+        from aqueduct.agent.budget import BudgetConfig
+        with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
+            mock_gen.side_effect = [
+                self._result_with_tokens(tokens=900),
+                self._success(model_num=2),
+            ]
+            result = generate_cascade_patch(
+                tiers=[_tier("model-a"), _tier("model-b")],
+                failure_ctx=_fctx(), patches_dir=tmp_path,
+                budget=BudgetConfig(max_tokens_total=None),
+            )
+        calls = mock_gen.call_args_list
+        assert calls[0][1]["budget"].max_tokens_total is None
+        assert calls[1][1]["budget"].max_tokens_total is None
+        assert result.patch is not None
+
+
 class TestCascadeTierConfigImmutability:
     def test_frozen(self):
         t = CascadeTierConfig(model="m")
