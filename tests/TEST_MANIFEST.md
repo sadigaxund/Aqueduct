@@ -590,7 +590,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ DDL + Phase-45/46 migration add `model_cascade_position INTEGER`; `record_healing_outcome(model_cascade_position=…)` persists it — `tests/test_surveyor/test_surveyor_models.py`
 - ✅ `AgentPatchResult.model` / `.model_cascade_position` set by `generate_agent_patch` — `tests/test_agent/test_agent_init.py::TestGenerateAgentPatch::test_result_has_model_fields`
 - ✅ CLI records the producing tier's model (not the top-level `agent.model`) and tier index — `tests/test_surveyor/test_surveyor_models.py::test_record_healing_outcome_persists_cascade_model`
-- ⏳ replay resolutions record `model=NULL`
+- ✅ replay resolutions record `model=NULL`
 
 #### `doctor` — `check_cascade_tiers`
 - ✅ anthropic tier without `ANTHROPIC_API_KEY` → warn naming the tier index + model; with key → ok — `tests/test_cli/test_cli_doctor_new.py::TestCheckCascadeTiers`
@@ -605,6 +605,12 @@ This section tracks high-level functional verification of core features against 
 - ✅ `payload: null` + `event=` → standardized envelope `{event, timestamp, run_id, blueprint_id, data}`; `event=None` (legacy caller) → raw payload unchanged; explicit `payload:` template wins over both — `tests/test_surveyor/test_surveyor_webhook.py`
 - ✅ Delivery retry: one retry on 429/5xx or network error (2 attempts total); non-retryable 4xx → single attempt; success → no retry; never raises, never blocks — `tests/test_surveyor/test_surveyor_webhook.py`
 - ✅ `stage_patch_for_human` webhook payload + template vars carry `patch_id`/`root_cause`/`rationale`/`confidence`/`category` (+ `diagnosis`/`suggestions` for defer patches, `source` for replay); ci staging fires `event='on_ci_patch'`, human staging `'on_patch_pending'` — `tests/test_surveyor/test_agent.py::TestStageForHuman`
+
+### Quick fixes (2026-06, no phase)
+
+- ✅ Assert `sql_row` + `min_pass_rate`: pass-rate computed via single `agg(count(*), count_if(expr))` — one Spark job, results identical to the old two-count path (rate below min still fails, above passes)
+- ✅ Egress `_write_merge`: generated MERGE SQL backtick-quotes the target (catalog parts split on `.`, path target as `` delta.`path` ``) and every ON-clause merge-key column; embedded backticks escaped by doubling; reserved-word merge key (`order`) merges successfully
+- ✅ Executor `_cache_if_multi_spillway`: quarantine frame `.cache()`d when >1 spillway edge leaves the module (Channel + Assert publish sites); single spillway consumer → no cache call
 
 ### Phase 47 — `replace_macro` patch op
 

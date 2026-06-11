@@ -203,3 +203,38 @@ def test_egress_register_as_table_absent(spark: SparkSession, tmp_path):
     write_egress(df, module)
 
     assert spark.read.parquet(path).count() == 4
+
+
+def test_write_merge_sql_backticks_and_keys(spark: SparkSession):
+    """_write_merge generates MERGE SQL with backticks and handles reserved-word keys."""
+    from pyspark.sql import functions as F
+    # Create a DataFrame with a reserved-word column 'order'
+    df = spark.range(1).withColumn("order", F.lit(1))
+    # Module config using a table name and merge keys including the reserved word
+    module = Module(
+        id="m1",
+        type="Egress",
+        label="M1",
+        config={"format": "delta", "table": "mydb.mytbl", "merge_key": ["id", "order"]},
+    )
+    # Capture the SQL passed to spark.sql
+    captured = {}
+    def fake_sql(sql):
+        captured["sql"] = sql
+    spark.sql = fake_sql
+
+    # Provide dummy catalog with dropTempView method
+    class DummyCatalog:
+        def dropTempView(self, name): pass
+    spark.catalog = DummyCatalog()
+
+    # Execute the merge write
+    from aqueduct.executor.spark.egress import _write_merge
+    _write_merge(df, module)
+
+    sql = captured.get("sql", "")
+    # The target should be backtick-quoted fully qualified table name
+    assert "`mydb`.`mytbl`" in sql
+    # Each merge key column should be backtick-quoted, including the reserved word
+    assert "_aq_target.`id` = _aq_src.`id`" in sql
+    assert "_aq_target.`order` = _aq_src.`order`" in sql

@@ -186,6 +186,35 @@ def test_sql_row_rule_abort(spark: SparkSession):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
 
 
+def test_sql_row_min_pass_rate_fails(spark: SparkSession):
+    """sql_row rule with min_pass_rate below actual pass rate aborts."""
+    df = spark.range(10)  # ids 0-9, even ids pass expr=id % 2 == 0 (5/10=0.5)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id % 2 == 0", "min_pass_rate": 0.6}]}
+    )
+    # Default on_fail is quarantine; min_pass_rate should force abort
+    with pytest.raises(AssertError, match=r"sql_row pass_rate"):
+        execute_assert(module, df, spark, "run-1", "blueprint-1")
+
+
+def test_sql_row_min_pass_rate_passes(spark: SparkSession):
+    """sql_row rule with min_pass_rate satisfied passes and quarantines failing rows."""
+    df = spark.range(10)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "sql_row", "expr": "id < 8", "min_pass_rate": 0.6}]}
+    )
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    # Expected: passing rows are id 0-7 (8 rows), failing rows id 8-9 (2 rows)
+    assert passing.count() == 8
+    assert quarantine is not None
+    assert quarantine.count() == 2
+    # Ensure error columns are present in quarantine rows
+    assert "_aq_error_module" in quarantine.columns
+    assert "_aq_error_msg" in quarantine.columns
+
+
 def test_custom_rule_passes(spark: SparkSession, tmp_path):
     fn_path = tmp_path / "my_custom.py"
     fn_path.write_text("def my_check(df):\n    return {'passed': True}\n")
