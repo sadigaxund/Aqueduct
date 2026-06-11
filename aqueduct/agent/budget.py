@@ -6,9 +6,8 @@ the ``stop_reason``. Same config is shared by production heal AND benchmark
 — divergence between the two would silently invalidate the leaderboard
 (see Phase 34 item #7 in TODOs.md).
 
-This module ships the dataclass + reason vocabulary only. The driver
-(BudgetTracker) and integration into ``generate_agent_patch`` ship in
-Task 86 once the unified reprompt loop (Task 84) lands.
+This module ships the config dataclass, the reason vocabulary, and the
+driver (``BudgetTracker``); integration lives in ``generate_agent_patch``.
 
 Defaults
 --------
@@ -147,7 +146,7 @@ class AttemptRecord:
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
-    gate_that_rejected: str | None = None    # 'schema' | 'apply' | 'guardrail' | 'runtime' | None
+    gate_that_rejected: str | None = None    # 'schema' | 'apply' | 'validate' | 'provider' | 'budget' | 'defer_rejected' | None on success
     escalated: bool = False                   # was Task 87 escalation applied on this attempt?
     model_cascade_position: int | None = None  # Phase 44: tier index (0-based) in multi-model cascade
 
@@ -282,6 +281,11 @@ class BudgetTracker:
         """Caller invokes when the mid-call budget deadline fires — terminates
         with ``budget_seconds_exceeded`` (Phase 40)."""
         self._stop_reason = "budget_seconds_exceeded"
+
+    def mark_deferred(self) -> None:
+        """Caller invokes when the LLM defers to a human (``defer_to_human``
+        with ``allow_defer=True``) — terminates with ``deferred``."""
+        self._stop_reason = "deferred"
 
     def remaining_seconds(self) -> float:
         """Seconds remaining in the wall-clock budget, floored at 0 (Phase 40).

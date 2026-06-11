@@ -398,10 +398,13 @@ def generate_agent_patch(
             f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
             for o in patch_spec.operations
         )
+        _conf_str = (
+            f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a"
+        )
         logger.info(
-            "  ✓ Parsed: %s (confidence %.2f, %d op%s: %s)",
+            "  ✓ Parsed: %s (confidence %s, %d op%s: %s)",
             patch_spec.patch_id,
-            patch_spec.confidence,
+            _conf_str,
             len(patch_spec.operations),
             "s" if len(patch_spec.operations) != 1 else "",
             _ops_summary or "(none)",
@@ -475,7 +478,7 @@ def generate_agent_patch(
                     on_attempt(rec)
                 except Exception:
                     logger.debug("on_attempt callback raised; ignoring", exc_info=True)
-            tracker._stop_reason = "deferred"
+            tracker.mark_deferred()
             break
 
         # ── Phase 43: in-conversation validation (deep_loop) ────────────────
@@ -640,8 +643,9 @@ def generate_agent_patch(
         )
     else:
         logger.info(
-            "── Heal complete: %s (confidence %.2f, %d ops, stop_reason=%s, %d tokens in, %d out) ──",
-            patch_spec.patch_id, patch_spec.confidence,
+            "── Heal complete: %s (confidence %s, %d ops, stop_reason=%s, %d tokens in, %d out) ──",
+            patch_spec.patch_id,
+            f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a",
             len(patch_spec.operations), tracker.stop_reason,
             tracker.tokens_in_total, tracker.tokens_out_total,
         )

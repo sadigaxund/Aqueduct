@@ -396,6 +396,7 @@ This section tracks high-level functional verification of core features against 
 - ✅ `mark_escalated()` flips `escalated_once=True`; subsequent `should_escalate()` returns False
 - ✅ `mark_api_error()` sets stop_reason to `"api_error"`
 - ✅ `mark_budget_seconds_exceeded()` sets stop_reason to `"budget_seconds_exceeded"` (Phase 40)
+- ⏳ `mark_deferred()` sets stop_reason to `"deferred"` (replaces the loop's direct `_stop_reason` write)
 - ✅ `remaining_seconds()` returns `max(0, max_seconds - elapsed)` — computes remaining wall-clock budget (Phase 40)
 - ✅ `remaining_seconds()` returns 0 when the budget is exhausted (Phase 40)
 - ✅ `StopReason` Literal includes `"deferred"` (Phase 41)
@@ -443,6 +444,11 @@ This section tracks high-level functional verification of core features against 
 - ✅ `generate_cascade_patch([tier1, tier2])` with tier1 `api_error` → aborts, does NOT escalate
 - ✅ Each tier's `generate_agent_patch` receives `model_cascade_position=idx`
 - ✅ Budget per tier: `tier.max_reprompts` overrides default; missing fields inherit from cascade defaults
+- ⏳ Regression: tier1 `stop_reason="deferred"` (patch non-None) with tier2 present → escalates to tier2, defer diagnosis discarded (was: returned immediately because the patch-presence check ran before the escalation check, making `deferred` escalation dead code)
+- ⏳ Final-tier `deferred` → defer result (patch + stop_reason) returned to caller for staging
+- ⏳ Regression: top-level `allow_defer=True` / `deep_loop=True` inherited by tiers whose own field is None (was: hardcoded `False` fallback, contradicting specs §8 inheritance)
+- ⏳ `budget=BudgetConfig(max_tokens_total=N, ...)` passed to cascade → every tier budget keeps `max_tokens_total=N` and stuck/stall axes; `tier.max_reprompts` / `tier.max_seconds` override only those two axes
+- ⏳ Regression: `last_apply_error` forwarded to every tier's `generate_agent_patch` (was: dropped in cascade mode)
 
 #### `agent/loop.py` — Phase 43 deep_loop / in-conversation validation
 - ✅ `generate_agent_patch(deep_loop=True, validate_callback=mock_cb)` with `mock_cb` returning `(False, "sandbox fail")` → feedback injected as user message, model retries in same conversation
@@ -460,6 +466,20 @@ This section tracks high-level functional verification of core features against 
 - ✅ `generate_agent_patch(allow_defer=True)` + model returns `defer_to_human` → `AgentPatchResult.stop_reason="deferred"`, `patch` is a valid PatchSpec with one `DeferToHumanOp`
 - ✅ `generate_agent_patch(allow_defer=False)` + model returns `defer_to_human` → reprompt (gate_that_rejected="defer_rejected"), loop continues
 - ✅ `PatchSpec` with mixed ops (defer + real) → `_reject_mixed_defer_ops` raises `ValueError`
+- ⏳ Regression: `_build_system_prompt(allow_defer=False)` → rendered schema contains NO `DeferToHumanOp` (`$defs` entry, `oneOf` `$ref`, or `discriminator.mapping` key all removed) (was: strip targeted nonexistent `$defs.PatchSpec` path + `anyOf` key — no-op — while `$defs.pop` left a dangling `$ref`)
+- ⏳ `_build_system_prompt(allow_defer=True)` → `DeferToHumanOp` present in schema and defer rules section rendered
+
+#### `agent/parse.py` — `_parse_patch_spec` recovery passes
+- ⏳ Regression: valid JSON whose string value contains ` // ` or ` # ` (e.g. `"value": "SELECT a // 2 FROM t"`) parses with `recovery_applied == []` and the value byte-identical (was: comment regex ate the value to end-of-line, then json_repair "fixed" the broken JSON by silently truncating the string — a valid patch was corrupted)
+- ⏳ JSON with real line comments (`// note` / `# note` on their own lines) still parses with `recovery_applied == ["stripped_line_comments"]`
+- ⏳ Comment-strip runs only AFTER strict parse fails; json_repair fallback operates on the original (not comment-stripped) text
+
+#### `agent/prompts.py` — `_load_previous_patches`
+- ⏳ Regression: archived patch dumped via `model_dump()` (canonical `rationale` key) → history entry `description` is the rationale text (was: read `data["description"]`, always empty)
+- ⏳ Hand-written archived patch with legacy `description` key → still picked up via fallback
+
+#### `agent/loop.py` — optional confidence logging
+- ⏳ Regression: patch with `confidence: None` (field omitted by model) → parse-success and heal-complete log lines render confidence as `n/a` without raising in the logging layer (was: `%.2f` applied to None)
 
 #### `agent/loop.py` — Phase 40 mid-call budget enforcement
 - ✅ `generate_agent_patch` with `budget.max_seconds=5` + mocked `_call_agent` that sleeps 10s → `stop_reason="budget_seconds_exceeded"`, attempt recorded with `gate_that_rejected="budget"` (Phase 40)
