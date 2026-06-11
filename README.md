@@ -86,7 +86,7 @@ flowchart LR
 5. On failure, the **LLM Agent** emits a structured `PatchSpec`.
 6. The patch clears guardrail → lineage → sandbox gates, then re-runs — or stages for review.
 
-**Model-agnostic by design.** The healing loop works with any LLM — a local 7B on Ollama up to a frontier model via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. <!-- TODO(claim): verify the 70% figure against a published `aqueduct benchmark` run and link the results here. --> Around **70% of production Spark errors are healable by a 7B model in a single attempt.** Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades push heal rates higher with larger models.
+**Model-agnostic by design.** The healing loop works with any LLM — a local 7B on Ollama up to a frontier model via API. The constrained PatchSpec grammar (14 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. <!-- TODO(claim): verify the 70% figure against a published `aqueduct benchmark` run and link the results here. --> Around **70% of production Spark errors are healable by a 7B model in a single attempt.** Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades push heal rates higher with larger models.
 
 ## Core Concepts
 

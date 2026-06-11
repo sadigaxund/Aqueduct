@@ -59,6 +59,7 @@ _VALID_OPS = (
     "add_arcade_ref",
     "defer_to_human",
     "set_spark_config",
+    "replace_macro",
 )
 
 # Op-level field names that LLMs sometimes put at the TOP level of the patch,
@@ -547,7 +548,12 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
                 + ", ".join(f"`{{{{ macros.{m} }}}}`" for m in macros_defined)
                 + ". When editing a query that used a macro, keep the "
                 "`{{ macros.NAME }}` reference instead of inlining the "
-                "expanded SQL — the engine re-expands it at compile time.\n"
+                "expanded SQL — the engine re-expands it at compile time. "
+                "If the root cause is INSIDE a macro body, fix it with the "
+                "`replace_macro` op (existing macros only) — but remember the "
+                "macro is shared: every module referencing it gets the new "
+                "body, so keep the change minimal and preserve `{{ param }}` "
+                "placeholders its callers supply.\n"
             )
 
     return _USER_PROMPT_TEMPLATE.format(

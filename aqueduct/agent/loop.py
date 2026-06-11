@@ -58,7 +58,9 @@ logger = logging.getLogger(__name__)
 # 1.2 — Phase 45: signature-matched coaching section replaces the chronological
 #       patch-history section; recovery-pass polish (orphan </think>, fence
 #       selection, multi-key wrapper unwrap, reprompt char cap).
-PROMPT_VERSION = "1.2"
+# 1.3 — Phase 47: replace_macro op added to the grammar/schema; macro hint
+#       now points at it for in-macro root causes.
+PROMPT_VERSION = "1.3"
 
 
 @dataclass
