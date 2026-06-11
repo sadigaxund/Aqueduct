@@ -435,9 +435,9 @@ This section tracks high-level functional verification of core features against 
 - ✅ `temperature_override=0.8` is added to the Anthropic payload as `temperature`
 - ✅ `temperature_override=0.8` overwrites top-level + Ollama `options.temperature` for OpenAI-compat
 - ✅ Missing `usage` block in response → tokens default to 0 (no KeyError)
-- ✅ `_call_anthropic(deadline=5.0)` → `httpx.Client(timeout=5.0)` (deadline overrides static timeout) (Phase 40)
-- ✅ `_call_anthropic(deadline=None)` → `httpx.Client(timeout=120.0)` (static timeout unchanged) (Phase 40)
-- ✅ `_call_openai_compat(deadline=3.0)` → `httpx.Timeout(read=3.0)` (deadline in read slot) (Phase 40)
+- ✅ `_call_anthropic(deadline=5.0)` → `client.post(timeout≈5.0)` (deadline overrides static timeout, passed through `_post_with_retry`) (Phase 40/46)
+- ✅ `_call_anthropic(deadline=None)` → `client.post(timeout≈120.0)` (static timeout unchanged) (Phase 40/46)
+- ✅ `_call_openai_compat(deadline=3.0)` → `client.post(timeout.read≈3.0)` (deadline in read slot) (Phase 40/46)
 
 #### `agent/cascade.py` — Phase 44 multi-model cascade
 - ✅ `generate_cascade_patch([tier1, tier2])` with tier1 returning patch → returns tier1 result, tier2 never called
@@ -560,49 +560,66 @@ This section tracks high-level functional verification of core features against 
 - ✅ `AgentConnectionConfig().memory` defaults to `replay=True, coaching=True`; frozen; `extra="forbid"` rejects unknown keys; `agent.memory.replay: false` round-trips from YAML — `tests/test_config.py::TestAgentMemoryConfig`
 
 #### `cli.py` — heal-cache wiring (run loop)
-- ⏳ Pending hit: matching `_aq_meta.failure_signature.hash` in `patches/pending/` → LLM NOT called, "heal cache: pending patch … skipping LLM" message, exit `HEAL_PENDING(3)`, `healing_outcomes` row with `resolution='cached'` + synthetic `heal_attempts` row `stop_reason='cached'`
-- ⏳ Replay hit (auto mode): archived patch with matching signature + success record → gates run on candidate; pass → patch applied with zero LLM calls, `resolution='replayed'`, downstream gate rerun skipped (`_replay_gates_done`)
-- ⏳ Replay gate-fail: candidate failing sandbox falls through to the LLM in the SAME iteration ("falling through to LLM" message); candidate patch_id not retried again this run (`_replay_tried` guard, no infinite loop in multi-patch mode)
-- ⏳ Replay hit (human/ci mode): candidate staged to pending with `_aq_meta.source='replay'` without gates or LLM call, exit `HEAL_PENDING(3)`
-- ⏳ `agent.memory.replay: false` → pending/replay lookups skipped entirely, straight to LLM; `agent.memory.coaching: false` → `memory_coaching=False` reaches `generate_agent_patch`/cascade
-- ⏳ LLM-resolution heals stamp `healing_outcomes.failure_signature` with the exact hash + `resolution='llm'` (all loop record sites)
-- ⏳ `aqueduct runs --heal-coverage`: aggregates `COALESCE(resolution,'llm')` counts across discovered obs DBs; text shows per-resolution counts + zero-token %; `--format json` returns `{total_heals, by_resolution, zero_token_heals, zero_token_coverage}`; no DBs → "No runs found"; empty table → "No healing outcomes recorded yet."
+- ✅ Pending hit: matching `_aq_meta.failure_signature.hash` in `patches/pending/` → LLM NOT called, "heal cache: pending patch … skipping LLM" message, exit `HEAL_PENDING(3)` — `tests/test_cli/test_cli_heal_cache.py::test_pending_hit_skips_llm_exits_heal_pending`
+- ✅ Replay hit (auto mode): archived patch with matching signature + success record → gates run on candidate; pass → patch applied with zero LLM calls — `tests/test_cli/test_cli_heal_cache.py::test_replay_hit_auto_mode_zero_llm`
+- ✅ Replay gate-fail: candidate failing sandbox falls through to the LLM in the SAME iteration ("falling through to LLM" message); candidate patch_id not retried again this run (`_replay_tried` guard, no infinite loop in multi-patch mode) — `tests/test_cli/test_cli_heal_cache.py::test_replay_gate_fail_falls_through_to_llm`
+- ✅ Replay hit (human/ci mode): candidate staged to pending with `_aq_meta.source='replay'` without gates or LLM call, exit `HEAL_PENDING(3)` — `tests/test_cli/test_cli_heal_cache.py::test_replay_human_mode_stages_pending`
+- ✅ `agent.memory.replay: false` → pending/replay lookups skipped entirely, straight to LLM — `tests/test_cli/test_cli_heal_cache.py::test_memory_replay_false_skips_pending_replay_lookups`
+- ✅ LLM-resolution heals stamp `healing_outcomes.failure_signature` with the exact hash + `resolution='llm'` — `tests/test_cli/test_cli_heal_cache.py::test_llm_heal_stamps_resolution_and_signature`
+- ✅ `aqueduct runs --heal-coverage`: aggregates `COALESCE(resolution,'llm')` counts across discovered obs DBs; text shows per-resolution counts + zero-token %; no DBs → "No runs found"; empty table → no error — `tests/test_cli/test_cli_heal_cache.py`
 
 ### Phase 46 — Provider + budget hardening
 
 #### `agent/providers.py` — `_post_with_retry` + provider plumbing
-- ⏳ 2xx first try → returned, no retry; non-retryable 4xx (400/401) → raises immediately, no sleep
-- ⏳ 429/503/529 → retried up to `max_retries`, then the retryable response raises; `Retry-After: <seconds>` header overrides exponential backoff; malformed Retry-After ignored (falls back to backoff)
-- ⏳ Deadline cap: when the computed sleep would not leave ≥1s of `total_seconds`, the retryable response raises WITHOUT sleeping (budget never overrun by retry)
-- ⏳ `_call_anthropic` honors `base_url` (`{base}/v1/messages`; default `https://api.anthropic.com` unchanged) and merges `provider_options` into the payload top-level, dropping `ollama_*`-prefixed keys and `response_format` (config block shared with openai_compat)
-- ⏳ `_call_openai_compat` passes through the same retry helper; per-request read timeout = min(deadline, remaining)
-- ⏳ `agent.retry {max_retries, backoff_seconds}` threads cli → generate_agent_patch/cascade → `_ProviderConfig.retry_*` (defaults 2 / 2.0; `max_retries: 0` disables)
+- ✅ 2xx first try → returned, no retry; non-retryable 4xx (400/401) → raises immediately, no sleep
+- ✅ 429/503/529 → retried up to `max_retries`, then the retryable response raises; `Retry-After: <seconds>` header overrides exponential backoff; malformed Retry-After ignored (falls back to backoff)
+- ✅ Deadline cap: when the computed sleep would not leave ≥1s of `total_seconds`, the retryable response raises WITHOUT sleeping (budget never overrun by retry)
+- ✅ `_call_anthropic` honors `base_url` (`{base}/v1/messages`; default `https://api.anthropic.com` unchanged) and merges `provider_options` into the payload top-level, dropping `ollama_*`-prefixed keys and `response_format` (config block shared with openai_compat)
+- ✅ `_call_openai_compat` passes through the same retry helper — `tests/test_agent/test_agent_init.py::TestCallProviders::test_call_openai_compat_uses_post_with_retry`
+- ✅ `agent.retry {max_retries, backoff_seconds}` threads cli → generate_agent_patch/cascade → `_ProviderConfig.retry_*` (defaults 2 / 2.0; `max_retries: 0` disables) — `tests/test_agent/test_agent_init.py::TestGenerateAgentPatch::test_retry_params_threaded`
 
 #### `agent/budget.py` — gate-time exclusion
-- ⏳ `pause_clock()` context manager: time inside the block excluded from `check_stop()`'s `budget_seconds_exceeded` axis and from `remaining_seconds()`; `summary()` gains `excluded_gate_seconds`, `elapsed_seconds` stays wall time
-- ⏳ loop wraps the deep-loop `validate_callback` in `pause_clock()` — a sandbox sleep longer than `max_seconds` no longer trips the budget
+- ✅ `pause_clock()` context manager: time inside the block excluded from `check_stop()`'s `budget_seconds_exceeded` axis and from `remaining_seconds()`; `summary()` gains `excluded_gate_seconds`, `elapsed_seconds` stays wall time — `tests/test_agent/test_budget.py::TestPauseClock`
+- ✅ loop wraps the deep-loop `validate_callback` in `pause_clock()` — a sandbox sleep longer than `max_seconds` no longer trips the budget — `tests/test_agent/test_agent_init.py::TestDeepLoop::test_deep_loop_validate_under_pause_clock_no_budget_exhaustion`
 
 #### `agent/cascade.py` — cascade-spanning token cap
-- ⏳ `max_tokens_total` is consumed cumulatively: tier 2's budget = base cap − tier 1's spend; when remaining < 1 the cascade stops with `stop_reason='budget_tokens_exceeded'` before calling the next tier
-- ⏳ `max_tokens_total: null` (axis disabled) → tiers unconstrained as before
+- ✅ `max_tokens_total` is consumed cumulatively: tier 2's budget = base cap − tier 1's spend; when remaining < 1 the cascade stops with `stop_reason='budget_tokens_exceeded'` before calling the next tier — `tests/test_agent/test_cascade.py::TestCascadeSpanningBudget`
+- ✅ `max_tokens_total: null` (axis disabled) → tiers unconstrained as before — `tests/test_agent/test_cascade.py::TestCascadeSpanningBudget::test_null_tokens_total_unconstrained`
 
 #### `healing_outcomes` — producing model + tier
-- ⏳ DDL + Phase-45/46 migration add `model_cascade_position INTEGER`; `record_healing_outcome(model_cascade_position=…)` persists it
-- ⏳ `AgentPatchResult.model` / `.model_cascade_position` set by `generate_agent_patch`; CLI records the producing tier's model (not the top-level `agent.model`) and tier index; replay resolutions record `model=NULL`
+- ✅ DDL + Phase-45/46 migration add `model_cascade_position INTEGER`; `record_healing_outcome(model_cascade_position=…)` persists it — `tests/test_surveyor/test_surveyor_models.py`
+- ✅ `AgentPatchResult.model` / `.model_cascade_position` set by `generate_agent_patch` — `tests/test_agent/test_agent_init.py::TestGenerateAgentPatch::test_result_has_model_fields`
+- ✅ CLI records the producing tier's model (not the top-level `agent.model`) and tier index — `tests/test_surveyor/test_surveyor_models.py::test_record_healing_outcome_persists_cascade_model`
+- ⏳ replay resolutions record `model=NULL`
 
 #### `doctor` — `check_cascade_tiers`
-- ⏳ anthropic tier without `ANTHROPIC_API_KEY` → warn naming the tier index + model; with key → ok
-- ⏳ openai_compat tier without base_url (tier AND engine) → warn; tier-level or engine-level base_url → ok; unknown provider → warn
-- ⏳ no cascade block or unparseable blueprint → no results (other checks own blueprint errors); wired into `run_doctor` only when a blueprint path is given
+- ✅ anthropic tier without `ANTHROPIC_API_KEY` → warn naming the tier index + model; with key → ok — `tests/test_cli/test_cli_doctor_new.py::TestCheckCascadeTiers`
+- ✅ openai_compat tier without base_url (tier AND engine) → warn; tier-level or engine-level base_url → ok; unknown provider → warn — `tests/test_cli/test_cli_doctor_new.py::TestCheckCascadeTiers`
+- ✅ no cascade block or unparseable blueprint → no results (other checks own blueprint errors); wired into `run_doctor` only when a blueprint path is given — `tests/test_cli/test_cli_doctor_new.py::TestCheckCascadeTiers`
 
 #### `parser/schema.py` — `agent.model: list[str]` sugar
-- ⏳ `model: [a, b]` → `model='a'` + synthesized `cascade: [{model: a}, {model: b}]`; single-item list collapses to plain string with no cascade; empty list or non-string items → validation error
-- ⏳ list form combined with explicit `cascade:` → validation error (mutually exclusive)
+- ✅ `model: [a, b]` → `model='a'` + synthesized `cascade: [{model: a}, {model: b}]`; single-item list collapses to plain string with no cascade; empty list or non-string items → validation error — `tests/test_parser/test_schema.py::TestAgentModelListSugar`
+- ✅ list form combined with explicit `cascade:` → validation error (mutually exclusive) — `tests/test_parser/test_schema.py::TestAgentModelListSugar::test_list_and_explicit_cascade_mutually_exclusive`
 
 #### `surveyor/webhook.py` — envelope + delivery retry
-- ⏳ `payload: null` + `event=` → standardized envelope `{event, timestamp, run_id, blueprint_id, data}`; `event=None` (legacy caller) → raw payload unchanged; explicit `payload:` template wins over both
-- ⏳ Delivery retry: one retry on 429/5xx or network error (2 attempts total); non-retryable 4xx → single attempt; success → no retry; never raises, never blocks
-- ⏳ `stage_patch_for_human` webhook payload + template vars carry `patch_id`/`root_cause`/`rationale`/`confidence`/`category` (+ `diagnosis`/`suggestions` for defer patches, `source` for replay); ci staging fires `event='on_ci_patch'`, human staging `'on_patch_pending'`
+- ✅ `payload: null` + `event=` → standardized envelope `{event, timestamp, run_id, blueprint_id, data}`; `event=None` (legacy caller) → raw payload unchanged; explicit `payload:` template wins over both — `tests/test_surveyor/test_surveyor_webhook.py`
+- ✅ Delivery retry: one retry on 429/5xx or network error (2 attempts total); non-retryable 4xx → single attempt; success → no retry; never raises, never blocks — `tests/test_surveyor/test_surveyor_webhook.py`
+- ✅ `stage_patch_for_human` webhook payload + template vars carry `patch_id`/`root_cause`/`rationale`/`confidence`/`category` (+ `diagnosis`/`suggestions` for defer patches, `source` for replay); ci staging fires `event='on_ci_patch'`, human staging `'on_patch_pending'` — `tests/test_surveyor/test_agent.py::TestStageForHuman`
+
+### Phase 47 — `replace_macro` patch op
+
+#### `patch/grammar.py` + `patch/operations.py`
+- ✅ `ReplaceMacroOp` in the discriminated union: `model_json_schema()` operations `oneOf` has 14 entries, discriminator mapping contains `replace_macro`, `$defs` has `ReplaceMacroOp`
+- ✅ Apply: replaces an existing macro body; original blueprint dict not mutated (all-or-nothing copy semantics preserved)
+- ✅ Replace-only: unknown macro name → `PatchError` listing available macros; missing/empty `macros:` block → `PatchError` ("can only modify existing macros, not create them")
+- ✅ Multiline `value` written as ruamel `LiteralScalarString` (renders as `|` block scalar); single-line value double-quoted like other string writes
+- ✅ Op aliases normalize: `set_macro` / `update_macro` / `replace_macro_body` → `replace_macro`
+- ✅ `guardrails.forbidden_ops: [replace_macro]` blocks the op via the existing op-name check (no new guardrail code)
+
+#### `agent/prompts.py` — PROMPT_VERSION 1.3
+- ✅ `_VALID_OPS` contains `replace_macro` (reprompt "Valid ops" list)
+- ✅ Macro hint extended: still says keep `{{ macros.NAME }}` refs, now adds "fix in-macro root causes with replace_macro, macro is shared, preserve `{{ param }}` placeholders" — only rendered when the blueprint defines macros
+- ✅ Gate integration: a `replace_macro` patch with a body referencing an unsupplied `{{ param }}` fails the compile gate with `MacroError` (reprompt feedback), not at apply time
 
 ### Phase 35 — Structured Spark error extraction
 
@@ -1234,10 +1251,10 @@ Blueprints live in `tests/fixtures/blueprints/`. All I/O paths injected via `cli
 - ✅ Assert quarantine rows stamp `_aq_error_type` = rule's `error_type` label when set — `tests/test_executor/test_spillway_error_types.py::test_assert_quarantine_stamps_aq_error_type`
 - ✅ Parser: `error_types` on a non-spillway edge → `ParseError` mentioning port='spillway' — `tests/test_parser/test_schema.py::TestErrorTypesValidation::test_error_types_on_non_spillway_edge_raises`
 - ✅ Parser: `error_types` on a spillway edge parses; `Edge.error_types` tuple preserved through arcade expansion — `tests/test_parser/test_schema.py::TestErrorTypesValidation::test_error_types_on_spillway_edge_parses`
-- ⏳ Spillway edge with `error_types: [SpillwayCondition]` → Egress receives only rows whose `_aq_error_type` matches — *requires Spark integration test*
-- ⏳ Two spillway edges from one Assert — *requires Spark integration test*
-- ⏳ Funnel consuming a spillway edge with `error_types` gets the filtered frame — *requires Spark integration test*
-- ⏳ Doctor `_check_spillway_error_types` — *requires manifest with modules*
+- ✅ Spillway edge with `error_types: [SpillwayCondition]` → Egress receives only rows whose `_aq_error_type` matches — `tests/test_executor/test_spillway_error_types.py::TestSpillwayErrorTypesSpark::test_spillway_error_type_filters_rows`
+- ✅ Two spillway edges from one Assert → each gets only its matching rows — `tests/test_executor/test_spillway_error_types.py::TestSpillwayErrorTypesSpark::test_spillway_two_edges_from_one_assert`
+- ✅ Funnel consuming a spillway edge with `error_types` gets the filtered frame — `tests/test_executor/test_spillway_error_types.py::TestSpillwayErrorTypesSpark::test_funnel_consumes_filtered_spillway`
+- ✅ Doctor `_check_spillway_error_types` — warns on unknown error_types, no warn on match, ignores main-port edges, builtin labels known — `tests/test_cli/test_cli_doctor_new.py::TestCheckSpillwayErrorTypes`
 
 ### Depot KV Store (`aqueduct/depot/depot.py`)
 
