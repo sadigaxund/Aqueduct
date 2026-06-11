@@ -59,6 +59,22 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 
 ---
 
+## Iceberg / Hudi Table Formats
+
+Ingress and Egress currently support Parquet, Delta Lake, CSV, JSON, and JDBC. Apache Iceberg and Apache Hudi are planned as additional table formats — both fit the existing `format:` config surface without schema changes.
+
+**Status:** Planned, not started. Tracked in the compatibility matrix as "planned".
+
+---
+
+## Persist `model_cascade_position` to `heal_attempts`
+
+The multi-model cascade tags every in-memory `AttemptRecord` with its 0-based tier index, but the `heal_attempts` table does not yet have a column for it — per-tier heal analytics (e.g. "which tier actually solves things") currently require correlating `healing_outcomes.model` instead. Adding the column needs a DDL migration for existing observability stores.
+
+**Status:** Deferred. Small, self-contained.
+
+---
+
 ## Flink Execution Engine
 
 The `executor/__init__.py` factory has a `flink` stub that raises `NotImplementedError`. Flink support is not actively planned — the engine is designed for Spark batch pipelines.

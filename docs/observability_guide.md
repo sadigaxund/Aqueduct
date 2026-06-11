@@ -118,7 +118,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
 | `latency_ms`        | INTEGER NOT NULL    | Per-attempt wall clock |
-| `gate_that_rejected`| VARCHAR             | `schema` \| `apply` \| `provider` \| NULL on success |
+| `gate_that_rejected`| VARCHAR             | `schema` \| `apply` \| `validate` (deep-loop gates) \| `provider` \| `budget` \| `defer_rejected` \| NULL on success |
 | `escalated`         | BOOLEAN NOT NULL    | TRUE when the attempt ran with bumped temperature + skeleton template after `same_error_consecutive` tripped |
 | `stop_reason`       | VARCHAR             | Filled only on the loop's terminal row (UPDATE post-loop); NULL on intermediate rows |
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
@@ -126,7 +126,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
-`progress_stalled`, `api_error`. `solved` describes LLM loop termination
+`progress_stalled`, `api_error`, `deferred`. `solved` describes LLM loop termination
 only (a parseable PatchSpec returned) — it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 

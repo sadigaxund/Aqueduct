@@ -190,6 +190,7 @@ whenever a package is restructured — use it as the first filter before greppin
 |--------|-----------|--------------|
 | `__init__.py` | `AgentPatchResult`, `PROMPT_VERSION`, `MAX_REPROMPTS`, `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `build_prompt`, `resolve_budget` | Thin re-export facade + `resolve_budget()` |
 | `loop.py` | `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `AgentPatchResult`, `PROMPT_VERSION` | Main orchestration loop, patch I/O, result type |
+| `cascade.py` | `generate_cascade_patch` | Multi-model healing cascade — per-tier config inheritance, escalation on stuck/exhausted/deferred |
 | `prompts.py` | `build_prompt`, `_build_user_prompt`, `_build_system_prompt`, `_FIELD_ALIASES`, `_VALID_OPS` | Template strings, prompt construction, LLM-facing constants |
 | `providers.py` | `_call_agent`, `_call_anthropic`, `_call_openai_compat`, `_ProviderConfig` | HTTP dispatch to Anthropic / OpenAI-compatible endpoints |
 | `parse.py` | `_parse_patch_spec`, `_detect_structural_error`, `_format_reprompt_error`, `_format_reprompt_for_next_turn` | Response parsing, structural error detection, reprompt formatting |

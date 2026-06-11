@@ -9,6 +9,7 @@ Module layout (use the file name as your first search filter):
   providers.py   — Anthropic + OpenAI-compatible HTTP dispatch (_call_anthropic, _call_openai_compat)
   parse.py       — PatchSpec parsing, reprompt formatting, structural error detection
   loop.py        — ``generate_agent_patch`` orchestration loop + patch I/O
+  cascade.py     — multi-model healing cascade (generate_cascade_patch)
   budget.py      — multi-axis budget tracking (BudgetConfig, BudgetTracker)
   signature.py   — error signature engine (ErrorSignature, from_* helpers)
 

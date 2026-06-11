@@ -22,7 +22,7 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 | Spark 4.0 (`pyspark>=4.0,<5.0`) | ✅ | ✅ | ⚠ |
 | Spark 3.x (`pyspark==3.5.8`) | ⚠ — tested via Legacy CI combo | ⚠ — tested via Legacy CI combo | ❌ |
 | Delta Lake (`delta-spark>=4.0,<5.0` for Spark 4.x; `delta-spark==3.3.0` for Spark 3.5) | ✅ | ✅ | ⚠ |
-| Iceberg / Hudi | planned (TODO Phase 45) | planned | planned |
+| Iceberg / Hudi | planned — see [roadmap](roadmap.md) | planned | planned |
 
 ## Notes
 

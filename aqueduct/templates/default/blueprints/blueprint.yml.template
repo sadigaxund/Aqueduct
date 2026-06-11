@@ -137,7 +137,7 @@ agent:
   #   - model: qwen2.5-coder:7b
   #     max_reprompts: 2
   #     max_seconds: 30
-  #   - model: claude-sonnet-4-20250514
+  #   - model: claude-sonnet-4-6
   #     max_reprompts: 3
   #     max_seconds: 120
   #     deep_loop: true
