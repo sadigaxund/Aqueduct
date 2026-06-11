@@ -5,13 +5,13 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 <!-- COMPAT_RESULTS_START -->
 ## Latest run
 
-**Build:** `dce3520` — commit `dce3520`
+**Build:** `019278d` — commit `019278d`
 
 | Combo | Python | Spark | Delta | Postgres | Java | Status |
 |---|---|---|---|---|---|---|
-| LTS | 3.11 | 4.1.2 | 4.1.0 | 17.10 | 17 | ✅ |
-| Latest | 3.13 | 4.1.2 | 4.2.0 | 18.4 | 21 | ✅ |
-| Legacy | 3.12 | 3.5.8 | 3.3.0 | 17.10 | 17 | ✅ |
+| LTS | 3.11 | 4.1.2 | 4.1.0 | 17.10 | 17 | ❌ 1 failure(s) |
+| Latest | 3.13 | 4.1.2 | 4.2.0 | 18.4 | 21 | ❌ 1 failure(s) |
+| Legacy | 3.12 | 3.5.8 | 3.3.0 | 17.10 | 17 | ❌ 1 failure(s) |
 <!-- COMPAT_RESULTS_END -->
 
 ## Python × Spark
