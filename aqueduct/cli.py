@@ -3972,7 +3972,7 @@ def heal(
     default=None,
     type=float,
     help="Override agent.timeout (seconds) for this run. Raise for slow/cold "
-    "local models (default 120; e.g. 600). Use 0 for no limit (unbounded "
+    "local models (default 300; e.g. 600). Use 0 for no limit (unbounded "
     "read; connect still fails fast).",
 )
 @click.option(

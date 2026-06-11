@@ -221,7 +221,7 @@ class StoresConfig(BaseModel):
 class MetricsConfig(BaseModel):
     """Per-module observability tuning.
 
-    See docs/SPARK_GUIDE.md ("DataFrame.observe() and Whole-Stage Codegen") for
+    See docs/spark_guide.md ("DataFrame.observe() and Whole-Stage Codegen") for
     the tradeoff between accurate per-module attribution and codegen overhead.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")

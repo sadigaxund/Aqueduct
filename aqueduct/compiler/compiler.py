@@ -285,7 +285,7 @@ def compile(  # noqa: A001
                 "this is a FULL DATASET SCAN. sample() is a row-level filter, not a "
                 "partition prune: all data is read before rows are discarded. "
                 "Use method: spark_listener for zero-cost row counts. "
-                "See docs/SPARK_GUIDE.md#probe-sample-cost.",
+                "See docs/spark_guide.md#probe-sample-cost.",
             )
 
     # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
@@ -304,7 +304,7 @@ def compile(  # noqa: A001
                 "After each run, Aqueduct computes MAX(watermark_column) on the output — "
                 "a second full scan if the DataFrame is not cached. "
                 "Add a Checkpoint upstream or accept the extra Spark action. "
-                "See docs/SPARK_GUIDE.md#incremental-watermark-scan.",
+                "See docs/spark_guide.md#incremental-watermark-scan.",
             )
 
     # 8c. Python UDF registered — row-at-a-time execution warning
@@ -317,7 +317,7 @@ def compile(  # noqa: A001
                 "For high-volume channels, prefer native Spark SQL expressions or "
                 "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
                 "and unaffected, but the UDF body will not be vectorized. "
-                "See docs/SPARK_GUIDE.md#python-udf-performance.",
+                "See docs/spark_guide.md#python-udf-performance.",
             )
 
     # 8d. Delta append without partition hint — small-file accumulation risk
@@ -333,7 +333,7 @@ def compile(  # noqa: A001
                     "but has no partition_by or repartition hint. "
                     "Incremental appends without partitioning accumulate small files over time, "
                     "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
-                    "See docs/SPARK_GUIDE.md#planned-future-checks.",
+                    "See docs/spark_guide.md#planned-future-checks.",
                 )
 
     # 8e. Multi-consumer Channel without cache — DAG re-evaluated per consumer
@@ -352,7 +352,7 @@ def compile(  # noqa: A001
                 "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "
                 "consumer branch — consider adding a Checkpoint or cache() boundary to "
                 "avoid redundant computation. "
-                "See docs/SPARK_GUIDE.md#caching-strategy.",
+                "See docs/spark_guide.md#caching-strategy.",
             )
 
     # 8f. Hadoop filesystem keys in Ingress options — must be in spark_config instead
@@ -373,7 +373,7 @@ def compile(  # noqa: A001
                 "see them and authentication will fail. Move these to spark_config with "
                 "the 'spark.hadoop.' prefix instead: e.g. "
                 "'spark.hadoop.fs.s3a.access.key'. "
-                "See docs/SPARK_GUIDE.md#jdbc-ingress-parallelism.",
+                "See docs/spark_guide.md#jdbc-ingress-parallelism.",
             )
 
     # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only

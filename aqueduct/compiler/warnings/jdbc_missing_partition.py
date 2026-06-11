@@ -33,6 +33,6 @@ def check(manifest: Any) -> list[str]:
             "be read through a single executor connection — this is the most "
             "common bottleneck for JDBC ingestion. Add the four "
             "partitioning options to enable parallel reads. "
-            "See docs/SPARK_GUIDE.md#jdbc-ingress-parallelism."
+            "See docs/spark_guide.md#jdbc-ingress-parallelism."
         )
     return out
