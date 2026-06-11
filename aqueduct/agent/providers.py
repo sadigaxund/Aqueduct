@@ -48,6 +48,11 @@ class _ProviderConfig:
     engine_prompt_context: str | None = None
     blueprint_prompt_context: str | None = None
     allow_defer: bool = False
+    # Phase 45 coaching: the FailureContext keys signature-matched retrieval
+    # of past (failure → validated fix) pairs into the system prompt. None
+    # (or coaching=False) falls back to the chronological patch-history section.
+    failure_ctx: Any = None
+    coaching: bool = True
 
 
 def _format_llm_error_hint(
@@ -137,6 +142,8 @@ def _call_agent(
         cfg.blueprint_prompt_context,
         last_apply_error,
         allow_defer=cfg.allow_defer,
+        failure_ctx=cfg.failure_ctx,
+        coaching=cfg.coaching,
     )
 
     # Scrub registered @aq.secret() values from anything leaving the process.

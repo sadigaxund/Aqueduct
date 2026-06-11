@@ -40,6 +40,7 @@ from aqueduct.agent.providers import (
 from aqueduct.agent.signature import (
     from_apply_error,
     from_exception,
+    from_failure_context,
     from_json_decode_error,
     from_validation_error,
 )
@@ -54,7 +55,10 @@ logger = logging.getLogger(__name__)
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
-PROMPT_VERSION = "1.1"
+# 1.2 — Phase 45: signature-matched coaching section replaces the chronological
+#       patch-history section; recovery-pass polish (orphan </think>, fence
+#       selection, multi-key wrapper unwrap, reprompt char cap).
+PROMPT_VERSION = "1.2"
 
 
 @dataclass
@@ -100,24 +104,34 @@ def stage_patch_for_human(
     patches_dir: Path,
     failure_ctx: FailureContext,
     on_patch_pending_webhook: WebhookEndpointConfig | None = None,
+    source: str = "llm",
 ) -> None:
     """Write patch to ``patches/pending/`` for human review.
 
     Args:
         on_patch_pending_webhook: When set, fires the on_patch_pending webhook
             with patch metadata. Errors are logged and never block staging.
+        source: Provenance of the patch — ``"llm"`` for a fresh agent patch,
+            ``"replay"`` when the heal cache re-staged a previously validated
+            patch with zero LLM tokens.
     """
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     filename = _patch_filename(patch_spec)
     out_path = pending_dir / filename
     payload = patch_spec.model_dump()
+    sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
         "staged_at": _utcnow(),
         "prompt_version": PROMPT_VERSION,
+        # Full dict (not just hash): coaching renders error_class/where/message
+        # as the few-shot "failure" half without re-reading failure_contexts.
+        "failure_signature": sig_exact.to_dict(),
+        "failure_signature_coarse": sig_coarse.hash,
+        "source": source,
     }
     out_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
     logger.info(
@@ -161,6 +175,7 @@ def archive_patch(
     filename = _patch_filename(patch_spec)
     archive_path = applied_dir / filename
     payload = patch_spec.model_dump()
+    sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
@@ -168,6 +183,8 @@ def archive_patch(
         "applied_at": _utcnow(),
         "approval_mode": mode,
         "prompt_version": PROMPT_VERSION,
+        "failure_signature": sig_exact.to_dict(),
+        "failure_signature_coarse": sig_coarse.hash,
     }
     archive_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
 
@@ -196,6 +213,7 @@ def generate_agent_patch(
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
     model_cascade_position: int | None = None,
+    memory_coaching: bool = True,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -230,6 +248,8 @@ def generate_agent_patch(
         engine_prompt_context=engine_prompt_context,
         blueprint_prompt_context=blueprint_prompt_context,
         allow_defer=allow_defer,
+        failure_ctx=failure_ctx,
+        coaching=memory_coaching,
     )
 
     messages: list[dict[str, Any]] = [

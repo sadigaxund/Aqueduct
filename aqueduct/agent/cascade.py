@@ -48,6 +48,7 @@ def generate_cascade_patch(
     allow_defer: bool = False,
     deep_loop: bool = False,
     last_apply_error: str | None = None,
+    memory_coaching: bool = True,
     # ── Callbacks shared across all tiers ───────────────────────────
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
@@ -102,6 +103,7 @@ def generate_cascade_patch(
             validate_callback=validate_callback,
             on_attempt=on_attempt,
             model_cascade_position=idx - 1,
+            memory_coaching=memory_coaching,
         )
 
         # Escalation check runs BEFORE the patch check: a defer result carries

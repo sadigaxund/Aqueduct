@@ -21,6 +21,9 @@ Public API
 rejections (guardrail violation, lineage gate, explain regression, sandbox).
 ``from_text(text, error_class="reprompt", where=None)`` — last-resort plain
 text input (e.g. friendly reprompt strings).
+``from_failure_context(ctx)`` — pipeline ``FailureContext`` → (exact, coarse)
+signature pair for the Phase 45 heal cache (exact keys replay/pending-reuse
+within a blueprint; coarse drops the module id for cross-blueprint coaching).
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ __all__ = [
     "from_exception",
     "from_apply_error",
     "from_text",
+    "from_failure_context",
 ]
 
 _MAX_MESSAGE_CHARS = 240
@@ -154,6 +158,39 @@ def from_apply_error(
 ) -> ErrorSignature:
     """Apply-time gate rejection (guardrail, lineage, explain, sandbox)."""
     return make_signature(error_class, where or "<root>", message)
+
+
+def from_failure_context(ctx: Any) -> tuple[ErrorSignature, ErrorSignature]:
+    """Pipeline ``FailureContext`` → ``(exact, coarse)`` signature pair.
+
+    *exact* — ``(error_class, failed_module, normalized_message)``; keys the
+    blueprint-local heal cache (pending-patch reuse + exact replay, where
+    patch ops reference module ids so the module must match).
+
+    *coarse* — same with ``where`` pinned to ``<any>``; keys cross-blueprint
+    coaching where module ids differ but the failure shape is the same.
+
+    Error-class priority: Spark condition (``error_class``) → user-defined
+    Assert label (``error_type``) → innermost throwable type
+    (``root_exception["type"]``) → ``"unknown"``. Message prefers the
+    innermost throwable's message over the full ``error_message`` blob.
+    """
+    _root = getattr(ctx, "root_exception", None)
+    if not isinstance(_root, dict):
+        _root = {}
+    error_class = (
+        getattr(ctx, "error_class", None)
+        or getattr(ctx, "error_type", None)
+        or _root.get("type")
+        or "unknown"
+    )
+    message = _root.get("message") or getattr(ctx, "error_message", "") or ""
+    where = getattr(ctx, "failed_module", None) or "<root>"
+    # str() coercion: duck-typed contexts (tests pass mocks) must never
+    # break signature hashing — real FailureContext fields are already str.
+    exact = make_signature(str(error_class), str(where), str(message))
+    coarse = make_signature(str(error_class), "<any>", str(message))
+    return exact, coarse
 
 
 def from_text(

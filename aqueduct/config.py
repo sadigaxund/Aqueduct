@@ -323,6 +323,30 @@ class AgentBudgetConfig(BaseModel):
     progress_stalled_window: int = 3
 
 
+class AgentMemoryConfig(BaseModel):
+    """Phase 45 signature memory — zero-token heal paths.
+
+    ``replay`` governs both reuse paths consulted before the LLM is called:
+    pending-patch reuse (a patch for the same failure signature already
+    awaits review → surface it, ``stop_reason: cached``) and exact replay
+    (an archived patch already fixed this signature → re-run it through the
+    gate pyramid, ``stop_reason: replayed``). ``coaching`` governs
+    signature-matched few-shot examples in the heal prompt. Both default on;
+    disable ``replay`` when re-running gates (sandbox Spark time) is more
+    expensive than fresh LLM tokens.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    replay: bool = Field(
+        default=True,
+        description="Zero-token reuse of pending/archived patches matching the failure signature.",
+    )
+    coaching: bool = Field(
+        default=True,
+        description="Signature-matched (failure → validated fix) few-shot examples in the heal prompt.",
+    )
+
+
 class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
@@ -409,6 +433,13 @@ class AgentConnectionConfig(BaseModel):
             "fit in any driver's memory. Set to 'spark://host:7077' or 'yarn' "
             "to run sandbox on a cluster when your blueprint is too large for "
             "a single driver node."
+        ),
+    )
+    memory: AgentMemoryConfig = Field(
+        default_factory=AgentMemoryConfig,
+        description=(
+            "Phase 45 signature memory: zero-token patch reuse/replay and "
+            "signature-matched coaching. Both sub-flags default on."
         ),
     )
 

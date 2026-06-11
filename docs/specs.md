@@ -543,10 +543,12 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The cascade tags every in-memory `AttemptRecord` with `model_cascade_position` (0-based tier index); it is not yet persisted as a `heal_attempts` column.
 
+**Signature memory (Phase 45).** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs from `patches/applied/` as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+
 ## **8.2 The Healing Flow**
 
 ```
-Pipeline failure → Capture → Prune → Generate → Reprompt → Gate → Confirm and write
+Pipeline failure → Capture → Memory (cached patch? replay?) → Prune → Generate → Reprompt → Gate → Confirm and write
 ```
 
 ### 1. Capture

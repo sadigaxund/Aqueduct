@@ -100,6 +100,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 |---------|-------------|
 | `aqueduct runs` | List recent runs |
 | `aqueduct runs --failed` | Show only failed runs |
+| `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
 | `aqueduct signal <signal_id>` | View or override Probe gates |

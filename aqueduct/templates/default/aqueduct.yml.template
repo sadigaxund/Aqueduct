@@ -509,6 +509,28 @@ agent:
   # single driver node.
   # sandbox_master_url: null
 
+  # ── Signature memory (Phase 45) ────────────────────────────────────────────
+  # Zero-token heal paths consulted BEFORE the LLM is called. Each failure is
+  # hashed into a stable signature (error class + module + normalized message);
+  # patches carry the signature of the failure they fixed.
+  #
+  #   replay: true (default)
+  #     Pending-patch reuse — a patch for the same signature already awaits
+  #     review → surface it, skip the LLM (stop_reason: cached). Exact replay —
+  #     an archived patch already fixed this signature (confirmed by
+  #     healing_outcomes) → re-run it through the normal gate pyramid with
+  #     zero tokens (stop_reason: replayed); gate failure falls through to
+  #     the LLM. Disable when re-running gates (sandbox Spark time) costs
+  #     more than fresh LLM tokens.
+  #
+  #   coaching: true (default)
+  #     Nearest-signature retrieval of past (failure → validated fix) pairs
+  #     from patches/applied/ as few-shot examples in the heal prompt.
+  #
+  # memory:
+  #   replay: true
+  #   coaching: true
+
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"
   # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required

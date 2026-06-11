@@ -566,12 +566,59 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
     )
 
 
+_COACHING_TIER_LABELS = {
+    1: "same failure",
+    2: "same failure shape, different module",
+    3: "same error class",
+    4: "recent fix",
+}
+
+
+def _build_coaching_section(failure_ctx: Any, patches_dir: Path) -> str:
+    """Phase 45 — signature-matched (failure → validated fix) few-shot section.
+
+    Replaces the chronological last-3 history with nearest-signature
+    retrieval over ``patches/applied/``. Empty string when nothing matches
+    (caller falls back to the legacy section).
+    """
+    from aqueduct.agent.memory import find_coaching_examples
+    from aqueduct.agent.signature import from_failure_context
+
+    try:
+        sig_exact, sig_coarse = from_failure_context(failure_ctx)
+        examples = find_coaching_examples(
+            sig_exact.hash, sig_coarse.hash, sig_exact.error_class, patches_dir,
+        )
+    except Exception:
+        logger.debug("Coaching retrieval failed — section omitted", exc_info=True)
+        return ""
+    if not examples:
+        return ""
+    lines = [
+        "\n## Past validated fixes for similar failures",
+        "These patches fixed failures like this one before and passed validation.",
+        "Reuse the successful approach where it applies — but module ids and paths",
+        "must match the CURRENT blueprint; never copy them blindly.",
+    ]
+    for ex in examples:
+        failure_half = f"{ex.error_class} @ {ex.where}"
+        if ex.normalized_message:
+            failure_half += f": {ex.normalized_message}"
+        lines.append(
+            f"- [{_COACHING_TIER_LABELS.get(ex.tier, 'recent fix')}] {failure_half}\n"
+            f"  → fix {ex.patch_id} (ops: {', '.join(ex.ops) or '?'}): {ex.rationale or '(no rationale recorded)'}"
+        )
+    return "\n".join(lines)
+
+
 def _build_system_prompt(
     patches_dir: Path,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
     last_apply_error: str | None = None,
     allow_defer: bool = False,
+    failure_ctx: Any = None,
+    coaching: bool = True,
 ) -> str:
     raw_schema = PatchSpec.model_json_schema()
 
@@ -622,20 +669,30 @@ def _build_system_prompt(
             "Do NOT mix `defer_to_human` with other operations. If you defer, defer completely."
         )
 
-    prev = _load_previous_patches(patches_dir)
-    if prev:
-        lines = ["\n## Previous patch attempts (do NOT repeat these)"]
-        for p in prev:
-            lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
-        if last_apply_error:
-            lines.append(
-                f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
+    # Phase 45: signature-matched coaching replaces the chronological last-3
+    # history when a FailureContext is available. Falls back to the legacy
+    # "do NOT repeat" section when coaching is off, no failure_ctx was
+    # threaded (debug/`aqueduct heal --show-prompt` paths), or nothing matches.
+    prev_section = ""
+    if coaching and failure_ctx is not None:
+        prev_section = _build_coaching_section(failure_ctx, patches_dir)
+        if prev_section and last_apply_error:
+            prev_section += (
+                f"\n\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
             )
-        prev_section = "\n".join(lines)
-    elif last_apply_error:
-        prev_section = f"\n## Last patch apply error\n{last_apply_error}"
-    else:
-        prev_section = ""
+    if not prev_section:
+        prev = _load_previous_patches(patches_dir)
+        if prev:
+            lines = ["\n## Previous patch attempts (do NOT repeat these)"]
+            for p in prev:
+                lines.append(f"- {p['patch_id']}: {p['description']} (ops: {', '.join(p['ops'])})")
+            if last_apply_error:
+                lines.append(
+                    f"\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
+                )
+            prev_section = "\n".join(lines)
+        elif last_apply_error:
+            prev_section = f"\n## Last patch apply error\n{last_apply_error}"
 
     # Merge engine-level and blueprint-level prompt_context
     ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
@@ -675,6 +732,7 @@ def build_prompt(
     guardrails: Any = None,
     last_apply_error: str | None = None,
     allow_defer: bool = False,
+    coaching: bool = True,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -695,6 +753,8 @@ def build_prompt(
             patches_dir, engine_prompt_context, blueprint_prompt_context,
             last_apply_error=last_apply_error,
             allow_defer=allow_defer,
+            failure_ctx=failure_ctx,
+            coaching=coaching,
         ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }
