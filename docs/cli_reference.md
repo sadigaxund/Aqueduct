@@ -122,7 +122,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 --set  >  blueprint agent:  >  aqueduct.yml  >  built-in defaults
 ```
 
-One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval_mode`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
+One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
 
 Value grammar:
 - `PATH=value` — coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
@@ -130,7 +130,7 @@ Value grammar:
 
 ```bash
 aqueduct run bp.yml \
-  --set agent.approval_mode=auto \
+  --set agent.approval=auto \
   --set agent.budget.max_seconds=5 \
   --set deployment.master_url=spark://10.0.0.39:7077 \
   --set agent.provider_options:='{"temperature":0.1}'
@@ -175,16 +175,16 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 | `preflight` | full dataset | dropped | `danger.allow_full_preflight: true` | Slow but conclusive — use when sample misses representative rows |
 | `off` | — (no replay) | next `execute()` writes for real | `danger.allow_skip_sandbox: true` | Skip pre-validation entirely. Patch hits real data immediately. **Use only on tiny, fully-trusted blueprints.** |
 
-`approval_mode` (who applies) and `sandbox_mode` (how to validate before apply) are orthogonal axes that compose:
+`approval` (who applies) and `sandbox_mode` (how to validate before apply) are orthogonal axes that compose:
 
-| `approval_mode` | Behaviour | `sandbox_mode` impact |
+| `approval` | Behaviour | `sandbox_mode` impact |
 |---|---|---|
 | `disabled` | No patching | N/A |
 | `human` | Patch staged for manual review | Replay still runs (gives reviewer signal) |
 | `ci` | Patch staged for CI | Replay still runs |
 | `auto` | Auto-apply. `max_patches: 1` = single shot. `max_patches > 1` = multi-patch reprompt loop (requires `danger.allow_multi_patch: true`). | Replay gates apply every iteration |
 
-`approval_mode: aggressive` is a deprecated alias for `auto` + `max_patches > 1`; it still parses and emits a `[deprecated]` warning. `aggressive_max_patches` is an alias for `max_patches`. Both are slated for removal in `aqueduct: "2.0"` schema.
+`agent.approval` is the canonical key; `agent.approval_mode` is a deprecated input alias (still parses, emits a `[deprecated]` warning, removed in `aqueduct: "2.0"`). `approval: aggressive` is a deprecated alias for `auto` + `max_patches > 1`. `aggressive_max_patches` is an alias for `max_patches`. All are slated for removal in the `2.0` schema.
 
 **Double-danger combo** — `sandbox_mode: off` + `max_patches > 1` means every LLM patch hits production data without pre-validation, in a loop. Engine prints a `⚠ DANGER COMBO` line at startup when both are set; use only on tiny scopes you fully trust.
 

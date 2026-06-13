@@ -2262,6 +2262,15 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ aqtest/aqscenario file → `files[].valid=null` with a `note` (not counted in valid/invalid)
 - ⏳ no file given and no aqueduct.yml in CWD, `--format json` → JSON with `error` field, exit `CONFIG_ERROR(1)`
 
+### `agent.approval` rename (aliased) — `aqueduct/parser/schema.py` + `parser.py`
+- ⏳ blueprint `agent: {approval: auto}` → `manifest.agent.approval_mode == 'auto'`, no deprecation warning on stderr
+- ⏳ blueprint `agent: {approval_mode: human}` (old key) → `approval_mode == 'human'` AND a `[deprecated] agent.approval_mode → use agent.approval` line on stderr
+- ⏳ both keys present (`approval: auto` + `approval_mode: human`) → canonical `approval` wins (`== 'auto'`), deprecation warning still emitted, no `extra="forbid"` error
+- ⏳ `approval: aggressive` (or via alias) → still parses to `'aggressive'` + the existing aggressive deprecation warning
+- ⏳ absent → default `'disabled'`, no warning
+- ⏳ `--set agent.approval=auto` routes to the blueprint (BlueprintSchema accepts both `approval` and `approval_mode` via AliasChoices); overlay flips approval to auto
+- ⏳ `aqueduct schema --target blueprint` JSON exposes the `approval` alias for the field
+
 ### `-s/--set` config overrides — `aqueduct/overrides.py` + `aqueduct/cli.py`
 - ⏳ `parse_set_items`: `agent.timeout=5` → int 5; `=true`/`=false` → bool; `=null`/`=none` → None; `=3.5` → float; `=qwen:7b` → str; `x:={"a":1}` → dict via JSON
 - ⏳ `parse_set_items` rejects items with no `=` and empty/`..` paths → `OverrideError`

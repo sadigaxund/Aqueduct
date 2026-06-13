@@ -219,7 +219,7 @@ edges:
   - { from: clean, to: save }
 
 agent:
-  approval_mode: human
+  approval: human
   budget:
     max_reprompts: 5
     max_seconds: 120

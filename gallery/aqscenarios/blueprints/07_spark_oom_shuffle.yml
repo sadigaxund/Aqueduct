@@ -59,4 +59,4 @@ edges:
     to: out_aggregate
 
 agent:
-  approval_mode: auto
+  approval: auto

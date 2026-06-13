@@ -98,7 +98,7 @@ spark_config:
 # Per-blueprint. Connection defaults (provider, model) come from aqueduct.yml.
 
 agent:
-  # approval_mode controls what happens when the blueprint fails:
+  # approval controls what happens when the blueprint fails:
   #   disabled   — LLM never fires (default)
   #   human      — LLM generates patch → staged in patches/pending/ → run ends
   #                Review: aqueduct patch apply patches/pending/<id>.json --blueprint ...
@@ -107,8 +107,9 @@ agent:
   #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   #
-  # Legacy: `approval_mode: aggressive` still parses but is deprecated → use `auto` + max_patches.
-  approval_mode: "human"
+  # `approval_mode:` is a deprecated alias for `approval:` (parses with a warning until 2.0).
+  # Legacy: `approval: aggressive` still parses but is deprecated → use `auto` + max_patches.
+  approval: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
   max_patches: 1                  # 1 = single auto patch (default); > 1 enables the multi-patch loop

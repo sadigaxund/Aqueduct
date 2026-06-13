@@ -24,7 +24,11 @@ release and are marked **BREAKING**.
 - **`aqueduct run --sandbox` — dev dry-run.** Compile and execute a Blueprint against sampled inputs with every Egress skipped — no writes, no self-healing, no observability persistence. `--sample N` caps rows per Ingress (default `1000`, `0` = no limit). Reuses the patch-validation sandbox transform (Gate 3) so behaviour matches the heal sandbox: Egress modules are stripped and snapshotted, each Ingress is read through `.limit(N)`. A fast feedback loop for iterating on transforms without touching sinks. Requires `engine: spark`.
 - **Linear-edge sugar.** `edges:` may now be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the compiler chains modules in declaration order, injecting `main`-port edges flagged `injected: true` in the Manifest (`edges[].injected`). Blueprints that omit `edges:` while using Junction / Funnel / Arcade / Probe / Regulator fail compilation with a clear error, since those ports can't be inferred in a flat chain. Single-module Blueprints need no edges.
 
+### Changed
+- **`agent.approval` is now the canonical Blueprint key** (was `agent.approval_mode`). Values are unchanged (`disabled`/`human`/`auto`/`ci`). `agent.approval_mode` keeps working as an input alias with a parse-time `[deprecated]` warning; when both keys are present, `approval` wins. Templates, gallery examples, and docs now use `approval`. The internal field/attribute name is unchanged, so existing tooling reading the Manifest is unaffected.
+
 ### Deprecated
+- **`agent.approval_mode`** (Blueprint key) → use `agent.approval`. Parses with a warning until 2.0.
 - **`benchmark --provider` / `--base-url` / `--timeout`** → use `--set agent.provider=…` / `--set agent.base_url=…` / `--set agent.timeout=…`. The flags still work but print a deprecation warning; they will be removed in 2.0.
 
 ## [1.2.1] — 2026-06-11

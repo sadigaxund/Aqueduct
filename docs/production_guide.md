@@ -179,7 +179,7 @@ agent:
   base_url: "${LLM_BASE_URL}"
   model: "${LLM_MODEL}"
   timeout: 60
-  approval_mode: human
+  approval: human
 ```
 
 **Anthropic API:**
@@ -188,7 +188,7 @@ agent:
 agent:
   provider: anthropic
   model: claude-opus-4-7-20251001
-  approval_mode: human
+  approval: human
 ```
 
 Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`.
@@ -201,7 +201,7 @@ Certain features are disabled by default because they have destructive or expens
 
 ```yaml
 danger:
-  allow_multi_patch: false          # if true, approval_mode: auto + max_patches > 1 is allowed
+  allow_multi_patch: false          # if true, approval: auto + max_patches > 1 is allowed
   allow_full_probe_actions: false   # if true, Probes may run expensive Spark actions
   allow_full_preflight: false       # if true, sandbox_mode: preflight is allowed
   allow_skip_sandbox: false         # if true, sandbox_mode: off is allowed (no pre-validation)
@@ -222,11 +222,11 @@ pipeline fails → LLM generates patch → patch written to patches/pending/
 → human reviews → aqueduct patch apply → Blueprint updated → re-run
 ```
 
-`approval_mode: auto` is acceptable locally — git provides rollback.
+`approval: auto` is acceptable locally — git provides rollback.
 
 **Production (recommended):**
 
-**Rule: in production, use `approval_mode: human`. The LLM must never autonomously modify a Blueprint managed by CI/CD.**
+**Rule: in production, use `approval: human`. The LLM must never autonomously modify a Blueprint managed by CI/CD.**
 
 Recommended flow:
 
@@ -238,9 +238,9 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 → CI/CD validates → human approves → merge → redeploy
 ```
 
-**`approval_mode: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct fires a POST request to `agent.ci_webhook_url` with the full PatchSpec JSON. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider.
+**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct fires a POST request to `agent.ci_webhook_url` with the full PatchSpec JSON. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider.
 
-**`on_patch_pending` webhook:** When a patch is staged (`approval_mode: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
+**`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
 ### `patches/rules.md`
 
@@ -310,11 +310,11 @@ Before promoting a Blueprint to production:
 - [ ] All I/O paths use `${ctx.*}` refs resolved from environment variables (no hardcoded local paths)
 - [ ] `aqueduct doctor pipeline.yml` passes with `deployment.env: cluster` or `cloud`
 - [ ] `agent.guardrails.allowed_paths` set to cloud URI patterns
-- [ ] `agent.approval_mode: human` or `ci` (not `auto`)
+- [ ] `agent.approval: human` or `ci` (not `auto`)
 - [ ] No `danger.*: true` in production `aqueduct.yml`
 - [ ] API keys injected via environment (`@aq.secret()` reads `os.environ`)
 - [ ] Store directories point to persistent paths (PVC in K8s, edge node in YARN)
 - [ ] `patches/pending/` and `patches/rejected/` in `.gitignore`
 - [ ] `patches/applied/` and `patches/rules.md` committed to git
-- [ ] `agent.webhooks.on_patch_pending` configured if using `approval_mode: human` in a team setting
+- [ ] `agent.webhooks.on_patch_pending` configured if using `approval: human` in a team setting
 - [ ] If using `format: delta`: external OPTIMIZE / VACUUM jobs scheduled

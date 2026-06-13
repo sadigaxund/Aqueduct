@@ -54,4 +54,4 @@ edges:
     to: out_enriched
 
 agent:
-  approval_mode: auto
+  approval: auto
