@@ -285,6 +285,22 @@ This section tracks high-level functional verification of core features against 
 - ✅ `_compare`: `confidence` is deliberately EXCLUDED from regression detection — LLM self-reported confidence is too noisy to gate on (overconfidence bias + cross-model incomparability). Value still persisted in `benchmark_results.confidence` column for inspection. A confidence-only change between runs MUST NOT produce a `REGRESS` status.
 - ✅ `has_regressions([])` → False; `has_regressions([entry_with_regs])` → True; `has_regressions([new_pair_entry])` → False
 
+#### Benchmark v2 — `surveyor/benchmark_store.py` backend + stats
+- ⏳ `BenchmarkStore(backend="duckdb", location=<file>)` `.cursor()` opens DuckDB (DDL run); `persist_results`/`diff_latest` accept a `BenchmarkStore` AND a legacy `Path`/`str` (back-compat)
+- ⏳ `BenchmarkStore.from_config(cfg.stores.benchmark, <scenarios_dir>)`: duckdb + no path → `default_store_path(scenarios_dir)`; backend=postgres + no path → `ValueError`; backend=postgres + DSN → postgres store
+- ⏳ `compute_stats(store)` over seeded rows: `models` leaderboard ordered by pass_rate DESC (best first), each row has n/pass_rate/parse_rate/apply_rate/avg_diag/avg_duration from the LATEST row per (scenario,model); `scenarios` ordered by pass_rate ASC (hardest first); `trend` one entry per day, chronological
+- ⏳ `compute_stats` on an empty/missing store → `{"models":[], "scenarios":[], "trend":[]}`, no raise
+- ⏳ `format_stats` renders leaderboard + "→ best model" + hardest-scenarios + trend; empty stats → "(benchmark store empty …)"
+- ⏳ (integration, `-m integration`, `AQ_PG_DSN` set) postgres backend: persist + compute_stats round-trip against the `benchmark` schema
+- ⏳ `format_benchmark_table`: heavy/light rule lines are the SAME length as the data rows (regression test for the off-by-one bar width)
+- ⏳ `run_benchmark(workers=2)` populates `results` in deterministic scenario order (pre-populated dict) regardless of completion order; table renders identically to `workers=1` for the same inputs
+
+#### `cli.py` — `benchmark-stats` + deprecated store flags
+- ⏳ `aqueduct benchmark-stats --store-path <file>` prints the leaderboard/hardest/trend tables, exit 0; `--format json` emits `{models, scenarios, trend}`
+- ⏳ `aqueduct benchmark-stats --set stores.benchmark.backend=postgres` with no `path` → `CONFIG_ERROR(1)` (DSN required)
+- ⏳ `aqueduct benchmark <dir> --no-persist` prints `[deprecated] --no-persist` and skips persistence; `--store-path`/`--gate-on-regression` likewise warn and map onto `stores.benchmark.*`
+- ⏳ `aqueduct benchmark <dir> --set stores.benchmark.persist=false` skips persistence with no deprecation warning (canonical path)
+
 #### `cli.py` — `benchmark` flags + `benchmark-diff` command
 - ✅ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
 - ✅ `aqueduct benchmark` with no target → exit `USAGE_ERROR(5)`, error message — `test_cli/test_cli_benchmark.py::test_benchmark_no_target_exits_5`

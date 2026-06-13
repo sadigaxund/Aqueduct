@@ -4860,22 +4860,41 @@ def benchmark(
             err=True,
         )
 
-    # ── Phase 33 Part A — persist + optional regression gate ──────────────────
+    # ── Persist + optional regression gate ────────────────────────────────────
+    # Effective settings come from stores.benchmark (override with --set);
+    # the legacy --no-persist / --gate-on-regression / --store-path flags still
+    # work but are deprecated and warn.
+    from aqueduct.surveyor.benchmark_store import (
+        BenchmarkStore, diff_latest, format_diff_table,
+        has_regressions, persist_results,
+    )
+    bench_cfg = cfg.stores.benchmark
+    _persist = bench_cfg.persist
+    _gate = bench_cfg.gate_on_regression
+    if no_persist:
+        click.echo("[deprecated] --no-persist → use --set stores.benchmark.persist=false (removed in 2.0)", err=True)
+        _persist = False
+    if gate_on_regression:
+        click.echo("[deprecated] --gate-on-regression → use --set stores.benchmark.gate_on_regression=true (removed in 2.0)", err=True)
+        _gate = True
+
+    try:
+        if store_path_override:
+            click.echo("[deprecated] --store-path → use --set stores.benchmark.path=… (removed in 2.0)", err=True)
+            bench_store = BenchmarkStore(backend="duckdb", location=store_path_override)
+        else:
+            bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
+    except ValueError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
     regression_exit = False
-    if not no_persist:
-        from aqueduct.surveyor.benchmark_store import (
-            default_store_path, diff_latest, format_diff_table,
-            has_regressions, persist_results,
-        )
-        store_path = (
-            Path(store_path_override) if store_path_override
-            else default_store_path(Path(scenarios_dir))
-        )
-        written = persist_results(results, store_path)
+    if _persist:
+        written = persist_results(results, bench_store)
         if written and fmt != "json":
-            click.echo(f"↳ persisted {written} benchmark row(s) → {store_path}")
-        if gate_on_regression:
-            diff_entries = diff_latest(results, store_path)
+            click.echo(f"↳ persisted {written} benchmark row(s) → {bench_store.label}")
+        if _gate:
+            diff_entries = diff_latest(results, bench_store)
             if fmt == "json":
                 click.echo(json.dumps({
                     "diff": [
@@ -4901,9 +4920,9 @@ def benchmark(
                         "✗ regression(s) detected vs baseline — failing the gate",
                         err=True,
                     )
-    elif gate_on_regression and fmt != "json":
+    elif _gate and fmt != "json":
         click.echo(
-            "(--gate-on-regression ignored: --no-persist set)",
+            "(regression gate ignored: persistence is off)",
             err=True,
         )
 
@@ -5029,6 +5048,90 @@ def benchmark_diff_cmd(
         if fmt != "json":
             click.echo("✗ regression(s) detected", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+
+# ── aqueduct benchmark-stats ─────────────────────────────────────────────────
+
+
+@cli.command("benchmark-stats")
+@click.argument("scenarios", required=False, default=None, type=click.Path(exists=True))
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Benchmark store path (overrides stores.benchmark). Default: scenario-anchored "
+    "`.aqueduct/benchmark.duckdb`.",
+)
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value (e.g. --set stores.benchmark.backend=postgres "
+         "--set stores.benchmark.path=postgresql://h/db).",
+)
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+@_env_options
+def benchmark_stats_cmd(
+    scenarios: str | None,
+    config_path: str | None,
+    store_path_override: str | None,
+    set_items: tuple[str, ...],
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Aggregate the benchmark store: leaderboard, hardest scenarios, pass-rate trend.
+
+    Read-only over the store written by ``aqueduct benchmark`` (DuckDB or
+    Postgres). Uses the LATEST row per (scenario, model) for the leaderboard
+    and difficulty views.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.benchmark_store import (
+        BenchmarkStore, compute_stats, format_stats,
+    )
+
+    _resolve_and_load_env(
+        env_file, Path(config_path) if config_path else None, cli_env=cli_env
+    )
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
+
+    anchor = Path(scenarios) if scenarios else Path(".")
+    try:
+        if store_path_override:
+            store = BenchmarkStore(backend="duckdb", location=store_path_override)
+        else:
+            store = BenchmarkStore.from_config(cfg.stores.benchmark, anchor)
+    except ValueError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    stats = compute_stats(store)
+    if fmt == "json":
+        click.echo(json.dumps(stats, indent=2))
+    else:
+        click.echo(format_stats(stats))
 
 
 # ── aqueduct log ─────────────────────────────────────────────────────────────

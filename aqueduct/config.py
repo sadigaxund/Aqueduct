@@ -117,6 +117,43 @@ class KVStoreConfig(BaseModel):
     )
 
 
+class BenchmarkStoreConfig(BaseModel):
+    """Backend config for the benchmark history store (`aqueduct benchmark`).
+
+    Separate from the observability/lineage/depot stores: benchmark rows are
+    not tied to a real ``run_id`` and live in their own DB (DuckDB file) or
+    Postgres schema. ``path`` is optional — left unset, the DuckDB store is
+    anchored to the scenarios directory (``<scenarios_dir>/.aqueduct/
+    benchmark.duckdb``); set it to a file path or, for ``backend: postgres``, a
+    libpq DSN.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: RelationalBackend = Field(
+        default="duckdb",
+        description="`duckdb` (default, embedded file) or `postgres` (networked DSN).",
+    )
+    path: str | None = Field(
+        default=None,
+        description=(
+            "DuckDB: file path (default: scenario-anchored "
+            "`.aqueduct/benchmark.duckdb`). Postgres: libpq DSN. Not FsPath-"
+            "anchored — the CLI resolves the scenario-relative default."
+        ),
+    )
+    persist: bool = Field(
+        default=True,
+        description="Write each (scenario, model) row to the store. False = the old `--no-persist`.",
+    )
+    gate_on_regression: bool = Field(
+        default=False,
+        description=(
+            "After persisting, diff each (scenario, model) vs its baseline and "
+            "exit non-zero on any regression. The old `--gate-on-regression`."
+        ),
+    )
+
+
 # Backwards-compatible alias for code that still imports the old name.
 # The two new classes have identical shapes for the relational path; the
 # alias maps to `RelationalStoreConfig` so static typing keeps working.
@@ -190,6 +227,13 @@ class StoresConfig(BaseModel):
             "Depot KV store (`@aq.depot.*`). With postgres backend, the "
             "`depot_kv` table lives in the `depot` schema. With redis "
             "backend, keys live directly in the configured Redis database."
+        ),
+    )
+    benchmark: BenchmarkStoreConfig = Field(
+        default_factory=BenchmarkStoreConfig,
+        description=(
+            "Benchmark history store (`aqueduct benchmark`). DuckDB file or "
+            "Postgres schema (`benchmark`); disjoint from observability rows."
         ),
     )
 

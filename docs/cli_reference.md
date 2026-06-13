@@ -199,6 +199,7 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `aqueduct heal <run_id>` | Trigger self-healing on a failed run |
 | `aqueduct benchmark <path>` | Evaluate scenarios against models |
 | `aqueduct benchmark-diff` | Compare benchmark results for regressions |
+| `aqueduct benchmark-stats [path]` | Aggregate the store: model leaderboard, hardest scenarios, pass-rate trend |
 
 **Key flags for `heal`:**
 
@@ -217,11 +218,22 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `--provider anthropic\|openai_compat` | `agent.provider` | **Deprecated** → `--set agent.provider=…` (removed in 2.0) |
 | `--base-url <url>` | `agent.base_url` | **Deprecated** → `--set agent.base_url=…` (removed in 2.0) |
 | `--timeout <seconds>` | `agent.timeout` (300) | **Deprecated** → `--set agent.timeout=…` (removed in 2.0) |
-| `--workers <N>` | 1 | Parallel scenario×model pairs |
+| `--workers <N>` | 1 | Parallel scenario×model pairs. Per-pair progress prints one line per completed pair (serial mode keeps the grouped multi-line view). |
 | `--format table\|json` | `table` | |
-| `--no-persist` | off | Skip writing to `<scenarios_dir>/.aqueduct/benchmark.duckdb` |
-| `--store-path <path>` | `<scenarios_dir>/.aqueduct/benchmark.duckdb` | Override store path |
-| `--gate-on-regression` | off | Exit non-zero if any regression vs. prior row (passed flip, `patch_applies` flip, `diag_score` drop > 5pp). Implies persistence. |
+| `--no-persist` | from `stores.benchmark.persist` (true) | **Deprecated** → `--set stores.benchmark.persist=false` (removed in 2.0) |
+| `--store-path <path>` | from `stores.benchmark.path` (else `<scenarios_dir>/.aqueduct/benchmark.duckdb`) | **Deprecated** → `--set stores.benchmark.path=…` (removed in 2.0) |
+| `--gate-on-regression` | from `stores.benchmark.gate_on_regression` (false) | **Deprecated** → `--set stores.benchmark.gate_on_regression=true` (removed in 2.0) |
+
+The benchmark store backend is configured under `stores.benchmark` in `aqueduct.yml` (`backend: duckdb\|postgres`, `path`, `persist`, `gate_on_regression`) — Postgres rows live in the `benchmark` schema. Override any of these per-run with `--set stores.benchmark.*`.
+
+**Key flags for `benchmark-stats`:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `[scenarios]` (positional) | `.` | Scenarios path — anchors the default DuckDB store location |
+| `--store-path <path>` | from `stores.benchmark` | Read a specific store file directly |
+| `-s` / `--set PATH=VALUE` | — | e.g. `--set stores.benchmark.backend=postgres --set stores.benchmark.path=postgresql://h/db` |
+| `--format table\|json` | `table` | Leaderboard / hardest-scenarios / trend as text, or structured JSON |
 
 Production heal and `aqueduct benchmark` share the same `agent.budget:`
 block — divergence would let the leaderboard cheat by running under softer

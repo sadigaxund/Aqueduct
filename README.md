@@ -195,6 +195,7 @@ Compose extras as needed — `pip install aqueduct-core[spark,airflow,aws]`:
 ```yaml
 aqueduct: "1.0"
 id: hello.pipeline
+name: Hello Pipeline
 
 macros:
   active: "status = 'active' AND deleted_at IS NULL"
@@ -202,16 +203,19 @@ macros:
 modules:
   - id: load
     type: Ingress
+    label: Load orders
     config: { format: csv, path: "data/in.csv", options: { header: true } }
 
   - id: clean
     type: Channel
+    label: Filter active
     config:
       op: sql
       query: "SELECT order_id, amount FROM load WHERE {{ macros.active }}"
 
   - id: save
     type: Egress
+    label: Write parquet
     config: { format: parquet, path: "data/out/", mode: overwrite }
 
 edges:
@@ -220,10 +224,6 @@ edges:
 
 agent:
   approval: human
-  budget:
-    max_reprompts: 5
-    max_seconds: 120
-    same_signature_overall: 3
 ```
 
 Engine-wide defaults live in a separate `aqueduct.yml` (LLM provider, store backends, danger settings). Inline module tests live in `*.aqtest.yml`. Repeatable healing benchmarks live in `*.aqscenario.yml`. The [Gallery](gallery/) has runnable examples of each.

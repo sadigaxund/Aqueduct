@@ -144,6 +144,18 @@ stores:
     # backend: redis
     # path: "redis://host:6379/0"
 
+  # benchmark — history store for `aqueduct benchmark` (disjoint from the
+  # stores above; rows are not tied to a real run_id). Defaults to a DuckDB
+  # file anchored to the scenarios directory; no need to set `path` for duckdb.
+  benchmark:
+    backend: duckdb
+    # path: ".aqueduct/benchmark.duckdb"   # default: <scenarios_dir>/.aqueduct/benchmark.duckdb
+    persist: true                          # write each (scenario, model) row
+    gate_on_regression: false              # exit non-zero on any regression vs baseline
+    # Postgres (uncomment + install `aqueduct-core[postgres]`); rows live in the `benchmark` schema:
+    # backend: postgres
+    # path: "postgresql://aq@host:5432/aqueduct_db"
+
 
 # ── Cluster / Cloud deployment example ───────────────────────────────────────
 #
