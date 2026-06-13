@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **`aqueduct run --sandbox` — dev dry-run.** Compile and execute a Blueprint against sampled inputs with every Egress skipped — no writes, no self-healing, no observability persistence. `--sample N` caps rows per Ingress (default `1000`, `0` = no limit). Reuses the patch-validation sandbox transform (Gate 3) so behaviour matches the heal sandbox: Egress modules are stripped and snapshotted, each Ingress is read through `.limit(N)`. A fast feedback loop for iterating on transforms without touching sinks. Requires `engine: spark`.
+- **Linear-edge sugar.** `edges:` may now be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the compiler chains modules in declaration order, injecting `main`-port edges flagged `injected: true` in the Manifest (`edges[].injected`). Blueprints that omit `edges:` while using Junction / Funnel / Arcade / Probe / Regulator fail compilation with a clear error, since those ports can't be inferred in a flat chain. Single-module Blueprints need no edges.
 
 ## [1.2.1] — 2026-06-11
 

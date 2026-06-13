@@ -598,6 +598,12 @@ udf_registry: []
 
 
 # ── Edges ─────────────────────────────────────────────────────────────────────
+#
+# Optional. Omit `edges:` entirely and the compiler chains your modules in
+# declaration order (linear-edge sugar) — but only when every module is a
+# single-input/single-output type (Ingress, Channel, Egress, Assert). If you
+# use Junction / Funnel / Arcade / Probe / Regulator, wire edges explicitly:
+# their ports are ambiguous in a flat chain.
 
 edges: []
   # - from: raw_orders

@@ -83,6 +83,8 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--execution-date YYYY-MM-DD` | today (UTC) | Logical date for `@aq.date.*` — enables idempotent backfills |
 | `--resume <run_id>` | — | Resume from checkpoints of a previous run |
 | `--parallel` | off | Execute independent DAG branches concurrently (one thread per connected component) |
+| `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`. |
+| `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
 | `--ctx KEY=VALUE` | — | Override a Tier 0 context variable. Repeatable. |
 | `--profile <name>` | — | Activate a `context_profiles:` block |
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |

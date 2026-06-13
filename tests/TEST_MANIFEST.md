@@ -169,6 +169,12 @@ This section tracks high-level functional verification of core features against 
 - ✅ Arcade expansion namespaces IDs correctly
 - ✅ Arcade with missing required_context fails
 
+### Linear-edge sugar — `compiler.py`
+- ⏳ Blueprint with no `edges:` and only Ingress→Channel→Egress modules → compiler injects 2 edges in declaration order, each with `injected=True`; `manifest.to_dict()["edges"][0]` includes `"injected": true`
+- ⏳ Blueprint with no `edges:` and a `Junction` (or Funnel/Arcade/Probe/Regulator) module → `CompileError` naming the offending module id + type, message mentions "Linear-edge sugar"
+- ⏳ Blueprint with explicit `edges:` → no injection; every `edge.injected` is `False`
+- ⏳ Single-module Blueprint with no `edges:` → compiles, zero edges, no error
+
 ### Performance diagnostic warnings — `compiler.py`
 - ✅ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "SPARK_GUIDE.md#probe-sample-cost"
 - ✅ Probe with `row_count_estimate` (sample method) → warns; `row_count_estimate` with `method: spark_listener` → no warning
@@ -2218,6 +2224,15 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `observe_df(df, name, alias, enabled=True)` returns a wrapped df with a usable `Observation` (Spark 3.3+)
 - ✅ `execute(use_observe=False)` path completes a full Ingress→Channel→Egress run; resulting `module_metrics.records_written` is `NULL` (not collected) but the pipeline succeeds
 - ✅ `cli.py:run` reads `cfg.metrics.use_observe` and forwards it to `execute()`; default `true` reproduces pre-audit behaviour
+
+### `aqueduct run --sandbox` — `aqueduct/cli.py` + `aqueduct/patch/preview.py:build_sandbox_manifest`
+- ⏳ `build_sandbox_manifest(manifest, sample_rows=N)` drops every Egress module, returns them in `egress_targets`, and marks each Ingress config with `sandbox_limit=N`; edges referencing dropped Egress are removed
+- ⏳ `build_sandbox_manifest(manifest, sample_rows=0)` skips the `sandbox_limit` wrap (no row cap) but still strips Egress
+- ⏳ `run_sandbox_gate` still passes its existing tests after refactor onto `build_sandbox_manifest` (no behavior change — regression guard)
+- ⏳ `aqueduct run bp.yml --sandbox` on a healthy Ingress→Channel→Egress blueprint exits `SUCCESS(0)`, writes nothing to the Egress path, and prints the skipped Egress target(s)
+- ⏳ `aqueduct run bp.yml --sandbox` does not create/append observability rows (no Surveyor) — `run_records` unchanged before vs after
+- ⏳ `aqueduct run bp.yml --sandbox` with a failing transform exits `DATA_OR_RUNTIME(2)` and names the first erroring module
+- ⏳ `aqueduct run bp.yml --sandbox` with `engine` ≠ `spark` in aqueduct.yml exits `CONFIG_ERROR(1)`
 
 ### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
 

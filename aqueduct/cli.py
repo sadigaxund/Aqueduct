@@ -1246,6 +1246,21 @@ def _format_provenance_rows(pairs) -> str:
     help="Execute independent DAG branches concurrently (one thread per connected component). "
          "Only beneficial when the Blueprint has multiple fully-independent source trees.",
 )
+@click.option(
+    "--sandbox",
+    is_flag=True,
+    default=False,
+    help="Dev dry-run: compile + execute against sampled inputs with every Egress "
+         "skipped (no writes). No self-healing, no observability persistence. Fast "
+         "feedback loop for iterating on transforms.",
+)
+@click.option(
+    "--sample",
+    default=1000,
+    show_default=True,
+    type=int,
+    help="Row cap per Ingress in --sandbox mode (0 = no limit). Ignored without --sandbox.",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -1262,6 +1277,8 @@ def run(
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
     parallel: bool = False,
+    sandbox: bool = False,
+    sample: int = 1000,
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import os
@@ -1423,6 +1440,69 @@ def run(
         except CompileError as exc:
             click.echo(f"✗ compile error: {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
+
+        # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
+        # Dev loop: run the compiled pipeline against sampled inputs with every
+        # Egress skipped — no writes, no Surveyor, no self-healing, no
+        # observability persistence. Reuses the patch-validation sandbox
+        # transform so behaviour matches Gate 3.
+        if sandbox:
+            import atexit
+            from aqueduct.patch.preview import build_sandbox_manifest
+
+            if engine != "spark":
+                click.echo(f"✗ --sandbox requires engine=spark (got {engine!r})", err=True)
+                sys.exit(exit_codes.CONFIG_ERROR)
+
+            sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
+            merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex[:8]}"
+
+            _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"
+            click.echo(
+                f"⊙ sandbox dry-run — {_limit_desc}, {len(egress_targets)} Egress "
+                "module(s) skipped (no writes, no healing, no persistence)",
+                err=True,
+            )
+
+            from aqueduct.executor.spark.session import make_spark_session
+            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
+            atexit.register(session.stop)
+
+            try:
+                result = execute(
+                    sandboxed_manifest, session,
+                    run_id=sandbox_run_id,
+                    store_dir=None,
+                    surveyor=None,
+                    depot=depot,
+                    from_module=from_module,
+                    to_module=to_module,
+                    block_full_actions=not cfg.danger.allow_full_probe_actions,
+                    parallel=parallel,
+                )
+            except ExecuteError as exc:
+                click.echo(f"✗ sandbox run failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+            if result.status != "success":
+                failing = next((r for r in result.module_results if r.status == "error"), None)
+                detail = f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
+                click.echo(click.style(f"✗ sandbox run status={result.status}{detail}", fg="red"), err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+            _ran = sum(1 for r in result.module_results if r.status == "success")
+            click.echo(click.style(
+                f"✓ sandbox run succeeded — {_ran} module(s) executed, "
+                f"{len(egress_targets)} Egress skipped", fg="green",
+            ))
+            for tgt in egress_targets:
+                click.echo(
+                    f"    · skipped Egress {tgt['id']!r} → "
+                    f"{tgt.get('format')} {tgt.get('path')}",
+                    err=True,
+                )
+            sys.exit(exit_codes.SUCCESS)
 
         # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
         if resolved_store_dir is None:

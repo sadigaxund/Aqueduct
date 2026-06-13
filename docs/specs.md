@@ -180,6 +180,8 @@ retry_policy:                          # per-pipeline retry config
   max_attempts: 3
 ```
 
+**Linear-edge sugar.** `edges:` may be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
+
 ## **4.3 Module Schema — Common Fields**
 
 Every Module regardless of type shares these fields:

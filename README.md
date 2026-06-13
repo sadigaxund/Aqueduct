@@ -30,7 +30,7 @@
 A Spark job fails at 3 a.m. on a column rename upstream. Today that means a paged engineer scrolling a four-kilobyte JVM stack trace to find a one-line fix. Aqueduct turns it into a Git-diffable patch waiting for review in the morning.
 
 <kbd>
-  <img width="1600" height="764" alt="Screenshot 2026-06-13 at 05-23-26 (1)" src="https://github.com/user-attachments/assets/dedd5af5-aa59-4f09-9fa8-9632b02a6894" />
+  <img width="1600" height="764" alt="Figure 1: Aqueduct at a glance" src="https://github.com/user-attachments/assets/dedd5af5-aa59-4f09-9fa8-9632b02a6894" />
 </kbd>  
 
 <br><br>
@@ -103,7 +103,7 @@ When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope.
 
 <kbd>
   
-<img width="1362" height="1410" alt="Screenshot 2026-06-13 at 05-28-42 (1)(1)" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
+<img width="1362" height="1410" alt="Figure 2: The Healing Flow" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
 
 </kbd>
 
@@ -159,7 +159,7 @@ For the stage-by-stage detail, see the [Blueprint & Engine Spec](docs/specs.md).
 Aqueduct is a single CLI that runs on the Spark driver — no servers, no daemons. Logic flows through four immutable layers:
 
 <kbd>
-<img width="1343" height="663" alt="Screenshot 2026-06-13 at 05-31-32 (1)(1)" src="https://github.com/user-attachments/assets/d3f00605-2322-4a7b-a3e8-583bbf932d88" />
+<img width="1343" height="663" alt="Figure 3: Architecture" src="https://github.com/user-attachments/assets/d3f00605-2322-4a7b-a3e8-583bbf932d88" />
 </kbd>
 <br>
 
