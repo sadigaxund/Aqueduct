@@ -2234,6 +2234,34 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ `aqueduct run bp.yml --sandbox` with a failing transform exits `DATA_OR_RUNTIME(2)` and names the first erroring module
 - ⏳ `aqueduct run bp.yml --sandbox` with `engine` ≠ `spark` in aqueduct.yml exits `CONFIG_ERROR(1)`
 
+### `aqueduct lint` — `aqueduct/lint.py` + `aqueduct/cli.py:lint_cmd`
+- ⏳ AQ-LINT001: blueprint with a module touched by no edge / `depends_on` / `spillway` / `attach_to` → one finding for that module id; a Probe with `attach_to` set is NOT flagged
+- ⏳ AQ-LINT002: module with empty label → finding; module whose `label == id` → finding; descriptive label → none
+- ⏳ AQ-LINT003: same `(from, to, port)` edge declared twice → one finding; distinct edges → none
+- ⏳ AQ-LINT004: Channel `SELECT * FROM a JOIN a` (no alias) → finding; `FROM a x JOIN a y` (distinct aliases) → none
+- ⏳ AQ-LINT010: Channel `JOIN` with no `ON`/`USING` → finding; `JOIN … ON …` → none; explicit `CROSS JOIN` / comma-join → none (intentional)
+- ⏳ AQ-LINT011: `SELECT *` Channel with a main-port edge into an Egress → finding; same `SELECT *` not feeding an Egress → none
+- ⏳ AQ-LINT012: `SELECT region, SUM(x)` with no GROUP BY → finding; same query WITH `GROUP BY region` → none
+- ⏳ `run_lint` is resilient — a rule raising is logged + skipped, other rules still run; findings returned sorted by `(rule_id, module_id, message)`
+- ⏳ unparseable Channel SQL → SQL rules skip it silently (no finding, no crash)
+- ⏳ `aqueduct lint bp.yml` (warn-only findings) exits `SUCCESS(0)`; clean blueprint prints "no lint findings", exits 0
+- ⏳ `aqueduct lint bp.yml --strict` with ≥1 finding exits `CONFIG_ERROR(1)`; clean blueprint still exits 0
+- ⏳ `aqueduct lint bp.yml --format json` emits `{schema_version, blueprint, strict, summary{total,error,warn,passed}, findings[]}`; `--strict` flips each finding's `severity` to `error` and `summary.passed` to false
+- ⏳ `aqueduct lint missing-or-broken.yml` (parse error) exits `CONFIG_ERROR(1)`; `--format json` emits an `error` field with empty `findings`
+
+### `aqueduct doctor --format json` + grouped text — `aqueduct/cli.py:doctor`
+- ⏳ `aqueduct doctor --skip-spark --format json` emits `{schema_version, summary{ok,fail,warn,skip,total,passed}, checks[]}`; each check has `name/status/group/detail/elapsed_ms`; valid JSON parses
+- ⏳ JSON mode emits ALL checks (no `quiet_when_ok` / `skip` collapsing) regardless of `--verbose`
+- ⏳ JSON exit code matches text: `CONFIG_ERROR(1)` when any check failed, else `SUCCESS(0)`
+- ⏳ group assignment: `observability`/`lineage`/`depot` → `stores`; `spark`/`storage`/`cloudpickle` → `spark`; `agent`/`cascade-tier-*` → `agent`; `ingress:*`/`egress:*` → `io`; `webhook` → `network`; `aqtest`/`aqscenario`/`blueprint` → `validation`
+- ⏳ text mode prints labelled section headers (Config, Stores, Spark, …) in `_GROUP_ORDER`; the collapsed "more" line and final pass/fail summary still render
+
+### `aqueduct validate --format json` — `aqueduct/cli.py:validate`
+- ⏳ `aqueduct validate bp.yml --format json` emits `{schema_version, summary{total,valid,invalid,passed}, files[]}`; a valid blueprint file carries `id/modules/edges`; a config file carries `engine/target/stores/...`
+- ⏳ invalid blueprint → `files[].valid=false` with `error`, `summary.invalid≥1`, exit 1; valid → exit 0
+- ⏳ aqtest/aqscenario file → `files[].valid=null` with a `note` (not counted in valid/invalid)
+- ⏳ no file given and no aqueduct.yml in CWD, `--format json` → JSON with `error` field, exit `CONFIG_ERROR(1)`
+
 ### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
 
 - ✅ `aqueduct --version` exits 0 and prints `aqueduct <version>` with the version sourced from `importlib.metadata.version("aqueduct-core")`

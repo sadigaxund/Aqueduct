@@ -49,6 +49,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
 | `aqueduct doctor --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
+| `aqueduct doctor --format json` | Machine-readable result of every check (`{schema_version, summary, checks[]}`); implies `--verbose` (nothing collapsed). Text mode groups checks into sections (Config, Stores, Spark, …). |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 
 ### Shell completion
@@ -68,10 +69,28 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | Command | Description |
 |---------|-------------|
 | `aqueduct validate <file>...` | Static validation of blueprints/configs |
+| `aqueduct validate <file>... --format json` | Same checks, machine-readable (`{schema_version, summary, files[]}`) for CI |
+| `aqueduct lint <blueprint>` | Static style + correctness checks beyond schema validation (AQ-LINT rules) |
+| `aqueduct lint <blueprint> --strict` | Promote every finding to error — exit non-zero on any finding (CI gate) |
+| `aqueduct lint <blueprint> --format json` | Machine-readable findings (`{schema_version, summary, findings[]}`) |
 | `aqueduct compile <blueprint>` | Output the fully resolved Manifest |
 | `aqueduct run <blueprint>` | Compile and execute the pipeline |
 | `aqueduct test <file.aqtest.yml>` | Run isolated module unit tests |
 | `aqueduct schema [--target blueprint\|config\|patch] [-o <file>]` | Emit the Pydantic-derived JSON Schema for a Blueprint, `aqueduct.yml`, or PatchSpec — enables IDE autocomplete and CI schema gates. Writes to stdout by default. |
+
+### `aqueduct lint` rules
+
+`lint` runs after a successful parse and reports static smells the schema permits. Each rule has a stable `AQ-LINT<NNN>` id and a severity. All initial rules are advisory (`warn`) — a warn-only result exits `0`; `--strict` promotes findings to errors so a non-empty result exits `1` (`CONFIG_ERROR`), for CI gating. SQL rules parse Channel `op: sql` queries with sqlglot (`dialect="spark"`); unparseable SQL is skipped, never errored.
+
+| Rule | Severity | Flags |
+|------|----------|-------|
+| `AQ-LINT001` | warn | Orphan module — not referenced by any edge, `depends_on`, `spillway`, or `attach_to` |
+| `AQ-LINT002` | warn | Module label is empty or just repeats its `id` |
+| `AQ-LINT003` | warn | Duplicate edge — same `(from, to, port)` declared more than once |
+| `AQ-LINT004` | warn | Un-aliased self-join — a relation referenced 2+ times without distinct aliases |
+| `AQ-LINT010` | warn | Cartesian join — `JOIN` with no `ON`/`USING` (explicit `CROSS JOIN` is allowed) |
+| `AQ-LINT011` | warn | `SELECT *` in a Channel that feeds directly into an Egress (silent schema drift) |
+| `AQ-LINT012` | warn | Aggregate function mixed with a non-aggregated column and no `GROUP BY` |
 
 ### Important `aqueduct run` Flags
 

@@ -714,9 +714,17 @@ def completion_cmd(shell: str) -> None:
 
 @cli.command()
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format. `json` emits a stable, versioned per-file document.",
+)
 @_env_options
 def validate(
-    files: tuple[str, ...], env_file: str | None, cli_env: tuple[str, ...]
+    files: tuple[str, ...], fmt: str, env_file: str | None, cli_env: tuple[str, ...]
 ) -> None:
     """Static validation — parse + schema check, no side effects.
 
@@ -732,17 +740,30 @@ def validate(
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.config import ConfigError, load_config
 
+    _VALIDATE_JSON_SCHEMA_VERSION = "1.0"
+
     targets = [Path(f) for f in files]
     if not targets:
         default_cfg = Path.cwd() / "aqueduct.yml"
         if default_cfg.exists():
-            click.echo(f"(no file given → validating {default_cfg.name})", err=True)
+            if fmt == "text":
+                click.echo(f"(no file given → validating {default_cfg.name})", err=True)
             targets = [default_cfg]
         else:
-            click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
+            if fmt == "json":
+                click.echo(json.dumps({
+                    "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
+                    "summary": {"total": 0, "valid": 0, "invalid": 0, "passed": False},
+                    "files": [],
+                    "error": "no file given and no aqueduct.yml in CWD",
+                }, indent=2))
+            else:
+                click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
 
+    text = fmt == "text"
     any_fail = False
+    file_results: list[dict] = []
     for path in targets:
         _resolve_and_load_env(env_file, path, cli_env=cli_env)
         kind = _sniff_file_kind(path)
@@ -752,40 +773,188 @@ def validate(
                 cfg = load_config(path)
                 _apply_warnings_from_cfg(cfg)
             except ConfigError as exc:
-                click.echo(f"✗ {path}: {exc}", err=True)
+                if text:
+                    click.echo(f"✗ {path}: {exc}", err=True)
+                file_results.append({"path": str(path), "kind": "config", "valid": False, "error": str(exc)})
                 any_fail = True
                 continue
-            click.echo(f"✓ {path}  [engine config]")
-            click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-            click.echo(f"  stores:  observability={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
-            click.echo(f"  secrets: provider={cfg.secrets.provider}")
-            wh_lines = []
+            wh = {}
             if cfg.webhooks.on_failure:
-                wh_lines.append(f"on_failure={cfg.webhooks.on_failure.method} {cfg.webhooks.on_failure.url}")
+                wh["on_failure"] = f"{cfg.webhooks.on_failure.method} {cfg.webhooks.on_failure.url}"
             if cfg.webhooks.on_success:
-                wh_lines.append(f"on_success={cfg.webhooks.on_success.method} {cfg.webhooks.on_success.url}")
-            click.echo(f"  webhooks: {', '.join(wh_lines) if wh_lines else '(not configured)'}")
-            if cfg.spark_config:
-                click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
+                wh["on_success"] = f"{cfg.webhooks.on_success.method} {cfg.webhooks.on_success.url}"
+            file_results.append({
+                "path": str(path), "kind": "config", "valid": True,
+                "engine": cfg.deployment.engine, "target": cfg.deployment.target,
+                "master_url": cfg.deployment.master_url,
+                "stores": {
+                    "observability": cfg.stores.observability.path,
+                    "lineage": cfg.stores.lineage.path,
+                    "depot": cfg.stores.depot.path,
+                },
+                "secrets_provider": cfg.secrets.provider,
+                "webhooks": wh,
+                "spark_config": cfg.spark_config or {},
+            })
+            if text:
+                click.echo(f"✓ {path}  [engine config]")
+                click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
+                click.echo(f"  stores:  observability={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
+                click.echo(f"  secrets: provider={cfg.secrets.provider}")
+                click.echo(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}")
+                if cfg.spark_config:
+                    click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
 
         elif kind == "blueprint" or kind is None:
             # Unknown header → attempt blueprint parse (most common case);
             # the parser emits a precise error if it is not a blueprint.
             try:
                 bp = parse(str(path))
-                click.echo(f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]")
+                file_results.append({
+                    "path": str(path), "kind": "blueprint", "valid": True,
+                    "id": bp.id, "modules": len(bp.modules), "edges": len(bp.edges),
+                })
+                if text:
+                    click.echo(f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]")
             except ParseError as exc:
-                click.echo(f"✗ {path}: {exc}", err=True)
+                file_results.append({"path": str(path), "kind": "blueprint", "valid": False, "error": str(exc)})
                 any_fail = True
+                if text:
+                    click.echo(f"✗ {path}: {exc}", err=True)
 
         else:  # aqtest / aqscenario — schema pre-flight lives in `doctor`
-            click.echo(
-                f"- {path}: {kind} file — use `aqueduct doctor --{kind} {path}` "
-                "for schema pre-flight",
-                err=True,
-            )
+            file_results.append({
+                "path": str(path), "kind": kind, "valid": None,
+                "note": f"use `aqueduct doctor --{kind} {path}` for schema pre-flight",
+            })
+            if text:
+                click.echo(
+                    f"- {path}: {kind} file — use `aqueduct doctor --{kind} {path}` "
+                    "for schema pre-flight",
+                    err=True,
+                )
+
+    if fmt == "json":
+        _checked = [r for r in file_results if r["valid"] is not None]
+        click.echo(json.dumps({
+            "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
+            "summary": {
+                "total": len(file_results),
+                "valid": sum(1 for r in _checked if r["valid"]),
+                "invalid": sum(1 for r in _checked if not r["valid"]),
+                "passed": not any_fail,
+            },
+            "files": file_results,
+        }, indent=2))
 
     sys.exit(1 if any_fail else 0)
+
+
+@cli.command("lint")
+@click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
+@click.option("-p", "--profile", default=None, help="Context profile to activate")
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help="Promote every finding to error severity — exit non-zero on any "
+    "finding. Use to gate CI on a lint-clean Blueprint.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format. `json` emits a stable, versioned document.",
+)
+@_env_options
+def lint_cmd(
+    blueprint: str,
+    profile: str | None,
+    strict: bool,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Static style + correctness checks on a Blueprint (AQ-LINT rules).
+
+    Goes beyond `validate` (which only parses + schema-checks): lints the
+    parsed module/edge graph and Channel SQL for smells the schema permits —
+    orphan modules, duplicate edges, non-descriptive labels, cartesian joins,
+    `SELECT *` into an Egress, aggregate/GROUP BY mismatches, un-aliased
+    self-joins. Each finding has a stable `AQ-LINT<NNN>` id.
+
+    All initial rules are advisory (`warn`); a clean Blueprint and a
+    warn-only result both exit 0. `--strict` promotes findings to errors so a
+    non-empty result exits non-zero — wire that into CI to enforce a clean tree.
+    """
+    import json
+    from pathlib import Path
+
+    from aqueduct.lint import LINT_SCHEMA_VERSION, run_lint
+    from aqueduct.parser.parser import ParseError, parse
+
+    _resolve_and_load_env(env_file, Path(blueprint), cli_env=cli_env)
+    try:
+        bp = parse(blueprint, profile=profile)
+    except ParseError as exc:
+        if fmt == "json":
+            click.echo(json.dumps({
+                "schema_version": LINT_SCHEMA_VERSION,
+                "blueprint": str(blueprint),
+                "error": f"parse error: {exc}",
+                "findings": [],
+            }, indent=2))
+        else:
+            click.echo(f"✗ {blueprint}: parse error — {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    findings = run_lint(bp)
+
+    def _sev(f) -> str:
+        return "error" if strict else f.severity
+
+    n_error = sum(1 for f in findings if _sev(f) == "error")
+    n_warn = len(findings) - n_error
+    has_blocking = n_error > 0
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "schema_version": LINT_SCHEMA_VERSION,
+            "blueprint": bp.id,
+            "strict": strict,
+            "summary": {
+                "total": len(findings),
+                "error": n_error,
+                "warn": n_warn,
+                "passed": not has_blocking,
+            },
+            "findings": [
+                {
+                    "rule_id": f.rule_id,
+                    "severity": _sev(f),
+                    "module_id": f.module_id,
+                    "message": f.message,
+                }
+                for f in findings
+            ],
+        }, indent=2))
+    else:
+        if not findings:
+            click.echo(click.style(f"✓ {blueprint}: no lint findings", fg="green"))
+        else:
+            for f in findings:
+                sev = _sev(f)
+                color = "red" if sev == "error" else "yellow"
+                loc = f" [{f.module_id}]" if f.module_id else ""
+                click.echo(click.style(
+                    f"  {sev.upper():<5} {f.rule_id}{loc}: {f.message}", fg=color,
+                ))
+            click.echo()
+            click.echo(f"{len(findings)} finding(s): {n_error} error, {n_warn} warn")
+
+    sys.exit(exit_codes.CONFIG_ERROR if has_blocking else exit_codes.SUCCESS)
 
 
 @cli.command("schema")
@@ -880,6 +1049,15 @@ def schema(target: str, output: str) -> None:
     default=False,
     help="Show skipped checks too (not-applicable / not-configured), not just the collapsed summary.",
 )
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["text", "json"]),
+    default="text",
+    show_default=True,
+    help="Output format. `json` emits a stable, versioned document of every "
+    "check (implies --verbose: no rows are collapsed).",
+)
 @_env_options
 def doctor(
     target: str | None,
@@ -888,6 +1066,7 @@ def doctor(
     aqtest_path: str | None,
     aqscenario_path: str | None,
     verbose: bool,
+    fmt: str,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -944,12 +1123,40 @@ def doctor(
     _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
     _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
 
-    if skip_spark:
-        click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
-    elif preflight:
-        click.echo("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...")
-    else:
-        click.echo("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...")
+    # Group assignment for sectioned display + JSON. Most checks already carry
+    # a `group`; leaf checks default to "general" — stamp those by name here so
+    # the renderer can section them without per-call-site churn in doctor/.
+    _GROUP_FOR_NAME = {
+        "config": "config",
+        "observability": "stores", "lineage": "stores", "depot": "stores",
+        "store-backend": "stores", "cluster-stores": "stores",
+        "secrets": "secrets",
+        "agent": "agent",
+        "webhook": "network",
+        "spark": "spark", "storage": "spark", "cloudpickle": "spark",
+        "aqtest": "validation", "aqscenario": "validation", "blueprint": "validation",
+    }
+    _GROUP_ORDER = ["config", "stores", "spark", "io", "agent", "secrets", "network", "validation", "general"]
+    _GROUP_LABEL = {
+        "config": "Config", "stores": "Stores", "spark": "Spark",
+        "io": "Blueprint sources", "agent": "Agent / LLM", "secrets": "Secrets",
+        "network": "Network", "validation": "Blueprint files", "general": "General",
+    }
+
+    def _group_of(r) -> str:
+        if r.group and r.group != "general":
+            return r.group
+        if r.name.startswith(("ingress:", "egress:")):
+            return "io"
+        return _GROUP_FOR_NAME.get(r.name, "general")
+
+    if fmt == "text":
+        if skip_spark:
+            click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
+        elif preflight:
+            click.echo("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...")
+        else:
+            click.echo("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...")
 
     results = run_doctor(
         config_path=config_path,
@@ -960,6 +1167,32 @@ def doctor(
         preflight=preflight,
     )
 
+    any_fail = any(r.status == "fail" for r in results)
+
+    # ── JSON output (no row collapsing — every check is emitted) ──────────────
+    if fmt == "json":
+        import json as _json
+        _DOCTOR_JSON_SCHEMA_VERSION = "1.0"
+        counts = {"ok": 0, "fail": 0, "warn": 0, "skip": 0}
+        for r in results:
+            counts[r.status] = counts.get(r.status, 0) + 1
+        click.echo(_json.dumps({
+            "schema_version": _DOCTOR_JSON_SCHEMA_VERSION,
+            "summary": {**counts, "total": len(results), "passed": not any_fail},
+            "checks": [
+                {
+                    "name": r.name,
+                    "status": r.status,
+                    "group": _group_of(r),
+                    "detail": r.detail,
+                    "elapsed_ms": r.elapsed_ms,
+                }
+                for r in results
+            ],
+        }, indent=2))
+        sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
+
+    # ── Text output (grouped sections) ────────────────────────────────────────
     # Default view = actionable rows only. Hidden (collapsed into one aligned
     # line): `skip` rows (not-applicable / not-configured) and green
     # low-signal rows (quiet_when_ok, e.g. cloudpickle). Policy is data on
@@ -972,20 +1205,27 @@ def doctor(
 
     col_w = max((len(r.name) for r in shown), default=0)
     col_w = max(col_w, len("more")) + 2
-    any_fail = False
+
+    by_group: dict[str, list] = {}
     for r in shown:
-        icon = _STATUS_ICON[r.status]
-        color = _STATUS_COLOR[r.status]
-        label = r.name.ljust(col_w)
-        elapsed = f"  [{r.elapsed_ms}ms]" if r.elapsed_ms > 0 else ""
-        line = f"  {icon} {label}{r.detail}{elapsed}"
-        click.echo(click.style(line, fg=color) if color else line)
-        if r.status == "fail":
-            any_fail = True
+        by_group.setdefault(_group_of(r), []).append(r)
+
+    for grp in _GROUP_ORDER:
+        rows = by_group.get(grp)
+        if not rows:
+            continue
+        click.echo(click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg="cyan", bold=True))
+        for r in rows:
+            icon = _STATUS_ICON[r.status]
+            color = _STATUS_COLOR[r.status]
+            label = r.name.ljust(col_w)
+            elapsed = f"  [{r.elapsed_ms}ms]" if r.elapsed_ms > 0 else ""
+            line = f"    {icon} {label}{r.detail}{elapsed}"
+            click.echo(click.style(line, fg=color) if color else line)
 
     if hidden:
         names = ", ".join(r.name for r in hidden)
-        # Same `  {glyph} {name.ljust(col_w)}{detail}` shape as every row above.
+        # Same aligned `{glyph} {name.ljust(col_w)}{detail}` shape as the rows above.
         click.echo(click.style(
             f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)",
             fg="bright_black",
