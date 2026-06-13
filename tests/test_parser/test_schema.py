@@ -233,3 +233,119 @@ class TestPromptContext:
         assert "agent" in m_dict
         assert "prompt_context" in m_dict["agent"]
         assert m_dict["agent"]["prompt_context"] == "Contextual info"
+
+
+class TestErrorTypesValidation:
+    def test_error_types_on_non_spillway_edge_raises(self, tmp_path):
+        """error_types on a main-port edge → ParseError mentioning port='spillway'."""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text("""
+aqueduct: '1.0'
+id: test
+name: Test
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: data}
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: src
+    to: sink
+    error_types: ["DataQualityViolation"]
+""")
+        from aqueduct.parser.parser import ParseError, parse
+        with pytest.raises(ParseError, match="spillway"):
+            parse(str(bp_file))
+
+    def test_error_types_on_spillway_edge_parses(self, tmp_path):
+        """error_types on a spillway edge parses successfully."""
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text("""
+aqueduct: '1.0'
+id: test
+name: Test
+modules:
+  - id: src
+    type: Ingress
+    label: Src
+    config: {format: parquet, path: data}
+  - id: sink
+    type: Egress
+    label: Sink
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: src
+    to: sink
+    port: spillway
+    error_types: ["DataQualityViolation"]
+""")
+        from aqueduct.parser.parser import parse
+        bp = parse(str(bp_file))
+        assert len(bp.edges) == 1
+        assert bp.edges[0].port == "spillway"
+        assert bp.edges[0].error_types == ("DataQualityViolation",)
+
+
+# ── Phase 46 — agent.model: list[str] sugar ──────────────────────────────────
+
+class TestAgentModelListSugar:
+    def test_list_two_models_synthesises_cascade(self):
+        from aqueduct.parser.schema import AgentSchema
+        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval_mode": "auto"})
+        assert s.model == "claude"
+        assert s.cascade is not None
+        assert len(s.cascade) == 2
+        assert s.cascade[0].model == "claude"
+        assert s.cascade[1].model == "gpt4"
+
+    def test_single_item_list_collapses_to_plain_string(self):
+        from aqueduct.parser.schema import AgentSchema
+        s = AgentSchema.model_validate({"model": ["claude"], "approval_mode": "auto"})
+        assert s.model == "claude"
+        assert s.cascade is None
+
+    def test_empty_list_raises_validation_error(self):
+        from aqueduct.parser.schema import AgentSchema
+        with pytest.raises(ValueError, match=r"non-empty model name strings"):
+            AgentSchema.model_validate({"model": [], "approval_mode": "auto"})
+
+    def test_list_with_non_string_item_raises_error(self):
+        from aqueduct.parser.schema import AgentSchema
+        with pytest.raises(ValueError, match=r"non-empty model name strings"):
+            AgentSchema.model_validate({"model": ["claude", 42], "approval_mode": "auto"})
+
+    def test_list_with_empty_string_raises_error(self):
+        from aqueduct.parser.schema import AgentSchema
+        with pytest.raises(ValueError, match=r"non-empty model name strings"):
+            AgentSchema.model_validate({"model": [""], "approval_mode": "auto"})
+
+    def test_list_and_explicit_cascade_mutually_exclusive(self):
+        from aqueduct.parser.schema import AgentSchema
+        with pytest.raises(ValueError, match=r"mutually exclusive"):
+            AgentSchema.model_validate({
+                "model": ["claude", "gpt4"],
+                "cascade": [{"model": "claude"}],
+                "approval_mode": "auto",
+            })
+
+    def test_plain_string_model_no_list_preserved(self):
+        from aqueduct.parser.schema import AgentSchema
+        s = AgentSchema.model_validate({"model": "claude", "approval_mode": "auto"})
+        assert s.model == "claude"
+        assert s.cascade is None
+
+    def test_list_three_models_all_in_cascade(self):
+        from aqueduct.parser.schema import AgentSchema
+        s = AgentSchema.model_validate({
+            "model": ["claude", "gpt4", "gemini"],
+            "approval_mode": "auto",
+        })
+        assert s.model == "claude"
+        assert len(s.cascade) == 3
+        assert s.cascade[0].model == "claude"
+        assert s.cascade[1].model == "gpt4"
+        assert s.cascade[2].model == "gemini"

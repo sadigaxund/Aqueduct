@@ -1618,6 +1618,8 @@ def run(
         patch_rejected_by_gate = False  # set when a validation gate rejects a patch in auto (non-interactive) mode → VALIDATION_GATE(4)
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
+        _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
+
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
             # for execute() and persisted on `run_records`. The user-visible
@@ -1720,6 +1722,125 @@ def run(
                         err=True,
                     )
                     break
+
+            # ── Phase 45 signature memory — zero-token paths before the LLM ───────
+            # The failure signature hash is computed every iteration (it also
+            # stamps healing_outcomes.failure_signature for LLM resolutions).
+            from aqueduct.agent.signature import from_failure_context as _from_failure_ctx
+            _sig_exact, _sig_coarse = _from_failure_ctx(failure_ctx)
+            _patch_source = "llm"     # → stage_patch_for_human(source=...) + healing_outcomes.resolution
+            _replay_result = None     # synthetic AgentPatchResult substituting the LLM call
+            _replay_gates_done = False  # gates already ran on the replay candidate pre-substitution
+
+            _memory_cfg = getattr(cfg.agent, "memory", None)
+            if _memory_cfg is None or _memory_cfg.replay:
+                from aqueduct.agent import memory as _heal_memory
+
+                # 1) Pending-patch reuse — same failure already has a patch
+                #    awaiting review; re-healing it would burn tokens on a
+                #    duplicate. Surface the existing patch and stop.
+                _pending_hit = _heal_memory.find_pending(_sig_exact.hash, patches_dir)
+                if _pending_hit is not None:
+                    _rel_pending = (
+                        _pending_hit.path.relative_to(_project_root)
+                        if _pending_hit.path.is_relative_to(_project_root) else _pending_hit.path
+                    )
+                    click.echo(
+                        f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
+                        f"this failure signature ({_sig_exact.hash}) — skipping LLM (0 tokens)\n"
+                        f"    Review: aqueduct patch apply {_rel_pending} --blueprint {blueprint}",
+                        err=True,
+                    )
+                    patch_staged_for_review = True
+                    try:
+                        from types import SimpleNamespace as _NS
+                        surveyor.record_heal_attempt(
+                            run_id=run_id,
+                            attempt_record=_NS(attempt_num=0, signature=_sig_exact,
+                                               tokens_in=0, tokens_out=0, latency_ms=0,
+                                               gate_that_rejected=None, escalated=False),
+                            stop_reason="cached",
+                        )
+                        surveyor.record_healing_outcome(
+                            run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                            parent_run_id=run_id,
+                            failure_category=failure_ctx.error_class, model=None,
+                            patch_id=_pending_hit.patch_id, confidence=None,
+                            patch_applied=False, run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash, resolution="cached",
+                        )
+                    except Exception:
+                        pass  # persistence must never block the cache hit
+                    break
+
+                # 2) Exact replay — an archived patch already fixed this
+                #    signature (confirmed via healing_outcomes). Re-validate it
+                #    through the normal pipeline with zero LLM tokens; any
+                #    failure falls through to the LLM in this same iteration.
+                _candidate = _heal_memory.find_replay_candidate(
+                    _sig_exact.hash, patches_dir, surveyor.successful_patch_ids(),
+                )
+                if _candidate is not None and _candidate.patch_id not in _replay_tried:
+                    _replay_tried.add(_candidate.patch_id)
+                    try:
+                        from aqueduct.patch.grammar import PatchSpec as _PatchSpec
+                        _payload = {k: v for k, v in _candidate.payload.items() if k != "_aq_meta"}
+                        _replay_patch = _PatchSpec.model_validate(_payload)
+                    except Exception as _re_exc:
+                        _replay_patch = None
+                        click.echo(
+                            f"  ⚠ heal cache: archived patch {_candidate.patch_id} no longer "
+                            f"parses ({_re_exc}) — falling through to LLM",
+                            err=True,
+                        )
+                    if _replay_patch is not None:
+                        _replay_ok = True
+                        if effective_mode in ("auto", "aggressive"):
+                            # Run the gate pyramid on the candidate NOW so a stale
+                            # patch costs one sandbox pass, not a production write.
+                            _rg2, _rg3, _rg4, _rg3_passed = _run_patch_gates_inline(
+                                patch=_replay_patch,
+                                blueprint_path=Path(blueprint),
+                                bundle=bundle,
+                                surveyor=surveyor,
+                                failed_module=failure_ctx.failed_module,
+                                iteration_run_id=iteration_run_id,
+                                blueprint_id=manifest.blueprint_id,
+                                sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                            )
+                            if _rg3 is not None and not _rg3_passed:
+                                _replay_ok = False
+                                click.echo(
+                                    f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
+                                    f"sandbox replay ({_rg3.detail}) — falling through to LLM",
+                                    err=True,
+                                )
+                            else:
+                                _replay_gates_done = True
+                        if _replay_ok:
+                            from aqueduct.agent import AgentPatchResult as _AgentPatchResult
+                            _replay_result = _AgentPatchResult(
+                                patch=_replay_patch, attempts=0, stop_reason="replayed",
+                            )
+                            _patch_source = "replay"
+                            click.echo(
+                                f"  ✓ heal cache: replaying archived patch {_candidate.patch_id} "
+                                f"(signature {_sig_exact.hash}, 0 tokens)",
+                                err=True,
+                            )
+                            try:
+                                from types import SimpleNamespace as _NS
+                                surveyor.record_heal_attempt(
+                                    run_id=run_id,
+                                    attempt_record=_NS(attempt_num=0, signature=_sig_exact,
+                                                       tokens_in=0, tokens_out=0, latency_ms=0,
+                                                       gate_that_rejected=None, escalated=False),
+                                    stop_reason="replayed",
+                                )
+                            except Exception:
+                                pass
+
+            _resolution = "replayed" if _patch_source == "replay" else "llm"
 
             # ── Generate patch ────────────────────────────────────────────────────
             from aqueduct.agent import archive_patch, generate_agent_patch, stage_patch_for_human
@@ -1871,8 +1992,13 @@ def run(
                     except Exception as exc:
                         return False, f"Validation error: {exc}"
 
+            # Phase 45: a validated replay candidate substitutes the LLM call
+            # entirely — downstream staging/validation/archival treats it like
+            # any agent patch (with source="replay" + resolution="replayed").
+            if _replay_result is not None:
+                agent_result = _replay_result
             # Phase 44: multi-model cascade takes priority over single-model loop.
-            if _cascade_tiers:
+            elif _cascade_tiers:
                 from aqueduct.agent.cascade import generate_cascade_patch
                 agent_result = generate_cascade_patch(
                     tiers=list(_cascade_tiers),
@@ -1894,6 +2020,9 @@ def run(
                     apply_callback=_apply_cb,
                     validate_callback=_validate_cb,
                     on_attempt=_persist_attempt,
+                    memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                    retry_max_retries=cfg.agent.retry.max_retries,
+                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                 )
             else:
                 agent_result = generate_agent_patch(
@@ -1915,8 +2044,18 @@ def run(
                     validate_callback=_validate_cb,
                     on_attempt=_persist_attempt,
                     apply_callback=_apply_cb,
+                    memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                    retry_max_retries=cfg.agent.retry.max_retries,
+                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                 )
             patch = agent_result.patch
+            # Phase 46 — record the model that actually produced this result
+            # (under cascade the producing tier's model, not the top-level
+            # agent.model) and its tier index. None on replay (no LLM ran).
+            _outcome_model = agent_result.model or (
+                None if _patch_source == "replay" else resolved_agent_model
+            )
+            _cascade_pos = agent_result.model_cascade_position
             # Update the last persisted row with stop_reason so downstream
             # joins can answer "which axis terminated this heal".
             if agent_result.attempt_records and agent_result.stop_reason:
@@ -1953,11 +2092,13 @@ def run(
                             parent_run_id=run_id,
                             failed_module=failure_ctx.failed_module,
                             failure_category=_fail_cat,
-                            model=resolved_agent_model,
+                            model=_outcome_model,
                             patch_id=None,
                             confidence=None,
                             patch_applied=False,
                             run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash, resolution="llm",
+                            model_cascade_position=getattr(_rec, "model_cascade_position", None),
                         )
                 except Exception:
                     pass  # never let persistence block the loop exit
@@ -2004,7 +2145,8 @@ def run(
                 last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
                 click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                                      source=_patch_source)
                 click.echo(
                     f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
                     err=True,
@@ -2012,9 +2154,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2022,7 +2166,8 @@ def run(
 
             if effective_mode == "human":
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                                      on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                                      source=_patch_source)
                 patch_staged_for_review = True
                 pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
                     or patches_dir / "pending" / f"{patch.patch_id}.json"
@@ -2036,9 +2181,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2057,7 +2204,9 @@ def run(
                     except Exception as _ce:
                         click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
-                                      on_patch_pending_webhook=cfg.webhooks.on_ci_patch)
+                                      on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
+                                      source=_patch_source,
+                                      webhook_event="on_ci_patch")
                 patch_staged_for_review = True
                 click.echo(
                     f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
@@ -2066,9 +2215,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
+                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 break
 
@@ -2076,7 +2227,9 @@ def run(
                 # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
                 # Phase 43: when deep_loop is enabled, these gates already ran
                 # inside the LLM conversation — skip the redundant post-hoc run.
-                if _deep_loop:
+                # Phase 45: same skip when the gates already validated a replay
+                # candidate at the heal-cache check.
+                if _deep_loop or _replay_gates_done:
                     _g3_passed = True
                     _g2, _g3, _g4 = None, None, None
                 else:
@@ -2103,9 +2256,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     _stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
@@ -2128,9 +2283,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
 
@@ -2158,9 +2315,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
+                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
                     _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
@@ -2179,16 +2338,22 @@ def run(
             elif effective_mode == "aggressive":
                 # Patch validation pyramid Gates 2, 3, 4 pre-filter for the legacy
                 # `aggressive` mode (deprecated alias for `auto` + `max_patches > 1`).
-                _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
-                    patch=patch,
-                    blueprint_path=Path(blueprint),
-                    bundle=bundle,
-                    surveyor=surveyor,
-                    failed_module=failure_ctx.failed_module,
-                    iteration_run_id=iteration_run_id,
-                    blueprint_id=manifest.blueprint_id,
-                    sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                )
+                # Phase 45: gates already ran on a replay candidate at the
+                # heal-cache check — skip the redundant rerun.
+                if _replay_gates_done:
+                    _g3_passed = True
+                    _g2, _g3, _g4 = None, None, None
+                else:
+                    _g2, _g3, _g4, _g3_passed = _run_patch_gates_inline(
+                        patch=patch,
+                        blueprint_path=Path(blueprint),
+                        bundle=bundle,
+                        surveyor=surveyor,
+                        failed_module=failure_ctx.failed_module,
+                        iteration_run_id=iteration_run_id,
+                        blueprint_id=manifest.blueprint_id,
+                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                    )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
                     if manifest.agent.block_on_explain_regression is not None
@@ -2206,9 +2371,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     continue
                 if _g3 is not None and not _g3_passed:
@@ -2220,9 +2387,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     continue  # try next patch iteration
 
@@ -2237,9 +2406,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
 
@@ -2250,9 +2421,11 @@ def run(
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                         parent_run_id=run_id,
-                        failure_category=patch.category, model=resolved_agent_model,
+                        failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
+                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        model_cascade_position=_cascade_pos,
                     )
                     break
                 try:
@@ -2275,9 +2448,11 @@ def run(
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
                     parent_run_id=run_id,
-                    failure_category=patch.category, model=resolved_agent_model,
+                    failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
+                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
                     _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
@@ -2360,6 +2535,7 @@ def run(
                 cfg.webhooks.on_success,
                 full_payload=success_payload,
                 template_vars=success_payload,
+                event="on_success",
             )
 
         status_label = "patched" if result.status == "patched" else "complete"
@@ -3305,6 +3481,11 @@ def report(
     default="text", show_default=True,
     help="Output format. `json` for machine-readable consumption (Phase 30b).",
 )
+@click.option(
+    "--heal-coverage", is_flag=True, default=False,
+    help="Phase 45 — summarize healing_outcomes by resolution (llm / cached / "
+         "replayed) and report zero-token heal coverage instead of listing runs.",
+)
 @_env_options
 def runs(
     blueprint: str | None,
@@ -3313,6 +3494,7 @@ def runs(
     store_dir: str | None,
     config_path: str | None,
     out_format: str,
+    heal_coverage: bool,
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -3366,6 +3548,50 @@ def runs(
 
     if not candidates:
         click.echo("No runs found (no observability.db files discovered)")
+        return
+
+    if heal_coverage:
+        # Phase 45 — playbook coverage: how many heals were resolved with
+        # zero LLM tokens (resolution 'cached' or 'replayed'). One distinct
+        # heal = one (parent_run_id-or-run_id, patch_id) outcome row group;
+        # raw row counts are good enough at this granularity.
+        _by_resolution: dict[str, int] = {}
+        for db in candidates:
+            try:
+                conn = _duckdb.connect(str(db), read_only=True)
+                try:
+                    # healing_outcomes has no blueprint_id column — scoping
+                    # happens via the per-pipeline DB selection above.
+                    _rows = conn.execute(
+                        """
+                        SELECT COALESCE(resolution, 'llm') AS res, COUNT(*)
+                        FROM healing_outcomes GROUP BY res
+                        """
+                    ).fetchall()
+                finally:
+                    conn.close()
+            except Exception:
+                continue
+            for _res, _n in _rows:
+                _by_resolution[_res] = _by_resolution.get(_res, 0) + int(_n)
+        _total = sum(_by_resolution.values())
+        _zero_token = _by_resolution.get("cached", 0) + _by_resolution.get("replayed", 0)
+        _coverage = (_zero_token / _total) if _total else 0.0
+        if out_format.lower() == "json":
+            import json as _json
+            click.echo(_json.dumps({
+                "total_heals": _total,
+                "by_resolution": _by_resolution,
+                "zero_token_heals": _zero_token,
+                "zero_token_coverage": round(_coverage, 4),
+            }, indent=2))
+        elif _total == 0:
+            click.echo("No healing outcomes recorded yet.")
+        else:
+            click.echo(f"  heals recorded: {_total}")
+            for _res in sorted(_by_resolution):
+                click.echo(f"    {_res:<10} {_by_resolution[_res]}")
+            click.echo(f"  zero-token coverage: {_coverage:.1%}  ({_zero_token}/{_total} heals needed no LLM call)")
         return
 
     where_parts = []
@@ -3972,7 +4198,7 @@ def heal(
     default=None,
     type=float,
     help="Override agent.timeout (seconds) for this run. Raise for slow/cold "
-    "local models (default 120; e.g. 600). Use 0 for no limit (unbounded "
+    "local models (default 300; e.g. 600). Use 0 for no limit (unbounded "
     "read; connect still fails fast).",
 )
 @click.option(

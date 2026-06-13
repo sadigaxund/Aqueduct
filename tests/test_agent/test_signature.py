@@ -240,6 +240,110 @@ def test_from_apply_error_no_where_defaults_root():
     assert s.where == "<root>"
 
 
+# ── from_failure_context ──────────────────────────────────────────────────────
+
+class TestFromFailureContext:
+    def test_returns_exact_and_coarse_pair(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="column not found", stack_trace="",
+            manifest_json="{}", started_at="2020-01-01", finished_at="2020-01-01",
+            error_class="UNRESOLVED_COLUMN",
+        )
+        exact, coarse = from_failure_context(ctx)
+        assert exact.where == "m1"
+        assert coarse.where == "<any>"
+        assert exact.error_class == "UNRESOLVED_COLUMN"
+        assert coarse.error_class == "UNRESOLVED_COLUMN"
+        assert exact.hash != coarse.hash  # different where → different hash
+
+    def test_error_class_priority_spark_wins(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="err", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+            error_class="UNRESOLVED_COLUMN", error_type="MyAssert",
+        )
+        exact, _ = from_failure_context(ctx)
+        assert exact.error_class == "UNRESOLVED_COLUMN"  # Spark wins
+
+    def test_error_class_priority_assert_when_no_spark(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="err", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+            error_class=None, error_type="DataQualityViolation",
+        )
+        exact, _ = from_failure_context(ctx)
+        assert exact.error_class == "DataQualityViolation"
+
+    def test_error_class_falls_back_to_root_exception_type(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="err", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+            root_exception={"type": "PySparkException", "message": "detail"},
+        )
+        exact, _ = from_failure_context(ctx)
+        assert exact.error_class == "PySparkException"
+
+    def test_error_class_defaults_to_unknown(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+        )
+        exact, _ = from_failure_context(ctx)
+        assert exact.error_class == "unknown"
+
+    def test_message_prefers_root_exception_message(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="shallow error", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+            root_exception={"type": "E", "message": "deep detail"},
+        )
+        exact, _ = from_failure_context(ctx)
+        assert "deep detail" in exact.normalized_message
+
+    def test_duck_typed_context_never_raises(self):
+        from aqueduct.agent.signature import from_failure_context
+        from unittest.mock import MagicMock
+        ctx = MagicMock()
+        ctx.error_class = "UNRESOLVED_COLUMN"
+        ctx.failed_module = "m1"
+        ctx.error_message = "boom"
+        ctx.root_exception = "not a dict"  # str → coerced to empty dict
+        exact, coarse = from_failure_context(ctx)
+        assert exact.error_class == "UNRESOLVED_COLUMN"
+        assert coarse.where == "<any>"
+
+    def test_non_dict_root_exception_does_not_crash(self):
+        from aqueduct.agent.signature import from_failure_context
+        from aqueduct.surveyor.models import FailureContext
+        ctx = FailureContext(
+            run_id="r1", blueprint_id="b1", failed_module="m1",
+            error_message="err", stack_trace="", manifest_json="{}",
+            started_at="2020-01-01", finished_at="2020-01-01",
+            root_exception=None,
+        )
+        # Must not raise
+        exact, _ = from_failure_context(ctx)
+        assert exact.error_class == "unknown"
+
+
 # ── from_text ─────────────────────────────────────────────────────────────────
 
 def test_from_text_digits_collapsed():

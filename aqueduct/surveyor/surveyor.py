@@ -83,7 +83,15 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     patch_applied BOOLEAN,
     run_success_after_patch BOOLEAN,
     applied_at   VARCHAR,
-    prompt_version VARCHAR
+    prompt_version VARCHAR,
+    -- Phase 45 signature memory: exact failure-signature hash + how the heal
+    -- was resolved ('llm' fresh agent patch, 'cached' pending-patch reuse,
+    -- 'replayed' zero-token replay of an archived successful patch).
+    failure_signature VARCHAR,
+    resolution   VARCHAR,
+    -- Phase 46: 0-based cascade tier index of the model that produced the
+    -- patch; NULL outside multi-model cascade (or when no LLM was involved).
+    model_cascade_position INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS patch_simulation (
@@ -159,6 +167,14 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     prompt_version        VARCHAR,
     recorded_at           VARCHAR NOT NULL
 );
+"""
+
+# Phase 45/46 columns for observability DBs created before the schema change.
+# Both DuckDB and Postgres support ADD COLUMN IF NOT EXISTS.
+_PHASE45_MIGRATION_DDL = """
+ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature VARCHAR;
+ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS resolution VARCHAR;
+ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS model_cascade_position INTEGER;
 """
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -428,6 +444,7 @@ class Surveyor:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
+            cur.execute(_PHASE45_MIGRATION_DDL)
 
             cur.execute(
                 """
@@ -648,7 +665,7 @@ class Surveyor:
                 "started_at": ctx.started_at,
                 "attempt": str(attempt),
             }
-            fire_webhook(self._webhook_config, ctx.to_dict(), template_vars)
+            fire_webhook(self._webhook_config, ctx.to_dict(), template_vars, event="on_failure")
 
         return ctx
 
@@ -665,6 +682,9 @@ class Surveyor:
         run_success_after_patch: bool,
         prompt_version: str | None = None,
         parent_run_id: str | None = None,
+        failure_signature: str | None = None,
+        resolution: str = "llm",
+        model_cascade_position: int | None = None,
     ) -> None:
         """Persist one LLM healing attempt to healing_outcomes table.
 
@@ -678,6 +698,11 @@ class Surveyor:
         Lets cross-iteration queries (``WHERE parent_run_id = '<outer>'``)
         retrieve every outcome from the same heal call. NULL when caller is
         not in the multi-patch loop.
+
+        Phase 45: ``failure_signature`` is the exact signature hash of the
+        pipeline failure this heal addressed; ``resolution`` says how it was
+        resolved — ``"llm"`` fresh agent patch, ``"cached"`` pending-patch
+        reuse, ``"replayed"`` zero-token replay of an archived patch.
         """
         if self._observability is None:
             return
@@ -691,8 +716,9 @@ class Surveyor:
                 """
                 INSERT INTO healing_outcomes
                 (id, run_id, parent_run_id, failed_module, failure_category, model, patch_id,
-                 confidence, patch_applied, run_success_after_patch, applied_at, prompt_version)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 confidence, patch_applied, run_success_after_patch, applied_at, prompt_version,
+                 failure_signature, resolution, model_cascade_position)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     str(_uuid.uuid4()),
@@ -700,8 +726,31 @@ class Surveyor:
                     confidence, patch_applied, run_success_after_patch,
                     _dt.datetime.now(_dt.timezone.utc).isoformat(),
                     prompt_version,
+                    failure_signature, resolution, model_cascade_position,
                 ],
             )
+
+    def successful_patch_ids(self) -> set[str]:
+        """patch_ids with at least one ``run_success_after_patch = true`` row.
+
+        Feeds the Phase 45 replay cache: only patches that demonstrably fixed
+        a run are eligible for zero-token replay. Best-effort — store errors
+        return an empty set (replay silently disabled, heal proceeds via LLM).
+        """
+        if self._observability is None:
+            return set()
+        try:
+            with self._observability.connect() as cur:
+                rows = cur.execute(
+                    """
+                    SELECT DISTINCT patch_id FROM healing_outcomes
+                     WHERE run_success_after_patch AND patch_id IS NOT NULL
+                    """
+                ).fetchall()
+            return {r[0] for r in rows if r and r[0]}
+        except Exception:
+            logger.debug("successful_patch_ids query failed", exc_info=True)
+            return set()
 
     def record_heal_attempt(
         self,

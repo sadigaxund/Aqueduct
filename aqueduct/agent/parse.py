@@ -261,10 +261,29 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
         recovery_applied.append("stripped_think_block")
     text = cleaned.strip()
 
-    # 2. If the response contains a fenced ```json ... ``` block, prefer it.
-    fence_match = _FENCE_BLOCK_RE.search(text)
-    if fence_match:
-        text = fence_match.group(1).strip()
+    # 1b. Orphan </think> — some servers strip the opening tag (or the
+    #     opener fell outside the context window), leaving reasoning prose
+    #     terminated by a bare closer. Everything before it is reasoning,
+    #     not patch; dropping it stops brace-find from latching onto a `{`
+    #     inside the reasoning text.
+    _orphan_close = text.lower().rfind("</think>")
+    if _orphan_close != -1:
+        _remainder = text[_orphan_close + len("</think>"):].strip()
+        if "{" in _remainder:  # never strip when no JSON would survive
+            text = _remainder
+            recovery_applied.append("stripped_orphan_think_close")
+
+    # 2. If the response contains fenced ```json ... ``` blocks, prefer the
+    #    first one that looks like a PatchSpec (contains "operations") —
+    #    cheap models sometimes echo our quoted evidence snippet back in a
+    #    fence BEFORE emitting the real patch.
+    fence_matches = list(_FENCE_BLOCK_RE.finditer(text))
+    if fence_matches:
+        chosen = next(
+            (m for m in fence_matches if '"operations"' in m.group(1)),
+            fence_matches[0],
+        )
+        text = chosen.group(1).strip()
         recovery_applied.append("stripped_code_fence")
 
     # 3. Find the start of the first JSON object (handles leading prose).
@@ -303,11 +322,18 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
             obj, _ = json.JSONDecoder().raw_decode(repaired)
             recovery_applied.append("json_repair")
 
-    # 6. Unwrap single-key wrappers (e.g. {"patch": {operations: [...]}})
-    if isinstance(obj, dict) and len(obj) == 1:
-        (wrapper_key, inner) = next(iter(obj.items()))
-        if isinstance(inner, dict) and "operations" in inner:
-            obj = inner
+    # 6. Unwrap wrappers (e.g. {"patch": {operations: [...]}}). Also handles
+    #    the multi-key variant ({"patch": {...}, "explanation": "..."}) as
+    #    long as the top level itself is NOT already an envelope and exactly
+    #    one nested dict carries `operations` — ambiguity falls through to
+    #    normal validation (which reports the real shape problem).
+    if isinstance(obj, dict) and "operations" not in obj:
+        _nested = [
+            (k, v) for k, v in obj.items()
+            if isinstance(v, dict) and "operations" in v
+        ]
+        if len(_nested) == 1:
+            wrapper_key, obj = _nested[0]
             recovery_applied.append(f"unwrapped_{wrapper_key}")
 
     return PatchSpec.model_validate(obj), recovery_applied
@@ -348,4 +374,8 @@ def _format_reprompt_for_next_turn(
     raw_truncated = "\n".join(raw_lines[:80])
     if len(raw_lines) > 80:
         raw_truncated += f"\n... ({len(raw_lines) - 80} more lines truncated)"
+    # Char cap on top of the line cap — a single minified-JSON line can be
+    # tens of KB and would otherwise dominate the next turn's context.
+    if len(raw_truncated) > 4000:
+        raw_truncated = raw_truncated[:4000] + "\n... (truncated at 4000 chars)"
     return _REPROMPT_TEMPLATE.format(error=friendly, raw_truncated=raw_truncated)

@@ -131,6 +131,40 @@ stores:
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
+### Growing up: when to switch observability to Postgres
+
+Per-pipeline DuckDB files are the right default: zero setup, single-writer is fine because one pipeline runs at a time, and the file sits next to the project. You have outgrown them when any of these become true:
+
+- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `lineage` / `depot` schemas per store automatically).
+- **Many pipelines** — dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
+- **Ephemeral drivers** — Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
+- **Concurrent access** — a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
+
+The switch is one config change (plus `pip install aqueduct-core[postgres]`):
+
+```yaml
+stores:
+  observability:
+    backend: postgres
+    path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
+  depot:
+    backend: postgres
+    path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
+```
+
+Tables are created on the first run — no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
+
+```sql
+-- inside `duckdb .aqueduct/observability/<blueprint_id>/observability.db`
+INSTALL postgres; LOAD postgres;
+ATTACH 'dbname=aqueduct user=aq host=pg.internal' AS pg (TYPE postgres);
+INSERT INTO pg.observability.run_records       SELECT * FROM run_records;
+INSERT INTO pg.observability.healing_outcomes  SELECT * FROM healing_outcomes;
+-- repeat for failure_contexts, heal_attempts, probe_signals, module_metrics, …
+```
+
+Run the new-backend pipeline once first so the target tables exist, and mind schema drift: columns added by newer Aqueduct versions (e.g. `healing_outcomes.failure_signature`) may not exist in old DuckDB files — list columns explicitly if the `SELECT *` shapes differ.
+
 ---
 
 ## LLM Service Configuration

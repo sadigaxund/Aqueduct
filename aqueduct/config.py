@@ -221,7 +221,7 @@ class StoresConfig(BaseModel):
 class MetricsConfig(BaseModel):
     """Per-module observability tuning.
 
-    See docs/SPARK_GUIDE.md ("DataFrame.observe() and Whole-Stage Codegen") for
+    See docs/spark_guide.md ("DataFrame.observe() and Whole-Stage Codegen") for
     the tradeoff between accurate per-module attribution and codegen overhead.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -323,6 +323,52 @@ class AgentBudgetConfig(BaseModel):
     progress_stalled_window: int = 3
 
 
+class AgentRetryConfig(BaseModel):
+    """Phase 46 — transient-error retry for agent LLM calls.
+
+    Applies to rate-limit/overload responses (HTTP 429, 503, 529) from both
+    providers. Sleeps are exponential with jitter, honor a server-sent
+    ``Retry-After`` header, and are always capped by the heal budget's
+    remaining per-call deadline — a retry can delay an attempt but never
+    overrun ``agent.budget.max_seconds``. Shared by production heal and
+    ``aqueduct benchmark`` (same provider path).
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_retries: int = Field(
+        default=2, ge=0,
+        description="Extra attempts after the first call on 429/503/529. 0 disables retry.",
+    )
+    backoff_seconds: float = Field(
+        default=2.0, gt=0,
+        description="Base backoff; attempt N sleeps ~backoff_seconds * 2^N (+ jitter), capped by the remaining budget deadline.",
+    )
+
+
+class AgentMemoryConfig(BaseModel):
+    """Phase 45 signature memory — zero-token heal paths.
+
+    ``replay`` governs both reuse paths consulted before the LLM is called:
+    pending-patch reuse (a patch for the same failure signature already
+    awaits review → surface it, ``stop_reason: cached``) and exact replay
+    (an archived patch already fixed this signature → re-run it through the
+    gate pyramid, ``stop_reason: replayed``). ``coaching`` governs
+    signature-matched few-shot examples in the heal prompt. Both default on;
+    disable ``replay`` when re-running gates (sandbox Spark time) is more
+    expensive than fresh LLM tokens.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    replay: bool = Field(
+        default=True,
+        description="Zero-token reuse of pending/archived patches matching the failure signature.",
+    )
+    coaching: bool = Field(
+        default=True,
+        description="Signature-matched (failure → validated fix) few-shot examples in the heal prompt.",
+    )
+
+
 class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
@@ -409,6 +455,20 @@ class AgentConnectionConfig(BaseModel):
             "fit in any driver's memory. Set to 'spark://host:7077' or 'yarn' "
             "to run sandbox on a cluster when your blueprint is too large for "
             "a single driver node."
+        ),
+    )
+    memory: AgentMemoryConfig = Field(
+        default_factory=AgentMemoryConfig,
+        description=(
+            "Phase 45 signature memory: zero-token patch reuse/replay and "
+            "signature-matched coaching. Both sub-flags default on."
+        ),
+    )
+    retry: AgentRetryConfig = Field(
+        default_factory=AgentRetryConfig,
+        description=(
+            "Phase 46 — retry on transient provider errors (429/503/529) with "
+            "exponential backoff, capped by the heal budget deadline."
         ),
     )
 

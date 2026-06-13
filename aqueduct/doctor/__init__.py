@@ -54,6 +54,7 @@ __all__ = [
     "check_aqtest",
     "check_blueprint_sources",
     "check_blueprint_sources_from_manifest",
+    "check_cascade_tiers",
     "check_cloudpickle_compat",
     "check_config",
     "check_depot",
@@ -353,6 +354,45 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                 ))
 
     results.extend(_check_heal_guardrail_typos(manifest))
+    results.extend(_check_spillway_error_types(manifest))
+    return results
+
+
+def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
+    """Warn if a spillway edge's error_types filter can never match.
+
+    Quarantined rows carry an ``_aq_error_type`` label: the Assert rule's
+    ``error_type`` (falling back to the rule name — freshness / sql_row /
+    custom) or ``SpillwayCondition`` for Channel spillway rows. An edge
+    filter naming a label declared nowhere routes zero rows — almost always
+    a typo.
+    """
+    results: list[CheckResult] = []
+
+    known: set[str] = {"SpillwayCondition", "freshness", "sql_row", "custom"}
+    for module in getattr(manifest, "modules", []):
+        if getattr(module, "type", "") != "Assert":
+            continue
+        for rule in (module.config or {}).get("rules", []):
+            et = rule.get("error_type")
+            if et:
+                known.add(et)
+
+    for edge in getattr(manifest, "edges", []):
+        if getattr(edge, "port", "main") != "spillway":
+            continue
+        for entry in getattr(edge, "error_types", ()) or ():
+            if entry not in known:
+                results.append(CheckResult(
+                    name=f"spillway_error_type_typo:{edge.from_id}->{edge.to_id}",
+                    status="warn",
+                    detail=(
+                        f"Spillway edge {edge.from_id!r} -> {edge.to_id!r} filters on "
+                        f"error_types entry {entry!r}, which matches no Assert rule "
+                        f"error_type and no built-in label. Known labels here: "
+                        f"{sorted(known)}. Rows will never route down this edge."
+                    ),
+                ))
     return results
 
 
@@ -401,6 +441,69 @@ def _check_heal_guardrail_typos(manifest: Any) -> "list[CheckResult]":
                 ),
             ))
 
+    return results
+
+
+def check_cascade_tiers(
+    blueprint_path: Path,
+    engine_provider: str = "anthropic",
+    engine_base_url: str | None = None,
+) -> list[CheckResult]:
+    """Phase 46 — per-tier credential/endpoint checks for `agent.cascade:`.
+
+    A cascade only escalates at runtime, so a tier-3 missing API key
+    surfaces exactly when the expensive fallback was needed. Doctor warns
+    ahead: anthropic tiers need ANTHROPIC_API_KEY; openai_compat tiers need
+    a base_url (own or inherited from engine config).
+    """
+    results: list[CheckResult] = []
+    try:
+        from aqueduct.parser.parser import parse
+        bp = parse(str(blueprint_path))
+    except Exception:
+        return results  # blueprint problems are reported by other checks
+    agent = getattr(bp, "agent", None)
+    tiers = tuple(getattr(agent, "cascade", None) or ())
+    if not tiers:
+        return results
+
+    for idx, tier in enumerate(tiers, start=1):
+        t = time.monotonic()
+        name = f"cascade-tier-{idx}"
+        provider = getattr(tier, "provider", None) or engine_provider
+        model = getattr(tier, "model", "?")
+        if provider == "anthropic":
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                results.append(CheckResult(
+                    name, "warn",
+                    f"tier {idx} ({model}) uses provider=anthropic but ANTHROPIC_API_KEY "
+                    "is not set — escalation to this tier will fail at heal time.",
+                    _ms(t), group="agent",
+                ))
+            else:
+                results.append(CheckResult(
+                    name, "ok", f"tier {idx} ({model})  provider=anthropic  key present",
+                    _ms(t), group="agent",
+                ))
+        elif provider == "openai_compat":
+            base = getattr(tier, "base_url", None) or engine_base_url
+            if not base:
+                results.append(CheckResult(
+                    name, "warn",
+                    f"tier {idx} ({model}) uses provider=openai_compat but no base_url is set "
+                    "(tier or engine agent.base_url) — escalation to this tier will fail.",
+                    _ms(t), group="agent",
+                ))
+            else:
+                results.append(CheckResult(
+                    name, "ok", f"tier {idx} ({model})  provider=openai_compat  base_url={base}",
+                    _ms(t), group="agent",
+                ))
+        else:
+            results.append(CheckResult(
+                name, "warn", f"tier {idx} ({model}) has unknown provider {provider!r}",
+                _ms(t), group="agent",
+            ))
     return results
 
 
@@ -736,6 +839,14 @@ def run_doctor(
 
     # LLM connectivity
     results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
+
+    # Phase 46 — cascade tier credentials/endpoints (blueprint-level config)
+    if blueprint_path is not None:
+        results.extend(check_cascade_tiers(
+            blueprint_path,
+            engine_provider=cfg.agent.provider,
+            engine_base_url=cfg.agent.base_url,
+        ))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure

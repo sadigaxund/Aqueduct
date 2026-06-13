@@ -203,3 +203,44 @@ def test_apply_set_spark_config_auto_creates_block(base_bp):
     patched = apply_operation(bp, op)
     assert "spark_config" in patched
     assert patched["spark_config"]["spark.sql.shuffle.partitions"] == 200
+
+# ── Phase 47: replace_macro ────────────────────────────────────────────────
+
+
+def test_replace_macro_success_single_line(base_bp):
+    bp = dict(base_bp)
+    bp["macros"] = {"mymacro": "SELECT 1"}
+    from aqueduct.patch.grammar import ReplaceMacroOp
+    op = ReplaceMacroOp(op="replace_macro", name="mymacro", value="SELECT 2")
+    patched = apply_operation(bp, op)
+    assert patched["macros"]["mymacro"] == "SELECT 2"
+    # original blueprint unchanged (no macros originally)
+    assert "macros" not in base_bp
+
+
+def test_replace_macro_success_multiline(base_bp):
+    bp = dict(base_bp)
+    bp["macros"] = {"mymacro": "SELECT 1"}
+    from aqueduct.patch.grammar import ReplaceMacroOp
+    multi = "SELECT *\nFROM table\nWHERE col = 1"
+    op = ReplaceMacroOp(op="replace_macro", name="mymacro", value=multi)
+    patched = apply_operation(bp, op)
+    # Ruamel stores multiline as LiteralScalarString, but accessing yields string
+    assert str(patched["macros"]["mymacro"]).strip() == multi
+
+
+def test_replace_macro_unknown_name_raises(base_bp):
+    bp = dict(base_bp)
+    bp["macros"] = {"existing": "SELECT 1"}
+    from aqueduct.patch.grammar import ReplaceMacroOp
+    op = ReplaceMacroOp(op="replace_macro", name="missing", value="SELECT 2")
+    with pytest.raises(PatchOperationError, match="Macro"):
+        apply_operation(bp, op)
+
+
+def test_replace_macro_missing_macros_block_raises(base_bp):
+    bp = dict(base_bp)  # no macros key
+    from aqueduct.patch.grammar import ReplaceMacroOp
+    op = ReplaceMacroOp(op="replace_macro", name="any", value="SELECT 1")
+    with pytest.raises(PatchOperationError, match="no macros"):
+        apply_operation(bp, op)

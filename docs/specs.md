@@ -201,9 +201,27 @@ Every Module regardless of type shares these fields:
 | Port | Carries | Where it's produced | Where it's consumed |
 | :- | :- | :- | :- |
 | `main` (default) | Successful DataFrame | Every module type | Every module type |
-| `spillway` | Row-level error DataFrame | Channel, Assert | Egress (quarantine sink) |
+| `spillway` | Row-level error DataFrame | Channel, Assert | Egress / Funnel (quarantine sink) |
 | `signal` | Control signal, not a DataFrame | Probe (threshold signal) | Regulator (gate evaluation) |
 | `<branch_id>` | One subset of the upstream Junction's branches | Junction | Any downstream module |
+
+### Typed spillway routing (`error_types`)
+
+A spillway edge may declare an `error_types` filter — a typed catch block. Only quarantined rows whose `_aq_error_type` label matches flow down that edge:
+
+```yaml
+edges:
+  - from: orders_quality_gate
+    to: write_quarantine
+    port: spillway
+    error_types:                   # optional filter — only route these error types
+      - DataQualityViolation
+      - SchemaError
+```
+
+The label comes from the Assert rule's `error_type` field (falling back to the rule name — `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation — zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
+
+Every spillway row carries the system columns `_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts` (Assert rows additionally `_aq_error_rule`).
 
 ## **4.4 Module Types — Full Specification**
 
@@ -307,11 +325,11 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark write format. Standard: parquet, delta, csv, json, orc, avro, jdbc. |
-| **mode** | Write mode: `overwrite`, `append`, `error`, `ignore`, `merge` (Delta `MERGE INTO`, requires `key`). |
-| **path** | Output path or URL. |
+| **format** | Spark write format. Standard: parquet, delta, csv, json, orc, avro, jdbc. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
+| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`). |
+| **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
-| **key** | Required for `mode: merge`. Column(s) for upsert match. |
+| **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
 
 ### Junction (Fan-out)
@@ -351,12 +369,13 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 ```yaml
 - id: schema_check
   type: Probe
+  attach_to: dedup_orders          # module-level field, NOT inside config
   config:
-    attach_to: dedup_orders
-    signal: schema_snapshot        # schema_snapshot | null_rates | value_distribution | row_count_estimate | distinct_count | freshness | partition_stats
+    signals:
+      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold
 ```
 
-Probes are non-blocking observability taps. They do not execute on the Spark critical path. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`) require explicit opt-in via `danger.allow_full_probe_actions`.
+Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
 
 See the [Observability Guide](observability_guide.md) for full signal reference and cost model.
 
@@ -411,7 +430,7 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
         on_fail: quarantine
 ```
 
-Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `min_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `custom`.
+Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
 
 ---
 
@@ -498,12 +517,12 @@ All observability is governed by one rule: **no Spark actions may be added to th
 
 | Layer | Computed at | Purpose |
 | :- | :- | :- |
-| **Structural Lineage** | Parse time (static) | Column-level DAG of the Blueprint. Used by the lineage gate and the LLM. |
+| **Structural Lineage** | Compile time (static) | Column-level DAG of the Blueprint. Used by the lineage gate and the LLM. |
 | **Runtime Flow Report** | Post-run | Per-column quality metrics from Probe signals. |
 
 ## **7.2 Structural Lineage**
 
-Structural lineage is computed at parse time by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in the `column_lineage` table inside `observability.db`. Used by:
+Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py`, zero Spark actions) by `sqlglot` analysis of Channel SQL queries. It maps each output column to its upstream source module and column. Stored in the `column_lineage` table inside `observability.db`. Used by:
 
 - **Lineage gate:** Before a patch is applied, the lineage of the patched Blueprint is compared to the original. Lost columns or broken references are flagged.
 - **LLM context:** The structural lineage for the failed module's neighbourhood is included in the FailureContext, allowing the agent to trace column origins without accessing the original Spark session.
@@ -520,14 +539,16 @@ Generated post-run from Probe signals. Shows per-column, per-Module status (OK /
 
 The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer.
 
-**Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 13 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
+**Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 14 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The cascade tags every in-memory `AttemptRecord` with `model_cascade_position` (0-based tier index); it is not yet persisted as a `heal_attempts` column.
+**Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade (Phase 46): each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
+
+**Signature memory (Phase 45).** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs from `patches/applied/` as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
 
 ## **8.2 The Healing Flow**
 
 ```
-Pipeline failure → Capture → Prune → Generate → Reprompt → Gate → Confirm and write
+Pipeline failure → Capture → Memory (cached patch? replay?) → Prune → Generate → Reprompt → Gate → Confirm and write
 ```
 
 ### 1. Capture
@@ -540,7 +561,11 @@ Transient errors retry first (per `retry_policy.max_attempts`). Non-transient fa
 - Structured root-cause block (offending column + Spark suggestions)
 - `inputs_fingerprint` (file metadata to distinguish data-drift from code bugs)
 
-### 2. Prune
+### 2. Memory (zero tokens)
+
+The failure's signature is checked against the heal cache before any LLM call (Phase 45): a **pending patch** with the same signature ends the run immediately (`stop_reason: cached`, exit `HEAL_PENDING`); an **archived patch** that already fixed this signature replays through the gate pyramid (`stop_reason: replayed`), falling through to the LLM only if a gate rejects it. Cache miss → continue below.
+
+### 3. Prune
 
 A ContextPruner trims the package to the failure's blast radius. Pruning rules:
 
@@ -550,18 +575,18 @@ A ContextPruner trims the package to the failure's blast radius. Pruning rules:
 | `SparkException` with OOM/shuffle | Full manifest |
 | All other errors | Failed module + direct upstream |
 
-### 3. Generate
+### 4. Generate
 
 The LLM responds with a structured PatchSpec — a list of typed operations that map one-to-one to Blueprint edits. Anything else is rejected.
 
-### 4. Reprompt
+### 5. Reprompt
 
 Schema errors, guardrail violations, and gate rejections feed back into the same conversation as annotated, field-level corrections. The loop is bounded by a multi-axis budget:
 
 | Axis | Default | What it guards against |
 | :- | :- | :- |
 | `max_reprompts` | 5 | Hard ceiling on LLM round-trips |
-| `max_seconds` | 120 | Wall-clock cap per heal call |
+| `max_seconds` | 120 | Wall-clock cap on LLM-conversation time per heal call |
 | `max_tokens_total` | 50,000 | Sum of prompt + completion tokens |
 | `same_error_consecutive` | 2 | Stuck on identical error signatures |
 | `same_signature_overall` | 3 | Same error signature across the run |
@@ -569,7 +594,9 @@ Schema errors, guardrail violations, and gate rejections feed back into the same
 
 When `same_error_consecutive` trips, the loop escalates: temperature is bumped and a skeleton reprompt template is used for one more attempt before honouring the abort.
 
-### 5. Gate
+`max_seconds` counts LLM time only (Phase 46): validation-gate work (deep-loop sandbox replay, lineage, explain) is excluded from the clock, so a slow sandbox cannot exhaust the heal budget. Transient provider errors (HTTP 429/503/529) are retried per `agent.retry` (default 2 retries, exponential backoff with jitter, server `Retry-After` honored); retry sleeps count as LLM time and are always capped by the remaining per-call deadline.
+
+### 6. Gate
 
 Before a patch touches the Blueprint, four gates run in order:
 
@@ -578,7 +605,7 @@ Before a patch touches the Blueprint, four gates run in order:
 3. **Lineage gate** — column-level diff catches broken references before Spark sees them
 4. **Sandbox gate** — sampled or full replay catches "parsed but produces nothing"
 
-### 6. Confirm and write
+### 7. Confirm and write
 
 Only after every gate passes does the patch run against the real pipeline. The on-disk Blueprint is rewritten only if the full re-run succeeds. Failed patches stage to `patches/pending/` for inspection.
 
@@ -619,11 +646,13 @@ A PatchSpec is a JSON document with the following structure:
 }
 ```
 
-Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `replace_module_label`, `insert_module`, `remove_module`, `add_probe`, `replace_edge`, `set_module_on_failure`, `replace_retry_policy`, `add_arcade_ref`, `defer_to_human`, `set_spark_config`.
+Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `replace_module_label`, `insert_module`, `remove_module`, `add_probe`, `replace_edge`, `set_module_on_failure`, `replace_retry_policy`, `add_arcade_ref`, `defer_to_human`, `set_spark_config`, `replace_macro`.
 
 `defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true` — when false (default), the op is hidden from the LLM prompt.
 
 `set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize — seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
+
+`replace_macro` (Phase 47) replaces the body of an **existing** macro in the Blueprint `macros:` block — the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
 
 **`deep_loop`:** when `agent.deep_loop: true`, sandbox/lineage/explain gates run inside the LLM conversation so the model sees rejection feedback and retries in-context before `apply_callback` runs. Default false preserves the current post-hoc gate behavior.
 

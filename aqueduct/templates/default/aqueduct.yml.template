@@ -305,12 +305,17 @@ secrets:
 
 # ── Webhooks ──────────────────────────────────────────────────────────────────
 #
-# Blueprint-level push notifications. Delivery is best-effort (daemon thread);
-# failures are logged and do not affect run outcome.
+# Blueprint-level push notifications. Delivery is best-effort (daemon thread,
+# one automatic retry on 429/5xx or network error); failures are logged and
+# do not affect run outcome.
 #
-# Two hooks:
-#   on_failure — fires when a run ends with status="error"
-#   on_success — fires when a run ends with status="success"
+# Four hooks:
+#   on_failure       — fires when a run ends with status="error"
+#   on_success       — fires when a run ends with status="success"
+#   on_patch_pending — fires when a patch is staged to patches/pending/
+#   on_ci_patch      — fires for approval_mode: ci; receives the patch JSON
+#                      for external PR creation (full-config alternative to
+#                      agent.ci_webhook_url)
 #
 # Per-module webhook: set on_failure_webhook on any module in the Blueprint.
 #   Fires when that module's retry policy is exhausted, regardless of whether
@@ -342,6 +347,15 @@ secrets:
 #   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
+# on_patch_pending / on_ci_patch template variables (Phase 46 — the agent's
+# structured diagnosis, no extra LLM calls):
+#   ${run_id} ${blueprint_id} ${failed_module}
+#   ${patch_id}        Staged patch identifier
+#   ${root_cause}      Agent's root-cause analysis of the failure
+#   ${rationale}       Why the proposed fix should work
+#   ${confidence}      Agent self-rated confidence (e.g. "0.85", "n/a")
+#   ${category}        Failure category label (schema_drift, bad_path, …)
+#
 # on_failure_webhook (per-module) template variables:
 #   ${run_id}          UUID of this blueprint run
 #   ${blueprint_id}     Blueprint identifier string
@@ -351,7 +365,11 @@ secrets:
 #
 # ${ENV_VAR} in any value resolves to os.environ[VAR] (useful for secrets in headers).
 #
-# If payload is omitted, the full context JSON object is sent unchanged.
+# If payload is omitted, Aqueduct sends a standardized envelope (Phase 46):
+#   {"event": "<hook name>", "timestamp": "<ISO-8601 UTC>",
+#    "run_id": "...", "blueprint_id": "...", "data": {<event-specific payload>}}
+# data carries the full FailureContext (on_failure), the success summary
+# (on_success), or patch metadata + diagnosis (on_patch_pending / on_ci_patch).
 
 webhooks:
   on_failure: null
@@ -417,6 +435,11 @@ agent:
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
   #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
+  # retry:                      # Phase 46 — transient-error retry (HTTP 429/503/529, both providers).
+  #   max_retries: 2            # extra attempts after the first call; 0 disables retry
+  #   backoff_seconds: 2.0      # base backoff; attempt N sleeps ~2^N * base (+ jitter),
+  #                             # honors server Retry-After, always capped by the remaining
+  #                             # agent.budget.max_seconds deadline. Shared with `aqueduct benchmark`.
   # max_reprompts: 5            # Legacy single-axis cap; the unified loop also catches
   #                             # apply-gate rejections (guardrail / compile error) and
   #                             # feeds them back as reprompts. Use agent.budget below for
@@ -492,9 +515,44 @@ agent:
   # Blueprint agent: block (Blueprint value wins).
   # max_heal_attempts_per_hour: 10
 
+  # ── CI patch hand-off (approval_mode: ci) ──────────────────────────────────
+  # POST target for external CI to receive the staged patch JSON and open a
+  # PR. Only used when approval_mode: ci. See also webhooks.on_ci_patch for
+  # the full-config (method/headers/payload) variant.
+  # ci_webhook_url: "https://ci.example.com/hooks/aqueduct-patch"
+
+  # ── Sandbox Spark master ───────────────────────────────────────────────────
+  # Spark master URL for sandbox replay (patch preview). Default null uses
+  # local[*] — 1000 sampled rows fit in any driver's memory. Set to
+  # "spark://host:7077" or "yarn" when the blueprint is too large for a
+  # single driver node.
+  # sandbox_master_url: null
+
+  # ── Signature memory (Phase 45) ────────────────────────────────────────────
+  # Zero-token heal paths consulted BEFORE the LLM is called. Each failure is
+  # hashed into a stable signature (error class + module + normalized message);
+  # patches carry the signature of the failure they fixed.
+  #
+  #   replay: true (default)
+  #     Pending-patch reuse — a patch for the same signature already awaits
+  #     review → surface it, skip the LLM (stop_reason: cached). Exact replay —
+  #     an archived patch already fixed this signature (confirmed by
+  #     healing_outcomes) → re-run it through the normal gate pyramid with
+  #     zero tokens (stop_reason: replayed); gate failure falls through to
+  #     the LLM. Disable when re-running gates (sandbox Spark time) costs
+  #     more than fresh LLM tokens.
+  #
+  #   coaching: true (default)
+  #     Nearest-signature retrieval of past (failure → validated fix) pairs
+  #     from patches/applied/ as few-shot examples in the heal prompt.
+  #
+  # memory:
+  #   replay: true
+  #   coaching: true
+
   # ── Ollama / vLLM / LM Studio (OpenAI-compatible endpoint) ────────────────
   # provider: "openai_compat"
-  # base_url: "http://10.0.0.39:11434/v1"   # /v1 suffix required
+  # base_url: "http://ollama.internal:11434/v1"   # /v1 suffix required
   # model: "deepseek-r1:14b"
   # timeout: 600.0              # large local models need more time
   # provider_options:

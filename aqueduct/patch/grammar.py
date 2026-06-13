@@ -179,6 +179,29 @@ class DeferToHumanOp(BaseModel, extra="forbid"):
     )
 
 
+class ReplaceMacroOp(BaseModel, extra="forbid"):
+    """Replace the body of an existing SQL macro in the ``macros:`` block (Phase 47).
+
+    Bad SQL often lives in a macro: the agent is told to preserve
+    ``{{ macros.* }}`` references in module queries, so when the root cause
+    is inside the macro body itself, this is the only op that can fix it.
+    Replace-only — the macro name must already exist (a macro nothing
+    references would be dead weight; unknown names are rejected at apply
+    time, which also catches name hallucinations).
+
+    Blast radius: a macro is shared — every module referencing it picks up
+    the new body at re-expansion. The compile and lineage gates re-run on
+    the patched Blueprint, so parameter mismatches and broken columns in ANY
+    consumer are caught before the patch lands.
+
+    Guardrail: recommended for ``guardrails.forbidden_ops`` (template
+    default) so multi-module macro changes get human review.
+    """
+    op: Literal["replace_macro"]
+    name: str = Field(..., description="Name of an EXISTING macro in the Blueprint macros: block")
+    value: str = Field(..., description="New SQL body. Keep {{ param }} placeholders the macro's callers supply.")
+
+
 class SetSparkConfigOp(BaseModel, extra="forbid"):
     """Set a single key in the Blueprint's ``spark_config`` block (Phase 42).
 
@@ -222,6 +245,7 @@ PatchOperation = Annotated[
         AddArcadeRefOp,
         DeferToHumanOp,
         SetSparkConfigOp,
+        ReplaceMacroOp,
     ],
     Field(discriminator="op"),
 ]
@@ -244,6 +268,10 @@ _OP_ALIASES: dict[str, str] = {
     "human_review": "defer_to_human",
     # Phase 42: set_spark_config variants
     "set_spark_config_key": "set_spark_config",
+    # Phase 47: replace_macro variants
+    "set_macro": "replace_macro",
+    "update_macro": "replace_macro",
+    "replace_macro_body": "replace_macro",
 }
 
 

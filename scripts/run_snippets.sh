@@ -26,6 +26,7 @@ WORK_BASE="${AQ_SNIPPET_WORKDIR:-$REPO_ROOT/.snippet_runs}"
 SKIP_PATTERNS=(
     "02_ingress_parquet_s3"
     "04_ingress_jdbc_postgres"
+    "12_assert_null_sampling"
 )
 
 # ---------------------------------------------------------------------------

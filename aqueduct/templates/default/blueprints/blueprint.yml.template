@@ -133,6 +133,7 @@ agent:
   # cascade: multi-model healing cascade. Each tier tries a
   # different model; escalates on stuck_signature / exhausted_attempts /
   # deferred. Cheaper model first, expensive model as fallback.
+  # agent.budget.max_tokens_total spans the WHOLE cascade (Phase 46).
   # cascade:
   #   - model: qwen2.5-coder:7b
   #     max_reprompts: 2
@@ -142,6 +143,10 @@ agent:
   #     max_seconds: 120
   #     deep_loop: true
   #     allow_defer: true
+  #
+  # Shorthand (Phase 46): a model LIST expands to a default-settings cascade.
+  # Mutually exclusive with an explicit cascade: block.
+  # model: [qwen2.5-coder:7b, claude-sonnet-4-6]
 
   # confidence_threshold: LLM patches with confidence below this are escalated to human review
   confidence_threshold: 0.7
@@ -178,53 +183,59 @@ agent:
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
+  # NOTE: all four lists live under the `guardrails:` key, not directly on `agent:`.
 
-  # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
-  #   Empty (default) = unrestricted.
-  # allowed_paths:
-  #   - "s3a://my-bucket/prod/*"
+  # guardrails:
+  #   # allowed_paths: fnmatch patterns for config.path values the LLM may touch.
+  #   #   Empty (default) = unrestricted.
+  #   allowed_paths:
+  #     - "s3a://my-bucket/prod/*"
 
-  # forbidden_ops: PatchSpec ops the LLM may never use.
-  #   Empty (default) = all ops permitted.
-  #   Complete op list:
-  #     set_module_config_key     update a single key in a module's config block
-  #     replace_module_config     overwrite a module's entire config block
-  #     replace_module_label      rename a module's display label
-  #     insert_module             add a new module and rewire edges
-  #     remove_module             delete a module and all its edges
-  #     replace_context_value     change a context: variable
-  #     add_probe                 add a Probe tapping an existing module
-  #     replace_edge              change an edge's from / to / port
-  #     set_module_on_failure     set per-module retry policy
-  #     replace_retry_policy      replace the blueprint-level RetryPolicy
-  #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
-  #     defer_to_human            signal unhealable failure (requires allow_defer: true)
-  #     set_spark_config          change a spark_config value (recommended: block in auto mode)
-  # forbidden_ops:
-  #   - remove_module
-  #   - replace_retry_policy
-  #   - set_spark_config          # recommended: spark config changes affect cluster resources
+  #   # forbidden_ops: PatchSpec ops the LLM may never use.
+  #   #   Empty (default) = all ops permitted.
+  #   #   Complete op list:
+  #   #     set_module_config_key     update a single key in a module's config block
+  #   #     replace_module_config     overwrite a module's entire config block
+  #   #     replace_module_label      rename a module's display label
+  #   #     insert_module             add a new module and rewire edges
+  #   #     remove_module             delete a module and all its edges
+  #   #     replace_context_value     change a context: variable
+  #   #     add_probe                 add a Probe tapping an existing module
+  #   #     replace_edge              change an edge's from / to / port
+  #   #     set_module_on_failure     set per-module retry policy
+  #   #     replace_retry_policy      replace the blueprint-level RetryPolicy
+  #   #     add_arcade_ref            insert an Arcade (sub-Blueprint) reference
+  #   #     defer_to_human            signal unhealable failure (requires allow_defer: true)
+  #   #     set_spark_config          change a spark_config value (recommended: block in auto mode)
+  #   #     replace_macro             replace an existing macros: body (recommended: block in auto mode)
+  #   forbidden_ops:
+  #     - remove_module
+  #     - replace_retry_policy
+  #     - set_spark_config          # recommended: spark config changes affect cluster resources
+  #     - replace_macro             # recommended: one macro change can affect many modules
 
-  # heal_on_errors: LLM only triggers when the failure matches one of these labels.
-  #   Labels come from Assert rules' error_type field, or infrastructure exception class
-  #   names extracted from the stack trace (e.g. "SparkException", "AnalysisException").
-  #   Empty (default) = LLM triggers on all errors.
-  # heal_on_errors:
-  #   - DataQualityViolation
-  #   - SchemaError
+  #   # heal_on_errors: LLM only triggers when the failure matches one of these labels.
+  #   #   Labels come from Assert rules' error_type field, or infrastructure exception class
+  #   #   names extracted from the stack trace (e.g. "SparkException", "AnalysisException").
+  #   #   Empty (default) = LLM triggers on all errors.
+  #   heal_on_errors:
+  #     - DataQualityViolation
+  #     - SchemaError
 
-  # never_heal_errors: LLM never triggers when the failure matches one of these labels.
-  #   Takes priority over heal_on_errors. Useful to block LLM on known-unrecoverable errors.
-  #   Empty (default) = no restriction.
-  # never_heal_errors:
-  #   - SLABreach
-  #   - OutOfDiskSpaceError
+  #   # never_heal_errors: LLM never triggers when the failure matches one of these labels.
+  #   #   Takes priority over heal_on_errors. Useful to block LLM on known-unrecoverable errors.
+  #   #   Empty (default) = no restriction.
+  #   never_heal_errors:
+  #     - SLABreach
+  #     - OutOfDiskSpaceError
 
   # Override connection defaults for this blueprint only (all optional — unset = inherit from aqueduct.yml):
   # provider: "openai_compat"
-  # base_url: "http://10.0.0.39:11434/v1"
+  # base_url: "http://ollama.internal:11434/v1"
   # model: "claude-sonnet-4-6"
   # timeout: 300.0               # seconds; increase for slow local models
+  # provider_options: {}         # extra payload keys for openai_compat endpoints
+  #                              # (ollama_* keys land in Ollama's options block)
   # max_reprompts: 5             # legacy single-axis cap — prefer `budget:` below
   #                              
   # Multi-axis budget (available at both engine and blueprint level):
@@ -245,6 +256,13 @@ agent:
 
 # Replace [] with your module list — an empty modules list will run successfully
 # but produce no output and write no data. Uncomment the examples below to start.
+#
+# Optional fields available on EVERY module (omitted from the examples below):
+#   description: ""              # free-text, carried into the compiled Manifest
+#   tags: [finance, daily]       # labels, carried into the compiled Manifest
+#   depends_on: [other_module]   # ordering-only dependency — adds a DAG edge
+#                                # without passing data (e.g. run after an Egress)
+#   checkpoint: true             # per-module checkpoint (see blueprint-level note above)
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────
@@ -563,6 +581,21 @@ udf_registry: []
   #   entry: com.myco.geo.Haversine  # fully-qualified class name
   #   return_type: double
 
+  # ── ARCADE — reusable sub-pipeline, expanded at compile time ──────────────────
+  # The referenced file is a normal Blueprint. Its modules are flattened into
+  # this pipeline with namespaced IDs ({arcade_id}__{child_id}); `__` is
+  # reserved for that, so plain module IDs must not contain it. The
+  # sub-Blueprint can declare `required_context: [data_dir, env]` — compile
+  # fails fast when a listed key is missing from context_override/parent context.
+
+  # - id: process_region
+  #   type: Arcade
+  #   config:
+  #     ref: arcades/region_processor.yml   # path relative to THIS blueprint file
+  #     context_override:                   # values injected into the sub-Blueprint's context
+  #       env: ${ctx.env}
+  #       data_dir: "data/regions/west"
+
 
 # ── Edges ─────────────────────────────────────────────────────────────────────
 
@@ -576,6 +609,10 @@ edges: []
   # - from: clean_orders            # spillway port carries bad rows with _aq_error_* columns
   #   to: error_output
   #   port: spillway
+  #   error_types:                  # optional typed catch — only route rows whose
+  #     - DataQualityViolation      # _aq_error_type matches (Assert rule error_type,
+  #     - SpillwayCondition         # rule name, or SpillwayCondition for Channel rows).
+  #                                 # Omit for catch-all. Spillway edges only.
 
   # - from: clean_orders
   #   to: split_by_region

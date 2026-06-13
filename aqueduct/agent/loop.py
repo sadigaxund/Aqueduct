@@ -40,6 +40,7 @@ from aqueduct.agent.providers import (
 from aqueduct.agent.signature import (
     from_apply_error,
     from_exception,
+    from_failure_context,
     from_json_decode_error,
     from_validation_error,
 )
@@ -54,7 +55,12 @@ logger = logging.getLogger(__name__)
 
 # Bump manually when the system prompt changes significantly.
 # Stored in patch _aq_meta so benchmark results can be correlated to prompt versions.
-PROMPT_VERSION = "1.1"
+# 1.2 — Phase 45: signature-matched coaching section replaces the chronological
+#       patch-history section; recovery-pass polish (orphan </think>, fence
+#       selection, multi-key wrapper unwrap, reprompt char cap).
+# 1.3 — Phase 47: replace_macro op added to the grammar/schema; macro hint
+#       now points at it for in-macro root causes.
+PROMPT_VERSION = "1.3"
 
 
 @dataclass
@@ -76,6 +82,12 @@ class AgentPatchResult:
     attempt_records: list[Any] = field(default_factory=list)
     escalated: bool = False
     recovery_applied: list[str] = field(default_factory=list)
+    # Phase 46 — the model that actually produced this result (under cascade
+    # the top-level agent.model differs from the producing tier's model) and
+    # its 0-based tier index (None outside cascade). None on Phase 45 replay
+    # results — no LLM was involved.
+    model: str | None = None
+    model_cascade_position: int | None = None
 
 
 # ── Timestamp helpers ────────────────────────────────────────────────────
@@ -100,24 +112,37 @@ def stage_patch_for_human(
     patches_dir: Path,
     failure_ctx: FailureContext,
     on_patch_pending_webhook: WebhookEndpointConfig | None = None,
+    source: str = "llm",
+    webhook_event: str = "on_patch_pending",
 ) -> None:
     """Write patch to ``patches/pending/`` for human review.
 
     Args:
         on_patch_pending_webhook: When set, fires the on_patch_pending webhook
             with patch metadata. Errors are logged and never block staging.
+        source: Provenance of the patch — ``"llm"`` for a fresh agent patch,
+            ``"replay"`` when the heal cache re-staged a previously validated
+            patch with zero LLM tokens.
+        webhook_event: Envelope event name — ``"on_ci_patch"`` when the caller
+            passes the ci endpoint config instead of the pending one.
     """
     pending_dir = patches_dir / "pending"
     pending_dir.mkdir(parents=True, exist_ok=True)
     filename = _patch_filename(patch_spec)
     out_path = pending_dir / filename
     payload = patch_spec.model_dump()
+    sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
         "staged_at": _utcnow(),
         "prompt_version": PROMPT_VERSION,
+        # Full dict (not just hash): coaching renders error_class/where/message
+        # as the few-shot "failure" half without re-reading failure_contexts.
+        "failure_signature": sig_exact.to_dict(),
+        "failure_signature_coarse": sig_coarse.hash,
+        "source": source,
     }
     out_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
     logger.info(
@@ -129,6 +154,20 @@ def stage_patch_for_human(
     if on_patch_pending_webhook is not None:
         try:
             from aqueduct.surveyor.webhook import fire_webhook
+            # Phase 46 — the agent's structured diagnosis rides along so a
+            # Slack/Teams message can say WHAT broke and WHY the fix should
+            # work, not just "a patch is pending". Zero extra LLM calls —
+            # these fields come from the PatchSpec the heal already produced.
+            _diagnosis: dict[str, Any] = {
+                "root_cause": patch_spec.root_cause or "",
+                "rationale": patch_spec.rationale or "",
+                "confidence": patch_spec.confidence,
+                "category": patch_spec.category or "",
+            }
+            _first_op = patch_spec.operations[0] if patch_spec.operations else None
+            if _first_op is not None and getattr(_first_op, "op", "") == "defer_to_human":
+                _diagnosis["diagnosis"] = getattr(_first_op, "diagnosis", "")
+                _diagnosis["suggestions"] = list(getattr(_first_op, "suggestions", ()) or ())
             fire_webhook(
                 on_patch_pending_webhook,
                 full_payload={
@@ -137,12 +176,20 @@ def stage_patch_for_human(
                     "blueprint_id": failure_ctx.blueprint_id,
                     "failed_module": failure_ctx.failed_module,
                     "patch_path": str(out_path),
+                    "source": source,
+                    **_diagnosis,
                 },
                 template_vars={
                     "run_id": failure_ctx.run_id,
                     "blueprint_id": failure_ctx.blueprint_id,
                     "failed_module": failure_ctx.failed_module or "",
+                    "patch_id": patch_spec.patch_id,
+                    "root_cause": str(_diagnosis["root_cause"]),
+                    "rationale": str(_diagnosis["rationale"]),
+                    "confidence": f"{patch_spec.confidence:.2f}" if patch_spec.confidence is not None else "n/a",
+                    "category": str(_diagnosis["category"]),
                 },
+                event=webhook_event,
             )
         except Exception:
             logger.debug("Webhook fire failed", exc_info=True)
@@ -161,6 +208,7 @@ def archive_patch(
     filename = _patch_filename(patch_spec)
     archive_path = applied_dir / filename
     payload = patch_spec.model_dump()
+    sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
@@ -168,6 +216,8 @@ def archive_patch(
         "applied_at": _utcnow(),
         "approval_mode": mode,
         "prompt_version": PROMPT_VERSION,
+        "failure_signature": sig_exact.to_dict(),
+        "failure_signature_coarse": sig_coarse.hash,
     }
     archive_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
 
@@ -196,6 +246,9 @@ def generate_agent_patch(
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
     model_cascade_position: int | None = None,
+    memory_coaching: bool = True,
+    retry_max_retries: int = 2,
+    retry_backoff_seconds: float = 2.0,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -230,6 +283,10 @@ def generate_agent_patch(
         engine_prompt_context=engine_prompt_context,
         blueprint_prompt_context=blueprint_prompt_context,
         allow_defer=allow_defer,
+        failure_ctx=failure_ctx,
+        coaching=memory_coaching,
+        retry_max_retries=retry_max_retries,
+        retry_backoff_seconds=retry_backoff_seconds,
     )
 
     messages: list[dict[str, Any]] = [
@@ -488,11 +545,14 @@ def generate_agent_patch(
         # retries immediately — same conversation, learned context.
         # Without deep_loop: gates run only in the apply_callback (post-hoc).
         if deep_loop and validate_callback is not None:
-            try:
-                validated, vfeedback = validate_callback(patch_spec)
-            except Exception as vcb_exc:
-                logger.debug("validate_callback raised; treating as validation fail", exc_info=True)
-                validated, vfeedback = False, f"Validation error: {vcb_exc}"
+            # Phase 46: gate work (sandbox replay = Spark time) is excluded
+            # from max_seconds — the budget caps LLM-conversation time only.
+            with tracker.pause_clock():
+                try:
+                    validated, vfeedback = validate_callback(patch_spec)
+                except Exception as vcb_exc:
+                    logger.debug("validate_callback raised; treating as validation fail", exc_info=True)
+                    validated, vfeedback = False, f"Validation error: {vcb_exc}"
 
             if not validated:
                 logger.info(
@@ -659,4 +719,6 @@ def generate_agent_patch(
         attempt_records=list(tracker.attempts),
         escalated=tracker.escalated_once,
         recovery_applied=recovery_applied if patch_spec is not None else [],
+        model=model,
+        model_cascade_position=model_cascade_position,
     )

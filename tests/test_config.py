@@ -43,3 +43,37 @@ class TestAgentConnectionConfig:
         config = load_config(cfg_path)
         assert config.agent.timeout == 300.5
         assert config.agent.max_reprompts == 5
+
+
+class TestAgentMemoryConfig:
+    def test_defaults_replay_coaching_true(self):
+        from aqueduct.config import AgentMemoryConfig
+        cfg = AgentMemoryConfig()
+        assert cfg.replay is True
+        assert cfg.coaching is True
+
+    def test_frozen_pydantic(self):
+        from aqueduct.config import AgentMemoryConfig
+        cfg = AgentMemoryConfig()
+        with pytest.raises(Exception):
+            cfg.replay = False
+
+    def test_extra_forbid_raises(self):
+        from pydantic import ValidationError
+        from aqueduct.config import AgentMemoryConfig
+        with pytest.raises(ValidationError):
+            AgentMemoryConfig(**{"replay": True, "unknown_key": 1})
+
+    def test_replay_false_round_trips(self, tmp_path):
+        import yaml
+        from aqueduct.config import AgentMemoryConfig
+        data = yaml.safe_load("memory:\n  replay: false\n  coaching: true\n")
+        cfg = AgentMemoryConfig(**data["memory"])
+        assert cfg.replay is False
+        assert cfg.coaching is True
+
+    def test_memory_in_agent_connection_config(self):
+        from aqueduct.config import AgentConnectionConfig
+        cfg = AgentConnectionConfig()
+        assert cfg.memory.replay is True
+        assert cfg.memory.coaching is True

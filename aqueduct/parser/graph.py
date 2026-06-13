@@ -98,3 +98,15 @@ def validate_spillway_targets(modules: list[Module]) -> None:
             raise ValueError(
                 f"Module {module.id!r} spillway target {module.spillway!r} does not exist"
             )
+
+
+def validate_edge_error_types(edges: list[Edge]) -> None:
+    """``error_types`` is a spillway-only filter (typed catch) — reject it on
+    any other port, where it would be silently ignored."""
+    for edge in edges:
+        if edge.error_types and edge.port != "spillway":
+            raise ValueError(
+                f"Edge {edge.from_id!r} -> {edge.to_id!r}: error_types is only "
+                f"valid on port='spillway' (got port={edge.port!r}). It filters "
+                "quarantined rows by their _aq_error_type label."
+            )

@@ -68,7 +68,7 @@ before the migration have `NULL` in those columns.
 |------------------|---------------------|-------|
 | `run_id`         | VARCHAR PRIMARY KEY | UUID; in multi-patch heal (auto + `max_patches > 1`) this is the per-iteration id from iteration 1+ |
 | `blueprint_id`   | VARCHAR NOT NULL    | Blueprint identifier |
-| `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`, `skipped` |
+| `status`         | VARCHAR NOT NULL    | `running`, `success`, `error`, `patched`. (`skipped` exists only as a per-module status inside `module_results`, never at run level.) |
 | `started_at`     | TIMESTAMPTZ NOT NULL | Iteration start |
 | `finished_at`    | TIMESTAMPTZ          | NULL while running |
 | `module_results` | JSON                | Per-module status/error blobs |
@@ -130,6 +130,11 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 only (a parseable PatchSpec returned) — it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 
+Phase 45 adds two values outside the loop vocabulary: `cached` and
+`replayed` mark synthetic zero-token rows (`attempt_num=0`,
+`tokens_in=tokens_out=0`) written when the heal cache resolved the failure
+without calling the LLM at all.
+
 #### `healing_outcomes`
 
 | Column                    | Type    | Notes |
@@ -146,6 +151,12 @@ the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 | `run_success_after_patch` | BOOLEAN | The authoritative "did this heal actually work" flag |
 | `applied_at`              | VARCHAR | ISO-8601 |
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
+| `failure_signature`       | VARCHAR | Phase 45 — exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
+| `resolution`              | VARCHAR | Phase 45 — `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on pre-Phase-45 rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `model_cascade_position`  | INTEGER | Phase 46 — 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
+
+Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
+`resolution` counts across discovered observability DBs.
 
 When the unified loop exits with `patch=None` (every attempt rejected, or a
 budget axis tripped before a valid patch landed), the CLI synthesises one
@@ -155,8 +166,10 @@ budget axis tripped before a valid patch landed), the CLI synthesises one
 
 #### `patch_simulation`
 
-One row per gate the patch went through. `gate` vocabulary: `guardrail`,
-`lineage`, `sandbox`, `explain`. `status` is `pass` or `fail`.
+One row per gate the patch went through. `gate` vocabulary: `lineage`,
+`sandbox`, `explain` (guardrail rejections are recorded in `heal_attempts`,
+not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
+`sandbox_mode: off` synthesises a pass-through row).
 
 #### `signal_overrides`
 
@@ -242,7 +255,9 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution.
 
 #### `depot_kv`
 
-Cross-run KV state (`@aq.depot.*`). Keyed by `(blueprint_id, key)`.
+Cross-run KV state (`@aq.depot.*`). Keyed by `key` alone — the depot is
+project-wide, so two blueprints reading the same key share state (prefix
+keys per pipeline, e.g. `sales.watermark`, if you need isolation).
 
 ---
 
@@ -399,7 +414,7 @@ ORDER BY pass_rate DESC;
 
 ### Sandbox replay diagnostics (1.1.0+)
 
-**When** a patch passed `aqueduct.sandbox_mode: sample` but failed once
+**When** a patch passed `agent.sandbox_mode: sample` but failed once
 applied to production.
 **What you learn** Whether the sample skipped the offending row shape.
 Re-run with `sandbox_mode: preflight` (requires `danger.allow_full_preflight`)

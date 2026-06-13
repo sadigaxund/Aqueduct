@@ -150,7 +150,16 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
         raise EgressError(f"[{module.id}] mode=merge requires 'merge_key'")
     keys: list[str] = [merge_key] if isinstance(merge_key, str) else list(merge_key)
 
-    target = table if table else f"delta.`{path}`"
+    # Backtick-quote identifiers so reserved words ("order", "group") and
+    # special characters in column/table names survive SQL generation.
+    # Embedded backticks escape by doubling, per Spark identifier rules.
+    def _bq(identifier: str) -> str:
+        return "`" + identifier.replace("`", "``") + "`"
+
+    if table:
+        target = ".".join(_bq(part) for part in table.split("."))
+    else:
+        target = f"delta.{_bq(str(path))}"
     view_name = "_aq_merge_src"
     spark = df.sparkSession
 
@@ -161,7 +170,7 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
     df.createTempView(view_name)
 
     on_clause = " AND ".join(
-        f"_aq_target.{k} = _aq_src.{k}" for k in keys
+        f"_aq_target.{_bq(k)} = _aq_src.{_bq(k)}" for k in keys
     )
     merge_sql = (
         f"MERGE INTO {target} AS _aq_target "

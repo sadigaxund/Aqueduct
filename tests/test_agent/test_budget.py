@@ -318,7 +318,8 @@ class TestBudgetTracker:
         s = t.summary()
         expected_keys = {
             "attempts", "stop_reason", "tokens_in_total", "tokens_out_total",
-            "elapsed_seconds", "escalated_once", "signatures",
+            "elapsed_seconds", "excluded_gate_seconds", "escalated_once",
+            "signatures",
         }
         assert set(s.keys()) == expected_keys
 
@@ -334,3 +335,63 @@ class TestBudgetTracker:
         assert s["escalated_once"] is False
         assert len(s["signatures"]) == 1
         assert s["signatures"][0]["hash"] == sig.hash
+
+
+# ── Phase 46 — pause_clock ────────────────────────────────────────────────────
+
+class TestPauseClock:
+    def test_pause_clock_adds_excluded_seconds(self):
+        t = BudgetTracker(BudgetConfig(max_seconds=60.0))
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [100.0, 105.0]
+            with t.pause_clock():
+                pass
+        assert t._excluded_seconds == 5.0
+
+    def test_pause_clock_accumulates(self):
+        t = BudgetTracker(BudgetConfig(max_seconds=60.0))
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [100.0, 102.0]
+            with t.pause_clock():
+                pass
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [200.0, 204.0]
+            with t.pause_clock():
+                pass
+        assert t._excluded_seconds == 6.0
+
+    def test_summary_includes_excluded_gate_seconds(self):
+        t = BudgetTracker(BudgetConfig(max_seconds=60.0))
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [100.0, 103.0]
+            with t.pause_clock():
+                pass
+        s = t.summary()
+        assert s["excluded_gate_seconds"] == pytest.approx(3.0, rel=0.1)
+
+    def test_remaining_seconds_excludes_gate_time(self):
+        """remaining_seconds() subtracts only wall time minus excluded gate time."""
+        t = BudgetTracker(BudgetConfig(max_seconds=60.0))
+        started = t.started_at
+        # exclude 5s of gate time
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [started, started + 5.0]
+            with t.pause_clock():
+                pass
+        # pretend 20s have passed wall time
+        with patch("aqueduct.agent.budget.time.monotonic", return_value=started + 20.0):
+            remaining = t.remaining_seconds()
+        # 60 - (20 - 5) = 45
+        assert remaining == pytest.approx(45.0, rel=0.1)
+
+    def test_excluded_seconds_dont_affect_elapsed_seconds_in_summary(self):
+        t = BudgetTracker(BudgetConfig(max_seconds=60.0))
+        started = t.started_at
+        with patch("aqueduct.agent.budget.time.monotonic") as mock_time:
+            mock_time.side_effect = [started, started + 5.0]
+            with t.pause_clock():
+                pass
+        with patch("aqueduct.agent.budget.time.monotonic", return_value=started + 10.0):
+            s = t.summary()
+        assert s["elapsed_seconds"] == pytest.approx(10.0, rel=0.1)
+        assert s["excluded_gate_seconds"] == pytest.approx(5.0, rel=0.1)

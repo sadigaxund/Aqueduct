@@ -10,15 +10,16 @@
   <strong>Self-healing Spark pipelines. Declarative. Observable. Autonomous.</strong>
 </p>
 
+<!-- Badges: two deliberate rows so a long badge can never orphan the last one onto its own line. -->
 <p align="center">
   <a href="https://pypi.org/project/aqueduct-core/"><img src="https://img.shields.io/pypi/v/aqueduct-core?style=flat-square&logo=pypi&logoColor=white&color=2563eb" alt="PyPI" /></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11%2B-2563eb?style=flat-square&logo=python&logoColor=white" alt="Python" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-2563eb?style=flat-square" alt="License" /></a>
+  <br/>
   <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/test-suite.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/test-suite.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white&label=tests" alt="Test Suite" /></a>
   <a href="https://github.com/sadigaxund/aqueduct/actions/workflows/version-matrix.yml"><img src="https://img.shields.io/github/actions/workflow/status/sadigaxund/aqueduct/version-matrix.yml?branch=main&style=flat-square&label=compatibility" alt="Compatibility Matrix" /></a>
-  <a href="https://pepy.tech/project/aqueduct-core"><img src="https://static.pepy.tech/badge/aqueduct-core/month" alt="Downloads / month" /></a>
   <!-- TODO(maturity): set the real project status. Options: experimental · alpha · beta · stable -->
   <img src="https://img.shields.io/badge/status-beta-orange?style=flat-square" alt="Project status: beta" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-2563eb?style=flat-square" alt="License" /></a>
   <a href="https://github.com/sadigaxund/aqueduct/stargazers"><img src="https://img.shields.io/github/stars/sadigaxund/aqueduct?style=flat-square&logo=github&color=2563eb" alt="Stars" /></a>
 </p>
 
@@ -26,33 +27,26 @@
 
 ## Why Aqueduct
 
-A Spark job fails at 3 a.m. on a column rename upstream. Today that means a paged engineer scrolling a four-kilobyte JVM stack trace to find a one-line fix.
+A Spark job fails at 3 a.m. on a column rename upstream. Today that means a paged engineer scrolling a four-kilobyte JVM stack trace to find a one-line fix. Aqueduct turns it into a Git-diffable patch waiting for review in the morning.
 
-Aqueduct turns that into a Git-diffable patch waiting for you in the morning.
+<kbd>
+  <img width="1600" height="764" alt="Screenshot 2026-06-13 at 05-23-26 (1)" src="https://github.com/user-attachments/assets/dedd5af5-aa59-4f09-9fa8-9632b02a6894" />
+</kbd>  
 
-- **Declarative, not DAG code.** Pipelines are YAML *Blueprints* — no PySpark boilerplate, no scheduler glue, no operator classes.
-- **Self-healing, not just alerting.** On failure an LLM agent diagnoses the root cause and emits a structured patch that passes guardrail, lineage, and sandbox gates *before* it touches your pipeline. No codegen, no shell access, no silent mutation.
-- **Observable by construction.** Every run, every heal attempt, every column-lineage edge is recorded in a queryable store — at zero extra Spark actions on the hot path.
+<br><br>
+
+- **Declarative, not DAG code.** Pipelines are YAML *Blueprints* — no PySpark boilerplate, no scheduler glue, no operator classes. Bring your own scheduler; Aqueduct is the control plane on top of Spark.
+- **Self-healing, not just alerting.** On failure an LLM agent diagnoses the root cause and emits a structured patch that passes guardrail, lineage, and sandbox gates *before* it touches your pipeline. No codegen, no shell access, no silent mutation — and a failure it has solved before heals from memory with **zero tokens**.
+- **Observable by construction.** Every run, every heal attempt, every column-lineage edge lands in a queryable store — at zero extra Spark actions on the hot path.
+- **Model-agnostic.** Any LLM — a local 7B on Ollama up to a frontier API. The constrained patch grammar (14 deterministic operations, no code generation) is what keeps small models reliable; multi-model cascades escalate to bigger models only when needed.
 
 > **Wake up to a pending patch — not a wall of Spark errors.**
-
-<!--
-  ┌──────────────────────────────────────────────────────────────┐
-  │  TODO(demo): drop a terminal GIF / asciinema cast here.       │
-  │  Ideal clip: `aqueduct run` hits a schema-drift failure, the  │
-  │  agent generates a patch, gates pass, the re-run goes green.  │
-  │  ~20s. This is the single highest-impact addition to the README. │
-  └──────────────────────────────────────────────────────────────┘
--->
-<p align="center">
-  <em>📽️ Demo coming soon — a live heal, start to green, in under 20 seconds.</em>
-</p>
 
 ---
 
 ## Table of Contents
 
-- [How It Works](#how-it-works)
+- [What You Get](#what-you-get)
 - [Core Concepts](#core-concepts)
 - [The Healing Flow](#the-healing-flow)
 - [Architecture](#architecture)
@@ -63,30 +57,18 @@ Aqueduct turns that into a Git-diffable patch waiting for you in the morning.
 
 ---
 
-## How It Works
+## What You Get
 
-Aqueduct is a control plane for Apache Spark. You describe *what* the pipeline does; Aqueduct compiles, runs, observes, and — when it breaks — repairs it.
-
-```mermaid
-flowchart LR
-    A[Blueprint<br/>YAML] --> B[Compile<br/>→ Manifest]
-    B --> C[Execute<br/>on Spark]
-    C --> D[Observe<br/>Surveyor]
-    D -- success --> E([Done])
-    D -- failure --> F[LLM Agent<br/>→ PatchSpec]
-    F --> G[Guardrail · Lineage · Sandbox gates]
-    G -- pass --> C
-    G -- low confidence --> H[Stage for human review]
-```
-
-1. You write a **Blueprint** (YAML).
-2. Aqueduct **compiles** it into a Manifest.
-3. The **Executor** runs it on Spark.
-4. The **Surveyor** observes everything.
-5. On failure, the **LLM Agent** emits a structured `PatchSpec`.
-6. The patch clears guardrail → lineage → sandbox gates, then re-runs — or stages for review.
-
-**Model-agnostic by design.** The healing loop works with any LLM — a local 7B on Ollama up to a frontier model via API. The constrained PatchSpec grammar (13 deterministic operations, no code generation) means even small models produce valid, guardrail-passing patches for common failures: path typos, format mismatches, column renames, SQL fixes. <!-- TODO(claim): verify the 70% figure against a published `aqueduct benchmark` run and link the results here. --> Around **70% of production Spark errors are healable by a 7B model in a single attempt.** Advanced features like `deep_loop` (in-conversation sandbox feedback) and multi-model cascades push heal rates higher with larger models.
+| Capability | What it does | Details |
+|---|---|---|
+| **Self-healing** | LLM diagnoses failures, emits gated, Git-diffable patches — human, CI, or auto approval | [Spec §8](docs/specs.md) |
+| **Heal memory** | Failure signatures cache validated fixes — repeat failures heal with zero LLM tokens | [Spec §8.2](docs/specs.md) |
+| **Observability store** | Runs, failures, heal attempts, metrics in queryable DuckDB/Postgres | [Observability Guide](docs/observability_guide.md) |
+| **Column lineage** | Compile-time, zero Spark actions; powers the patch lineage gate | [Spec §7](docs/specs.md) |
+| **Data quality** | Inline `Assert` rules + Spillway quarantine — bad rows routed, not dropped, typed like catch blocks | [Spec §5](docs/specs.md) |
+| **Module tests** | `aqueduct test` runs transforms against inline fixtures — no I/O, no cluster | [CLI Reference](docs/cli_reference.md) |
+| **LLM benchmark** | `aqueduct benchmark` scores models against simulated failures — pick the cheapest model that heals your pipelines | [CLI Reference](docs/cli_reference.md) |
+| **Safety rails** | Guardrails, multi-axis budgets, hourly heal caps, sandbox replay before any live write | [Spec §8.3](docs/specs.md) |
 
 ## Core Concepts
 
@@ -110,22 +92,20 @@ Full details in the [References](#references).
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline, and the model works inside a constrained grammar — it cannot write code, mutate files, or run shell commands.
 
-```mermaid
-flowchart TD
-    F[Failure] --> CAP[1 · Capture<br/>self-contained failure package]
-    CAP --> PR[2 · Prune<br/>trim to blast radius]
-    PR --> GEN[3 · Generate<br/>structured PatchSpec only]
-    GEN --> RE{4 · Reprompt<br/>field-level corrections}
-    RE -- valid --> G1[Guardrails]
-    RE -- budget exhausted --> HUM[Defer to human<br/>structured diagnosis]
-    G1 --> G2[Compile-check]
-    G2 --> G3[Lineage gate]
-    G3 --> G4[Sandbox gate]
-    G4 -- reject --> RE
-    G4 -- pass --> CW[6 · Confirm & write<br/>real re-run, then rewrite on success]
-    CW --> APPLIED[patches/applied/ · Git-diffable]
-    GEN -. all gates fail .-> PENDING[patches/pending/]
-```
+<!--
+  TODO(demo): terminal GIF / asciinema cast goes HERE — proof next to the claim.
+  Ideal clip (~20s): `aqueduct run` hits a schema-drift failure, the agent
+  generates a patch, gates pass, the re-run goes green.
+-->
+<p align="center">
+  <em>📽️ Demo coming soon — a live heal, start to green, in under 20 seconds.</em>
+</p>
+
+<kbd>
+  
+<img width="1362" height="1410" alt="Screenshot 2026-06-13 at 05-28-42 (1)(1)" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
+
+</kbd>
 
 ### Approval modes
 
@@ -178,17 +158,10 @@ For the stage-by-stage detail, see the [Blueprint & Engine Spec](docs/specs.md).
 
 Aqueduct is a single CLI that runs on the Spark driver — no servers, no daemons. Logic flows through four immutable layers:
 
-```mermaid
-flowchart LR
-    subgraph CLI["aqueduct CLI (Spark driver)"]
-        P[Parser<br/>YAML → AST] --> C[Compiler<br/>AST → Manifest]
-        C --> E[Executor<br/>Spark run]
-        E --> S[Surveyor<br/>observe · record]
-    end
-    S --> ST[(Stores<br/>DuckDB · Postgres · Redis)]
-    S --> AG[Agent<br/>LLM heal loop]
-    AG --> PT[Patch<br/>grammar · gates · apply]
-```
+<kbd>
+<img width="1343" height="663" alt="Screenshot 2026-06-13 at 05-31-32 (1)(1)" src="https://github.com/user-attachments/assets/d3f00605-2322-4a7b-a3e8-583bbf932d88" />
+</kbd>
+<br>
 
 - **Parser** validates YAML into an immutable AST.
 - **Compiler** resolves context, expands Arcades and macros, extracts column lineage, and assembles a fully-resolved Manifest.
@@ -214,6 +187,7 @@ Compose extras as needed — `pip install aqueduct-core[spark,airflow,aws]`:
 | `airflow` | Apache Airflow operator shim | Scheduler / worker host; the box submitting jobs to Spark. |
 | `secrets` | AWS + GCP + Azure secret-manager SDKs (or pick `aws` / `gcp` / `azure` individually) | Resolving `@aq.secret('KEY')` against a cloud vault. |
 | `stores` | Postgres + Redis backends (or pick `postgres` / `redis` individually) | Replacing single-writer DuckDB defaults for obs / lineage / depot. |
+| `llm` | `json-repair` — last-ditch recovery of malformed LLM patch JSON | Healing with small local models that emit imperfect JSON. |
 | `all` | Everything above | Single-laptop dev. |
 
 ### A first blueprint

@@ -186,6 +186,11 @@ class BudgetTracker:
     escalated_once: bool = False             # one escalation per heal, never two
     _current_attempt: int = 0
     _stop_reason: str | None = None
+    # Phase 46 — seconds spent OUTSIDE the LLM conversation (validation
+    # gates: sandbox replay, lineage, explain). Subtracted from elapsed so
+    # ``max_seconds`` caps LLM time only — a slow sandbox no longer eats
+    # the heal budget. Accumulated via ``pause_clock()``.
+    _excluded_seconds: float = 0.0
 
     # ── public API ─────────────────────────────────────────────────────────
 
@@ -238,7 +243,7 @@ class BudgetTracker:
         if self._current_attempt >= self.config.max_reprompts:
             self._stop_reason = "exhausted_attempts"
             return self._stop_reason
-        if time.monotonic() - self.started_at >= self.config.max_seconds:
+        if self._elapsed_llm_seconds() >= self.config.max_seconds:
             self._stop_reason = "budget_seconds_exceeded"
             return self._stop_reason
         if (
@@ -287,15 +292,39 @@ class BudgetTracker:
         with ``allow_defer=True``) — terminates with ``deferred``."""
         self._stop_reason = "deferred"
 
+    def _elapsed_llm_seconds(self) -> float:
+        """Wall-clock elapsed minus gate time excluded via ``pause_clock()``."""
+        return time.monotonic() - self.started_at - self._excluded_seconds
+
+    def pause_clock(self):
+        """Context manager — exclude the wrapped block from ``max_seconds``.
+
+        Phase 46: wrap validation-gate work (deep-loop sandbox/lineage/
+        explain callbacks) so gate time cannot exhaust the LLM budget.
+        ``max_seconds`` thus caps LLM-conversation time only; per-attempt
+        ``latency_ms`` still reports real wall time.
+        """
+        import contextlib
+
+        @contextlib.contextmanager
+        def _pause():
+            t0 = time.monotonic()
+            try:
+                yield
+            finally:
+                self._excluded_seconds += time.monotonic() - t0
+
+        return _pause()
+
     def remaining_seconds(self) -> float:
         """Seconds remaining in the wall-clock budget, floored at 0 (Phase 40).
 
         Used by the orchestration loop to compute a per-call HTTP deadline
         so that ``max_seconds`` is enforced mid-call, not just at iteration
-        boundaries.
+        boundaries. Phase 46: gate time excluded via ``pause_clock()`` does
+        not count against the budget.
         """
-        elapsed = time.monotonic() - self.started_at
-        return max(0.0, self.config.max_seconds - elapsed)
+        return max(0.0, self.config.max_seconds - self._elapsed_llm_seconds())
 
     def signatures(self) -> list[ErrorSignature]:
         return [a.signature for a in self.attempts if a.signature is not None]
@@ -307,6 +336,7 @@ class BudgetTracker:
             "tokens_in_total": self.tokens_in_total,
             "tokens_out_total": self.tokens_out_total,
             "elapsed_seconds": round(time.monotonic() - self.started_at, 3),
+            "excluded_gate_seconds": round(self._excluded_seconds, 3),
             "escalated_once": self.escalated_once,
             "signatures": [s.to_dict() for s in self.signatures()],
         }

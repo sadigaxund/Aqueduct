@@ -1,10 +1,18 @@
 import pytest
 import warnings
 from pathlib import Path
+from aqueduct import AqueductWarning
 from aqueduct.parser.parser import parse
 from aqueduct.compiler.compiler import compile as compiler_compile
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _ensure_warnings_caught():
+    warnings.simplefilter("always", AqueductWarning)
+    yield
+
 
 def _compile_yaml(yaml_str: str, tmp_path: Path):
     bp_path = tmp_path / "test.yml"
@@ -32,12 +40,15 @@ modules:
     config:
       signals:
         - type: {sig}
-            """
-            if sig == "row_count_estimate":
-                # By default, method is omitted, which should trigger a warning
-                pass
-            with pytest.warns(UserWarning, match="FULL DATASET SCAN.*SPARK_GUIDE.md#probe-sample-cost"):
+        - type: schema_snapshot
+"""
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always", AqueductWarning)
                 _compile_yaml(yaml_str, tmp_path)
+                assert any(
+                    "FULL DATASET SCAN" in str(x.message) and "probe-sample-cost" in str(x.message)
+                    for x in w
+                ), f"No warning for signal {sig}"
 
     def test_probe_safe_signals_no_warn(self, tmp_path):
         for sig_yaml in [
@@ -85,8 +96,10 @@ edges:
   - from: in
     to: ch
         """
-        with pytest.warns(UserWarning, match="incremental-watermark-scan"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
+            assert any("incremental-watermark-scan" in str(x.message) for x in w)
 
     def test_incremental_channel_with_checkpoint_no_warn(self, tmp_path):
         yaml_str = """
@@ -122,8 +135,10 @@ udf_registry:
     lang: python
 modules: []
         """
-        with pytest.warns(UserWarning, match="row-at-a-time.*SPARK_GUIDE.md#python-udf-performance"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
+            assert any("row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message) for x in w), f"No UDF warning in {[str(x.message) for x in w]}"
             
     def test_default_udf_warns(self, tmp_path):
         yaml_str = """
@@ -135,8 +150,10 @@ udf_registry:
 modules: []
         """
         # Default lang is python, so it should warn
-        with pytest.warns(UserWarning, match="row-at-a-time.*SPARK_GUIDE.md#python-udf-performance"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
+            assert any("row-at-a-time" in str(x.message) and "python-udf-performance" in str(x.message) for x in w)
 
     def test_java_udf_no_warn(self, tmp_path):
         yaml_str = """
@@ -167,8 +184,10 @@ modules:
       mode: append
       path: data
             """
-            with pytest.warns(UserWarning, match="small files.*SPARK_GUIDE.md#planned-future-checks"):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always", AqueductWarning)
                 _compile_yaml(yaml_str, tmp_path)
+                assert any("small files" in str(x.message) and "planned-future-checks" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
 
     def test_egress_append_with_partition_no_warn(self, tmp_path):
         yaml_str = """
@@ -231,8 +250,10 @@ edges:
   - from: ch
     to: out2
         """
-        with pytest.warns(UserWarning, match="2 downstream consumers.*SPARK_GUIDE.md#caching-strategy"):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
             _compile_yaml(yaml_str, tmp_path)
+            assert any("downstream consumers" in str(x.message) and "caching-strategy" in str(x.message) for x in w)
 
     def test_channel_multi_consumer_with_checkpoint_no_warn(self, tmp_path):
         yaml_str = """
@@ -301,7 +322,7 @@ modules:
       options:
         {opt_key}: "secret"
             """
-            with pytest.warns(UserWarning, match="Hadoop filesystem keys in 'options'"):
+            with pytest.warns(AqueductWarning, match="Hadoop filesystem keys in 'options'"):
                 _compile_yaml(yaml_str, tmp_path)
 
     def test_ingress_non_hadoop_options_no_warn(self, tmp_path):
@@ -361,7 +382,7 @@ modules:
       maintenance:
         optimize: true
         """
-        with pytest.warns(UserWarning, match="OPTIMIZE is a Delta Lake operation"):
+        with pytest.warns(AqueductWarning, match="OPTIMIZE is a Delta Lake operation"):
             _compile_yaml(yaml_str, tmp_path)
 
     def test_optimize_true_delta_no_warn(self, tmp_path):

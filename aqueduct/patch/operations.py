@@ -64,6 +64,7 @@ from aqueduct.patch.grammar import (
     RemoveModuleOp,
     ReplaceContextValueOp,
     ReplaceEdgeOp,
+    ReplaceMacroOp,
     ReplaceModuleConfigOp,
     ReplaceModuleLabelOp,
     ReplaceRetryPolicyOp,
@@ -350,6 +351,35 @@ def apply_set_spark_config(bp: dict, op: SetSparkConfigOp) -> dict:
     return bp
 
 
+def apply_replace_macro(bp: dict, op: ReplaceMacroOp) -> dict:
+    """Replace the body of an existing macro in the ``macros:`` block (Phase 47).
+
+    Replace-only: the macro must already exist. Unknown names raise with the
+    available list — mirrors the compile-time ``MacroError`` wording so the
+    reprompt feedback reads the same in both failure paths. Re-expansion
+    correctness (parameter mismatches, broken consumers) is owned by the
+    compile + lineage gates that run on the patched Blueprint.
+    """
+    macros = bp.get("macros")
+    if not isinstance(macros, dict) or not macros:
+        raise PatchOperationError(
+            "Blueprint has no macros: block — replace_macro can only modify "
+            "existing macros, not create them"
+        )
+    if op.name not in macros:
+        raise PatchOperationError(
+            f"Macro {op.name!r} is not defined — replace_macro is replace-only. "
+            f"Available: {sorted(macros)}"
+        )
+    if "\n" in op.value:
+        # Multiline SQL renders as a `|` block scalar, not an escaped one-liner.
+        from ruamel.yaml.scalarstring import LiteralScalarString as _LS
+        macros[op.name] = _LS(op.value)
+    else:
+        macros[op.name] = _quote_strings(op.value)
+    return bp
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _DISPATCH = {
@@ -366,6 +396,7 @@ _DISPATCH = {
     "add_arcade_ref":         apply_add_arcade_ref,
     "defer_to_human":         apply_defer_to_human,
     "set_spark_config":       apply_set_spark_config,
+    "replace_macro":          apply_replace_macro,
 }
 
 

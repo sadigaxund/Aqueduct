@@ -41,13 +41,13 @@ def _write_bp(tmp_path, agent_block: str, context_block: str = "") -> str:
 
 class TestAgentBlockEnvVarResolution:
     def test_base_url_env_var_resolves(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("AQ_OLLAMA_URL", "http://10.0.0.39:11434")
+        monkeypatch.setenv("AQ_OLLAMA_URL", "http://ollama.internal:11434")
         bp = _write_bp(
             tmp_path,
             agent_block='  provider: openai_compat\n  base_url: "${AQ_OLLAMA_URL}/v1"\n  model: m\n',
         )
         result = parse(bp)
-        assert result.agent.base_url == "http://10.0.0.39:11434/v1"
+        assert result.agent.base_url == "http://ollama.internal:11434/v1"
 
     def test_model_env_var_resolves(self, tmp_path, monkeypatch):
         monkeypatch.setenv("MY_MODEL", "qwen2.5-coder:7b")
