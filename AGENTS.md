@@ -195,8 +195,9 @@ whenever a package is restructured — use it as the first filter before greppin
 | `prompts.py` | `build_prompt`, `_build_user_prompt`, `_build_system_prompt`, `_FIELD_ALIASES`, `_VALID_OPS` | Template strings, prompt construction, LLM-facing constants |
 | `providers.py` | `_call_agent`, `_call_anthropic`, `_call_openai_compat`, `_ProviderConfig` | HTTP dispatch to Anthropic / OpenAI-compatible endpoints |
 | `parse.py` | `_parse_patch_spec`, `_detect_structural_error`, `_format_reprompt_error`, `_format_reprompt_for_next_turn` | Response parsing, structural error detection, reprompt formatting |
-| `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop |
-| `signature.py` | `ErrorSignature`, `from_*` helpers | Error signature engine (stable dedup hash for budget + coaching) |
+| `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop (`pause_clock()` excludes gate time) |
+| `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for budget + heal cache + coaching) |
+| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Phase 45 signature memory — zero-token lookups over patch lifecycle dirs (pending reuse, exact replay, coaching retrieval) |
 
 **When adding a feature:**
 - New LLM provider → add `_call_<provider>()` in `providers.py`, wire in `_call_agent()`
@@ -204,6 +205,7 @@ whenever a package is restructured — use it as the first filter before greppin
 - New recovery pattern → add to `_parse_patch_spec()` in `parse.py`
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
+- New heal-cache lookup → add to `memory.py` (pure file reads — no LLM calls, no DB connections)
 
 ## Git & Commit Conventions
 

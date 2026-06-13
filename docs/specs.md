@@ -561,7 +561,11 @@ Transient errors retry first (per `retry_policy.max_attempts`). Non-transient fa
 - Structured root-cause block (offending column + Spark suggestions)
 - `inputs_fingerprint` (file metadata to distinguish data-drift from code bugs)
 
-### 2. Prune
+### 2. Memory (zero tokens)
+
+The failure's signature is checked against the heal cache before any LLM call (Phase 45): a **pending patch** with the same signature ends the run immediately (`stop_reason: cached`, exit `HEAL_PENDING`); an **archived patch** that already fixed this signature replays through the gate pyramid (`stop_reason: replayed`), falling through to the LLM only if a gate rejects it. Cache miss → continue below.
+
+### 3. Prune
 
 A ContextPruner trims the package to the failure's blast radius. Pruning rules:
 
@@ -571,11 +575,11 @@ A ContextPruner trims the package to the failure's blast radius. Pruning rules:
 | `SparkException` with OOM/shuffle | Full manifest |
 | All other errors | Failed module + direct upstream |
 
-### 3. Generate
+### 4. Generate
 
 The LLM responds with a structured PatchSpec — a list of typed operations that map one-to-one to Blueprint edits. Anything else is rejected.
 
-### 4. Reprompt
+### 5. Reprompt
 
 Schema errors, guardrail violations, and gate rejections feed back into the same conversation as annotated, field-level corrections. The loop is bounded by a multi-axis budget:
 
@@ -592,7 +596,7 @@ When `same_error_consecutive` trips, the loop escalates: temperature is bumped a
 
 `max_seconds` counts LLM time only (Phase 46): validation-gate work (deep-loop sandbox replay, lineage, explain) is excluded from the clock, so a slow sandbox cannot exhaust the heal budget. Transient provider errors (HTTP 429/503/529) are retried per `agent.retry` (default 2 retries, exponential backoff with jitter, server `Retry-After` honored); retry sleeps count as LLM time and are always capped by the remaining per-call deadline.
 
-### 5. Gate
+### 6. Gate
 
 Before a patch touches the Blueprint, four gates run in order:
 
@@ -601,7 +605,7 @@ Before a patch touches the Blueprint, four gates run in order:
 3. **Lineage gate** — column-level diff catches broken references before Spark sees them
 4. **Sandbox gate** — sampled or full replay catches "parsed but produces nothing"
 
-### 6. Confirm and write
+### 7. Confirm and write
 
 Only after every gate passes does the patch run against the real pipeline. The on-disk Blueprint is rewritten only if the full re-run succeeds. Failed patches stage to `patches/pending/` for inspection.
 

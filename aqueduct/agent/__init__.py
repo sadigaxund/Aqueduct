@@ -12,6 +12,7 @@ Module layout (use the file name as your first search filter):
   cascade.py     — multi-model healing cascade (generate_cascade_patch)
   budget.py      — multi-axis budget tracking (BudgetConfig, BudgetTracker)
   signature.py   — error signature engine (ErrorSignature, from_* helpers)
+  memory.py      — Phase 45 signature memory (pending reuse, replay, coaching)
 
 All providers use httpx — no optional SDK dependency required.
 
