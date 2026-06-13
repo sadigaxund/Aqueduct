@@ -1501,6 +1501,16 @@ def _format_provenance_rows(pairs) -> str:
     type=int,
     help="Row cap per Ingress in --sandbox mode (0 = no limit). Ignored without --sandbox.",
 )
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override a config or blueprint value for this run only (repeatable, "
+         "in-memory, never persisted). Dotted path — e.g. "
+         "--set agent.approval_mode=auto --set deployment.master_url=spark://h:7077. "
+         "Values coerce to bool/int/float/null else string; use PATH:=JSON for "
+         "structured values. Highest precedence (beats blueprint + aqueduct.yml).",
+)
 def run(
     blueprint: str,
     profile: str | None,
@@ -1519,6 +1529,7 @@ def run(
     parallel: bool = False,
     sandbox: bool = False,
     sample: int = 1000,
+    set_items: tuple[str, ...] = (),
 ) -> None:
     """Compile and execute a Blueprint on a SparkSession."""
     import os
@@ -1582,6 +1593,26 @@ def run(
         except ConfigError as exc:
             click.echo(f"✗ config error: {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
+
+        # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
+        # Applied BEFORE engine/master/danger are read below; blueprint-targeted
+        # overrides (agent.*) are overlaid on the raw Blueprint dict at parse time.
+        blueprint_set_nested: dict = {}
+        if set_items:
+            from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+            try:
+                _config_set_nested, blueprint_set_nested = route_overrides(
+                    set_items, allow_blueprint=True
+                )
+                cfg = apply_to_model(cfg, _config_set_nested)
+            except OverrideError as exc:
+                click.echo(f"✗ {exc}", err=True)
+                sys.exit(exit_codes.CONFIG_ERROR)
+            if _config_set_nested.get("danger"):
+                click.echo(click.style(
+                    f"⚠  --set DANGER override(s) (single-run, NOT persisted): "
+                    f"{_config_set_nested['danger']}", fg="red", bold=True,
+                ), err=True)
 
         # CLI flags override config file; config file overrides built-in defaults
         # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
@@ -1660,7 +1691,21 @@ def run(
 
         # ── Parse ──────────────────────────────────────────────────────────────────
         try:
-            bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
+            if blueprint_set_nested:
+                # Overlay blueprint-targeted --set values (e.g. agent.approval_mode)
+                # on the raw Blueprint dict, then parse so schema validation +
+                # extra="forbid" still apply to the overridden values.
+                import yaml as _yaml
+                from aqueduct.overrides import deep_merge as _deep_merge
+                from aqueduct.parser.parser import parse_dict
+                _raw_bp = _yaml.safe_load(Path(blueprint).read_text(encoding="utf-8")) or {}
+                _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
+                bp = parse_dict(
+                    _raw_bp, base_dir=Path(blueprint).parent,
+                    profile=profile, cli_overrides=cli_overrides or None,
+                )
+            else:
+                bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
         except ParseError as exc:
             click.echo(f"✗ parse error: {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
@@ -4275,6 +4320,14 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
     help="Print the LLM prompt that would be sent and exit without calling "
     "the model. Bare = text; `--print-prompt json` for JSON.",
 )
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this run only (repeatable, "
+         "in-memory). Dotted path — e.g. --set agent.model=claude-opus-4-8 "
+         "--set agent.timeout=600.",
+)
 @_env_options
 def heal(
     run_id: str | None,
@@ -4283,6 +4336,7 @@ def heal(
     config_path: str | None,
     patches_dir: str,
     print_prompt: str | None,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -4314,6 +4368,16 @@ def heal(
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (config-only) ───────────────────────────────────────
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
     resolved_provider = eng.provider
@@ -4575,6 +4639,15 @@ def heal(
     "(passed True→False, patch_applies True→False, diag_score or confidence "
     "drop > 5pp). Implies persistence; ignored with --no-persist.",
 )
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this run only (repeatable, "
+         "in-memory). Dotted path — e.g. --set agent.provider=openai_compat "
+         "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600. "
+         "Replaces the deprecated --provider/--base-url/--timeout flags.",
+)
 @_env_options
 def benchmark(
     scenarios_pos: str | None,
@@ -4590,6 +4663,7 @@ def benchmark(
     no_persist: bool,
     store_path_override: str | None,
     gate_on_regression: bool,
+    set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
@@ -4626,6 +4700,28 @@ def benchmark(
     except ConfigError as exc:
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (config-only; no blueprint in benchmark) ────────────
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
+
+    # Deprecated single-purpose flags → fold into --set.
+    for _flag, _val, _path in (
+        ("--provider", provider_override, "agent.provider"),
+        ("--base-url", base_url_override, "agent.base_url"),
+        ("--timeout", timeout_override, "agent.timeout"),
+    ):
+        if _val is not None:
+            click.echo(click.style(
+                f"[deprecated] {_flag} → use --set {_path}=… (removed in 2.0)",
+                fg="yellow",
+            ), err=True)
 
     eng = cfg.agent
     # Precedence: CLI flag > cfg.agent > built-in default. Connection identity

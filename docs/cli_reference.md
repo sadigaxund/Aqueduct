@@ -104,6 +104,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--parallel` | off | Execute independent DAG branches concurrently (one thread per connected component) |
 | `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`. |
 | `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
+| `-s` / `--set PATH=VALUE` | — | Override any config or blueprint value for this run only (repeatable, in-memory, never persisted). See [Config overrides](#config-overrides--s--set) below. |
 | `--ctx KEY=VALUE` | — | Override a Tier 0 context variable. Repeatable. |
 | `--profile <name>` | — | Activate a `context_profiles:` block |
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |
@@ -112,6 +113,30 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `-e KEY=VAL` / `--env KEY=VAL` | — | Inline env override (highest precedence). Repeatable. |
 | `--env-file <path>` | anchored `<dir>/.env` | Explicit fallback `.env` (used only when no anchored project `.env` exists) |
+
+### Config overrides (`-s` / `--set`)
+
+`--set PATH=VALUE` overrides any value in `aqueduct.yml` or the Blueprint for a single invocation — repeatable, applied in memory, **never written back to disk**. It is the highest-precedence layer:
+
+```
+--set  >  blueprint agent:  >  aqueduct.yml  >  built-in defaults
+```
+
+One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval_mode`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
+
+Value grammar:
+- `PATH=value` — coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
+- `PATH:=value` — `value` parsed as JSON, for structured values (objects/arrays/typed scalars).
+
+```bash
+aqueduct run bp.yml \
+  --set agent.approval_mode=auto \
+  --set agent.budget.max_seconds=5 \
+  --set deployment.master_url=spark://10.0.0.39:7077 \
+  --set agent.provider_options:='{"temperature":0.1}'
+```
+
+`--set danger.*` overrides print a loud stderr warning (single-run, not persisted). Available on `run`, `benchmark`, and `heal`. `--set` replaces the deprecated one-off override flags (`--provider`, `--base-url`, `--timeout`).
 
 ---
 
@@ -187,10 +212,11 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. |
-| `--provider anthropic\|openai_compat` | `agent.provider` | One-shot override |
-| `--base-url <url>` | `agent.base_url` | One-shot override |
-| `--timeout <seconds>` | `agent.timeout` (300) | Per-call HTTP timeout; `0` = unbounded read |
+| `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. (Stays — multi-model runs aren't expressible as `--set`.) |
+| `-s` / `--set PATH=VALUE` | — | Override an `aqueduct.yml` value for this run (repeatable, in-memory). E.g. `--set agent.provider=openai_compat --set agent.base_url=http://h:11434/v1 --set agent.timeout=600`. |
+| `--provider anthropic\|openai_compat` | `agent.provider` | **Deprecated** → `--set agent.provider=…` (removed in 2.0) |
+| `--base-url <url>` | `agent.base_url` | **Deprecated** → `--set agent.base_url=…` (removed in 2.0) |
+| `--timeout <seconds>` | `agent.timeout` (300) | **Deprecated** → `--set agent.timeout=…` (removed in 2.0) |
 | `--workers <N>` | 1 | Parallel scenario×model pairs |
 | `--format table\|json` | `table` | |
 | `--no-persist` | off | Skip writing to `<scenarios_dir>/.aqueduct/benchmark.duckdb` |

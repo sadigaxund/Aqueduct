@@ -2262,6 +2262,23 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ aqtest/aqscenario file → `files[].valid=null` with a `note` (not counted in valid/invalid)
 - ⏳ no file given and no aqueduct.yml in CWD, `--format json` → JSON with `error` field, exit `CONFIG_ERROR(1)`
 
+### `-s/--set` config overrides — `aqueduct/overrides.py` + `aqueduct/cli.py`
+- ⏳ `parse_set_items`: `agent.timeout=5` → int 5; `=true`/`=false` → bool; `=null`/`=none` → None; `=3.5` → float; `=qwen:7b` → str; `x:={"a":1}` → dict via JSON
+- ⏳ `parse_set_items` rejects items with no `=` and empty/`..` paths → `OverrideError`
+- ⏳ `model_accepts_path(BlueprintSchema, ('agent','approval_mode'))` True; `(AqueductConfig, ('agent','approval_mode'))` False; `(AqueductConfig, ('agent','budget','max_seconds'))` True; `(AqueductConfig, ('deployment','master_url'))` True; open `spark_config.*` dict accepts arbitrary trailing keys
+- ⏳ `route_overrides(allow_blueprint=True)`: `agent.approval_mode` → blueprint bucket; `agent.budget.max_seconds`/`deployment.master_url`/`danger.*` → config bucket; shared `agent.timeout` → blueprint (wins)
+- ⏳ `route_overrides(allow_blueprint=False)`: blueprint-only path (`agent.approval_mode`) → `OverrideError` with suggestion (no blueprint to route to)
+- ⏳ `apply_to_model(AqueductConfig(), {...})` returns a NEW validated config with `deployment.master_url` / `agent.timeout` / `danger.allow_multi_patch` overridden; type-invalid value → `OverrideError`
+- ⏳ `suggest_for_path([AqueductConfig, BlueprintSchema], ('agent','aproval_mode'))` unions sibling names across both roots → suggests `approval_mode`
+- ⏳ `aqueduct run bp.yml --set agent.approval_mode=auto` parses the blueprint with `agent.approval_mode == 'auto'` even when the file says `human` (acceptance) — overlay applied to raw blueprint dict before parse
+- ⏳ `aqueduct run bp.yml --set deployment.master_url=spark://h:7077` overrides `cfg.deployment.master_url` before session creation
+- ⏳ `aqueduct run bp.yml --set agent.aproval_mode=auto` (typo) exits `CONFIG_ERROR(1)` with a sibling suggestion, BEFORE any Spark/compile work
+- ⏳ `aqueduct run bp.yml --set bad-no-eq` (malformed item) exits `CONFIG_ERROR(1)`
+- ⏳ `aqueduct run bp.yml --set danger.allow_multi_patch=true` prints a loud red single-run stderr warning; value is not persisted to aqueduct.yml
+- ⏳ `aqueduct benchmark scn --set agent.provider=openai_compat` overrides `cfg.agent.provider`; `--set agent.budget.max_seconds=5` overrides the engine budget
+- ⏳ `aqueduct benchmark scn --provider X` (and `--base-url`, `--timeout`) prints a `[deprecated] --provider → use --set …` stderr warning but still works
+- ⏳ `aqueduct heal <run_id> --set agent.model=claude-opus-4-8` overrides the engine agent model for that heal
+
 ### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
 
 - ✅ `aqueduct --version` exits 0 and prints `aqueduct <version>` with the version sourced from `importlib.metadata.version("aqueduct-core")`
