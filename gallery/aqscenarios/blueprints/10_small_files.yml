@@ -40,4 +40,4 @@ edges:
     to: out_events
 
 agent:
-  approval_mode: auto
+  approval: auto

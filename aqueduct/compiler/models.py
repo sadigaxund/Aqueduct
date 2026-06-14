@@ -69,6 +69,7 @@ class Manifest:
                     "to": e.to_id,
                     "port": e.port,
                     "error_types": list(e.error_types),
+                    "injected": e.injected,
                 }
                 for e in self.edges
             ],

@@ -45,5 +45,5 @@ edges:
     to: out_events
 
 agent:
-  approval_mode: human
+  approval: human
   confidence_threshold: 0.5

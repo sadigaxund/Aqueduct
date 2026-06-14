@@ -223,7 +223,7 @@ path. `blob_store.materialize()` transparently resolves blob paths to content on
 
 #### `benchmark_results`
 
-One row per `(scenario_id, model, prompt_version)` benchmark execution.
+One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in its own store (DuckDB file or, with `stores.benchmark.backend: postgres`, the `benchmark` Postgres schema) — disjoint from observability rows, no `run_id` foreign key. `aqueduct benchmark-stats` aggregates it into a model leaderboard, hardest-scenario ranking, and a by-day pass-rate trend (all computed from the latest row per `(scenario, model)`); `aqueduct benchmark-diff` compares the two most recent runs per pair.
 
 | Column                | Type                | Notes |
 |-----------------------|---------------------|-------|

@@ -49,6 +49,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
 | `aqueduct doctor --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
+| `aqueduct doctor --format json` | Machine-readable result of every check (`{schema_version, summary, checks[]}`); implies `--verbose` (nothing collapsed). Text mode groups checks into sections (Config, Stores, Spark, …). |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 
 ### Shell completion
@@ -68,10 +69,28 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | Command | Description |
 |---------|-------------|
 | `aqueduct validate <file>...` | Static validation of blueprints/configs |
+| `aqueduct validate <file>... --format json` | Same checks, machine-readable (`{schema_version, summary, files[]}`) for CI |
+| `aqueduct lint <blueprint>` | Static style + correctness checks beyond schema validation (AQ-LINT rules) |
+| `aqueduct lint <blueprint> --strict` | Promote every finding to error — exit non-zero on any finding (CI gate) |
+| `aqueduct lint <blueprint> --format json` | Machine-readable findings (`{schema_version, summary, findings[]}`) |
 | `aqueduct compile <blueprint>` | Output the fully resolved Manifest |
 | `aqueduct run <blueprint>` | Compile and execute the pipeline |
 | `aqueduct test <file.aqtest.yml>` | Run isolated module unit tests |
 | `aqueduct schema [--target blueprint\|config\|patch] [-o <file>]` | Emit the Pydantic-derived JSON Schema for a Blueprint, `aqueduct.yml`, or PatchSpec — enables IDE autocomplete and CI schema gates. Writes to stdout by default. |
+
+### `aqueduct lint` rules
+
+`lint` runs after a successful parse and reports static smells the schema permits. Each rule has a stable `AQ-LINT<NNN>` id and a severity. All initial rules are advisory (`warn`) — a warn-only result exits `0`; `--strict` promotes findings to errors so a non-empty result exits `1` (`CONFIG_ERROR`), for CI gating. SQL rules parse Channel `op: sql` queries with sqlglot (`dialect="spark"`); unparseable SQL is skipped, never errored.
+
+| Rule | Severity | Flags |
+|------|----------|-------|
+| `AQ-LINT001` | warn | Orphan module — not referenced by any edge, `depends_on`, `spillway`, or `attach_to` |
+| `AQ-LINT002` | warn | Module label is empty or just repeats its `id` |
+| `AQ-LINT003` | warn | Duplicate edge — same `(from, to, port)` declared more than once |
+| `AQ-LINT004` | warn | Un-aliased self-join — a relation referenced 2+ times without distinct aliases |
+| `AQ-LINT010` | warn | Cartesian join — `JOIN` with no `ON`/`USING` (explicit `CROSS JOIN` is allowed) |
+| `AQ-LINT011` | warn | `SELECT *` in a Channel that feeds directly into an Egress (silent schema drift) |
+| `AQ-LINT012` | warn | Aggregate function mixed with a non-aggregated column and no `GROUP BY` |
 
 ### Important `aqueduct run` Flags
 
@@ -83,6 +102,9 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--execution-date YYYY-MM-DD` | today (UTC) | Logical date for `@aq.date.*` — enables idempotent backfills |
 | `--resume <run_id>` | — | Resume from checkpoints of a previous run |
 | `--parallel` | off | Execute independent DAG branches concurrently (one thread per connected component) |
+| `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`. |
+| `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
+| `-s` / `--set PATH=VALUE` | — | Override any config or blueprint value for this run only (repeatable, in-memory, never persisted). See [Config overrides](#config-overrides--s--set) below. |
 | `--ctx KEY=VALUE` | — | Override a Tier 0 context variable. Repeatable. |
 | `--profile <name>` | — | Activate a `context_profiles:` block |
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |
@@ -91,6 +113,30 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `-e KEY=VAL` / `--env KEY=VAL` | — | Inline env override (highest precedence). Repeatable. |
 | `--env-file <path>` | anchored `<dir>/.env` | Explicit fallback `.env` (used only when no anchored project `.env` exists) |
+
+### Config overrides (`-s` / `--set`)
+
+`--set PATH=VALUE` overrides any value in `aqueduct.yml` or the Blueprint for a single invocation — repeatable, applied in memory, **never written back to disk**. It is the highest-precedence layer:
+
+```
+--set  >  blueprint agent:  >  aqueduct.yml  >  built-in defaults
+```
+
+One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
+
+Value grammar:
+- `PATH=value` — coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
+- `PATH:=value` — `value` parsed as JSON, for structured values (objects/arrays/typed scalars).
+
+```bash
+aqueduct run bp.yml \
+  --set agent.approval=auto \
+  --set agent.budget.max_seconds=5 \
+  --set deployment.master_url=spark://10.0.0.39:7077 \
+  --set agent.provider_options:='{"temperature":0.1}'
+```
+
+`--set danger.*` overrides print a loud stderr warning (single-run, not persisted). Available on `run`, `benchmark`, and `heal`. `--set` replaces the deprecated one-off override flags (`--provider`, `--base-url`, `--timeout`).
 
 ---
 
@@ -129,16 +175,16 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 | `preflight` | full dataset | dropped | `danger.allow_full_preflight: true` | Slow but conclusive — use when sample misses representative rows |
 | `off` | — (no replay) | next `execute()` writes for real | `danger.allow_skip_sandbox: true` | Skip pre-validation entirely. Patch hits real data immediately. **Use only on tiny, fully-trusted blueprints.** |
 
-`approval_mode` (who applies) and `sandbox_mode` (how to validate before apply) are orthogonal axes that compose:
+`approval` (who applies) and `sandbox_mode` (how to validate before apply) are orthogonal axes that compose:
 
-| `approval_mode` | Behaviour | `sandbox_mode` impact |
+| `approval` | Behaviour | `sandbox_mode` impact |
 |---|---|---|
 | `disabled` | No patching | N/A |
 | `human` | Patch staged for manual review | Replay still runs (gives reviewer signal) |
 | `ci` | Patch staged for CI | Replay still runs |
 | `auto` | Auto-apply. `max_patches: 1` = single shot. `max_patches > 1` = multi-patch reprompt loop (requires `danger.allow_multi_patch: true`). | Replay gates apply every iteration |
 
-`approval_mode: aggressive` is a deprecated alias for `auto` + `max_patches > 1`; it still parses and emits a `[deprecated]` warning. `aggressive_max_patches` is an alias for `max_patches`. Both are slated for removal in `aqueduct: "2.0"` schema.
+`agent.approval` is the canonical key; `agent.approval_mode` is a deprecated input alias (still parses, emits a `[deprecated]` warning, removed in `aqueduct: "2.0"`). `approval: aggressive` is a deprecated alias for `auto` + `max_patches > 1`. `aggressive_max_patches` is an alias for `max_patches`. All are slated for removal in the `2.0` schema.
 
 **Double-danger combo** — `sandbox_mode: off` + `max_patches > 1` means every LLM patch hits production data without pre-validation, in a loop. Engine prints a `⚠ DANGER COMBO` line at startup when both are set; use only on tiny scopes you fully trust.
 
@@ -153,6 +199,7 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `aqueduct heal <run_id>` | Trigger self-healing on a failed run |
 | `aqueduct benchmark <path>` | Evaluate scenarios against models |
 | `aqueduct benchmark-diff` | Compare benchmark results for regressions |
+| `aqueduct benchmark-stats [path]` | Aggregate the store: model leaderboard, hardest scenarios, pass-rate trend |
 
 **Key flags for `heal`:**
 
@@ -166,15 +213,27 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. |
-| `--provider anthropic\|openai_compat` | `agent.provider` | One-shot override |
-| `--base-url <url>` | `agent.base_url` | One-shot override |
-| `--timeout <seconds>` | `agent.timeout` (300) | Per-call HTTP timeout; `0` = unbounded read |
-| `--workers <N>` | 1 | Parallel scenario×model pairs |
+| `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. (Stays — multi-model runs aren't expressible as `--set`.) |
+| `-s` / `--set PATH=VALUE` | — | Override an `aqueduct.yml` value for this run (repeatable, in-memory). E.g. `--set agent.provider=openai_compat --set agent.base_url=http://h:11434/v1 --set agent.timeout=600`. |
+| `--provider anthropic\|openai_compat` | `agent.provider` | **Deprecated** → `--set agent.provider=…` (removed in 2.0) |
+| `--base-url <url>` | `agent.base_url` | **Deprecated** → `--set agent.base_url=…` (removed in 2.0) |
+| `--timeout <seconds>` | `agent.timeout` (300) | **Deprecated** → `--set agent.timeout=…` (removed in 2.0) |
+| `--workers <N>` | 1 | Parallel scenario×model pairs. Per-pair progress prints one line per completed pair (serial mode keeps the grouped multi-line view). |
 | `--format table\|json` | `table` | |
-| `--no-persist` | off | Skip writing to `<scenarios_dir>/.aqueduct/benchmark.duckdb` |
-| `--store-path <path>` | `<scenarios_dir>/.aqueduct/benchmark.duckdb` | Override store path |
-| `--gate-on-regression` | off | Exit non-zero if any regression vs. prior row (passed flip, `patch_applies` flip, `diag_score` drop > 5pp). Implies persistence. |
+| `--no-persist` | from `stores.benchmark.persist` (true) | **Deprecated** → `--set stores.benchmark.persist=false` (removed in 2.0) |
+| `--store-path <path>` | from `stores.benchmark.path` (else `<scenarios_dir>/.aqueduct/benchmark.duckdb`) | **Deprecated** → `--set stores.benchmark.path=…` (removed in 2.0) |
+| `--gate-on-regression` | from `stores.benchmark.gate_on_regression` (false) | **Deprecated** → `--set stores.benchmark.gate_on_regression=true` (removed in 2.0) |
+
+The benchmark store backend is configured under `stores.benchmark` in `aqueduct.yml` (`backend: duckdb\|postgres`, `path`, `persist`, `gate_on_regression`) — Postgres rows live in the `benchmark` schema. Override any of these per-run with `--set stores.benchmark.*`.
+
+**Key flags for `benchmark-stats`:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `[scenarios]` (positional) | `.` | Scenarios path — anchors the default DuckDB store location |
+| `--store-path <path>` | from `stores.benchmark` | Read a specific store file directly |
+| `-s` / `--set PATH=VALUE` | — | e.g. `--set stores.benchmark.backend=postgres --set stores.benchmark.path=postgresql://h/db` |
+| `--format table\|json` | `table` | Leaderboard / hardest-scenarios / trend as text, or structured JSON |
 
 Production heal and `aqueduct benchmark` share the same `agent.budget:`
 block — divergence would let the leaderboard cheat by running under softer

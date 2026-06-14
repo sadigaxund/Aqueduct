@@ -52,5 +52,5 @@ edges:
     to: out_events
 
 agent:
-  approval_mode: auto                   # auto-apply; max_patches > 1 below = multi-patch loop
+  approval: auto                        # auto-apply; max_patches > 1 below = multi-patch loop
   confidence_threshold: 0.5

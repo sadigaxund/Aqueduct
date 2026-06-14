@@ -8,7 +8,7 @@
 # DuckDB stores in .aqueduct/.
 #
 # CLI flags override values here. Blueprint spark_config overrides spark_config
-# below (Blueprint wins on conflict). LLM policy (approval_mode, forbidden_ops)
+# below (Blueprint wins on conflict). LLM policy (approval, forbidden_ops)
 # belongs in each Blueprint's agent: block — not here.
 #
 # Usage:
@@ -143,6 +143,18 @@ stores:
     # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
     # backend: redis
     # path: "redis://host:6379/0"
+
+  # benchmark — history store for `aqueduct benchmark` (disjoint from the
+  # stores above; rows are not tied to a real run_id). Defaults to a DuckDB
+  # file anchored to the scenarios directory; no need to set `path` for duckdb.
+  benchmark:
+    backend: duckdb
+    # path: ".aqueduct/benchmark.duckdb"   # default: <scenarios_dir>/.aqueduct/benchmark.duckdb
+    persist: true                          # write each (scenario, model) row
+    gate_on_regression: false              # exit non-zero on any regression vs baseline
+    # Postgres (uncomment + install `aqueduct-core[postgres]`); rows live in the `benchmark` schema:
+    # backend: postgres
+    # path: "postgresql://aq@host:5432/aqueduct_db"
 
 
 # ── Cluster / Cloud deployment example ───────────────────────────────────────
@@ -313,7 +325,7 @@ secrets:
 #   on_failure       — fires when a run ends with status="error"
 #   on_success       — fires when a run ends with status="success"
 #   on_patch_pending — fires when a patch is staged to patches/pending/
-#   on_ci_patch      — fires for approval_mode: ci; receives the patch JSON
+#   on_ci_patch      — fires for approval: ci; receives the patch JSON
 #                      for external PR creation (full-config alternative to
 #                      agent.ci_webhook_url)
 #
@@ -419,7 +431,7 @@ webhooks:
 # ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
 # Sets the provider, endpoint, and model for all blueprints that enable LLM
-# self-healing. Per-blueprint policy (approval_mode, forbidden_ops,
+# self-healing. Per-blueprint policy (approval, forbidden_ops,
 # on_pending_patches) belongs in each Blueprint's agent: block — see
 # blueprint.yml.template.
 #
@@ -515,9 +527,9 @@ agent:
   # Blueprint agent: block (Blueprint value wins).
   # max_heal_attempts_per_hour: 10
 
-  # ── CI patch hand-off (approval_mode: ci) ──────────────────────────────────
+  # ── CI patch hand-off (approval: ci) ──────────────────────────────────
   # POST target for external CI to receive the staged patch JSON and open a
-  # PR. Only used when approval_mode: ci. See also webhooks.on_ci_patch for
+  # PR. Only used when approval: ci. See also webhooks.on_ci_patch for
   # the full-config (method/headers/payload) variant.
   # ci_webhook_url: "https://ci.example.com/hooks/aqueduct-patch"
 

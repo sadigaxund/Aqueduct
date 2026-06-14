@@ -428,6 +428,45 @@ def test_benchmark_no_persist_skips_db(mock_run, tmp_path):
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_no_persist_emits_deprecation_warning(mock_run, tmp_path):
+    """--no-persist prints '[deprecated]' stderr warning."""
+    scenarios_dir = tmp_path / "scenarios"
+    scenarios_dir.mkdir()
+    mock_run.return_value = {"s1": {"m1": _passing_result()}}
+
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("agent:\n  provider: anthropic\n  model: m1\n")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "benchmark", str(scenarios_dir), "--config", str(cfg), "--no-persist",
+    ])
+
+    assert result.exit_code == 0
+    assert "[deprecated]" in result.stderr
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
+def test_benchmark_set_persist_false_no_deprecation(mock_run, tmp_path):
+    """--set stores.benchmark.persist=false skips persistence with NO deprecation."""
+    scenarios_dir = tmp_path / "scenarios"
+    scenarios_dir.mkdir()
+    mock_run.return_value = {"s1": {"m1": _passing_result()}}
+
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("agent:\n  provider: anthropic\n  model: m1\n")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, [
+        "benchmark", str(scenarios_dir), "--config", str(cfg),
+        "--set", "stores.benchmark.persist=false",
+    ])
+
+    assert result.exit_code == 0
+    assert "[deprecated]" not in result.stderr + result.output
+
+
+@patch("aqueduct.surveyor.scenario.run_benchmark")
 def test_benchmark_store_path_override(mock_run, tmp_path):
     """aqueduct benchmark --store-path <override> writes to the override path."""
     scenarios_dir = tmp_path / "scenarios"
@@ -447,6 +486,7 @@ def test_benchmark_store_path_override(mock_run, tmp_path):
     assert result.exit_code == 0, result.output
     assert override.exists()
     assert not (scenarios_dir / ".aqueduct" / "benchmark.duckdb").exists()
+    assert "[deprecated] --store-path" in result.stderr
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -480,6 +520,7 @@ def test_benchmark_gate_on_regression_with_regression_exits_1(mock_run, tmp_path
     from aqueduct.exit_codes import DATA_OR_RUNTIME
     assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
+    assert "[deprecated] --gate-on-regression" in result.stderr
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -518,7 +559,8 @@ def test_benchmark_gate_on_regression_with_no_persist_is_ignored(mock_run, tmp_p
     ])
 
     assert result.exit_code == 0
-    assert "--no-persist set" in result.stderr
+    assert "[deprecated] --no-persist" in result.stderr
+    assert "(regression gate ignored: persistence is off)" in result.stderr
 
 
 def test_benchmark_diff_missing_store_exits_2(tmp_path, monkeypatch):

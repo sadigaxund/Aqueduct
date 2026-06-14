@@ -61,7 +61,7 @@ edges:
     to: out_events
 
 agent:
-  approval_mode: auto             # multi-patch loop opted in via max_patches below
+  approval: auto                  # multi-patch loop opted in via max_patches below
   max_patches: 3                  # multi-patch loop; requires danger.allow_multi_patch: true
   confidence_threshold: 0.5
   guardrails:

@@ -24,4 +24,6 @@ modules:
     context_override:
       shared_val: "injected"
 
-edges: []
+edges:
+  - from: m1
+    to: arc

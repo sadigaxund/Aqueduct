@@ -130,6 +130,10 @@ class Edge:
     to_id: str
     port: str = "main"
     error_types: tuple[str, ...] = ()
+    # True when the compiler auto-generated this edge from linear-edge sugar
+    # (Blueprint omitted `edges:` entirely). Provenance marker — distinguishes
+    # user-declared wiring from compiler-injected decl-order chaining.
+    injected: bool = False
 
 
 @dataclass(frozen=True)

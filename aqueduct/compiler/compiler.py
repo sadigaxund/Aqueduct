@@ -44,7 +44,7 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
-from aqueduct.parser.models import Blueprint, Module
+from aqueduct.parser.models import Blueprint, Edge, Module
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
 
 
@@ -163,9 +163,40 @@ def compile(  # noqa: A001
             config=config_prov,
         )
 
+    # ── 3.8. Linear-edge sugar ────────────────────────────────────────────────
+    # When the Blueprint omits `edges:` entirely, chain the modules in
+    # declaration order. Only applies to pipelines built solely from
+    # single-input/single-output module types — fan-out (Junction), fan-in
+    # (Funnel), sub-pipeline (Arcade), tap (Probe), and gate (Regulator) types
+    # need explicit wiring (their ports are ambiguous in a flat chain), so a
+    # Blueprint that omits edges while using them is a hard error rather than a
+    # silent miswire. Injected edges carry `injected=True` for provenance.
+    _LINEAR_CHAIN_TYPES = {"Ingress", "Channel", "Egress", "Assert"}
+    edges = list(blueprint.edges)
+    if not edges and len(modules) > 1:
+        _nonlinear = [m for m in modules if m.type not in _LINEAR_CHAIN_TYPES]
+        if _nonlinear:
+            _bad = ", ".join(f"{m.id!r} ({m.type})" for m in _nonlinear)
+            raise CompileError(
+                "Blueprint omits `edges:` but contains module type(s) that cannot "
+                f"be auto-chained in declaration order: {_bad}. Linear-edge sugar "
+                "only applies when every module is single-input/single-output "
+                "(Ingress, Channel, Egress, Assert). Declare `edges:` explicitly to "
+                "wire Junction / Funnel / Arcade / Probe / Regulator modules."
+            )
+        edges = [
+            Edge(from_id=a.id, to_id=b.id, port="main", injected=True)
+            for a, b in zip(modules, modules[1:])
+        ]
+        logger.info(
+            "linear-edge sugar: no edges declared — injected %d edge(s) chaining "
+            "%s in declaration order",
+            len(edges),
+            " → ".join(m.id for m in modules),
+        )
+
     # ── 4. Expand Arcades ─────────────────────────────────────────────────────
     arcade_prov: dict = {}
-    edges = list(blueprint.edges)
     if any(m.type == "Arcade" for m in modules):
         if blueprint_path is None:
             raise CompileError(
