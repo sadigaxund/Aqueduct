@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+
+## [1.2.2] — 2026-06-14
+
 ### Added
 - **Benchmark v2.** The benchmark history store gains a **Postgres backend** (`stores.benchmark.backend: postgres`), mirroring the observability/lineage store pattern — rows live in a `benchmark` schema, reusing the dedup'd connection pool and `?`→`%s` cursor. New `stores.benchmark` config block (`backend`, `path`, `persist`, `gate_on_regression`) gives `--set` real fields to target. New **`aqueduct benchmark-stats`** command aggregates the store into a model leaderboard (best model), a hardest-scenario ranking, and a by-day pass-rate trend — computed from the latest row per `(scenario, model)`, `--format table|json`. Parallel benchmark runs (`--workers > 1`) now print one clean progress line per completed pair from the main thread (previously silent — `logger.info` only), and the results-table rule width is fixed (was one char wider than the rows).
 - **`-s/--set PATH=VALUE` — universal config override.** One repeatable flag replaces the scattered one-off override flags. Dotted-path grammar overlays any `aqueduct.yml` or Blueprint value for a single invocation — in-memory, never persisted — as the highest-precedence layer (`--set` > blueprint `agent:` > `aqueduct.yml` > defaults). One flat namespace routes each path to whichever schema owns it: blueprint-side `agent.*` (e.g. `agent.approval_mode`) lands on the Blueprint, engine-side (`agent.budget.*`, `deployment.*`, `danger.*`) on `aqueduct.yml`. Values coerce to bool/int/float/null else string; `PATH:=JSON` parses structured values. Unknown paths error with a nearest-sibling suggestion; `--set danger.*` prints a loud single-run warning. Available on `run`, `benchmark`, `heal`. Example: `aqueduct run bp.yml --set agent.approval_mode=auto --set deployment.master_url=spark://h:7077`.

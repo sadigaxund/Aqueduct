@@ -2,9 +2,9 @@ name: Test Suite
 
 on:
   push:
-    branches: [feat/**]
+    branches: [feat/**, phase/**]
   pull_request:
-    branches: [main, feat/**]
+    branches: [main, feat/**, phase/**]
   workflow_dispatch:
 
 concurrency:
