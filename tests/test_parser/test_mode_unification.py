@@ -42,7 +42,8 @@ def test_approval_mode_aggressive_emits_deprecation(tmp_path, capsys):
     )
     blueprint = parse(bp)
     err = capsys.readouterr().err
-    assert "[deprecated] approval_mode: aggressive" in err
+    assert "[deprecated] agent.approval_mode" in err
+    assert "[deprecated] approval: aggressive" in err
     # NOTE: parser intentionally keeps the literal "aggressive" string; CLI
     # bootstrap normalises it to "auto" before downstream branching. See
     # aqueduct/cli.py:1383 — the parser layer is a passthrough so the

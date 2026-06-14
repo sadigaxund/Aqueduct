@@ -149,7 +149,7 @@ def test_outer_run_id_reported_in_status_and_webhook():
     """
     from pathlib import Path
 
-    cli_src = Path(__file__).resolve().parents[2] / "aqueduct" / "cli.py"
+    cli_src = Path(__file__).resolve().parents[2] / "aqueduct" / "cli" / "__init__.py"
     text = cli_src.read_text(encoding="utf-8")
     # The outer run_id is allocated once near the top of the `run` command
     # and reused everywhere downstream — including the depot write and the

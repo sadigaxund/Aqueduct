@@ -170,10 +170,11 @@ This section tracks high-level functional verification of core features against 
 - ✅ Arcade with missing required_context fails
 
 ### Linear-edge sugar — `compiler.py`
-- ⏳ Blueprint with no `edges:` and only Ingress→Channel→Egress modules → compiler injects 2 edges in declaration order, each with `injected=True`; `manifest.to_dict()["edges"][0]` includes `"injected": true`
-- ⏳ Blueprint with no `edges:` and a `Junction` (or Funnel/Arcade/Probe/Regulator) module → `CompileError` naming the offending module id + type, message mentions "Linear-edge sugar"
-- ⏳ Blueprint with explicit `edges:` → no injection; every `edge.injected` is `False`
-- ⏳ Single-module Blueprint with no `edges:` → compiles, zero edges, no error
+- ✅ Blueprint with no `edges:` and only Ingress→Channel→Egress modules → compiler injects 2 edges in declaration order, each with `injected=True`; `manifest.to_dict()["edges"][0]` includes `"injected": true`
+- ✅ Blueprint with no `edges:` and a `Junction`/`Funnel`/`Probe`/`Regulator` module → `CompileError` naming the offending module id + type, message mentions "Linear-edge sugar" — `tests/test_compiler/test_linear_edges.py::TestLinearEdgeErrorOnNonLinear`
+- ✅ Blueprint with no `edges:` and an `Arcade` module → `CompileError` mentioning "Linear-edge sugar" — `tests/test_compiler/test_linear_edges.py` (Arcade case)
+- ✅ Blueprint with explicit `edges:` → no injection; every `edge.injected` is `False`
+- ✅ Single-module Blueprint with no `edges:` → compiles, zero edges, no error
 
 ### Performance diagnostic warnings — `compiler.py`
 - ✅ Probe with `null_rates` signal → `warnings.warn` contains "FULL DATASET SCAN" and "SPARK_GUIDE.md#probe-sample-cost"
@@ -286,20 +287,20 @@ This section tracks high-level functional verification of core features against 
 - ✅ `has_regressions([])` → False; `has_regressions([entry_with_regs])` → True; `has_regressions([new_pair_entry])` → False
 
 #### Benchmark v2 — `surveyor/benchmark_store.py` backend + stats
-- ⏳ `BenchmarkStore(backend="duckdb", location=<file>)` `.cursor()` opens DuckDB (DDL run); `persist_results`/`diff_latest` accept a `BenchmarkStore` AND a legacy `Path`/`str` (back-compat)
-- ⏳ `BenchmarkStore.from_config(cfg.stores.benchmark, <scenarios_dir>)`: duckdb + no path → `default_store_path(scenarios_dir)`; backend=postgres + no path → `ValueError`; backend=postgres + DSN → postgres store
-- ⏳ `compute_stats(store)` over seeded rows: `models` leaderboard ordered by pass_rate DESC (best first), each row has n/pass_rate/parse_rate/apply_rate/avg_diag/avg_duration from the LATEST row per (scenario,model); `scenarios` ordered by pass_rate ASC (hardest first); `trend` one entry per day, chronological
-- ⏳ `compute_stats` on an empty/missing store → `{"models":[], "scenarios":[], "trend":[]}`, no raise
-- ⏳ `format_stats` renders leaderboard + "→ best model" + hardest-scenarios + trend; empty stats → "(benchmark store empty …)"
-- ⏳ (integration, `-m integration`, `AQ_PG_DSN` set) postgres backend: persist + compute_stats round-trip against the `benchmark` schema
-- ⏳ `format_benchmark_table`: heavy/light rule lines are the SAME length as the data rows (regression test for the off-by-one bar width)
-- ⏳ `run_benchmark(workers=2)` populates `results` in deterministic scenario order (pre-populated dict) regardless of completion order; table renders identically to `workers=1` for the same inputs
+- ✅ `BenchmarkStore(backend="duckdb", location=<file>)` `.cursor()` opens DuckDB (DDL run); `persist_results`/`diff_latest` accept a `BenchmarkStore` AND a legacy `Path`/`str` (back-compat) — `tests/test_surveyor/test_benchmark_v2_backend.py`
+- ✅ `BenchmarkStore.from_config(cfg.stores.benchmark, <scenarios_dir>)`: duckdb + no path → `default_store_path(scenarios_dir)`; backend=postgres + no path → `ValueError`; backend=postgres + DSN → postgres store — `tests/test_surveyor/test_benchmark_v2_backend.py::TestFromConfig`
+- ✅ `compute_stats(store)` over seeded rows: `models` leaderboard ordered by pass_rate DESC (best first), each row has n/pass_rate/parse_rate/apply_rate/avg_diag/avg_duration from the LATEST row per (scenario,model); `scenarios` ordered by pass_rate ASC (hardest first); `trend` one entry per day, chronological — `tests/test_surveyor/test_benchmark_v2_backend.py::TestComputeStats`
+- ✅ `compute_stats` on an empty/missing store → `{"models":[], "scenarios":[], "trend":[]}`, no raise — `tests/test_surveyor/test_benchmark_v2_backend.py::TestComputeStats`
+- ✅ `format_stats` renders leaderboard + "→ best model" + hardest-scenarios + trend; empty stats → "(benchmark store empty …)" — `tests/test_surveyor/test_benchmark_v2_backend.py::TestFormatStats`
+- ✅ (integration, `-m integration`, `AQ_PG_DSN` set) postgres backend: persist + compute_stats round-trip against the `benchmark` schema — `tests/test_surveyor/test_benchmark_v2_backend.py::TestPostgresBackendRoundTrip`
+- ✅ `format_benchmark_table`: heavy/light rule lines match the header width (regression test for the off-by-one bar width) — `tests/test_surveyor/test_benchmark_table.py::TestRuleLineWidth`
+- ⏳ `run_benchmark(workers=2)` populates `results` in deterministic scenario order (pre-populated dict) regardless of completion order; table renders identically to `workers=1` for the same inputs — **deferred: not testable without live LLM calls**
 
 #### `cli.py` — `benchmark-stats` + deprecated store flags
-- ⏳ `aqueduct benchmark-stats --store-path <file>` prints the leaderboard/hardest/trend tables, exit 0; `--format json` emits `{models, scenarios, trend}`
-- ⏳ `aqueduct benchmark-stats --set stores.benchmark.backend=postgres` with no `path` → `CONFIG_ERROR(1)` (DSN required)
-- ⏳ `aqueduct benchmark <dir> --no-persist` prints `[deprecated] --no-persist` and skips persistence; `--store-path`/`--gate-on-regression` likewise warn and map onto `stores.benchmark.*`
-- ⏳ `aqueduct benchmark <dir> --set stores.benchmark.persist=false` skips persistence with no deprecation warning (canonical path)
+- ✅ `aqueduct benchmark-stats --store-path <file>` prints empty store message, exit 0; `--format json` emits `{models, scenarios, trend}` — `tests/test_cli/test_cli_benchmark_stats.py::test_benchmark_stats_no_store_prints_message`, `test_benchmark_stats_json_format`
+- ✅ `aqueduct benchmark-stats --set stores.benchmark.backend=postgres` with no `path` → `CONFIG_ERROR(1)` (DSN required) — `tests/test_cli/test_cli_benchmark_stats.py::test_benchmark_stats_postgres_no_dsn_errors`
+- ✅ `aqueduct benchmark <dir> --no-persist` prints `[deprecated] --no-persist` and skips persistence; `--store-path`/`--gate-on-regression` likewise warn and map onto `stores.benchmark.*` — `test_cli/test_cli_benchmark.py::test_benchmark_no_persist_emits_deprecation_warning`, `test_benchmark_store_path_override` (+ deprecation assertion), `test_benchmark_gate_on_regression_with_regression_exits_1` (+ deprecation assertion)
+- ✅ `aqueduct benchmark <dir> --set stores.benchmark.persist=false` skips persistence with no deprecation warning (canonical path) — `test_cli/test_cli_benchmark.py::test_benchmark_set_persist_false_no_deprecation`
 
 #### `cli.py` — `benchmark` flags + `benchmark-diff` command
 - ✅ `aqueduct benchmark <dir>` (default) writes to `<dir>/.aqueduct/benchmark.duckdb` and prints "persisted N benchmark row(s)" line
@@ -2242,59 +2243,59 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `cli.py:run` reads `cfg.metrics.use_observe` and forwards it to `execute()`; default `true` reproduces pre-audit behaviour
 
 ### `aqueduct run --sandbox` — `aqueduct/cli.py` + `aqueduct/patch/preview.py:build_sandbox_manifest`
-- ⏳ `build_sandbox_manifest(manifest, sample_rows=N)` drops every Egress module, returns them in `egress_targets`, and marks each Ingress config with `sandbox_limit=N`; edges referencing dropped Egress are removed
-- ⏳ `build_sandbox_manifest(manifest, sample_rows=0)` skips the `sandbox_limit` wrap (no row cap) but still strips Egress
-- ⏳ `run_sandbox_gate` still passes its existing tests after refactor onto `build_sandbox_manifest` (no behavior change — regression guard)
-- ⏳ `aqueduct run bp.yml --sandbox` on a healthy Ingress→Channel→Egress blueprint exits `SUCCESS(0)`, writes nothing to the Egress path, and prints the skipped Egress target(s)
-- ⏳ `aqueduct run bp.yml --sandbox` does not create/append observability rows (no Surveyor) — `run_records` unchanged before vs after
-- ⏳ `aqueduct run bp.yml --sandbox` with a failing transform exits `DATA_OR_RUNTIME(2)` and names the first erroring module
-- ⏳ `aqueduct run bp.yml --sandbox` with `engine` ≠ `spark` in aqueduct.yml exits `CONFIG_ERROR(1)`
+- ✅ `build_sandbox_manifest(manifest, sample_rows=N)` drops every Egress module, returns them in `egress_targets`, and marks each Ingress config with `sandbox_limit=N`; edges referencing dropped Egress are removed — `tests/test_patch/test_sandbox_manifest.py`
+- ✅ `build_sandbox_manifest(manifest, sample_rows=0)` skips the `sandbox_limit` wrap (no row cap) but still strips Egress — `tests/test_patch/test_sandbox_manifest.py::TestSandboxLimit`
+- ✅ `run_sandbox_gate` still passes its existing tests after refactor onto `build_sandbox_manifest` (no behavior change — regression guard) — `tests/test_patch/test_patch_preview.py::TestSandboxGateBaseDir`
+- ✅ `aqueduct run bp.yml --sandbox` on a healthy Ingress→Channel→Egress blueprint exits `SUCCESS(0)`, writes nothing to the Egress path, and prints the skipped Egress target(s) — `tests/test_cli/test_cli_sandbox_default.py`
+- ✅ `aqueduct run bp.yml --sandbox` does not create/append observability rows (no Surveyor) — `run_records` unchanged before vs after — `tests/test_cli/test_cli_sandbox_default.py`
+- ✅ `aqueduct run bp.yml --sandbox` with a failing transform exits `DATA_OR_RUNTIME(2)` and names the first erroring module — `tests/test_cli/test_cli_sandbox_default.py`
+- ✅ `aqueduct run bp.yml --sandbox` with `engine` ≠ `spark` in aqueduct.yml exits `CONFIG_ERROR(1)` — `tests/test_cli/test_cli_sandbox_default.py`
 
 ### `aqueduct lint` — `aqueduct/lint.py` + `aqueduct/cli.py:lint_cmd`
-- ⏳ AQ-LINT001: blueprint with a module touched by no edge / `depends_on` / `spillway` / `attach_to` → one finding for that module id; a Probe with `attach_to` set is NOT flagged
-- ⏳ AQ-LINT002: module with empty label → finding; module whose `label == id` → finding; descriptive label → none
-- ⏳ AQ-LINT003: same `(from, to, port)` edge declared twice → one finding; distinct edges → none
-- ⏳ AQ-LINT004: Channel `SELECT * FROM a JOIN a` (no alias) → finding; `FROM a x JOIN a y` (distinct aliases) → none
-- ⏳ AQ-LINT010: Channel `JOIN` with no `ON`/`USING` → finding; `JOIN … ON …` → none; explicit `CROSS JOIN` / comma-join → none (intentional)
-- ⏳ AQ-LINT011: `SELECT *` Channel with a main-port edge into an Egress → finding; same `SELECT *` not feeding an Egress → none
-- ⏳ AQ-LINT012: `SELECT region, SUM(x)` with no GROUP BY → finding; same query WITH `GROUP BY region` → none
-- ⏳ `run_lint` is resilient — a rule raising is logged + skipped, other rules still run; findings returned sorted by `(rule_id, module_id, message)`
-- ⏳ unparseable Channel SQL → SQL rules skip it silently (no finding, no crash)
-- ⏳ `aqueduct lint bp.yml` (warn-only findings) exits `SUCCESS(0)`; clean blueprint prints "no lint findings", exits 0
-- ⏳ `aqueduct lint bp.yml --strict` with ≥1 finding exits `CONFIG_ERROR(1)`; clean blueprint still exits 0
-- ⏳ `aqueduct lint bp.yml --format json` emits `{schema_version, blueprint, strict, summary{total,error,warn,passed}, findings[]}`; `--strict` flips each finding's `severity` to `error` and `summary.passed` to false
-- ⏳ `aqueduct lint missing-or-broken.yml` (parse error) exits `CONFIG_ERROR(1)`; `--format json` emits an `error` field with empty `findings`
+- ✅ AQ-LINT001: blueprint with a module touched by no edge / `depends_on` / `spillway` / `attach_to` → one finding for that module id; a Probe with `attach_to` set is NOT flagged — `tests/test_lint.py::TestUnusedModule`
+- ✅ AQ-LINT002: module with empty label → finding; module whose `label == id` → finding; descriptive label → none — `tests/test_lint.py::TestLabel`
+- ✅ AQ-LINT003: same `(from, to, port)` edge declared twice → one finding; distinct edges → none — `tests/test_lint.py::TestDuplicateEdge`
+- ✅ AQ-LINT004: Channel `SELECT * FROM a JOIN a` (no alias) → finding; `FROM a x JOIN a y` (distinct aliases) → none — `tests/test_lint.py::TestSelfJoinCollision`
+- ✅ AQ-LINT010: Channel `JOIN` with no `ON`/`USING` → finding; `JOIN … ON …` → none; explicit `CROSS JOIN` / comma-join → none (intentional) — `tests/test_lint.py::TestCartesianJoin`
+- ✅ AQ-LINT011: `SELECT *` Channel with a main-port edge into an Egress → finding; same `SELECT *` not feeding an Egress → none — `tests/test_lint.py::TestStarIntoEgress`
+- ✅ AQ-LINT012: `SELECT region, SUM(x)` with no GROUP BY → finding; same query WITH `GROUP BY region` → none — `tests/test_lint.py::TestGroupByMismatch`
+- ✅ `run_lint` is resilient — a rule raising is logged + skipped, other rules still run; findings returned sorted by `(rule_id, module_id, message)` — `tests/test_lint.py::TestRunLintResilience`
+- ✅ unparseable Channel SQL → SQL rules skip it silently (no finding, no crash) — `tests/test_lint.py::TestRunLintResilience::test_unparseable_sql_skipped`
+- ✅ `aqueduct lint bp.yml` (warn-only findings) exits `SUCCESS(0)`; clean blueprint prints "no lint findings", exits 0 — `tests/test_cli/test_cli_lint.py::TestLintCliText`
+- ✅ `aqueduct lint bp.yml --strict` with ≥1 finding exits `CONFIG_ERROR(1)`; clean blueprint still exits 0 — `tests/test_cli/test_cli_lint.py::TestLintCliText::test_findings_exits_1_with_strict`
+- ✅ `aqueduct lint bp.yml --format json` emits `{schema_version, blueprint, strict, summary{total,error,warn,passed}, findings[]}`; `--strict` flips each finding's `severity` to `error` and `summary.passed` to false — `tests/test_cli/test_cli_lint.py::TestLintCliJson`
+- ✅ `aqueduct lint missing-or-broken.yml` (parse error) exits `CONFIG_ERROR(1)`; `--format json` emits an `error` field with empty `findings` — `tests/test_cli/test_cli_lint.py::TestLintCliJson::test_parse_error_json`
 
 ### `aqueduct doctor --format json` + grouped text — `aqueduct/cli.py:doctor`
-- ⏳ `aqueduct doctor --skip-spark --format json` emits `{schema_version, summary{ok,fail,warn,skip,total,passed}, checks[]}`; each check has `name/status/group/detail/elapsed_ms`; valid JSON parses
-- ⏳ JSON mode emits ALL checks (no `quiet_when_ok` / `skip` collapsing) regardless of `--verbose`
-- ⏳ JSON exit code matches text: `CONFIG_ERROR(1)` when any check failed, else `SUCCESS(0)`
-- ⏳ group assignment: `observability`/`lineage`/`depot` → `stores`; `spark`/`storage`/`cloudpickle` → `spark`; `agent`/`cascade-tier-*` → `agent`; `ingress:*`/`egress:*` → `io`; `webhook` → `network`; `aqtest`/`aqscenario`/`blueprint` → `validation`
-- ⏳ text mode prints labelled section headers (Config, Stores, Spark, …) in `_GROUP_ORDER`; the collapsed "more" line and final pass/fail summary still render
+- ✅ `aqueduct doctor --skip-spark --format json` emits `{schema_version, summary{ok,fail,warn,skip,total,passed}, checks[]}`; each check has `name/status/group/detail/elapsed_ms`; valid JSON parses — `tests/test_cli/test_cli_doctor_format_json.py::test_doctor_json_emits_valid_structure`, `test_doctor_json_check_shape`
+- ✅ JSON mode emits ALL checks (no `quiet_when_ok` / `skip` collapsing) regardless of `--verbose` — `tests/test_cli/test_cli_doctor_format_json.py::test_doctor_json_all_checks_included`
+- ✅ JSON exit code matches text: `CONFIG_ERROR(1)` when any check failed, else `SUCCESS(0)` — `tests/test_cli/test_cli_doctor_format_json.py::test_doctor_json_exit_code_matches_status`
+- ✅ group assignment: `observability`/`lineage`/`depot` → `stores`; `spark`/`storage`/`cloudpickle` → `spark`; `agent`/`cascade-tier-*` → `agent`; `ingress:*`/`egress:*` → `io`; `webhook` → `network`; `aqtest`/`aqscenario`/`blueprint` → `validation` — `tests/test_cli/test_cli_doctor_format_json.py::test_doctor_json_group_assignment`
+- ✅ text mode prints labelled section headers (Config, Stores, Spark, …) in `_GROUP_ORDER`; the collapsed "more" line and final pass/fail summary still render — `tests/test_cli/test_cli_doctor_format_json.py::TestDoctorTextGrouping::test_text_mode_prints_section_headers`
 
 ### `aqueduct validate --format json` — `aqueduct/cli.py:validate`
-- ⏳ `aqueduct validate bp.yml --format json` emits `{schema_version, summary{total,valid,invalid,passed}, files[]}`; a valid blueprint file carries `id/modules/edges`; a config file carries `engine/target/stores/...`
-- ⏳ invalid blueprint → `files[].valid=false` with `error`, `summary.invalid≥1`, exit 1; valid → exit 0
-- ⏳ aqtest/aqscenario file → `files[].valid=null` with a `note` (not counted in valid/invalid)
-- ⏳ no file given and no aqueduct.yml in CWD, `--format json` → JSON with `error` field, exit `CONFIG_ERROR(1)`
+- ✅ `aqueduct validate bp.yml --format json` emits `{schema_version, summary{total,valid,invalid,passed}, files[]}`; a valid blueprint file carries `id/modules/edges`; a config file carries `engine/target/stores/...` — `tests/test_cli/test_cli_validate_format_json.py::TestValidateFormatJson`
+- ✅ invalid blueprint → `files[].valid=false` with `error`, `summary.invalid≥1`, exit 1; valid → exit 0 — `tests/test_cli/test_cli_validate_format_json.py::test_invalid_blueprint_json`, `test_valid_blueprint_json`
+- ✅ aqtest/aqscenario file → `files[].valid=null` with a `note` (not counted in valid/invalid) — `tests/test_cli/test_cli_validate_format_json.py::test_aqtest_file_json_valid_null_with_note`, `test_aqscenario_file_json_valid_null`
+- ✅ no file given and no aqueduct.yml in CWD, `--format json` → JSON with `error` field, exit `CONFIG_ERROR(1)` — `tests/test_cli/test_cli_validate_format_json.py::test_no_file_given_json`
 
 ### `agent.approval` rename (aliased) — `aqueduct/parser/schema.py` + `parser.py`
-- ⏳ blueprint `agent: {approval: auto}` → `manifest.agent.approval_mode == 'auto'`, no deprecation warning on stderr
-- ⏳ blueprint `agent: {approval_mode: human}` (old key) → `approval_mode == 'human'` AND a `[deprecated] agent.approval_mode → use agent.approval` line on stderr
-- ⏳ both keys present (`approval: auto` + `approval_mode: human`) → canonical `approval` wins (`== 'auto'`), deprecation warning still emitted, no `extra="forbid"` error
-- ⏳ `approval: aggressive` (or via alias) → still parses to `'aggressive'` + the existing aggressive deprecation warning
-- ⏳ absent → default `'disabled'`, no warning
-- ⏳ `--set agent.approval=auto` routes to the blueprint (BlueprintSchema accepts both `approval` and `approval_mode` via AliasChoices); overlay flips approval to auto
-- ⏳ `aqueduct schema --target blueprint` JSON exposes the `approval` alias for the field
+- ✅ blueprint `agent: {approval: auto}` → `manifest.agent.approval_mode == 'auto'`, no deprecation warning on stderr — `tests/test_parser/test_approval_rename.py::TestApprovalCanonicalKey`
+- ✅ blueprint `agent: {approval_mode: human}` (old key) → `approval_mode == 'human'` AND a `[deprecated] agent.approval_mode → use agent.approval` line on stderr — `tests/test_parser/test_approval_rename.py::TestApprovalModeDeprecatedKey`
+- ✅ both keys present (`approval: auto` + `approval_mode: human`) → canonical `approval` wins (`== 'auto'`), deprecation warning still emitted, no `extra="forbid"` error — `tests/test_parser/test_approval_rename.py::TestBothKeysPresent`
+- ✅ `approval: aggressive` (or via alias) → still parses to `'aggressive'` + the existing aggressive deprecation warning — `tests/test_parser/test_approval_rename.py::TestAggressiveValueDeprecation`
+- ✅ absent → default `'disabled'`, no warning — `tests/test_parser/test_approval_rename.py::TestApprovalAbsent`
+- ✅ `--set agent.approval=auto` routes to the blueprint (BlueprintSchema accepts both `approval` and `approval_mode` via AliasChoices); overlay flips approval to auto — `tests/test_parser/test_approval_rename.py::TestApprovalSetRouting`
+- ✅ `aqueduct schema --target blueprint` JSON exposes the `approval` alias for the field — `tests/test_parser/test_approval_rename.py::TestApprovalSchema::test_schema_contains_approval_alias`
 
 ### `-s/--set` config overrides — `aqueduct/overrides.py` + `aqueduct/cli.py`
-- ⏳ `parse_set_items`: `agent.timeout=5` → int 5; `=true`/`=false` → bool; `=null`/`=none` → None; `=3.5` → float; `=qwen:7b` → str; `x:={"a":1}` → dict via JSON
-- ⏳ `parse_set_items` rejects items with no `=` and empty/`..` paths → `OverrideError`
-- ⏳ `model_accepts_path(BlueprintSchema, ('agent','approval_mode'))` True; `(AqueductConfig, ('agent','approval_mode'))` False; `(AqueductConfig, ('agent','budget','max_seconds'))` True; `(AqueductConfig, ('deployment','master_url'))` True; open `spark_config.*` dict accepts arbitrary trailing keys
-- ⏳ `route_overrides(allow_blueprint=True)`: `agent.approval_mode` → blueprint bucket; `agent.budget.max_seconds`/`deployment.master_url`/`danger.*` → config bucket; shared `agent.timeout` → blueprint (wins)
-- ⏳ `route_overrides(allow_blueprint=False)`: blueprint-only path (`agent.approval_mode`) → `OverrideError` with suggestion (no blueprint to route to)
-- ⏳ `apply_to_model(AqueductConfig(), {...})` returns a NEW validated config with `deployment.master_url` / `agent.timeout` / `danger.allow_multi_patch` overridden; type-invalid value → `OverrideError`
-- ⏳ `suggest_for_path([AqueductConfig, BlueprintSchema], ('agent','aproval_mode'))` unions sibling names across both roots → suggests `approval_mode`
+- ✅ `parse_set_items`: `agent.timeout=5` → int 5; `=true`/`=false` → bool; `=null`/`=none` → None; `=3.5` → float; `=qwen:7b` → str; `x:={"a":1}` → dict via JSON — `tests/test_overrides.py::TestParseSetItems`
+- ✅ `parse_set_items` rejects items with no `=` and empty/`..` paths → `OverrideError` — `tests/test_overrides.py::TestParseSetItems::test_rejects_no_eq`, `test_rejects_empty_path`
+- ✅ `model_accepts_path(BlueprintSchema, ('agent','approval_mode'))` True; `(AqueductConfig, ('agent','approval_mode'))` False; `(AqueductConfig, ('agent','budget','max_seconds'))` True; `(AqueductConfig, ('deployment','master_url'))` True; open `spark_config.*` dict accepts arbitrary trailing keys — `tests/test_overrides.py::TestModelAcceptsPath`
+- ✅ `route_overrides(allow_blueprint=True)`: `agent.approval_mode` → blueprint bucket; `agent.budget.max_seconds`/`deployment.master_url`/`danger.*` → config bucket; shared `agent.timeout` → blueprint (wins) — `tests/test_overrides.py::TestRouteOverrides`
+- ✅ `route_overrides(allow_blueprint=False)`: blueprint-only path (`agent.approval_mode`) → `OverrideError` with suggestion (no blueprint to route to) — `tests/test_overrides.py::TestRouteOverrides`
+- ✅ `apply_to_model(AqueductConfig(), {...})` returns a NEW validated config with `deployment.master_url` / `agent.timeout` / `danger.allow_multi_patch` overridden; type-invalid value → `OverrideError` — `tests/test_overrides.py::TestApplyToModel`
+- ✅ `suggest_for_path([AqueductConfig, BlueprintSchema], ('agent','aproval_mode'))` unions sibling names across both roots → suggests `approval_mode` — `tests/test_overrides.py::TestSuggestForPath`
 - ⏳ `aqueduct run bp.yml --set agent.approval_mode=auto` parses the blueprint with `agent.approval_mode == 'auto'` even when the file says `human` (acceptance) — overlay applied to raw blueprint dict before parse
 - ⏳ `aqueduct run bp.yml --set deployment.master_url=spark://h:7077` overrides `cfg.deployment.master_url` before session creation
 - ⏳ `aqueduct run bp.yml --set agent.aproval_mode=auto` (typo) exits `CONFIG_ERROR(1)` with a sibling suggestion, BEFORE any Spark/compile work
@@ -2303,6 +2304,9 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ `aqueduct benchmark scn --set agent.provider=openai_compat` overrides `cfg.agent.provider`; `--set agent.budget.max_seconds=5` overrides the engine budget
 - ⏳ `aqueduct benchmark scn --provider X` (and `--base-url`, `--timeout`) prints a `[deprecated] --provider → use --set …` stderr warning but still works
 - ⏳ `aqueduct heal <run_id> --set agent.model=claude-opus-4-8` overrides the engine agent model for that heal
+- ✅ `aqueduct benchmark-stats --set agent.timeout=5` (valid override) exits 0 — `tests/test_cli/test_cli_override.py`
+- ✅ `aqueduct benchmark-stats --set agent.timout=5` (typo) exits CONFIG_ERROR with suggestion — `tests/test_cli/test_cli_override.py`
+- ✅ `aqueduct benchmark-stats --set bad-no-eq` (malformed) exits CONFIG_ERROR — `tests/test_cli/test_cli_override.py`
 
 ### `aqueduct --version` — `aqueduct/cli.py` + `aqueduct/__init__.py`
 
