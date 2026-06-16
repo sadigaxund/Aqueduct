@@ -1,0 +1,68 @@
+# Example CI heal workflow — Aqueduct `approval: ci` reference (Phase 54).
+#
+# This is a copy-paste snippet you OWN and adapt, NOT a maintained GitHub Action.
+# Aqueduct ships no versioned Action: the engine stays serverless. A cluster run
+# heals, stages the patch, and fires the `on_patch_pending` webhook at
+# `agent.ci_webhook_url`. Point that webhook at a `repository_dispatch` (or any
+# receiver that triggers this workflow), passing the patch body + envelope.
+#
+# What this does: apply the received patch on a fresh branch with
+# `aqueduct patch import`, then open a PR. A human reviews the diff and merges.
+#
+# Required secrets/permissions:
+#   - `contents: write` + `pull-requests: write` (to push the branch + open PR)
+#   - the patch body delivered as `client_payload.patch` (JSON string)
+
+name: aqueduct-heal-pr
+
+on:
+  repository_dispatch:
+    types: [aqueduct_patch_pending]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  open-heal-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Aqueduct
+        run: pip install aqueduct-core
+
+      - name: Write received patch body to disk
+        env:
+          PATCH_BODY: ${{ toJSON(github.event.client_payload.patch) }}
+        run: printf '%s' "$PATCH_BODY" > received-patch.json
+
+      - name: Create heal branch
+        id: branch
+        run: |
+          PATCH_ID="${{ github.event.client_payload.patch_id }}"
+          BRANCH="aqueduct/heal/${PATCH_ID}"
+          git switch -c "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Apply + commit the patch
+        run: |
+          aqueduct patch import received-patch.json \
+            --blueprint "${{ github.event.client_payload.blueprint_path }}"
+
+      - name: Push branch
+        run: git push --set-upstream origin "${{ steps.branch.outputs.name }}"
+
+      - name: Open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "Aqueduct heal: ${{ github.event.client_payload.blueprint_id }}" \
+            --body "Auto-generated patch \`${{ github.event.client_payload.patch_id }}\` for run \`${{ github.event.client_payload.run_id }}\`. Review the diff before merging." \
+            --base main \
+            --head "${{ steps.branch.outputs.name }}"
