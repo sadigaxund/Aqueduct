@@ -13,6 +13,23 @@ except ImportError:
 os.environ.setdefault("AQ_TESTING", "1")
 
 
+# ── Test backlog (pytest-native, replaces TEST_MANIFEST.md) ───────────────────
+# `@pytest.mark.todo("why")` marks a planned-but-unwritten test. It is
+# auto-skipped here (never a failure), and its reason is surfaced by
+# `pytest -rs`. Writing a skipped stub — with whatever asserts you can already
+# express — is the unambiguous replacement for a TEST_MANIFEST ⏳ line: the
+# spec lives next to the code, and `pytest --collect-only -m todo` is the
+# living backlog. Known bugs use `@pytest.mark.xfail(strict=True, reason=...)`
+# instead, which fails the moment the bug is fixed (see pyproject xfail_strict).
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        marker = item.get_closest_marker("todo")
+        if marker is not None:
+            reason = (marker.args[0] if marker.args else None) or "todo: unwritten test"
+            item.add_marker(pytest.mark.skip(reason=f"todo: {reason}"))
+
+
 # ── Agent / LLM testing policy ────────────────────────────────────────────────
 # No live-LLM fixtures. LLM responses are non-deterministic and a live model
 # (e.g. gemma3:12b ≈ 8-12 GB) is slow, RAM-heavy and flaky — it tests model

@@ -139,13 +139,23 @@ testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
 tmp_path_retention_count = 1
 tmp_path_retention_policy = "failed"
+# Any xfail without an explicit strict= is strict: a test marked for a known bug
+# FAILS the build the moment the bug is fixed, forcing the marker's removal —
+# so ❌→✅ is self-maintaining and the suite can never silently carry a stale
+# known-failure. See CONTRIBUTING.md "Test backlog".
+xfail_strict = true
 markers = [
-    "unit: Fast unit tests that can run on every commit (no external services).",
-    "integration: Tests that require a local Spark cluster, database, or long runtimes.",
+    # ── Layer taxonomy (every test should carry exactly one) ──
+    "unit: Fast, pure tests — no Spark, no network, no external services.",
+    "integration: Blueprint/feature-level — gallery snippets parse+compile, aqtests run, mocked aqscenarios (real Spark, no live LLM).",
+    "e2e: End-to-end showcases — full pipelines from the gallery showcase dir.",
+    # ── Capability gates (skip when the dependency is absent) ──
     "slow: Tests that take > 2 seconds to complete.",
     "agent: Tests that require a live agent/LLM endpoint (Anthropic, Ollama).",
     "spark: Tests that require a SparkSession (local[1] ok).",
     "airflow: Tests that require apache-airflow (orchestrator integration).",
+    # ── Backlog ──
+    "todo: A planned-but-unwritten test. Auto-skipped (its reason is the spec). The pytest-native replacement for a TEST_MANIFEST ⏳ entry — write the asserts you can, mark @pytest.mark.todo('why'), drop the marker when it's real.",
 ]
 
 [tool.coverage.run]

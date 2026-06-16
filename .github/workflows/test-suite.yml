@@ -2,9 +2,9 @@ name: Test Suite
 
 on:
   push:
-    branches: [feat/**]
+    branches: [feat/**, phase/**]
   pull_request:
-    branches: [main, feat/**]
+    branches: [main, feat/**, phase/**]
   workflow_dispatch:
 
 concurrency:
@@ -24,6 +24,7 @@ jobs:
       stores:    ${{ steps.filter.outputs.stores }}
       cli:       ${{ steps.filter.outputs.cli }}
       config:    ${{ steps.filter.outputs.config }}
+      gallery:   ${{ steps.filter.outputs.gallery }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -67,6 +68,11 @@ jobs:
               - 'tests/test_redaction.py'
               - 'tests/test_secrets.py'
               - 'tests/test_warnings.py'
+            gallery:
+              - 'gallery/**'
+              - 'tests/test_gallery.py'
+              - 'aqueduct/parser/**'
+              - 'aqueduct/compiler/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -194,6 +200,27 @@ jobs:
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm]"
       - run: bash scripts/run_snippets.sh
+
+  # ── Gallery guard — fast parse/compile/load of every shipped example ──
+  # Complements the slow `snippets` full-run job: catches gallery rot in
+  # seconds without executing 20 Spark pipelines. Needs Java for the
+  # aqtest cases that run on a real local[1] Spark.
+
+  gallery-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.gallery == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm]"
+      - run: pytest tests/test_gallery.py
 
   # ── Store integration layer — needs PG + Redis ───────────────────────
 

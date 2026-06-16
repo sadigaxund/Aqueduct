@@ -99,7 +99,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
 | Any new flag, command, or behaviour visible from the CLI | `docs/cli_reference.md` |
 | Any user-facing engine semantic (architecture, module semantics, configs, gates, runtime behaviour) NOT covered by a dedicated guide above | `docs/specs.md` — NO `Phase NN` artefacts |
-| Any new testable feature | `tests/TEST_MANIFEST.md` checklist item |
+| Any new testable feature | A real test at the right layer (`unit` / `integration` / `e2e`), OR a `@pytest.mark.todo("why")` stub if you're deferring it. NEVER an entry in `TEST_MANIFEST.md` (retired → `docs/archive/`). See the Testing section. |
 | Any phase / sprint / shippable change | `CHANGELOG.md` `[Unreleased]` only — never bump version, never add a versioned header (user controls release timing) |
 | Any new `@aq.*` function in `aqueduct/compiler/runtime.py` | `docs/specs.md` §5.3 function table + `_DISPATCH` table in `runtime.py` |
 | Any new path-key entry in `aqueduct/executor/path_keys.py` | The module-type's schema model in `aqueduct/parser/schema.py` (mark path fields with `Annotated[str, FsPath()]`) |
@@ -265,40 +265,67 @@ When building a phase from a sequence of changes:
 
 - **Immutable dataclasses across compile steps.** Every compilation pass returns a new frozen dataclass. Mutating a Module/Edge/Manifest in place will silently work (Python dataclasses aren't truly immutable) but breaks the provenance chain. Always use `dataclasses.replace()` and test with `FrozenInstanceError`.
 
-## Testing Workflow (Two-Model Split)
-- **You (Claude)** write core implementation. Add checklist items to `tests/TEST_MANIFEST.md` when adding testable features. Optionally create issue files in `.dev/ISSUES/` for the cheaper model.
-- **Cheaper model** handles test generation — reads `tests/TEST_MANIFEST.md` and `.dev/ISSUES/`.
-- **Never suggest or run test commands.** User handles all test execution. Only paste specific failures if stuck.
+## Testing
 
-### When to add to TEST_MANIFEST.md
+### The three layers (every test carries exactly one marker)
 
-Every new feature, bug fix, or behavioral change that is testable should add a `⏳` item under the relevant module section. The entry should describe the exact behavior being tested: what input, what output, what error. Follow the existing `✅` / `⏳` / `❌` convention. Mark items `✅` only when the user confirms the test passes — never self-mark.
+| Marker | Layer | What lives here |
+|---|---|---|
+| `@pytest.mark.unit` | **Unit** | Fast, pure — no Spark, no network, no external services. The bulk of the suite. |
+| `@pytest.mark.integration` | **Integration** | Blueprint/feature level: every `gallery/snippets/**` blueprint parses + compiles, `*.aqtest.yml` modules run on a real `local[1]` Spark, `*.aqscenario.yml` heals run with a **mocked** agent (no live LLM). |
+| `@pytest.mark.e2e` | **E2E** | Full pipelines — the `gallery/showcase/**` setups end to end. |
 
-When fixing a bug, add a regression test entry that captures the *broken* behavior (what was happening before the fix) and the *expected* behavior (what happens after). This prevents the same bug from recurring without a test catching it.
+Capability gates (`spark`, `agent`, `airflow`, `slow`) compose with a layer marker and skip when the dependency is absent.
+
+### The test backlog is pytest-native — `TEST_MANIFEST.md` is RETIRED
+
+`TEST_MANIFEST.md` (now frozen in `docs/archive/`) is gone. The suite itself is the source of truth for what passes; do **not** maintain a parallel ledger. Track gaps in code:
+
+- **Unwritten test** → write a `@pytest.mark.todo("what input → what output/error")` stub (with whatever asserts you can already express). It auto-skips; `pytest --collect-only -m todo` is the living backlog. Delete the marker when the body is real — never flip a status by hand.
+- **Known bug / regression to fix** → write the test that *should* pass and mark it `@pytest.mark.xfail(strict=True, reason="bug: …")`. `xfail_strict` is on, so the build FAILS the moment the bug is fixed, forcing the marker's removal. ❌→✅ maintains itself.
+
+When fixing a bug, add a regression test capturing the broken→expected behavior so it can't recur silently.
+
+### Two-model split
+- **You (Claude)** write core implementation + the high-value behavior tests. Leave `@pytest.mark.todo` stubs for coverage you're deferring; optionally drop issue files in `.dev/ISSUES/` for the cheaper model.
+- **Cheaper model** fills in `todo` stubs and broadens coverage — it reads the stubs (`pytest --collect-only -m todo`) and `.dev/ISSUES/`.
+- **Never suggest or run test commands.** The user runs the suite. Paste specific failures only if stuck.
 
 ### CI workflow (`.github/workflows/test-suite.yml`)
 
-CI runs 9 parallel jobs, each scoped to a feature area.  A `changes` job
-(using `dorny/paths-filter@v3`) detects which files changed; on branches
-only matching jobs fire.  On `main` every job runs unconditionally.
+CI runs scoped parallel jobs, each owning a feature area.  A `changes` job
+(using `dorny/paths-filter@v4`) detects which files changed; on branches only
+matching jobs fire.  On `main` every job runs unconditionally.  Triggers:
+push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 
 | Job | Runs when | Command |
 |---|---|---|
-| `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/` |
-| `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/` |
-| `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, or `tests/test_blueprints.py` | `pytest ... -m spark` |
+| `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/ -m "not spark"` |
+| `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/ -m "not spark"` |
+| `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, `tests/test_compiler/test_blueprints.py`, or `gallery/snippets/**` | `pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark` |
+| `snippets` | same as executor | `bash scripts/run_snippets.sh` (full-runs each snippet, slow) |
+| `gallery-tests` | `gallery/**`, `tests/test_gallery.py`, parser/compiler | `pytest tests/test_gallery.py` (fast parse/compile/load guard) |
 | `surveyor-tests` | `aqueduct/surveyor/**` or `tests/test_surveyor/**` | `pytest tests/test_surveyor/ tests/test_benchmark_store.py` |
 | `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
 | `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
 | `cli-tests` | `aqueduct/cli.py` or `tests/test_cli/**` | `pytest tests/test_cli/` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
-| `stores-tests` | `aqueduct/stores/**` or `tests/test_stores/**` (PG + Redis services) | `pytest ... -m integration` |
+| `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
-`agent-tests` fires (~30s).  Merge to `main` → all 9 jobs run (full gate).
+`agent-tests` fires (~30s).  Merge to `main` → every job runs (full gate).
 
 **New area**: if you add a new top-level directory under `aqueduct/`, add
 its path glob to the `changes` job filter and add a corresponding test job.
+
+### Release (`.github/workflows/release.yml`)
+
+Pushing a **bare semver tag** (`1.2.3`, no `v` prefix) gates on the full suite,
+builds sdist+wheel, publishes to PyPI via **Trusted Publishing** (OIDC, no stored
+token), then cuts a GitHub Release titled `Aqueduct X.Y.Z` whose body is that
+version's `CHANGELOG.md` section.  The `build` job asserts the tag equals
+`pyproject` `project.version`.  Release the user's call — never tag or publish
+unprompted.
 
 ### Testing constraints (reminder)
 - **No live LLM calls in pytest.** Agent tests mock `httpx.post` or `_call_agent`. Live-model evaluation belongs to `.aqscenario.yml` scenarios.

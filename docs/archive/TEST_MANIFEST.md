@@ -1,3 +1,11 @@
+> **FROZEN / ARCHIVED.** This hand-maintained ledger was retired in favour of a
+> pytest-native backlog: the suite itself is now the source of truth for passing
+> tests, `@pytest.mark.todo("why")` is the unwritten-test backlog (`pytest
+> --collect-only -m todo`), and `@pytest.mark.xfail(strict=True)` tracks known
+> bugs (self-removing when fixed). See `CONTRIBUTING.md` → "Test backlog" and
+> AGENTS.md → "Testing". This file is kept only for historical reference; do not
+> add entries.
+
 # Aqueduct Test Manifest
 
 ## How to use this file
