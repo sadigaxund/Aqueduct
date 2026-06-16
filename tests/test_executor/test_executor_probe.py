@@ -68,6 +68,30 @@ def test_execute_probe_writes_to_db(spark, tmp_path):
     assert payload["passed"] is True
     assert payload["expr"] == "COUNT(*) > 0"
 
+def test_schema_snapshot_writes_probe_signals_only_no_sidecar(spark, tmp_path):
+    """Phase 53 — a schema_snapshot probe persists its payload to probe_signals
+    only; the local ``snapshots/<run_id>/*_schema.json`` sidecar is NOT written."""
+    df = spark.createDataFrame([Row(id=1, name="a")])
+    module = Module(
+        id="schema_probe", type="Probe", label="Schema",
+        config={"signals": [{"type": "schema_snapshot"}]},
+    )
+
+    execute_probe(module, df, spark, "run_snap", tmp_path)
+
+    # Payload landed in probe_signals …
+    conn = duckdb.connect(str(tmp_path / "observability.db"))
+    row = conn.execute(
+        "SELECT payload FROM probe_signals WHERE probe_id='schema_probe' AND signal_type='schema_snapshot'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    payload = json.loads(row[0])
+    assert {f["name"] for f in payload["fields"]} == {"id", "name"}
+    # … and NO local snapshots/ sidecar directory was created.
+    assert not (tmp_path / "snapshots").exists()
+
+
 def test_evaluate_regulator_passed(tmp_path):
     # Setup obs.db with a passed signal
     db_path = tmp_path / "observability.db"

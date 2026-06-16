@@ -208,5 +208,62 @@ def test_blob_config_rejects_unknown_backend():
     with pytest.raises(ValidationError):
         ObjectStoreConfig(backend="ftp", path="")
 
-# (fsspec/s3 backend behaviours that need a mocked object store are staged in
-#  tests/test_backlog.py until a moto fixture lands here.)
+# ── FsspecBackend (exercised over fsspec's in-memory filesystem) ──────────────
+# fsspec's ``memory://`` driver runs the exact same FsspecBackend code path as
+# s3/gcs/adls without needing moto or network — process-local, deterministic.
+# Each test uses a unique base since the memory filesystem is process-global.
+
+import importlib.util as _import_util
+import uuid as _uuid
+
+# fsspec ships with the [object-store] extra — skip these where it is absent
+# (a base install / the minimal CI matrix leg). They run in the object-store env.
+_needs_fsspec = pytest.mark.skipif(
+    _import_util.find_spec("fsspec") is None,
+    reason="fsspec not installed (pip install 'aqueduct-core[object-store]')",
+)
+
+
+def _mem_base(tag: str) -> str:
+    return f"memory://{tag}-{_uuid.uuid4().hex}"
+
+
+@_needs_fsspec
+def test_fsspec_backend_roundtrip_and_lifecycle():
+    b = FsspecBackend(_mem_base("obj"))
+    b.put("d/x.json", b'{"k": 1}')
+    assert b.get("d/x.json") == b'{"k": 1}'
+    assert b.exists("d/x.json") and not b.exists("d/missing.json")
+    assert b.list("d") == ["d/x.json"]
+    assert b.mtime("d/x.json") >= 0.0
+
+    b.move("d/x.json", "d/y.json")
+    assert not b.exists("d/x.json")
+    assert b.get("d/y.json") == b'{"k": 1}'
+
+    b.delete("d/y.json")
+    assert not b.exists("d/y.json")
+    assert b.list("d") == []
+
+
+@_needs_fsspec
+def test_fsspec_backend_list_empty_prefix_is_empty():
+    assert FsspecBackend(_mem_base("empty")).list("nope") == []
+
+
+@_needs_fsspec
+def test_patchstore_over_fsspec_pending_to_applied_move_preserves_body():
+    ps = PatchStore(FsspecBackend(_mem_base("ps")))
+    body = {"patch_id": "p1", "rationale": "r", "operations": [{"op": "x"}]}
+    pending_key = ps.write_pending("p1.json", body)
+    assert pending_key == "pending/p1.json"
+
+    ps.move(pending_key, "applied/p1.json")
+    assert ps.get_json("applied/p1.json") == body
+    assert not ps.exists(pending_key)
+
+
+@_needs_fsspec
+def test_make_patch_store_fsspec_backend_type():
+    ps = make_patch_store("s3", "s3://bucket/prefix", local_patches_dir="ignored")
+    assert isinstance(ps._backend, FsspecBackend)

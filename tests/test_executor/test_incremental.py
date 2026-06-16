@@ -294,6 +294,78 @@ def test_compute_watermark_from_output_delta_format_none_fallback(spark, tmp_pat
     assert result is None
 
 
+def test_watermark_depot_only_no_sidecar(spark, tmp_path):
+    """Phase 53 — a full incremental run persists the watermark to the Depot and
+    creates NO local ``watermarks/*.json`` sidecar under store_dir."""
+    in_path = str(tmp_path / "in_wm.parquet")
+    out_path = str(tmp_path / "out_wm")
+    spark.createDataFrame(
+        [("2024-01-01 10:00:00", 1), ("2024-01-01 12:00:00", 2)],
+        ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
+
+    store_dir = tmp_path / "store_wm"
+    depot = MockDepot()
+    manifest = create_manifest(
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="inc", type="Channel", label="Inc", config={
+                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
+                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
+            }),
+            Module(id="out", type="Egress", label="Out", config={
+                "format": "parquet", "path": out_path, "mode": "append",
+            }),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="inc", port="main"),
+            Edge(from_id="inc", to_id="out", port="main"),
+        ),
+    )
+
+    result = execute(manifest, spark, depot=depot, store_dir=store_dir)
+    assert result.status == "success"
+    # Watermark advanced in the Depot …
+    assert depot.get("test_bp:inc:_watermark") == "2024-01-01 12:00:00"
+    # … and NO local sidecar was written.
+    assert not (store_dir / "watermarks").exists()
+
+
+def test_watermark_no_depot_warns_and_persists_nothing(spark, tmp_path, caplog):
+    """Phase 53 — incremental Egress with no Depot logs a warning and persists
+    nothing (next run re-scans); still no local sidecar."""
+    in_path = str(tmp_path / "in_nd.parquet")
+    out_path = str(tmp_path / "out_nd")
+    spark.createDataFrame(
+        [("2024-01-01 10:00:00", 1)], ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
+
+    store_dir = tmp_path / "store_nd"
+    manifest = create_manifest(
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="inc", type="Channel", label="Inc", config={
+                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
+                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
+            }),
+            Module(id="out", type="Egress", label="Out", config={
+                "format": "parquet", "path": out_path, "mode": "append",
+            }),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="inc", port="main"),
+            Edge(from_id="inc", to_id="out", port="main"),
+        ),
+    )
+
+    with caplog.at_level("WARNING"):
+        result = execute(manifest, spark, depot=None, store_dir=store_dir)
+    assert result.status == "success"
+    assert "no depot is configured" in caplog.text
+    assert "re-scans all source data" in caplog.text
+    assert not (store_dir / "watermarks").exists()
+
+
 def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     """Watermark MAX computed from Egress output path, not the lazy Channel df (no double-scan)."""
     from aqueduct.executor.spark.executor import execute
