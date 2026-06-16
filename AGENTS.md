@@ -10,7 +10,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 | Doc | Owns | When to read |
 |---|---|---|
 | `docs/specs.md` | Blueprint format, architecture (4-layer), Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Spark Integration §10, Engine Scope §13 | Domain semantics, anything user-facing about the engine itself |
-| `docs/cli_reference.md` | Every CLI command and flag with defaults | Touching `@click.option` / new subcommand in `aqueduct/cli.py`, or answering "what flag does X" |
+| `docs/cli_reference.md` | Every CLI command and flag with defaults | Touching `@click.option` / new subcommand in `aqueduct/cli/`, or answering "what flag does X" |
 | `docs/observability_guide.md` | Store schemas (run_records, heal_attempts, healing_outcomes, failure_contexts, column_lineage, benchmark_results, patch_simulation, signal_overrides, explain_snapshot, probe_signals, module_metrics, maintenance_metrics, depot_kv) + diagnostic SQL cookbook | DDL / `ALTER TABLE` changes in `aqueduct/surveyor/` or `aqueduct/executor/`, or writing post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, performance, tuning, Spark behavior gotchas | Modifying Executor modules, adding Channel ops, debugging Spark perf |
 | `docs/production_guide.md` | Cluster deployment, env config, Spark cluster config, path conventions, danger settings, Delta operational notes, production patch lifecycle, security, readiness checklist | Anything related to running Aqueduct on a cluster (k8s, YARN, Databricks, …) |
@@ -89,7 +89,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | If you change … | You must update … |
 | :- | :- |
 | Any DDL or `ALTER TABLE` in `aqueduct/surveyor/` or `aqueduct/executor/` | `docs/observability_guide.md` schema table; if the new column enables a meaningful diagnostic, add a cookbook recipe (When → What you learn → What to do next) |
-| Any `@click.option` / new sub-command in `aqueduct/cli.py` | `docs/cli_reference.md` flag table (include default value) |
+| Any `@click.option` / new sub-command in `aqueduct/cli/` | `docs/cli_reference.md` flag table (include default value) |
 | Any pydantic field in `aqueduct/config.py` or `aqueduct/parser/schema.py` | The corresponding template comment block (`aqueduct.yml.template` for engine config, `blueprints/blueprint.yml.template` for Blueprint) |
 | Any `StopReason`, `BudgetConfig`, or apply-gate behaviour | `docs/specs.md` §8 + `docs/observability_guide.md` `heal_attempts` section |
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
@@ -227,6 +227,35 @@ whenever a package is restructured — use it as the first filter before greppin
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
 - New heal-cache lookup → add the SQL to `patch/index.py`, surface it via `memory.py` (an `obs_store` query — no LLM calls)
 
+### `aqueduct/cli/` — Command-line interface (package, split from the old `cli.py`)
+
+`cli.py` was split into a package. `__init__.py` holds the `cli` click group, the
+**shared helpers** (env loading, redaction, `_resolve_obs_db`, `_agent_usable`,
+the patch-gate helpers, `_patches_root_from_blueprint`, …), and the bottom-of-file
+imports that register + re-export each command family. Helpers stay in `__init__`
+so `patch("aqueduct.cli._helper")` paths and `from aqueduct.cli import _helper`
+keep working. Command families live in submodules:
+
+| Module | Commands |
+|--------|----------|
+| `__init__.py` | `cli` group + group options; all shared `_*` helpers; command registration/re-export |
+| `run.py` | `run` (+ `--sandbox`), `compile` |
+| `heal.py` | `heal` |
+| `patch.py` | `patch` group: preview/apply/reject/commit/discard/list/log/rollback |
+| `observability.py` | `report`, `runs`, `lineage`, `signal` |
+| `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
+| `diagnostics.py` | `validate`, `lint`, `schema`, `doctor` |
+| `stores.py` | `stores` group (info, migrate) |
+| `project.py` | `init`, `completion`, `test` |
+
+**Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
+the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
+`_run_patch_gates_inline`, `_apply_patch_in_memory`, `_write_patch_to_blueprint`,
+`_stage_failed_patch`) are accessed via `import aqueduct.cli as _aqcli` /
+`_aqcli._helper(...)` so test patch paths still bite. New commands go in the
+matching submodule (or a new one + a bottom-of-`__init__` re-export); new shared
+helpers go in `__init__`.
+
 ## Git & Commit Conventions
 
 ### Commit message format
@@ -309,7 +338,7 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `surveyor-tests` | `aqueduct/surveyor/**` or `tests/test_surveyor/**` | `pytest tests/test_surveyor/ tests/test_benchmark_store.py` |
 | `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
 | `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
-| `cli-tests` | `aqueduct/cli.py` or `tests/test_cli/**` | `pytest tests/test_cli/` |
+| `cli-tests` | `aqueduct/cli/**` or `tests/test_cli/**` | `pytest tests/test_cli/` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 

@@ -44,4 +44,4 @@ edges:
     to: out_orders
 
 agent:
-  approval_mode: auto
+  approval: auto

@@ -30,9 +30,17 @@ id: test
 name: Test
 modules:
   - id: m1
-    type: Channel
+    type: Ingress
     label: M1
-    config: {{}}
+    config:
+      format: parquet
+      path: /dummy/in
+  - id: e1
+    type: Egress
+    label: E1
+    config:
+      format: parquet
+      path: /dummy/out
   - id: p1
     type: Probe
     label: P1
@@ -41,6 +49,9 @@ modules:
       signals:
         - type: {sig}
         - type: schema_snapshot
+edges:
+  - from: m1
+    to: e1
 """
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always", AqueductWarning)
@@ -62,9 +73,17 @@ id: test
 name: Test
 modules:
   - id: m1
-    type: Channel
+    type: Ingress
     label: M1
-    config: {{}}
+    config:
+      format: parquet
+      path: /dummy/in
+  - id: e1
+    type: Egress
+    label: E1
+    config:
+      format: parquet
+      path: /dummy/out
   - id: p1
     type: Probe
     label: P1
@@ -72,6 +91,9 @@ modules:
     config:
       signals:
         - {sig_yaml}
+edges:
+  - from: m1
+    to: e1
             """
             with warnings.catch_warnings():
                 warnings.simplefilter("error")

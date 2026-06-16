@@ -23,7 +23,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aqueduct.surveyor.scenario import ScenarioResult
@@ -121,73 +121,145 @@ def _connect(store_path: Path):
     return con
 
 
+# ── Backend abstraction (DuckDB file | Postgres schema) ─────────────────────────
+
+import contextlib as _contextlib
+
+# Postgres schema the benchmark table lives in (disjoint from the
+# observability/lineage/depot schemas the StoreBundle uses).
+_PG_BENCHMARK_SCHEMA = "benchmark"
+
+
+@dataclass(frozen=True)
+class BenchmarkStore:
+    """Where benchmark rows live. DuckDB file or a Postgres schema.
+
+    The whole module speaks DuckDB-flavoured SQL (`?` placeholders, `JSON`,
+    `DOUBLE PRECISION`); the Postgres path reuses ``stores.postgres`` —
+    ``RelationalCursor`` rewrites `?` → `%s` and the DDL is already portable.
+    """
+
+    backend: str = "duckdb"       # "duckdb" | "postgres"
+    location: str = ""            # DuckDB file path OR Postgres libpq DSN
+    schema: str = _PG_BENCHMARK_SCHEMA
+
+    @classmethod
+    def from_config(cls, bench_cfg: Any, scenarios_dir: Path) -> "BenchmarkStore":
+        """Build from a ``stores.benchmark`` config block + scenarios anchor.
+
+        DuckDB with no explicit path → scenario-anchored default. Postgres
+        requires an explicit DSN (``path``).
+        """
+        backend = getattr(bench_cfg, "backend", "duckdb")
+        path = getattr(bench_cfg, "path", None)
+        if backend == "postgres":
+            if not path:
+                raise ValueError(
+                    "stores.benchmark.backend=postgres requires stores.benchmark.path "
+                    "(a libpq DSN, e.g. postgresql://user:pass@host/db)"
+                )
+            return cls(backend="postgres", location=path)
+        location = path or str(default_store_path(scenarios_dir))
+        return cls(backend="duckdb", location=location)
+
+    @property
+    def label(self) -> str:
+        return f"postgres:{self.schema}" if self.backend == "postgres" else self.location
+
+    @_contextlib.contextmanager
+    def cursor(self):
+        """Yield a cursor exposing ``execute(sql, params).fetchone()/.fetchall()``.
+
+        DuckDB connection and ``RelationalCursor`` share that surface, so every
+        query in this module is backend-agnostic. Postgres commits on exit.
+        """
+        if self.backend == "postgres":
+            from aqueduct.stores.postgres import _pg_relational
+            with _pg_relational(self.location, self.schema) as cur:
+                cur.execute(_BENCHMARK_DDL)
+                yield cur
+        elif self.backend == "duckdb":
+            con = _connect(Path(self.location))
+            try:
+                yield con
+            finally:
+                con.close()
+        else:  # pragma: no cover — config Literal blocks other values
+            raise ValueError(f"unknown benchmark backend: {self.backend!r}")
+
+
+def _as_store(store: "Path | str | BenchmarkStore") -> BenchmarkStore:
+    """Normalise a path/str (legacy DuckDB API) or a BenchmarkStore to a store."""
+    if isinstance(store, BenchmarkStore):
+        return store
+    return BenchmarkStore(backend="duckdb", location=str(store))
+
+
 # ── Persist ───────────────────────────────────────────────────────────────────
 
 def persist_results(
     results: dict[str, dict[str, "ScenarioResult"]],
-    store_path: Path,
+    store: "Path | str | BenchmarkStore",
 ) -> int:
     """Insert one row per ``(scenario, model)`` ScenarioResult into the store.
 
+    ``store`` accepts a DuckDB path (legacy) or a :class:`BenchmarkStore`.
     Returns the number of rows written. Errors are logged but do not raise —
     benchmark output is the primary signal; persistence is best-effort so a
-    locked file or missing duckdb dep cannot fail the benchmark command.
+    locked file, missing driver, or unreachable DB cannot fail the command.
     """
-    try:
-        con = _connect(store_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("benchmark persistence skipped — cannot open %s: %s",
-                       store_path, exc)
-        return 0
-
+    bs = _as_store(store)
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
     written = 0
     try:
-        for sid, by_model in results.items():
-            for model, r in by_model.items():
-                vg = getattr(r, "violated_guardrails", None)
-                vg_json = json.dumps(list(vg)) if vg is not None else None
-                con.execute(
-                    """
-                    INSERT INTO benchmark_results (
-                        id, recorded_at, scenario_id, model, prompt_version,
-                        provider, base_url,
-                        passed, patch_valid, patch_applies,
-                        confidence, duration_seconds, attempts_to_parse,
-                        diag_score, root_cause_match, category_match,
-                        failures, soft_failures, violated_guardrails,
-                        stop_reason, escalated, tokens_in_total, tokens_out_total
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        str(uuid.uuid4()),
-                        now,
-                        sid,
-                        model,
-                        r.prompt_version,
-                        r.provider,
-                        r.base_url,
-                        r.passed,
-                        r.patch_valid,
-                        r.patch_applies,
-                        r.confidence,
-                        r.duration_seconds,
-                        r.attempts_to_parse,
-                        r.diag_score,
-                        r.root_cause_match,
-                        r.category_match,
-                        json.dumps(list(r.failures)),
-                        json.dumps(list(r.soft_failures)),
-                        vg_json,
-                        getattr(r, "stop_reason", None),
-                        getattr(r, "escalated", False),
-                        int(getattr(r, "tokens_in_total", 0) or 0),
-                        int(getattr(r, "tokens_out_total", 0) or 0),
-                    ],
-                )
-                written += 1
-    finally:
-        con.close()
+        with bs.cursor() as con:
+            for sid, by_model in results.items():
+                for model, r in by_model.items():
+                    vg = getattr(r, "violated_guardrails", None)
+                    vg_json = json.dumps(list(vg)) if vg is not None else None
+                    con.execute(
+                        """
+                        INSERT INTO benchmark_results (
+                            id, recorded_at, scenario_id, model, prompt_version,
+                            provider, base_url,
+                            passed, patch_valid, patch_applies,
+                            confidence, duration_seconds, attempts_to_parse,
+                            diag_score, root_cause_match, category_match,
+                            failures, soft_failures, violated_guardrails,
+                            stop_reason, escalated, tokens_in_total, tokens_out_total
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            str(uuid.uuid4()),
+                            now,
+                            sid,
+                            model,
+                            r.prompt_version,
+                            r.provider,
+                            r.base_url,
+                            r.passed,
+                            r.patch_valid,
+                            r.patch_applies,
+                            r.confidence,
+                            r.duration_seconds,
+                            r.attempts_to_parse,
+                            r.diag_score,
+                            r.root_cause_match,
+                            r.category_match,
+                            json.dumps(list(r.failures)),
+                            json.dumps(list(r.soft_failures)),
+                            vg_json,
+                            getattr(r, "stop_reason", None),
+                            getattr(r, "escalated", False),
+                            int(getattr(r, "tokens_in_total", 0) or 0),
+                            int(getattr(r, "tokens_out_total", 0) or 0),
+                        ],
+                    )
+                    written += 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("benchmark persistence skipped — cannot write to %s: %s",
+                       bs.label, exc)
+        return written
     return written
 
 
@@ -329,10 +401,11 @@ def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], 
 
 def diff_latest(
     results: dict[str, dict[str, "ScenarioResult"]],
-    store_path: Path,
+    store: "Path | str | BenchmarkStore",
 ) -> list[DiffEntry]:
     """Compare every ``(scenario, model)`` in ``results`` against its baseline.
 
+    ``store`` accepts a DuckDB path (legacy) or a :class:`BenchmarkStore`.
     Returns one ``DiffEntry`` per pair. An entry with ``baseline is None``
     means this is the first ever benchmark for that pair — never treated as a
     regression. An entry with ``baseline_prompt_mismatch=True`` means the
@@ -342,58 +415,55 @@ def diff_latest(
     Reads only — does not write. Call ``persist_results`` first so the current
     run's rows are in the store; this function then looks back ONE step.
     """
-    try:
-        con = _connect(store_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("benchmark diff skipped — cannot open %s: %s", store_path, exc)
-        return []
-
+    bs = _as_store(store)
     entries: list[DiffEntry] = []
     try:
-        for sid, by_model in results.items():
-            for model, r in by_model.items():
-                # Look up the most recent persisted row for this pair — that's
-                # the "current" row we just wrote.
-                rec = con.execute(
-                    f"SELECT {_SELECT_COLS} FROM benchmark_results "
-                    "WHERE scenario_id = ? AND model = ? "
-                    "ORDER BY recorded_at DESC LIMIT 1",
-                    [sid, model],
-                ).fetchone()
-                if rec is None:
-                    # Persistence skipped (locked file, dep missing); nothing to diff.
-                    continue
-                current = _row_from_record(rec)
-                baseline, prompt_mismatch = _fetch_baseline(
-                    con,
-                    scenario_id=sid,
-                    model=model,
-                    prompt_version=current.prompt_version,
-                    current_recorded_at=current.recorded_at,
-                )
-                if baseline is None:
+        with bs.cursor() as con:
+            for sid, by_model in results.items():
+                for model, r in by_model.items():
+                    # Most recent persisted row for this pair — the "current"
+                    # row we just wrote.
+                    rec = con.execute(
+                        f"SELECT {_SELECT_COLS} FROM benchmark_results "
+                        "WHERE scenario_id = ? AND model = ? "
+                        "ORDER BY recorded_at DESC LIMIT 1",
+                        [sid, model],
+                    ).fetchone()
+                    if rec is None:
+                        # Persistence skipped (locked file, dep missing); nothing to diff.
+                        continue
+                    current = _row_from_record(rec)
+                    baseline, prompt_mismatch = _fetch_baseline(
+                        con,
+                        scenario_id=sid,
+                        model=model,
+                        prompt_version=current.prompt_version,
+                        current_recorded_at=current.recorded_at,
+                    )
+                    if baseline is None:
+                        entries.append(DiffEntry(
+                            scenario_id=sid,
+                            model=model,
+                            baseline=None,
+                            current=current,
+                            baseline_prompt_mismatch=False,
+                            regressions=(),
+                            improvements=(),
+                        ))
+                        continue
+                    regs, imps = _compare(baseline, current)
                     entries.append(DiffEntry(
                         scenario_id=sid,
                         model=model,
-                        baseline=None,
+                        baseline=baseline,
                         current=current,
-                        baseline_prompt_mismatch=False,
-                        regressions=(),
-                        improvements=(),
+                        baseline_prompt_mismatch=prompt_mismatch,
+                        regressions=tuple(regs),
+                        improvements=tuple(imps),
                     ))
-                    continue
-                regs, imps = _compare(baseline, current)
-                entries.append(DiffEntry(
-                    scenario_id=sid,
-                    model=model,
-                    baseline=baseline,
-                    current=current,
-                    baseline_prompt_mismatch=prompt_mismatch,
-                    regressions=tuple(regs),
-                    improvements=tuple(imps),
-                ))
-    finally:
-        con.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("benchmark diff skipped — cannot read %s: %s", bs.label, exc)
+        return []
     return entries
 
 
@@ -432,3 +502,115 @@ def format_diff_table(entries: list[DiffEntry]) -> str:
         model = (e.model[:22] + "..") if len(e.model) > 24 else e.model
         lines.append(f"  {sid:<32} {model:<24} {status:<12} {notes}")
     return "\n".join(lines)
+
+
+# ── Aggregation / stats views ───────────────────────────────────────────────────
+
+# Latest row per (scenario, model) — history is not double-counted in the
+# leaderboard / difficulty views. Window functions work on DuckDB and Postgres.
+_RANKED_CTE = (
+    "WITH ranked AS ("
+    " SELECT scenario_id, model, passed, patch_valid, patch_applies,"
+    " diag_score, duration_seconds,"
+    " ROW_NUMBER() OVER (PARTITION BY scenario_id, model"
+    " ORDER BY recorded_at DESC) AS rn"
+    " FROM benchmark_results)"
+)
+
+
+def _f(v: Any) -> float | None:
+    return float(v) if v is not None else None
+
+
+def compute_stats(store: "Path | str | BenchmarkStore", *, trend_limit: int = 14) -> dict:
+    """Aggregate the store into leaderboard / difficulty / trend views.
+
+    Leaderboard + difficulty use the LATEST row per (scenario, model). Trend
+    aggregates pass-rate by calendar day across all rows. Returns empty lists
+    when the store is empty or unreadable — never raises.
+    """
+    bs = _as_store(store)
+    out: dict = {"models": [], "scenarios": [], "trend": []}
+    try:
+        with bs.cursor() as con:
+            for r in con.execute(
+                _RANKED_CTE +
+                " SELECT model, COUNT(*) n,"
+                " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END),"
+                " AVG(CASE WHEN patch_valid THEN 1.0 ELSE 0.0 END),"
+                " AVG(CASE WHEN patch_applies THEN 1.0 ELSE 0.0 END),"
+                " AVG(diag_score), AVG(duration_seconds)"
+                " FROM ranked WHERE rn = 1 GROUP BY model"
+                " ORDER BY 3 DESC, model"
+            ).fetchall():
+                out["models"].append({
+                    "model": r[0], "n": int(r[1]), "pass_rate": _f(r[2]),
+                    "parse_rate": _f(r[3]), "apply_rate": _f(r[4]),
+                    "avg_diag": _f(r[5]), "avg_duration": _f(r[6]),
+                })
+            for r in con.execute(
+                _RANKED_CTE +
+                " SELECT scenario_id, COUNT(*) n,"
+                " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END)"
+                " FROM ranked WHERE rn = 1 GROUP BY scenario_id"
+                " ORDER BY 3 ASC, scenario_id"
+            ).fetchall():
+                out["scenarios"].append({
+                    "scenario_id": r[0], "n": int(r[1]), "pass_rate": _f(r[2]),
+                })
+            trend = con.execute(
+                " SELECT substr(recorded_at, 1, 10) d, COUNT(*) n,"
+                " AVG(CASE WHEN passed THEN 1.0 ELSE 0.0 END)"
+                " FROM benchmark_results GROUP BY substr(recorded_at, 1, 10)"
+                " ORDER BY d DESC LIMIT ?",
+                [trend_limit],
+            ).fetchall()
+            out["trend"] = [
+                {"date": r[0], "n": int(r[1]), "pass_rate": _f(r[2])}
+                for r in reversed(trend)
+            ]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("benchmark stats unavailable — %s: %s", bs.label, exc)
+        return {"models": [], "scenarios": [], "trend": []}
+    return out
+
+
+def format_stats(stats: dict) -> str:
+    """Terminal-friendly render of :func:`compute_stats` output."""
+    models = stats.get("models") or []
+    scenarios = stats.get("scenarios") or []
+    trend = stats.get("trend") or []
+    if not models and not scenarios:
+        return "(benchmark store empty — run `aqueduct benchmark` first)"
+
+    def pct(x: float | None) -> str:
+        return f"{x:.0%}" if x is not None else "—"
+
+    def dur(x: float | None) -> str:
+        return f"{x:.1f}s" if x is not None else "—"
+
+    out: list[str] = []
+    out.append("Model leaderboard  (latest row per scenario × model)")
+    out.append(f"  {'model':<28} {'n':>3} {'pass':>6} {'parse':>6} {'apply':>6} {'diag':>6} {'dur':>7}")
+    for m in models:
+        out.append(
+            f"  {m['model'][:28]:<28} {m['n']:>3} {pct(m['pass_rate']):>6} "
+            f"{pct(m['parse_rate']):>6} {pct(m['apply_rate']):>6} "
+            f"{pct(m['avg_diag']):>6} {dur(m['avg_duration']):>7}"
+        )
+    if models:
+        best = models[0]
+        out.append(f"  → best model: {best['model']}  ({pct(best['pass_rate'])} pass rate)")
+
+    out.append("")
+    out.append("Hardest scenarios  (lowest pass rate across models)")
+    out.append(f"  {'scenario':<44} {'n':>3} {'pass':>6}")
+    for s in scenarios[:10]:
+        out.append(f"  {s['scenario_id'][:44]:<44} {s['n']:>3} {pct(s['pass_rate']):>6}")
+
+    if trend:
+        out.append("")
+        out.append("Pass-rate trend  (by day)")
+        for t in trend:
+            out.append(f"  {t['date']}  {pct(t['pass_rate']):>6}   (n={t['n']})")
+    return "\n".join(out)

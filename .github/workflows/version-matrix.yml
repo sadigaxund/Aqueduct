@@ -168,14 +168,14 @@ jobs:
             echo "No results files — skipping"
             exit 0
           fi
-          VERSION_LINE=$(git describe --tags --always 2>/dev/null || echo "untagged")
-          COMMIT_HASH=$(git rev-parse --short HEAD)
-
+          # NOTE: the generated region must stay deterministic — anything that
+          # changes every run (commit SHA, timestamp) would defeat the
+          # `git diff --staged --quiet` guard below and produce a churn commit
+          # on every push to main. Provenance lives in the commit history (the
+          # commit's parent is the tested commit), not in the file body.
           TABLE_FILE=/tmp/compat_table.md
           > "$TABLE_FILE"
           echo "## Latest run" >> "$TABLE_FILE"
-          echo "" >> "$TABLE_FILE"
-          echo "**Build:** \`$VERSION_LINE\` — commit \`$COMMIT_HASH\`" >> "$TABLE_FILE"
           echo "" >> "$TABLE_FILE"
           echo "| Combo | Python | Spark | Delta | Postgres | Java | Status |" >> "$TABLE_FILE"
           echo "|---|---|---|---|---|---|---|" >> "$TABLE_FILE"

@@ -56,7 +56,7 @@ jobs:
               - 'tests/test_stores/**'
               - 'tests/test_depot/**'
             cli:
-              - 'aqueduct/cli.py'
+              - 'aqueduct/cli/**'
               - 'tests/test_cli/**'
             config:
               - 'aqueduct/config.py'

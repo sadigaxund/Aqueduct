@@ -215,6 +215,56 @@ def run_lineage_gate(
     return result
 
 
+# ── Sandbox manifest transform (shared: gate + `run --sandbox`) ───────────────
+
+def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[dict[str, Any]]]:
+    """Transform a compiled Manifest into a sandbox-safe one.
+
+    Drops every Egress module (snapshotting its declared sink for the report)
+    and, when ``sample_rows > 0``, marks every Ingress with a ``sandbox_limit``
+    so the Spark ingress executor caps the read at ``sample_rows`` rows. Edges
+    whose endpoints were dropped are removed.
+
+    Returns ``(sandboxed_manifest, egress_targets)``. Shared by
+    ``run_sandbox_gate`` (patch validation, Gate 3) and ``aqueduct run
+    --sandbox`` (dev dry-run) so both strip/limit identically.
+    """
+    import dataclasses as _dc
+
+    egress_targets: list[dict[str, Any]] = []
+    sandboxed_modules = []
+    for m in manifest.modules:
+        if m.type == "Egress":
+            egress_targets.append({
+                "id": m.id,
+                "format": (m.config or {}).get("format"),
+                "path":   (m.config or {}).get("path"),
+                "mode":   (m.config or {}).get("mode"),
+            })
+            continue
+        sandboxed_modules.append(m)
+
+    if sample_rows and sample_rows > 0:
+        sandboxed_modules = [
+            _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
+            if m.type == "Ingress"
+            else m
+            for m in sandboxed_modules
+        ]
+
+    keep_ids = {m.id for m in sandboxed_modules}
+    sandboxed_edges = [
+        e for e in manifest.edges
+        if e.from_id in keep_ids and e.to_id in keep_ids
+    ]
+    sandboxed_manifest = _dc.replace(
+        manifest,
+        modules=tuple(sandboxed_modules),
+        edges=tuple(sandboxed_edges),
+    )
+    return sandboxed_manifest, egress_targets
+
+
 # ── sandbox gate sandbox replay ─────────────────────────────────────────────────────
 
 def run_sandbox_gate(
@@ -297,46 +347,10 @@ def run_sandbox_gate(
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
 
-        # ── Capture + strip Egress modules ──────────────────────────────────────
-        sandboxed_modules = []
-        for m in manifest.modules:
-            if m.type == "Egress":
-                egress_targets.append({
-                    "id": m.id,
-                    "format": (m.config or {}).get("format"),
-                    "path":   (m.config or {}).get("path"),
-                    "mode":   (m.config or {}).get("mode"),
-                })
-                continue
-            sandboxed_modules.append(m)
-
-        # ── Apply LIMIT to every Ingress when sample_rows > 0 ───────────────────
-        # We inject a Channel `op: sql` immediately downstream of each Ingress
-        # via a temp module ID, but a simpler trick — and the one used here — is
-        # to rewrite the Ingress config to carry a `sandbox_limit` marker. The
-        # Spark ingress executor honours `sandbox_limit` (if present) by calling
-        # `.limit(N)` after `.load()`. This is implemented in `ingress.py`.
-        import dataclasses as _dc
-        if sample_rows and sample_rows > 0:
-            sandboxed_modules = [
-                _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
-                if m.type == "Ingress"
-                else m
-                for m in sandboxed_modules
-            ]
-
-        # Drop edges whose endpoints disappear.
-        keep_ids = {m.id for m in sandboxed_modules}
-        sandboxed_edges = [
-            e for e in manifest.edges
-            if e.from_id in keep_ids and e.to_id in keep_ids
-        ]
-
-        sandboxed_manifest = _dc.replace(
-            manifest,
-            modules=tuple(sandboxed_modules),
-            edges=tuple(sandboxed_edges),
-        )
+        # ── Strip Egress + cap Ingress rows (shared with `run --sandbox`) ───────
+        # The Spark ingress executor honours the `sandbox_limit` marker (if
+        # present) by calling `.limit(N)` after `.load()` — see `ingress.py`.
+        sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample_rows)
 
         # ── Spark session ──────────────────────────────────────────────────────
         if spark_session is None:

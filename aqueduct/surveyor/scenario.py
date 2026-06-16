@@ -804,10 +804,23 @@ def run_benchmark(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as pool:
         futures = [pool.submit(_run_pair, s, m) for s, m in pairs]
+        done = 0
         for future in concurrent.futures.as_completed(futures):
             try:
                 sid, model, result = future.result()
                 results[sid][model] = result
+                done += 1
+                # Parallel mode can't emit the serial multi-line box (worker
+                # threads would interleave it into garbage). Emit ONE atomic
+                # progress line per completed pair from this main thread — it
+                # is serialised by the loop, so lines never interleave.
+                if not serial:
+                    status = "PASS" if result.passed else "FAIL"
+                    diag = f"diag={result.diag_score:.0%}" if result.diag_score is not None else "diag=—"
+                    _emit(
+                        f"[{done}/{len(pairs)}] {status}  {sid}  ·  {model}  "
+                        f"{diag}  {result.duration_seconds:.1f}s"
+                    )
             except Exception as exc:
                 logger.error("Unexpected error in benchmark worker: %s", exc)
 
@@ -846,7 +859,10 @@ def format_benchmark_table(
             widest = max(widest, len(_format_cell(results[sid].get(m))))
         model_col_w_by_model[m] = max(widest, 10)
 
-    total_w = id_col_w + sum(model_col_w_by_model.values()) + 3 * len(models) + 2
+    # Row width = id_col + "  │ " (4) + Σ model widths + " │ " (3) between each
+    # of the N models = id_col + Σwidths + 3N + 1. The heavy/light rules must
+    # match exactly (was +2 → one char overhang).
+    total_w = id_col_w + sum(model_col_w_by_model.values()) + 3 * len(models) + 1
     h_heavy = "═" * total_w
     h_light = "─" * total_w
 

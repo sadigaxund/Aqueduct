@@ -1,0 +1,615 @@
+"""`aqueduct benchmark`, `benchmark-diff`, `benchmark-stats` commands.
+
+Extracted verbatim from aqueduct/cli/__init__.py — no behaviour change. The
+click group + shared helpers are imported from the package; the commands
+register onto `cli` when this module is imported at the bottom of __init__.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import click
+
+from aqueduct import exit_codes
+from aqueduct.cli import (
+    cli,
+    _apply_warnings_from_cfg,
+    _env_options,
+    _resolve_and_load_env,
+)
+
+# ── aqueduct benchmark ────────────────────────────────────────────────────────
+
+@cli.command()
+@click.argument(
+    "scenarios_pos",
+    required=False,
+    default=None,
+    type=click.Path(exists=True),
+)
+@click.option(
+    "--scenarios",
+    "scenarios_dir",
+    default=None,
+    type=click.Path(exists=True),
+    help="A .aqscenario.yml file or a directory of them (searched recursively). "
+    "May also be given as a positional argument.",
+)
+@click.option(
+    "--model",
+    "models",
+    multiple=True,
+    default=None,
+    help="Model to benchmark (repeatable: --model A --model B). Defaults to agent.model in aqueduct.yml",
+)
+@click.option(
+    "--provider",
+    "provider_override",
+    default=None,
+    type=click.Choice(["anthropic", "openai_compat"]),
+    help="Override agent.provider for this run (e.g. openai_compat for Ollama/vLLM).",
+)
+@click.option(
+    "--base-url",
+    "base_url_override",
+    default=None,
+    help="Override agent.base_url for this run (e.g. http://host:11434/v1).",
+)
+@click.option(
+    "--timeout",
+    "timeout_override",
+    default=None,
+    type=float,
+    help="Override agent.timeout (seconds) for this run. Raise for slow/cold "
+    "local models (default 300; e.g. 600). Use 0 for no limit (unbounded "
+    "read; connect still fails fast).",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    help="Path to aqueduct.yml",
+)
+@click.option(
+    "--patches-dir",
+    default="patches",
+    show_default=True,
+    help="Root directory for patch lifecycle (for previous-patch history)",
+)
+@click.option(
+    "--format",
+    "fmt",
+    default="table",
+    type=click.Choice(["table", "json"]),
+    show_default=True,
+    help="Output data shape (table | json). (-o/--output is reserved for "
+    "file destinations on other commands; this is the data format.)",
+)
+@click.option(
+    "--workers",
+    default=1,
+    show_default=True,
+    help="Max concurrent LLM calls. Default 1 (serial); set >1 to parallelize scenario×model pairs.",
+)
+@click.option(
+    "--no-persist",
+    "no_persist",
+    is_flag=True,
+    default=False,
+    help="Skip writing results to the benchmark store (Phase 33 Part A). "
+    "Default is to persist each (scenario, model) row into "
+    "<scenarios_dir>/.aqueduct/benchmark.duckdb for future regression diffs.",
+)
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Override the benchmark store path. Default: "
+    "<scenarios_dir>/.aqueduct/benchmark.duckdb",
+)
+@click.option(
+    "--gate-on-regression",
+    "gate_on_regression",
+    is_flag=True,
+    default=False,
+    help="After persisting, diff each (scenario, model) vs the most recent "
+    "prior row in the store. Exit non-zero if any regression is detected "
+    "(passed True→False, patch_applies True→False, diag_score or confidence "
+    "drop > 5pp). Implies persistence; ignored with --no-persist.",
+)
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value for this run only (repeatable, "
+         "in-memory). Dotted path — e.g. --set agent.provider=openai_compat "
+         "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600. "
+         "Replaces the deprecated --provider/--base-url/--timeout flags.",
+)
+@_env_options
+def benchmark(
+    scenarios_pos: str | None,
+    scenarios_dir: str | None,
+    models: tuple[str, ...],
+    provider_override: str | None,
+    base_url_override: str | None,
+    timeout_override: float | None,
+    config_path: str | None,
+    patches_dir: str,
+    fmt: str,
+    workers: int,
+    no_persist: bool,
+    store_path_override: str | None,
+    gate_on_regression: bool,
+    set_items: tuple[str, ...],
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Run one or many scenarios against one or more LLM models and compare.
+
+    \b
+    Example:
+      aqueduct benchmark aqscenarios/ --model claude-opus-4-7 --model llama3
+      aqueduct benchmark one.aqscenario.yml          # single scenario
+
+    Takes a .aqscenario.yml file or a directory (recursively globbed),
+    runs each against every specified model, prints a comparison table.
+    No Spark required — scenarios inject failures synthetically.
+    """
+    target = scenarios_pos or scenarios_dir
+    if not target:
+        click.echo(
+            "✗ provide a scenario file or directory (positional, or --scenarios)",
+            err=True,
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+    scenarios_dir = target
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
+
+    try:
+        _resolve_and_load_env(
+            env_file,
+            Path(config_path) if config_path else Path(scenarios_dir),
+            cli_env=cli_env,
+        )
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (config-only; no blueprint in benchmark) ────────────
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
+
+    # Deprecated single-purpose flags → fold into --set.
+    for _flag, _val, _path in (
+        ("--provider", provider_override, "agent.provider"),
+        ("--base-url", base_url_override, "agent.base_url"),
+        ("--timeout", timeout_override, "agent.timeout"),
+    ):
+        if _val is not None:
+            click.echo(click.style(
+                f"[deprecated] {_flag} → use --set {_path}=… (removed in 2.0)",
+                fg="yellow",
+            ), err=True)
+
+    eng = cfg.agent
+    # Precedence: CLI flag > cfg.agent > built-in default. Connection identity
+    # only — provider_options / guardrails stay config (aqueduct.yml).
+    resolved_provider = provider_override or eng.provider
+    resolved_base_url = base_url_override or eng.base_url
+    resolved_model = eng.model
+    resolved_provider_options = eng.provider_options
+    resolved_timeout = timeout_override if timeout_override is not None else eng.timeout
+    # 0 = sentinel for "no limit" → None (httpx: unbounded read; connect
+    # still bounded so an unreachable host fails fast).
+    if resolved_timeout == 0:
+        resolved_timeout = None
+    resolved_max_reprompts = eng.max_reprompts
+    resolved_engine_prompt_context = eng.prompt_context
+
+    model_list = list(models) if models else ([resolved_model] if resolved_model else None)
+    if not model_list:
+        click.echo(
+            "✗ no models specified — use --model <model> or set agent.model in aqueduct.yml",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    click.echo(
+        f"↻ benchmark  scenarios={scenarios_dir}  "
+        f"models={model_list}  provider={resolved_provider}",
+        err=True,
+    )
+
+    # Count scenarios up-front for the banner. Cheap glob — load_scenario
+    # runs again inside run_benchmark, but we only need the count here.
+    _scn_count = (
+        1 if Path(scenarios_dir).is_file()
+        else len(list(Path(scenarios_dir).glob("**/*.aqscenario.yml")))
+    )
+    _pair_count = _scn_count * len(model_list)
+
+    # Benchmark MUST use the same BudgetConfig as production. Reading from
+    # the same engine config block enforces parity — divergence would
+    # silently invalidate the leaderboard.
+    from aqueduct.agent import resolve_budget as _resolve_budget
+    _budget = _resolve_budget(
+        getattr(cfg.agent, "budget", None),
+        max_reprompts=resolved_max_reprompts,
+    )
+
+    # Banner shows pair count + LLM-call envelope (call counts, not time).
+    # Floor = 1 call per pair (every pair succeeds first try); ceiling =
+    # pair_count × budget.max_reprompts (every pair burns the full reprompt
+    # budget). Use "floor/ceiling" instead of "min/max" so it can't be
+    # misread as minutes next to a duration.
+    _floor_calls = _pair_count
+    _ceiling_calls = _pair_count * _budget.max_reprompts
+    click.echo(
+        f"[benchmark] {_scn_count} scenarios × {len(model_list)} models = "
+        f"{_pair_count} pairs · LLM calls: {_floor_calls} floor / "
+        f"{_ceiling_calls} ceiling (max_reprompts={_budget.max_reprompts})",
+        err=True,
+    )
+    try:
+        results = run_benchmark(
+            scenarios_dir=Path(scenarios_dir),
+            models=model_list,
+            patches_dir=Path(patches_dir),
+            provider=resolved_provider or "anthropic",
+            base_url=resolved_base_url,
+            provider_options=resolved_provider_options,
+            timeout=resolved_timeout,
+            max_reprompts=resolved_max_reprompts,
+            engine_prompt_context=resolved_engine_prompt_context,
+            workers=workers,
+            budget=_budget,
+        )
+    except KeyboardInterrupt:
+        # Per-pair results persist to benchmark.duckdb inside run_scenario
+        # via Surveyor.record_benchmark_result, so completed pairs survive
+        # the interrupt. Queued pairs are dropped when the executor's
+        # __exit__ propagates the KeyboardInterrupt; in-flight HTTP calls
+        # close their socket via the `with httpx.Client():` context
+        # manager, signalling the LLM server to abort generation.
+        click.echo(
+            "\n↑ interrupted — completed pairs persisted to benchmark store",
+            err=True,
+        )
+        sys.exit(130)  # SIGINT convention
+
+    if fmt == "json":
+        output: dict = {}
+        for sid, model_results in results.items():
+            output[sid] = {}
+            for model, r in model_results.items():
+                output[sid][model] = {
+                    "passed": r.passed,
+                    "patch_valid": r.patch_valid,
+                    "patch_applies": r.patch_applies,
+                    "confidence": r.confidence,
+                    "duration_seconds": r.duration_seconds,
+                    "attempts_to_parse": r.attempts_to_parse,
+                    "reprompt_errors": r.reprompt_errors,
+                    "root_cause_match": r.root_cause_match,
+                    "category_match": r.category_match,
+                    "diag_score": r.diag_score,
+                    "violated_guardrails": r.violated_guardrails,
+                    "failures": r.failures,
+                    "soft_failures": r.soft_failures,
+                    "patch": (
+                        r.patch.model_dump(mode="json")
+                        if r.patch is not None else None
+                    ),
+                }
+        click.echo(json.dumps(output, indent=2))
+    else:
+        _table = format_benchmark_table(results, model_list)
+        click.echo(_table)
+        # Mirror to stderr when stdout is redirected/piped so the user sees
+        # the table in the terminal AND captures it in `> file`. Skip when
+        # stdout is a TTY (avoid duplicate output in interactive runs).
+        if not sys.stdout.isatty():
+            click.echo(_table, err=True)
+
+    total = sum(
+        1 for model_results in results.values()
+        for r in model_results.values()
+    )
+    passed = sum(
+        1 for model_results in results.values()
+        for r in model_results.values()
+        if r.passed
+    )
+    failed = total - passed
+    if failed and fmt != "json":
+        click.echo(
+            f"({failed} failed — rerun with --format json for failure "
+            f"detail + the generated patch)",
+            err=True,
+        )
+
+    # ── Persist + optional regression gate ────────────────────────────────────
+    # Effective settings come from stores.benchmark (override with --set);
+    # the legacy --no-persist / --gate-on-regression / --store-path flags still
+    # work but are deprecated and warn.
+    from aqueduct.surveyor.benchmark_store import (
+        BenchmarkStore, diff_latest, format_diff_table,
+        has_regressions, persist_results,
+    )
+    bench_cfg = cfg.stores.benchmark
+    _persist = bench_cfg.persist
+    _gate = bench_cfg.gate_on_regression
+    if no_persist:
+        click.echo("[deprecated] --no-persist → use --set stores.benchmark.persist=false (removed in 2.0)", err=True)
+        _persist = False
+    if gate_on_regression:
+        click.echo("[deprecated] --gate-on-regression → use --set stores.benchmark.gate_on_regression=true (removed in 2.0)", err=True)
+        _gate = True
+
+    try:
+        if store_path_override:
+            click.echo("[deprecated] --store-path → use --set stores.benchmark.path=… (removed in 2.0)", err=True)
+            bench_store = BenchmarkStore(backend="duckdb", location=store_path_override)
+        else:
+            bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
+    except ValueError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    regression_exit = False
+    if _persist:
+        written = persist_results(results, bench_store)
+        if written and fmt != "json":
+            click.echo(f"↳ persisted {written} benchmark row(s) → {bench_store.label}")
+        if _gate:
+            diff_entries = diff_latest(results, bench_store)
+            if fmt == "json":
+                click.echo(json.dumps({
+                    "diff": [
+                        {
+                            "scenario_id": e.scenario_id,
+                            "model": e.model,
+                            "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                            "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                            "regressions": list(e.regressions),
+                            "improvements": list(e.improvements),
+                        }
+                        for e in diff_entries
+                    ],
+                }, indent=2))
+            else:
+                click.echo("")
+                click.echo("Regression diff vs baseline:")
+                click.echo(format_diff_table(diff_entries))
+            if has_regressions(diff_entries):
+                regression_exit = True
+                if fmt != "json":
+                    click.echo(
+                        "✗ regression(s) detected vs baseline — failing the gate",
+                        err=True,
+                    )
+    elif _gate and fmt != "json":
+        click.echo(
+            "(regression gate ignored: persistence is off)",
+            err=True,
+        )
+
+    if failed or regression_exit:
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+
+# ── aqueduct benchmark-diff ──────────────────────────────────────────────────
+
+
+@cli.command("benchmark-diff")
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Path to the benchmark store. Default: ./.aqueduct/benchmark.duckdb",
+)
+@click.option(
+    "--scenario",
+    "scenario_filter",
+    default=None,
+    help="Restrict the diff to a single scenario_id.",
+)
+@click.option(
+    "--model",
+    "model_filter",
+    default=None,
+    help="Restrict the diff to a single model.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+def benchmark_diff_cmd(
+    store_path_override: str | None,
+    scenario_filter: str | None,
+    model_filter: str | None,
+    fmt: str,
+) -> None:
+    """Diff the two most recent benchmark runs per (scenario, model) pair.
+
+    Reads from the benchmark store written by ``aqueduct benchmark``. Does
+    not re-run any scenarios — purely a store inspection. Exits non-zero if
+    any pair shows a regression (passed True→False, patch_applies True→False,
+    diag_score or confidence drop > 5pp).
+    """
+    from aqueduct.surveyor.benchmark_store import (
+        _connect, _fetch_baseline, _row_from_record, _SELECT_COLS,
+        DiffEntry, format_diff_table, has_regressions,
+    )
+
+    store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
+    if not store_path.exists():
+        click.echo(f"✗ benchmark store not found: {store_path}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    try:
+        con = _connect(store_path)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"✗ cannot open benchmark store {store_path}: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    where_parts: list[str] = []
+    params: list = []
+    if scenario_filter:
+        where_parts.append("scenario_id = ?")
+        params.append(scenario_filter)
+    if model_filter:
+        where_parts.append("model = ?")
+        params.append(model_filter)
+    where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    try:
+        pairs = con.execute(
+            f"SELECT DISTINCT scenario_id, model FROM benchmark_results {where}",
+            params,
+        ).fetchall()
+        entries: list[DiffEntry] = []
+        for sid, model in pairs:
+            rec = con.execute(
+                f"SELECT {_SELECT_COLS} FROM benchmark_results "
+                "WHERE scenario_id = ? AND model = ? "
+                "ORDER BY recorded_at DESC LIMIT 1",
+                [sid, model],
+            ).fetchone()
+            if rec is None:
+                continue
+            current = _row_from_record(rec)
+            baseline, prompt_mismatch = _fetch_baseline(
+                con, sid, model, current.prompt_version, current.recorded_at,
+            )
+            if baseline is None:
+                entries.append(DiffEntry(sid, model, None, current, False, (), ()))
+                continue
+            from aqueduct.surveyor.benchmark_store import _compare
+            regs, imps = _compare(baseline, current)
+            entries.append(DiffEntry(sid, model, baseline, current, prompt_mismatch, tuple(regs), tuple(imps)))
+    finally:
+        con.close()
+
+    if fmt == "json":
+        click.echo(json.dumps({
+            "diff": [
+                {
+                    "scenario_id": e.scenario_id,
+                    "model": e.model,
+                    "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                    "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                    "regressions": list(e.regressions),
+                    "improvements": list(e.improvements),
+                }
+                for e in entries
+            ],
+        }, indent=2))
+    else:
+        click.echo(format_diff_table(entries))
+
+    if has_regressions(entries):
+        if fmt != "json":
+            click.echo("✗ regression(s) detected", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+
+# ── aqueduct benchmark-stats ─────────────────────────────────────────────────
+
+
+@cli.command("benchmark-stats")
+@click.argument("scenarios", required=False, default=None, type=click.Path(exists=True))
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-path",
+    "store_path_override",
+    default=None,
+    type=click.Path(dir_okay=False),
+    help="Benchmark store path (overrides stores.benchmark). Default: scenario-anchored "
+    "`.aqueduct/benchmark.duckdb`.",
+)
+@click.option(
+    "-s", "--set", "set_items",
+    multiple=True,
+    metavar="PATH=VALUE",
+    help="Override an aqueduct.yml value (e.g. --set stores.benchmark.backend=postgres "
+         "--set stores.benchmark.path=postgresql://h/db).",
+)
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(["table", "json"]),
+    default="table",
+    show_default=True,
+)
+@_env_options
+def benchmark_stats_cmd(
+    scenarios: str | None,
+    config_path: str | None,
+    store_path_override: str | None,
+    set_items: tuple[str, ...],
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Aggregate the benchmark store: leaderboard, hardest scenarios, pass-rate trend.
+
+    Read-only over the store written by ``aqueduct benchmark`` (DuckDB or
+    Postgres). Uses the LATEST row per (scenario, model) for the leaderboard
+    and difficulty views.
+    """
+    from aqueduct.config import ConfigError, load_config
+    from aqueduct.surveyor.benchmark_store import (
+        BenchmarkStore, compute_stats, format_stats,
+    )
+
+    _resolve_and_load_env(
+        env_file, Path(config_path) if config_path else None, cli_env=cli_env
+    )
+    try:
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
+            cfg = apply_to_model(cfg, _cfg_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
+
+    anchor = Path(scenarios) if scenarios else Path(".")
+    try:
+        if store_path_override:
+            store = BenchmarkStore(backend="duckdb", location=store_path_override)
+        else:
+            store = BenchmarkStore.from_config(cfg.stores.benchmark, anchor)
+    except ValueError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    stats = compute_stats(store)
+    if fmt == "json":
+        click.echo(json.dumps(stats, indent=2))
+    else:
+        click.echo(format_stats(stats))

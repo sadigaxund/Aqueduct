@@ -190,7 +190,7 @@ Cross-version correlation queries are now a direct `GROUP BY prompt_version` on 
 
 ## Future: Integrity & Signing
 
-Deferred. Relevant only once `approval_mode: auto` + `max_patches > 1` runs in shared / production environments where tampering is a real threat model. Planned shape:
+Deferred. Relevant only once `approval: auto` + `max_patches > 1` runs in shared / production environments where tampering is a real threat model. Planned shape:
 
 - **Patch signatures**: SHA-256 hash over patch JSON + pre-patch blueprint state.
 - **Verification**: `aqueduct run` re-checks the signature before applying an auto-applied patch.

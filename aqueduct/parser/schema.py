@@ -101,7 +101,14 @@ class AgentSchema(BaseModel):
                 data["cascade"] = [{"model": m} for m in models]
         return data
 
-    approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = "disabled"
+    # `approval` is the canonical YAML key (since 1.x). `approval_mode` stays a
+    # deprecated input alias until 2.0 (parser emits a warning). The Python
+    # attribute name remains `approval_mode` — internal, unchanged. Both YAML
+    # keys populate it via AliasChoices.
+    approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = Field(
+        default="disabled",
+        validation_alias=AliasChoices("approval", "approval_mode"),
+    )
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
     # 1.1.0 — `max_patches` is the canonical name. `aggressive_max_patches` is
     # accepted as a deprecated alias and emits a warning at parse time.

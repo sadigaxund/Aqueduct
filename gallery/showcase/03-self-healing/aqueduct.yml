@@ -1,5 +1,5 @@
 # Engine config for the 1.1.0 self-healing demo.
-# Per-blueprint policy (approval_mode, guardrails) lives in each blueprint.
+# Per-blueprint policy (approval, guardrails) lives in each blueprint.
 
 aqueduct_config: "1.0"
 

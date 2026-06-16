@@ -22,7 +22,7 @@ agent:
   model: "${AQ_OLLAMA_MODEL}"
   timeout: 600.0
   max_reprompts: 3
-  approval_mode: human            # stage patches under patches/pending/, exit 3
+  approval: human                 # stage patches under patches/pending/, exit 3
   on_pending_patches: block       # stop the run on pending patches → exit 3 (HEAL_PENDING)
 
 modules:

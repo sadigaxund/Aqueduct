@@ -43,7 +43,7 @@ Candidate MCP tools:
 | `get_flow_report` | Returns the Flow Report for a given run_id in structured JSON. |
 | `run_pipeline` | Submits a Blueprint for execution and streams RunRecord status events. |
 
-When Aqueduct operates as an MCP server, `approval_mode` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
+When Aqueduct operates as an MCP server, `approval` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
 
 **Status:** Architectural design only. No code.
 
