@@ -251,7 +251,28 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 → CI/CD validates → human approves → merge → redeploy
 ```
 
-**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct fires a POST request to `agent.ci_webhook_url` with the full PatchSpec JSON. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider.
+**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct stages the patch and fires a POST to `agent.ci_webhook_url`. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider and ships no versioned GitHub Action — you wire a short workflow you own.
+
+**CI webhook payload schema.** The `on_patch_pending` POST body carries:
+
+| Key | Type | Notes |
+|---|---|---|
+| `patch_id` | string | Stable patch identifier (non-empty) |
+| `run_id` | string | The failing run |
+| `blueprint_id` | string | Blueprint that failed |
+| `failed_module` | string \| null | Module id, or null when no single module |
+| `source` | string | Origin of the patch (e.g. `llm`) |
+| `root_cause`, `rationale`, `category`, `confidence` | string | Diagnostic extras (optional to consume) |
+| `patch_path` | string | Where the body was staged |
+
+The patch **body** (a PatchSpec JSON) additionally carries an `_aq_meta` block (`run_id`, `blueprint_id`, `failed_module`, `applied_at`, `approval_mode`, `prompt_version`, `failure_signature`). The receiver obtains the body — from a run artifact or `aqueduct patch pull <patch_id> --blueprint <bp>` — then applies + commits it:
+
+```bash
+aqueduct patch import received-patch.json --blueprint pipeline.yml
+# → applies the patch, then `git commit` with a structured ---aqueduct--- trailer
+```
+
+`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml) — a snippet you own, not a maintained Action.
 
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
