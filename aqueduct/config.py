@@ -647,6 +647,29 @@ class WarningsConfig(BaseModel):
     )
 
 
+class LineageConfig(BaseModel):
+    """Phase 55 — OpenLineage emission.
+
+    Top-level `lineage:` block. **Naming collision:** this is NOT
+    `stores.lineage`, which has been inert since Phase 38 (column lineage merged
+    into the observability store). `stores.lineage` configures a (dead) store
+    backend; this block configures *emission* of OpenLineage run events.
+
+    When `openlineage_url` is unset (default), no events are emitted — zero cost.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    openlineage_url: str | None = Field(
+        default=None,
+        description="OpenLineage receiver endpoint (Marquez / DataHub / Atlan). "
+                    "POST target for run events. Unset → emission disabled.",
+    )
+    openlineage_namespace: str = Field(
+        default="aqueduct",
+        description="OpenLineage namespace for jobs and datasets emitted by this engine.",
+    )
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -666,6 +689,7 @@ class AqueductConfig(BaseModel):
     danger: DangerConfig = Field(default_factory=DangerConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
+    lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: "WarningsConfig" = Field(default_factory=lambda: WarningsConfig())
     spark_config: dict[str, Any] = Field(

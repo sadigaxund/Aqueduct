@@ -391,6 +391,7 @@ class Surveyor:
         patches_dir: Path | None = None,
         stores: "StoreBundle | None" = None,
         blob_config: tuple[str, str] | None = None,
+        lineage_config: tuple[str, str] | None = None,
     ) -> None:
         """Initialise the Surveyor.
 
@@ -416,6 +417,18 @@ class Surveyor:
         # backend rooted at store_dir, byte-identical to the historical layout.
         self._blob_config = blob_config
         self._blob_store_cached: "BlobStore | None" = None
+        # Phase 55 — OpenLineage emitter. Built only when a url is configured
+        # (lineage.openlineage_url); otherwise emission is off, zero cost.
+        self._openlineage = None
+        if lineage_config is not None and lineage_config[0]:
+            try:
+                from aqueduct.surveyor.openlineage import OpenLineageEmitter
+                self._openlineage = OpenLineageEmitter(
+                    url=lineage_config[0], namespace=lineage_config[1] or "aqueduct",
+                    manifest=manifest,
+                )
+            except Exception:  # noqa: BLE001 — never let lineage setup break a run
+                self._openlineage = None
         self._run_id: str | None = None
         self._started_at: datetime | None = None
         self._stores: "StoreBundle | None" = stores
@@ -499,6 +512,10 @@ class Surveyor:
 
         self._started = True
 
+        # Phase 55 — emit the OpenLineage START event (daemon thread, best-effort).
+        if self._openlineage is not None:
+            self._openlineage.emit("START", run_id=run_id, event_time=_iso(self._started_at))
+
     def register_iteration(self, *, run_id: str, parent_run_id: str) -> None:
         """Register a multi-patch iteration's per-execute run_id.
 
@@ -575,6 +592,9 @@ class Surveyor:
             )
 
         if result.status == "success":
+            # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).
+            if self._openlineage is not None:
+                self._openlineage.emit("COMPLETE", run_id=result.run_id, event_time=_iso(finished_at))
             return None
 
         # ── Build FailureContext ───────────────────────────────────────────────
@@ -701,6 +721,13 @@ class Surveyor:
                 "attempt": str(attempt),
             }
             fire_webhook(self._webhook_config, ctx.to_dict(), template_vars, event="on_failure")
+
+        # Phase 55 — terminal OpenLineage FAIL with the error message facet.
+        if self._openlineage is not None:
+            self._openlineage.emit(
+                "FAIL", run_id=result.run_id, event_time=_iso(finished_at),
+                error_message=ctx.error_message,
+            )
 
         return ctx
 

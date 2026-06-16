@@ -534,6 +534,22 @@ Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py
 
 Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds.
 
+## **7.4 OpenLineage Emission (1.2)**
+
+When `lineage.openlineage_url` is set, the Surveyor emits **OpenLineage** RunEvents to an OpenLineage-compatible backend (Marquez, DataHub, Atlan): `START` on run begin, `COMPLETE` on success, `FAIL` on terminal failure (with an `errorMessage` run facet). Delivery uses the same async daemon-thread pattern as webhooks — non-blocking, best-effort, zero hot-path cost; the blueprint result is authoritative and a dropped event is logged, never raised. Events POST to `<openlineage_url>/api/v1/lineage`.
+
+Each event maps Ingress modules → input datasets and Egress modules → output datasets. The **output datasets carry the column-level `columnLineage` facet** — built from the same compile-time lineage rows that populate `column_lineage` (`compiler.lineage.compute_lineage_rows`), so field-to-field arrows render downstream. sqlglot resolves ~90% of SparkSQL; unresolved columns fall back to `UNKNOWN`. The Aqueduct `run_id` is mapped to a deterministic UUIDv5 (`run`/`runId` correlate across START and COMPLETE/FAIL).
+
+**Config — top-level `lineage:` block:**
+
+```yaml
+lineage:
+  openlineage_url: "http://marquez:5000"   # unset (default) → emission disabled
+  openlineage_namespace: aqueduct          # namespace for jobs + datasets
+```
+
+> **Naming collision:** this top-level `lineage:` block is **not** `stores.lineage`. `stores.lineage` is an inert store-backend config (column lineage merged into the observability store in Phase 38, §3.2); the `lineage:` block configures OpenLineage *emission*.
+
 ---
 
 # **8. Self-Healing & LLM Agent Loop**
