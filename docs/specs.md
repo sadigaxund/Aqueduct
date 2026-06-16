@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.1 — Reference Document**
+**Version 1.2 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -100,7 +100,8 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
 | **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is inert. |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
+| **Object Store** (1.2+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the pre-1.2 on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 
 ## **3.3 Component Interaction Flow**
 
@@ -545,7 +546,9 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade (Phase 46): each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
 
-**Signature memory (Phase 45).** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs from `patches/applied/` as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+**Signature memory (Phase 45).** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+
+As of 1.2, the heal cache resolves through SQL queries against the **`patch_index`** observability table (status + signature + body `object_key`) rather than scanning the `patches/` directory — identical behaviour, but backend-blind, so the cache works when patch bodies live on s3/gcs/adls (the replay path fetches the one body it needs from the PatchStore by `object_key`). Patch bodies are written through the PatchStore (`pending` / `applied` / `rejected`) and every status transition is recorded in `patch_index`; local-checkout commands (`patch apply` / `patch reject`) stay on the filesystem but flip the index status so the cache stays consistent.
 
 ## **8.2 The Healing Flow**
 
@@ -621,6 +624,16 @@ Only after every gate passes does the patch run against the real pipeline. The o
 | `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run |
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
+
+**Config key (1.2).** `agent.approval` is the canonical key; `agent.approval_mode` is a deprecated input alias that still parses with a `[deprecated]` warning (removed in the `aqueduct: "2.0"` schema). `approval: aggressive` is a deprecated alias for `auto` + `max_patches > 1`, and `aggressive_max_patches` aliases `max_patches`.
+
+**`ci` mode — the CI kit (1.2).** In `ci` mode the patch is staged and the `on_patch_pending` webhook fires a POST to `agent.ci_webhook_url`. The engine ships **no** long-running receiver and **no** versioned GitHub Action — a CI runner you own receives the payload, obtains the patch body (a run artefact, or `aqueduct patch pull`), and applies + commits it in one step:
+
+```bash
+aqueduct patch import received-patch.json --blueprint pipeline.yml
+```
+
+`patch import` is `patch apply` + `patch commit` atomically (`--no-commit` stages only), writing a structured `---aqueduct---` commit trailer that `aqueduct patch log` / `rollback` read back. The webhook payload schema (envelope keys `patch_id` / `run_id` / `blueprint_id` / `failed_module` / `source` plus the body's `_aq_meta`) and a copy-paste example workflow wiring `import` + `gh pr create` are documented in the **[Production Guide](production_guide.md)**.
 
 ## **8.4 Sandbox Modes**
 
@@ -736,6 +749,8 @@ Aqueduct reads a project-level `aqueduct.yml` configuration file from the workin
 - Aqueduct automatically loads `.env` from the directory of the config or blueprint file.
 - Override with `-e KEY=VAL` (highest precedence) or `--env-file <path>`.
 - Disable entirely with `AQ_NO_ENV_FILE=1`.
+
+**Config overrides (`-s/--set`, 1.2).** `aqueduct run -s agent.approval=human -s stores.observability.backend=postgres …` sets dotted-path keys in the loaded `aqueduct.yml` config in memory for that invocation — repeatable, applied after the file is read and before validation. Distinct from `--ctx` (which sets Blueprint Context Registry values, not engine config). Values are parsed as YAML scalars (`true`/`123`/strings).
 
 ## **10.3 SparkSession Lifecycle**
 
