@@ -74,6 +74,10 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
+    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    mock_surveyor_cls.return_value.observability = None
+    mock_surveyor_cls.return_value.patch_store.return_value = None
+    
     # 1. First run fails
     mock_exec.side_effect = [
         ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", 
@@ -108,6 +112,10 @@ def test_aggressive_mode_fails_then_continues(
     patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
+    
+    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    mock_surveyor_cls.return_value.observability = None
+    mock_surveyor_cls.return_value.patch_store.return_value = None
     
     # 1. Sequence of results: Error (Initial) -> Error (Patch 1) -> Error (Patch 2)
     mock_exec.side_effect = [
@@ -164,6 +172,10 @@ def test_aggressive_mode_succeeds_stops_loop(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
+    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    mock_surveyor_cls.return_value.observability = None
+    mock_surveyor_cls.return_value.patch_store.return_value = None
+    
     # 1. Error -> Success
     mock_exec.side_effect = [
         ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", 
@@ -196,6 +208,10 @@ def test_trigger_agent_escalation(
     patch("aqueduct.cli._agent_usable", return_value=True).start()
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
+    
+    # Prevent the MagicMock Surveyor from poisoning find_pending/find_replay_candidate
+    mock_surveyor_cls.return_value.observability = None
+    mock_surveyor_cls.return_value.patch_store.return_value = None
     
     # Update blueprint to disabled
     base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: disabled"))

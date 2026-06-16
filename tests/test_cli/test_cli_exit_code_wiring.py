@@ -142,6 +142,9 @@ def test_run_human_mode_stages_patch_exits_3(
     mock_surveyor = MagicMock()
     mock_surveyor.record.return_value = _make_failure_context(exec_res.run_id)
     mock_surveyor_cls.return_value = mock_surveyor
+    # Prevent MagicMock from poisoning find_pending/find_replay_candidate
+    mock_surveyor.observability = None
+    mock_surveyor.patch_store.return_value = None
 
     mock_gen.return_value = MagicMock(patch=_make_patch("p-human-001"))
 
@@ -173,6 +176,8 @@ def test_run_ci_mode_stages_patch_exits_3(
     mock_surveyor = MagicMock()
     mock_surveyor.record.return_value = _make_failure_context(exec_res.run_id)
     mock_surveyor_cls.return_value = mock_surveyor
+    mock_surveyor.observability = None
+    mock_surveyor.patch_store.return_value = None
 
     mock_gen.return_value = MagicMock(patch=_make_patch("p-ci-001"))
 
@@ -237,6 +242,8 @@ def test_run_auto_mode_patch_succeeds_exits_0(
         None,   # second record after patch success
     ]
     mock_surveyor_cls.return_value = mock_surveyor
+    mock_surveyor.observability = None
+    mock_surveyor.patch_store.return_value = None
 
     # Recovered-patch downgrade policy (CHANGELOG [Unreleased] Added): when
     # ``recovery_applied`` is non-empty, auto-apply forfeits and the CLI

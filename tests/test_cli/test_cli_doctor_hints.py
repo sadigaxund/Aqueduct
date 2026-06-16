@@ -60,6 +60,9 @@ def test_doctor_warn_adds_hints_before_agent(
         doctor_hints=[]
     )
     mock_surveyor_cls.return_value = mock_surveyor_instance
+    # Prevent MagicMock from poisoning find_pending/find_replay_candidate
+    mock_surveyor_instance.observability = None
+    mock_surveyor_instance.patch_store.return_value = None
     
     # Mock doctor to return a warning
     mock_check.return_value = [
@@ -113,6 +116,8 @@ def test_doctor_exception_swallowed_hints_empty(
         doctor_hints=[]
     )
     mock_surveyor_cls.return_value = mock_surveyor_instance
+    mock_surveyor_instance.observability = None
+    mock_surveyor_instance.patch_store.return_value = None
     
     # Mock doctor to throw exception
     mock_check.side_effect = Exception("Doctor crashed")
