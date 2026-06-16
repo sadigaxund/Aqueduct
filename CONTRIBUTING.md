@@ -36,8 +36,9 @@ Capability gates (`spark`, `agent`, `airflow`, `slow`) skip when the dependency 
 
 There is no hand-maintained test ledger — the suite is the source of truth.
 
-- **Need a test you haven't written?** Add a `@pytest.mark.todo("input → expected output/error")` stub. It auto-skips and shows up in `pytest --collect-only -m todo`. Delete the marker when the body is real.
+- **Need a test you haven't written?** Add a `@pytest.mark.todo("input → expected output/error")` stub to **`tests/test_backlog.py`** (the single landing file), with an `intended:` line for where it should ultimately live. It auto-skips and shows up in `pytest --collect-only -m todo`. When you implement it, move it to that path and drop the marker.
 - **Found a bug?** Write the test that *should* pass and mark it `@pytest.mark.xfail(strict=True, reason="bug: …")`. `xfail_strict` is on, so the build fails the instant the bug is fixed — forcing you to drop the marker. No status is ever flipped by hand.
+- **Honesty guard:** `tests/test_meta_quality.py` fails the build if any test asserts nothing (and isn't a `todo`/`xfail` stub). Every test must check an outcome.
 
 (The old `TEST_MANIFEST.md` is frozen in `docs/archive/` for history only.)
 

@@ -148,8 +148,8 @@ def test_surveyor_orchestration_webhook_firing(manifest, tmp_path):
 def test_surveyor_stop_idempotent(manifest, tmp_path):
     surveyor = Surveyor(manifest, store_dir=tmp_path)
     surveyor.start("r1")
-    surveyor.stop()
-    surveyor.stop()  # Should not raise
+    assert surveyor.stop() is None
+    assert surveyor.stop() is None  # second stop is an idempotent no-op
 
 
 def test_surveyor_multi_run_persistence(manifest, tmp_path):

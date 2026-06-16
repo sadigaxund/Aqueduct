@@ -198,7 +198,8 @@ def test_maintenance_timing_written_to_obs_db(spark, tmp_path):
 def test_write_maintenance_metrics_store_dir_none_no_crash():
     """_write_maintenance_metrics with store_dir=None → no-op, no crash."""
     from aqueduct.executor.spark.executor import _write_maintenance_metrics
-    _write_maintenance_metrics("m1", "run-1", {"optimize_ms": 10, "vacuum_ms": None}, None)
+    # store_dir=None → silent no-op: returns None, persists nothing
+    assert _write_maintenance_metrics("m1", "run-1", {"optimize_ms": 10, "vacuum_ms": None}, None) is None
 
 
 def test_write_maintenance_metrics_db_error_debug_only(tmp_path, caplog):

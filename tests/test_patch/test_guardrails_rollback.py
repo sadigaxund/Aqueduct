@@ -38,7 +38,7 @@ class TestGuardrails:
     def test_no_restrictions_always_pass(self):
         bp = _bp_with_guardrails()
         spec = _patch({"op": "remove_module", "module_id": "x"})
-        _check_guardrails(spec, bp)  # no raise
+        assert _check_guardrails(spec, bp) is None  # passes → returns None, no raise
 
     def test_forbidden_op_blocks(self):
         bp = _bp_with_guardrails(forbidden_ops=("remove_module",))
@@ -59,7 +59,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "x",
             "key": "path", "value": "s3a://prod/orders/",
         })
-        _check_guardrails(spec, bp)
+        assert _check_guardrails(spec, bp) is None  # path in allowlist → passes
 
     def test_set_key_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -76,7 +76,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "x",
             "key": "format", "value": "/etc/passwd",
         })
-        _check_guardrails(spec, bp)  # no raise — only path/output_path checked
+        assert _check_guardrails(spec, bp) is None  # only path/output_path keys are checked
 
     def test_set_key_arcade_expanded_id_skipped(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))
@@ -84,7 +84,7 @@ class TestGuardrails:
             "op": "set_module_config_key", "module_id": "arcade__ingress",
             "key": "path", "value": "s3a://staging/anywhere/",
         })
-        _check_guardrails(spec, bp)  # skipped — apply step gives clearer error
+        assert _check_guardrails(spec, bp) is None  # arcade-expanded id skipped here
 
     # ── replace_module_config path enforcement (regression for bypass bug) ────
     def test_replace_config_path_matching_passes(self):
@@ -93,7 +93,7 @@ class TestGuardrails:
             "op": "replace_module_config", "module_id": "x",
             "config": {"format": "parquet", "path": "s3a://prod/orders/"},
         })
-        _check_guardrails(spec, bp)
+        assert _check_guardrails(spec, bp) is None  # config path in allowlist → passes
 
     def test_replace_config_path_non_matching_blocks(self):
         bp = _bp_with_guardrails(allowed_paths=("s3a://prod/*",))

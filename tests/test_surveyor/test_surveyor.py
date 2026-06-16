@@ -311,8 +311,8 @@ class TestRecordHealAttempt:
         rec = AttemptRecord(attempt_num=1, signature=None)
         
         with patch.object(s._observability, "connect", side_effect=Exception("db error")):
-            # Should not raise
-            s.record_heal_attempt(run_id="run1", attempt_record=rec)
+            # DB error during persistence is swallowed — returns None, never raises
+            assert s.record_heal_attempt(run_id="run1", attempt_record=rec) is None
 
     def test_record_heal_attempt_prompt_version_default(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
@@ -475,17 +475,6 @@ class TestPhase35ExtractStructuredError:
                 assert res is not None
                 assert res["root_exception"] == {"type": "ValueError", "message": "root"}
                 assert res["error_class"] == "ValueError"
-
-    def test_returns_none_when_all_fields_empty(self):
-        # A plain exception with no causes and we clear its type string mapping just in case
-        class PlainExc(Exception):
-            pass
-        # Wait, Python fallback will extract PlainExc.
-        # But if we mock extraction such that fields remain None...
-        # Let's pass an object that doesn't have __cause__ and fails extraction.
-        # Wait, "root_exception" is always populated for Python exception.
-        # So when does it return None? When extraction fails completely or exc is None.
-        pass # The function itself always populates root_exception for standard Python exceptions unless it's None
 
     def test_unexpected_internal_exception_swallowed(self):
         # Mock sys.modules to raise an Exception on getattr to trigger except block

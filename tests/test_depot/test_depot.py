@@ -75,7 +75,8 @@ def test_depot_get_db_access_error(tmp_path, monkeypatch):
 
 def test_depot_close_no_op(tmp_path):
     store = DepotStore(tmp_path / "store.db")
-    store.close()  # must not raise
+    assert store.close() is None
+    assert store.close() is None  # idempotent — a second close is also a no-op
 
 
 def test_depot_get_after_put_no_read_only_error(tmp_path):

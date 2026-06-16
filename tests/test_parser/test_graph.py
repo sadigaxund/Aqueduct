@@ -111,7 +111,8 @@ class TestParserGraph:
             Module(id="m1", type="Channel", label="M1", config={}, spillway="eg1"),
             Module(id="eg1", type="Egress", label="Eg1", config={}),
         )
-        validate_spillway_targets(list(modules))  # should not raise
+        # valid spillway target → passes, returns None (the invalid case raises)
+        assert validate_spillway_targets(list(modules)) is None
 
 
 class TestParserGraphTopologicalSort:

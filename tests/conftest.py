@@ -22,12 +22,26 @@ os.environ.setdefault("AQ_TESTING", "1")
 # living backlog. Known bugs use `@pytest.mark.xfail(strict=True, reason=...)`
 # instead, which fails the moment the bug is fixed (see pyproject xfail_strict).
 
+_LAYER_OR_CAP = {"unit", "integration", "e2e", "spark", "agent", "airflow", "todo"}
+
+
 def pytest_collection_modifyitems(config, items):
     for item in items:
-        marker = item.get_closest_marker("todo")
-        if marker is not None:
-            reason = (marker.args[0] if marker.args else None) or "todo: unwritten test"
+        # 1. todo → auto-skip with its reason as the spec.
+        todo = item.get_closest_marker("todo")
+        if todo is not None:
+            reason = (todo.args[0] if todo.args else None) or "todo: unwritten test"
             item.add_marker(pytest.mark.skip(reason=f"todo: {reason}"))
+        # 2. Default-layer marker: every test gets exactly one layer without
+        # editing 1788 files. A test that declares no layer/capability marker
+        # and doesn't pull the real Spark session is, by definition, a `unit`.
+        # Tests using the `spark` fixture are treated as `spark` (integration).
+        existing = {m.name for m in item.iter_markers()}
+        if not (existing & _LAYER_OR_CAP):
+            if "spark" in getattr(item, "fixturenames", ()):  # type: ignore[arg-type]
+                item.add_marker(pytest.mark.spark)
+            else:
+                item.add_marker(pytest.mark.unit)
 
 
 # ── Agent / LLM testing policy ────────────────────────────────────────────────

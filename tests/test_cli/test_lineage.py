@@ -129,8 +129,8 @@ class TestWriteLineage:
             _mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),
         )
         edges = (_edge("src", "ch1"),)
-        # Should not raise despite no store
-        write_lineage("pipe1", "run1", modules, edges, observability_store=None)
+        # no store → graceful no-op, returns None, never raises
+        assert write_lineage("pipe1", "run1", modules, edges, observability_store=None) is None
 
     def test_non_channel_modules_produce_no_rows(self, tmp_path):
         import duckdb
@@ -161,7 +161,14 @@ class TestWriteLineage:
         monkeypatch.setattr("aqueduct.compiler.lineage._extract_sql_lineage", bad_extract)
         modules = (_mod("ch1", "Channel", {"op": "sql", "query": "SELECT a FROM src"}),)
         edges = (_edge("src", "ch1"),)
-        write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store)
+        # extraction blew up → swallowed, no partial rows persisted
+        assert write_lineage("pipe1", "run1", modules, edges, observability_store=obs_store) is None
+        with obs_store.connect() as cur:
+            try:
+                n = cur.execute("SELECT COUNT(*) FROM column_lineage").fetchone()[0]
+            except Exception:
+                n = 0  # table never created → also "no rows"
+            assert n == 0
 
     def test_duckdb_failure_does_not_propagate(self, tmp_path, monkeypatch):
         import duckdb as _duckdb

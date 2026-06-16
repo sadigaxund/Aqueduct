@@ -281,8 +281,9 @@ Capability gates (`spark`, `agent`, `airflow`, `slow`) compose with a layer mark
 
 `TEST_MANIFEST.md` (now frozen in `docs/archive/`) is gone. The suite itself is the source of truth for what passes; do **not** maintain a parallel ledger. Track gaps in code:
 
-- **Unwritten test** → write a `@pytest.mark.todo("what input → what output/error")` stub (with whatever asserts you can already express). It auto-skips; `pytest --collect-only -m todo` is the living backlog. Delete the marker when the body is real — never flip a status by hand.
-- **Known bug / regression to fix** → write the test that *should* pass and mark it `@pytest.mark.xfail(strict=True, reason="bug: …")`. `xfail_strict` is on, so the build FAILS the moment the bug is fixed, forcing the marker's removal. ❌→✅ maintains itself.
+- **Unwritten test** → add a `@pytest.mark.todo("what input → what output/error")` stub to **`tests/test_backlog.py`** — the single low-friction landing zone (keeps the manifest's one-place-to-append ergonomics). Give it an `intended:` line (where the real test should live) + a `context:` note. It auto-skips; `pytest --collect-only -m todo` is the living backlog. When you implement it, write the body and **move it to the `intended:` path**, deleting the stub from `test_backlog.py`. Never flip a status by hand.
+- **Known bug / regression to fix** → write the test that *should* pass and mark it `@pytest.mark.xfail(strict=True, reason="bug: …")` (in `test_backlog.py` or in place). `xfail_strict` is on, so the build FAILS the moment the bug is fixed, forcing the marker's removal. ❌→✅ maintains itself.
+- **Enforcement** → `tests/test_meta_quality.py::test_no_zero_assertion_tests` fails the build if any test verifies nothing (no `assert` / `raises` / `warns` / mock-assert / asserting-helper) and isn't a `todo`/`xfail` stub. A test that runs code but checks no outcome is the cheating it catches.
 
 When fixing a bug, add a regression test capturing the broken→expected behavior so it can't recur silently.
 
