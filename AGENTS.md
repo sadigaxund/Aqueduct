@@ -9,7 +9,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 
 | Doc | Owns | When to read |
 |---|---|---|
-| `docs/specs.md` | Blueprint format, architecture (4-layer), Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Spark Integration §10, Engine Scope §13 | Domain semantics, anything user-facing about the engine itself |
+| `docs/specs.md` | Blueprint format, architecture (4-layer) §3, Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Deployment & Spark Integration §10, Engine Scope §11 | Domain semantics, anything user-facing about the engine itself |
 | `docs/cli_reference.md` | Every CLI command and flag with defaults | Touching `@click.option` / new subcommand in `aqueduct/cli/`, or answering "what flag does X" |
 | `docs/observability_guide.md` | Store schemas (run_records, heal_attempts, healing_outcomes, failure_contexts, column_lineage, benchmark_results, patch_simulation, signal_overrides, explain_snapshot, probe_signals, module_metrics, maintenance_metrics, depot_kv) + diagnostic SQL cookbook | DDL / `ALTER TABLE` changes in `aqueduct/surveyor/` or `aqueduct/executor/`, or writing post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, performance, tuning, Spark behavior gotchas | Modifying Executor modules, adding Channel ops, debugging Spark perf |
@@ -86,12 +86,16 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 
 `docs/specs.md` is the **engine reference** for semantics that don't belong elsewhere. Production / CLI / observability / Spark-tuning details now live in their dedicated guides (see Documentation map). Phase / sprint / development artefacts (`Phase 35`, `Sprint 7`, `Task NN`, `pre-30a`, `deferred to Phase NN`, etc.) belong **only** in `CHANGELOG.md` and `TODOs.md`. Never in: source code (`aqueduct/**/*.py`), docs (`docs/**/*.md`), templates (`aqueduct/templates/**`), gallery (`gallery/**`), or user-facing scaffolding (`README.md`, `CONTRIBUTING.md`). Verify with `grep -rnE "Phase [0-9]|Sprint [0-9]|Task [0-9]" aqueduct/ docs/ gallery/ README.md CONTRIBUTING.md` before commits that touched any of those surfaces.
 
+> **specs.md drift is the easy failure mode.** The matrix below routes most work to the *dedicated* guides, so specs.md — the engine reference — is the doc that silently goes stale (it lagged 6 phases once, 1.1 → 1.2). It is **not** a catch-all of last resort: any change to a documented **contract** must update specs.md *in the same commit* — a new/renamed `aqueduct.yml` key or top-level block, a new `stores.*` backend or persistent store/table, an `agent.approval` mode/value or exit-code change, a new patch op or CLI contract (not just a flag). When such a change lands, also **bump the `Version X.Y` header** at the top of specs.md. Phase-end verification: `git log -1 --format=%h -- docs/specs.md` should not be many phases behind `aqueduct/config.py` / `aqueduct/stores/` / `aqueduct/cli/` if any of those changed a contract this phase.
+
 | If you change … | You must update … |
 | :- | :- |
 | Any DDL or `ALTER TABLE` in `aqueduct/surveyor/` or `aqueduct/executor/` | `docs/observability_guide.md` schema table; if the new column enables a meaningful diagnostic, add a cookbook recipe (When → What you learn → What to do next) |
 | Any `@click.option` / new sub-command in `aqueduct/cli/` | `docs/cli_reference.md` flag table (include default value) |
 | Any pydantic field in `aqueduct/config.py` or `aqueduct/parser/schema.py` | The corresponding template comment block (`aqueduct.yml.template` for engine config, `blueprints/blueprint.yml.template` for Blueprint) |
 | Any `StopReason`, `BudgetConfig`, or apply-gate behaviour | `docs/specs.md` §8 + `docs/observability_guide.md` `heal_attempts` section |
+| Any new/renamed `aqueduct.yml` key, top-level config block, or `stores.*` backend / persistent store / table | `docs/specs.md` (§3.2 stores, §10 config, or the relevant section) **and** bump the specs.md `Version X.Y` header + the template comment block (row above) |
+| Any change to `agent.approval` modes/values, the patch-grammar op list, or the exit-code contract | `docs/specs.md` §8 (Approval Modes / Patch Grammar) + §10.7 exit-code table |
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
 | Any Spark compiler-warning, performance, or tuning behaviour | `docs/spark_guide.md` |
 | Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` |
