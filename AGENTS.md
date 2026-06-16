@@ -217,7 +217,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `parse.py` | `_parse_patch_spec`, `_detect_structural_error`, `_format_reprompt_error`, `_format_reprompt_for_next_turn` | Response parsing, structural error detection, reprompt formatting |
 | `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop (`pause_clock()` excludes gate time) |
 | `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for budget + heal cache + coaching) |
-| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Phase 45 signature memory — zero-token lookups over patch lifecycle dirs (pending reuse, exact replay, coaching retrieval) |
+| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Signature memory — zero-token heal-cache lookups (pending reuse, exact replay, coaching retrieval). Phase 53: backed by the `patch_index` SQL table (`patch/index.py`), not a `patches/` dir scan; takes an `obs_store` (+ `patch_store` for replay bodies) |
 
 **When adding a feature:**
 - New LLM provider → add `_call_<provider>()` in `providers.py`, wire in `_call_agent()`
@@ -225,7 +225,7 @@ whenever a package is restructured — use it as the first filter before greppin
 - New recovery pattern → add to `_parse_patch_spec()` in `parse.py`
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
-- New heal-cache lookup → add to `memory.py` (pure file reads — no LLM calls, no DB connections)
+- New heal-cache lookup → add the SQL to `patch/index.py`, surface it via `memory.py` (an `obs_store` query — no LLM calls)
 
 ## Git & Commit Conventions
 

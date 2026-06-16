@@ -155,6 +155,15 @@ _SELECT_COLS = [
 _SELECT = ", ".join(_SELECT_COLS)
 
 
+def get(cur: RelationalCursor, patch_id: str) -> dict | None:
+    """The index row for *patch_id*, or None (used by ``aqueduct patch pull``)."""
+    if not patch_id:
+        return None
+    cur.execute(f"SELECT {_SELECT} FROM patch_index WHERE patch_id = ? LIMIT 1", [patch_id])
+    r = cur.fetchone()
+    return _row_to_dict(_SELECT_COLS, r) if r else None
+
+
 def find_pending(cur: RelationalCursor, signature: str) -> dict | None:
     """Newest pending patch whose exact signature matches, or None."""
     if not signature:

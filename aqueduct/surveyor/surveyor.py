@@ -34,7 +34,7 @@ from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:
     from aqueduct.stores import ObservabilityStore, StoreBundle
-    from aqueduct.stores.object_store import BlobStore
+    from aqueduct.stores.object_store import BlobStore, PatchStore
 
 logger = logging.getLogger(__name__)
 
@@ -433,6 +433,20 @@ class Surveyor:
             backend, location = self._blob_config or ("local", "")
             self._blob_store_cached = make_blob_store(backend, location, self._store_dir)
         return self._blob_store_cached
+
+    @property
+    def observability(self) -> "ObservabilityStore | None":
+        """The active observability store (backs the patch_index + heal cache)."""
+        return self._observability
+
+    def patch_store(self) -> "PatchStore":
+        """Build the PatchStore from the configured object-store backend.
+
+        Local default reproduces the historical ``patches/`` directory; an
+        object backend (s3/gcs/adls) persists where a cluster pod survives."""
+        from aqueduct.stores.object_store import make_patch_store
+        backend, location = self._blob_config or ("local", "")
+        return make_patch_store(backend, location, self._patches_dir)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

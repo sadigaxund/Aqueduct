@@ -226,7 +226,8 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         return None
 
 
-def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str) -> Any:
+def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,
+                              obs_store=None, patch_store=None) -> Any:
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
@@ -251,7 +252,8 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         _yaml_dump(patched, tmp_out)
         _os.replace(tmp_out, blueprint_path)
 
-        archive_patch(patch, patches_dir, failure_ctx, mode=mode)
+        archive_patch(patch, patches_dir, failure_ctx, mode=mode,
+                      patch_store=patch_store, obs_store=obs_store)
 
         # Re-parse + re-compile from updated file
         bp = parse(str(blueprint_path))
@@ -367,12 +369,14 @@ def _run_patch_gates_inline(
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 
-def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
+def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,
+                        obs_store=None, patch_store=None) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
         from aqueduct.agent import stage_patch_for_human
         stage_patch_for_human(patch, patches_dir, failure_ctx,
-                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                              patch_store=patch_store, obs_store=obs_store)
         # Reflect the actual on-disk filename (timestamp prefix added by
         # `_patch_filename`) instead of the bare patch_id.
         pending = patches_dir / "pending"
@@ -1599,6 +1603,10 @@ def run(
             blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
         )
         surveyor.start(run_id)
+        # Phase 53 — object-store patch lifecycle + patch_index heal cache.
+        # Built once: the obs store backs the index, the patch store the bodies.
+        _obs_store = surveyor.observability
+        _patch_store = surveyor.patch_store()
 
         # ── Engine session ────────────────────────────────────────────────────────
         merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
@@ -1740,16 +1748,14 @@ def run(
                 # 1) Pending-patch reuse — same failure already has a patch
                 #    awaiting review; re-healing it would burn tokens on a
                 #    duplicate. Surface the existing patch and stop.
-                _pending_hit = _heal_memory.find_pending(_sig_exact.hash, patches_dir)
+                _pending_hit = _heal_memory.find_pending(_obs_store, _sig_exact.hash)
                 if _pending_hit is not None:
-                    _rel_pending = (
-                        _pending_hit.path.relative_to(_project_root)
-                        if _pending_hit.path.is_relative_to(_project_root) else _pending_hit.path
-                    )
+                    _rel_pending = f"{_patch_store.location_label}/{_pending_hit.object_key}"
                     click.echo(
                         f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
                         f"this failure signature ({_sig_exact.hash}) — skipping LLM (0 tokens)\n"
-                        f"    Review: aqueduct patch apply {_rel_pending} --blueprint {blueprint}",
+                        f"    Review: aqueduct patch pull {_pending_hit.patch_id}  "
+                        f"(body: {_rel_pending})",
                         err=True,
                     )
                     patch_staged_for_review = True
@@ -1779,7 +1785,7 @@ def run(
                 #    through the normal pipeline with zero LLM tokens; any
                 #    failure falls through to the LLM in this same iteration.
                 _candidate = _heal_memory.find_replay_candidate(
-                    _sig_exact.hash, patches_dir, surveyor.successful_patch_ids(),
+                    _obs_store, _patch_store, _sig_exact.hash, surveyor.successful_patch_ids(),
                 )
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
@@ -2024,6 +2030,7 @@ def run(
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                    obs_store=_obs_store,
                 )
             else:
                 agent_result = generate_agent_patch(
@@ -2048,6 +2055,7 @@ def run(
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                    obs_store=_obs_store,
                 )
             patch = agent_result.patch
             # Phase 46 — record the model that actually produced this result
@@ -2147,7 +2155,8 @@ def run(
                 click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source)
+                                      source=_patch_source,
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 click.echo(
                     f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
                     err=True,
@@ -2168,7 +2177,8 @@ def run(
             if effective_mode == "human":
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source)
+                                      source=_patch_source,
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
                     or patches_dir / "pending" / f"{patch.patch_id}.json"
@@ -2207,7 +2217,8 @@ def run(
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
                                       source=_patch_source,
-                                      webhook_event="on_ci_patch")
+                                      webhook_event="on_ci_patch",
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 click.echo(
                     f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
@@ -2265,6 +2276,7 @@ def run(
                     )
                     _stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     break
 
@@ -2275,7 +2287,8 @@ def run(
                     # Sandbox-only validation: write the patched Blueprint without
                     # running the full pipeline. The next regular `aqueduct run`
                     # will execute it against real data and real Egress sinks.
-                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ LLM patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
                         f"→ {blueprint}",
@@ -2323,7 +2336,8 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
                     result = result2
                     failure_ctx = failure_ctx2
@@ -2331,6 +2345,7 @@ def run(
                     click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
                     _stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     result = result2
                     failure_ctx = failure_ctx2
@@ -2399,7 +2414,8 @@ def run(
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
 
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ multi-patch: sandbox-only validated → {blueprint}",
                         err=True,
@@ -2456,7 +2472,8 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    _write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
@@ -2474,6 +2491,7 @@ def run(
                     )
                     _stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     result = result2
                     failure_ctx = failure_ctx2
@@ -2622,6 +2640,31 @@ def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
             break
         _search = _search.parent
     return project_root / "patches"
+
+
+def _patch_index_obs_store(blueprint_path: "Path | None" = None):
+    """Best-effort observability store for patch_index status updates (Phase 53).
+
+    Postgres → the shared DSN. DuckDB → the per-blueprint store when a blueprint
+    is known, else the configured default. Returns None on any failure — the
+    index update is best-effort and never blocks a local patch command."""
+    try:
+        from aqueduct.config import load_config
+        cfg = load_config(None)
+        if cfg.stores.observability.backend == "postgres":
+            from aqueduct.stores import get_stores
+            return get_stores(cfg).observability
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        if blueprint_path is not None:
+            from aqueduct.parser.parser import parse as _parse
+            bp_id = _parse(str(blueprint_path)).id
+            cand = Path(".aqueduct/observability") / bp_id / "observability.db"
+            if cand.exists():
+                return DuckDBObservabilityStore(cand)
+        default = Path(cfg.stores.observability.path)
+        return DuckDBObservabilityStore(default) if default.exists() else None
+    except Exception:
+        return None
 
 
 # ── patch command group ───────────────────────────────────────────────────────
@@ -2893,6 +2936,7 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
             blueprint_path=blueprint_path,
             patch_path=Path(patch_file),
             patches_dir=patches_root,
+            obs_store=_patch_index_obs_store(blueprint_path),
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -2943,6 +2987,7 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
             patch_id=patch_id,
             reason=reason,
             patches_dir=resolved_patches_dir,
+            obs_store=_patch_index_obs_store(),
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
@@ -2951,6 +2996,68 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
     click.echo(f"✓ patch rejected  id={patch_id}")
     click.echo(f"  archived → {rejected_path}")
     click.echo(f"  reason: {reason}")
+
+
+@patch.command("pull")
+@click.argument("patch_id")
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint the patch belongs to (locates the index + patches dir)",
+)
+@click.option(
+    "--out",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Output directory (default: <blueprint-dir>/patches/pending)",
+)
+def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
+    """Fetch a patch body from the object store into a local checkout for review.
+
+    Profile C — the pipeline heals on a cluster and stages the patch to an
+    object store (s3/gcs/adls); this pulls the body down so you can `git diff`
+    and apply it locally. With a local object store this just copies the file.
+    """
+    from pathlib import Path
+
+    from aqueduct.config import load_config
+    from aqueduct.patch import index as _ix
+    from aqueduct.stores.object_store import make_patch_store
+
+    blueprint_path = Path(blueprint)
+    patches_root = _patches_root_from_blueprint(blueprint_path)
+    cfg = load_config(None)
+
+    obs = _patch_index_obs_store(blueprint_path)
+    if obs is None:
+        click.echo("✗ no observability store found — cannot resolve the patch index", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    try:
+        with obs.connect() as cur:
+            row = _ix.get(cur, patch_id)
+    except Exception as exc:
+        click.echo(f"✗ index query failed: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    if row is None:
+        click.echo(f"✗ patch {patch_id!r} not found in the index", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
+    try:
+        body = ps.get_text(str(row["object_key"]))
+    except Exception as exc:
+        click.echo(f"✗ could not read patch body at {row['object_key']!r}: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    out_dir = Path(out) if out else patches_root / "pending"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{patch_id}.json"
+    out_path.write_text(body, encoding="utf-8")
+
+    click.echo(f"✓ patch pulled  id={patch_id}  status={row['status']}")
+    click.echo(f"  → {out_path}")
+    click.echo(f"  review: git diff  •  apply: aqueduct patch apply {out_path} --blueprint {blueprint}")
 
 
 @patch.command("commit")

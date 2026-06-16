@@ -2960,3 +2960,17 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ⏳ Incremental Channel: watermark is read from and written to the Depot only; no `watermarks/*.json` file is created. With no Depot configured, the post-Egress watermark update logs a warning and persists nothing.
 - ⏳ Legacy migration: a pre-existing `store_dir/watermarks/<bp>__<ch>.json` sidecar is read into the Depot on next run and the file deleted (`_migrate_legacy_watermark_sidecar`).
 - ⏳ `schema_snapshot` probe writes its payload only to `probe_signals`; no `snapshots/<run_id>/*_schema.json` file is created.
+
+### Phase 53b — Patch lifecycle wired through PatchStore + patch_index
+
+`agent/loop.py`, `agent/memory.py`, `agent/prompts.py`, `patch/apply.py`, `cli.py patch pull`.
+
+- ⏳ `stage_patch_for_human(..., patch_store, obs_store)` writes the body via PatchStore (`patches/pending/`) AND upserts `patch_index` with `status='pending'` + the failure signature; `memory.find_pending(obs_store, sig)` then returns it.
+- ⏳ `archive_patch(..., patch_store, obs_store)` writes `patches/applied/` AND upserts `status='applied'`; `find_pending` no longer returns it (moved out of pending), `find_coaching_examples` + `_load_previous_patches` now include it.
+- ⏳ With only `patches_dir` (no patch_store/obs_store), stage/archive still write local files (back-compat) and skip the index.
+- ⏳ `memory.find_replay_candidate(obs_store, patch_store, sig, {patch_id})` returns the applied row only when the id is in the successful set, and fetches the body (operations) from the object store via `object_key`.
+- ⏳ `memory.find_coaching_examples` tiers exact→coarse→error_class→fill from `patch_index`, deduped by patch_id, capped at 3; empty list when `obs_store` is None.
+- ⏳ `_load_previous_patches(obs_store)` returns most-recent applied patches (patch_id/description/ops) from `patch_index`; empty when `obs_store` is None.
+- ⏳ `apply_patch_file(..., obs_store)` flips `patch_index` status to `applied`; `reject_patch(..., obs_store)` flips it to `rejected` (best-effort, never raises).
+- ⏳ `aqueduct patch pull <id> --blueprint <bp>`: resolves the index row, reads the body from `stores.blob`, writes `<patches>/pending/<id>.json`; exits `DATA_OR_RUNTIME` when the id is unknown or the body is unreadable.
+- ⏳ Heal-cache content rendered into the system prompt is byte-identical between the old dir-scan and the index source for the same patches (no PROMPT_VERSION change).

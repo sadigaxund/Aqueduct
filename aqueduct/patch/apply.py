@@ -20,20 +20,18 @@ import fnmatch
 import json
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 from typing import Any
-
-from aqueduct.redaction import redact as _redact
-
-from io import StringIO
 
 from pydantic import ValidationError
 from ruamel.yaml import YAML
 
+from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
-from aqueduct.parser.parser import ParseError, parse
+from aqueduct.redaction import redact as _redact
 
 _ryaml = YAML()
 _ryaml.preserve_quotes = True
@@ -151,7 +149,7 @@ def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
 _CTX_REF_RE = __import__("re").compile(r"^\$\{ctx\.([a-zA-Z0-9_.]+)\}$")
 
 
-def _resolve_path_for_guardrail(value: Any, provenance_map: "Any | None") -> str:
+def _resolve_path_for_guardrail(value: Any, provenance_map: Any | None) -> str:
     """Resolve a ${ctx.*} template path to its runtime value via ProvenanceMap.
 
     Non-template values pass through unchanged. Used so allowed_paths fnmatch
@@ -172,7 +170,7 @@ def _check_path_against_allowlist(
     allowed_paths: list[str],
     op_name: str,
     module_id: str,
-    provenance_map: "Any | None",
+    provenance_map: Any | None,
     key_hint: str = "path",
 ) -> None:
     """Raise PatchError if a resolved path doesn't match any allowed_paths pattern."""
@@ -192,7 +190,7 @@ def _check_config_dict_paths(
     allowed_paths: list[str],
     op_name: str,
     module_id: str,
-    provenance_map: "Any | None",
+    provenance_map: Any | None,
 ) -> None:
     """Check path/output_path keys inside a module config dict (full or partial)."""
     if not isinstance(config, dict):
@@ -207,7 +205,7 @@ def _check_config_dict_paths(
 def _check_guardrails(
     patch_spec: PatchSpec,
     bp_raw: dict,
-    provenance_map: "Any | None" = None,
+    provenance_map: Any | None = None,
 ) -> None:
     """Deterministically enforce agent.guardrails declared in the Blueprint.
 
@@ -275,11 +273,25 @@ def _check_guardrails(
             )
 
 
+def _set_index_status(obs_store: Any | None, patch_id: str, status: str) -> None:
+    """Best-effort ``patch_index`` status update (Phase 53). Never raises."""
+    if obs_store is None:
+        return
+    try:
+        from aqueduct.patch import index as _ix
+        with obs_store.connect() as cur:
+            _ix.ensure_schema(cur)
+            _ix.set_status(cur, patch_id, status)
+    except Exception:
+        pass
+
+
 def apply_patch_file(
     blueprint_path: Path,
     patch_path: Path,
     patches_dir: Path = Path("patches"),
-    provenance_map: "Any | None" = None,
+    provenance_map: Any | None = None,
+    obs_store: Any | None = None,
 ) -> ApplyResult:
     """Full apply lifecycle: validate → apply → verify → backup → write → archive.
 
@@ -344,7 +356,7 @@ def apply_patch_file(
     applied_dir.mkdir(parents=True, exist_ok=True)
     archive_path = applied_dir / patch_path.name
 
-    applied_at = datetime.now(tz=timezone.utc).isoformat()
+    applied_at = datetime.now(tz=UTC).isoformat()
     try:
         raw_spec = json.loads(patch_path.read_text(encoding="utf-8"))
         raw_spec["applied_at"] = applied_at
@@ -356,6 +368,10 @@ def apply_patch_file(
     except Exception as exc:
         import sys
         print(f"[patch] warning: could not archive patch to {archive_path}: {exc}", file=sys.stderr)
+
+    # Phase 53 — mark the patch applied in the index so the heal cache can
+    # replay it (and stops surfacing it as still-pending).
+    _set_index_status(obs_store, patch_spec.patch_id, "applied")
 
     return ApplyResult(
         patch_id=patch_spec.patch_id,
@@ -370,6 +386,7 @@ def reject_patch(
     patch_id: str,
     reason: str,
     patches_dir: Path = Path("patches"),
+    obs_store: Any | None = None,
 ) -> Path:
     """Move a pending patch to patches/rejected/ with a reason annotation.
 
@@ -405,9 +422,11 @@ def reject_patch(
     except Exception as exc:
         raise PatchError(f"Cannot read pending patch {patch_id}: {exc}") from exc
 
-    raw["rejected_at"] = datetime.now(tz=timezone.utc).isoformat()
+    raw["rejected_at"] = datetime.now(tz=UTC).isoformat()
     raw["rejection_reason"] = reason
     rejected_path.write_text(json.dumps(_redact(raw), indent=2), encoding="utf-8")
     pending_path.unlink()
+
+    _set_index_status(obs_store, patch_id, "rejected")
 
     return rejected_path
