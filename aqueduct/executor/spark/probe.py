@@ -150,21 +150,18 @@ def _schema_snapshot(
     df: DataFrame,
     store_dir: Path,
 ) -> dict[str, Any]:
-    """Capture df.schema — zero Spark actions."""
+    """Capture df.schema — zero Spark actions.
+
+    Phase 53 — the payload is persisted only to the ``probe_signals``
+    observability table (by ``execute_probe``); the former local
+    ``snapshots/<run_id>/<probe>_schema.json`` sidecar was dropped so a driver
+    pod on an ephemeral filesystem leaves no artefacts."""
     # df.schema is always available on a lazy DataFrame
     fields = [
         {"name": f.name, "type": str(f.dataType), "nullable": f.nullable}
         for f in df.schema.fields
     ]
-    payload: dict[str, Any] = {"fields": fields}
-
-    # Write human-readable JSON file too
-    sig_dir = store_dir / "snapshots" / run_id
-    sig_dir.mkdir(parents=True, exist_ok=True)
-    (sig_dir / f"{probe_id}_schema.json").write_text(
-        json.dumps(payload, indent=2), encoding="utf-8"
-    )
-    return payload
+    return {"fields": fields}
 
 
 def _row_count_estimate(
@@ -426,7 +423,8 @@ def execute_probe(
     Writes one row per signal to the configured observability store
     (``store_dir/observability.db`` for DuckDB by default; Postgres `obs.probe_signals`
     when wired through Phase 28's `StoreBundle`).
-    For ``schema_snapshot``, also writes a JSON file under ``snapshots/``.
+    Every signal — including ``schema_snapshot`` — is persisted to
+    ``probe_signals`` only (Phase 53 dropped the local ``snapshots/`` sidecar).
 
     Args:
         module:    The Probe Module from the compiled Manifest.

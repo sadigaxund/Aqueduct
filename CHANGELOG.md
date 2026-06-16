@@ -16,6 +16,15 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Phase 53a — Pluggable object store for driver artefacts.** The driver no longer hard-writes observability blobs and the patch lifecycle to its local filesystem — both now route through a new `stores.blob` object store with a `local` default (byte-identical to the previous on-disk layout) plus `s3` / `gcs` / `adls` backends served by one `fsspec` handle (the new `[object-store]` extra, folded into `[stores]`). New `aqueduct/stores/object_store.py` introduces an `ObjectStore` transport over a pluggable `local`/`fsspec` backend with two semantic stores on top: `BlobStore` (zstd externalisation of `manifest_json` / `stack_trace` / `provenance_json`, absorbing the former `surveyor/blob_store.py`, which stays as a back-compat shim) and `PatchStore` (the `pending`/`applied`/`rejected` lifecycle). Groundwork for running on an ephemeral k8s pod that leaves no local-FS artefacts under its cwd.
+- **`patch_index` observability table.** New relational table recording the status + signature metadata of every patch (`pending` → `applied` | `rejected`) plus the body's `object_key` into the object store. It is the backend-blind truth that lets the heal cache resolve pending-reuse, replay, coaching, and prompt history with SQL instead of an `os.scandir` over `patches/` — created on `aqueduct run`, wired into the lifecycle in a follow-up.
+- **Extras policy codified.** `AGENTS.md` now documents the two-axis rule (per-vendor leaves + capability aggregates, no feature-named extras); the object store became the `object-store` leaf inside `[stores]`.
+
+### Changed
+- **Incremental-Channel watermark is persisted to the Depot only.** The local `watermarks/<bp>__<channel>.json` sidecar was dropped; a one-time migration reads any sidecar left by an older release into the Depot and deletes it. **Behavior change:** an incremental Channel now requires a configured Depot to persist its position — without one, each run re-scans all source data (a warning is logged). Configure `stores.depot`.
+- **`schema_snapshot` probe payloads live only in `probe_signals`.** The redundant local `snapshots/<run_id>/<probe>_schema.json` sidecar was removed; the payload was already written to the observability store.
+
 
 ## [1.2.1] — 2026-06-11
 

@@ -144,6 +144,17 @@ stores:
     # backend: redis
     # path: "redis://host:6379/0"
 
+  # Object store for observability blobs (fat manifest/stack/provenance
+  # columns) + the patch lifecycle (pending/applied/rejected). `local`
+  # (default) keeps the on-disk layout; on a cluster point it at object
+  # storage so an ephemeral pod leaves no local-FS artefacts.
+  blob:
+    backend: local
+    # path: ""   # local: base dir (empty → blobs under the obs dir, patches under cwd)
+    # Object-store example (uncomment + install `aqueduct-core[object-store]`):
+    # backend: s3            # or gcs | adls
+    # path: "s3://my-bucket/aqueduct"
+
 
 # ── Cluster / Cloud deployment example ───────────────────────────────────────
 #

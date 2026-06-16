@@ -29,6 +29,24 @@ AGENTS.md itself is process and constraint guidance only.
   - `sqlglot` — SQL lineage; do NOT write a custom SQL parser
   - `httpx` — HTTP client for webhooks and LLM calls; no `anthropic` SDK, no extra install needed
 
+## Packaging & Extras Policy
+
+Optional dependencies follow **two axes only — never invent a third.** Adding a
+feature-named extra (`[blob-s3]`, `[openlineage]`, `[drift]`) is forbidden; it
+multiplies the surface users have to reason about.
+
+- **Per-vendor leaves:** `aws`, `gcp`, `azure`, `postgres`, `redis`, `airflow`,
+  `object-store` — one SDK/capability each.
+- **Capability aggregates:** `secrets` (= aws+gcp+azure), `stores`
+  (= postgres+redis+object-store), `schedulers` (= airflow), `all`.
+
+A user installs an aggregate or a leaf. When a new optional dependency appears,
+map it onto an existing axis: reuse a vendor leaf if it's that vendor's SDK, or
+add a leaf that rolls up into the right aggregate. A genuinely new vendor → new
+leaf + add it to its aggregate. Never a standalone feature flag. (Example:
+Phase 53's object store became the `object-store` leaf inside `stores`; Phase 55
+OpenLineage adds **no** extra — `httpx` is already a base dep.)
+
 ## Code Organization & Safety
 - **4-layer boundary**: `Parser` → `Compiler` → `Executor` → `Surveyor`. Put logic in the correct layer. Only modify the layer relevant to the task. Topological sort, Probe insertion, and parallel-component detection are sub-steps inside the Executor — not a separate "Planner" layer.
 - **Dual-format contract**: Humans write YAML (`Blueprint`); engine consumes JSON (`Manifest`, `FailureContext`).
@@ -102,7 +120,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `scenario.py` | Scenario benchmark framework: `load_scenario`, `_build_failure_ctx`, effect-based grader |
 | `webhook.py` | HTTP dispatch in daemon thread, `${VAR}` template rendering, redaction |
 | `benchmark_store.py` | DuckDB persistence + regression detection for benchmark results |
-| `blob_store.py` | Zstd externalisation of fat columns (manifest_json, provenance_json, stack_trace) |
+| `blob_store.py` | Back-compat shim (Phase 53) — `externalise`/`materialize` delegate to `stores/object_store.BlobStore`; new code uses `make_blob_store` directly |
 
 ### `aqueduct/patch/` — PatchSpec grammar + apply + validation gates
 
@@ -111,6 +129,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `grammar.py` | `PatchSpec` Pydantic v2 model, 13 operation types, discriminated union |
 | `operations.py` | Per-op implementations against Blueprint dict, ruamel YAML round-trip |
 | `apply.py` | Apply orchestrator: load → deep-copy → apply ops → re-parse → archive |
+| `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind heal-cache lookups (pending/replay/coaching/history) without scanning `patches/` |
 | `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
 | `explain_gate.py` | Plan regression gate (Gate 4): compare Exchange/Broadcast counts before vs after |
 | `__init__.py` | Module description only |
@@ -123,6 +142,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `duckdb_.py` | DuckDB implementations (single-file embeddable) |
 | `postgres.py` | Postgres implementations (connection-pool dedup, schema-per-store) |
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
+| `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 
 ### `aqueduct/depot/` — Cross-run KV state
 

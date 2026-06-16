@@ -34,6 +34,7 @@ from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:
     from aqueduct.stores import ObservabilityStore, StoreBundle
+    from aqueduct.stores.object_store import BlobStore
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,7 @@ class Surveyor:
         blueprint_path: Path | None = None,
         patches_dir: Path | None = None,
         stores: "StoreBundle | None" = None,
+        blob_config: tuple[str, str] | None = None,
     ) -> None:
         """Initialise the Surveyor.
 
@@ -410,12 +412,27 @@ class Surveyor:
             self._webhook_config = None
         self._blueprint_path = blueprint_path
         self._patches_dir = patches_dir or Path("patches")
+        # Phase 53 — (backend, location) for the object store. None → local
+        # backend rooted at store_dir, byte-identical to the historical layout.
+        self._blob_config = blob_config
+        self._blob_store_cached: "BlobStore | None" = None
         self._run_id: str | None = None
         self._started_at: datetime | None = None
         self._stores: "StoreBundle | None" = stores
         self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
+
+    def _blob_store(self) -> "BlobStore | None":
+        """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
+        configured — programmatic callers without a store keep blobs inline."""
+        if self._store_dir is None:
+            return None
+        if self._blob_store_cached is None:
+            from aqueduct.stores.object_store import make_blob_store
+            backend, location = self._blob_config or ("local", "")
+            self._blob_store_cached = make_blob_store(backend, location, self._store_dir)
+        return self._blob_store_cached
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -445,6 +462,11 @@ class Surveyor:
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
             cur.execute(_PHASE45_MIGRATION_DDL)
+            # Phase 53 — patch index (relational truth for the object-store patch
+            # lifecycle). Created here so the heal cache can query it instead of
+            # scanning the patches/ directory.
+            from aqueduct.patch.index import ensure_schema as _ensure_patch_index
+            _ensure_patch_index(cur)
 
             cur.execute(
                 """
@@ -583,15 +605,14 @@ class Surveyor:
         # Phase 39 — externalise fat columns to compressed blobs so the DB
         # row stores only a relative path (DuckDB row width drops ~10×).
         # Postgres is unaffected — TOAST handles large JSON natively.
-        _blob_root = self._store_dir if self._store_dir is not None else None
         _manifest_json = _redact(json.dumps(self._manifest.to_dict()))
         _stack_trace_str = _redact(stack_trace) or ""
         _prov_json = _redact(provenance_json) or ""
-        if _blob_root is not None:
-            from aqueduct.surveyor.blob_store import externalise as _blob_ext
-            _manifest_json = _blob_ext(_manifest_json, _blob_root, result.run_id, "manifest")
-            _stack_trace_str = _blob_ext(_stack_trace_str, _blob_root, result.run_id, "stack")
-            _prov_json = _blob_ext(_prov_json, _blob_root, result.run_id, "prov")
+        _blob = self._blob_store()
+        if _blob is not None:
+            _manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
+            _stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
+            _prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
 
         ctx = FailureContext(
             run_id=result.run_id,

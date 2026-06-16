@@ -1596,6 +1596,7 @@ def run(
             blueprint_path=Path(blueprint),
             patches_dir=patches_dir,
             stores=bundle,
+            blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
         )
         surveyor.start(run_id)
 
@@ -4054,13 +4055,13 @@ def heal(
         stack_trace, manifest_json_raw, started_at, finished_at,
     ) = fc_row
 
-    # Phase 39 — materialize blob-externalised columns transparently.
-    # If the DB row stores a blob path (e.g. "blobs/<run_id>/manifest.json.zst"),
-    # load and decompress; otherwise the value is inline text.
-    _store_root = observability_db.parent
-    from aqueduct.surveyor.blob_store import materialize as _mat
-    _manifest_str = _mat(manifest_json_raw if isinstance(manifest_json_raw, str) else "", _store_root)
-    _stack_str = _mat(stack_trace or "", _store_root)
+    # Phase 39/53 — materialize blob-externalised columns transparently.
+    # If the DB row stores a blob marker ("blobs/<run_id>/manifest.json.zst"),
+    # load and decompress via the configured object store; otherwise inline text.
+    from aqueduct.stores.object_store import make_blob_store
+    _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, observability_db.parent)
+    _manifest_str = _blob.materialize(manifest_json_raw if isinstance(manifest_json_raw, str) else "")
+    _stack_str = _blob.materialize(stack_trace or "")
 
     target_module = module_id or failed_module
 

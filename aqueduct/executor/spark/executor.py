@@ -595,53 +595,57 @@ def _reachable_backward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
     return visited
 
 
-# ── Watermark sidecar helpers ─────────────────────────────────────────────────
+# ── Watermark persistence (Depot-only, Phase 53) ──────────────────────────────
+#
+# The incremental-Channel watermark is persisted to the Depot exclusively. The
+# legacy local-FS sidecar (``store_dir/watermarks/<bp>__<channel>.json``) was
+# dropped in Phase 53 so a driver pod on an ephemeral filesystem leaves no
+# artefacts. ``_migrate_legacy_watermark_sidecar`` performs a one-time read of
+# any sidecar left by an older release, writes it to the Depot, deletes the
+# file, and returns the value — so an in-flight incremental pipeline does not
+# lose its position across the upgrade.
 
-def _watermark_sidecar_path(store_dir: "Path | None", blueprint_id: str, channel_id: str) -> "Path | None":
+
+def _legacy_watermark_sidecar_path(
+    store_dir: "Path | None", blueprint_id: str, channel_id: str
+) -> "Path | None":
     if store_dir is None:
         return None
     return store_dir / "watermarks" / f"{blueprint_id}__{channel_id}.json"
 
 
-def _read_watermark_sidecar(store_dir: "Path | None", blueprint_id: str, channel_id: str) -> str | None:
-    """Read watermark value from local sidecar. Returns None if absent or unreadable."""
-    path = _watermark_sidecar_path(store_dir, blueprint_id, channel_id)
-    if path is None or not path.exists():
-        return None
-    try:
-        import json as _json
-        data = _json.loads(path.read_text(encoding="utf-8"))
-        return data.get("watermark") or None
-    except Exception:
-        return None
-
-
-def _write_watermark_sidecar(
+def _migrate_legacy_watermark_sidecar(
     store_dir: "Path | None",
     blueprint_id: str,
     channel_id: str,
-    watermark_value: str,
-    watermark_column: str,
-    run_id: str,
-) -> None:
-    """Atomically write watermark sidecar JSON to store_dir/watermarks/."""
-    path = _watermark_sidecar_path(store_dir, blueprint_id, channel_id)
-    if path is None:
-        return
-    from datetime import datetime, timezone
-    import json as _json
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    payload = {
-        "watermark": watermark_value,
-        "watermark_column": watermark_column,
-        "blueprint_id": blueprint_id,
-        "channel_id": channel_id,
-        "run_id": run_id,
-        "written_at": datetime.now(tz=timezone.utc).isoformat(),
-    }
-    tmp.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
-    tmp.replace(path)  # atomic rename
+    depot_key: str,
+    depot: "Any | None",
+) -> str:
+    """One-time migration of a pre-Phase-53 watermark sidecar into the Depot.
+
+    Returns the migrated watermark value (``""`` when no sidecar exists or it is
+    unreadable). When a Depot is configured the value is written through and the
+    sidecar file deleted, so the migration runs at most once.
+    """
+    path = _legacy_watermark_sidecar_path(store_dir, blueprint_id, channel_id)
+    if path is None or not path.exists():
+        return ""
+    try:
+        import json as _json
+        value = _json.loads(path.read_text(encoding="utf-8")).get("watermark") or ""
+    except Exception:
+        return ""
+    if value and depot is not None:
+        try:
+            depot.put(depot_key, value)
+            path.unlink()
+            logger.info(
+                "[%s] Migrated legacy watermark sidecar to depot (%s); sidecar removed.",
+                channel_id, depot_key,
+            )
+        except Exception:
+            logger.debug("[%s] Watermark sidecar migration failed", channel_id, exc_info=True)
+    return value
 
 
 def _compute_watermark_from_output(
@@ -992,10 +996,14 @@ def execute(
                     if _incremental:
                         _watermark_col = module.config.get("watermark_column", "")
                         _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
-                        # Sidecar takes priority over depot (eliminates re-scan of Egress output)
+                        # Phase 53 — Depot is the sole watermark store. A legacy
+                        # local sidecar (older release) is migrated into the Depot
+                        # once, then deleted.
                         _watermark_val = (
-                            _read_watermark_sidecar(store_dir, manifest.blueprint_id, module.id)
-                            or (depot.get(_depot_key, "") if depot else "")
+                            (depot.get(_depot_key, "") if depot else "")
+                            or _migrate_legacy_watermark_sidecar(
+                                store_dir, manifest.blueprint_id, module.id, _depot_key, depot
+                            )
                             or "1900-01-01 00:00:00"
                         )
                         _query = module.config.get("query", "")
@@ -1422,29 +1430,31 @@ def execute(
                             observability_store=observability_store,
                         )
 
-                # ── Sidecar watermark update ───────────────────────────────────
+                # ── Watermark update (Depot-only, Phase 53) ────────────────────
                 if module.id in _pending_watermarks:
                     _ch_id, _wm_col, _wm_depot_key = _pending_watermarks.pop(module.id)
                     _eg_path = module.config.get("path", "")
                     _eg_fmt = module.config.get("format", "parquet")
                     if _eg_path and _eg_fmt not in ("depot",):
                         _new_wm = _compute_watermark_from_output(spark, _eg_path, _eg_fmt, _wm_col)
-                        if _new_wm is not None:
-                            _write_watermark_sidecar(
-                                store_dir, manifest.blueprint_id, _ch_id,
-                                _new_wm, _wm_col, run_id,
-                            )
-                            if depot:
-                                depot.put(_wm_depot_key, _new_wm)
-                            logger.debug(
-                                "[%s] Watermark sidecar written: %s=%s",
-                                module.id, _wm_col, _new_wm,
-                            )
-                        else:
+                        if _new_wm is None:
                             logger.warning(
                                 "[%s] Could not compute watermark from output path %r; "
-                                "next run will use depot fallback.",
+                                "watermark not advanced this run.",
                                 module.id, _eg_path,
+                            )
+                        elif depot is None:
+                            logger.warning(
+                                "[%s] Incremental Channel %r advanced watermark to %s=%s but no "
+                                "depot is configured — it cannot be persisted, so the next run "
+                                "re-scans all source data. Configure stores.depot.",
+                                module.id, _ch_id, _wm_col, _new_wm,
+                            )
+                        else:
+                            depot.put(_wm_depot_key, _new_wm)
+                            logger.debug(
+                                "[%s] Watermark persisted to depot: %s=%s",
+                                module.id, _wm_col, _new_wm,
                             )
 
                 local_results.append(ModuleResult(module_id=module.id, status="success"))

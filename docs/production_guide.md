@@ -115,9 +115,9 @@ In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains 
 | Local / dev | Permanent | None |
 | YARN client mode | Permanent (edge node) | None |
 | Spark standalone | Permanent (driver host) | None |
-| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
+| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/`, or use external stores (below) |
 
-Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point both stores at a persistent mount:
+Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point the stores at a persistent mount:
 
 ```yaml
 stores:
@@ -126,6 +126,19 @@ stores:
   depot:
     path: "/mnt/aqueduct-state/depot.db"
 ```
+
+### Pod-native: external stores, zero local artefacts (Phase 53)
+
+Instead of a PVC, point every store at an external backend so the pod writes **nothing** to its cwd:
+
+```yaml
+stores:
+  observability: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  depot:         { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
+```
+
+The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
 > The `stores.lineage` config block is **inert** as of 1.1.2 — `column_lineage` lives in `observability.db`. Setting it emits a `DeprecationWarning` and is ignored.
 

@@ -19,16 +19,24 @@ or DuckDB file locks:
                              failure_contexts, probe_signals, module_metrics,
                              maintenance_metrics, patch_simulation,
                              signal_overrides, explain_snapshot,
-                             column_lineage
+                             column_lineage, patch_index
       blobs/               ← Zstandard-compressed manifest_json, provenance_json,
                              stack_trace payloads (<run_id>/{manifest,prov,stack}.json.zst)
-      snapshots/           ← schema_snapshot JSON files (one per probe per run)
       checkpoints/         ← Parquet checkpoints written by --resume
-      watermarks/          ← incremental-Channel watermark sidecars
-  depot.db                 ← project-wide cross-run KV state (@aq.depot.*)
+  depot.db                 ← project-wide cross-run KV state (@aq.depot.*),
+                             incremental-Channel watermarks
   benchmark.duckdb         ← appears next to the scenarios dir, not here:
                              written to <scenarios_dir>/.aqueduct/benchmark.duckdb
 ```
+
+**Phase 53 changes the artefact map.** The incremental-Channel watermark
+sidecar (`watermarks/`) and the `schema_snapshot` sidecar (`snapshots/`) were
+removed: watermarks are persisted to the Depot only, and `schema_snapshot`
+payloads live solely in `probe_signals`. The `blobs/` directory and the patch
+lifecycle (`patches/`) are now written through a pluggable **object store**
+(`stores.blob`) — `local` (default, the layout above) or `s3` / `gcs` / `adls`
+so a cluster pod leaves no local-FS artefacts. The `patch_index` table is the
+relational truth for the object-store patch lifecycle.
 
 Per-pipeline routing is the new default. Pre-1.1.0 stores at
 `.aqueduct/observability.db` still load (the CLI's `_resolve_obs_db` helper
@@ -45,7 +53,8 @@ Each store is independently pluggable in `aqueduct.yml`:
 |-----------------|--------------------------------|-------|
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
 | `lineage`       | _(inert — merged into `observability`)_ | Setting `stores.lineage.path` emits a `DeprecationWarning` and is ignored. |
-| `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. |
+| `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. Incremental-Channel watermarks persist here (Phase 53 dropped the local sidecar — no depot ⇒ no incremental state). |
+| `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec). `local` keeps the on-disk layout above. |
 
 With `postgres`, tables live in named schemas (`observability`, `depot`).
 With `redis`, depot keys live directly in the configured Redis DB.
@@ -170,6 +179,18 @@ One row per gate the patch went through. `gate` vocabulary: `lineage`,
 `sandbox`, `explain` (guardrail rejections are recorded in `heal_attempts`,
 not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
 `sandbox_mode: off` synthesises a pass-through row).
+
+#### `patch_index` (1.2.x+)
+
+The relational truth for the object-store patch lifecycle (Phase 53). One row
+per `patch_id`; `status` moves `pending` → `applied` | `rejected`. The patch
+*body* lives in the object store at `object_key`; this row carries enough
+metadata (`signature`, `signature_coarse`, `error_class`, `where_field`,
+`normalized_message`, `rationale`, `ops`) for the heal cache to resolve
+pending-reuse, coaching retrieval, and prompt history **without reading a body**
+— only zero-token replay fetches the body. Backend-blind: the same SQL serves
+local-disk, s3, gcs, and adls patch stores, replacing the former `os.scandir`
+over the `patches/` directory.
 
 #### `signal_overrides`
 
