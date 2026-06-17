@@ -54,6 +54,8 @@ release and are marked **BREAKING**.
 - **`_zero_token_attempt()` factory in cli/run.py.** Two identical `SimpleNamespace` constructors for pending‑cache‑hit and exact‑replay attempts replaced with one helper.
 - **`resolve_agent_connection()` helper in `cli/__init__.py`.** The 8-line boolean‑OR merge of blueprint agent over engine agent defaults (duplicated in `cli/run.py` and implicitly in `cli/benchmark.py` and `cli/heal.py`) is now a single function returning a resolved‑fields object. Adding a new agent connection field requires one edit.
 - **`AgentConfig.to_dict()` for manifest serialization.** The `Manifest.to_dict()` method previously hand‑picked 7 fields from `AgentConfig` — new fields (like `allow_defer`, `deep_loop`, `confidence_threshold`) were silently dropped from the serialized manifest the LLM sees. `AgentConfig` now owns its own `to_dict()` serialization (14 fields), and `Manifest.to_dict()` delegates to it. Adding a field to `AgentConfig` requires an explicit entry in `to_dict()` — still manual, but co‑located.
+- **`_RelationalDepotMixin` in `stores/base.py`.** The `kv_get` / `kv_put` / `kv_delete` implementations were near‑duplicates across `DuckDBDepotStore` and `PostgresDepotStore` — only the error‑message prefix and a DuckDB `_path.exists()` guard differed. A shared mixin now provides the three methods via `self.connect()` + `self._DDL`; both backends declare the DDL string and inherit the logic. ~50 lines removed.
+- **`aqueduct stores info` now lists `blob` and `benchmark` stores.** The blob object store and benchmark history store were invisible in store diagnostics despite being fully configurable. Both are now displayed alongside observability / lineage / depot.
 
 ## [1.3.0] — 2026-06-17
 

@@ -150,6 +150,59 @@ class DepotStore(ABC):
     def location_label(self) -> str: ...
 
 
+class _RelationalDepotMixin:
+    """Default ``kv_get`` / ``kv_put`` / ``kv_delete`` for relational backends.
+
+    Subclasses must provide:
+      * ``connect()`` → ``RelationalCursor`` context manager
+      * ``_DDL`` → the ``CREATE TABLE IF NOT EXISTS depot_kv`` string
+
+    File‑existence optimisation (DuckDB) is handled by checking for a
+    ``_path`` attribute — Postgres backends that lack it skip the guard
+    and delegate to ``connect()`` directly.
+    """
+    _DDL: str = ""
+
+    def kv_get(self, key: str, default: str = "") -> str:
+        path = getattr(self, "_path", None)
+        if path is not None and isinstance(path, Path) and not path.exists():
+            return default
+        try:
+            with self.connect() as cur:
+                cur.execute(self._DDL)
+                row = cur.execute(
+                    "SELECT value FROM depot_kv WHERE key = ?", [key]
+                ).fetchone()
+                return row[0] if row else default
+        except Exception as exc:
+            logger.warning("%s.kv_get(%r): %s — returning default", type(self).__name__, key, exc)
+            return default
+
+    def kv_put(self, key: str, value: str) -> None:
+        from datetime import datetime, timezone
+
+        with self.connect() as cur:
+            cur.execute(self._DDL)
+            cur.execute(
+                """
+                INSERT INTO depot_kv (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT (key) DO UPDATE
+                    SET value = excluded.value,
+                        updated_at = excluded.updated_at
+                """,
+                [key, value, datetime.now(tz=timezone.utc).isoformat()],
+            )
+
+    def kv_delete(self, key: str) -> None:
+        path = getattr(self, "_path", None)
+        if path is not None and isinstance(path, Path) and not path.exists():
+            return
+        with self.connect() as cur:
+            cur.execute(self._DDL)
+            cur.execute("DELETE FROM depot_kv WHERE key = ?", [key])
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

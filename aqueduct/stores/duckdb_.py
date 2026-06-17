@@ -22,6 +22,7 @@ from aqueduct.stores.base import (
     LineageStore,
     ObservabilityStore,
     RelationalCursor,
+    _RelationalDepotMixin,
 )
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class DuckDBLineageStore(_DuckDBRelational, LineageStore):
     """Single-file DuckDB lineage.db."""
 
 
-class DuckDBDepotStore(_DuckDBRelational, DepotStore):
+class DuckDBDepotStore(_DuckDBRelational, _RelationalDepotMixin, DepotStore):
     """Depot KV backed by DuckDB. Same single-writer constraint as observability/lineage."""
 
     _DDL = """
@@ -72,38 +73,4 @@ class DuckDBDepotStore(_DuckDBRelational, DepotStore):
         );
     """
 
-    def kv_get(self, key: str, default: str = "") -> str:
-        if not self._path.exists():
-            return default
-        try:
-            with self.connect() as cur:
-                cur.execute(self._DDL)
-                row = cur.execute(
-                    "SELECT value FROM depot_kv WHERE key = ?", [key]
-                ).fetchone()
-                return row[0] if row else default
-        except Exception as exc:
-            logger.warning("DuckDBDepotStore.kv_get(%r): %s — returning default", key, exc)
-            return default
 
-    def kv_put(self, key: str, value: str) -> None:
-        from datetime import datetime, timezone
-        with self.connect() as cur:
-            cur.execute(self._DDL)
-            cur.execute(
-                """
-                INSERT INTO depot_kv (key, value, updated_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT (key) DO UPDATE
-                    SET value = excluded.value,
-                        updated_at = excluded.updated_at
-                """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
-            )
-
-    def kv_delete(self, key: str) -> None:
-        if not self._path.exists():
-            return
-        with self.connect() as cur:
-            cur.execute(self._DDL)
-            cur.execute("DELETE FROM depot_kv WHERE key = ?", [key])
