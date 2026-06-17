@@ -711,16 +711,16 @@ def run(
         )
 
         # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
-        eng = cfg.agent
-        bp_agent = manifest.agent
-        resolved_agent_provider = bp_agent.provider or eng.provider
-        resolved_agent_base_url = bp_agent.base_url or eng.base_url
-        resolved_agent_model = bp_agent.model or eng.model
-        resolved_agent_provider_options = bp_agent.provider_options or eng.provider_options
-        resolved_agent_timeout = bp_agent.timeout or eng.timeout
-        resolved_agent_max_reprompts = bp_agent.max_reprompts or eng.max_reprompts
-        resolved_agent_engine_prompt_context = eng.prompt_context
-        resolved_agent_blueprint_prompt_context = bp_agent.prompt_context
+        from aqueduct.cli import resolve_agent_connection
+        _rac = resolve_agent_connection(cfg.agent, manifest.agent)
+        resolved_agent_provider = _rac.provider
+        resolved_agent_base_url = _rac.base_url
+        resolved_agent_model = _rac.model
+        resolved_agent_provider_options = _rac.provider_options
+        resolved_agent_timeout = _rac.timeout
+        resolved_agent_max_reprompts = _rac.max_reprompts
+        resolved_agent_engine_prompt_context = _rac.engine_prompt_context
+        resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
         resolved_sandbox_master_url = cfg.agent.sandbox_master_url
 
         # ── Multi-patch disclaimer ────────────────────────────────────────────────

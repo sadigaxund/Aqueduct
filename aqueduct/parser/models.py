@@ -117,6 +117,32 @@ class AgentConfig:
     # requires danger.allow_skip_sandbox).
     sandbox_mode: str = "sample"
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize agent policy fields for the manifest snapshot the LLM sees.
+
+        Adding a new agent field here ensures it reaches the LLM; forgetting
+        to add it here means the LLM won't see the field (silent omission).
+        """
+        return {
+            "approval_mode": self.approval_mode,
+            "model": self.model,
+            "max_patches": self.max_patches,
+            "provider": self.provider,
+            "base_url": self.base_url,
+            "prompt_context": self.prompt_context,
+            "sandbox_mode": self.sandbox_mode,
+            "allow_defer": self.allow_defer,
+            "deep_loop": self.deep_loop,
+            "confidence_threshold": self.confidence_threshold,
+            "patch_validation": self.patch_validation,
+            "block_on_explain_regression": self.block_on_explain_regression,
+            "max_heal_attempts_per_hour": self.max_heal_attempts_per_hour,
+            "guardrails": {
+                "forbidden_ops": list(self.guardrails.forbidden_ops),
+                "allowed_paths": list(self.guardrails.allowed_paths),
+            },
+        }
+
 
 @dataclass(frozen=True)
 class Module:

@@ -123,6 +123,35 @@ def _check_heal_guardrails(failure_ctx: Any, guardrails: Any) -> tuple[bool, str
     return True, ""
 
 
+def resolve_agent_connection(engine_agent, blueprint_agent=None):
+    """Merge blueprint agent connection overrides into engine defaults.
+
+    Each connection field uses the blueprint value when set (truthy),
+    falling back to the engine default.  Returns a simple object with
+    resolved values that can be destructured at the call site.
+
+    prompt_context is NOT OR‑merged — the engine and blueprint versions
+    are kept separate so the agent loop can concatenate them.
+    """
+    class _Resolved:
+        __slots__ = ("provider", "base_url", "model", "provider_options",
+                      "timeout", "max_reprompts", "engine_prompt_context",
+                      "blueprint_prompt_context")
+
+    bp = blueprint_agent
+    eng = engine_agent
+    r = _Resolved()
+    r.provider = (bp.provider or eng.provider) if bp else eng.provider
+    r.base_url = (bp.base_url or eng.base_url) if bp else eng.base_url
+    r.model = (bp.model or eng.model) if bp else eng.model
+    r.provider_options = (bp.provider_options or eng.provider_options) if bp else eng.provider_options
+    r.timeout = (bp.timeout or eng.timeout) if bp else eng.timeout
+    r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
+    r.engine_prompt_context = eng.prompt_context
+    r.blueprint_prompt_context = bp.prompt_context if bp else None
+    return r
+
+
 _DEFAULT_OBS_PATH = ".aqueduct/observability.db"
 
 

@@ -52,6 +52,8 @@ release and are marked **BREAKING**.
 - **`is_arcade_expanded_id()` in compiler/expander.py.** Five raw `"__" in module_id` checks across `patch/apply.py` and `patch/operations.py` now call a named function — changing the Arcade separator from `__` updates one file.
 - **`utcnow_iso()` in aqueduct/utils.py.** The agent loop's private `_utcnow()` now delegates to a shared UTC‑ISO timestamp helper.
 - **`_zero_token_attempt()` factory in cli/run.py.** Two identical `SimpleNamespace` constructors for pending‑cache‑hit and exact‑replay attempts replaced with one helper.
+- **`resolve_agent_connection()` helper in `cli/__init__.py`.** The 8-line boolean‑OR merge of blueprint agent over engine agent defaults (duplicated in `cli/run.py` and implicitly in `cli/benchmark.py` and `cli/heal.py`) is now a single function returning a resolved‑fields object. Adding a new agent connection field requires one edit.
+- **`AgentConfig.to_dict()` for manifest serialization.** The `Manifest.to_dict()` method previously hand‑picked 7 fields from `AgentConfig` — new fields (like `allow_defer`, `deep_loop`, `confidence_threshold`) were silently dropped from the serialized manifest the LLM sees. `AgentConfig` now owns its own `to_dict()` serialization (14 fields), and `Manifest.to_dict()` delegates to it. Adding a field to `AgentConfig` requires an explicit entry in `to_dict()` — still manual, but co‑located.
 
 ## [1.3.0] — 2026-06-17
 
