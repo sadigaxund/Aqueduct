@@ -144,6 +144,17 @@ stores:
     # backend: redis
     # path: "redis://host:6379/0"
 
+  # Object store for observability blobs (fat manifest/stack/provenance
+  # columns) + the patch lifecycle (pending/applied/rejected). `local`
+  # (default) keeps the on-disk layout; on a cluster point it at object
+  # storage so an ephemeral pod leaves no local-FS artefacts.
+  blob:
+    backend: local
+    # path: ""   # local: base dir (empty → blobs under the obs dir, patches under cwd)
+    # Object-store example (uncomment + install `aqueduct-core[object-store]`):
+    # backend: s3            # or gcs | adls
+    # path: "s3://my-bucket/aqueduct"
+
   # benchmark — history store for `aqueduct benchmark` (disjoint from the
   # stores above; rows are not tied to a real run_id). Defaults to a DuckDB
   # file anchored to the scenarios directory; no need to set `path` for duckdb.
@@ -359,7 +370,7 @@ secrets:
 #   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
-# on_patch_pending / on_ci_patch template variables (Phase 46 — the agent's
+# on_patch_pending / on_ci_patch template variables (the agent's
 # structured diagnosis, no extra LLM calls):
 #   ${run_id} ${blueprint_id} ${failed_module}
 #   ${patch_id}        Staged patch identifier
@@ -377,7 +388,7 @@ secrets:
 #
 # ${ENV_VAR} in any value resolves to os.environ[VAR] (useful for secrets in headers).
 #
-# If payload is omitted, Aqueduct sends a standardized envelope (Phase 46):
+# If payload is omitted, Aqueduct sends a standardized envelope:
 #   {"event": "<hook name>", "timestamp": "<ISO-8601 UTC>",
 #    "run_id": "...", "blueprint_id": "...", "data": {<event-specific payload>}}
 # data carries the full FailureContext (on_failure), the success summary
@@ -428,6 +439,25 @@ webhooks:
   #   timeout: 15
 
 
+# ── OpenLineage Emission ─────────────────────────────────────────────────────
+#
+# Emit OpenLineage run events (START on run begin, COMPLETE/FAIL on end) to an
+# OpenLineage-compatible backend (Marquez, DataHub, Atlan). Delivery is async
+# (daemon thread) and best-effort — it never blocks or fails the run. Output
+# datasets carry the column-level `columnLineage` facet (field-to-field arrows),
+# serialized from the same compile-time lineage as the `column_lineage` table.
+#
+# NAMING COLLISION: this top-level `lineage:` block is NOT `stores.lineage`.
+# `stores.lineage` is an inert store-backend config (lineage merged into the
+# observability store); THIS block configures OpenLineage *emission*.
+#
+# Disabled by default — leave openlineage_url unset for zero cost.
+
+lineage:
+  openlineage_url: null              # e.g. "http://marquez:5000"  (events POST to <url>/api/v1/lineage)
+  openlineage_namespace: aqueduct    # OpenLineage namespace for jobs + datasets
+
+
 # ── LLM Agent — Connection Defaults ──────────────────────────────────────────
 #
 # Sets the provider, endpoint, and model for all blueprints that enable LLM
@@ -447,7 +477,7 @@ agent:
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
   #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
-  # retry:                      # Phase 46 — transient-error retry (HTTP 429/503/529, both providers).
+  # retry:                      # transient-error retry (HTTP 429/503/529, both providers).
   #   max_retries: 2            # extra attempts after the first call; 0 disables retry
   #   backoff_seconds: 2.0      # base backoff; attempt N sleeps ~2^N * base (+ jitter),
   #                             # honors server Retry-After, always capped by the remaining
@@ -540,7 +570,7 @@ agent:
   # single driver node.
   # sandbox_master_url: null
 
-  # ── Signature memory (Phase 45) ────────────────────────────────────────────
+  # ── Signature memory ────────────────────────────────────────────
   # Zero-token heal paths consulted BEFORE the LLM is called. Each failure is
   # hashed into a stable signature (error class + module + normalized message);
   # patches carry the signature of the failure they fixed.

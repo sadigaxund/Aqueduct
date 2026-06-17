@@ -111,6 +111,38 @@ def _opaque_row(channel_id: str, upstream_ids: list[str]) -> list[dict[str, str]
     ]
 
 
+def compute_lineage_rows(
+    modules: tuple[Any, ...],
+    edges: tuple[Any, ...],
+) -> list[dict[str, str]]:
+    """Extract column-level lineage rows from the compiled module/edge lists.
+
+    Pure (no I/O): the single source of truth for both ``write_lineage`` (which
+    persists these rows to ``column_lineage``) and the OpenLineage emitter
+    (Phase 55, which serializes them into a ``columnLineage`` facet). Each row is
+    ``{channel_id, output_column, source_table, source_column}``; unresolved
+    columns fall back to ``UNKNOWN`` inside ``_extract_sql_lineage``.
+    """
+    channel_modules = [m for m in modules if m.type == "Channel" and m.config.get("op") == "sql"]
+    if not channel_modules:
+        return []
+
+    upstream_map: dict[str, list[str]] = {}
+    for m in channel_modules:
+        upstream_map[m.id] = [
+            e.from_id for e in edges
+            if e.to_id == m.id and e.port == "main"
+        ]
+
+    all_rows: list[dict[str, str]] = []
+    for m in channel_modules:
+        query = m.config.get("query", "")
+        if not query:
+            continue
+        all_rows.extend(_extract_sql_lineage(m.id, query, upstream_map.get(m.id, [])))
+    return all_rows
+
+
 def write_lineage(
     blueprint_id: str,
     run_id: str,
@@ -135,25 +167,7 @@ def write_lineage(
     try:
         from datetime import datetime, timezone
 
-        channel_modules = [m for m in modules if m.type == "Channel" and m.config.get("op") == "sql"]
-        if not channel_modules:
-            return
-
-        upstream_map: dict[str, list[str]] = {}
-        for m in channel_modules:
-            upstream_map[m.id] = [
-                e.from_id for e in edges
-                if e.to_id == m.id and e.port == "main"
-            ]
-
-        all_rows: list[dict[str, str]] = []
-        for m in channel_modules:
-            query = m.config.get("query", "")
-            if not query:
-                continue
-            rows = _extract_sql_lineage(m.id, query, upstream_map.get(m.id, []))
-            all_rows.extend(rows)
-
+        all_rows = compute_lineage_rows(modules, edges)
         if not all_rows:
             return
 

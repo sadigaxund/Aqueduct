@@ -1,4 +1,4 @@
-# DEMO 1 — Phase 35: structured Spark error extraction in action.
+# DEMO 1 — structured Spark error extraction in action.
 #
 # clean_events references column `event_ts` which does NOT exist in events.csv
 # (real column is `event_time`). Spark raises

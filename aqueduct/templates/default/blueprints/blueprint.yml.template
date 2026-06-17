@@ -134,7 +134,7 @@ agent:
   # cascade: multi-model healing cascade. Each tier tries a
   # different model; escalates on stuck_signature / exhausted_attempts /
   # deferred. Cheaper model first, expensive model as fallback.
-  # agent.budget.max_tokens_total spans the WHOLE cascade (Phase 46).
+  # agent.budget.max_tokens_total spans the WHOLE cascade.
   # cascade:
   #   - model: qwen2.5-coder:7b
   #     max_reprompts: 2
@@ -145,7 +145,7 @@ agent:
   #     deep_loop: true
   #     allow_defer: true
   #
-  # Shorthand (Phase 46): a model LIST expands to a default-settings cascade.
+  # Shorthand: a model LIST expands to a default-settings cascade.
   # Mutually exclusive with an explicit cascade: block.
   # model: [qwen2.5-coder:7b, claude-sonnet-4-6]
 

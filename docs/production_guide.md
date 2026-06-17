@@ -115,9 +115,9 @@ In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains 
 | Local / dev | Permanent | None |
 | YARN client mode | Permanent (edge node) | None |
 | Spark standalone | Permanent (driver host) | None |
-| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/` |
+| Kubernetes | **Ephemeral** (pod) | Mount PVC at `.aqueduct/`, or use external stores (below) |
 
-Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point both stores at a persistent mount:
+Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephemeral environments, point the stores at a persistent mount:
 
 ```yaml
 stores:
@@ -126,6 +126,19 @@ stores:
   depot:
     path: "/mnt/aqueduct-state/depot.db"
 ```
+
+### Pod-native: external stores, zero local artefacts
+
+Instead of a PVC, point every store at an external backend so the pod writes **nothing** to its cwd:
+
+```yaml
+stores:
+  observability: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  depot:         { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
+```
+
+The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
 > The `stores.lineage` config block is **inert** as of 1.1.2 — `column_lineage` lives in `observability.db`. Setting it emits a `DeprecationWarning` and is ignored.
 
@@ -238,7 +251,28 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 → CI/CD validates → human approves → merge → redeploy
 ```
 
-**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct fires a POST request to `agent.ci_webhook_url` with the full PatchSpec JSON. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider.
+**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct stages the patch and fires a POST to `agent.ci_webhook_url`. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider and ships no versioned GitHub Action — you wire a short workflow you own.
+
+**CI webhook payload schema.** The `on_patch_pending` POST body carries:
+
+| Key | Type | Notes |
+|---|---|---|
+| `patch_id` | string | Stable patch identifier (non-empty) |
+| `run_id` | string | The failing run |
+| `blueprint_id` | string | Blueprint that failed |
+| `failed_module` | string \| null | Module id, or null when no single module |
+| `source` | string | Origin of the patch (e.g. `llm`) |
+| `root_cause`, `rationale`, `category`, `confidence` | string | Diagnostic extras (optional to consume) |
+| `patch_path` | string | Where the body was staged |
+
+The patch **body** (a PatchSpec JSON) additionally carries an `_aq_meta` block (`run_id`, `blueprint_id`, `failed_module`, `applied_at`, `approval_mode`, `prompt_version`, `failure_signature`). The receiver obtains the body — from a run artifact or `aqueduct patch pull <patch_id> --blueprint <bp>` — then applies + commits it:
+
+```bash
+aqueduct patch import received-patch.json --blueprint pipeline.yml
+# → applies the patch, then `git commit` with a structured ---aqueduct--- trailer
+```
+
+`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml) — a snippet you own, not a maintained Action.
 
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 

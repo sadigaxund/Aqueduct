@@ -14,7 +14,7 @@ import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -33,9 +33,9 @@ from aqueduct.agent.parse import (
 from aqueduct.agent.prompts import _build_user_prompt
 from aqueduct.agent.providers import (
     _ESCALATION_TEMPERATURE,
-    _ProviderConfig,
     _call_agent,
     _format_llm_error_hint,
+    _ProviderConfig,
 )
 from aqueduct.agent.signature import (
     from_apply_error,
@@ -50,6 +50,8 @@ from aqueduct.surveyor.models import FailureContext
 
 if TYPE_CHECKING:
     from aqueduct.config import WebhookEndpointConfig
+    from aqueduct.stores.base import ObservabilityStore
+    from aqueduct.stores.object_store import PatchStore
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +97,65 @@ class AgentPatchResult:
 
 def _utcnow() -> str:
     """ISO-8601 UTC timestamp, e.g. 2026-06-04T12:34:56.789+00:00."""
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 def _patch_filename(patch_spec: PatchSpec) -> str:
     """Generate structured filename: {YYYYMMDDTHHmmss}_{slug}.json."""
-    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%S")
     return f"{ts}_{patch_spec.patch_id}.json"
+
+
+def _patch_store_for(patches_dir: Path, patch_store: PatchStore | None) -> PatchStore:
+    """Return the given PatchStore or a local one rooted at *patches_dir*.
+
+    The local default reproduces the historical ``patches/`` directory exactly,
+    so callers that pass only ``patches_dir`` keep writing real files."""
+    if patch_store is not None:
+        return patch_store
+    from aqueduct.stores.object_store import make_patch_store
+    return make_patch_store("local", "", patches_dir)
+
+
+def _record_patch_index(
+    obs_store: ObservabilityStore | None,
+    *,
+    patch_spec: PatchSpec,
+    failure_ctx: FailureContext,
+    status: str,
+    object_key: str,
+    source: str,
+) -> None:
+    """Upsert the ``patch_index`` row for a staged/archived patch.
+
+    Best-effort and never raises — index gaps degrade the heal cache to a fresh
+    LLM call, never a crash. No-op when no observability store is available."""
+    if obs_store is None:
+        return
+    try:
+        from aqueduct.patch import index as _ix
+        sig_exact, sig_coarse = from_failure_context(failure_ctx)
+        row = _ix.PatchIndexRow(
+            patch_id=patch_spec.patch_id,
+            status=status,
+            object_key=object_key,
+            blueprint_id=failure_ctx.blueprint_id or "",
+            run_id=failure_ctx.run_id or "",
+            signature=sig_exact.hash,
+            signature_coarse=sig_coarse.hash,
+            error_class=sig_exact.error_class or "",
+            where_field=sig_exact.where or "",
+            normalized_message=sig_exact.normalized_message or "",
+            rationale=patch_spec.rationale or patch_spec.root_cause or "",
+            ops=[op.op for op in patch_spec.operations],
+            source=source,
+            prompt_version=PROMPT_VERSION,
+        )
+        with obs_store.connect() as cur:
+            _ix.ensure_schema(cur)
+            _ix.upsert(cur, row)
+    except Exception:
+        logger.debug("patch_index upsert failed for %s", patch_spec.patch_id, exc_info=True)
 
 
 # ── Patch I/O ────────────────────────────────────────────────────────────
@@ -114,8 +168,10 @@ def stage_patch_for_human(
     on_patch_pending_webhook: WebhookEndpointConfig | None = None,
     source: str = "llm",
     webhook_event: str = "on_patch_pending",
+    patch_store: PatchStore | None = None,
+    obs_store: ObservabilityStore | None = None,
 ) -> None:
-    """Write patch to ``patches/pending/`` for human review.
+    """Write a patch body to ``patches/pending/`` and index it for review.
 
     Args:
         on_patch_pending_webhook: When set, fires the on_patch_pending webhook
@@ -125,11 +181,13 @@ def stage_patch_for_human(
             patch with zero LLM tokens.
         webhook_event: Envelope event name — ``"on_ci_patch"`` when the caller
             passes the ci endpoint config instead of the pending one.
+        patch_store: Object store for the body. None → a local store rooted at
+            *patches_dir* (historical on-disk layout).
+        obs_store: Observability store for the ``patch_index`` upsert. None skips
+            indexing (the heal cache then can't reuse this pending patch).
     """
-    pending_dir = patches_dir / "pending"
-    pending_dir.mkdir(parents=True, exist_ok=True)
+    ps = _patch_store_for(patches_dir, patch_store)
     filename = _patch_filename(patch_spec)
-    out_path = pending_dir / filename
     payload = patch_spec.model_dump()
     sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
@@ -144,7 +202,12 @@ def stage_patch_for_human(
         "failure_signature_coarse": sig_coarse.hash,
         "source": source,
     }
-    out_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
+    object_key = ps.write_pending(filename, _redact(payload))
+    _record_patch_index(
+        obs_store, patch_spec=patch_spec, failure_ctx=failure_ctx,
+        status="pending", object_key=object_key, source=source,
+    )
+    out_path = f"{ps.location_label}/{object_key}"
     logger.info(
         "LLM patch staged for human review: %s  "
         "(apply with: aqueduct patch apply %s --blueprint <path>)",
@@ -175,7 +238,7 @@ def stage_patch_for_human(
                     "run_id": failure_ctx.run_id,
                     "blueprint_id": failure_ctx.blueprint_id,
                     "failed_module": failure_ctx.failed_module,
-                    "patch_path": str(out_path),
+                    "patch_path": out_path,
                     "source": source,
                     **_diagnosis,
                 },
@@ -201,12 +264,12 @@ def archive_patch(
     patches_dir: Path,
     failure_ctx: FailureContext,
     mode: str,
+    patch_store: PatchStore | None = None,
+    obs_store: ObservabilityStore | None = None,
 ) -> None:
-    """Write patch to ``patches/applied/`` with metadata."""
-    applied_dir = patches_dir / "applied"
-    applied_dir.mkdir(parents=True, exist_ok=True)
+    """Write a patch body to ``patches/applied/`` and mark it applied in the index."""
+    ps = _patch_store_for(patches_dir, patch_store)
     filename = _patch_filename(patch_spec)
-    archive_path = applied_dir / filename
     payload = patch_spec.model_dump()
     sig_exact, sig_coarse = from_failure_context(failure_ctx)
     payload["_aq_meta"] = {
@@ -219,7 +282,11 @@ def archive_patch(
         "failure_signature": sig_exact.to_dict(),
         "failure_signature_coarse": sig_coarse.hash,
     }
-    archive_path.write_text(json.dumps(_redact(payload), indent=2), encoding="utf-8")
+    object_key = ps.write_applied(filename, _redact(payload))
+    _record_patch_index(
+        obs_store, patch_spec=patch_spec, failure_ctx=failure_ctx,
+        status="applied", object_key=object_key, source="llm",
+    )
 
 
 # ── Main orchestration loop ──────────────────────────────────────────────
@@ -249,6 +316,7 @@ def generate_agent_patch(
     memory_coaching: bool = True,
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
+    obs_store: ObservabilityStore | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -287,6 +355,7 @@ def generate_agent_patch(
         coaching=memory_coaching,
         retry_max_retries=retry_max_retries,
         retry_backoff_seconds=retry_backoff_seconds,
+        obs_store=obs_store,
     )
 
     messages: list[dict[str, Any]] = [

@@ -34,10 +34,11 @@ def test_lineage_store_roundtrip(lineage_store):
         assert all_rows[1][0] == "x"
 
 def test_lineage_store_idempotent_connect(lineage_store):
-    with lineage_store.connect():
-        pass
-    with lineage_store.connect():
-        pass
+    with lineage_store.connect() as cur:
+        cur.execute("SELECT 1")
+    # a second connect on the same store still yields a working cursor
+    with lineage_store.connect() as cur:
+        assert cur.execute("SELECT 1").fetchone()[0] == 1
 
 def test_lineage_store_location_label(lineage_store):
     label = lineage_store.location_label

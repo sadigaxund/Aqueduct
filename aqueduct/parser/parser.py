@@ -171,6 +171,10 @@ def parse_dict(
     # When both canonical and alias keys are present in the same dict, drop the
     # alias before pydantic validation — `extra="forbid"` would otherwise reject
     # the second key as an unknown field even though it maps to an alias.
+    # Clone the agent sub-dict before the alias-stripping pops below, so callers
+    # reusing `raw` (in-memory patch / sandbox flows) don't see their keys mutated.
+    if isinstance(raw.get("agent"), dict):
+        raw = {**raw, "agent": dict(raw["agent"])}
     _agent_raw = raw.get("agent") if isinstance(raw, dict) else None
     if isinstance(_agent_raw, dict):
         import sys as _sys
@@ -365,7 +369,12 @@ def parse_dict(
         spark_config=resolved_spark_config,
         retry_policy=retry_policy,
         agent=agent,
-        udf_registry=tuple(validated.udf_registry),
+        # UdfSchema → plain dicts (the compiler/executor consume dicts via .get()).
+        # by_alias dumps `class_name` back to `class`; exclude_none keeps the dict
+        # shape the executor expects (it applies its own field defaults).
+        udf_registry=tuple(
+            u.model_dump(by_alias=True, exclude_none=True) for u in validated.udf_registry
+        ),
         macros=resolved_macros,
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,

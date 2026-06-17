@@ -14,10 +14,9 @@ VALID_MODULE_TYPES = frozenset(
     {"Ingress", "Channel", "Egress", "Junction", "Funnel", "Probe", "Regulator", "Arcade", "Assert"}
 )
 
-VALID_PORTS = frozenset({"main", "spillway", "signal"})
-
-# Ports that carry DataFrames (vs control-only ports)
-CONTROL_PORTS = frozenset({"signal", "spillway"})
+# Note: edge `port` is NOT constrained to a fixed set at schema level — Junction
+# branch ids are valid dynamic port names, so membership is validated downstream
+# (graph/compiler), not here.
 
 
 class BackoffSchema(BaseModel):
@@ -226,17 +225,30 @@ class EdgeSchema(BaseModel):
 
 
 class UdfSchema(BaseModel):
+    """A UDF registry entry. Matches the executor's registration contract:
+    python UDFs import ``module``/``entry``; java/scala UDFs load ``jar``/``class``.
+    """
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     id: str
-    label: str
-    lang: Literal["python", "scala", "java"] = "python"
-    return_type: str
+    lang: Literal["python", "java", "scala"] = "python"
+    return_type: str | None = None      # executor defaults to "string" when absent
+    label: str | None = None
     deterministic: bool = True
-    path: str | None = None
+    # python: import `entry` (defaults to `id`) from `module`
+    module: str | None = None
     entry: str | None = None
+    # java / scala: load `class` from `jar` (or `path`)
     jar: str | None = None
+    path: str | None = None
     class_name: str | None = Field(default=None, alias="class")
+
+    @field_validator("id")
+    @classmethod
+    def validate_udf_id(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("UDF id must not be empty")
+        return v
 
 
 class BlueprintSchema(BaseModel):
@@ -253,7 +265,7 @@ class BlueprintSchema(BaseModel):
     spark_config: dict[str, Any] = Field(default_factory=dict)
     retry_policy: RetryPolicySchema = Field(default_factory=RetryPolicySchema)
     agent: AgentSchema = Field(default_factory=AgentSchema)
-    udf_registry: list[dict[str, Any]] = Field(default_factory=list)
+    udf_registry: list[UdfSchema] = Field(default_factory=list)
     macros: dict[str, str] = Field(default_factory=dict)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False

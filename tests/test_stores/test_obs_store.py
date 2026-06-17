@@ -20,10 +20,10 @@ def test_obs_store_roundtrip(obs_store):
         assert cur.execute("SELECT passed FROM probe_signals WHERE probe_id=?", ["probe_1"]).fetchone()[0] is True
 
 def test_obs_store_idempotent_connect(obs_store):
-    with obs_store.connect():
-        pass
-    with obs_store.connect():
-        pass
+    with obs_store.connect() as cur:
+        cur.execute("SELECT 1")
+    with obs_store.connect() as cur:
+        assert cur.execute("SELECT 1").fetchone()[0] == 1
 
 def test_obs_store_location_label(obs_store):
     label = obs_store.location_label

@@ -66,7 +66,7 @@ A Spark job fails at 3 a.m. on a column rename upstream. Today that means a page
 | **Heal memory** | Failure signatures cache validated fixes — repeat failures heal with zero LLM tokens | [Spec §8.2](docs/specs.md) |
 | **Observability store** | Runs, failures, heal attempts, metrics in queryable DuckDB/Postgres | [Observability Guide](docs/observability_guide.md) |
 | **Column lineage** | Compile-time, zero Spark actions; powers the patch lineage gate | [Spec §7](docs/specs.md) |
-| **Data quality** | Inline `Assert` rules + Spillway quarantine — bad rows routed, not dropped, typed like catch blocks | [Spec §5](docs/specs.md) |
+| **Data quality** | Inline `Assert` rules + Spillway quarantine — bad rows routed, not dropped, typed like catch blocks | [Spec §4.4](docs/specs.md) |
 | **Module tests** | `aqueduct test` runs transforms against inline fixtures — no I/O, no cluster | [CLI Reference](docs/cli_reference.md) |
 | **LLM benchmark** | `aqueduct benchmark` scores models against simulated failures — pick the cheapest model that heals your pipelines | [CLI Reference](docs/cli_reference.md) |
 | **Safety rails** | Guardrails, multi-axis budgets, hourly heal caps, sandbox replay before any live write | [Spec §8.3](docs/specs.md) |

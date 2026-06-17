@@ -191,6 +191,76 @@ def test_reject_patch_resolves_glob(tmp_path):
 
 
 
+class TestPatchIndexStatusFlip:
+    """Phase 53 — apply/reject flip the patch_index status (best-effort, never raises).
+
+    Exercised against a real DuckDB observability store (the index backend) — the
+    same path the CLI takes via ``_patch_index_obs_store``.
+    """
+
+    def _store(self, tmp_path):
+        from aqueduct.patch import index as ix
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        store = DuckDBObservabilityStore(tmp_path / "obs.db")
+        with store.connect() as cur:
+            ix.ensure_schema(cur)
+        return store
+
+    def _seed_pending(self, store, patch_id):
+        from aqueduct.patch import index as ix
+        with store.connect() as cur:
+            ix.upsert(cur, ix.PatchIndexRow(
+                patch_id=patch_id, status="pending",
+                object_key=f"pending/{patch_id}.json", signature="sigZ",
+            ))
+
+    def _status(self, store, patch_id):
+        from aqueduct.patch import index as ix
+        with store.connect() as cur:
+            return ix.get(cur, patch_id)["status"]
+
+    def test_apply_flips_index_pending_to_applied(self, minimal_bp_path, tmp_path):
+        store = self._store(tmp_path)
+        self._seed_pending(store, "p_apply")
+
+        patch_path = tmp_path / "p_apply.json"
+        patch_path.write_text(json.dumps({
+            "patch_id": "p_apply",
+            "rationale": "relabel",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L2"}],
+        }), encoding="utf-8")
+
+        apply_patch_file(minimal_bp_path, patch_path,
+                         patches_dir=tmp_path / "patches", obs_store=store)
+        assert self._status(store, "p_apply") == "applied"
+
+    def test_reject_flips_index_pending_to_rejected(self, tmp_path):
+        store = self._store(tmp_path)
+        self._seed_pending(store, "p_reject")
+
+        pending_dir = tmp_path / "patches" / "pending"
+        pending_dir.mkdir(parents=True)
+        (pending_dir / "p_reject.json").write_text(
+            json.dumps({"patch_id": "p_reject", "rationale": "r", "operations": []}),
+            encoding="utf-8",
+        )
+
+        reject_patch("p_reject", "too risky",
+                     patches_dir=tmp_path / "patches", obs_store=store)
+        assert self._status(store, "p_reject") == "rejected"
+
+    def test_apply_with_no_obs_store_does_not_raise(self, minimal_bp_path, tmp_path):
+        # obs_store=None → index update is skipped, apply still succeeds.
+        patch_path = tmp_path / "p_none.json"
+        patch_path.write_text(json.dumps({
+            "patch_id": "p_none", "rationale": "r",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "L3"}],
+        }), encoding="utf-8")
+        res = apply_patch_file(minimal_bp_path, patch_path,
+                               patches_dir=tmp_path / "patches", obs_store=None)
+        assert res.patch_id == "p_none"
+
+
 class TestPatchFormatting:
     def test_apply_patch_preserves_comments(self, tmp_path):
         bp_path = tmp_path / "bp.yml"

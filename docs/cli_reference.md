@@ -251,7 +251,9 @@ caps than production.
 | `aqueduct patch list` | Show pending/applied/rejected patches |
 | `aqueduct patch preview <file>` | Review changes and run gates |
 | `aqueduct patch apply <file>` | Apply a patch |
+| `aqueduct patch import <file> --blueprint <bp> [--no-commit]` | Apply a received patch and `git commit` it in one step — the `approval: ci` entry point a CI runner calls after the `on_patch_pending` webhook. Equivalent to `apply` + `commit`; `--no-commit` stages only. See `docs/templates/ci-heal-workflow.yml`. |
 | `aqueduct patch reject <file>` | Reject a patch |
+| `aqueduct patch pull <id> --blueprint <file> [--out <dir>]` | Fetch a patch body from the object store (`stores.blob`) into a local checkout for review — for the cluster-heals/laptop-reviews flow when patches live on s3/gcs/adls. Writes `<out>/<id>.json` (default `<blueprint-dir>/patches/pending/`). |
 | `aqueduct patch commit` | Git commit all applied patches |
 | `aqueduct patch discard --blueprint <file>` | Restore Blueprint to last git commit (`git checkout HEAD`) and move uncommitted applied patches back to `patches/pending/` |
 | `aqueduct patch log <blueprint> [--format table\|json]` | Show the Blueprint's git history with parsed Aqueduct patch metadata (patch ids, ops, run_id); manual edits show as `(manual change)` |

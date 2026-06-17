@@ -50,5 +50,5 @@ def test_update_metric_success(tmp_path):
     assert val == 999
 
 def test_write_stage_metrics_no_store_dir():
-    # Should not raise
-    _write_stage_metrics("m1", "r1", {}, None)
+    # store_dir=None → silent no-op: returns None, persists nothing
+    assert _write_stage_metrics("m1", "r1", {}, None) is None

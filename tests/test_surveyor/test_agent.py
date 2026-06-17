@@ -1008,47 +1008,75 @@ class TestFailureContextBlueprintSourceYaml:
 # ── _load_previous_patches ─────────────────────────────────────────────────────
 
 class TestLoadPreviousPatches:
-    def _write_patch(self, patches_dir, patch_id, rationale=None, description=None):
-        applied_dir = patches_dir / "applied"
-        applied_dir.mkdir(parents=True, exist_ok=True)
-        data = {"patch_id": patch_id, "operations": [{"op": "set_module_config_key"}]}
-        if rationale is not None:
-            data["rationale"] = rationale
-        if description is not None:
-            data["description"] = description
-        (applied_dir / f"20260611T120000_{patch_id}.json").write_text(
-            json.dumps(data), encoding="utf-8"
-        )
+    def _make_store(self, db_path):
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        s = DuckDBObservabilityStore(db_path)
+        with s.connect() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS patch_index (
+                    patch_id           VARCHAR PRIMARY KEY,
+                    blueprint_id       VARCHAR,
+                    run_id             VARCHAR,
+                    status             VARCHAR NOT NULL,
+                    object_key         VARCHAR NOT NULL,
+                    signature          VARCHAR,
+                    signature_coarse   VARCHAR,
+                    error_class        VARCHAR,
+                    where_field        VARCHAR,
+                    normalized_message VARCHAR,
+                    rationale          VARCHAR,
+                    ops                JSON,
+                    source             VARCHAR,
+                    prompt_version     VARCHAR,
+                    created_at         VARCHAR NOT NULL,
+                    updated_at         VARCHAR NOT NULL
+                )
+            """)
+        return s
+
+    def _stamp(self, store, patch_id, rationale=None, ops=None):
+        with store.connect() as cur:
+            cur.execute(
+                "INSERT OR REPLACE INTO patch_index "
+                "(patch_id, object_key, blueprint_id, status, source, "
+                " rationale, ops, created_at, updated_at) "
+                "VALUES (?, ?, ?, 'applied', 'llm', ?, ?, ?, ?)",
+                [patch_id, f"/obj/{patch_id}.json", "bp1",
+                 rationale or "", (ops or '[{"op": "set_module_config_key"}]'),
+                 "2026-06-11T12:00:00", "2026-06-11T12:00:00"],
+            )
 
     def test_archived_patch_uses_rationale_key(self, tmp_path):
         """Archived patch dumped via model_dump() (canonical 'rationale' key) → description is rationale text."""
         from aqueduct.agent.prompts import _load_previous_patches
-        self._write_patch(tmp_path, "fix-1", rationale="wrong path corrected")
-        patches = _load_previous_patches(tmp_path)
+        store = self._make_store(tmp_path / "obs.db")
+        self._stamp(store, "fix-1", rationale="wrong path corrected")
+        patches = _load_previous_patches(store)
         assert len(patches) == 1
         assert patches[0]["description"] == "wrong path corrected"
 
     def test_legacy_patch_uses_description_key(self, tmp_path):
         """Hand-written archived patch with legacy 'description' key → still picked up via fallback."""
         from aqueduct.agent.prompts import _load_previous_patches
-        self._write_patch(tmp_path, "fix-legacy", description="legacy description text")
-        patches = _load_previous_patches(tmp_path)
+        store = self._make_store(tmp_path / "obs.db")
+        self._stamp(store, "fix-legacy", rationale="legacy description text")
+        patches = _load_previous_patches(store)
         assert len(patches) == 1
         assert patches[0]["description"] == "legacy description text"
 
     def test_rationale_takes_priority_over_description(self, tmp_path):
         """When both rationale and description are present, rationale wins."""
         from aqueduct.agent.prompts import _load_previous_patches
-        self._write_patch(tmp_path, "fix-both",
-                          rationale="rationale wins", description="fallback text")
-        patches = _load_previous_patches(tmp_path)
+        store = self._make_store(tmp_path / "obs.db")
+        self._stamp(store, "fix-both", rationale="rationale wins")
+        patches = _load_previous_patches(store)
         assert len(patches) == 1
         assert patches[0]["description"] == "rationale wins"
 
-    def test_empty_dir_returns_empty_list(self, tmp_path):
-        """No applied patches dir → returns empty list."""
+    def test_empty_store_returns_empty_list(self, tmp_path):
+        """No obs_store → returns empty list."""
         from aqueduct.agent.prompts import _load_previous_patches
-        patches = _load_previous_patches(tmp_path)
+        patches = _load_previous_patches(None)
         assert patches == []
 
 

@@ -195,57 +195,53 @@ def test_incremental_depot_none_no_crash(spark, tmp_path):
     assert result.status == "success"
 
 
-# ── Phase 24c — Watermark sidecar helpers ─────────────────────────────────────
+# ── Phase 53 — legacy watermark-sidecar migration (sidecar removed) ───────────
+# The local sidecar was dropped; the watermark now lives in the Depot. These
+# cover the one-time migration of a sidecar left by a pre-Phase-53 release.
 
-def test_read_watermark_sidecar_absent_returns_none(tmp_path):
-    from aqueduct.executor.spark.executor import _read_watermark_sidecar
-    result = _read_watermark_sidecar(tmp_path, "bp1", "channel1")
-    assert result is None
+class _FakeDepot:
+    def __init__(self):
+        self.kv = {}
+    def put(self, key, value):
+        self.kv[key] = value
 
 
-def test_read_watermark_sidecar_valid_returns_value(tmp_path):
+def _write_legacy_sidecar(store_dir, bp, ch, value):
     import json
-    from aqueduct.executor.spark.executor import (
-        _read_watermark_sidecar,
-        _watermark_sidecar_path,
-    )
-    path = _watermark_sidecar_path(tmp_path, "bp1", "ch1")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"watermark": "2024-06-01 00:00:00"}))
-    result = _read_watermark_sidecar(tmp_path, "bp1", "ch1")
-    assert result == "2024-06-01 00:00:00"
+    from aqueduct.executor.spark.executor import _legacy_watermark_sidecar_path
+    p = _legacy_watermark_sidecar_path(store_dir, bp, ch)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"watermark": value}))
+    return p
 
 
-def test_read_watermark_sidecar_corrupt_json_returns_none(tmp_path):
-    from aqueduct.executor.spark.executor import (
-        _read_watermark_sidecar,
-        _watermark_sidecar_path,
-    )
-    path = _watermark_sidecar_path(tmp_path, "bp1", "ch1")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("not valid json {{{{")
-    result = _read_watermark_sidecar(tmp_path, "bp1", "ch1")
-    assert result is None
+def test_migrate_legacy_sidecar_absent_returns_empty(tmp_path):
+    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
+    assert _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "k", _FakeDepot()) == ""
 
 
-def test_write_watermark_sidecar_atomic_rename(tmp_path):
-    from aqueduct.executor.spark.executor import (
-        _write_watermark_sidecar,
-        _read_watermark_sidecar,
-        _watermark_sidecar_path,
-    )
-    _write_watermark_sidecar(tmp_path, "bp1", "ch1", "2024-07-01 00:00:00", "ts", "run-123")
-    result = _read_watermark_sidecar(tmp_path, "bp1", "ch1")
-    assert result == "2024-07-01 00:00:00"
-    # No .tmp file left behind
-    path = _watermark_sidecar_path(tmp_path, "bp1", "ch1")
-    assert not path.with_suffix(".json.tmp").exists()
+def test_migrate_legacy_sidecar_writes_depot_and_deletes_file(tmp_path):
+    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
+    p = _write_legacy_sidecar(tmp_path, "bp1", "ch1", "2024-07-01 00:00:00")
+    depot = _FakeDepot()
+    out = _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "bp1:ch1:_watermark", depot)
+    assert out == "2024-07-01 00:00:00"
+    assert depot.kv["bp1:ch1:_watermark"] == "2024-07-01 00:00:00"
+    assert not p.exists(), "sidecar must be deleted after migration"
 
 
-def test_write_watermark_sidecar_store_dir_none_noop():
-    from aqueduct.executor.spark.executor import _write_watermark_sidecar
-    # Must not crash when store_dir is None
-    _write_watermark_sidecar(None, "bp1", "ch1", "2024-07-01", "ts", "run-1")
+def test_migrate_legacy_sidecar_no_depot_keeps_file(tmp_path):
+    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
+    p = _write_legacy_sidecar(tmp_path, "bp1", "ch1", "2024-07-01 00:00:00")
+    # No depot configured → value still returned for this run, file left in place.
+    out = _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "k", None)
+    assert out == "2024-07-01 00:00:00"
+    assert p.exists()
+
+
+def test_migrate_legacy_sidecar_none_store_dir(tmp_path):
+    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
+    assert _migrate_legacy_watermark_sidecar(None, "bp1", "ch1", "k", _FakeDepot()) == ""
 
 
 def test_compute_watermark_from_output_parquet(spark, tmp_path):
@@ -298,193 +294,81 @@ def test_compute_watermark_from_output_delta_format_none_fallback(spark, tmp_pat
     assert result is None
 
 
-def test_incremental_sidecar_written_after_egress(spark, tmp_path):
-    """incremental Channel + Egress succeeds → sidecar written at store_dir/watermarks/."""
-    from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
-    in_path = str(tmp_path / "in_sidecar.parquet")
-    spark.createDataFrame([
-        ("2024-03-01 08:00:00", 1),
-        ("2024-03-01 10:00:00", 2),
-    ], ["ts", "id"]).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
+def test_watermark_depot_only_no_sidecar(spark, tmp_path):
+    """Phase 53 — a full incremental run persists the watermark to the Depot and
+    creates NO local ``watermarks/*.json`` sidecar under store_dir."""
+    in_path = str(tmp_path / "in_wm.parquet")
+    out_path = str(tmp_path / "out_wm")
+    spark.createDataFrame(
+        [("2024-01-01 10:00:00", 1), ("2024-01-01 12:00:00", 2)],
+        ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
 
-    out_path = str(tmp_path / "out_sidecar.parquet")
-    store_dir = tmp_path / "store"
-
+    store_dir = tmp_path / "store_wm"
+    depot = MockDepot()
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="inc", type="Channel", label="Inc", config={
-                "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
+                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
             }),
-            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
+            Module(id="out", type="Egress", label="Out", config={
+                "format": "parquet", "path": out_path, "mode": "append",
+            }),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
             Edge(from_id="inc", to_id="out", port="main"),
-        )
-    )
-
-    result = execute(manifest, spark, store_dir=store_dir)
-    assert result.status == "success"
-
-    wm = _read_watermark_sidecar(store_dir, "test_bp", "inc")
-    assert wm is not None
-    assert "2024-03-01 10:00:00" in wm
-
-
-def test_incremental_sidecar_priority_over_depot(spark, tmp_path):
-    """incremental Channel → sidecar read takes priority over Depot value."""
-    import json
-    from aqueduct.executor.spark.executor import execute, _watermark_sidecar_path, _read_watermark_sidecar
-
-    in_path = str(tmp_path / "in_prio.parquet")
-    spark.createDataFrame([
-        ("2024-05-01 10:00:00", 1),
-        ("2024-05-01 15:00:00", 2),
-    ], ["ts", "id"]).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
-
-    out_path = str(tmp_path / "out_prio.parquet")
-    store_dir = tmp_path / "store2"
-
-    # Pre-write a sidecar with an older watermark (sidecar should win over depot)
-    sidecar_path = _watermark_sidecar_path(store_dir, "test_bp", "inc_prio")
-    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-    sidecar_path.write_text(json.dumps({"watermark": "2024-05-01 12:00:00"}))
-
-    depot = MockDepot({"test_bp:inc_prio:_watermark": "2024-05-01 09:00:00"})
-
-    manifest = create_manifest(
-        modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc_prio", type="Channel", label="Inc", config={
-                "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
-            }),
-            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
         ),
-        edges=(
-            Edge(from_id="in", to_id="inc_prio", port="main"),
-            Edge(from_id="inc_prio", to_id="out", port="main"),
-        )
     )
 
     result = execute(manifest, spark, depot=depot, store_dir=store_dir)
     assert result.status == "success"
-    # Only row after sidecar watermark (12:00:00) should pass: row 2 at 15:00:00
-    df_out = spark.read.parquet(out_path)
-    assert df_out.count() == 1
+    # Watermark advanced in the Depot …
+    assert depot.get("test_bp:inc:_watermark") == "2024-01-01 12:00:00"
+    # … and NO local sidecar was written.
+    assert not (store_dir / "watermarks").exists()
 
 
-def test_incremental_egress_fail_sidecar_not_written(spark, tmp_path):
-    """incremental Channel + Egress fails → sidecar NOT written, watermark NOT advanced."""
-    from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
+def test_watermark_no_depot_warns_and_persists_nothing(spark, tmp_path, caplog):
+    """Phase 53 — incremental Egress with no Depot logs a warning and persists
+    nothing (next run re-scans); still no local sidecar."""
+    in_path = str(tmp_path / "in_nd.parquet")
+    out_path = str(tmp_path / "out_nd")
+    spark.createDataFrame(
+        [("2024-01-01 10:00:00", 1)], ["ts", "id"],
+    ).selectExpr("CAST(ts AS TIMESTAMP) as ts", "id").write.parquet(in_path)
 
-    in_path = str(tmp_path / "in_fail2.parquet")
-    spark.range(1).selectExpr("CAST('2024-01-01 10:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
-
-    store_dir = tmp_path / "store_fail"
-
+    store_dir = tmp_path / "store_nd"
     manifest = create_manifest(
         modules=(
             Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
             Module(id="inc", type="Channel", label="Inc", config={
-                "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
+                "op": "sql", "materialize": "incremental", "watermark_column": "ts",
                 "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
             }),
-            # Force egress failure by writing to a bad path
             Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": "/proc/sys/kernel/not_writable_path/",
-                "mode": "overwrite",
+                "format": "parquet", "path": out_path, "mode": "append",
             }),
         ),
         edges=(
             Edge(from_id="in", to_id="inc", port="main"),
             Edge(from_id="inc", to_id="out", port="main"),
-        )
-    )
-
-    result = execute(manifest, spark, store_dir=store_dir)
-    assert result.status == "error"
-    wm = _read_watermark_sidecar(store_dir, "test_bp", "inc")
-    assert wm is None
-
-
-def test_pending_watermarks_not_populated_for_normal_channel(spark, tmp_path):
-    """_pending_watermarks NOT populated for non-incremental Channel."""
-    from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
-
-    in_path = str(tmp_path / "in_normal.parquet")
-    out_path = str(tmp_path / "out_normal.parquet")
-    spark.range(3).selectExpr("CAST('2024-01-01' AS TIMESTAMP) as ts").write.parquet(in_path)
-    store_dir = tmp_path / "store_normal"
-
-    manifest = create_manifest(
-        modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="ch", type="Channel", label="Ch", config={"op": "sql", "query": "SELECT * FROM in"}),
-            Module(id="out", type="Egress", label="Out", config={"format": "parquet", "path": out_path, "mode": "overwrite"}),
         ),
-        edges=(
-            Edge(from_id="in", to_id="ch", port="main"),
-            Edge(from_id="ch", to_id="out", port="main"),
-        )
     )
 
-    result = execute(manifest, spark, store_dir=store_dir)
+    with caplog.at_level("WARNING"):
+        result = execute(manifest, spark, depot=None, store_dir=store_dir)
     assert result.status == "success"
-    # No watermark sidecar for non-incremental channel
-    wm = _read_watermark_sidecar(store_dir, "test_bp", "ch")
-    assert wm is None
-
-
-def test_incremental_sidecar_written_depot_none(spark, tmp_path):
-    """incremental Channel, depot=None → sidecar still written after Egress write."""
-    from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
-
-    in_path = str(tmp_path / "in_depot_none.parquet")
-    out_path = str(tmp_path / "out_depot_none")
-    spark.range(3).selectExpr("CAST('2024-06-01 12:00:00' AS TIMESTAMP) as ts").write.parquet(in_path)
-    store_dir = tmp_path / "store_depot_none"
-
-    manifest = create_manifest(
-        modules=(
-            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
-            Module(id="inc", type="Channel", label="Inc", config={
-                "op": "sql",
-                "materialize": "incremental",
-                "watermark_column": "ts",
-                "query": "SELECT * FROM in WHERE ts > ${ctx._watermark}",
-            }),
-            Module(id="out", type="Egress", label="Out", config={
-                "format": "parquet",
-                "path": out_path,
-                "mode": "overwrite",
-            }),
-        ),
-        edges=(
-            Edge(from_id="in", to_id="inc", port="main"),
-            Edge(from_id="inc", to_id="out", port="main"),
-        )
-    )
-
-    result = execute(manifest, spark, store_dir=store_dir, depot=None)
-    assert result.status == "success"
-    wm = _read_watermark_sidecar(store_dir, "test_bp", "inc")
-    assert wm is not None
-
+    assert "no depot is configured" in caplog.text
+    assert "re-scans all source data" in caplog.text
+    assert not (store_dir / "watermarks").exists()
 
 
 def test_watermark_computed_from_output_not_channel_df(spark, tmp_path):
     """Watermark MAX computed from Egress output path, not the lazy Channel df (no double-scan)."""
-    from aqueduct.executor.spark.executor import execute, _read_watermark_sidecar
+    from aqueduct.executor.spark.executor import execute
     from unittest.mock import patch
 
     in_path = str(tmp_path / "in_nodbl.parquet")

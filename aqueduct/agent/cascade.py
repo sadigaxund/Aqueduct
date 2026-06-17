@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from aqueduct.agent.budget import BudgetConfig
 from aqueduct.agent.loop import AgentPatchResult, generate_agent_patch
@@ -51,6 +52,7 @@ def generate_cascade_patch(
     memory_coaching: bool = True,
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
+    obs_store: Any = None,
     # ── Callbacks shared across all tiers ───────────────────────────
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
@@ -129,6 +131,7 @@ def generate_cascade_patch(
             memory_coaching=memory_coaching,
             retry_max_retries=retry_max_retries,
             retry_backoff_seconds=retry_backoff_seconds,
+            obs_store=obs_store,
         )
 
         tokens_spent += result.tokens_in_total + result.tokens_out_total

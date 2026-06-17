@@ -122,11 +122,11 @@ All three confirm the loop is doing the right thing. The bug we are guarding aga
 aqueduct heal R2 --print-prompt | grep -A 20 "guardrail"
 ```
 
-The prompt should explicitly tell the model that the previous attempt was rejected by a guardrail and which op was forbidden. That is the Phase 34 unification — apply-side failures travel back through the same prompt builder as schema failures.
+The prompt should explicitly tell the model that the previous attempt was rejected by a guardrail and which op was forbidden. That is the unification — apply-side failures travel back through the same prompt builder as schema failures.
 
 ---
 
-## DEMO 3 — Multi-axis budget terminates correctly (Phase 34)
+## DEMO 3 — Multi-axis budget terminates correctly
 
 ```bash
 aqueduct run blueprints/03_unrecoverable_budget.yml

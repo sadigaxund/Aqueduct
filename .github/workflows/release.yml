@@ -1,0 +1,171 @@
+name: Release
+
+# Triggered by pushing a bare semver tag — NO 'v' prefix (e.g. `1.2.3`, not
+# `v1.2.3`). Tag the commit after moving CHANGELOG `[Unreleased]` to `[X.Y.Z]`:
+#
+#   git tag 1.2.3 && git push origin 1.2.3
+#
+# Pipeline (only the tagged commit on `main`):
+#   main-guard → full test suite → build → publish to TestPyPI (automatic) →
+#   publish to PyPI (MANUAL approval gate) → create the GitHub Release.
+#
+# TestPyPI is automatic (a throwaway index — safe to re-run). The real PyPI
+# upload is irreversible and idempotent, so it sits behind a manual approval:
+# the `pypi` GitHub Environment must have a required reviewer, which pauses the
+# job until a maintainer clicks "Approve" in the Actions UI.
+#
+# ONE-TIME SETUP:
+#   1. PyPI Trusted Publishing — on
+#      https://pypi.org/manage/project/aqueduct-core/settings/publishing/ add a
+#      GitHub publisher → owner: sadigaxund, repo: aqueduct, workflow:
+#      release.yml, environment: pypi. Repeat on https://test.pypi.org with
+#      environment: testpypi. No API token is ever stored in the repo.
+#   2. Manual gate — repo Settings → Environments → `pypi` → add yourself as a
+#      Required reviewer. (Leave `testpypi` with no protection.)
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+      - '[0-9]+.[0-9]+.[0-9]+[a-z]*[0-9]*'   # 1.2.3rc1 / 1.2.3b1 pre-releases
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Guard: the tag must point at a commit on main ────────────────────
+  main-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need full history + branches to test ancestry
+      - name: Refuse tags not on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::tag ${GITHUB_REF_NAME} is not on main — refusing to release"
+            exit 1
+          fi
+
+  # ── Gate: the whole suite must pass before anything is published ──────
+  test:
+    needs: main-guard
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: aq
+          POSTGRES_PASSWORD: aq
+          POSTGRES_DB: aq_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
+      AQ_REDIS_URL: "redis://localhost:6379/0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[all,dev]"
+      # Full suite. `todo` tests auto-skip; xfail_strict means a fixed-but-still
+      # -marked known bug fails here. Live-LLM `agent` tests self-skip (no key).
+      - run: pytest tests/
+
+  # ── Build sdist + wheel ──────────────────────────────────────────────
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install build
+      - run: python -m build
+      - name: Verify the tag matches the package version
+        run: |
+          PKG_VER=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$PKG_VER" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != pyproject version ${PKG_VER}"; exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ── TestPyPI: automatic dry-run upload (throwaway index, safe to re-run) ─
+  publish-testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write   # OIDC trusted publishing — no password
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  # ── PyPI: irreversible — gated behind the `pypi` environment's required
+  #         reviewer (manual "Approve" click in the Actions UI) ──────────
+  publish-pypi:
+    needs: publish-testpypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write   # OIDC trusted publishing — no password
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # ── GitHub Release: "Aqueduct X.Y.Z" + the CHANGELOG section ─────────
+  github-release:
+    needs: publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Extract this version's CHANGELOG section
+        run: |
+          python - "$GITHUB_REF_NAME" > release_notes.md <<'PY'
+          import re, sys, pathlib
+          tag = sys.argv[1]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          # Grab everything under "## [<tag>]" up to the next "## [" header.
+          m = re.search(rf"^## \[{re.escape(tag)}\].*?$(.*?)(?=^## \[)", text, re.S | re.M)
+          body = (m.group(1).strip() if m else "")
+          print(body or f"Release {tag}. See CHANGELOG.md for details.")
+          PY
+      - name: Create the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Aqueduct ${{ github.ref_name }}"
+          body_path: release_notes.md
+          files: dist/*
+          fail_on_unmatched_files: true

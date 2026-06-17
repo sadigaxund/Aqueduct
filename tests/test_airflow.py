@@ -746,6 +746,9 @@ stores:
         None,
     ]
     mock_surveyor_cls.return_value = mock_surveyor
+    # Prevent MagicMock from poisoning find_pending/find_replay_candidate
+    mock_surveyor.observability = None
+    mock_surveyor.patch_store.return_value = None
 
     # Agent generator mock
     # The patch operation will set path to "valid.csv"

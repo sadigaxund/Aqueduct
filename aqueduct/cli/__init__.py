@@ -226,7 +226,8 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         return None
 
 
-def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str) -> Any:
+def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,
+                              obs_store=None, patch_store=None) -> Any:
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
@@ -251,7 +252,8 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         _yaml_dump(patched, tmp_out)
         _os.replace(tmp_out, blueprint_path)
 
-        archive_patch(patch, patches_dir, failure_ctx, mode=mode)
+        archive_patch(patch, patches_dir, failure_ctx, mode=mode,
+                      patch_store=patch_store, obs_store=obs_store)
 
         # Re-parse + re-compile from updated file
         bp = parse(str(blueprint_path))
@@ -273,6 +275,7 @@ def _run_patch_gates_inline(
     blueprint_id: str,
     sample_rows: int = 1000,
     sandbox_mode: str = "sample",
+    sandbox_master_url: str | None = None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
@@ -329,7 +332,7 @@ def _run_patch_gates_inline(
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
             explain_capture=explain_after,
-            sandbox_master_url=None,  # TODO: thread resolved_sandbox_master_url when cfg is accessible
+            sandbox_master_url=sandbox_master_url,
         )
     try:
         surveyor.record_patch_simulation(
@@ -367,12 +370,14 @@ def _run_patch_gates_inline(
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 
-def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod) -> None:
+def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,
+                        obs_store=None, patch_store=None) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
         from aqueduct.agent import stage_patch_for_human
         stage_patch_for_human(patch, patches_dir, failure_ctx,
-                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending)
+                              on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
+                              patch_store=patch_store, obs_store=obs_store)
         # Reflect the actual on-disk filename (timestamp prefix added by
         # `_patch_filename`) instead of the bare patch_id.
         pending = patches_dir / "pending"

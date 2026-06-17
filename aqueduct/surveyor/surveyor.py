@@ -34,6 +34,7 @@ from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:
     from aqueduct.stores import ObservabilityStore, StoreBundle
+    from aqueduct.stores.object_store import BlobStore, PatchStore
 
 logger = logging.getLogger(__name__)
 
@@ -389,6 +390,8 @@ class Surveyor:
         blueprint_path: Path | None = None,
         patches_dir: Path | None = None,
         stores: "StoreBundle | None" = None,
+        blob_config: tuple[str, str] | None = None,
+        lineage_config: tuple[str, str] | None = None,
     ) -> None:
         """Initialise the Surveyor.
 
@@ -410,12 +413,53 @@ class Surveyor:
             self._webhook_config = None
         self._blueprint_path = blueprint_path
         self._patches_dir = patches_dir or Path("patches")
+        # Phase 53 — (backend, location) for the object store. None → local
+        # backend rooted at store_dir, byte-identical to the historical layout.
+        self._blob_config = blob_config
+        self._blob_store_cached: "BlobStore | None" = None
+        # Phase 55 — OpenLineage emitter. Built only when a url is configured
+        # (lineage.openlineage_url); otherwise emission is off, zero cost.
+        self._openlineage = None
+        if lineage_config is not None and lineage_config[0]:
+            try:
+                from aqueduct.surveyor.openlineage import OpenLineageEmitter
+                self._openlineage = OpenLineageEmitter(
+                    url=lineage_config[0], namespace=lineage_config[1] or "aqueduct",
+                    manifest=manifest,
+                )
+            except Exception:  # noqa: BLE001 — never let lineage setup break a run
+                self._openlineage = None
         self._run_id: str | None = None
         self._started_at: datetime | None = None
         self._stores: "StoreBundle | None" = stores
         self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
+
+    def _blob_store(self) -> "BlobStore | None":
+        """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
+        configured — programmatic callers without a store keep blobs inline."""
+        if self._store_dir is None:
+            return None
+        if self._blob_store_cached is None:
+            from aqueduct.stores.object_store import make_blob_store
+            backend, location = self._blob_config or ("local", "")
+            self._blob_store_cached = make_blob_store(backend, location, self._store_dir)
+        return self._blob_store_cached
+
+    @property
+    def observability(self) -> "ObservabilityStore | None":
+        """The active observability store (backs the patch_index + heal cache)."""
+        return self._observability
+
+    def patch_store(self) -> "PatchStore":
+        """Build the PatchStore from the configured object-store backend.
+
+        Local default reproduces the historical ``patches/`` directory; an
+        object backend (s3/gcs/adls) persists where a cluster pod survives."""
+        from aqueduct.stores.object_store import make_patch_store
+        backend, location = self._blob_config or ("local", "")
+        return make_patch_store(backend, location, self._patches_dir)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -445,6 +489,11 @@ class Surveyor:
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
             cur.execute(_PHASE45_MIGRATION_DDL)
+            # Phase 53 — patch index (relational truth for the object-store patch
+            # lifecycle). Created here so the heal cache can query it instead of
+            # scanning the patches/ directory.
+            from aqueduct.patch.index import ensure_schema as _ensure_patch_index
+            _ensure_patch_index(cur)
 
             cur.execute(
                 """
@@ -462,6 +511,10 @@ class Surveyor:
             )
 
         self._started = True
+
+        # Phase 55 — emit the OpenLineage START event (daemon thread, best-effort).
+        if self._openlineage is not None:
+            self._openlineage.emit("START", run_id=run_id, event_time=_iso(self._started_at))
 
     def register_iteration(self, *, run_id: str, parent_run_id: str) -> None:
         """Register a multi-patch iteration's per-execute run_id.
@@ -539,6 +592,9 @@ class Surveyor:
             )
 
         if result.status == "success":
+            # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).
+            if self._openlineage is not None:
+                self._openlineage.emit("COMPLETE", run_id=result.run_id, event_time=_iso(finished_at))
             return None
 
         # ── Build FailureContext ───────────────────────────────────────────────
@@ -583,15 +639,14 @@ class Surveyor:
         # Phase 39 — externalise fat columns to compressed blobs so the DB
         # row stores only a relative path (DuckDB row width drops ~10×).
         # Postgres is unaffected — TOAST handles large JSON natively.
-        _blob_root = self._store_dir if self._store_dir is not None else None
         _manifest_json = _redact(json.dumps(self._manifest.to_dict()))
         _stack_trace_str = _redact(stack_trace) or ""
         _prov_json = _redact(provenance_json) or ""
-        if _blob_root is not None:
-            from aqueduct.surveyor.blob_store import externalise as _blob_ext
-            _manifest_json = _blob_ext(_manifest_json, _blob_root, result.run_id, "manifest")
-            _stack_trace_str = _blob_ext(_stack_trace_str, _blob_root, result.run_id, "stack")
-            _prov_json = _blob_ext(_prov_json, _blob_root, result.run_id, "prov")
+        _blob = self._blob_store()
+        if _blob is not None:
+            _manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
+            _stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
+            _prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
 
         ctx = FailureContext(
             run_id=result.run_id,
@@ -666,6 +721,13 @@ class Surveyor:
                 "attempt": str(attempt),
             }
             fire_webhook(self._webhook_config, ctx.to_dict(), template_vars, event="on_failure")
+
+        # Phase 55 — terminal OpenLineage FAIL with the error message facet.
+        if self._openlineage is not None:
+            self._openlineage.emit(
+                "FAIL", run_id=result.run_id, event_time=_iso(finished_at),
+                error_message=ctx.error_message,
+            )
 
         return ctx
 

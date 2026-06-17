@@ -208,6 +208,9 @@ def test_phase45_migration_idempotent_on_fresh_db():
     conn.execute(_DDL)
     conn.execute(_PHASE45_MIGRATION_DDL)
     conn.execute(_PHASE45_MIGRATION_DDL)  # second call must not raise
+    # migration actually added its columns (idempotent ADD COLUMN IF NOT EXISTS)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('healing_outcomes')").fetchall()}
+    assert {"failure_signature", "resolution"} <= cols
     conn.close()
 
 

@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.1 — Reference Document**
+**Version 1.3 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -100,7 +100,8 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
 | **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is inert. |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
+| **Object Store** (1.2+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the pre-1.2 on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 
 ## **3.3 Component Interaction Flow**
 
@@ -483,18 +484,46 @@ Resolution order (highest priority wins):
 
 ## **5.4 UDF Registry**
 
+UDFs are registered from importable code, not inline source. Two execution
+models — `lang: python` (default) and `lang: java`/`scala` (JAR-backed).
+
+**Python UDFs** point at an importable module + function:
+
 ```yaml
 udf_registry:
   - id: clean_phone
-    lang: python                   # python (default) | pandas | spark_sql
-    fn: |
-      import re
-      def clean_phone(p: str) -> str:
-          return re.sub(r'[^\d+]', '', p) if p else p
+    lang: python                   # default
+    module: my_project.udfs        # importable module (must be on PYTHONPATH)
+    entry: clean_phone             # function name in that module (defaults to `id`)
     return_type: STRING
 ```
 
-Three UDF execution models: Python (row-at-a-time via JVM bridge), Pandas (vectorized via Arrow), Spark SQL (inline expression, zero serialization).
+The driver imports `module` and looks up `entry` (a plain Python callable),
+registering it with `spark.udf.register`. The module must be importable from the
+run's working directory / `PYTHONPATH`. Python UDFs execute row-at-a-time via the
+JVM bridge — for high-volume Channels prefer native Spark SQL.
+
+**Java/Scala UDFs** point at a JAR + class — pure JVM bytecode, no Python
+serialization:
+
+```yaml
+udf_registry:
+  - id: geohash
+    lang: java                     # or scala
+    jar: libs/geo-udfs.jar         # JAR path (relative paths anchor to the Blueprint dir)
+    class: com.example.GeoHashUDF  # fully-qualified class name
+    return_type: STRING
+```
+
+| Field | Applies to | Description |
+| :- | :- | :- |
+| `id` | all | UDF name as referenced in `udfs:` lists and SQL. Required. |
+| `lang` | all | `python` (default), `java`, or `scala`. |
+| `return_type` | all | Spark DDL type string (default `string`). |
+| `module` | python | Importable module path. Required for python. |
+| `entry` | python | Function name in `module` (defaults to `id`). |
+| `jar` | java/scala | JAR file path (relative paths anchor to the Blueprint dir). |
+| `class` | java/scala | Fully-qualified class name. |
 
 ---
 
@@ -533,6 +562,24 @@ Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py
 
 Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds.
 
+## **7.4 OpenLineage Emission (1.2)**
+
+When `lineage.openlineage_url` is set, the Surveyor emits **OpenLineage** RunEvents to an OpenLineage-compatible backend (Marquez, DataHub, Atlan): `START` on run begin, `COMPLETE` on success, `FAIL` on terminal failure (with an `errorMessage` run facet). Delivery uses the same async daemon-thread pattern as webhooks — non-blocking, best-effort, zero hot-path cost; the blueprint result is authoritative and a dropped event is logged, never raised. Events POST to `<openlineage_url>/api/v1/lineage`.
+
+Each event maps Ingress modules → input datasets and Egress modules → output datasets. The **output datasets carry the column-level `columnLineage` facet** — built from the same compile-time lineage rows that populate `column_lineage` (`compiler.lineage.compute_lineage_rows`), so field-to-field arrows render downstream. sqlglot resolves ~90% of SparkSQL; unresolved columns fall back to `UNKNOWN`. The Aqueduct `run_id` is mapped to a deterministic UUIDv5 (`run`/`runId` correlate across START and COMPLETE/FAIL).
+
+**v1 limitations to be aware of:** (1) the `columnLineage` facet is the union of all Channel lineage rows attached to each Egress output — exact for the common single-Egress pipeline, over-broad for multi-Egress Blueprints (transitive per-output resolution is future work). (2) Input/output datasets use the configured `openlineage_namespace`, not a per-storage-system namespace (e.g. `s3://bucket`), so datasets won't auto-correlate with other tools writing the same physical table under a storage-system namespace.
+
+**Config — top-level `lineage:` block:**
+
+```yaml
+lineage:
+  openlineage_url: "http://marquez:5000"   # unset (default) → emission disabled
+  openlineage_namespace: aqueduct          # namespace for jobs + datasets
+```
+
+> **Naming collision:** this top-level `lineage:` block is **not** `stores.lineage`. `stores.lineage` is an inert store-backend config (column lineage merged into the observability store, §3.2); the `lineage:` block configures OpenLineage *emission*.
+
 ---
 
 # **8. Self-Healing & LLM Agent Loop**
@@ -543,9 +590,11 @@ The LLM agent operates within a grammar, not in free-form code generation mode. 
 
 **Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 14 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade (Phase 46): each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
+**Multi-model cascade.** When `agent.cascade:` is configured, Aqueduct tries models in order — cheapest first, expensive as fallback. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `deep_loop`, and `allow_defer`. Missing fields inherit from top-level `agent.*` defaults; a tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade: each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
 
-**Signature memory (Phase 45).** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs from `patches/applied/` as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+**Signature memory.** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+
+As of 1.2, the heal cache resolves through SQL queries against the **`patch_index`** observability table (status + signature + body `object_key`) rather than scanning the `patches/` directory — identical behaviour, but backend-blind, so the cache works when patch bodies live on s3/gcs/adls (the replay path fetches the one body it needs from the PatchStore by `object_key`). Patch bodies are written through the PatchStore (`pending` / `applied` / `rejected`) and every status transition is recorded in `patch_index`; local-checkout commands (`patch apply` / `patch reject`) stay on the filesystem but flip the index status so the cache stays consistent.
 
 ## **8.2 The Healing Flow**
 
@@ -565,7 +614,7 @@ Transient errors retry first (per `retry_policy.max_attempts`). Non-transient fa
 
 ### 2. Memory (zero tokens)
 
-The failure's signature is checked against the heal cache before any LLM call (Phase 45): a **pending patch** with the same signature ends the run immediately (`stop_reason: cached`, exit `HEAL_PENDING`); an **archived patch** that already fixed this signature replays through the gate pyramid (`stop_reason: replayed`), falling through to the LLM only if a gate rejects it. Cache miss → continue below.
+The failure's signature is checked against the heal cache before any LLM call: a **pending patch** with the same signature ends the run immediately (`stop_reason: cached`, exit `HEAL_PENDING`); an **archived patch** that already fixed this signature replays through the gate pyramid (`stop_reason: replayed`), falling through to the LLM only if a gate rejects it. Cache miss → continue below.
 
 ### 3. Prune
 
@@ -596,7 +645,7 @@ Schema errors, guardrail violations, and gate rejections feed back into the same
 
 When `same_error_consecutive` trips, the loop escalates: temperature is bumped and a skeleton reprompt template is used for one more attempt before honouring the abort.
 
-`max_seconds` counts LLM time only (Phase 46): validation-gate work (deep-loop sandbox replay, lineage, explain) is excluded from the clock, so a slow sandbox cannot exhaust the heal budget. Transient provider errors (HTTP 429/503/529) are retried per `agent.retry` (default 2 retries, exponential backoff with jitter, server `Retry-After` honored); retry sleeps count as LLM time and are always capped by the remaining per-call deadline.
+`max_seconds` counts LLM time only: validation-gate work (deep-loop sandbox replay, lineage, explain) is excluded from the clock, so a slow sandbox cannot exhaust the heal budget. Transient provider errors (HTTP 429/503/529) are retried per `agent.retry` (default 2 retries, exponential backoff with jitter, server `Retry-After` honored); retry sleeps count as LLM time and are always capped by the remaining per-call deadline.
 
 ### 6. Gate
 
@@ -621,6 +670,16 @@ Only after every gate passes does the patch run against the real pipeline. The o
 | `auto` | Aqueduct applies in-memory, re-validates, writes only if the re-run succeeds | Only on a successful re-run |
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
+
+**Config key (1.2).** `agent.approval` is the canonical key; `agent.approval_mode` is a deprecated input alias that still parses with a `[deprecated]` warning (removed in the `aqueduct: "2.0"` schema). `approval: aggressive` is a deprecated alias for `auto` + `max_patches > 1`, and `aggressive_max_patches` aliases `max_patches`.
+
+**`ci` mode — the CI kit (1.2).** In `ci` mode the patch is staged and the `on_patch_pending` webhook fires a POST to `agent.ci_webhook_url`. The engine ships **no** long-running receiver and **no** versioned GitHub Action — a CI runner you own receives the payload, obtains the patch body (a run artefact, or `aqueduct patch pull`), and applies + commits it in one step:
+
+```bash
+aqueduct patch import received-patch.json --blueprint pipeline.yml
+```
+
+`patch import` is `patch apply` + `patch commit` atomically (`--no-commit` stages only), writing a structured `---aqueduct---` commit trailer that `aqueduct patch log` / `rollback` read back. The webhook payload schema (envelope keys `patch_id` / `run_id` / `blueprint_id` / `failed_module` / `source` plus the body's `_aq_meta`) and a copy-paste example workflow wiring `import` + `gh pr create` are documented in the **[Production Guide](production_guide.md)**.
 
 ## **8.4 Sandbox Modes**
 
@@ -654,7 +713,7 @@ Supported operations: `set_module_config_key`, `replace_module_config`, `replace
 
 `set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize — seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
 
-`replace_macro` (Phase 47) replaces the body of an **existing** macro in the Blueprint `macros:` block — the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
+`replace_macro` replaces the body of an **existing** macro in the Blueprint `macros:` block — the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
 
 **`deep_loop`:** when `agent.deep_loop: true`, sandbox/lineage/explain gates run inside the LLM conversation so the model sees rejection feedback and retries in-context before `apply_callback` runs. Default false preserves the current post-hoc gate behavior.
 
@@ -737,12 +796,14 @@ Aqueduct reads a project-level `aqueduct.yml` configuration file from the workin
 - Override with `-e KEY=VAL` (highest precedence) or `--env-file <path>`.
 - Disable entirely with `AQ_NO_ENV_FILE=1`.
 
+**Config overrides (`-s/--set`, 1.2).** `aqueduct run -s agent.approval=human -s stores.observability.backend=postgres …` sets dotted-path keys in the loaded `aqueduct.yml` config in memory for that invocation — repeatable, applied after the file is read and before validation. Distinct from `--ctx` (which sets Blueprint Context Registry values, not engine config). Values are parsed as YAML scalars (`true`/`123`/strings).
+
 ## **10.3 SparkSession Lifecycle**
 
 - The Executor creates one SparkSession per pipeline run.
 - Session configuration from the Blueprint `spark_config` block is merged with engine defaults (Blueprint takes precedence).
 - On self-healing patch and resume: the SparkSession is preserved if the failure was application-level; recycled if JVM/network-level.
-- On run completion or abort, `session.stop()` is called.
+- On run completion or abort, the one-shot CLI relies on process-exit teardown to release the JVM — it deliberately does **not** call `session.stop()`, because `getOrCreate()` may have returned a shared/long-lived cluster (or test) session that other code still depends on. Short-lived helper commands that create a throwaway session (`doctor`, scaffolding) do stop theirs.
 
 ## **10.4 Path Resolution (1.1.0+)**
 

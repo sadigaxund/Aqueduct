@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
 
@@ -320,32 +319,28 @@ def _build_blueprint_summary(manifest_dict: dict) -> str:
     return " → ".join(parts) if parts else "(complex graph)"
 
 
-def _load_previous_patches(patches_dir: Path, limit: int = _PATCH_HISTORY_MAX) -> list[dict]:
-    """Read most-recent applied patches for the 'do not repeat' section.
+def _load_previous_patches(obs_store: Any, limit: int = _PATCH_HISTORY_MAX) -> list[dict]:
+    """Most-recent applied patches for the 'do not repeat' section.
 
-    Uses ``os.scandir`` for bounded stat overhead on large directories.
-    Unreadable or malformed files are skipped at DEBUG log level.
-    """
-    applied_dir = patches_dir / "applied"
-    if not applied_dir.exists():
+    Phase 53 — served from the ``patch_index`` table (backend-blind) instead of
+    an ``os.scandir`` over ``patches/applied/``. Empty when no store is given."""
+    if obs_store is None:
+        return []
+    try:
+        from aqueduct.patch import index as _ix
+        with obs_store.connect() as cur:
+            rows = _ix.recent_applied(cur, limit)
+    except Exception:
+        logger.debug("previous-patch history query failed", exc_info=True)
         return []
     patches: list[dict] = []
-    entries = [
-        e for e in os.scandir(applied_dir)
-        if e.name.endswith(".json") and e.is_file()
-    ]
-    for e in sorted(entries, key=lambda e: e.stat().st_mtime, reverse=True)[:limit]:
-        try:
-            data = json.loads(Path(e.path).read_text(encoding="utf-8"))
-            patches.append({
-                "patch_id": data.get("patch_id", Path(e.name).stem),
-                # Archived patches dump the canonical `rationale` key;
-                # `description` is the alias older / hand-written patches use.
-                "description": data.get("rationale") or data.get("description", ""),
-                "ops": [op.get("op", "?") for op in data.get("operations", [])],
-            })
-        except Exception:
-            logger.debug("Skipping unreadable patch history file %s", e.path, exc_info=True)
+    for d in rows:
+        ops = d.get("ops")
+        patches.append({
+            "patch_id": str(d.get("patch_id") or "?"),
+            "description": str(d.get("rationale") or ""),
+            "ops": list(ops) if isinstance(ops, list) else [],
+        })
     return patches
 
 
@@ -580,11 +575,11 @@ _COACHING_TIER_LABELS = {
 }
 
 
-def _build_coaching_section(failure_ctx: Any, patches_dir: Path) -> str:
+def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
     """Phase 45 — signature-matched (failure → validated fix) few-shot section.
 
-    Replaces the chronological last-3 history with nearest-signature
-    retrieval over ``patches/applied/``. Empty string when nothing matches
+    Nearest-signature retrieval over applied patches, served from the
+    ``patch_index`` table (Phase 53). Empty string when nothing matches
     (caller falls back to the legacy section).
     """
     from aqueduct.agent.memory import find_coaching_examples
@@ -593,7 +588,7 @@ def _build_coaching_section(failure_ctx: Any, patches_dir: Path) -> str:
     try:
         sig_exact, sig_coarse = from_failure_context(failure_ctx)
         examples = find_coaching_examples(
-            sig_exact.hash, sig_coarse.hash, sig_exact.error_class, patches_dir,
+            obs_store, sig_exact.hash, sig_coarse.hash, sig_exact.error_class,
         )
     except Exception:
         logger.debug("Coaching retrieval failed — section omitted", exc_info=True)
@@ -625,6 +620,7 @@ def _build_system_prompt(
     allow_defer: bool = False,
     failure_ctx: Any = None,
     coaching: bool = True,
+    obs_store: Any = None,
 ) -> str:
     raw_schema = PatchSpec.model_json_schema()
 
@@ -681,13 +677,13 @@ def _build_system_prompt(
     # threaded (debug/`aqueduct heal --show-prompt` paths), or nothing matches.
     prev_section = ""
     if coaching and failure_ctx is not None:
-        prev_section = _build_coaching_section(failure_ctx, patches_dir)
+        prev_section = _build_coaching_section(failure_ctx, obs_store)
         if prev_section and last_apply_error:
             prev_section += (
                 f"\n\n**Last patch apply error (the previous fix failed for this reason — do not repeat it):**\n{last_apply_error}"
             )
     if not prev_section:
-        prev = _load_previous_patches(patches_dir)
+        prev = _load_previous_patches(obs_store)
         if prev:
             lines = ["\n## Previous patch attempts (do NOT repeat these)"]
             for p in prev:
@@ -739,6 +735,7 @@ def build_prompt(
     last_apply_error: str | None = None,
     allow_defer: bool = False,
     coaching: bool = True,
+    obs_store: Any = None,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -750,6 +747,8 @@ def build_prompt(
             on a re-prompt turn.
         allow_defer: When True, includes defer_to_human in the schema and defer
             rules in the prompt (Phase 41).
+        obs_store: Observability store backing the patch_index — sources the
+            coaching + history sections (Phase 53). None → those sections empty.
 
     Returns:
         {"system": <system prompt>, "user": <user prompt>}
@@ -761,6 +760,7 @@ def build_prompt(
             allow_defer=allow_defer,
             failure_ctx=failure_ctx,
             coaching=coaching,
+            obs_store=obs_store,
         ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }

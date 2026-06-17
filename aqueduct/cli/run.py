@@ -745,8 +745,15 @@ def run(
             blueprint_path=Path(blueprint),
             patches_dir=patches_dir,
             stores=bundle,
+            blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
+            lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
+            if cfg.lineage.openlineage_url else None,
         )
         surveyor.start(run_id)
+        # Phase 53 — object-store patch lifecycle + patch_index heal cache.
+        # Built once: the obs store backs the index, the patch store the bodies.
+        _obs_store = surveyor.observability
+        _patch_store = surveyor.patch_store()
 
         # ── Engine session ────────────────────────────────────────────────────────
         merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
@@ -888,16 +895,14 @@ def run(
                 # 1) Pending-patch reuse — same failure already has a patch
                 #    awaiting review; re-healing it would burn tokens on a
                 #    duplicate. Surface the existing patch and stop.
-                _pending_hit = _heal_memory.find_pending(_sig_exact.hash, patches_dir)
+                _pending_hit = _heal_memory.find_pending(_obs_store, _sig_exact.hash)
                 if _pending_hit is not None:
-                    _rel_pending = (
-                        _pending_hit.path.relative_to(_project_root)
-                        if _pending_hit.path.is_relative_to(_project_root) else _pending_hit.path
-                    )
+                    _rel_pending = f"{_patch_store.location_label}/{_pending_hit.object_key}"
                     click.echo(
                         f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
                         f"this failure signature ({_sig_exact.hash}) — skipping LLM (0 tokens)\n"
-                        f"    Review: aqueduct patch apply {_rel_pending} --blueprint {blueprint}",
+                        f"    Review: aqueduct patch pull {_pending_hit.patch_id}  "
+                        f"(body: {_rel_pending})",
                         err=True,
                     )
                     patch_staged_for_review = True
@@ -927,7 +932,7 @@ def run(
                 #    through the normal pipeline with zero LLM tokens; any
                 #    failure falls through to the LLM in this same iteration.
                 _candidate = _heal_memory.find_replay_candidate(
-                    _sig_exact.hash, patches_dir, surveyor.successful_patch_ids(),
+                    _obs_store, _patch_store, _sig_exact.hash, surveyor.successful_patch_ids(),
                 )
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
@@ -956,6 +961,7 @@ def run(
                                 iteration_run_id=iteration_run_id,
                                 blueprint_id=manifest.blueprint_id,
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                                sandbox_master_url=resolved_sandbox_master_url,
                             )
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
@@ -1121,6 +1127,7 @@ def run(
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
                             sandbox_mode=_vc_sandbox_mode,
+                            sandbox_master_url=resolved_sandbox_master_url,
                         )
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
@@ -1172,6 +1179,7 @@ def run(
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                    obs_store=_obs_store,
                 )
             else:
                 agent_result = generate_agent_patch(
@@ -1196,6 +1204,7 @@ def run(
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                    obs_store=_obs_store,
                 )
             patch = agent_result.patch
             # Phase 46 — record the model that actually produced this result
@@ -1295,7 +1304,8 @@ def run(
                 click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source)
+                                      source=_patch_source,
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 click.echo(
                     f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
                     err=True,
@@ -1316,7 +1326,8 @@ def run(
             if effective_mode == "human":
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
-                                      source=_patch_source)
+                                      source=_patch_source,
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
                     or patches_dir / "pending" / f"{patch.patch_id}.json"
@@ -1354,7 +1365,8 @@ def run(
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
                                       source=_patch_source,
-                                      webhook_event="on_ci_patch")
+                                      webhook_event="on_ci_patch",
+                                      patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 click.echo(
                     f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
@@ -1390,6 +1402,7 @@ def run(
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                        sandbox_master_url=resolved_sandbox_master_url,
                     )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
@@ -1412,6 +1425,7 @@ def run(
                     )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     break
 
@@ -1422,7 +1436,8 @@ def run(
                     # Sandbox-only validation: write the patched Blueprint without
                     # running the full pipeline. The next regular `aqueduct run`
                     # will execute it against real data and real Egress sinks.
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ LLM patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
                         f"→ {blueprint}",
@@ -1470,7 +1485,8 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto")
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
                     result = result2
                     failure_ctx = failure_ctx2
@@ -1478,6 +1494,7 @@ def run(
                     click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     result = result2
                     failure_ctx = failure_ctx2
@@ -1501,6 +1518,7 @@ def run(
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                        sandbox_master_url=resolved_sandbox_master_url,
                     )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
@@ -1546,7 +1564,8 @@ def run(
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
 
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ multi-patch: sandbox-only validated → {blueprint}",
                         err=True,
@@ -1603,7 +1622,8 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive")
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                                              obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
@@ -1621,6 +1641,7 @@ def run(
                     )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
+                        obs_store=_obs_store, patch_store=_patch_store,
                     )
                     result = result2
                     failure_ctx = failure_ctx2

@@ -1,4 +1,4 @@
-# DEMO 3 — Phase 34: multi-axis budget actually terminates the loop.
+# DEMO 3 — multi-axis budget actually terminates the loop.
 #
 # The failure here is unrecoverable by patching the blueprint — the path
 # points at a nonexistent S3 bucket. Spark raises a path / IO error every

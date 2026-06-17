@@ -84,7 +84,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
     _write_config(cfg_path)
 
     from aqueduct.agent.memory import PendingHit
-    hit = PendingHit(path=tmp_path / "patches" / "pending" / "001_fix.json",
+    hit = PendingHit(object_key="pending/001_fix.json",
                      patch_id="fix-1", staged_at=None, source="llm")
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"

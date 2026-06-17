@@ -1,3 +1,11 @@
+> **FROZEN / ARCHIVED.** This hand-maintained ledger was retired in favour of a
+> pytest-native backlog: the suite itself is now the source of truth for passing
+> tests, `@pytest.mark.todo("why")` is the unwritten-test backlog (`pytest
+> --collect-only -m todo`), and `@pytest.mark.xfail(strict=True)` tracks known
+> bugs (self-removing when fixed). See `CONTRIBUTING.md` → "Test backlog" and
+> AGENTS.md → "Testing". This file is kept only for historical reference; do not
+> add entries.
+
 # Aqueduct Test Manifest
 
 ## How to use this file
@@ -3032,3 +3040,34 @@ costly Probe sample-scan signals are skipped). `cli.py` derives the
 - ✅ `danger.allow_full_preflight: false` (default) with `sandbox_mode: preflight` → exit 1. — `tests/test_cli/test_cli_sandbox_mode.py::test_sandbox_mode_preflight_blocks_without_danger_gate`
 - ✅ `danger.allow_skip_sandbox: false` (default) with `sandbox_mode: off` → exit 1. — `tests/test_cli/test_cli_sandbox_mode.py::test_sandbox_mode_off_blocks_without_danger_gate`
 - ✅ `danger.allow_full_probe_actions: false` (default) → `block_full_actions=True` blocks probe signals that would trigger Spark actions. — `tests/test_cli/test_cli_aggressive.py::test_block_full_actions_propagation`
+
+### Phase 53a — Object store + patch_index + watermark/schema_snapshot migration
+
+`aqueduct/stores/object_store.py`, `aqueduct/patch/index.py`, executor watermark, probe schema_snapshot.
+
+- ⏳ `BlobStore.externalise` writes a zstd blob under `blobs/<run_id>/<name>.json.zst` and returns that marker; `materialize(marker)` round-trips the original text. Empty string stays inline; an inline (non-marker) value passes through unchanged.
+- ⏳ Blob marker format is byte-identical to the pre-Phase-53 layout — a local `BlobStore(LocalBackend(store_dir))` reads a blob written by the old `surveyor.blob_store.externalise(value, store_dir, run_id, name)`.
+- ⏳ `surveyor/blob_store.py` shim: `externalise`/`materialize` still importable with the old `store_dir` signature and delegate to `BlobStore` (regression — `tests/test_redaction.py` + `tests/test_surveyor/test_agent.py` import them).
+- ⏳ `LocalBackend` put/get/exists/delete/move/list/mtime over a temp dir; `iter_payloads` returns `(rel_key, mtime, dict)` newest-first and skips malformed JSON.
+- ⏳ `PatchStore.write_pending/applied/rejected` writes under `patches/<status>/`; `find_pending_by_id` resolves both exact `{id}.json` and timestamped `*_{id}.json` names (newest match).
+- ⏳ `make_blob_store('local','',root)` → LocalBackend(root); `make_patch_store('local','',patches_dir)` roots the backend at `patches_dir.parent` so `<root>/patches/...` reproduces the dir.
+- ⏳ `make_blob_store('s3','s3://b/x',_)` constructs a `FsspecBackend`; raises a clear ImportError instructing `[object-store]` when fsspec is absent.
+- ⏳ `ObjectStoreConfig` defaults: `backend='local'`, `path=''`; `stores.blob` present on `StoresConfig` with `extra='forbid'` rejecting unknown keys.
+- ⏳ `patch_index` DDL is created on `Surveyor.start`; `ix.upsert` then `find_pending(sig)` returns the row, `set_status(id,'applied')` removes it from pending; `find_replay(sig, {id})` returns only confirmed-successful applied rows; `find_coaching` tiers exact→coarse→error_class→fill and dedupes by patch_id; `recent_applied(n)` newest-first. — `aqueduct/patch/index.py`
+- ⏳ Incremental Channel: watermark is read from and written to the Depot only; no `watermarks/*.json` file is created. With no Depot configured, the post-Egress watermark update logs a warning and persists nothing.
+- ⏳ Legacy migration: a pre-existing `store_dir/watermarks/<bp>__<ch>.json` sidecar is read into the Depot on next run and the file deleted (`_migrate_legacy_watermark_sidecar`).
+- ⏳ `schema_snapshot` probe writes its payload only to `probe_signals`; no `snapshots/<run_id>/*_schema.json` file is created.
+
+### Phase 53b — Patch lifecycle wired through PatchStore + patch_index
+
+`agent/loop.py`, `agent/memory.py`, `agent/prompts.py`, `patch/apply.py`, `cli.py patch pull`.
+
+- ⏳ `stage_patch_for_human(..., patch_store, obs_store)` writes the body via PatchStore (`patches/pending/`) AND upserts `patch_index` with `status='pending'` + the failure signature; `memory.find_pending(obs_store, sig)` then returns it.
+- ⏳ `archive_patch(..., patch_store, obs_store)` writes `patches/applied/` AND upserts `status='applied'`; `find_pending` no longer returns it (moved out of pending), `find_coaching_examples` + `_load_previous_patches` now include it.
+- ⏳ With only `patches_dir` (no patch_store/obs_store), stage/archive still write local files (back-compat) and skip the index.
+- ⏳ `memory.find_replay_candidate(obs_store, patch_store, sig, {patch_id})` returns the applied row only when the id is in the successful set, and fetches the body (operations) from the object store via `object_key`.
+- ⏳ `memory.find_coaching_examples` tiers exact→coarse→error_class→fill from `patch_index`, deduped by patch_id, capped at 3; empty list when `obs_store` is None.
+- ⏳ `_load_previous_patches(obs_store)` returns most-recent applied patches (patch_id/description/ops) from `patch_index`; empty when `obs_store` is None.
+- ⏳ `apply_patch_file(..., obs_store)` flips `patch_index` status to `applied`; `reject_patch(..., obs_store)` flips it to `rejected` (best-effort, never raises).
+- ⏳ `aqueduct patch pull <id> --blueprint <bp>`: resolves the index row, reads the body from `stores.blob`, writes `<patches>/pending/<id>.json`; exits `DATA_OR_RUNTIME` when the id is unknown or the body is unreadable.
+- ⏳ Heal-cache content rendered into the system prompt is byte-identical between the old dir-scan and the index source for the same patches (no PROMPT_VERSION change).

@@ -66,6 +66,7 @@ class DeploymentConfig(BaseModel):
 
 RelationalBackend = Literal["duckdb", "postgres"]
 KVBackend = Literal["duckdb", "postgres", "redis"]
+ObjectBackend = Literal["local", "s3", "gcs", "adls"]
 
 
 class RelationalStoreConfig(BaseModel):
@@ -113,6 +114,38 @@ class KVStoreConfig(BaseModel):
         description=(
             "DuckDB: local file path. Postgres: libpq DSN. "
             "Redis: `redis://host:port/db` URL."
+        ),
+    )
+
+
+class ObjectStoreConfig(BaseModel):
+    """Backend config for opaque driver artefacts — observability blobs and the
+    patch lifecycle (Phase 53).
+
+    These are not relational rows but compressed/JSON files the driver writes.
+    Routing them through a pluggable object store lets an ephemeral cluster pod
+    produce no local-FS artefacts under its cwd. `local` (default) is
+    byte-identical to the historical layout, so the git review workflow is
+    unchanged. `s3` / `gcs` / `adls` are served by one `fsspec` handle — install
+    the `[object-store]` extra. The `path` is NOT FsPath-anchored: for object
+    backends it is a base URI that must survive verbatim.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: ObjectBackend = Field(
+        default="local",
+        description=(
+            "Object-store backend for blobs + patch lifecycle. `local` (default) "
+            "writes to the driver filesystem. `s3` / `gcs` / `adls` route through "
+            "fsspec (requires the `[object-store]` extra)."
+        ),
+    )
+    path: str = Field(
+        default="",
+        description=(
+            "Object-store location. `local`: base directory (empty → per-store "
+            "default: blobs under the observability dir, patches under cwd). "
+            "`s3` / `gcs` / `adls`: base URI such as `s3://bucket/aqueduct`."
         ),
     )
 
@@ -227,6 +260,15 @@ class StoresConfig(BaseModel):
             "Depot KV store (`@aq.depot.*`). With postgres backend, the "
             "`depot_kv` table lives in the `depot` schema. With redis "
             "backend, keys live directly in the configured Redis database."
+        ),
+    )
+    blob: ObjectStoreConfig = Field(
+        default_factory=ObjectStoreConfig,
+        description=(
+            "Object store for opaque driver artefacts — observability blobs "
+            "(fat manifest/stack/provenance columns) and the patch lifecycle. "
+            "`local` (default) keeps the historical on-disk layout; `s3`/`gcs`/"
+            "`adls` route through fsspec so cluster pods leave no local files."
         ),
     )
     benchmark: BenchmarkStoreConfig = Field(
@@ -605,6 +647,29 @@ class WarningsConfig(BaseModel):
     )
 
 
+class LineageConfig(BaseModel):
+    """Phase 55 — OpenLineage emission.
+
+    Top-level `lineage:` block. **Naming collision:** this is NOT
+    `stores.lineage`, which has been inert since Phase 38 (column lineage merged
+    into the observability store). `stores.lineage` configures a (dead) store
+    backend; this block configures *emission* of OpenLineage run events.
+
+    When `openlineage_url` is unset (default), no events are emitted — zero cost.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    openlineage_url: str | None = Field(
+        default=None,
+        description="OpenLineage receiver endpoint (Marquez / DataHub / Atlan). "
+                    "POST target for run events. Unset → emission disabled.",
+    )
+    openlineage_namespace: str = Field(
+        default="aqueduct",
+        description="OpenLineage namespace for jobs and datasets emitted by this engine.",
+    )
+
+
 class AqueductConfig(BaseModel):
     """Fully validated engine configuration.
 
@@ -624,6 +689,7 @@ class AqueductConfig(BaseModel):
     danger: DangerConfig = Field(default_factory=DangerConfig)
     secrets: SecretsConfig = Field(default_factory=SecretsConfig)
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
+    lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: "WarningsConfig" = Field(default_factory=lambda: WarningsConfig())
     spark_config: dict[str, Any] = Field(

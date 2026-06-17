@@ -1,35 +1,38 @@
-"""Heal memory — signature-keyed lookups over the patch lifecycle dirs.
+"""Heal memory — signature-keyed lookups over the ``patch_index`` table.
 
-Phase 45 signature memory. Three zero-token paths consulted BEFORE the LLM:
+Phase 45 introduced signature memory; Phase 53 moved its backing store from an
+``os.scandir`` over the local ``patches/`` directory to the ``patch_index``
+relational table (see ``aqueduct/patch/index.py``). The three zero-token paths
+that run BEFORE the LLM are unchanged in behaviour; only the source is now
+backend-blind SQL, so they work identically whether patch bodies live on local
+disk, s3, gcs, or adls:
 
-* ``find_pending(sig_hash, patches_dir)`` — a patch for the same failure is
-  already awaiting review in ``patches/pending/`` → surface it, skip the LLM
-  (``stop_reason: cached``). Fixes the human/ci-mode "re-heal every run while
-  review pending" token burn.
-* ``find_replay_candidate(sig_hash, patches_dir, successful_patch_ids)`` —
-  an archived patch with the same signature already fixed this failure once
-  (``healing_outcomes.run_success_after_patch = true``) → replay it through
-  the normal gate pyramid (``stop_reason: replayed``). Gate fail falls
-  through to the LLM.
+* ``find_pending(obs_store, sig_hash)`` — a patch for the same failure already
+  awaits review → surface it, skip the LLM (``stop_reason: cached``).
+* ``find_replay_candidate(obs_store, patch_store, sig_hash, successful_ids)`` —
+  an applied patch with the same signature already fixed this failure once
+  (``healing_outcomes.run_success_after_patch = true``) → fetch its body from
+  the object store and replay it through the gate pyramid
+  (``stop_reason: replayed``). Gate fail falls through to the LLM.
 * ``find_coaching_examples(...)`` — nearest-signature retrieval of past
-  (failure → validated fix) pairs used as few-shot prompt examples.
+  (failure → validated fix) pairs for the few-shot prompt section, served
+  entirely from index metadata (no body reads).
 
-Signatures are stamped into each patch file's ``_aq_meta`` by
-``stage_patch_for_human`` / ``archive_patch`` (``failure_signature`` full
-dict + ``failure_signature_coarse`` hash). Files staged before Phase 45
-carry no signature and are simply never matched.
-
-This module is intentionally pure: file reads only — no LLM calls, no DB
-connections (callers pass in the success set from the observability store).
+Signatures + metadata are stamped into ``patch_index`` by
+``stage_patch_for_human`` / ``archive_patch`` when a patch body is written.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+from aqueduct.patch import index as _ix
+
+if TYPE_CHECKING:
+    from aqueduct.stores.base import ObservabilityStore
+    from aqueduct.stores.object_store import PatchStore
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,7 @@ _COACHING_MAX = 3
 class PendingHit:
     """A pending patch whose failure signature matches the current failure."""
 
-    path: Path
+    object_key: str
     patch_id: str
     staged_at: str | None
     source: str  # "llm" | "replay"
@@ -57,9 +60,9 @@ class PendingHit:
 
 @dataclass(frozen=True)
 class ReplayCandidate:
-    """An archived, previously successful patch eligible for zero-token replay."""
+    """An applied, previously successful patch eligible for zero-token replay."""
 
-    path: Path
+    object_key: str
     patch_id: str
     payload: dict  # full patch JSON incl. operations — feed to PatchSpec.model_validate after stripping _aq_meta
 
@@ -77,133 +80,92 @@ class CoachingExample:
     tier: int = 4  # 1 exact sig, 2 coarse sig, 3 same error class, 4 chronological fill
 
 
-# ── File scanning ─────────────────────────────────────────────────────────
-
-
-def _iter_patch_payloads(directory: Path) -> list[tuple[Path, float, dict]]:
-    """Yield ``(path, mtime, payload)`` for every readable patch JSON, newest first.
-
-    Mirrors ``prompts._load_previous_patches``: ``os.scandir`` for bounded
-    stat overhead, malformed files skipped at DEBUG.
-    """
-    if not directory.exists():
-        return []
-    entries = [
-        e for e in os.scandir(directory)
-        if e.name.endswith(".json") and e.is_file()
-    ]
-    out: list[tuple[Path, float, dict]] = []
-    for e in sorted(entries, key=lambda e: e.stat().st_mtime, reverse=True):
-        try:
-            payload = json.loads(Path(e.path).read_text(encoding="utf-8"))
-        except Exception:
-            logger.debug("Skipping unreadable patch file %s", e.path, exc_info=True)
-            continue
-        if isinstance(payload, dict):
-            out.append((Path(e.path), e.stat().st_mtime, payload))
-    return out
-
-
-def _sig_meta(payload: dict) -> tuple[str | None, str | None, dict]:
-    """Extract ``(exact_hash, coarse_hash, exact_sig_dict)`` from ``_aq_meta``.
-
-    ``failure_signature`` is a full dict on Phase-45 files; tolerate a bare
-    hash string for forward robustness.
-    """
-    meta = payload.get("_aq_meta") or {}
-    raw = meta.get("failure_signature")
-    if isinstance(raw, dict):
-        return raw.get("hash"), meta.get("failure_signature_coarse"), raw
-    if isinstance(raw, str):
-        return raw, meta.get("failure_signature_coarse"), {}
-    return None, meta.get("failure_signature_coarse"), {}
-
-
 # ── Lookups ───────────────────────────────────────────────────────────────
 
 
-def find_pending(sig_hash: str, patches_dir: Path) -> PendingHit | None:
+def find_pending(obs_store: ObservabilityStore | None, sig_hash: str) -> PendingHit | None:
     """Newest pending patch whose exact failure signature matches, if any."""
-    for path, _mtime, payload in _iter_patch_payloads(patches_dir / "pending"):
-        exact, _coarse, _sig = _sig_meta(payload)
-        if exact == sig_hash:
-            meta = payload.get("_aq_meta") or {}
-            return PendingHit(
-                path=path,
-                patch_id=str(payload.get("patch_id") or path.stem),
-                staged_at=meta.get("staged_at"),
-                source=str(meta.get("source") or "llm"),
-            )
-    return None
+    if obs_store is None or not sig_hash:
+        return None
+    try:
+        with obs_store.connect() as cur:
+            row = _ix.find_pending(cur, sig_hash)
+    except Exception:
+        logger.debug("find_pending query failed", exc_info=True)
+        return None
+    if row is None:
+        return None
+    return PendingHit(
+        object_key=str(row.get("object_key") or ""),
+        patch_id=str(row.get("patch_id") or ""),
+        staged_at=row.get("created_at"),
+        source=str(row.get("source") or "llm"),
+    )
 
 
 def find_replay_candidate(
+    obs_store: ObservabilityStore | None,
+    patch_store: PatchStore | None,
     sig_hash: str,
-    patches_dir: Path,
     successful_patch_ids: set[str],
 ) -> ReplayCandidate | None:
-    """Newest archived patch matching the signature AND confirmed successful.
+    """Newest applied patch matching the signature AND confirmed successful.
 
-    ``successful_patch_ids`` comes from
-    ``healing_outcomes.run_success_after_patch = true`` — an archived patch
-    without a success record is never replayed (it may not have worked).
-    """
-    if not successful_patch_ids:
+    The index gives the matching row; the body (with ``operations``) is fetched
+    from the object store via ``object_key``. ``successful_patch_ids`` comes from
+    ``healing_outcomes.run_success_after_patch = true`` — an applied patch with
+    no success record is never replayed."""
+    if obs_store is None or patch_store is None or not sig_hash or not successful_patch_ids:
         return None
-    for path, _mtime, payload in _iter_patch_payloads(patches_dir / "applied"):
-        exact, _coarse, _sig = _sig_meta(payload)
-        patch_id = payload.get("patch_id")
-        if exact == sig_hash and patch_id in successful_patch_ids:
-            return ReplayCandidate(path=path, patch_id=str(patch_id), payload=payload)
-    return None
+    try:
+        with obs_store.connect() as cur:
+            row = _ix.find_replay(cur, sig_hash, successful_patch_ids)
+    except Exception:
+        logger.debug("find_replay query failed", exc_info=True)
+        return None
+    if row is None:
+        return None
+    object_key = str(row.get("object_key") or "")
+    try:
+        payload = patch_store.get_json(object_key)
+    except Exception:
+        logger.debug("Replay body unreadable at %s", object_key, exc_info=True)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return ReplayCandidate(object_key=object_key, patch_id=str(row.get("patch_id") or ""), payload=payload)
 
 
 def find_coaching_examples(
+    obs_store: ObservabilityStore | None,
     exact_hash: str,
     coarse_hash: str,
     error_class: str,
-    patches_dir: Path,
     limit: int = _COACHING_MAX,
 ) -> list[CoachingExample]:
-    """Nearest-signature (failure → validated fix) pairs from ``patches/applied/``.
+    """Nearest-signature (failure → validated fix) pairs from applied patches.
 
-    Tiered match, newest first within each tier:
-
-    1. exact signature hash (same error, same module),
-    2. coarse signature hash (same error shape, any module),
-    3. same ``error_class``,
-    4. chronological fill (pre-Phase-45 files without signatures land here),
-
-    deduplicated by patch_id across tiers, capped at ``limit``.
-    """
-    tiers: dict[int, list[CoachingExample]] = {1: [], 2: [], 3: [], 4: []}
-    for _path, _mtime, payload in _iter_patch_payloads(patches_dir / "applied"):
-        exact, coarse, sig = _sig_meta(payload)
-        if exact == exact_hash:
-            tier = 1
-        elif coarse is not None and coarse == coarse_hash:
-            tier = 2
-        elif sig.get("error_class") and sig.get("error_class") == error_class:
-            tier = 3
-        else:
-            tier = 4
-        tiers[tier].append(CoachingExample(
-            patch_id=str(payload.get("patch_id") or "?"),
-            error_class=str(sig.get("error_class") or "?"),
-            where=str(sig.get("where") or "?"),
-            normalized_message=str(sig.get("normalized_message") or ""),
-            rationale=str(payload.get("rationale") or payload.get("description") or ""),
-            ops=[op.get("op", "?") for op in payload.get("operations", []) if isinstance(op, dict)],
-            tier=tier,
+    Tiered match (1 exact sig, 2 coarse sig, 3 same error_class, 4 chronological
+    fill), deduped by patch_id, newest first within tier, capped at *limit* —
+    served from index metadata, no body reads."""
+    if obs_store is None:
+        return []
+    try:
+        with obs_store.connect() as cur:
+            rows = _ix.find_coaching(cur, exact_hash, coarse_hash, error_class, limit)
+    except Exception:
+        logger.debug("find_coaching query failed", exc_info=True)
+        return []
+    out: list[CoachingExample] = []
+    for d in rows:
+        ops = d.get("ops")
+        out.append(CoachingExample(
+            patch_id=str(d.get("patch_id") or "?"),
+            error_class=str(d.get("error_class") or "?"),
+            where=str(d.get("where_field") or "?"),
+            normalized_message=str(d.get("normalized_message") or ""),
+            rationale=str(d.get("rationale") or ""),
+            ops=list(ops) if isinstance(ops, list) else [],
+            tier=int(d.get("_tier") or 4),
         ))
-    picked: list[CoachingExample] = []
-    seen: set[str] = set()
-    for tier in (1, 2, 3, 4):
-        for ex in tiers[tier]:
-            if ex.patch_id in seen:
-                continue
-            seen.add(ex.patch_id)
-            picked.append(ex)
-            if len(picked) >= limit:
-                return picked
-    return picked
+    return out

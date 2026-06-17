@@ -10,14 +10,14 @@ This module owns:
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import random
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from aqueduct.agent.prompts import _build_system_prompt
 from aqueduct.redaction import redact as _redact
@@ -48,7 +48,7 @@ def _retry_after_seconds(response: Any) -> float | None:
 
 
 def _post_with_retry(
-    do_post: "Callable[[float], Any]",
+    do_post: Callable[[float], Any],
     *,
     total_seconds: float,
     max_retries: int,
@@ -115,6 +115,9 @@ class _ProviderConfig:
     # (or coaching=False) falls back to the chronological patch-history section.
     failure_ctx: Any = None
     coaching: bool = True
+    # Phase 53 — observability store backing the patch_index, used by the system
+    # prompt's coaching + history sections (replaces the patches/ dir scan).
+    obs_store: Any = None
     # Phase 46 — transient-error retry (429/503/529), from agent.retry config.
     retry_max_retries: int = 2
     retry_backoff_seconds: float = 2.0
@@ -209,6 +212,7 @@ def _call_agent(
         allow_defer=cfg.allow_defer,
         failure_ctx=cfg.failure_ctx,
         coaching=cfg.coaching,
+        obs_store=cfg.obs_store,
     )
 
     # Scrub registered @aq.secret() values from anything leaving the process.

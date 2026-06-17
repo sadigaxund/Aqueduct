@@ -21,6 +21,31 @@ from aqueduct.cli import (
     _uncommitted_applied_patches,)
 
 
+def _patch_index_obs_store(blueprint_path: "Path | None" = None):
+    """Best-effort observability store for patch_index status updates (Phase 53).
+
+    Postgres → the shared DSN. DuckDB → the per-blueprint store when a blueprint
+    is known, else the configured default. Returns None on any failure — the
+    index update is best-effort and never blocks a local patch command."""
+    try:
+        from aqueduct.config import load_config
+        cfg = load_config(None)
+        if cfg.stores.observability.backend == "postgres":
+            from aqueduct.stores import get_stores
+            return get_stores(cfg).observability
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        if blueprint_path is not None:
+            from aqueduct.parser.parser import parse as _parse
+            bp_id = _parse(str(blueprint_path)).id
+            cand = Path(".aqueduct/observability") / bp_id / "observability.db"
+            if cand.exists():
+                return DuckDBObservabilityStore(cand)
+        default = Path(cfg.stores.observability.path)
+        return DuckDBObservabilityStore(default) if default.exists() else None
+    except Exception:
+        return None
+
+
 # ── patch command group ───────────────────────────────────────────────────────
 
 @cli.group()
@@ -290,6 +315,7 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
             blueprint_path=blueprint_path,
             patch_path=Path(patch_file),
             patches_dir=patches_root,
+            obs_store=_patch_index_obs_store(blueprint_path),
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -300,6 +326,142 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
     click.echo(f"  archived   → {result.archive_path}")
     click.echo(f"  operations   {result.operations_applied} applied")
     click.echo(f"  commit with: aqueduct patch commit --blueprint {blueprint}")
+
+
+@patch.command("import")
+@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint YAML file to patch",
+)
+@click.option(
+    "--patches-dir",
+    default=None,
+    help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
+)
+@click.option(
+    "--no-commit",
+    is_flag=True,
+    default=False,
+    help="Apply only, skip the git commit (leave the change staged for review).",
+)
+def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_commit: bool) -> None:
+    """Apply a received patch JSON and commit it — the CI entry point (Phase 54).
+
+    `approval_mode: ci` reference flow: a cluster run heals, stages the patch,
+    and fires the on_patch_pending webhook; a CI runner obtains the patch body
+    and calls this to apply + commit it on a fresh checkout, then opens a PR
+    (see docs/templates/ci-heal-workflow.yml). Equivalent to
+    `patch apply` + `patch commit` in one atomic step.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    from aqueduct.patch.apply import PatchError, apply_patch_file
+    from aqueduct.patch.ci import build_commit_message, validate_ci_payload
+
+    blueprint_path = Path(blueprint)
+    patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+
+    # Pre-flight: if we are going to commit, fail BEFORE mutating the Blueprint
+    # when we are not inside a git work tree (so a non-repo checkout doesn't end
+    # up with an applied-but-uncommittable change).
+    if not no_commit:
+        _check = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        )
+        if _check.returncode != 0 or _check.stdout.strip() != "true":
+            click.echo(
+                "✗ not inside a git work tree — `patch import` commits the change. "
+                "Run inside the repo, or pass --no-commit to stage only.",
+                err=True,
+            )
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    # The input may be a bare PatchSpec OR a CI webhook envelope that wraps the
+    # body under a `patch` key (patch + `_aq_meta` + envelope fields). When it is
+    # an envelope, validate the envelope schema and unwrap the body to a tempfile.
+    _apply_path = Path(patch_file)
+    _tmp_unwrapped: Path | None = None
+    try:
+        _raw = json.loads(Path(patch_file).read_text(encoding="utf-8"))
+    except Exception:
+        _raw = None
+    if isinstance(_raw, dict) and isinstance(_raw.get("patch"), dict):
+        violations = validate_ci_payload(_raw)
+        if violations:
+            click.echo("✗ invalid CI webhook payload:\n  - " + "\n  - ".join(violations), err=True)
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
+        fd, _tmp = tempfile.mkstemp(suffix=".json", prefix="aq_ci_patch_")
+        import os as _os
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(_raw["patch"], fh)
+        _tmp_unwrapped = Path(_tmp)
+        _apply_path = _tmp_unwrapped
+
+    try:
+        result = apply_patch_file(
+            blueprint_path=blueprint_path,
+            patch_path=_apply_path,
+            patches_dir=patches_root,
+            obs_store=_patch_index_obs_store(blueprint_path),
+        )
+    except PatchError as exc:
+        click.echo(f"✗ patch failed: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    finally:
+        if _tmp_unwrapped is not None and _tmp_unwrapped.exists():
+            _tmp_unwrapped.unlink()
+
+    click.echo(f"✓ patch imported  id={result.patch_id}")
+    click.echo(f"  blueprint  → {result.blueprint_path}")
+    click.echo(f"  operations   {result.operations_applied} applied")
+
+    if no_commit:
+        click.echo("  (--no-commit) staged only — commit with: "
+                   f"aqueduct patch commit --blueprint {blueprint}")
+        return
+
+    # Resolve blueprint_id for the structured commit message.
+    try:
+        from aqueduct.parser.parser import parse as _parse
+        blueprint_id = _parse(blueprint).id
+    except Exception:
+        blueprint_id = blueprint_path.stem
+
+    # The applied body is archived under patches/applied/ — read it back for the
+    # commit trailer (rationale, operations, run_id).
+    try:
+        body = json.loads(result.archive_path.read_text(encoding="utf-8"))
+    except Exception:
+        body = {"patch_id": result.patch_id}
+    commit_msg = build_commit_message(blueprint_id, [body])
+
+    add = subprocess.run(
+        ["git", "add", blueprint_path.name],
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+    )
+    if add.returncode != 0:
+        click.echo(f"✗ git add failed: {add.stderr.strip()}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    commit = subprocess.run(
+        ["git", "commit", "-m", commit_msg],
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+    )
+    if commit.returncode != 0:
+        click.echo(f"✗ git commit failed: {commit.stderr.strip()}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    short_hash = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"],
+        capture_output=True, text=True, cwd=blueprint_path.parent or None,
+    ).stdout.strip()
+    click.echo(f"  committed  [{short_hash}]  {blueprint_id}")
 
 
 @patch.command("reject")
@@ -340,6 +502,7 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
             patch_id=patch_id,
             reason=reason,
             patches_dir=resolved_patches_dir,
+            obs_store=_patch_index_obs_store(),
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
@@ -348,6 +511,68 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
     click.echo(f"✓ patch rejected  id={patch_id}")
     click.echo(f"  archived → {rejected_path}")
     click.echo(f"  reason: {reason}")
+
+
+@patch.command("pull")
+@click.argument("patch_id")
+@click.option(
+    "--blueprint",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="Blueprint the patch belongs to (locates the index + patches dir)",
+)
+@click.option(
+    "--out",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Output directory (default: <blueprint-dir>/patches/pending)",
+)
+def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
+    """Fetch a patch body from the object store into a local checkout for review.
+
+    Profile C — the pipeline heals on a cluster and stages the patch to an
+    object store (s3/gcs/adls); this pulls the body down so you can `git diff`
+    and apply it locally. With a local object store this just copies the file.
+    """
+    from pathlib import Path
+
+    from aqueduct.config import load_config
+    from aqueduct.patch import index as _ix
+    from aqueduct.stores.object_store import make_patch_store
+
+    blueprint_path = Path(blueprint)
+    patches_root = _patches_root_from_blueprint(blueprint_path)
+    cfg = load_config(None)
+
+    obs = _patch_index_obs_store(blueprint_path)
+    if obs is None:
+        click.echo("✗ no observability store found — cannot resolve the patch index", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    try:
+        with obs.connect() as cur:
+            row = _ix.get(cur, patch_id)
+    except Exception as exc:
+        click.echo(f"✗ index query failed: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    if row is None:
+        click.echo(f"✗ patch {patch_id!r} not found in the index", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
+    try:
+        body = ps.get_text(str(row["object_key"]))
+    except Exception as exc:
+        click.echo(f"✗ could not read patch body at {row['object_key']!r}: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    out_dir = Path(out) if out else patches_root / "pending"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{patch_id}.json"
+    out_path.write_text(body, encoding="utf-8")
+
+    click.echo(f"✓ patch pulled  id={patch_id}  status={row['status']}")
+    click.echo(f"  → {out_path}")
+    click.echo(f"  review: git diff  •  apply: aqueduct patch apply {out_path} --blueprint {blueprint}")
 
 
 @patch.command("commit")
@@ -387,43 +612,20 @@ def patch_commit(blueprint: str, patches_dir: str | None) -> None:
     except Exception:
         blueprint_id = blueprint_path.stem
 
-    # Build commit message
-    patch_lines: list[str] = []
-    all_ops: list[str] = []
-    run_id: str | None = None
-    rationales: list[str] = []
+    # Build commit message — label each patch line by its filename stem so
+    # `aqueduct log`/`rollback` can match either the patch_id or the file name.
+    from aqueduct.patch.ci import build_commit_message
 
+    patch_bodies: list[dict] = []
+    n = len(uncommitted)
     for p in uncommitted:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-        rat = data.get("rationale", "")
-        if rat:
-            rationales.append(rat)
-        ops = [op.get("op", "?") for op in data.get("operations", [])]
-        all_ops.extend(ops)
-        meta = data.get("_aq_meta", {})
-        if not run_id:
-            run_id = meta.get("run_id") or data.get("run_id")
-        patch_lines.append(f"  - {p.stem}: {rat or '(no rationale)'}")
+        patch_bodies.append({**data, "patch_id": p.stem})
 
-    n = len(uncommitted)
-    summary = rationales[0] if n == 1 and rationales else f"{n} patches applied"
-    combined_rationale = "\n".join(rationales) if rationales else ""
-    ops_str = ", ".join(dict.fromkeys(all_ops))  # deduplicated, ordered
-
-    aqueduct_block = "---aqueduct---\npatches:\n" + "\n".join(patch_lines)
-    if run_id:
-        aqueduct_block += f"\nrun_id: {run_id}"
-    if ops_str:
-        aqueduct_block += f"\nops: {ops_str}"
-    aqueduct_block += "\n---"
-
-    commit_msg = f"fix(aqueduct/{blueprint_id}): {summary}"
-    if combined_rationale:
-        commit_msg += f"\n\n{combined_rationale}"
-    commit_msg += f"\n\n{aqueduct_block}"
+    commit_msg = build_commit_message(blueprint_id, patch_bodies)
 
     add = subprocess.run(["git", "add", blueprint_path.name], capture_output=True, cwd=blueprint_path.parent or None)
     if add.returncode != 0:

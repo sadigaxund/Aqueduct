@@ -287,10 +287,10 @@ def test_patch_sidecar_redaction(tmp_path):
         finished_at="2026-05-23T12:00:05Z",
     )
 
-    stage_patch_for_human(spec, tmp_path, failure_ctx)
+    stage_patch_for_human(spec, tmp_path / "patches", failure_ctx)
 
     # Find the written file in patches/pending
-    pending_dir = tmp_path / "pending"
+    pending_dir = tmp_path / "patches" / "pending"
     files = list(pending_dir.glob("*.json"))
     assert len(files) == 1
 

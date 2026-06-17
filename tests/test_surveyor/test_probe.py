@@ -59,22 +59,15 @@ def test_execute_probe_schema_snapshot(spark: SparkSession, tmp_path: Path):
     
     execute_probe(module, df, spark, "run-1", store_dir)
     
-    # File written
-    schema_file = store_dir / "snapshots" / "run-1" / "p1_schema.json"
-    assert schema_file.exists()
-    assert not (store_dir / "signals" / "run-1" / "p1_schema.json").exists()
-    
-    payload = json.loads(schema_file.read_text())
-    assert "fields" in payload
-    assert payload["fields"][0]["name"] == "id"
-    
-    # DB row inserted
+    # Phase 53 — probe data persisted only to probe_signals table (no sidecar files)
     conn = duckdb.connect(str(store_dir / "observability.db"))
     rows = conn.execute("SELECT payload FROM probe_signals WHERE signal_type='schema_snapshot'").fetchall()
     conn.close()
     
+    assert len(rows) == 1
     db_payload = json.loads(rows[0][0])
-    assert db_payload == payload
+    assert "fields" in db_payload
+    assert db_payload["fields"][0]["name"] == "id"
 
 
 def test_execute_probe_row_count_estimate_sample(spark: SparkSession, tmp_path: Path):
@@ -204,11 +197,11 @@ def test_execute_probe_global_exception(spark: SparkSession, tmp_path: Path):
     )
     
     store_dir = tmp_path / "store"
-    (tmp_path / "store").touch() # File obstructs directory creation
-    
-    # Should not raise exception
-    # Should not raise exception
-    execute_probe(module, df, spark, "run-1", store_dir)
+    (tmp_path / "store").touch()  # a file obstructs store-dir creation → inner failure
+
+    # The top-level guard swallows the error: execute_probe returns None and
+    # never raises, so a probe failure can't abort the pipeline.
+    assert execute_probe(module, df, spark, "run-1", store_dir) is None
 
 
 def test_execute_probe_value_distribution(spark: SparkSession, tmp_path: Path):

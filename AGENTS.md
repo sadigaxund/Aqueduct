@@ -9,7 +9,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 
 | Doc | Owns | When to read |
 |---|---|---|
-| `docs/specs.md` | Blueprint format, architecture (4-layer), Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Spark Integration §10, Engine Scope §13 | Domain semantics, anything user-facing about the engine itself |
+| `docs/specs.md` | Blueprint format, architecture (4-layer) §3, Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Deployment & Spark Integration §10, Engine Scope §11 | Domain semantics, anything user-facing about the engine itself |
 | `docs/cli_reference.md` | Every CLI command and flag with defaults | Touching `@click.option` / new subcommand in `aqueduct/cli/`, or answering "what flag does X" |
 | `docs/observability_guide.md` | Store schemas (run_records, heal_attempts, healing_outcomes, failure_contexts, column_lineage, benchmark_results, patch_simulation, signal_overrides, explain_snapshot, probe_signals, module_metrics, maintenance_metrics, depot_kv) + diagnostic SQL cookbook | DDL / `ALTER TABLE` changes in `aqueduct/surveyor/` or `aqueduct/executor/`, or writing post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, performance, tuning, Spark behavior gotchas | Modifying Executor modules, adding Channel ops, debugging Spark perf |
@@ -28,6 +28,24 @@ AGENTS.md itself is process and constraint guidance only.
   - `duckdb` — embedded observability store (avoids SQLite write locks)
   - `sqlglot` — SQL lineage; do NOT write a custom SQL parser
   - `httpx` — HTTP client for webhooks and LLM calls; no `anthropic` SDK, no extra install needed
+
+## Packaging & Extras Policy
+
+Optional dependencies follow **two axes only — never invent a third.** Adding a
+feature-named extra (`[blob-s3]`, `[openlineage]`, `[drift]`) is forbidden; it
+multiplies the surface users have to reason about.
+
+- **Per-vendor leaves:** `aws`, `gcp`, `azure`, `postgres`, `redis`, `airflow`,
+  `object-store` — one SDK/capability each.
+- **Capability aggregates:** `secrets` (= aws+gcp+azure), `stores`
+  (= postgres+redis+object-store), `schedulers` (= airflow), `all`.
+
+A user installs an aggregate or a leaf. When a new optional dependency appears,
+map it onto an existing axis: reuse a vendor leaf if it's that vendor's SDK, or
+add a leaf that rolls up into the right aggregate. A genuinely new vendor → new
+leaf + add it to its aggregate. Never a standalone feature flag. (Example:
+Phase 53's object store became the `object-store` leaf inside `stores`; Phase 55
+OpenLineage adds **no** extra — `httpx` is already a base dep.)
 
 ## Code Organization & Safety
 - **4-layer boundary**: `Parser` → `Compiler` → `Executor` → `Surveyor`. Put logic in the correct layer. Only modify the layer relevant to the task. Topological sort, Probe insertion, and parallel-component detection are sub-steps inside the Executor — not a separate "Planner" layer.
@@ -66,7 +84,9 @@ When adding an LLM provider: add `_call_<provider>()` in `aqueduct/agent/provide
 
 Use this table at coding time, not just at the end of a phase. Whenever you touch the left column, the right column **must** move in the same commit. The phase-end ritual becomes a verification pass: read this table top-to-bottom and confirm every triggered doc/file is current — the matrix is the trigger, not the date on the calendar.
 
-`docs/specs.md` is the **engine reference** for semantics that don't belong elsewhere. Production / CLI / observability / Spark-tuning details now live in their dedicated guides (see Documentation map). Phase / sprint / development artefacts (`Phase 35`, `Sprint 7`, `Task NN`, `pre-30a`, `deferred to Phase NN`, etc.) belong **only** in `CHANGELOG.md` and `TODOs.md`. Never in: source code (`aqueduct/**/*.py`), docs (`docs/**/*.md`), templates (`aqueduct/templates/**`), gallery (`gallery/**`), or user-facing scaffolding (`README.md`, `CONTRIBUTING.md`). Verify with `grep -rnE "Phase [0-9]|Sprint [0-9]|Task [0-9]" aqueduct/ docs/ gallery/ README.md CONTRIBUTING.md` before commits that touched any of those surfaces.
+`docs/specs.md` is the **engine reference** for semantics that don't belong elsewhere. Production / CLI / observability / Spark-tuning details now live in their dedicated guides (see Documentation map). Phase / sprint / development artefacts (`Phase 35`, `Sprint 7`, `Task NN`, `pre-30a`, `deferred to Phase NN`, etc.) must stay off **user-facing surfaces**: docs (`docs/**/*.md`), templates (`aqueduct/templates/**` — they get copied into user projects), gallery (`gallery/**`), and scaffolding (`README.md`, `CONTRIBUTING.md`). They are **allowed** in `CHANGELOG.md` / `TODOs.md` (where they belong) and in **source-code comments/docstrings** (`aqueduct/**/*.py`), where `# Phase NN —` is useful provenance — do not strip those. Verify the user-facing surfaces stay clean with `grep -rnE "Phase [0-9]|Sprint [0-9]|Task [0-9]" docs/ gallery/ aqueduct/templates/ README.md CONTRIBUTING.md` (note: **not** `aqueduct/` source) before commits that touched any of them.
+
+> **specs.md drift is the easy failure mode.** The matrix below routes most work to the *dedicated* guides, so specs.md — the engine reference — is the doc that silently goes stale (it lagged 6 phases once, 1.1 → 1.2). It is **not** a catch-all of last resort: any change to a documented **contract** must update specs.md *in the same commit* — a new/renamed `aqueduct.yml` key or top-level block, a new `stores.*` backend or persistent store/table, an `agent.approval` mode/value or exit-code change, a new patch op or CLI contract (not just a flag). When such a change lands, also **bump the `Version X.Y` header** at the top of specs.md. Phase-end verification: `git log -1 --format=%h -- docs/specs.md` should not be many phases behind `aqueduct/config.py` / `aqueduct/stores/` / `aqueduct/cli/` if any of those changed a contract this phase.
 
 | If you change … | You must update … |
 | :- | :- |
@@ -74,6 +94,8 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any `@click.option` / new sub-command in `aqueduct/cli/` | `docs/cli_reference.md` flag table (include default value) |
 | Any pydantic field in `aqueduct/config.py` or `aqueduct/parser/schema.py` | The corresponding template comment block (`aqueduct.yml.template` for engine config, `blueprints/blueprint.yml.template` for Blueprint) |
 | Any `StopReason`, `BudgetConfig`, or apply-gate behaviour | `docs/specs.md` §8 + `docs/observability_guide.md` `heal_attempts` section |
+| Any new/renamed `aqueduct.yml` key, top-level config block, or `stores.*` backend / persistent store / table | `docs/specs.md` (§3.2 stores, §10 config, or the relevant section) **and** bump the specs.md `Version X.Y` header + the template comment block (row above) |
+| Any change to `agent.approval` modes/values, the patch-grammar op list, or the exit-code contract | `docs/specs.md` §8 (Approval Modes / Patch Grammar) + §10.7 exit-code table |
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
 | Any Spark compiler-warning, performance, or tuning behaviour | `docs/spark_guide.md` |
 | Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` |
@@ -81,7 +103,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
 | Any new flag, command, or behaviour visible from the CLI | `docs/cli_reference.md` |
 | Any user-facing engine semantic (architecture, module semantics, configs, gates, runtime behaviour) NOT covered by a dedicated guide above | `docs/specs.md` — NO `Phase NN` artefacts |
-| Any new testable feature | `tests/TEST_MANIFEST.md` checklist item |
+| Any new testable feature | A real test at the right layer (`unit` / `integration` / `e2e`), OR a `@pytest.mark.todo("why")` stub if you're deferring it. NEVER an entry in `TEST_MANIFEST.md` (retired → `docs/archive/`). See the Testing section. |
 | Any phase / sprint / shippable change | `CHANGELOG.md` `[Unreleased]` only — never bump version, never add a versioned header (user controls release timing) |
 | Any new `@aq.*` function in `aqueduct/compiler/runtime.py` | `docs/specs.md` §5.3 function table + `_DISPATCH` table in `runtime.py` |
 | Any new path-key entry in `aqueduct/executor/path_keys.py` | The module-type's schema model in `aqueduct/parser/schema.py` (mark path fields with `Annotated[str, FsPath()]`) |
@@ -102,7 +124,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `scenario.py` | Scenario benchmark framework: `load_scenario`, `_build_failure_ctx`, effect-based grader |
 | `webhook.py` | HTTP dispatch in daemon thread, `${VAR}` template rendering, redaction |
 | `benchmark_store.py` | DuckDB persistence + regression detection for benchmark results |
-| `blob_store.py` | Zstd externalisation of fat columns (manifest_json, provenance_json, stack_trace) |
+| `blob_store.py` | Back-compat shim (Phase 53) — `externalise`/`materialize` delegate to `stores/object_store.BlobStore`; new code uses `make_blob_store` directly |
 
 ### `aqueduct/patch/` — PatchSpec grammar + apply + validation gates
 
@@ -111,6 +133,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `grammar.py` | `PatchSpec` Pydantic v2 model, 13 operation types, discriminated union |
 | `operations.py` | Per-op implementations against Blueprint dict, ruamel YAML round-trip |
 | `apply.py` | Apply orchestrator: load → deep-copy → apply ops → re-parse → archive |
+| `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind heal-cache lookups (pending/replay/coaching/history) without scanning `patches/` |
 | `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
 | `explain_gate.py` | Plan regression gate (Gate 4): compare Exchange/Broadcast counts before vs after |
 | `__init__.py` | Module description only |
@@ -123,6 +146,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `duckdb_.py` | DuckDB implementations (single-file embeddable) |
 | `postgres.py` | Postgres implementations (connection-pool dedup, schema-per-store) |
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
+| `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 
 ### `aqueduct/depot/` — Cross-run KV state
 
@@ -197,7 +221,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `parse.py` | `_parse_patch_spec`, `_detect_structural_error`, `_format_reprompt_error`, `_format_reprompt_for_next_turn` | Response parsing, structural error detection, reprompt formatting |
 | `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop (`pause_clock()` excludes gate time) |
 | `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for budget + heal cache + coaching) |
-| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Phase 45 signature memory — zero-token lookups over patch lifecycle dirs (pending reuse, exact replay, coaching retrieval) |
+| `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Signature memory — zero-token heal-cache lookups (pending reuse, exact replay, coaching retrieval). Phase 53: backed by the `patch_index` SQL table (`patch/index.py`), not a `patches/` dir scan; takes an `obs_store` (+ `patch_store` for replay bodies) |
 
 **When adding a feature:**
 - New LLM provider → add `_call_<provider>()` in `providers.py`, wire in `_call_agent()`
@@ -205,7 +229,7 @@ whenever a package is restructured — use it as the first filter before greppin
 - New recovery pattern → add to `_parse_patch_spec()` in `parse.py`
 - New budget axis → add to `BudgetConfig` / `BudgetTracker` in `budget.py`
 - New patch lifecycle event → add to `loop.py`, re-export from `__init__.py`
-- New heal-cache lookup → add to `memory.py` (pure file reads — no LLM calls, no DB connections)
+- New heal-cache lookup → add the SQL to `patch/index.py`, surface it via `memory.py` (an `obs_store` query — no LLM calls)
 
 ### `aqueduct/cli/` — Command-line interface (package, split from the old `cli.py`)
 
@@ -274,40 +298,68 @@ When building a phase from a sequence of changes:
 
 - **Immutable dataclasses across compile steps.** Every compilation pass returns a new frozen dataclass. Mutating a Module/Edge/Manifest in place will silently work (Python dataclasses aren't truly immutable) but breaks the provenance chain. Always use `dataclasses.replace()` and test with `FrozenInstanceError`.
 
-## Testing Workflow (Two-Model Split)
-- **You (Claude)** write core implementation. Add checklist items to `tests/TEST_MANIFEST.md` when adding testable features. Optionally create issue files in `.dev/ISSUES/` for the cheaper model.
-- **Cheaper model** handles test generation — reads `tests/TEST_MANIFEST.md` and `.dev/ISSUES/`.
-- **Never suggest or run test commands.** User handles all test execution. Only paste specific failures if stuck.
+## Testing
 
-### When to add to TEST_MANIFEST.md
+### The three layers (every test carries exactly one marker)
 
-Every new feature, bug fix, or behavioral change that is testable should add a `⏳` item under the relevant module section. The entry should describe the exact behavior being tested: what input, what output, what error. Follow the existing `✅` / `⏳` / `❌` convention. Mark items `✅` only when the user confirms the test passes — never self-mark.
+| Marker | Layer | What lives here |
+|---|---|---|
+| `@pytest.mark.unit` | **Unit** | Fast, pure — no Spark, no network, no external services. The bulk of the suite. |
+| `@pytest.mark.integration` | **Integration** | Blueprint/feature level: every `gallery/snippets/**` blueprint parses + compiles, `*.aqtest.yml` modules run on a real `local[1]` Spark, `*.aqscenario.yml` heals run with a **mocked** agent (no live LLM). |
+| `@pytest.mark.e2e` | **E2E** | Full pipelines — the `gallery/showcase/**` setups end to end. |
 
-When fixing a bug, add a regression test entry that captures the *broken* behavior (what was happening before the fix) and the *expected* behavior (what happens after). This prevents the same bug from recurring without a test catching it.
+Capability gates (`spark`, `agent`, `airflow`, `slow`) compose with a layer marker and skip when the dependency is absent.
+
+### The test backlog is pytest-native — `TEST_MANIFEST.md` is RETIRED
+
+`TEST_MANIFEST.md` (now frozen in `docs/archive/`) is gone. The suite itself is the source of truth for what passes; do **not** maintain a parallel ledger. Track gaps in code:
+
+- **Unwritten test** → add a `@pytest.mark.todo("what input → what output/error")` stub to **`tests/test_backlog.py`** — the single low-friction landing zone (keeps the manifest's one-place-to-append ergonomics). Give it an `intended:` line (where the real test should live) + a `context:` note. It auto-skips; `pytest --collect-only -m todo` is the living backlog. When you implement it, write the body and **move it to the `intended:` path**, deleting the stub from `test_backlog.py`. Never flip a status by hand.
+- **Known bug / regression to fix** → write the test that *should* pass and mark it `@pytest.mark.xfail(strict=True, reason="bug: …")` (in `test_backlog.py` or in place). `xfail_strict` is on, so the build FAILS the moment the bug is fixed, forcing the marker's removal. ❌→✅ maintains itself.
+- **Enforcement** → `tests/test_meta_quality.py::test_no_zero_assertion_tests` fails the build if any test verifies nothing (no `assert` / `raises` / `warns` / mock-assert / asserting-helper) and isn't a `todo`/`xfail` stub. A test that runs code but checks no outcome is the cheating it catches.
+
+When fixing a bug, add a regression test capturing the broken→expected behavior so it can't recur silently.
+
+### Two-model split
+- **You (Claude)** write core implementation + the high-value behavior tests. Leave `@pytest.mark.todo` stubs for coverage you're deferring; optionally drop issue files in `.dev/ISSUES/` for the cheaper model.
+- **Cheaper model** fills in `todo` stubs and broadens coverage — it reads the stubs (`pytest --collect-only -m todo`) and `.dev/ISSUES/`.
+- **Never suggest or run test commands.** The user runs the suite. Paste specific failures only if stuck.
 
 ### CI workflow (`.github/workflows/test-suite.yml`)
 
-CI runs 9 parallel jobs, each scoped to a feature area.  A `changes` job
-(using `dorny/paths-filter@v3`) detects which files changed; on branches
-only matching jobs fire.  On `main` every job runs unconditionally.
+CI runs scoped parallel jobs, each owning a feature area.  A `changes` job
+(using `dorny/paths-filter@v4`) detects which files changed; on branches only
+matching jobs fire.  On `main` every job runs unconditionally.  Triggers:
+push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 
 | Job | Runs when | Command |
 |---|---|---|
-| `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/` |
-| `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/` |
-| `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, or `tests/test_blueprints.py` | `pytest ... -m spark` |
+| `parser-tests` | `aqueduct/parser/**` or `tests/test_parser/**` | `pytest tests/test_parser/ -m "not spark"` |
+| `compiler-tests` | `aqueduct/compiler/**` or `tests/test_compiler/**` | `pytest tests/test_compiler/ -m "not spark"` |
+| `executor-tests` | `aqueduct/executor/**`, `tests/test_executor/**`, `tests/test_compiler/test_blueprints.py`, or `gallery/snippets/**` | `pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark` |
+| `snippets` | same as executor | `bash scripts/run_snippets.sh` (full-runs each snippet, slow) |
+| `gallery-tests` | `gallery/**`, `tests/test_gallery.py`, parser/compiler | `pytest tests/test_gallery.py` (fast parse/compile/load guard) |
 | `surveyor-tests` | `aqueduct/surveyor/**` or `tests/test_surveyor/**` | `pytest tests/test_surveyor/ tests/test_benchmark_store.py` |
 | `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
 | `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
 | `cli-tests` | `aqueduct/cli/**` or `tests/test_cli/**` | `pytest tests/test_cli/` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
-| `stores-tests` | `aqueduct/stores/**` or `tests/test_stores/**` (PG + Redis services) | `pytest ... -m integration` |
+| `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
-`agent-tests` fires (~30s).  Merge to `main` → all 9 jobs run (full gate).
+`agent-tests` fires (~30s).  Merge to `main` → every job runs (full gate).
 
 **New area**: if you add a new top-level directory under `aqueduct/`, add
 its path glob to the `changes` job filter and add a corresponding test job.
+
+### Release (`.github/workflows/release.yml`)
+
+Pushing a **bare semver tag** (`1.2.3`, no `v` prefix) gates on the full suite,
+builds sdist+wheel, publishes to PyPI via **Trusted Publishing** (OIDC, no stored
+token), then cuts a GitHub Release titled `Aqueduct X.Y.Z` whose body is that
+version's `CHANGELOG.md` section.  The `build` job asserts the tag equals
+`pyproject` `project.version`.  Release the user's call — never tag or publish
+unprompted.
 
 ### Testing constraints (reminder)
 - **No live LLM calls in pytest.** Agent tests mock `httpx.post` or `_call_agent`. Live-model evaluation belongs to `.aqscenario.yml` scenarios.
