@@ -10,9 +10,9 @@ from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-VALID_MODULE_TYPES = frozenset(
-    {"Ingress", "Channel", "Egress", "Junction", "Funnel", "Probe", "Regulator", "Arcade", "Assert"}
-)
+from aqueduct.parser.models import ModuleType
+
+VALID_MODULE_TYPES: frozenset[str] = frozenset(m.value for m in ModuleType)
 
 # Note: edge `port` is NOT constrained to a fixed set at schema level — Junction
 # branch ids are valid dynamic port names, so membership is validated downstream

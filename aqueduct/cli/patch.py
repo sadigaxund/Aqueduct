@@ -754,6 +754,8 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
             dirs_to_show.append((filter_status, d))
 
     if out_format.lower() == "json":
+        from aqueduct.patch.grammar import PATCH_META_KEY
+
         payload: list[dict] = []
         for status_label, d in dirs_to_show:
             for f in sorted(d.glob("*.json"), key=lambda x: x.name):
@@ -761,7 +763,7 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
                     data = json.loads(f.read_text(encoding="utf-8"))
                 except Exception:
                     data = {}
-                meta = data.get("_aq_meta") or {}
+                meta = data.get(PATCH_META_KEY) or {}
                 payload.append({
                     "status": status_label,
                     "file": str(f),
@@ -801,8 +803,8 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
         return
 
     if filter_status == "pending":
-        click.echo(f"\n  Apply: aqueduct patch apply patches/pending/<file> --blueprint <blueprint.yml>")
-        click.echo(f"  Reject: aqueduct patch reject patches/pending/<file> --reason '<reason>'")
+        click.echo("\n  Apply: aqueduct patch apply patches/pending/<file> --blueprint <blueprint.yml>")
+        click.echo("  Reject: aqueduct patch reject patches/pending/<file> --reason '<reason>'")
 
 
 

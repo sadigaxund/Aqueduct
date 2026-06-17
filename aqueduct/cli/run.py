@@ -937,8 +937,8 @@ def run(
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
                     try:
-                        from aqueduct.patch.grammar import PatchSpec as _PatchSpec
-                        _payload = {k: v for k, v in _candidate.payload.items() if k != "_aq_meta"}
+                        from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec as _PatchSpec
+                        _payload = {k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY}
                         _replay_patch = _PatchSpec.model_validate(_payload)
                     except Exception as _re_exc:
                         _replay_patch = None

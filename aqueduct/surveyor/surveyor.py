@@ -29,7 +29,7 @@ import logging
 from aqueduct.compiler.models import Manifest
 from aqueduct.executor.models import ExecutionResult
 from aqueduct.redaction import redact as _redact
-from aqueduct.surveyor.models import FailureContext, RunRecord
+from aqueduct.surveyor.models import FailureContext
 from aqueduct.surveyor.webhook import fire_webhook
 
 if TYPE_CHECKING:

@@ -30,7 +30,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from aqueduct.parser.parser import ParseError, parse
-from aqueduct.patch.grammar import PatchSpec
+from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.redaction import redact as _redact
 
@@ -96,7 +96,7 @@ def load_patch_spec(patch_path: Path) -> PatchSpec:
         raise PatchError(f"Invalid JSON in {patch_path}: {exc}") from exc
 
     # Strip metadata injected by _stage_for_human / _auto_apply before schema validation.
-    data.pop("_aq_meta", None)
+    data.pop(PATCH_META_KEY, None)
 
     try:
         return PatchSpec.model_validate(data)

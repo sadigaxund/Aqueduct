@@ -10,6 +10,8 @@ only the pure helpers below.
 """
 from __future__ import annotations
 
+from aqueduct.patch.grammar import PATCH_META_KEY
+
 from typing import Any
 
 # ── CI webhook payload schema ────────────────────────────────────────────────
@@ -67,7 +69,7 @@ def build_commit_message(blueprint_id: str, patches: list[dict]) -> str:
         if rat:
             rationales.append(rat)
         all_ops.extend(op.get("op", "?") for op in data.get("operations", []))
-        meta = data.get("_aq_meta", {}) or {}
+        meta = data.get(PATCH_META_KEY, {}) or {}
         if not run_id:
             run_id = meta.get("run_id") or data.get("run_id")
         patch_lines.append(f"  - {pid}: {rat or '(no rationale)'}")

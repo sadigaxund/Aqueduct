@@ -735,13 +735,14 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
 
     uncommitted = []
     from datetime import datetime
+    from aqueduct.patch.grammar import PATCH_META_KEY
     for p in all_applied:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             continue
         # applied_at may be top-level or inside _aq_meta
-        applied_at_str = data.get("applied_at") or (data.get("_aq_meta") or {}).get("applied_at")
+        applied_at_str = data.get("applied_at") or (data.get(PATCH_META_KEY) or {}).get("applied_at")
         if not applied_at_str:
             continue
 

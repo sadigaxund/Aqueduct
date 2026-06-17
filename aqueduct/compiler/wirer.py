@@ -16,7 +16,6 @@ Regulator compile-away (P6 — Passive-by-default gates):
 
 from __future__ import annotations
 
-import dataclasses
 
 from aqueduct.parser.models import Edge, Module
 

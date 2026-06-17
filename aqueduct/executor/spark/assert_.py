@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
 from aqueduct.parser.models import Module
+from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_RULE, AQ_ERROR_TYPE, AQ_ERROR_TS
 
 logger = logging.getLogger(__name__)
 
@@ -146,11 +147,11 @@ def execute_assert(
                 passing_filter = fresh_expr & ~is_null
                 q_df = (
                     passing_df.filter(~passing_filter)
-                    .withColumn("_aq_error_module", F.lit(module.id))
-                    .withColumn("_aq_error_rule", F.lit("freshness"))
-                    .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "freshness"))
-                    .withColumn("_aq_error_msg", F.lit(f"column {col!r} failed freshness check"))
-                    .withColumn("_aq_error_ts", F.current_timestamp())
+                    .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
+                    .withColumn(AQ_ERROR_RULE, F.lit("freshness"))
+                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "freshness"))
+                    .withColumn(AQ_ERROR_MSG, F.lit(f"column {col!r} failed freshness check"))
+                    .withColumn(AQ_ERROR_TS, F.current_timestamp())
                 )
                 passing_df = passing_df.filter(passing_filter)
                 quarantine_parts.append(q_df)
@@ -451,11 +452,11 @@ def _apply_row_rule(
         if isinstance(on_fail, str) and on_fail == "quarantine":
             quarantine_df = (
                 failing
-                .withColumn("_aq_error_module", F.lit(module_id))
-                .withColumn("_aq_error_rule", F.lit("sql_row"))
-                .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "sql_row"))
-                .withColumn("_aq_error_msg", F.lit(f"failed: {expr_str}"))
-                .withColumn("_aq_error_ts", F.current_timestamp())
+                .withColumn(AQ_ERROR_MODULE, F.lit(module_id))
+                .withColumn(AQ_ERROR_RULE, F.lit("sql_row"))
+                .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "sql_row"))
+                .withColumn(AQ_ERROR_MSG, F.lit(f"failed: {expr_str}"))
+                .withColumn(AQ_ERROR_TS, F.current_timestamp())
             )
             return passing, quarantine_df
 
@@ -487,11 +488,11 @@ def _apply_row_rule(
             if isinstance(on_fail, str) and on_fail == "quarantine" and q_df is not None:
                 q_df = (
                     q_df
-                    .withColumn("_aq_error_module", F.lit(module_id))
-                    .withColumn("_aq_error_rule", F.lit("custom"))
-                    .withColumn("_aq_error_type", F.lit(rule.get("error_type") or "custom"))
-                    .withColumn("_aq_error_msg", F.lit(msg))
-                    .withColumn("_aq_error_ts", F.current_timestamp())
+                    .withColumn(AQ_ERROR_MODULE, F.lit(module_id))
+                    .withColumn(AQ_ERROR_RULE, F.lit("custom"))
+                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "custom"))
+                    .withColumn(AQ_ERROR_MSG, F.lit(msg))
+                    .withColumn(AQ_ERROR_TS, F.current_timestamp())
                 )
                 # passing = df minus quarantine rows (caller's responsibility to exclude)
                 # For simplicity, trust fn to return the right quarantine_df
@@ -515,11 +516,11 @@ def _handle_fail_if_any(
 
     stamped = (
         failing_df
-        .withColumn("_aq_error_module", F.lit(module_id))
-        .withColumn("_aq_error_rule", F.lit(rule_type))
-        .withColumn("_aq_error_type", F.lit(error_type or rule_type))
-        .withColumn("_aq_error_msg", F.lit(message))
-        .withColumn("_aq_error_ts", F.current_timestamp())
+        .withColumn(AQ_ERROR_MODULE, F.lit(module_id))
+        .withColumn(AQ_ERROR_RULE, F.lit(rule_type))
+        .withColumn(AQ_ERROR_TYPE, F.lit(error_type or rule_type))
+        .withColumn(AQ_ERROR_MSG, F.lit(message))
+        .withColumn(AQ_ERROR_TS, F.current_timestamp())
     )
     count = stamped.count()
     if count > 0:

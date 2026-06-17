@@ -16,6 +16,10 @@ from typing import Annotated, Any, Literal, Union
 
 from pydantic import BaseModel, Field, model_validator
 
+# JSON envelope key for CI-kit patch metadata — the key under which the
+# structured `_aq_meta` block lives in webhook / patch-import payloads.
+PATCH_META_KEY = "_aq_meta"
+
 
 # ── Individual operation models ───────────────────────────────────────────────
 

@@ -10,7 +10,7 @@ the execution plan is only materialised when downstream Egress calls .save().
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from pyspark.sql import SparkSession
 

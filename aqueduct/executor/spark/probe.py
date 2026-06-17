@@ -396,7 +396,6 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
     The expression must evaluate to a truthy/falsy scalar (e.g. "MAX(amount) > 0",
     "COUNT(*) >= 1000", "SUM(CASE WHEN status='ok' THEN 1 ELSE 0 END) > 0").
     """
-    from pyspark.sql import functions as F
 
     expr_str = sig_cfg.get("expr", "")
     if not expr_str:

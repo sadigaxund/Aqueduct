@@ -63,7 +63,7 @@ from typing import TYPE_CHECKING, Any, Callable, TypeVar
 from pyspark.sql import SparkSession
 
 if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+    pass
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.config import WebhookEndpointConfig
@@ -75,7 +75,8 @@ from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
-from aqueduct.parser.models import Edge, Module, RetryPolicy
+from aqueduct.parser.models import Edge, Module, ModuleType, RetryPolicy
+from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_TYPE, AQ_ERROR_TS
 
 logger = logging.getLogger(__name__)
 
@@ -360,7 +361,7 @@ def _update_metric(
 
 
 _SUPPORTED_TYPES: frozenset[str] = frozenset(
-    {"Ingress", "Egress", "Channel", "Junction", "Funnel", "Probe", "Regulator", "Assert"}
+    {m for m in ModuleType if m != ModuleType.Arcade}
 )
 
 # Ports that carry control signals only, not DataFrames.
@@ -397,7 +398,7 @@ def _apply_spillway_filter(val: Any, edge: "Edge") -> Any:
     if val is None or _is_gate_closed(val):
         return val
     from pyspark.sql import functions as F
-    return val.filter(F.col("_aq_error_type").isin(list(edge.error_types)))
+    return val.filter(F.col(AQ_ERROR_TYPE).isin(list(edge.error_types)))
 
 
 def _cache_if_multi_spillway(df: Any, module_id: str, edges: tuple["Edge", ...]) -> Any:
@@ -892,7 +893,7 @@ def execute(
                 _signal_fail()
                 raise ExecuteError(
                     f"Module type {module.type!r} (id={module.id!r}) is not supported. "
-                    f"Supported: {sorted(_SUPPORTED_TYPES)}."
+                    f"Supported: {sorted(m.value for m in _SUPPORTED_TYPES)}."
                 )
 
             # ── Selector skip ──────────────────────────────────────────────────
@@ -1057,10 +1058,10 @@ def execute(
                         good_df = df.filter(f"NOT ({spillway_condition})")
                         error_df = (
                             df.filter(spillway_condition)
-                              .withColumn("_aq_error_module", F.lit(module.id))
-                              .withColumn("_aq_error_msg", F.lit("spillway_condition matched"))
-                              .withColumn("_aq_error_type", F.lit("SpillwayCondition"))
-                              .withColumn("_aq_error_ts", F.current_timestamp())
+                              .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
+                              .withColumn(AQ_ERROR_MSG, F.lit("spillway_condition matched"))
+                              .withColumn(AQ_ERROR_TYPE, F.lit("SpillwayCondition"))
+                              .withColumn(AQ_ERROR_TS, F.current_timestamp())
                         )
                         frame_store[module.id] = good_df
                         frame_store[f"{module.id}.spillway"] = _cache_if_multi_spillway(

@@ -44,7 +44,7 @@ from aqueduct.agent.signature import (
     from_json_decode_error,
     from_validation_error,
 )
-from aqueduct.patch.grammar import PatchSpec
+from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
 
@@ -190,7 +190,7 @@ def stage_patch_for_human(
     filename = _patch_filename(patch_spec)
     payload = patch_spec.model_dump()
     sig_exact, sig_coarse = from_failure_context(failure_ctx)
-    payload["_aq_meta"] = {
+    payload[PATCH_META_KEY] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,
@@ -272,7 +272,7 @@ def archive_patch(
     filename = _patch_filename(patch_spec)
     payload = patch_spec.model_dump()
     sig_exact, sig_coarse = from_failure_context(failure_ctx)
-    payload["_aq_meta"] = {
+    payload[PATCH_META_KEY] = {
         "run_id": failure_ctx.run_id,
         "blueprint_id": failure_ctx.blueprint_id,
         "failed_module": failure_ctx.failed_module,

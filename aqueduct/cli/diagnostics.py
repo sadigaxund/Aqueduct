@@ -44,7 +44,6 @@ def validate(
     Pass any number of files. With no argument, validates `aqueduct.yml`
     in the current directory if present. Exit 0 = all valid, 1 = any invalid.
     """
-    import json
     from pathlib import Path
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.config import ConfigError, load_config
@@ -198,7 +197,6 @@ def lint_cmd(
     warn-only result both exit 0. `--strict` promotes findings to errors so a
     non-empty result exits non-zero — wire that into CI to enforce a clean tree.
     """
-    import json
     from pathlib import Path
 
     from aqueduct.lint import LINT_SCHEMA_VERSION, run_lint

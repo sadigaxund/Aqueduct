@@ -442,7 +442,7 @@ def check_store_backend(
         except ImportError:
             return CheckResult(
                 label, "fail",
-                f"backend=postgres but psycopg2 not installed — "
+                "backend=postgres but psycopg2 not installed — "
                 "`pip install aqueduct-core[postgres]`",
                 _ms(t),
             )

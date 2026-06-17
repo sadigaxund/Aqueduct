@@ -8,7 +8,21 @@ to produce modified copies.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
+
+
+class ModuleType(StrEnum):
+    """Canonical module type names for the 9 blueprint module kinds."""
+    Ingress = "Ingress"
+    Channel = "Channel"
+    Egress = "Egress"
+    Junction = "Junction"
+    Funnel = "Funnel"
+    Probe = "Probe"
+    Regulator = "Regulator"
+    Arcade = "Arcade"
+    Assert = "Assert"
 
 
 @dataclass(frozen=True)

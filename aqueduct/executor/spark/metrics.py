@@ -10,7 +10,6 @@ gs://, etc.) return 0 — Spark doesn't expose byte totals without an extra job.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 

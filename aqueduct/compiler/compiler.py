@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,7 +34,6 @@ from aqueduct.compiler.provenance import (
     ProvenanceMap,
     ValueProvenance,
     build_config_provenance,
-    infer_value_provenance,
 )
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.wirer import (
@@ -44,7 +42,7 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
-from aqueduct.parser.models import Blueprint, Edge, Module
+from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
 from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 
@@ -172,7 +170,9 @@ def compile(  # noqa: A001
     # need explicit wiring (their ports are ambiguous in a flat chain), so a
     # Blueprint that omits edges while using them is a hard error rather than a
     # silent miswire. Injected edges carry `injected=True` for provenance.
-    _LINEAR_CHAIN_TYPES = {"Ingress", "Channel", "Egress", "Assert"}
+    _LINEAR_CHAIN_TYPES: frozenset[str] = frozenset({
+        ModuleType.Ingress, ModuleType.Channel, ModuleType.Egress, ModuleType.Assert,
+    })
     edges = list(blueprint.edges)
     if not edges and len(modules) > 1:
         _nonlinear = [m for m in modules if m.type not in _LINEAR_CHAIN_TYPES]
