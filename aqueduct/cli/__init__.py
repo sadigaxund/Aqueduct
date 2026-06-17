@@ -275,6 +275,7 @@ def _run_patch_gates_inline(
     blueprint_id: str,
     sample_rows: int = 1000,
     sandbox_mode: str = "sample",
+    sandbox_master_url: str | None = None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
@@ -331,7 +332,7 @@ def _run_patch_gates_inline(
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
             explain_capture=explain_after,
-            sandbox_master_url=None,  # TODO: thread resolved_sandbox_master_url when cfg is accessible
+            sandbox_master_url=sandbox_master_url,
         )
     try:
         surveyor.record_patch_simulation(

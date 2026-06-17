@@ -127,7 +127,7 @@ stores:
     path: "/mnt/aqueduct-state/depot.db"
 ```
 
-### Pod-native: external stores, zero local artefacts (Phase 53)
+### Pod-native: external stores, zero local artefacts
 
 Instead of a PVC, point every store at an external backend so the pod writes **nothing** to its cwd:
 

@@ -357,24 +357,65 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
     `patch apply` + `patch commit` in one atomic step.
     """
     import subprocess
+    import tempfile
     from pathlib import Path
 
     from aqueduct.patch.apply import PatchError, apply_patch_file
-    from aqueduct.patch.ci import build_commit_message
+    from aqueduct.patch.ci import build_commit_message, validate_ci_payload
 
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
+    # Pre-flight: if we are going to commit, fail BEFORE mutating the Blueprint
+    # when we are not inside a git work tree (so a non-repo checkout doesn't end
+    # up with an applied-but-uncommittable change).
+    if not no_commit:
+        _check = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, cwd=blueprint_path.parent or None,
+        )
+        if _check.returncode != 0 or _check.stdout.strip() != "true":
+            click.echo(
+                "✗ not inside a git work tree — `patch import` commits the change. "
+                "Run inside the repo, or pass --no-commit to stage only.",
+                err=True,
+            )
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    # The input may be a bare PatchSpec OR a CI webhook envelope that wraps the
+    # body under a `patch` key (patch + `_aq_meta` + envelope fields). When it is
+    # an envelope, validate the envelope schema and unwrap the body to a tempfile.
+    _apply_path = Path(patch_file)
+    _tmp_unwrapped: Path | None = None
+    try:
+        _raw = json.loads(Path(patch_file).read_text(encoding="utf-8"))
+    except Exception:
+        _raw = None
+    if isinstance(_raw, dict) and isinstance(_raw.get("patch"), dict):
+        violations = validate_ci_payload(_raw)
+        if violations:
+            click.echo("✗ invalid CI webhook payload:\n  - " + "\n  - ".join(violations), err=True)
+            sys.exit(exit_codes.DATA_OR_RUNTIME)
+        fd, _tmp = tempfile.mkstemp(suffix=".json", prefix="aq_ci_patch_")
+        import os as _os
+        with _os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(_raw["patch"], fh)
+        _tmp_unwrapped = Path(_tmp)
+        _apply_path = _tmp_unwrapped
+
     try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
-            patch_path=Path(patch_file),
+            patch_path=_apply_path,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
+    finally:
+        if _tmp_unwrapped is not None and _tmp_unwrapped.exists():
+            _tmp_unwrapped.unlink()
 
     click.echo(f"✓ patch imported  id={result.patch_id}")
     click.echo(f"  blueprint  → {result.blueprint_path}")

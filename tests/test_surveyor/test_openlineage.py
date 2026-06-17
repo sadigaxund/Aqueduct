@@ -135,15 +135,49 @@ def test_emitter_posts_event_with_column_lineage_facet():
     emitter = OpenLineageEmitter("http://ol.test", "ns", m)
     with patch("httpx.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
+        # COMPLETE for an unstarted run lazily emits START first, then COMPLETE.
         thread = emitter.emit("COMPLETE", run_id="run_1")
         assert isinstance(thread, threading.Thread)
-        thread.join(timeout=2)
-        mock_post.assert_called_once()
-        sent = mock_post.call_args.kwargs["json"]
+        for t in threading.enumerate():
+            if t.name == "surveyor-openlineage":
+                t.join(timeout=2)
+        sent = mock_post.call_args.kwargs["json"]  # the last call = COMPLETE
         assert sent["eventType"] == "COMPLETE"
         assert sent["job"]["name"] == "demo.bp"
         # the SQL Channel produced a columnLineage facet on the output dataset
         assert "columnLineage" in sent["outputs"][0]["facets"]
+
+
+def test_emitter_lazy_start_for_unstarted_run():
+    """A terminal event for a run_id that never got a START (e.g. a heal re-run)
+    emits a synthetic START first, so consumers never see a START-less terminal."""
+    emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        emitter.emit("COMPLETE", run_id="heal_run_2")
+        for c in mock_post.call_args_list:
+            c.kwargs["json"]  # touch
+        # join any spawned threads
+        import threading as _t
+        for t in _t.enumerate():
+            if t.name == "surveyor-openlineage":
+                t.join(timeout=2)
+        types = [c.kwargs["json"]["eventType"] for c in mock_post.call_args_list]
+        assert types == ["START", "COMPLETE"]
+
+
+def test_emitter_no_duplicate_start_when_already_started():
+    emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(status_code=200)
+        emitter.emit("START", run_id="r1")
+        emitter.emit("COMPLETE", run_id="r1")
+        import threading as _t
+        for t in _t.enumerate():
+            if t.name == "surveyor-openlineage":
+                t.join(timeout=2)
+        types = [c.kwargs["json"]["eventType"] for c in mock_post.call_args_list]
+        assert types == ["START", "COMPLETE"]  # no second START
 
 
 def test_emitter_server_error_logged_not_raised(capsys):

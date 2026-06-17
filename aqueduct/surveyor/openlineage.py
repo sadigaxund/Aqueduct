@@ -157,6 +157,7 @@ class OpenLineageEmitter:
         self._namespace = namespace
         self._manifest = manifest
         self._timeout = timeout
+        self._started_runs: set[str] = set()  # run_ids that already emitted a START
 
     def _outputs_with_facet(self) -> tuple[list[dict], list[dict]]:
         from aqueduct.compiler.lineage import compute_lineage_rows
@@ -170,6 +171,18 @@ class OpenLineageEmitter:
 
     def emit(self, event_type: str, *, run_id: str, error_message: str | None = None,
              event_time: str | None = None) -> threading.Thread | None:
+        # Lazy START: a terminal event for a run_id we never START-ed (e.g. a
+        # heal re-run, which mints a fresh run_id that bypassed surveyor.start())
+        # gets a synthetic START first, so a strict consumer never sees a
+        # START-less COMPLETE/FAIL.
+        if event_type in ("COMPLETE", "FAIL") and run_id not in self._started_runs:
+            self._emit_one("START", run_id=run_id, event_time=event_time)
+        return self._emit_one(
+            event_type, run_id=run_id, error_message=error_message, event_time=event_time
+        )
+
+    def _emit_one(self, event_type: str, *, run_id: str, error_message: str | None = None,
+                  event_time: str | None = None) -> threading.Thread | None:
         try:
             inputs, outputs = self._outputs_with_facet()
             event = build_run_event(
@@ -185,6 +198,8 @@ class OpenLineageEmitter:
         except Exception as exc:  # noqa: BLE001 — building an event must never break a run
             print(f"[surveyor] openlineage event build failed: {exc}", file=sys.stderr)
             return None
+        if event_type == "START":
+            self._started_runs.add(run_id)
         return self._post(event)
 
     def _post(self, event: dict) -> threading.Thread:

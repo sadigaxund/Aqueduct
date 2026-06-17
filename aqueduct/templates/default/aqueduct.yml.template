@@ -370,7 +370,7 @@ secrets:
 #   ${blueprint_name}   Blueprint display name
 #   ${module_count}    Number of modules executed
 #
-# on_patch_pending / on_ci_patch template variables (Phase 46 — the agent's
+# on_patch_pending / on_ci_patch template variables (the agent's
 # structured diagnosis, no extra LLM calls):
 #   ${run_id} ${blueprint_id} ${failed_module}
 #   ${patch_id}        Staged patch identifier
@@ -388,7 +388,7 @@ secrets:
 #
 # ${ENV_VAR} in any value resolves to os.environ[VAR] (useful for secrets in headers).
 #
-# If payload is omitted, Aqueduct sends a standardized envelope (Phase 46):
+# If payload is omitted, Aqueduct sends a standardized envelope:
 #   {"event": "<hook name>", "timestamp": "<ISO-8601 UTC>",
 #    "run_id": "...", "blueprint_id": "...", "data": {<event-specific payload>}}
 # data carries the full FailureContext (on_failure), the success summary
@@ -449,7 +449,7 @@ webhooks:
 #
 # NAMING COLLISION: this top-level `lineage:` block is NOT `stores.lineage`.
 # `stores.lineage` is an inert store-backend config (lineage merged into the
-# observability store in Phase 38); THIS block configures OpenLineage *emission*.
+# observability store); THIS block configures OpenLineage *emission*.
 #
 # Disabled by default — leave openlineage_url unset for zero cost.
 
@@ -477,7 +477,7 @@ agent:
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
   #                             # Increase for slow local models (e.g. 600.0 for Qwen3-32B).
-  # retry:                      # Phase 46 — transient-error retry (HTTP 429/503/529, both providers).
+  # retry:                      # transient-error retry (HTTP 429/503/529, both providers).
   #   max_retries: 2            # extra attempts after the first call; 0 disables retry
   #   backoff_seconds: 2.0      # base backoff; attempt N sleeps ~2^N * base (+ jitter),
   #                             # honors server Retry-After, always capped by the remaining
@@ -570,7 +570,7 @@ agent:
   # single driver node.
   # sandbox_master_url: null
 
-  # ── Signature memory (Phase 45) ────────────────────────────────────────────
+  # ── Signature memory ────────────────────────────────────────────
   # Zero-token heal paths consulted BEFORE the LLM is called. Each failure is
   # hashed into a stable signature (error class + module + normalized message);
   # patches carry the signature of the failure they fixed.

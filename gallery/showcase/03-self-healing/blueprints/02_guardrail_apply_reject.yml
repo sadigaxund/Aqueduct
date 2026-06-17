@@ -1,4 +1,4 @@
-# DEMO 2 — Phase 34: unified loop — apply-gate rejection feeds back into reprompt.
+# DEMO 2 — unified loop — apply-gate rejection feeds back into reprompt.
 #
 # Same broken SQL as demo 1. This blueprint adds:
 #   agent.guardrails.forbidden_ops: [set_module_config_key, replace_module_config]

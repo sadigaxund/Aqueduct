@@ -29,7 +29,7 @@ or DuckDB file locks:
                              written to <scenarios_dir>/.aqueduct/benchmark.duckdb
 ```
 
-**Phase 53 changes the artefact map.** The incremental-Channel watermark
+**The artefact map (1.2):** The incremental-Channel watermark
 sidecar (`watermarks/`) and the `schema_snapshot` sidecar (`snapshots/`) were
 removed: watermarks are persisted to the Depot only, and `schema_snapshot`
 payloads live solely in `probe_signals`. The `blobs/` directory and the patch
@@ -53,7 +53,7 @@ Each store is independently pluggable in `aqueduct.yml`:
 |-----------------|--------------------------------|-------|
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
 | `lineage`       | _(inert — merged into `observability`)_ | Setting `stores.lineage.path` emits a `DeprecationWarning` and is ignored. |
-| `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. Incremental-Channel watermarks persist here (Phase 53 dropped the local sidecar — no depot ⇒ no incremental state). |
+| `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. Incremental-Channel watermarks persist here( dropped the local sidecar — no depot ⇒ no incremental state). |
 | `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec). `local` keeps the on-disk layout above. |
 
 With `postgres`, tables live in named schemas (`observability`, `depot`).
@@ -139,7 +139,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 only (a parseable PatchSpec returned) — it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 
-Phase 45 adds two values outside the loop vocabulary: `cached` and
+Two values are added outside the loop vocabulary: `cached` and
 `replayed` mark synthetic zero-token rows (`attempt_num=0`,
 `tokens_in=tokens_out=0`) written when the heal cache resolved the failure
 without calling the LLM at all.
@@ -160,9 +160,9 @@ without calling the LLM at all.
 | `run_success_after_patch` | BOOLEAN | The authoritative "did this heal actually work" flag |
 | `applied_at`              | VARCHAR | ISO-8601 |
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
-| `failure_signature`       | VARCHAR | Phase 45 — exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
-| `resolution`              | VARCHAR | Phase 45 — `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on pre-Phase-45 rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
-| `model_cascade_position`  | INTEGER | Phase 46 — 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
+| `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
+| `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
 `resolution` counts across discovered observability DBs.
@@ -182,7 +182,7 @@ not here). `status` is `pass` | `fail` | `warn` | `skip` (`skip` when
 
 #### `patch_index` (1.2.x+)
 
-The relational truth for the object-store patch lifecycle (Phase 53). One row
+The relational truth for the object-store patch lifecycle. One row
 per `patch_id`; `status` moves `pending` → `applied` | `rejected`. The patch
 *body* lives in the object store at `object_key`; this row carries enough
 metadata (`signature`, `signature_coarse`, `error_class`, `where_field`,

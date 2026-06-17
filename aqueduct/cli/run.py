@@ -961,6 +961,7 @@ def run(
                                 iteration_run_id=iteration_run_id,
                                 blueprint_id=manifest.blueprint_id,
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                                sandbox_master_url=resolved_sandbox_master_url,
                             )
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
@@ -1126,6 +1127,7 @@ def run(
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
                             sandbox_mode=_vc_sandbox_mode,
+                            sandbox_master_url=resolved_sandbox_master_url,
                         )
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
@@ -1400,6 +1402,7 @@ def run(
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                        sandbox_master_url=resolved_sandbox_master_url,
                     )
                 if _g4 is not None and _g4.status == "warn":
                     for _r in _g4.regressions:
@@ -1515,6 +1518,7 @@ def run(
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
+                        sandbox_master_url=resolved_sandbox_master_url,
                     )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression

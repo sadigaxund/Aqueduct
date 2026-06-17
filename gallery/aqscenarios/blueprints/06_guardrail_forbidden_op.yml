@@ -7,7 +7,7 @@ description: >
   model must use a surgical op (set_module_config_key) instead of the
   blunt replace_module_config it might otherwise default to.
 
-# Phase 33 Part B Scope C step 1: surfaced in the LLM prompt as terse
+# surfaced in the LLM prompt as terse
 # imperative constraints. Step 2: enforced in the scenario apply path
 # via patch/apply.py:_check_guardrails (same code production runs).
 agent:

@@ -1,4 +1,4 @@
-# Example CI heal workflow — Aqueduct `approval: ci` reference (Phase 54).
+# Example CI heal workflow — Aqueduct `approval: ci` reference.
 #
 # This is a copy-paste snippet you OWN and adapt, NOT a maintained GitHub Action.
 # Aqueduct ships no versioned Action: the engine stays serverless. A cluster run

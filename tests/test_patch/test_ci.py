@@ -193,3 +193,70 @@ def test_patch_import_no_commit_stages_only(git_repo_with_blueprint):
         ["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True
     ).stdout.strip()
     assert head_after == head_before
+
+
+def test_patch_import_accepts_ci_webhook_envelope(git_repo_with_blueprint):
+    """`patch import` unwraps a CI webhook envelope ({...envelope, patch: {...}})
+    after validating it, not just a bare PatchSpec."""
+    repo, bp_path = git_repo_with_blueprint
+    envelope = repo / "envelope.json"
+    envelope.write_text(json.dumps({
+        "patch_id": "00007_new-label",
+        "run_id": "run-1",
+        "blueprint_id": "test.bp",
+        "failed_module": "in",
+        "source": "llm",
+        "patch": {
+            "patch_id": "00007_new-label",
+            "rationale": "relabel via envelope",
+            "operations": [{"op": "replace_module_label", "module_id": "in", "label": "Renamed"}],
+        },
+    }), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli, ["patch", "import", str(envelope), "--blueprint", str(bp_path)]
+    )
+    assert result.exit_code == 0, result.output
+    assert yaml.safe_load(bp_path.read_text())["modules"][0]["label"] == "Renamed"
+    log = subprocess.run(
+        ["git", "log", "-1", "--format=%B"], cwd=repo, capture_output=True, text=True
+    ).stdout
+    assert "relabel via envelope" in log
+
+
+def test_patch_import_rejects_invalid_envelope(git_repo_with_blueprint):
+    repo, bp_path = git_repo_with_blueprint
+    bad = repo / "bad.json"
+    # has a `patch` key (→ treated as envelope) but is missing required keys
+    bad.write_text(json.dumps({
+        "patch": {"patch_id": "p", "rationale": "r", "operations": []},
+    }), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli, ["patch", "import", str(bad), "--blueprint", str(bp_path)]
+    )
+    assert result.exit_code != 0
+    assert "invalid CI webhook payload" in result.output
+
+
+def test_patch_import_outside_git_repo_fails_before_mutating(tmp_path):
+    """Without --no-commit, a non-repo checkout fails BEFORE the Blueprint is
+    touched (no applied-but-uncommittable state)."""
+    bp = tmp_path / "blueprint.yml"
+    bp.write_text(yaml.dump({
+        "aqueduct": "1.0", "id": "test.bp", "name": "T",
+        "modules": [{"id": "in", "type": "Ingress", "label": "In",
+                     "config": {"format": "parquet", "path": "p1"}}],
+        "edges": [],
+    }), encoding="utf-8")
+    before = bp.read_text()
+    patch = tmp_path / "p.json"
+    patch.write_text(json.dumps({
+        "patch_id": "p", "rationale": "r",
+        "operations": [{"op": "replace_module_label", "module_id": "in", "label": "X"}],
+    }), encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["patch", "import", str(patch), "--blueprint", str(bp)])
+    assert result.exit_code != 0
+    assert "not inside a git work tree" in result.output
+    assert bp.read_text() == before  # Blueprint untouched
