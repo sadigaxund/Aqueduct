@@ -14,8 +14,8 @@ tests:
     inputs:
       raw_users:                  # upstream module id the Channel reads
         schema:
-          user_id: long
-          version: long
+          user_id: bigint
+          version: bigint
           data: string
         rows:
           - [1, 1, "old"]

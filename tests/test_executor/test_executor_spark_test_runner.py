@@ -39,10 +39,8 @@ def test_create_df_supported_types(spark: SparkSession):
     assert types["c_date"] == "date"
 
 def test_create_df_unknown_type(spark: SparkSession):
-    # unknown schema type -> passes through to Spark DDL
-    # If Spark doesn't know it, it will raise. But our _spark_type just returns the string as is.
-    # Let's use a type Spark knows but we don't have in _TYPE_MAP, like 'float' (which is in map) 
-    # or something truly weird.
+    # Schema types are Spark SQL DDL types passed directly to CREATE TEMP VIEW.
+    # Spark rejects unknown types with a clear ParseException.
     schema = {"c": "map<string,string>"}
     rows = [[{"a": "b"}]]
     df = _create_df(spark, schema, rows)

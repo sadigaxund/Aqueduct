@@ -10,27 +10,16 @@ pytestmark = [pytest.mark.spark, pytest.mark.integration]
 class TestTestRunnerHelpers:
     """Tests for pure helpers in test_runner.py — no Spark needed."""
 
-    def test_spark_type_long(self):
-        from aqueduct.executor.spark.test_runner import _spark_type
-        assert _spark_type("long") == "bigint"
-
-    def test_spark_type_string(self):
-        from aqueduct.executor.spark.test_runner import _spark_type
-        assert _spark_type("string") == "string"
-
-    def test_spark_type_boolean_alias(self):
-        from aqueduct.executor.spark.test_runner import _spark_type
-        assert _spark_type("bool") == "boolean"
-
-    def test_spark_type_passthrough_unknown(self):
-        from aqueduct.executor.spark.test_runner import _spark_type
-        assert _spark_type("decimal(10,2)") == "decimal(10,2)"
-
-    def test_schema_ddl(self):
+    def test_schema_ddl_uses_spark_types_directly(self):
         from aqueduct.executor.spark.test_runner import _schema_ddl
-        ddl = _schema_ddl({"order_id": "long", "name": "string"})
+        ddl = _schema_ddl({"order_id": "bigint", "name": "string"})
         assert "`order_id` bigint" in ddl
         assert "`name` string" in ddl
+
+    def test_schema_ddl_decimal_with_precision(self):
+        from aqueduct.executor.spark.test_runner import _schema_ddl
+        ddl = _schema_ddl({"amount": "decimal(38,2)"})
+        assert "`amount` decimal(38,2)" in ddl
 
     def test_sql_literal_string(self):
         from aqueduct.executor.spark.test_runner import _sql_literal

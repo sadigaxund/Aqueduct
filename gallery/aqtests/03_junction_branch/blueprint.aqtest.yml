@@ -11,7 +11,7 @@ tests:
     inputs:
       raw_tickets:
         schema:
-          ticket_id: long
+          ticket_id: bigint
           status: string
         rows:
           - [1, "NEW"]
@@ -32,7 +32,7 @@ tests:
     inputs:
       raw_tickets:
         schema:
-          ticket_id: long
+          ticket_id: bigint
           status: string
         rows:
           - [1, "NEW"]

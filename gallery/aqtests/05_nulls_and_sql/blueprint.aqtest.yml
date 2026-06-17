@@ -10,7 +10,7 @@ tests:
     inputs:
       raw_items:
         schema:
-          item_id: long
+          item_id: bigint
           category: string
           price: double
         rows:

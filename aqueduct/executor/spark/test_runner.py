@@ -81,32 +81,13 @@ class TestSchemaError(AqueductError):
     """Raised for test file schema errors, not assertion failures."""
 
 
-# ── Spark type mapping ────────────────────────────────────────────────────────
-
-_TYPE_MAP = {
-    "long": "bigint",
-    "int": "int",
-    "integer": "int",
-    "short": "smallint",
-    "byte": "tinyint",
-    "double": "double",
-    "float": "float",
-    "string": "string",
-    "boolean": "boolean",
-    "bool": "boolean",
-    "timestamp": "timestamp",
-    "date": "date",
-    "binary": "binary",
-    "decimal": "decimal(38,18)",
-}
-
-
-def _spark_type(user_type: str) -> str:
-    return _TYPE_MAP.get(user_type.lower(), user_type)
-
-
 def _schema_ddl(schema: dict[str, str]) -> str:
-    parts = [f"`{col}` {_spark_type(t)}" for col, t in schema.items()]
+    """Build a Spark SQL column definition list from schema dict.
+
+    Types are Spark SQL DDL type names — the same vocabulary used in Channel
+    ``cast:`` blocks (e.g. ``bigint`` not ``long``, ``decimal(38,2)`` not ``decimal``).
+    """
+    parts = [f"`{col}` {typ}" for col, typ in schema.items()]
     return ", ".join(parts)
 
 

@@ -10,14 +10,14 @@ tests:
     inputs:
       source_a:
         schema:
-          id: long
+          id: bigint
           name: string
         rows:
           - [1, "Alice"]
           - [2, "Bob"]
       source_b:
         schema:
-          id: long
+          id: bigint
           name: string
         rows:
           - [3, "Charlie"]

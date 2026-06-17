@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 
-_CLOUD_SCHEMES = ("s3://", "s3a://", "s3n://", "hdfs://", "gs://", "abfs://", "wasb://", "dbfs:/")
+CLOUD_SCHEMES = ("s3://", "s3a://", "s3n://", "hdfs://", "gs://", "abfs://", "wasbs://", "wasb://", "dbfs://")
 
 
 def observe_df(
@@ -123,7 +123,7 @@ def dir_bytes(path_str: str) -> "int | None":
     """
     if not path_str:
         return None
-    for scheme in _CLOUD_SCHEMES:
+    for scheme in CLOUD_SCHEMES:
         if path_str.startswith(scheme):
             return _hadoop_fs_bytes(path_str)
     try:

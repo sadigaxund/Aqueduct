@@ -10,7 +10,7 @@ tests:
     inputs:
       raw_orders:
         schema:
-          order_id: long
+          order_id: bigint
           amount: double
         rows:
           - [1, 5.0]     # should be quarantined (amount < 10)

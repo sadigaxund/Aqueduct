@@ -45,6 +45,7 @@ from aqueduct.compiler.wirer import (
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
 from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
+from aqueduct.executor.spark.metrics import CLOUD_SCHEMES
 from aqueduct.errors import AqueductError
 
 
@@ -251,14 +252,13 @@ def compile(  # noqa: A001
     modules, edges = compile_away_regulators(modules, edges)
 
     # ── 6.5. Build inputs fingerprint ─────────────────────────────────────────
-    _REMOTE_SCHEMES = ("s3://", "s3a://", "gs://", "hdfs://", "abfs://", "wasbs://", "wasb://")
     inputs_fingerprint: dict[str, dict[str, Any]] = {}
     for m in modules:
         if m.type != ModuleType.Ingress:
             continue
         fmt = m.config.get("format", "")
         path = m.config.get("path", "")
-        if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in _REMOTE_SCHEMES):
+        if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in CLOUD_SCHEMES):
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
             continue
         try:

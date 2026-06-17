@@ -39,6 +39,7 @@ from __future__ import annotations
 import importlib
 import logging
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -49,6 +50,29 @@ from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG,
 from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
+
+
+class AssertRuleType(StrEnum):
+    """Rule type vocabulary — scalar string values matching Blueprint config keys."""
+
+    SCHEMA_MATCH = "schema_match"
+    MIN_ROWS = "min_rows"
+    MAX_ROWS = "max_rows"
+    FRESHNESS = "freshness"
+    SQL = "sql"
+    SQL_ROW = "sql_row"
+    CUSTOM = "custom"
+    SPILLWAY_RATE = "spillway_rate"
+
+
+class AssertOnFailAction(StrEnum):
+    """``on_fail`` action vocabulary — scalar string values matching Blueprint config."""
+
+    ABORT = "abort"
+    WARN = "warn"
+    WEBHOOK = "webhook"
+    QUARANTINE = "quarantine"
+    TRIGGER_AGENT = "trigger_agent"
 
 
 # ── Public error type ─────────────────────────────────────────────────────────
@@ -104,7 +128,7 @@ def execute_assert(
 
     # ── Phase 1: schema_match (zero action) ──────────────────────────────────
     for rule in rules:
-        if rule.get("type") == "schema_match":
+        if rule.get("type") == AssertRuleType.SCHEMA_MATCH:
             _check_schema_match(module.id, df, rule)
 
     # ── Phase 2: aggregate rules (one batched action + one sample action) ────
@@ -116,14 +140,14 @@ def execute_assert(
 
     for rule in rules:
         rtype = rule.get("type")
-        if rtype in ("sql_row", "custom"):
+        if rtype in (AssertRuleType.SQL_ROW, AssertRuleType.CUSTOM):
             passing_df, q_df = _apply_row_rule(module.id, passing_df, rule, spark)
             if q_df is not None:
                 quarantine_parts.append(q_df)
-        elif rtype == "freshness":
-            on_fail = rule.get("on_fail", "abort")
-            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
-            if action == "quarantine":
+        elif rtype == AssertRuleType.FRESHNESS:
+            on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
+            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", AssertOnFailAction.ABORT)
+            if action == AssertOnFailAction.QUARANTINE:
                 col = rule.get("column")
                 if not col:
                     raise AssertError(
@@ -149,7 +173,7 @@ def execute_assert(
                 q_df = (
                     passing_df.filter(~passing_filter)
                     .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
-                    .withColumn(AQ_ERROR_RULE, F.lit("freshness"))
+                    .withColumn(AQ_ERROR_RULE, F.lit(AssertRuleType.FRESHNESS.value))
                     .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "freshness"))
                     .withColumn(AQ_ERROR_MSG, F.lit(f"column {col!r} failed freshness check"))
                     .withColumn(AQ_ERROR_TS, F.current_timestamp())
@@ -163,7 +187,7 @@ def execute_assert(
         quarantine_df = reduce(lambda a, b: a.union(b), quarantine_parts)
 
     # ── Phase 4: spillway_rate (post-row-level; needs quarantine count) ───────
-    spillway_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == "spillway_rate"]
+    spillway_rules = [(i, r) for i, r in enumerate(rules) if r.get("type") == AssertRuleType.SPILLWAY_RATE]
     if spillway_rules:
         _check_spillway_rate(module.id, df, quarantine_df, spillway_rules, blueprint_id, run_id)
 
@@ -186,16 +210,16 @@ def _handle_fail(
         action = on_fail
         webhook_url: str | None = None
     else:
-        action = on_fail.get("action", "abort")
+        action = on_fail.get("action", AssertOnFailAction.ABORT)
         webhook_url = on_fail.get("url")
 
-    if action == "abort":
+    if action == AssertOnFailAction.ABORT:
         raise AssertError(message, rule_id=rule_type, error_type=error_type)
-    elif action == "trigger_agent":
+    elif action == AssertOnFailAction.TRIGGER_AGENT:
         raise AssertError(message, rule_id=rule_type, trigger_agent=True, error_type=error_type)
-    elif action == "warn":
+    elif action == AssertOnFailAction.WARN:
         logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
-    elif action == "webhook":
+    elif action == AssertOnFailAction.WEBHOOK:
         if webhook_url:
             _fire_rule_webhook(
                 webhook_url, module_id, rule_type, message, blueprint_id, run_id
@@ -204,7 +228,7 @@ def _handle_fail(
             logger.warning(
                 "[%s] Assert %r on_fail=webhook but no url specified.", module_id, rule_type
             )
-    elif action == "quarantine":
+    elif action == AssertOnFailAction.QUARANTINE:
         # Row-level only — handled by _apply_row_rule; aggregate rules treat as warn
         logger.warning(
             "[%s] Assert %r on_fail=quarantine used on aggregate rule; treated as warn.",
@@ -224,7 +248,7 @@ def _handle_fail(
 def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -> None:
     """Zero Spark action. Checks df.schema against expected field map."""
     expected: dict[str, str] = rule.get("expected", {})
-    on_fail = rule.get("on_fail", "abort")
+    on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
 
     actual_fields = {f.name: f.dataType.simpleString() for f in df.schema.fields}
 
@@ -238,10 +262,10 @@ def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -
     error_type = rule.get("error_type")
     if missing:
         msg = f"schema_match: missing columns {missing}"
-        _handle_fail(on_fail, module_id, "schema_match", msg, error_type=error_type)
+        _handle_fail(on_fail, module_id, AssertRuleType.SCHEMA_MATCH, msg, error_type=error_type)
     if type_mismatches:
         msg = f"schema_match: type mismatches {type_mismatches}"
-        _handle_fail(on_fail, module_id, "schema_match", msg, error_type=error_type)
+        _handle_fail(on_fail, module_id, AssertRuleType.SCHEMA_MATCH, msg, error_type=error_type)
 
 
 # ── Phase 2: aggregate rules (batched) ───────────────────────────────────────
@@ -262,18 +286,18 @@ def _batch_aggregate_rules(
 
     for i, rule in enumerate(rules):
         rtype = rule.get("type")
-        if rtype == "min_rows":
+        if rtype == AssertRuleType.MIN_ROWS:
             agg_cols[f"_cnt_{i}"] = F.count("*")
             agg_rule_indices.append(i)
-        elif rtype == "max_rows":
+        elif rtype == AssertRuleType.MAX_ROWS:
             agg_cols[f"_cnt_{i}"] = F.count("*")
             agg_rule_indices.append(i)
-        elif rtype == "freshness":
+        elif rtype == AssertRuleType.FRESHNESS:
             col = rule.get("column")
             if col:
                 agg_cols[f"_max_{i}"] = F.max(F.col(col))
                 agg_rule_indices.append(i)
-        elif rtype == "sql":
+        elif rtype == AssertRuleType.SQL:
             expr_str = rule.get("expr", "")
             if expr_str:
                 agg_cols[f"_sql_{i}"] = F.expr(expr_str)
@@ -287,34 +311,34 @@ def _batch_aggregate_rules(
     if agg_row is not None:
         for i, rule in enumerate(rules):
             rtype = rule.get("type")
-            on_fail = rule.get("on_fail", "abort")
+            on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
 
-            if rtype == "min_rows" and f"_cnt_{i}" in agg_cols:
+            if rtype == AssertRuleType.MIN_ROWS and f"_cnt_{i}" in agg_cols:
                 count = agg_row[f"_cnt_{i}"]
                 min_val = int(rule.get("min", 0))
                 if count < min_val:
                     _handle_fail(
-                        on_fail, module_id, "min_rows",
+                        on_fail, module_id, AssertRuleType.MIN_ROWS,
                         f"min_rows: got {count}, expected >= {min_val}",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
-            elif rtype == "max_rows" and f"_cnt_{i}" in agg_cols:
+            elif rtype == AssertRuleType.MAX_ROWS and f"_cnt_{i}" in agg_cols:
                 count = agg_row[f"_cnt_{i}"]
                 max_val = int(rule.get("max", 2**63))
                 if count > max_val:
                     _handle_fail(
-                        on_fail, module_id, "max_rows",
+                        on_fail, module_id, AssertRuleType.MAX_ROWS,
                         f"max_rows: got {count}, expected <= {max_val}",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
-            elif rtype == "freshness" and f"_max_{i}" in agg_cols:
+            elif rtype == AssertRuleType.FRESHNESS and f"_max_{i}" in agg_cols:
                 max_ts = agg_row[f"_max_{i}"]
                 max_age_hours = float(rule.get("max_age_hours", 24))
                 if max_ts is None:
                     _handle_fail(
-                        on_fail, module_id, "freshness",
+                        on_fail, module_id, AssertRuleType.FRESHNESS,
                         "freshness: column has no non-null values",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
@@ -326,17 +350,17 @@ def _batch_aggregate_rules(
                     age_hours = (datetime.now(tz=timezone.utc) - ts_utc).total_seconds() / 3600
                     if age_hours > max_age_hours:
                         _handle_fail(
-                            on_fail, module_id, "freshness",
+                            on_fail, module_id, AssertRuleType.FRESHNESS,
                             f"freshness: data is {age_hours:.1f}h old, max allowed {max_age_hours}h",
                             blueprint_id, run_id, error_type=rule.get("error_type"),
                         )
 
-            elif rtype == "sql" and f"_sql_{i}" in agg_cols:
+            elif rtype == AssertRuleType.SQL and f"_sql_{i}" in agg_cols:
                 result = agg_row[f"_sql_{i}"]
                 # Expression expected to evaluate to a boolean or truthy value
                 if not result:
                     _handle_fail(
-                        on_fail, module_id, "sql",
+                        on_fail, module_id, AssertRuleType.SQL,
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
@@ -362,7 +386,7 @@ def _batch_aggregate_rules(
             col = rule.get("column")
             if not col or f"_null_{i}" not in null_cols:
                 continue
-            on_fail = rule.get("on_fail", "abort")
+            on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
             null_count = sample_row[f"_null_{i}"] or 0
             rate = null_count / total
             max_rate = float(rule.get("max", 0.0))
@@ -395,10 +419,10 @@ def _check_spillway_rate(
 
     for _i, rule in spillway_rules:
         max_rate = float(rule.get("max", 1.0))
-        on_fail = rule.get("on_fail", "abort")
+        on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
         if actual_rate > max_rate:
             _handle_fail(
-                on_fail, module_id, "spillway_rate",
+                on_fail, module_id, AssertRuleType.SPILLWAY_RATE,
                 f"spillway_rate: {actual_rate:.4%} of rows quarantined "
                 f"({quarantine_count}/{total}), max allowed {max_rate:.4%}",
                 blueprint_id, run_id, error_type=rule.get("error_type"),
@@ -420,9 +444,9 @@ def _apply_row_rule(
     from pyspark.sql import functions as F
 
     rtype = rule.get("type")
-    on_fail = rule.get("on_fail", "quarantine")
+    on_fail = rule.get("on_fail", AssertOnFailAction.QUARANTINE)
 
-    if rtype == "sql_row":
+    if rtype == AssertRuleType.SQL_ROW:
         expr_str = rule.get("expr", "")
         if not expr_str:
             return df, None
@@ -445,17 +469,17 @@ def _apply_row_rule(
             actual_rate = pass_count / total if total > 0 else 1.0
             if actual_rate < float(min_pass_rate):
                 _handle_fail(
-                    on_fail if not isinstance(on_fail, str) or on_fail != "quarantine" else "abort",
-                    module_id, "sql_row",
+                    on_fail if not isinstance(on_fail, str) or on_fail != AssertOnFailAction.QUARANTINE else AssertOnFailAction.ABORT,
+                    module_id, AssertRuleType.SQL_ROW,
                     f"sql_row pass_rate {actual_rate:.4%} < min {float(min_pass_rate):.4%}",
                 )
 
-        if isinstance(on_fail, str) and on_fail == "quarantine":
+        if isinstance(on_fail, str) and on_fail == AssertOnFailAction.QUARANTINE:
             quarantine_df = (
                 failing
                 .withColumn(AQ_ERROR_MODULE, F.lit(module_id))
-                .withColumn(AQ_ERROR_RULE, F.lit("sql_row"))
-                .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "sql_row"))
+                .withColumn(AQ_ERROR_RULE, F.lit(AssertRuleType.SQL_ROW.value))
+                .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or AssertRuleType.SQL_ROW.value))
                 .withColumn(AQ_ERROR_MSG, F.lit(f"failed: {expr_str}"))
                 .withColumn(AQ_ERROR_TS, F.current_timestamp())
             )
@@ -464,10 +488,10 @@ def _apply_row_rule(
         # non-quarantine on_fail for sql_row — evaluate lazily using count when needed
         # For abort/warn/webhook we'd need to detect if any rows fail; use lazy approach:
         # register failing as a view and check count only if non-quarantine action needed
-        _handle_fail_if_any(module_id, failing, on_fail, "sql_row", f"failed: {expr_str}", error_type=rule.get("error_type"))
+        _handle_fail_if_any(module_id, failing, on_fail, AssertRuleType.SQL_ROW, f"failed: {expr_str}", error_type=rule.get("error_type"))
         return passing, None
 
-    elif rtype == "custom":
+    elif rtype == AssertRuleType.CUSTOM:
         fn_path = rule.get("fn", "")
         if not fn_path:
             logger.warning("[%s] custom rule missing fn path; skipped.", module_id)
@@ -486,12 +510,12 @@ def _apply_row_rule(
             msg = result.get("message", f"custom rule {fn_path!r} failed")
             q_df = result.get("quarantine_df")
 
-            if isinstance(on_fail, str) and on_fail == "quarantine" and q_df is not None:
+            if isinstance(on_fail, str) and on_fail == AssertOnFailAction.QUARANTINE and q_df is not None:
                 q_df = (
                     q_df
                     .withColumn(AQ_ERROR_MODULE, F.lit(module_id))
-                    .withColumn(AQ_ERROR_RULE, F.lit("custom"))
-                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "custom"))
+                    .withColumn(AQ_ERROR_RULE, F.lit(AssertRuleType.CUSTOM.value))
+                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or AssertRuleType.CUSTOM.value))
                     .withColumn(AQ_ERROR_MSG, F.lit(msg))
                     .withColumn(AQ_ERROR_TS, F.current_timestamp())
                 )
@@ -499,7 +523,7 @@ def _apply_row_rule(
                 # For simplicity, trust fn to return the right quarantine_df
                 return df, q_df
             else:
-                _handle_fail(on_fail, module_id, "custom", msg, error_type=rule.get("error_type"))
+                _handle_fail(on_fail, module_id, AssertRuleType.CUSTOM, msg, error_type=rule.get("error_type"))
 
     return df, None
 
@@ -536,7 +560,7 @@ def _load_callable(fn_path: str) -> Any:
     if len(parts) != 2:
         raise AssertError(
             f"custom rule fn {fn_path!r} must be 'module.callable' format",
-            rule_id="custom",
+            rule_id=AssertRuleType.CUSTOM,
         )
     module_path, attr = parts
     try:
@@ -544,13 +568,13 @@ def _load_callable(fn_path: str) -> Any:
     except ImportError as exc:
         raise AssertError(
             f"custom rule fn {fn_path!r}: cannot import {module_path!r}: {exc}",
-            rule_id="custom",
+            rule_id=AssertRuleType.CUSTOM,
         ) from exc
     fn = getattr(mod, attr, None)
     if fn is None or not callable(fn):
         raise AssertError(
             f"custom rule fn {fn_path!r}: {attr!r} not found or not callable in {module_path!r}",
-            rule_id="custom",
+            rule_id=AssertRuleType.CUSTOM,
         )
     return fn
 
