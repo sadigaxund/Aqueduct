@@ -1167,7 +1167,7 @@ def test_resume_mismatched_manifest_warns_and_continues(spark: SparkSession, tmp
         r2 = execute(manifest2, spark, run_id="run-hash2", store_dir=store_dir, resume_run_id="run-hash1")
 
     assert r2.status == "success"
-    assert any("changed" in rec.message for rec in caplog.records)
+    assert any("changed" in rec.getMessage() for rec in caplog.records)
 
 
 def test_per_module_on_failure_abort_stops_blueprint(spark: SparkSession, tmp_path, monkeypatch):
@@ -1364,7 +1364,7 @@ def test_checkpoint_write_failure_non_fatal(spark: SparkSession, tmp_path, monke
         result = execute(manifest, spark, run_id="run-ckpt-fail", store_dir=store_dir)
 
     assert result.status == "success"
-    assert any("Checkpoint write failed" in rec.message for rec in caplog.records)
+    assert any("Checkpoint write failed" in rec.getMessage() for rec in caplog.records)
 
 
 # ── Assert Integration ────────────────────────────────────────────────────────
@@ -1424,7 +1424,7 @@ def test_execute_assert_no_spillway_edge_discards(spark: SparkSession, tmp_path,
         
     assert result.status == "success"
     assert spark.read.parquet(out_path).count() == 3
-    assert any("no spillway edge; discarded" in rec.message for rec in caplog.records)
+    assert any("no spillway edge; discarded" in rec.getMessage() for rec in caplog.records)
 
 
 def test_execute_assert_end_to_end_abort(spark: SparkSession, tmp_path):

@@ -225,8 +225,10 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
             cur.execute(f'SELECT COUNT(*) FROM "{obs_schema}".module_metrics')
             assert cur.fetchone()[0] >= 1
             
-            # Lineage
-            cur.execute(f'SELECT COUNT(*) FROM "{lin_schema}".column_lineage')
+            # Lineage — column_lineage DDL lives in the surveyor's observability
+            # DDL (surveyor.py _DDL), so the table is in the observability schema,
+            # not the lineage store schema.
+            cur.execute(f'SELECT COUNT(*) FROM "{obs_schema}".column_lineage')
             assert cur.fetchone()[0] >= 1
             
         conn.close()

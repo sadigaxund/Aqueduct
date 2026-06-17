@@ -59,8 +59,8 @@ if not AIRFLOW_INSTALLED:
             pass
 
     class TriggerEventMock:
-        def __init__(self, data):
-            self.data = data
+        def __init__(self, payload):
+            self.payload = payload
 
     class AirflowExceptionMock(Exception):
         pass
@@ -353,7 +353,7 @@ def test_trigger_run_approved_sync():
     with patch.object(t, "_check_once", side_effect=mock_check_once), patch("asyncio.sleep") as mock_sleep:
         events = asyncio.run(run_test())
         assert len(events) == 1
-        assert events[0].data == {"status": "approved", "patch_id": "p-123", "run_id": "run-123"}
+        assert events[0].payload == {"status": "approved", "patch_id": "p-123", "run_id": "run-123"}
         mock_sleep.assert_called_once_with(5.0)
 
 
@@ -522,11 +522,13 @@ context:
 modules:
   - id: src
     type: Ingress
+    label: Source
     config:
       format: csv
       path: ${{ctx.input_path}}
   - id: sink
     type: Egress
+    label: Sink
     config:
       format: csv
       path: ${{ctx.output_path}}
@@ -536,16 +538,38 @@ edges:
     to: sink
 """)
 
-    # Instantiate operator
+    # Create a minimal aqueduct config so the CLI doesn't fail with
+    # CONFIG_ERROR (exit 1) when it can't find one.
+    cfg = tmp_path / "aqueduct.yml"
+    cfg.write_text("""\
+aqueduct_config: "1.0"
+stores:
+  observability:
+    backend: duckdb
+    path: "{obs}"
+  lineage:
+    backend: duckdb
+    path: "{lin}"
+  depot:
+    backend: duckdb
+    path: "{dep}"
+""".format(
+        obs=str(tmp_path / "obs.duckdb"),
+        lin=str(tmp_path / "lin.duckdb"),
+        dep=str(tmp_path / "dep.duckdb"),
+    ), encoding="utf-8")
+
     import sys
+    from pathlib import Path
+    _aq = str(Path(sys.executable).parent / "aqueduct")
     op = AqueductOperator(
         task_id="test_happy_task",
         blueprint=str(blueprint_path),
         run_id="run-happy-123",
-        aqueduct_cmd=[sys.executable, "-m", "aqueduct.cli"],
+        config=str(cfg),
+        aqueduct_cmd=[_aq],
     )
 
-    # Let's run execute
     res = op.execute(context={})
     assert res == {"run_id": "run-happy-123", "exit_code": 0}
     assert output_csv.exists()
@@ -602,14 +626,14 @@ def test_airflow_integration_defect_healing(tmp_path):
                     events.append(event)
             asyncio.run(run_trigger())
             assert len(events) == 1
-            assert events[0].data == {"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"}
+            assert events[0].payload == {"status": "approved", "patch_id": "p-001", "run_id": "run-defect-123"}
             mock_sleep.assert_called_once_with(1.0)
 
         # 3. Simulate resuming from the patch event.
         # It calls resume_from_patch on the operator.
         # This re-invokes execute, which now succeeds (mock exit code 0).
         with patch.object(op, "execute", return_value={"run_id": "run-defect-123", "exit_code": 0}) as mock_execute:
-            res = op.resume_from_patch(context={}, event=events[0].data)
+            res = op.resume_from_patch(context={}, event=events[0].payload)
             mock_execute.assert_called_once()
             assert res == {"run_id": "run-defect-123", "exit_code": 0}
             
