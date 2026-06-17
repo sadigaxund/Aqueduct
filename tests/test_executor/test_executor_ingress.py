@@ -401,3 +401,14 @@ def test_partition_filters_jdbc_applied_after_pathless_load(spark: SparkSession)
     mock_reader.load.assert_called_once_with()
     # filter was applied - only rows with id >= 5 survive
     assert df.count() == 5
+
+
+def test_pathless_ingress_formats_are_expected_set():
+    """Verify PATHLESS_INGRESS_FORMATS matches the known pathless Ingress
+    formats.  The compiler uses the same constant for inputs_fingerprint
+    skip logic — a drift between the two sources would cause the compiler
+    to stat() a nonexistent path or the executor to reject a valid format.
+    """
+    from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
+
+    assert PATHLESS_INGRESS_FORMATS == {"jdbc", "kafka", "depot", "dataframe"}

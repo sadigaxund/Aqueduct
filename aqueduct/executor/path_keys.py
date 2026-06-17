@@ -61,4 +61,9 @@ def get_path_keys(module_type: str) -> tuple[str, ...]:
     return _PATH_KEYS.get(module_type, _LEGACY_FALLBACK)
 
 
-__all__ = ["get_path_keys"]
+# Ingress formats that locate data via options (url / dbtable / topic / …),
+# not a file path.  Used by both the compiler (inputs_fingerprint, to avoid
+# stat() on a non‑path value) and the executor (path‑required validation).
+PATHLESS_INGRESS_FORMATS: frozenset[str] = frozenset({"jdbc", "kafka", "depot", "dataframe"})
+
+__all__ = ["get_path_keys", "PATHLESS_INGRESS_FORMATS"]

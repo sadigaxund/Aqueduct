@@ -187,7 +187,10 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
             f"[{module.id}] mode=merge failed against {target!r}: {exc}"
         ) from exc
     finally:
-        spark.catalog.dropTempView(view_name)
+        try:
+            spark.catalog.dropTempView(view_name)
+        except Exception:
+            pass
 
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 

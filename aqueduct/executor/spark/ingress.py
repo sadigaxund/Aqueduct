@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
+from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 
 
 class IngressError(Exception):
@@ -59,10 +60,8 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
     # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
-    _PATHLESS_FORMATS = {"jdbc", "kafka", "depot", "dataframe"}
-
     path: str | None = cfg.get("path")
-    if not path and fmt not in _PATHLESS_FORMATS:
+    if not path and fmt not in PATHLESS_INGRESS_FORMATS:
         raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 
     reader = spark.read.format(fmt)

@@ -16,6 +16,13 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- **Guardrail exception no longer silently passes patches.** An unexpected error during the guardrail pre-staging check in `cli/run.py` previously set `guardrail_err = None` (meaning "passed"), allowing the patch to proceed unchecked. It now surfaces the error so the patch is properly staged for human review.
+- **`stores.blob.path` is now `FsPath`-anchored.** Relative paths in `stores.blob.path` (local backend) previously resolved against `CWD`. They now anchor against the config-file directory, consistent with every other `FsPath`-annotated store field. URI-style paths (`s3://`, `gs://`, `abfs://`) pass through untouched via `allow_uri=True`.
+- **`stores.blob` backend validated at config load.** Setting `stores.blob.backend: s3` (or `gcs`/`adls`) without the corresponding SDK installed now raises a `ConfigError` with an install hint, matching the fail-fast pattern of `stores.observability` / `stores.lineage` / `stores.depot`.
+- **`PATHLESS_INGRESS_FORMATS` is now a single source of truth.** Two independently maintained frozensets (`_SKIP_FORMATS` in the compiler, `_PATHLESS_FORMATS` in the executor) encoded the same knowledge (Ingress formats that don't have a file path). They are now a shared constant in `executor/path_keys.py`, imported by both layers, with a sync test.
+- **`_write_merge` cleanup no longer masks real errors.** The `finally: dropTempView` in the Delta merge path was unguarded — if the merge failed before creating the temp view, the cleanup `AnalysisException` would obscure the real root cause in the traceback. The `dropTempView` is now guarded so the original error chains through cleanly.
+
 ## [1.3.0] — 2026-06-17
 
 ### Added

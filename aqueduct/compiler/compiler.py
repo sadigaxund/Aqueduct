@@ -46,6 +46,7 @@ from aqueduct.compiler.wirer import (
 )
 from aqueduct.parser.models import Blueprint, Edge, Module
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
+from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 
 
 class CompileError(Exception):
@@ -250,14 +251,13 @@ def compile(  # noqa: A001
 
     # ── 6.5. Build inputs fingerprint ─────────────────────────────────────────
     _REMOTE_SCHEMES = ("s3://", "s3a://", "gs://", "hdfs://", "abfs://", "wasbs://", "wasb://")
-    _SKIP_FORMATS = {"jdbc", "kafka", "depot", "dataframe"}
     inputs_fingerprint: dict[str, dict[str, Any]] = {}
     for m in modules:
         if m.type != "Ingress":
             continue
         fmt = m.config.get("format", "")
         path = m.config.get("path", "")
-        if not path or fmt in _SKIP_FORMATS or any(path.startswith(s) for s in _REMOTE_SCHEMES):
+        if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in _REMOTE_SCHEMES):
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
             continue
         try:

@@ -127,8 +127,10 @@ class ObjectStoreConfig(BaseModel):
     produce no local-FS artefacts under its cwd. `local` (default) is
     byte-identical to the historical layout, so the git review workflow is
     unchanged. `s3` / `gcs` / `adls` are served by one `fsspec` handle — install
-    the `[object-store]` extra. The `path` is NOT FsPath-anchored: for object
-    backends it is a base URI that must survive verbatim.
+    the `[object-store]` extra.  The `path` is FsPath‑anchored with
+    ``allow_uri=True`` (the default) so relative paths resolve against the
+    config‑file directory while ``s3://`` / ``gs://`` / ``abfs://`` URIs pass
+    through verbatim.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -140,7 +142,7 @@ class ObjectStoreConfig(BaseModel):
             "fsspec (requires the `[object-store]` extra)."
         ),
     )
-    path: str = Field(
+    path: Annotated[str, FsPath()] = Field(
         default="",
         description=(
             "Object-store location. `local`: base directory (empty → per-store "
@@ -719,6 +721,12 @@ _STORE_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
     "redis":    ("redis",    "pip install aqueduct-core[redis]"),
 }
 
+_OBJECT_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
+    "s3":   ("s3fs",  "pip install aqueduct-core[object-store]"),
+    "gcs":  ("gcsfs", "pip install aqueduct-core[object-store]"),
+    "adls": ("adlfs", "pip install aqueduct-core[object-store]"),
+}
+
 
 def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
     """Fail fast at config-load if a store's backend SDK is missing.
@@ -752,6 +760,21 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
                 f"requires the {root_pkg!r} package, which is not installed.\n"
                 f"Install it with:  {install_hint}"
             )
+
+    # Object store backends (s3 / gcs / adls) are validated separately because
+    # they need different SDKs (s3fs / gcsfs / adlfs) than the relational/KV stores.
+    blob_backend = stores_cfg.blob.backend
+    if blob_backend != "local" and blob_backend not in seen:
+        seen.add(blob_backend)
+        if blob_backend in _OBJECT_BACKEND_REQUIREMENTS:
+            module_name, install_hint = _OBJECT_BACKEND_REQUIREMENTS[blob_backend]
+            root_pkg = module_name.split(".")[0]
+            if _import_util.find_spec(root_pkg) is None:
+                raise ConfigError(
+                    f"stores.blob.backend={blob_backend!r} "
+                    f"requires the {root_pkg!r} package, which is not installed.\n"
+                    f"Install it with:  {install_hint}"
+                )
 
 
 def _validate_secrets_backend(secrets_cfg: "SecretsConfig") -> None:

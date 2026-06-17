@@ -1297,8 +1297,8 @@ def run(
                 guardrail_err = None
             except _PatchError as _ge:
                 guardrail_err = str(_ge)
-            except Exception:
-                guardrail_err = None
+            except Exception as _gx:
+                guardrail_err = f"Unexpected guardrail error: {_gx}"
             if guardrail_err:
                 last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
                 click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
