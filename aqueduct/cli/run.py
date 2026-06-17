@@ -1350,7 +1350,7 @@ def run(
                 break
 
             elif effective_mode == "ci":
-                _ci_url = resolved_agent_base_url or (cfg.agent.ci_webhook_url if hasattr(cfg.agent, "ci_webhook_url") else None)
+                _ci_url = resolved_agent_base_url or cfg.agent.ci_webhook_url
                 if _ci_url:
                     try:
                         import httpx as _httpx

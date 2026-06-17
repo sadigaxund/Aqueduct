@@ -354,12 +354,15 @@ def run_sandbox_gate(
 
         # ── Spark session ──────────────────────────────────────────────────────
         if spark_session is None:
+            master = sandbox_master_url or "local[*]"
+            if sandbox_master_url:
+                logger.debug("Sandbox gate: connecting to Spark master %r", sandbox_master_url)
             try:
                 from aqueduct.executor.spark.session import make_spark_session
                 spark_session = make_spark_session(
                     f"aqueduct.sandbox.{patch_id}",
                     sandboxed_manifest.spark_config,
-                    master_url=sandbox_master_url or "local[*]",
+                    master_url=master,
                     quiet=True,
                 )
             except Exception as exc:

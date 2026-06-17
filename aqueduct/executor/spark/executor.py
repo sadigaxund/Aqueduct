@@ -1625,11 +1625,16 @@ def _on_retry_exhausted(
         module_id=module.id, status="error", error=str(exc), exception=exc,
     ))
 
-    # Per-module failure webhook — fires regardless of on_exhaustion action.
-    if module.on_failure_webhook is not None:
+    # Per-module failure webhook — fires for terminal on_exhaustion actions
+    # (trigger_agent / quarantine), not for alert_only (blueprint continues).
+    # Payload construction runs before the on_exhaustion check so that a
+    # Block-IO webhook implementation can't stall the executor thread before
+    # the blueprint continues under alert_only.
+    on_exhaustion = policy.on_exhaustion
+    fire_webhook_for_module: bool = on_exhaustion != "alert_only"
+    if fire_webhook_for_module and module.on_failure_webhook is not None:
         from aqueduct.surveyor.webhook import fire_webhook
         raw = module.on_failure_webhook
-        wh_cfg = WebhookEndpointConfig(**({"url": raw} if isinstance(raw, str) else raw))
         full_payload = {
             "run_id": run_id,
             "blueprint_id": blueprint_id,
@@ -1638,12 +1643,11 @@ def _on_retry_exhausted(
             "error_type": type(exc).__name__,
         }
         fire_webhook(
-            wh_cfg,
+            WebhookEndpointConfig(**({"url": raw} if isinstance(raw, str) else raw)),
             full_payload=full_payload,
             template_vars={k: str(v) for k, v in full_payload.items()},
         )
 
-    on_exhaustion = policy.on_exhaustion
     if on_exhaustion == "alert_only":
         logger.warning("[%s] Retry exhausted (alert_only): %s — blueprint continues.", module.id, exc)
         return True, None

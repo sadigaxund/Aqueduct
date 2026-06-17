@@ -130,7 +130,7 @@ whenever a package is restructured — use it as the first filter before greppin
 
 | Module | What it owns |
 |--------|--------------|
-| `grammar.py` | `PatchSpec` Pydantic v2 model, 13 operation types, discriminated union |
+| `grammar.py` | `PatchSpec` Pydantic v2 model, 14 operation types, discriminated union |
 | `operations.py` | Per-op implementations against Blueprint dict, ruamel YAML round-trip |
 | `apply.py` | Apply orchestrator: load → deep-copy → apply ops → re-parse → archive |
 | `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind heal-cache lookups (pending/replay/coaching/history) without scanning `patches/` |

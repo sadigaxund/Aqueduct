@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS patch_index (
     updated_at         VARCHAR NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_patch_index_sig ON patch_index (signature, status);
+CREATE INDEX IF NOT EXISTS idx_patch_index_sig_created
+    ON patch_index (signature, status, created_at);
 """
 
 

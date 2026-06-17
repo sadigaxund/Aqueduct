@@ -33,6 +33,16 @@ release and are marked **BREAKING**.
 - **`AQ_ERROR_*` spillway column name constants.** The 5 system column names (`_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts`, `_aq_error_rule`) now live in a single `executor/spark/error_columns.py` module, imported by both `executor.py` and `assert_.py`. All 25 raw-string usages are replaced.
 - **`PATCH_META_KEY = "_aq_meta"` constant in `patch/grammar.py`.** The CI-kit envelope key (8 usages across cli, agent, patch, and airflow) now references a single definition.
 - **Ruff F-class auto-fix (14 issues).** Removed 11 unused imports, 2 f-strings without placeholders, and 1 unused `dataclasses` import.
+- **Specs.md §10.1 expanded with config-block reference table and §3.2 adds Benchmark Store.** §10.1 now includes a table of all 10 `aqueduct.yml` config blocks with their ownership, plus a pointer to `aqueduct.yml.template` for the full field reference. §3.2 now lists the Benchmark Store (store-backend-independent `benchmark_results` table), previously absent from the persistent stores table.
+- **`stores.lineage` documented as redundant (not inert).** The spec previously called it "inert" — but a `LineageStore` is still constructed, DDL runs, and `doctor` checks it. Clarified that the config block is parsed but redundant (the write path uses the observability store).
+- **`hasattr(cfg.agent, "ci_webhook_url")` dead guard removed.** `ci_webhook_url` is always present on the Pydantic model — replaced with direct attribute access.
+- **`agent` marker documented as reserved.** The `@pytest.mark.agent` definition in `pyproject.toml` is now annotated as reserved for future `.aqscenario` tests; no current test uses it.
+- **`on_failure_webhook` hoisted before `on_exhaustion` check.** The webhook now skips under `alert_only` (blueprint continues) — if `fire_webhook` is ever changed to block, the executor thread won't stall before the alert-only continue.
+- **AGENTS.md operation count fixed.** The source-code navigation map said "13 operation types"; the grammar defines 14 (the 14th, `set_spark_config`, was added in a prior phase).
+- **`benchmark_results` Postgres schema migration.** The DuckDB `_connect` already performed additive `ALTER TABLE ADD COLUMN` migrations for older stores; the Postgres `cursor()` path now does the same via `ADD COLUMN IF NOT EXISTS` for `violated_guardrails`, `stop_reason`, `escalated`, `tokens_in_total`, and `tokens_out_total`.
+- **`patch_index` coaching-order covering index.** Added `(signature, status, created_at)` composite index so `ORDER BY created_at DESC` coaching lookups avoid filesort on the primary `idx_patch_index_sig` index.
+- **`benchmark_results` leaderboard index.** Added `(model, passed)` index to speed up `benchmark-stats` leaderboard queries (model rank, hardest-scenario, by-day trending).
+- **Sandbox gate logs the Spark master URL when configured.** A `logger.debug` line now precedes `make_spark_session` so operators can verify the `sandbox_master_url` is being honoured.
 
 ## [1.3.0] — 2026-06-17
 

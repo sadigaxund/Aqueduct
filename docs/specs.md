@@ -99,9 +99,10 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | Store | Description |
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
-| **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is inert. |
+| **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is still parsed and a `LineageStore` is constructed, but the write path goes through the observability store — the `stores.lineage` block is redundant and defaults to sharing the observability store's path. |
 | **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
-| **Object Store** (1.2+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the pre-1.2 on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
+| **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
+| **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store — rows are not tied to a real `run_id`. |
 
 ## **3.3 Component Interaction Flow**
 
@@ -789,6 +790,21 @@ For `schema_hint` and assertions, common aliases are normalized:
 ## **10.1 Engine Configuration File**
 
 Aqueduct reads a project-level `aqueduct.yml` configuration file from the working directory (or path specified by `--config` flag). This file sets deployment target, store backends, agent config, and engine defaults.
+
+The canonical field reference with descriptions and defaults lives in the `aqueduct.yml.template` file shipped with the engine. The config blocks that `aqueduct.yml` can contain:
+
+| Block | Owns |
+| :- | :- |
+| `deployment` | Engine selection (`spark`), cluster target, master URL |
+| `stores` | Backend selection for observability, lineage, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
+| `probes` | Default probe signal limits |
+| `danger` | Safety-gate overrides |
+| `secrets` | Secrets provider (env / aws / gcp / azure / hashicorp) |
+| `webhooks` | Outbound webhook endpoints for run lifecycle events |
+| `lineage` | OpenLineage emission config (`openlineage_url`, `openlineage_namespace`) |
+| `agent` | LLM connection defaults (provider, base_url, model, timeout, budget), CI webhook URL |
+| `warnings` | Compiler/executor warning suppression rules |
+| `spark_config` | Per-run Spark session configuration |
 
 ## **10.2 Environment Variables & .env**
 

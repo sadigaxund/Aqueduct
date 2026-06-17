@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
 );
 CREATE INDEX IF NOT EXISTS idx_benchmark_triple
     ON benchmark_results (scenario_id, model, prompt_version, recorded_at);
+CREATE INDEX IF NOT EXISTS idx_benchmark_model_passed
+    ON benchmark_results (model, passed);
 """
 
 
@@ -177,6 +179,17 @@ class BenchmarkStore:
             from aqueduct.stores.postgres import _pg_relational
             with _pg_relational(self.location, self.schema) as cur:
                 cur.execute(_BENCHMARK_DDL)
+                # Additive migrations for pre-existing Postgres stores.
+                for col, col_type in (
+                    ("violated_guardrails", "JSON"),
+                    ("stop_reason",          "VARCHAR"),
+                    ("escalated",            "BOOLEAN"),
+                    ("tokens_in_total",      "INTEGER"),
+                    ("tokens_out_total",     "INTEGER"),
+                ):
+                    cur.execute(
+                        f"ALTER TABLE benchmark_results ADD COLUMN IF NOT EXISTS {col} {col_type}"
+                    )
                 yield cur
         elif self.backend == "duckdb":
             con = _connect(Path(self.location))

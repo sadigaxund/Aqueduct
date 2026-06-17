@@ -151,7 +151,7 @@ markers = [
     "e2e: End-to-end showcases — full pipelines from the gallery showcase dir.",
     # ── Capability gates (skip when the dependency is absent) ──
     "slow: Tests that take > 2 seconds to complete.",
-    "agent: Tests that require a live agent/LLM endpoint (Anthropic, Ollama).",
+    "agent: Tests that require a live agent/LLM endpoint (reserved for future .aqscenario tests; no test currently uses this marker — all LLM calls are mocked).",
     "spark: Tests that require a SparkSession (local[1] ok).",
     "airflow: Tests that require apache-airflow (orchestrator integration).",
     # ── Backlog ──
