@@ -44,6 +44,10 @@ release and are marked **BREAKING**.
 - **`benchmark_results` leaderboard index.** Added `(model, passed)` index to speed up `benchmark-stats` leaderboard queries (model rank, hardest-scenario, by-day trending).
 - **Sandbox gate logs the Spark master URL when configured.** A `logger.debug` line now precedes `make_spark_session` so operators can verify the `sandbox_master_url` is being honoured.
 - **`AqueductError` base exception class.** All 20 Aqueduct exception classes (`ParseError`, `CompileError`, `ExecuteError`, …) now inherit from a shared `AqueductError(Exception)` in `aqueduct/errors.py`, exported in the public API. Callers can `except AqueductError:` to catch any internal engine error without swallowing `KeyboardInterrupt`, `SystemExit`, or foreign-library errors. `except AqueductError` is the recommended pattern for new code; existing `except Exception` blocks continue to work (compatible, no breakage).
+- **`_VALID_OPS` derived from grammar at import time.** The 14 valid PatchSpec operation names in agent prompts now import the canonical `VALID_PATCH_OPS` tuple from `patch/grammar.py` — adding a new op updates one file instead of two (silent drift risk: the LLM would receive stale op guidance if only the grammar was updated).
+- **`_FIELD_ALIASES` built from grammar's `_METADATA_ALIASES`.** The prompts-side metadata alias map now starts from the grammar's canonical alias dict and adds prompts‑only operation‑structure aliases — a rename in the grammar propagates to prompts automatically.
+- **`_fire_on_attempt()` helper in loop.py.** 10 identical try/except callback-invoke blocks replaced with one 5-line function. Adding a new callback field (e.g., attempt metadata) requires one edit, not 10.
+- **`_check_budget_and_escalate()` helper in loop.py.** 4 identical budget‑stop‑then‑escalation‑check blocks replaced with one function returning `(should_break, escalate_next)`. Changing the escalation trigger logic requires one edit.
 
 ## [1.3.0] — 2026-06-17
 

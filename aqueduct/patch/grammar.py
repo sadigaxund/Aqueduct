@@ -254,6 +254,26 @@ PatchOperation = Annotated[
     Field(discriminator="op"),
 ]
 
+# Canonical list of valid PatchSpec operation discriminator values — the
+# single source of truth consumed by the agent prompts so the LLM always
+# sees the grammar's actual op set, not a hand-maintained copy.
+VALID_PATCH_OPS = (
+    "replace_module_config",
+    "set_module_config_key",
+    "replace_module_label",
+    "insert_module",
+    "remove_module",
+    "replace_context_value",
+    "add_probe",
+    "replace_edge",
+    "set_module_on_failure",
+    "replace_retry_policy",
+    "add_arcade_ref",
+    "defer_to_human",
+    "set_spark_config",
+    "replace_macro",
+)
+
 
 # ── Top-level PatchSpec ───────────────────────────────────────────────────────
 

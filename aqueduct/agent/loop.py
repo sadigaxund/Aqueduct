@@ -106,6 +106,31 @@ def _patch_filename(patch_spec: PatchSpec) -> str:
     return f"{ts}_{patch_spec.patch_id}.json"
 
 
+def _fire_on_attempt(on_attempt, rec) -> None:
+    """Best-effort invoke an on_attempt callback.  Never raises."""
+    if on_attempt is not None:
+        try:
+            on_attempt(rec)
+        except Exception:
+            logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+
+
+def _check_budget_and_escalate(tracker, attempt_num: int) -> tuple[bool, bool]:
+    """Check budget stop + stuck-detection escalation.  Returns (should_break, escalate_next)."""
+    stop = tracker.check_stop()
+    if stop is not None and stop != "solved":
+        return True, False
+    escalate_next = tracker.should_escalate()
+    if escalate_next:
+        tracker.mark_escalated()
+        logger.info(
+            "stuck-detection escalation triggered on attempt %d "
+            "(temperature=%.2f, escalated template)",
+            attempt_num, _ESCALATION_TEMPERATURE,
+        )
+    return False, escalate_next
+
+
 def _patch_store_for(patches_dir: Path, patch_store: PatchStore | None) -> PatchStore:
     """Return the given PatchStore or a local one rooted at *patches_dir*.
 
@@ -387,11 +412,7 @@ def generate_agent_patch(
                 gate_that_rejected="budget", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            if on_attempt is not None:
-                try:
-                    on_attempt(rec)
-                except Exception:
-                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            _fire_on_attempt(on_attempt, rec)
             tracker.mark_budget_seconds_exceeded()
             break
 
@@ -426,11 +447,7 @@ def generate_agent_patch(
                     gate_that_rejected="budget", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                if on_attempt is not None:
-                    try:
-                        on_attempt(rec)
-                    except Exception:
-                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                _fire_on_attempt(on_attempt, rec)
                 tracker.mark_budget_seconds_exceeded()
                 break
 
@@ -447,11 +464,7 @@ def generate_agent_patch(
                 gate_that_rejected="provider", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            if on_attempt is not None:
-                try:
-                    on_attempt(rec)
-                except Exception:
-                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            _fire_on_attempt(on_attempt, rec)
             tracker.mark_api_error()
             break
 
@@ -490,25 +503,12 @@ def generate_agent_patch(
                 gate_that_rejected="schema", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            if on_attempt is not None:
-                try:
-                    on_attempt(rec)
-                except Exception:
-                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            _fire_on_attempt(on_attempt, rec)
 
-            stop = tracker.check_stop()
-            if stop is not None and stop != "solved":
+            _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
+            if _should_break:
                 patch_spec = None
                 break
-
-            escalate_next = tracker.should_escalate()
-            if escalate_next:
-                tracker.mark_escalated()
-                logger.info(
-                    "stuck-detection escalation triggered on attempt %d "
-                    "(temperature=%.2f, escalated template)",
-                    attempt_num, _ESCALATION_TEMPERATURE,
-                )
 
             structural_hint = _detect_structural_error(parse_exc, raw) or ""
             reprompt_msg = _format_reprompt_for_next_turn(
@@ -563,25 +563,12 @@ def generate_agent_patch(
                     gate_that_rejected="defer_rejected", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                if on_attempt is not None:
-                    try:
-                        on_attempt(rec)
-                    except Exception:
-                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                _fire_on_attempt(on_attempt, rec)
 
-                stop = tracker.check_stop()
-                if stop is not None and stop != "solved":
+                _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
+                if _should_break:
                     patch_spec = None
                     break
-
-                escalate_next = tracker.should_escalate()
-                if escalate_next:
-                    tracker.mark_escalated()
-                    logger.info(
-                        "stuck-detection escalation triggered on attempt %d "
-                        "(temperature=%.2f, escalated template)",
-                        attempt_num, _ESCALATION_TEMPERATURE,
-                    )
 
                 reprompt_msg = _format_reprompt_for_next_turn(
                     friendly=friendly, raw=raw, escalated=escalate_next,
@@ -599,11 +586,7 @@ def generate_agent_patch(
                 gate_that_rejected=None, escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            if on_attempt is not None:
-                try:
-                    on_attempt(rec)
-                except Exception:
-                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            _fire_on_attempt(on_attempt, rec)
             tracker.mark_deferred()
             break
 
@@ -639,11 +622,7 @@ def generate_agent_patch(
                     gate_that_rejected="validate", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                if on_attempt is not None:
-                    try:
-                        on_attempt(rec)
-                    except Exception:
-                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                _fire_on_attempt(on_attempt, rec)
 
                 stop = tracker.check_stop()
                 if stop is not None and stop != "solved":
@@ -684,11 +663,7 @@ def generate_agent_patch(
                     gate_that_rejected=None, escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                if on_attempt is not None:
-                    try:
-                        on_attempt(rec)
-                    except Exception:
-                        logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+                _fire_on_attempt(on_attempt, rec)
                 tracker.check_stop()  # sets 'solved'
                 logger.info("  ✓ Applied: patch accepted by guardrails + apply")
                 break
@@ -714,25 +689,12 @@ def generate_agent_patch(
                 gate_that_rejected="apply", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            if on_attempt is not None:
-                try:
-                    on_attempt(rec)
-                except Exception:
-                    logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+            _fire_on_attempt(on_attempt, rec)
 
-            stop = tracker.check_stop()
-            if stop is not None and stop != "solved":
+            _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
+            if _should_break:
                 patch_spec = None
                 break
-
-            escalate_next = tracker.should_escalate()
-            if escalate_next:
-                tracker.mark_escalated()
-                logger.info(
-                    "stuck-detection escalation triggered on attempt %d "
-                    "(temperature=%.2f, escalated template)",
-                    attempt_num, _ESCALATION_TEMPERATURE,
-                )
 
             reprompt_msg = _format_reprompt_for_next_turn(
                 friendly=friendly, raw=raw, escalated=escalate_next,
@@ -750,11 +712,7 @@ def generate_agent_patch(
             gate_that_rejected=None, escalated=escalate_next,
             model_cascade_position=model_cascade_position,
         )
-        if on_attempt is not None:
-            try:
-                on_attempt(rec)
-            except Exception:
-                logger.debug("on_attempt callback raised; ignoring", exc_info=True)
+        _fire_on_attempt(on_attempt, rec)
         tracker.check_stop()
         break
 

@@ -22,17 +22,24 @@ logger = logging.getLogger(__name__)
 _PATCH_HISTORY_MAX = 3
 
 
+from aqueduct.patch.grammar import _METADATA_ALIASES, VALID_PATCH_OPS
+
 # ── System-level constants exposed to the reprompt / alias machinery ───────
 
-# Known field name mistakes the LLM commonly makes → correct name
-_FIELD_ALIASES: dict[str, str] = {
-    "description":   "rationale",
-    "ops":           "operations",
-    "op_list":       "operations",
-    "patches":       "operations",
-    "steps":         "operations",
-    "fix":           "operations",
-}
+# Derived from the grammar — patch-level metadata aliases + prompts-only
+# operation-structure aliases the LLM commonly misnames.
+_FIELD_ALIASES: dict[str, str] = dict(
+    _METADATA_ALIASES,
+    ops="operations",
+    op_list="operations",
+    patches="operations",
+    steps="operations",
+    fix="operations",
+)
+
+# Canonical list imported from the grammar so the LLM always sees the
+# actual PatchOperation discriminator set — drift-free.
+_VALID_OPS = VALID_PATCH_OPS
 
 # Wrong discriminator keys LLM uses instead of "op"
 _OP_DISCRIMINATOR_ALIASES = (
@@ -41,24 +48,7 @@ _OP_DISCRIMINATOR_ALIASES = (
     "operation",
     "method",
     "kind",
-    "name"
-)
-
-_VALID_OPS = (
-    "replace_module_config",
-    "set_module_config_key",
-    "replace_module_label",
-    "insert_module",
-    "remove_module",
-    "replace_context_value",
-    "add_probe",
-    "replace_edge",
-    "set_module_on_failure",
-    "replace_retry_policy",
-    "add_arcade_ref",
-    "defer_to_human",
-    "set_spark_config",
-    "replace_macro",
+    "name",
 )
 
 # Op-level field names that LLMs sometimes put at the TOP level of the patch,
