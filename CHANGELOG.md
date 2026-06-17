@@ -48,6 +48,10 @@ release and are marked **BREAKING**.
 - **`_FIELD_ALIASES` built from grammar's `_METADATA_ALIASES`.** The prompts-side metadata alias map now starts from the grammar's canonical alias dict and adds prompts‑only operation‑structure aliases — a rename in the grammar propagates to prompts automatically.
 - **`_fire_on_attempt()` helper in loop.py.** 10 identical try/except callback-invoke blocks replaced with one 5-line function. Adding a new callback field (e.g., attempt metadata) requires one edit, not 10.
 - **`_check_budget_and_escalate()` helper in loop.py.** 4 identical budget‑stop‑then‑escalation‑check blocks replaced with one function returning `(should_break, escalate_next)`. Changing the escalation trigger logic requires one edit.
+- **`format_error_loc()` shared utility in `aqueduct/utils.py`.** Three independent implementations of Pydantic `loc`-tuple→dotted‑path formatting (config.py, parse.py, signature.py) now delegate to a single function. The parser's `_format_validation_error` retains its Blueprint‑specific module‑name handling but no longer contains the core loop.
+- **`is_arcade_expanded_id()` in compiler/expander.py.** Five raw `"__" in module_id` checks across `patch/apply.py` and `patch/operations.py` now call a named function — changing the Arcade separator from `__` updates one file.
+- **`utcnow_iso()` in aqueduct/utils.py.** The agent loop's private `_utcnow()` now delegates to a shared UTC‑ISO timestamp helper.
+- **`_zero_token_attempt()` factory in cli/run.py.** Two identical `SimpleNamespace` constructors for pending‑cache‑hit and exact‑replay attempts replaced with one helper.
 
 ## [1.3.0] — 2026-06-17
 

@@ -30,6 +30,7 @@ from aqueduct.agent.parse import (
     _format_reprompt_for_next_turn,
     _parse_patch_spec,
 )
+from aqueduct.utils import utcnow_iso
 from aqueduct.agent.prompts import _build_user_prompt
 from aqueduct.agent.providers import (
     _ESCALATION_TEMPERATURE,
@@ -97,7 +98,7 @@ class AgentPatchResult:
 
 def _utcnow() -> str:
     """ISO-8601 UTC timestamp, e.g. 2026-06-04T12:34:56.789+00:00."""
-    return datetime.now(tz=UTC).isoformat()
+    return utcnow_iso()
 
 
 def _patch_filename(patch_spec: PatchSpec) -> str:

@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 
 from aqueduct.parser.parser import ParseError, parse
+from aqueduct.compiler.expander import is_arcade_expanded_id
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.redaction import redact as _redact
@@ -245,7 +246,7 @@ def _check_guardrails(
         # set_module_config_key — single dotted key inside an existing module config
         if op_name == "set_module_config_key":
             module_id = getattr(op, "module_id", "") or ""
-            if "__" in module_id:
+            if is_arcade_expanded_id(module_id):
                 continue
             key = getattr(op, "key", None)
             if key in ("path", "output_path"):
@@ -257,7 +258,7 @@ def _check_guardrails(
         # replace_module_config — full config dict replacement on an existing module
         elif op_name == "replace_module_config":
             module_id = getattr(op, "module_id", "") or ""
-            if "__" in module_id:
+            if is_arcade_expanded_id(module_id):
                 continue
             _check_config_dict_paths(
                 getattr(op, "config", None), allowed_paths,
@@ -268,7 +269,7 @@ def _check_guardrails(
         elif op_name in ("insert_module", "add_probe", "add_arcade_ref"):
             module_dict = getattr(op, "module", None) or {}
             module_id = (module_dict.get("id") or "") if isinstance(module_dict, dict) else ""
-            if "__" in module_id:
+            if is_arcade_expanded_id(module_id):
                 continue
             cfg = module_dict.get("config") if isinstance(module_dict, dict) else None
             _check_config_dict_paths(

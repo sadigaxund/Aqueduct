@@ -157,15 +157,8 @@ def _format_reprompt_error(exc: Exception, raw: str) -> str:
         input_val = e.get("input")
 
         # Human-readable location: operations[0] not operations.0
-        loc_parts: list[str] = []
-        for part in loc:
-            if isinstance(part, int):
-                loc_parts.append(f"[{part}]")
-            elif loc_parts:
-                loc_parts.append(f".{part}")
-            else:
-                loc_parts.append(str(part))
-        loc_str = "".join(loc_parts)
+        from aqueduct.utils import format_error_loc
+        loc_str = format_error_loc(loc)
 
         if etype == "missing":
             field_name = str(loc[-1]) if loc else ""

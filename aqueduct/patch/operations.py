@@ -57,6 +57,7 @@ def _to_ruamel(data: Any) -> Any:
     return _ryaml.load(buf.getvalue())
 
 from aqueduct.errors import AqueductError
+from aqueduct.compiler.expander import is_arcade_expanded_id
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
@@ -87,7 +88,7 @@ def _find_module(bp: dict, module_id: str) -> dict:
         if m.get("id") == module_id:
             return m
     # Detect arcade-expanded IDs early to give a clearer error
-    if "__" in module_id:
+    if is_arcade_expanded_id(module_id):
         arcade_id, sub_id = module_id.split("__", 1)
         raise PatchOperationError(
             f"Module {module_id!r} is an arcade-expanded ID and does not exist in the Blueprint YAML. "

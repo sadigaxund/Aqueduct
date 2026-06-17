@@ -223,6 +223,18 @@ def _format_provenance_rows(pairs) -> str:
     return "\n".join([header, sep, body])
 
 
+def _zero_token_attempt(sig_exact):
+    """Return a synthetic ``SimpleNamespace`` attempt record for a zero‑token resolution.
+
+    Used by the pending‑cache‑hit and exact‑replay paths so a single factory
+    produces the record rather than two duplicated inline constructors.
+    """
+    from types import SimpleNamespace
+    return SimpleNamespace(attempt_num=0, signature=sig_exact,
+                           tokens_in=0, tokens_out=0, latency_ms=0,
+                           gate_that_rejected=None, escalated=False)
+
+
 @cli.command()
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("-p", "--profile", default=None, help="Context profile to activate")
@@ -243,10 +255,12 @@ def _format_provenance_rows(pairs) -> str:
 @click.option(
     "--store-dir",
     default=None,
-    help="Store directory (overrides aqueduct.yml; default: .aqueduct)",
+    help="Store directory (overrides aqueduct.yml; default: .aqueduct",
 )
 @click.option("--webhook", default=None, help="Webhook URL for failure notifications (overrides aqueduct.yml)")
 @click.option("--resume", "resume_run_id", default=None, help="Resume from checkpoints of a previous run_id")
+
+
 @click.option("--from", "from_module", default=None, metavar="MODULE_ID", help="Start execution at this module (skip all preceding modules)")
 @click.option("--to", "to_module", default=None, metavar="MODULE_ID", help="Stop execution after this module (skip all subsequent modules)")
 @click.option(
@@ -907,12 +921,9 @@ def run(
                     )
                     patch_staged_for_review = True
                     try:
-                        from types import SimpleNamespace as _NS
                         surveyor.record_heal_attempt(
                             run_id=run_id,
-                            attempt_record=_NS(attempt_num=0, signature=_sig_exact,
-                                               tokens_in=0, tokens_out=0, latency_ms=0,
-                                               gate_that_rejected=None, escalated=False),
+                            attempt_record=_zero_token_attempt(_sig_exact),
                             stop_reason="cached",
                         )
                         surveyor.record_healing_outcome(
@@ -984,12 +995,9 @@ def run(
                                 err=True,
                             )
                             try:
-                                from types import SimpleNamespace as _NS
                                 surveyor.record_heal_attempt(
                                     run_id=run_id,
-                                    attempt_record=_NS(attempt_num=0, signature=_sig_exact,
-                                                       tokens_in=0, tokens_out=0, latency_ms=0,
-                                                       gate_that_rejected=None, escalated=False),
+                                    attempt_record=_zero_token_attempt(_sig_exact),
                                     stop_reason="replayed",
                                 )
                             except Exception:

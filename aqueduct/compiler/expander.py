@@ -30,6 +30,15 @@ class ExpandError(AqueductError):
     """Raised when an Arcade cannot be expanded."""
 
 
+def is_arcade_expanded_id(module_id: str) -> bool:
+    """Return True if *module_id* was produced by Arcade expansion.
+
+    Arcade expansion creates module ids by joining the Arcade module id with
+    the sub‑blueprint module id using ``__``, e.g. ``"pipeline__ingest"``.
+    """
+    return "__" in module_id
+
+
 def _entry_modules(sub_bp: Blueprint) -> list[str]:
     """Module IDs in sub-Blueprint with no incoming edges (graph entry points)."""
     targets = {e.to_id for e in sub_bp.edges}

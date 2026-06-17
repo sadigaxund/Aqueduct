@@ -71,15 +71,8 @@ def _normalize_message(text: str) -> str:
 
 def _loc_to_where(loc: tuple[Any, ...]) -> str:
     """Render a Pydantic loc tuple as ``operations[0].op`` style path."""
-    parts: list[str] = []
-    for p in loc:
-        if isinstance(p, int):
-            parts.append(f"[{p}]")
-        elif parts:
-            parts.append(f".{p}")
-        else:
-            parts.append(str(p))
-    return "".join(parts) or "<root>"
+    from aqueduct.utils import format_error_loc
+    return format_error_loc(loc)
 
 
 @dataclass(frozen=True)
