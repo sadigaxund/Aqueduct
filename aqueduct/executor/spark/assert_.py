@@ -511,7 +511,17 @@ def _handle_fail_if_any(
     error_type: str | None = None,
 ) -> None:
     """Fire on_fail if failing_df has any rows.  Triggers one Spark action."""
-    count = failing_df.count()
+    from pyspark.sql import functions as F
+
+    stamped = (
+        failing_df
+        .withColumn("_aq_error_module", F.lit(module_id))
+        .withColumn("_aq_error_rule", F.lit(rule_type))
+        .withColumn("_aq_error_type", F.lit(error_type or rule_type))
+        .withColumn("_aq_error_msg", F.lit(message))
+        .withColumn("_aq_error_ts", F.current_timestamp())
+    )
+    count = stamped.count()
     if count > 0:
         _handle_fail(on_fail, module_id, rule_type, f"{message} ({count} rows)", error_type=error_type)
 

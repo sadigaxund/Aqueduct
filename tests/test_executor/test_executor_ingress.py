@@ -28,7 +28,7 @@ def test_ingress_missing_path_csv(spark: SparkSession):
 
 
 def test_ingress_pathless_formats_no_error(spark: SparkSession):
-    for fmt in ["jdbc", "kafka", "depot", "dataframe"]:
+    for fmt in ["jdbc", "kafka", "depot"]:
         module = Module(id="m1", type="Ingress", label="M1", config={"format": fmt, "options": {"dbtable": "t"}})
         try:
             read_ingress(module, spark)
@@ -411,4 +411,4 @@ def test_pathless_ingress_formats_are_expected_set():
     """
     from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 
-    assert PATHLESS_INGRESS_FORMATS == {"jdbc", "kafka", "depot", "dataframe"}
+    assert PATHLESS_INGRESS_FORMATS == {"jdbc", "kafka", "depot"}

@@ -921,7 +921,7 @@ def run(
                             failure_category=failure_ctx.error_class, model=None,
                             patch_id=_pending_hit.patch_id, confidence=None,
                             patch_applied=False, run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash, resolution="cached",
+                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution="cached",
                         )
                     except Exception:
                         pass  # persistence must never block the cache hit
@@ -1255,7 +1255,7 @@ def run(
                             confidence=None,
                             patch_applied=False,
                             run_success_after_patch=False,
-                            failure_signature=_sig_exact.hash, resolution="llm",
+                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution="llm",
                             model_cascade_position=getattr(_rec, "model_cascade_position", None),
                         )
                 except Exception:
@@ -1316,7 +1316,7 @@ def run(
                     failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -1344,7 +1344,7 @@ def run(
                     failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -1378,7 +1378,7 @@ def run(
                     failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=False, run_success_after_patch=False,
-                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 break
@@ -1420,7 +1420,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     _aqcli._stage_failed_patch(
@@ -1449,7 +1449,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     break
@@ -1481,7 +1481,7 @@ def run(
                     failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
-                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
@@ -1540,7 +1540,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     continue
@@ -1556,7 +1556,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     continue  # try next patch iteration
@@ -1576,7 +1576,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     break
@@ -1591,7 +1591,7 @@ def run(
                         failure_category=patch.category, model=_outcome_model,
                         patch_id=patch.patch_id, confidence=patch.confidence,
                         patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, resolution=_resolution,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
                     break
@@ -1618,7 +1618,7 @@ def run(
                     failure_category=patch.category, model=_outcome_model,
                     patch_id=patch.patch_id, confidence=patch.confidence,
                     patch_applied=True, run_success_after_patch=patch_success,
-                    failure_signature=_sig_exact.hash, resolution=_resolution,
+                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:

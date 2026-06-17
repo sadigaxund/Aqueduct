@@ -27,7 +27,7 @@ from typing import Any
 
 import httpx
 
-_PRODUCER = "https://github.com/aqueduct-engine/aqueduct"
+_PRODUCER = "https://github.com/sadigaxund/aqueduct"
 _RUN_EVENT_SCHEMA = (
     "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 )
@@ -37,7 +37,7 @@ _COLUMN_LINEAGE_FACET_SCHEMA = (
 )
 
 # Terminal run states recognised by the OpenLineage spec.
-_VALID_EVENT_TYPES = frozenset({"START", "COMPLETE", "FAIL", "ABORT"})
+_VALID_EVENT_TYPES = frozenset({"START", "COMPLETE", "FAIL"})
 
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 _DELIVERY_ATTEMPTS = 2

@@ -503,8 +503,8 @@ def _find_connected_components(
     Probe modules have NO data edges — they bind to their target via the
     `attach_to` field, not the graph. Without explicit unioning a Probe would
     form its own singleton component and be dispatched to a separate parallel
-    thread, racing the thread that produces its `attach_to` frame (ISSUE-042:
-    `frame_store.get(attach_to)` returns None → Probe silently skipped). So
+    thread, racing the thread that produces its `attach_to` frame:
+    `frame_store.get(attach_to)` returns None → Probe silently skipped. So
     union every Probe into its `attach_to` target's component — they then run
     in the same thread, after `attach_to` (the order already sequences them).
 

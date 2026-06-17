@@ -161,6 +161,7 @@ without calling the LLM at all.
 | `applied_at`              | VARCHAR | ISO-8601 |
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
+| `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message) — enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
 | `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
 | `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 
