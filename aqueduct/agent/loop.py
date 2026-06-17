@@ -155,7 +155,7 @@ def _record_patch_index(
             _ix.ensure_schema(cur)
             _ix.upsert(cur, row)
     except Exception:
-        logger.debug("patch_index upsert failed for %s", patch_spec.patch_id, exc_info=True)
+        logger.warning("patch_index upsert failed for %s", patch_spec.patch_id, exc_info=True)
 
 
 # ── Patch I/O ────────────────────────────────────────────────────────────

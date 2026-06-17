@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -38,6 +39,8 @@ _ryaml.preserve_quotes = True
 _ryaml.default_flow_style = False
 _ryaml.width = 4096  # prevent unwanted line wrapping
 _ryaml.indent(mapping=2, sequence=4, offset=2)  # ensures `  - item` style (dash at col+2, content at col+4)
+
+logger = logging.getLogger(__name__)
 
 
 def _yaml_load(path: Path) -> Any:
@@ -283,7 +286,7 @@ def _set_index_status(obs_store: Any | None, patch_id: str, status: str) -> None
             _ix.ensure_schema(cur)
             _ix.set_status(cur, patch_id, status)
     except Exception:
-        pass
+        logger.warning("_set_index_status failed for %s", patch_id, exc_info=True)
 
 
 def apply_patch_file(

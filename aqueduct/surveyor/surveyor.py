@@ -878,7 +878,7 @@ class Surveyor:
                     ],
                 )
         except Exception:
-            logger.debug("record_heal_attempt failed", exc_info=True)
+            logger.warning("record_heal_attempt failed", exc_info=True)
 
     def update_heal_attempt_stop_reason(
         self,

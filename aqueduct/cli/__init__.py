@@ -8,6 +8,7 @@ Commands: init, validate, compile, run, check-config, doctor, runs, report,
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,8 @@ from typing import Any
 import warnings
 
 import click
+
+logger = logging.getLogger(__name__)
 
 
 def _apply_warnings_from_cfg(cfg) -> None:
@@ -307,7 +310,7 @@ def _run_patch_gates_inline(
             blueprint_id=blueprint_id,
         )
     except Exception:
-        pass
+        logger.warning("record_patch_simulation (lineage) failed", exc_info=True)
 
     explain_after: dict[str, dict] = {}
     # 1.1.0 — sandbox_mode controls replay fidelity:
@@ -346,7 +349,7 @@ def _run_patch_gates_inline(
             blueprint_id=blueprint_id,
         )
     except Exception:
-        pass
+        logger.warning("record_patch_simulation (sandbox) failed", exc_info=True)
 
     # explain gate — per-module plan-count diff vs baseline in
     # observability.explain_snapshot
@@ -364,7 +367,7 @@ def _run_patch_gates_inline(
             blueprint_id=blueprint_id,
         )
     except Exception:
-        pass
+        logger.warning("record_patch_simulation (explain) failed", exc_info=True)
 
     gates_passed = sandbox_res.status in ("pass", "skip")
     return lineage_res, sandbox_res, explain_res, gates_passed
