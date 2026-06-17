@@ -32,12 +32,14 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
 
+from aqueduct.errors import AqueductError
+
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
 
 # ── Schema error ──────────────────────────────────────────────────────────────
 
-class ConfigError(Exception):
+class ConfigError(AqueductError):
     """Raised when aqueduct.yml cannot be loaded or fails validation."""
 
 

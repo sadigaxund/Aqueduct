@@ -18,9 +18,10 @@ from __future__ import annotations
 
 
 from aqueduct.parser.models import Edge, Module
+from aqueduct.errors import AqueductError
 
 
-class WireError(Exception):
+class WireError(AqueductError):
     """Raised when a wiring validation fails."""
 
 

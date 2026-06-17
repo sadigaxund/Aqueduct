@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
+from aqueduct.errors import AqueductError
 
 _SINGLE_INPUT_ALIAS = "__input__"
 
@@ -56,7 +57,7 @@ _MULTI_INPUT_OPS = frozenset({"union"})
 _ALL_OPS = _SQL_OPS | _SINGLE_INPUT_OPS | _MULTI_INPUT_OPS
 
 
-class ChannelError(Exception):
+class ChannelError(AqueductError):
     """Raised when a Channel module fails to execute."""
 
 

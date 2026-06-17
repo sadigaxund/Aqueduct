@@ -46,13 +46,14 @@ if TYPE_CHECKING:
 
 from aqueduct.parser.models import Module
 from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_RULE, AQ_ERROR_TYPE, AQ_ERROR_TS
+from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
 
 
 # ── Public error type ─────────────────────────────────────────────────────────
 
-class AssertError(Exception):
+class AssertError(AqueductError):
     """Raised when an Assert rule fires with on_fail=abort or on_fail=trigger_agent."""
 
     def __init__(

@@ -33,6 +33,7 @@ from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.redaction import redact as _redact
+from aqueduct.errors import AqueductError
 
 _ryaml = YAML()
 _ryaml.preserve_quotes = True
@@ -59,7 +60,7 @@ def _yaml_dumps(data: Any) -> str:
     return buf.getvalue()
 
 
-class PatchError(Exception):
+class PatchError(AqueductError):
     """Raised when a patch cannot be applied."""
 
 

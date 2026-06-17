@@ -25,13 +25,14 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
 from aqueduct.parser.models import Module
+from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore", "merge"})
 
 
-class EgressError(Exception):
+class EgressError(AqueductError):
     """Raised when an Egress module fails to write."""
 
 

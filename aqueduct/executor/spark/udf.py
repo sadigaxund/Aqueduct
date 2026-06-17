@@ -24,6 +24,7 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
+from aqueduct.errors import AqueductError
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from pyspark.sql.functions import UserDefinedFunction
@@ -160,7 +161,7 @@ def _patch_pyspark_cloudpickle() -> None:
     )
 
 
-class UDFError(Exception):
+class UDFError(AqueductError):
     """Raised when UDF registration fails."""
 
 

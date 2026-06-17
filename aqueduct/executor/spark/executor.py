@@ -77,6 +77,7 @@ from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
 from aqueduct.parser.models import Edge, Module, ModuleType, RetryPolicy
 from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_TYPE, AQ_ERROR_TS
+from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
 
@@ -373,7 +374,7 @@ _SIGNAL_PORTS: frozenset[str] = frozenset({"signal"})
 _GATE_CLOSED: object = object()
 
 
-class ExecuteError(Exception):
+class ExecuteError(AqueductError):
     """Raised for unrecoverable execution failures (config, unsupported type, etc.)."""
 
 

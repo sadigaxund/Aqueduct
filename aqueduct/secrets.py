@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import importlib
 import os
+from aqueduct.errors import AqueductError
 from typing import Any
 
 
-class SecretsError(Exception):
+class SecretsError(AqueductError):
     """Raised when a secret cannot be resolved."""
 
 

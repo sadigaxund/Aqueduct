@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from aqueduct.errors import AqueductError
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class BackendUnsupportedError(Exception):
+class BackendUnsupportedError(AqueductError):
     """Raised when a call site asks a backend for an operation it does not support.
 
     Concrete trigger: a Redis-backed depot is asked for `relational_connect()`,

@@ -17,9 +17,10 @@ Constraints (by design):
 from __future__ import annotations
 
 import re
+from aqueduct.errors import AqueductError
 
 
-class MacroError(Exception):
+class MacroError(AqueductError):
     """Raised when macro resolution fails."""
 
 

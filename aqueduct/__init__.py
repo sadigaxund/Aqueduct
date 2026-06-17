@@ -38,11 +38,13 @@ except Exception:  # pragma: no cover
     __version__ = "0.0.0+unknown"
 
 from aqueduct.parser.parser import parse, ParseError
+from aqueduct.errors import AqueductError
 from aqueduct.warnings import AqueductWarning
 
 __all__ = [
     "__version__",
     "parse",
     "ParseError",
+    "AqueductError",
     "AqueductWarning",
 ]

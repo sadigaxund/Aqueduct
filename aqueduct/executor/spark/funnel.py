@@ -49,9 +49,10 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
+from aqueduct.errors import AqueductError
 
 
-class FunnelError(Exception):
+class FunnelError(AqueductError):
     """Raised when a Funnel module cannot be executed."""
 
 

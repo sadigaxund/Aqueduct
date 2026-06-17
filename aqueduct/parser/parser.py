@@ -31,9 +31,10 @@ from aqueduct.parser.models import (
 )
 from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
+from aqueduct.errors import AqueductError
 
 
-class ParseError(Exception):
+class ParseError(AqueductError):
     """Raised for any Blueprint parse, validation, or resolution failure."""
 
 

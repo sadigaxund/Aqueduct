@@ -45,9 +45,10 @@ from aqueduct.compiler.wirer import (
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
 from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
+from aqueduct.errors import AqueductError
 
 
-class CompileError(Exception):
+class CompileError(AqueductError):
     """Raised for any compilation failure."""
 
 

@@ -36,6 +36,7 @@ Skips: Ingress, Egress (no external I/O).
 from __future__ import annotations
 
 import logging
+from aqueduct.errors import AqueductError
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -75,7 +76,7 @@ class TestSuiteResult:
         return self.failed == 0
 
 
-class TestSchemaError(Exception):
+class TestSchemaError(AqueductError):
     """Raised for test file schema errors, not assertion failures."""
 
 

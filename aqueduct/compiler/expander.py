@@ -23,9 +23,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from aqueduct.parser.models import Blueprint, Edge, Module
+from aqueduct.errors import AqueductError
 
 
-class ExpandError(Exception):
+class ExpandError(AqueductError):
     """Raised when an Arcade cannot be expanded."""
 
 

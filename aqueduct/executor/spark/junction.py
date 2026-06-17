@@ -42,9 +42,10 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
 from aqueduct.parser.models import Module
+from aqueduct.errors import AqueductError
 
 
-class JunctionError(Exception):
+class JunctionError(AqueductError):
     """Raised when a Junction module cannot be executed."""
 
 

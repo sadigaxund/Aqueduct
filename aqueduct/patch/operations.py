@@ -56,6 +56,7 @@ def _to_ruamel(data: Any) -> Any:
     _ryaml.dump(_quote_strings(data), buf)
     return _ryaml.load(buf.getvalue())
 
+from aqueduct.errors import AqueductError
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
@@ -74,7 +75,7 @@ from aqueduct.patch.grammar import (
 )
 
 
-class PatchOperationError(Exception):
+class PatchOperationError(AqueductError):
     """Raised when an operation cannot be applied to the Blueprint."""
 
 

@@ -35,3 +35,13 @@ def test_showcase_self_healing_e2e():
 def test_aqscenarios_heal_with_mocked_agent():
     # intended: tests/test_gallery.py  (mark integration)
     ...
+
+
+@pytest.mark.todo("sync-constants: PATHLESS_INGRESS_FORMATS, AQ_ERROR_*, PATCH_META_KEY values match their source-of-truth definitions; catch mismatch if a new format/column is added to one frozenset but not the other")
+def test_sync_constants_do_not_drift():
+    # intended: tests/test_sync_constants.py  (mark unit)
+    # context: Phase 2 Chunk A — constants extracted in Chunk 4 of the audit can
+    # independently drift if someone adds a new entry to a consuming frozenset
+    # without updating the canonical definition. A single file that asserts
+    # equality across all shared constants prevents lockstep-change regressions.
+    ...

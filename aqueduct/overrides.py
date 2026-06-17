@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import types
 import typing
+from aqueduct.errors import AqueductError
 from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
@@ -35,7 +36,7 @@ from typing import Any
 from pydantic import BaseModel
 
 
-class OverrideError(Exception):
+class OverrideError(AqueductError):
     """Raised for a malformed ``--set`` item or a path no schema accepts."""
 
 

@@ -43,6 +43,7 @@ release and are marked **BREAKING**.
 - **`patch_index` coaching-order covering index.** Added `(signature, status, created_at)` composite index so `ORDER BY created_at DESC` coaching lookups avoid filesort on the primary `idx_patch_index_sig` index.
 - **`benchmark_results` leaderboard index.** Added `(model, passed)` index to speed up `benchmark-stats` leaderboard queries (model rank, hardest-scenario, by-day trending).
 - **Sandbox gate logs the Spark master URL when configured.** A `logger.debug` line now precedes `make_spark_session` so operators can verify the `sandbox_master_url` is being honoured.
+- **`AqueductError` base exception class.** All 20 Aqueduct exception classes (`ParseError`, `CompileError`, `ExecuteError`, …) now inherit from a shared `AqueductError(Exception)` in `aqueduct/errors.py`, exported in the public API. Callers can `except AqueductError:` to catch any internal engine error without swallowing `KeyboardInterrupt`, `SystemExit`, or foreign-library errors. `except AqueductError` is the recommended pattern for new code; existing `except Exception` blocks continue to work (compatible, no breakage).
 
 ## [1.3.0] — 2026-06-17
 
