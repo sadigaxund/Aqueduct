@@ -12,6 +12,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 from click.testing import CliRunner
+from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 from aqueduct.exit_codes import HEAL_PENDING
 
@@ -168,7 +169,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason="solved",
+                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
                     res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
@@ -235,7 +236,7 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason="solved",
+                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
                     res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
@@ -354,7 +355,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
                     from aqueduct.agent import AgentPatchResult
                     mock_gap.return_value = AgentPatchResult(
-                        patch=spec, attempts=1, stop_reason="solved",
+                        patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
                     runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 

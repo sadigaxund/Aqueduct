@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from aqueduct.agent.budget import BudgetConfig as BudgetConfig
+from aqueduct.agent.budget import StopReason as StopReason
 from aqueduct.agent.cascade import generate_cascade_patch as generate_cascade_patch
 from aqueduct.agent.loop import (
     AgentPatchResult as AgentPatchResult,

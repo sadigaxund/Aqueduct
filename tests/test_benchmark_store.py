@@ -14,6 +14,8 @@ from unittest.mock import MagicMock, patch
 import duckdb
 import pytest
 
+from aqueduct.agent.budget import StopReason
+
 pytestmark = pytest.mark.unit
 
 from aqueduct.surveyor.benchmark_store import (
@@ -719,7 +721,7 @@ def test_persist_results_writes_phase34_columns(tmp_path):
     """persist_results writes new columns from ScenarioResult; falls back to safe defaults."""
     store_path = tmp_path / "bench.duckdb"
     r_full = _make_result("s1", "m1")
-    r_full.stop_reason = "stuck_signature"
+    r_full.stop_reason = StopReason.STUCK_SIGNATURE
     r_full.escalated = True
     r_full.tokens_in_total = 100
     r_full.tokens_out_total = 50
@@ -755,5 +757,5 @@ def test_persist_results_writes_phase34_columns(tmp_path):
     ).fetchall()
     con.close()
     
-    assert rows[0] == ("s1", "stuck_signature", True, 100, 50)
+    assert rows[0] == ("s1", StopReason.STUCK_SIGNATURE, True, 100, 50)
     assert rows[1] == ("s2", None, False, 0, 0)

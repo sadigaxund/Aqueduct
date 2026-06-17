@@ -9,6 +9,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
+from aqueduct.agent.budget import StopReason
 from aqueduct.surveyor.scenario import (
     AqScenario,
     ScenarioResult,
@@ -973,10 +974,10 @@ class TestPhase34BenchmarkParity:
         scenario = load_scenario(sc_path)
 
         with patch("aqueduct.agent.generate_agent_patch") as m_gap:
-            m_gap.return_value = _fake_agent_result(stop_reason="stuck_signature", escalated=True, tin=10, tout=20)
+            m_gap.return_value = _fake_agent_result(stop_reason=StopReason.STUCK_SIGNATURE, escalated=True, tin=10, tout=20)
             res = run_scenario(scenario, "model", tmp_path)
             
-            assert res.stop_reason == "stuck_signature"
+            assert res.stop_reason == StopReason.STUCK_SIGNATURE
             assert res.escalated is True
             assert res.tokens_in_total == 10
             assert res.tokens_out_total == 20
@@ -994,7 +995,7 @@ class TestPhase34BenchmarkParity:
             kwargs = m_rs.call_args[1]
             assert kwargs["budget"] == b
 
-def _fake_agent_result(stop_reason="solved", escalated=False, tin=0, tout=0):
+def _fake_agent_result(stop_reason=StopReason.SOLVED, escalated=False, tin=0, tout=0):
     from aqueduct.agent import AgentPatchResult
     return AgentPatchResult(
         patch=None, attempts=1, stop_reason=stop_reason, escalated=escalated,

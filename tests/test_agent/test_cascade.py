@@ -12,6 +12,7 @@ pytestmark = pytest.mark.unit
 
 from aqueduct.agent.cascade import generate_cascade_patch
 from aqueduct.agent import AgentPatchResult
+from aqueduct.agent.budget import StopReason
 from aqueduct.parser.models import CascadeTierConfig
 
 
@@ -54,13 +55,13 @@ class TestGenerateCascadePatch:
             operations=[{"op": "set_module_config_key",
                          "module_id": "m1", "key": "k", "value": "v"}],
         )
-        return AgentPatchResult(patch=p, attempts=1, stop_reason="solved")
+        return AgentPatchResult(patch=p, attempts=1, stop_reason=StopReason.SOLVED)
 
     def _stuck_result(self) -> AgentPatchResult:
-        return AgentPatchResult(patch=None, attempts=3, stop_reason="stuck_signature")
+        return AgentPatchResult(patch=None, attempts=3, stop_reason=StopReason.STUCK_SIGNATURE)
 
     def _api_error_result(self) -> AgentPatchResult:
-        return AgentPatchResult(patch=None, attempts=1, stop_reason="api_error")
+        return AgentPatchResult(patch=None, attempts=1, stop_reason=StopReason.API_ERROR)
 
     def test_tier1_success_returns_immediately(self, fctx, patches_dir):
         """When tier1 returns a patch, tier2 is never called."""
@@ -107,7 +108,7 @@ class TestGenerateCascadePatch:
             )
 
         assert result.patch is None
-        assert result.stop_reason == "api_error"
+        assert result.stop_reason == StopReason.API_ERROR
         assert mock_gen.call_count == 1
 
     def test_tier_receives_model_cascade_position(self, fctx, patches_dir):
@@ -154,7 +155,7 @@ class TestGenerateCascadePatch:
         """tier1 stop_reason='deferred' (patch non-None) with tier2 present → escalates to tier2."""
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             defer_result = AgentPatchResult(
-                patch=None, attempts=2, stop_reason="deferred",
+                patch=None, attempts=2, stop_reason=StopReason.DEFERRED,
             )
             mock_gen.side_effect = [
                 defer_result,
@@ -175,7 +176,7 @@ class TestGenerateCascadePatch:
         """Final-tier 'deferred' → defer result (patch + stop_reason) returned to caller for staging."""
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             defer_result = AgentPatchResult(
-                patch=None, attempts=1, stop_reason="deferred",
+                patch=None, attempts=1, stop_reason=StopReason.DEFERRED,
             )
             mock_gen.return_value = defer_result
 
@@ -185,7 +186,7 @@ class TestGenerateCascadePatch:
                 patches_dir=patches_dir,
             )
 
-        assert result.stop_reason == "deferred"
+        assert result.stop_reason == StopReason.DEFERRED
         assert result.patch is None
         assert mock_gen.call_count == 1
 
@@ -279,7 +280,7 @@ class TestGenerateCascadePatch:
 
 class TestCascadeSpanningBudget:
     def _result_with_tokens(self, tokens: int) -> AgentPatchResult:
-        return AgentPatchResult(patch=None, attempts=1, stop_reason="stuck_signature",
+        return AgentPatchResult(patch=None, attempts=1, stop_reason=StopReason.STUCK_SIGNATURE,
                                 tokens_in_total=tokens, tokens_out_total=0)
 
     def _success(self, model_num: int = 1) -> AgentPatchResult:
@@ -288,7 +289,7 @@ class TestCascadeSpanningBudget:
             patch=PatchSpec(patch_id=f"p{model_num}", rationale="fix",
                             operations=[{"op": "set_module_config_key",
                                          "module_id": "m1", "key": "k", "value": "v"}]),
-            attempts=1, stop_reason="solved",
+            attempts=1, stop_reason=StopReason.SOLVED,
         )
 
     def test_tier2_gets_remaining_tokens(self, tmp_path):
@@ -322,7 +323,7 @@ class TestCascadeSpanningBudget:
                 budget=BudgetConfig(max_tokens_total=1000),
             )
         assert mock_gen.call_count == 1
-        assert result.stop_reason == "budget_tokens_exceeded"
+        assert result.stop_reason == StopReason.BUDGET_TOKENS_EXCEEDED
         assert result.patch is None
 
     def test_null_tokens_total_unconstrained(self, tmp_path):

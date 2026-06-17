@@ -92,9 +92,9 @@ class TestDefaultBudget:
 
     def test_stop_reasons_contains_all_documented(self):
         expected = {
-            "solved", "exhausted_attempts", "budget_seconds_exceeded",
-            "budget_tokens_exceeded", "stuck_signature", "progress_stalled", "api_error",
-            "deferred",
+            StopReason.SOLVED, StopReason.EXHAUSTED_ATTEMPTS, StopReason.BUDGET_SECONDS_EXCEEDED,
+            StopReason.BUDGET_TOKENS_EXCEEDED, StopReason.STUCK_SIGNATURE, StopReason.PROGRESS_STALLED, StopReason.API_ERROR,
+            StopReason.DEFERRED,
         }
         assert set(STOP_REASONS) == expected
 
@@ -155,16 +155,16 @@ class TestBudgetTracker:
         t.begin_attempt()
         t.record(_sig())
         reason1 = t.check_stop()
-        assert reason1 == "exhausted_attempts"
+        assert reason1 == StopReason.EXHAUSTED_ATTEMPTS
         # second call returns same reason even if nothing changed
-        assert t.check_stop() == "exhausted_attempts"
+        assert t.check_stop() == StopReason.EXHAUSTED_ATTEMPTS
 
     # solved
     def test_check_stop_solved_on_success_signature(self):
         t = self._tracker()
         t.begin_attempt()
         t.record(None)
-        assert t.check_stop() == "solved"
+        assert t.check_stop() == StopReason.SOLVED
 
     # exhausted_attempts
     def test_check_stop_exhausted_attempts(self):
@@ -172,14 +172,14 @@ class TestBudgetTracker:
         for _ in range(2):
             t.begin_attempt()
             t.record(_sig())
-        assert t.check_stop() == "exhausted_attempts"
+        assert t.check_stop() == StopReason.EXHAUSTED_ATTEMPTS
 
     # budget_tokens_exceeded
     def test_check_stop_tokens_exceeded(self):
         t = self._tracker(max_tokens_total=100)
         t.begin_attempt()
         t.record(_sig(), tokens_in=60, tokens_out=50)  # 110 >= 100
-        assert t.check_stop() == "budget_tokens_exceeded"
+        assert t.check_stop() == StopReason.BUDGET_TOKENS_EXCEEDED
 
     # budget_seconds_exceeded
     def test_check_stop_seconds_exceeded(self, monkeypatch):
@@ -192,7 +192,7 @@ class TestBudgetTracker:
             "aqueduct.agent.budget.time.monotonic",
             lambda: t.started_at + 999.0,
         )
-        assert t.check_stop() == "budget_seconds_exceeded"
+        assert t.check_stop() == StopReason.BUDGET_SECONDS_EXCEEDED
 
     # stuck_signature — overall
     def test_check_stop_stuck_signature_overall(self):
@@ -202,7 +202,7 @@ class TestBudgetTracker:
         for _ in range(3):
             t.begin_attempt()
             t.record(sig)
-        assert t.check_stop() == "stuck_signature"
+        assert t.check_stop() == StopReason.STUCK_SIGNATURE
 
     # stuck_signature — consecutive + escalated
     def test_check_stop_stuck_consecutive_after_escalation(self):
@@ -225,7 +225,7 @@ class TestBudgetTracker:
         t.mark_escalated()
         t.begin_attempt()
         t.record(sig)  # 3rd consecutive with escalated_once=True
-        assert t.check_stop() == "stuck_signature"
+        assert t.check_stop() == StopReason.STUCK_SIGNATURE
 
     # stuck-consecutive does NOT abort before escalation
     def test_check_stop_no_abort_before_escalation(self):
@@ -246,7 +246,7 @@ class TestBudgetTracker:
             t.record(sig)
         # All 3 in window are identical → stalled
         # overall is 10 so overall won't trip first
-        assert t.check_stop() == "progress_stalled"
+        assert t.check_stop() == StopReason.PROGRESS_STALLED
 
     def test_check_stop_progress_stalled_distinct_window(self):
         """Window of 3 with all same → progress_stalled (when overall is high enough)."""
@@ -256,7 +256,7 @@ class TestBudgetTracker:
             t.begin_attempt()
             t.record(sig)
         result = t.check_stop()
-        assert result in ("progress_stalled", "stuck_signature")
+        assert result in (StopReason.PROGRESS_STALLED, StopReason.STUCK_SIGNATURE)
 
     # should_escalate / mark_escalated
     def test_should_escalate_when_consecutive_trips_and_not_escalated(self):
@@ -277,19 +277,19 @@ class TestBudgetTracker:
     def test_mark_api_error_sets_stop_reason(self):
         t = self._tracker()
         t.mark_api_error()
-        assert t.stop_reason == "api_error"
+        assert t.stop_reason == StopReason.API_ERROR
 
     def test_mark_deferred_sets_stop_reason(self):
         t = self._tracker()
         assert t.stop_reason is None
         t.mark_deferred()
-        assert t.stop_reason == "deferred"
+        assert t.stop_reason == StopReason.DEFERRED
 
     def test_mark_deferred_sticky(self):
         """Once deferred is set, check_stop returns 'deferred'."""
         t = self._tracker()
         t.mark_deferred()
-        assert t.check_stop() == "deferred"
+        assert t.check_stop() == StopReason.DEFERRED
 
     # summary
         # mark_budget_seconds_exceeded (Phase 40)
@@ -297,7 +297,7 @@ class TestBudgetTracker:
         t = self._tracker()
         assert t.stop_reason is None
         t.mark_budget_seconds_exceeded()
-        assert t.stop_reason == "budget_seconds_exceeded"
+        assert t.stop_reason == StopReason.BUDGET_SECONDS_EXCEEDED
 
     # remaining_seconds (Phase 40)
     def test_remaining_seconds_normal(self):

@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Literal
+from enum import StrEnum
 
 from aqueduct.agent.signature import ErrorSignature
 
@@ -59,27 +59,25 @@ __all__ = [
 ]
 
 
-StopReason = Literal[
-    "solved",
-    "exhausted_attempts",
-    "budget_seconds_exceeded",
-    "budget_tokens_exceeded",
-    "stuck_signature",
-    "progress_stalled",
-    "api_error",
-    "deferred",
-]
+class StopReason(StrEnum):
+    """Vocabulary shared by heal and benchmark — scalar string value.
 
-STOP_REASONS: tuple[StopReason, ...] = (
-    "solved",
-    "exhausted_attempts",
-    "budget_seconds_exceeded",
-    "budget_tokens_exceeded",
-    "stuck_signature",
-    "progress_stalled",
-    "api_error",
-    "deferred",
-)
+    ``StrEnum`` base means ``StopReason.SOLVED == "solved"`` keeps working
+    for every existing bare-string comparison while giving the compiler /
+    IDE enough information to catch typos.
+    """
+
+    SOLVED = "solved"
+    EXHAUSTED_ATTEMPTS = "exhausted_attempts"
+    BUDGET_SECONDS_EXCEEDED = "budget_seconds_exceeded"
+    BUDGET_TOKENS_EXCEEDED = "budget_tokens_exceeded"
+    STUCK_SIGNATURE = "stuck_signature"
+    PROGRESS_STALLED = "progress_stalled"
+    API_ERROR = "api_error"
+    DEFERRED = "deferred"
+
+
+STOP_REASONS: tuple[StopReason, ...] = tuple(StopReason)
 
 
 @dataclass(frozen=True)
@@ -238,34 +236,34 @@ class BudgetTracker:
             return self._stop_reason
         last = self.attempts[-1] if self.attempts else None
         if last and last.signature is None:
-            self._stop_reason = "solved"
+            self._stop_reason = StopReason.SOLVED
             return self._stop_reason
         if self._current_attempt >= self.config.max_reprompts:
-            self._stop_reason = "exhausted_attempts"
+            self._stop_reason = StopReason.EXHAUSTED_ATTEMPTS
             return self._stop_reason
         if self._elapsed_llm_seconds() >= self.config.max_seconds:
-            self._stop_reason = "budget_seconds_exceeded"
+            self._stop_reason = StopReason.BUDGET_SECONDS_EXCEEDED
             return self._stop_reason
         if (
             self.config.max_tokens_total is not None
             and (self.tokens_in_total + self.tokens_out_total) >= self.config.max_tokens_total
         ):
-            self._stop_reason = "budget_tokens_exceeded"
+            self._stop_reason = StopReason.BUDGET_TOKENS_EXCEEDED
             return self._stop_reason
         if self._same_signature_overall_tripped():
             # Overall-occurrence axis is unconditional — N repeats of the same
             # signature anywhere in the run is "looping" regardless of
             # escalation state. Maps to the public ``stuck_signature`` reason.
-            self._stop_reason = "stuck_signature"
+            self._stop_reason = StopReason.STUCK_SIGNATURE
             return self._stop_reason
         if self._progress_stalled_tripped():
-            self._stop_reason = "progress_stalled"
+            self._stop_reason = StopReason.PROGRESS_STALLED
             return self._stop_reason
         # Stuck-consecutive: only abort with `stuck_signature` AFTER one
         # escalation has been spent (Task 87). Until then it's a signal to
         # escalate, not abort — the caller checks should_escalate().
         if self._same_error_consecutive_tripped() and self.escalated_once:
-            self._stop_reason = "stuck_signature"
+            self._stop_reason = StopReason.STUCK_SIGNATURE
             return self._stop_reason
         return None
 
@@ -280,17 +278,17 @@ class BudgetTracker:
 
     def mark_api_error(self) -> None:
         """Caller invokes when the provider raises — terminates with api_error."""
-        self._stop_reason = "api_error"
+        self._stop_reason = StopReason.API_ERROR
 
     def mark_budget_seconds_exceeded(self) -> None:
         """Caller invokes when the mid-call budget deadline fires — terminates
         with ``budget_seconds_exceeded`` (Phase 40)."""
-        self._stop_reason = "budget_seconds_exceeded"
+        self._stop_reason = StopReason.BUDGET_SECONDS_EXCEEDED
 
     def mark_deferred(self) -> None:
         """Caller invokes when the LLM defers to a human (``defer_to_human``
         with ``allow_defer=True``) — terminates with ``deferred``."""
-        self._stop_reason = "deferred"
+        self._stop_reason = StopReason.DEFERRED
 
     def _elapsed_llm_seconds(self) -> float:
         """Wall-clock elapsed minus gate time excluded via ``pause_clock()``."""

@@ -13,6 +13,7 @@ from aqueduct.patch.grammar import PatchSpec
 
 
 from aqueduct.agent import MAX_REPROMPTS, PROMPT_VERSION
+from aqueduct.agent.budget import StopReason
 from aqueduct.agent.loop import archive_patch, generate_agent_patch, stage_patch_for_human
 from aqueduct.agent.parse import _parse_patch_spec
 from aqueduct.agent.prompts import _build_guardrails_section
@@ -1317,7 +1318,7 @@ class TestConfidenceLogging:
 
         assert result.patch is not None
         assert result.patch.confidence is None  # the model omitted the field
-        assert result.stop_reason == "solved"
+        assert result.stop_reason == StopReason.SOLVED
         assert call_count == 1
 
 

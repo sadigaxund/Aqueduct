@@ -1,5 +1,6 @@
 import pytest
 import duckdb
+from aqueduct.agent.budget import StopReason
 from pathlib import Path
 from unittest.mock import MagicMock
 from aqueduct.compiler.models import Manifest
@@ -129,11 +130,11 @@ def test_heal_attempts_no_duplicate_on_stop_reason(manifest, tmp_path):
     assert rows[0] == (1, None)
     
     # 2. Update stop reason
-    surveyor.update_heal_attempt_stop_reason(run_id="run-attempts", attempt_num=1, stop_reason="solved")
+    surveyor.update_heal_attempt_stop_reason(run_id="run-attempts", attempt_num=1, stop_reason=StopReason.SOLVED)
     
     rows_after = conn.execute("SELECT attempt_num, stop_reason FROM heal_attempts").fetchall()
     assert len(rows_after) == 1
-    assert rows_after[0] == (1, "solved")
+    assert rows_after[0] == (1, StopReason.SOLVED)
     
     conn.close()
     surveyor.stop()

@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from click.testing import CliRunner
 
+from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli, _run_patch_gates_inline
 from aqueduct.patch.grammar import PatchSpec, SetModuleConfigKeyOp
 from aqueduct.surveyor.models import FailureContext
@@ -149,7 +150,7 @@ danger:
     mock_generate_patch.return_value = AgentPatchResult(
         patch=patch_spec,
         attempts=1,
-        stop_reason="solved",
+        stop_reason=StopReason.SOLVED,
         tokens_in_total=10,
         tokens_out_total=20,
         attempt_records=[],
@@ -232,7 +233,7 @@ def test_cli_heal_wires_apply_callback(
     mock_generate_patch.return_value = AgentPatchResult(
         patch=patch_spec,
         attempts=1,
-        stop_reason="solved",
+        stop_reason=StopReason.SOLVED,
         tokens_in_total=10,
         tokens_out_total=20,
         attempt_records=[],

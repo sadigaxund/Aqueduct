@@ -251,7 +251,7 @@ class TestRecordHealAttempt:
     def test_record_heal_attempt_writes_row(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.agent.budget import AttemptRecord, StopReason
         from aqueduct.agent.signature import make_signature
 
         s = Surveyor(
@@ -265,7 +265,7 @@ class TestRecordHealAttempt:
             attempt_num=1, signature=sig, tokens_in=10, tokens_out=20,
             latency_ms=100, gate_that_rejected="schema", escalated=True,
         )
-        s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason="stuck_signature")
+        s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason=StopReason.STUCK_SIGNATURE)
         
         with s._observability.connect() as cur:
             row = cur.execute("SELECT attempt_num, signature_hash, tokens_in, gate_that_rejected, escalated, stop_reason FROM heal_attempts").fetchone()
@@ -275,7 +275,7 @@ class TestRecordHealAttempt:
         assert row[2] == 10
         assert row[3] == "schema"
         assert row[4] is True
-        assert row[5] == "stuck_signature"
+        assert row[5] == StopReason.STUCK_SIGNATURE
 
     def test_record_heal_attempt_success_row_writes_nulls(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
@@ -289,7 +289,7 @@ class TestRecordHealAttempt:
         s.start("run1")
 
         rec = AttemptRecord(attempt_num=2, signature=None)
-        s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason="solved")
+        s.record_heal_attempt(run_id="run1", attempt_record=rec, stop_reason=StopReason.SOLVED)
         
         with s._observability.connect() as cur:
             row = cur.execute("SELECT error_class, where_field, normalized_message, signature_hash FROM heal_attempts").fetchone()

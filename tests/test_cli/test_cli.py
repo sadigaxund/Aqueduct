@@ -5,6 +5,7 @@ pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pathlib import Path
 from unittest.mock import MagicMock
 from click.testing import CliRunner
+from aqueduct.agent.budget import StopReason
 from aqueduct.cli import cli
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -386,7 +387,7 @@ agent:
             from aqueduct.patch.grammar import PatchSpec
             mock_gap.return_value = AgentPatchResult(
                 patch=PatchSpec(patch_id="p1", rationale="r", operations=[{"op": "set_module_config_key", "module_id": "m1", "key": "k", "value": "v"}]),
-                attempts=1, stop_reason="solved",
+                attempts=1, stop_reason=StopReason.SOLVED,
             )
             # Patch Executor to fail first, then succeed
             with patch("aqueduct.executor.get_executor") as mock_get_exec:
@@ -454,14 +455,14 @@ edges: []
         with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
             from aqueduct.agent import AgentPatchResult
             mock_gap.return_value = AgentPatchResult(
-                patch=None, attempts=2, stop_reason="stuck_signature",
+                patch=None, attempts=2, stop_reason=StopReason.STUCK_SIGNATURE,
                 tokens_in_total=100, tokens_out_total=200, escalated=True,
             )
 
             # heal takes a run_id positional; we recorded the failure under "run1"
             res = runner.invoke(cli, ["heal", "run1", "--config", str(config_path)])
 
-            assert "stuck_signature" in res.output
+            assert StopReason.STUCK_SIGNATURE in res.output
             assert "2 attempt" in res.output  # CLI prints "after N attempt(s)"
 
     def test_benchmark_command_wires_budget(self, tmp_path):

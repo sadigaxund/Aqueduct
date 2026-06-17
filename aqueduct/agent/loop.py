@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from aqueduct.agent.budget import (
     BudgetConfig,
     BudgetTracker,
+    StopReason,
 )
 from aqueduct.agent.parse import (
     _detect_structural_error,
@@ -119,7 +120,7 @@ def _fire_on_attempt(on_attempt, rec) -> None:
 def _check_budget_and_escalate(tracker, attempt_num: int) -> tuple[bool, bool]:
     """Check budget stop + stuck-detection escalation.  Returns (should_break, escalate_next)."""
     stop = tracker.check_stop()
-    if stop is not None and stop != "solved":
+    if stop is not None and stop != StopReason.SOLVED:
         return True, False
     escalate_next = tracker.should_escalate()
     if escalate_next:
@@ -626,7 +627,7 @@ def generate_agent_patch(
                 _fire_on_attempt(on_attempt, rec)
 
                 stop = tracker.check_stop()
-                if stop is not None and stop != "solved":
+                if stop is not None and stop != StopReason.SOLVED:
                     patch_spec = None
                     break
 

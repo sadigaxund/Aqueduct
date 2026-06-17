@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aqueduct.agent.budget import BudgetConfig
+from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.agent.loop import AgentPatchResult, generate_agent_patch
 from aqueduct.parser.models import CascadeTierConfig
 from aqueduct.surveyor.models import FailureContext
@@ -25,8 +25,8 @@ logger = logging.getLogger("aqueduct.agent.cascade")
 # checked BEFORE the patch-presence check in the loop body — a defer result
 # carries a non-None patch (the diagnosis), but a cheaper tier saying
 # "I can't fix this" should escalate, not end the cascade.
-_ESCALATION_REASONS: frozenset[str] = frozenset(
-    {"stuck_signature", "exhausted_attempts", "deferred"}
+_ESCALATION_REASONS: frozenset[StopReason] = frozenset(
+    {StopReason.STUCK_SIGNATURE, StopReason.EXHAUSTED_ATTEMPTS, StopReason.DEFERRED}
 )
 
 
@@ -94,10 +94,10 @@ def generate_cascade_patch(
                     idx, n, tokens_spent, base_budget.max_tokens_total,
                 )
                 if result is not None:
-                    result.stop_reason = "budget_tokens_exceeded"
+                    result.stop_reason = StopReason.BUDGET_TOKENS_EXCEEDED
                     return result
                 return AgentPatchResult(
-                    patch=None, attempts=0, stop_reason="budget_tokens_exceeded",
+                    patch=None, attempts=0, stop_reason=StopReason.BUDGET_TOKENS_EXCEEDED,
                 )
 
         budget_cfg = dataclasses.replace(

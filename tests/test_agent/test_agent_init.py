@@ -27,7 +27,7 @@ from aqueduct.agent.prompts import (
     _REPROMPT_TEMPLATE,
     _REPROMPT_TEMPLATE_ESCALATED,
 )
-from aqueduct.agent.budget import BudgetConfig
+from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.config import AgentBudgetConfig, AgentConnectionConfig
 
 
@@ -171,7 +171,7 @@ class TestGenerateAgentPatch:
         
         assert res.patch is not None
         assert res.attempts == 1
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert len(res.attempt_records) == 1
         assert res.attempt_records[0].signature is None
         assert res.tokens_in_total == 10
@@ -188,7 +188,7 @@ class TestGenerateAgentPatch:
         
         assert res.patch is not None
         assert res.attempts == 2
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert len(res.attempt_records) == 2
         assert res.attempt_records[0].signature is not None
         assert res.attempt_records[1].signature is None
@@ -234,7 +234,7 @@ class TestGenerateAgentPatch:
         res = generate_agent_patch(fctx, "model", tmp_path)
         
         assert res.patch is None
-        assert res.stop_reason == "api_error"
+        assert res.stop_reason == StopReason.API_ERROR
         assert len(res.attempt_records) == 1
         assert res.attempt_records[0].gate_that_rejected == "provider"
 
@@ -691,14 +691,14 @@ class TestGenerateAgentPatchPhase34Extra:
         # caller's max_reprompts (clamped to >=1) and dataclass defaults for
         # the other axes. Verify by: (a) solving on attempt 1 — confirms the
         # synthesized budget did not abort prematurely; (b) inspecting that
-        # the stop reason is "solved" and only 1 LLM call was made.
+        # the stop reason is StopReason.SOLVED and only 1 LLM call was made.
         with patch("aqueduct.agent.loop._call_agent") as mock_call:
             mock_call.return_value = (_VALID_PATCH_JSON, 10, 20)
             res = generate_agent_patch(
                 fctx, "model", tmp_path, budget=None, max_reprompts=4
             )
         assert res.attempts == 1
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
 
     def test_apply_callback_success_returns_solved(self, fctx, tmp_path):
         cb_calls = 0
@@ -713,7 +713,7 @@ class TestGenerateAgentPatchPhase34Extra:
             res = generate_agent_patch(
                 fctx, "model", tmp_path, apply_callback=_cb, max_reprompts=3
             )
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 1
         assert cb_calls == 1
         assert res.patch is not None
@@ -766,7 +766,7 @@ class TestDeepLoop:
             )
 
         # Validation kept failing until exhausted_attempts (budget disables stuck detection)
-        assert res.stop_reason == "exhausted_attempts"
+        assert res.stop_reason == StopReason.EXHAUSTED_ATTEMPTS
         assert cb_calls == 5
         assert all(r.gate_that_rejected == "validate" for r in res.attempt_records)
 
@@ -787,7 +787,7 @@ class TestDeepLoop:
                 apply_callback=_apply,
             )
 
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 1
 
     def test_deep_loop_default_never_calls_validate_callback(self, fctx, tmp_path):
@@ -824,7 +824,7 @@ class TestDeepLoop:
                 max_reprompts=3,
             )
 
-        assert res.stop_reason == "exhausted_attempts"
+        assert res.stop_reason == StopReason.EXHAUSTED_ATTEMPTS
         assert res.attempt_records[0].gate_that_rejected == "validate"
 
     def test_deep_loop_validate_under_pause_clock_no_budget_exhaustion(self, fctx, tmp_path):
@@ -847,7 +847,7 @@ class TestDeepLoop:
         # If pause_clock were broken, the sleep × max_reprompts would have
         # consumed time and not changed the semantics. We verify the loop
         # completed normally (solved), which confirms pause_clock was active.
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 1
 
 
@@ -875,7 +875,7 @@ class TestDeferToHuman:
                 fctx, "model", tmp_path,
                 allow_defer=True, max_reprompts=3,
             )
-        assert res.stop_reason == "deferred"
+        assert res.stop_reason == StopReason.DEFERRED
         assert res.patch is not None
         assert res.patch.operations[0].op == "defer_to_human"
 
@@ -891,7 +891,7 @@ class TestDeferToHuman:
                 fctx, "model", tmp_path,
                 allow_defer=False, max_reprompts=5,
             )
-        assert res.stop_reason == "solved"
+        assert res.stop_reason == StopReason.SOLVED
         assert res.attempts == 3
 
 
@@ -944,7 +944,7 @@ class TestPhase40BudgetEnforcement:
             finally:
                 btime.monotonic = original_monotonic
 
-        assert res.stop_reason == "budget_seconds_exceeded"
+        assert res.stop_reason == StopReason.BUDGET_SECONDS_EXCEEDED
 
     def test_deadline_threaded_to_provider(self, fctx, tmp_path):
         """deadline param is threaded through to _call_agent."""
