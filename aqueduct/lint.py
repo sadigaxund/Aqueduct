@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterator
 
 from aqueduct.parser.models import Blueprint
+from aqueduct.parser.models import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ def _rule_duplicate_edge(bp: Blueprint) -> Iterator[LintFinding]:
 def _sql_channels(bp: Blueprint) -> Iterator[tuple[str, str]]:
     """Yield ``(module_id, query)`` for every Channel with ``op: sql``."""
     for m in bp.modules:
-        if m.type != "Channel":
+        if m.type != ModuleType.Channel:
             continue
         cfg = m.config or {}
         if cfg.get("op") != "sql":
@@ -226,7 +227,7 @@ def _rule_star_into_egress(bp: Blueprint) -> Iterator[LintFinding]:
     """AQ-LINT011 — a ``SELECT *`` Channel that feeds directly into an Egress."""
     import sqlglot.expressions as exp
 
-    egress_ids = {m.id for m in bp.modules if m.type == "Egress"}
+    egress_ids = {m.id for m in bp.modules if m.type == ModuleType.Egress}
     if not egress_ids:
         return
     downstream: dict[str, list[str]] = {}

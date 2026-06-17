@@ -153,7 +153,7 @@ def compile(  # noqa: A001
     
     module_provenance: dict[str, ModuleProvenance] = {}
     for m in modules:
-        if m.type == "Arcade":
+        if m.type == ModuleType.Arcade:
             continue  # arcade provenance built during expansion
         raw_cfg = raw_module_configs.get(m.id, {})
         config_prov = build_config_provenance(raw_cfg, m.config or {})
@@ -199,7 +199,7 @@ def compile(  # noqa: A001
 
     # ── 4. Expand Arcades ─────────────────────────────────────────────────────
     arcade_prov: dict = {}
-    if any(m.type == "Arcade" for m in modules):
+    if any(m.type == ModuleType.Arcade for m in modules):
         if blueprint_path is None:
             raise CompileError(
                 "Blueprint contains Arcade modules but blueprint_path was not provided. "
@@ -224,7 +224,7 @@ def compile(  # noqa: A001
         e.from_id for e in edges if e.port == "spillway"
     }
     for m in modules:
-        if m.type != "Assert":
+        if m.type != ModuleType.Assert:
             continue
         for rule in m.config.get("rules", []):
             rtype = rule.get("type", "")
@@ -254,7 +254,7 @@ def compile(  # noqa: A001
     _REMOTE_SCHEMES = ("s3://", "s3a://", "gs://", "hdfs://", "abfs://", "wasbs://", "wasb://")
     inputs_fingerprint: dict[str, dict[str, Any]] = {}
     for m in modules:
-        if m.type != "Ingress":
+        if m.type != ModuleType.Ingress:
             continue
         fmt = m.config.get("format", "")
         path = m.config.get("path", "")
@@ -288,7 +288,7 @@ def compile(  # noqa: A001
 
     if blueprint.retry_policy.max_attempts > 1:
         for m in modules:
-            if m.type == "Egress" and m.config.get("mode") == "append":
+            if m.type == ModuleType.Egress and m.config.get("mode") == "append":
                 _w(
                     "delivery_append_retry_dupes",
                     f"Egress '{m.id}' uses mode=append with "
@@ -302,7 +302,7 @@ def compile(  # noqa: A001
     # 8a. Probe sample() signals — full dataset scan despite the name
     _SAMPLE_SCAN_SIGNALS = {"null_rates", "row_count_estimate", "value_distribution", "distinct_count"}
     for m in modules:
-        if m.type != "Probe":
+        if m.type != ModuleType.Probe:
             continue
         for sig in m.config.get("signals", []):
             sig_type = sig.get("type", "")
@@ -322,7 +322,7 @@ def compile(  # noqa: A001
 
     # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
     for m in modules:
-        if m.type != "Channel" or m.config.get("materialize") != "incremental":
+        if m.type != ModuleType.Channel or m.config.get("materialize") != "incremental":
             continue
         # Check if any upstream module in the edge list is a cache/checkpoint
         upstream_ids = {e.from_id for e in edges if e.to_id == m.id}
@@ -354,7 +354,7 @@ def compile(  # noqa: A001
 
     # 8d. Delta append without partition hint — small-file accumulation risk
     for m in modules:
-        if m.type != "Egress":
+        if m.type != ModuleType.Egress:
             continue
         if m.config.get("format") in ("delta", "parquet") and m.config.get("mode") == "append":
             has_partition = bool(m.config.get("partition_by") or m.config.get("repartition"))
@@ -375,7 +375,7 @@ def compile(  # noqa: A001
 
     checkpointed_ids = {m.id for m in modules if m.checkpoint}
     for m in modules:
-        if m.type != "Channel":
+        if m.type != ModuleType.Channel:
             continue
         if consumer_counts.get(m.id, 0) > 1 and m.id not in checkpointed_ids:
             _w(
@@ -390,7 +390,7 @@ def compile(  # noqa: A001
     # 8f. Hadoop filesystem keys in Ingress options — must be in spark_config instead
     _HADOOP_FS_PREFIXES = ("fs.s3a.", "fs.gs.", "fs.azure.", "fs.hdfs.", "fs.abfs.")
     for m in modules:
-        if m.type != "Ingress":
+        if m.type != ModuleType.Ingress:
             continue
         bad_keys = [
             k for k in m.config.get("options", {})
@@ -410,7 +410,7 @@ def compile(  # noqa: A001
 
     # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only
     for m in modules:
-        if m.type != "Egress":
+        if m.type != ModuleType.Egress:
             continue
         maint = m.config.get("maintenance", {})
         if maint and maint.get("optimize") and m.config.get("format", "").lower() != "delta":

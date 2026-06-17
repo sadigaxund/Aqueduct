@@ -162,40 +162,37 @@ def _resolve_obs_db(
 ) -> Path | None:
     """Resolve the observability DB file path for a READ command.
 
-    Mirrors the per-pipeline routing the WRITE side (`aqueduct run`) does at
+    Mirrors the per-pipeline routing the WRITE side (``aqueduct run``) does at
     cli.py:1185-1290: when the user keeps the default
-    `.aqueduct/observability.db`, each blueprint writes to
-    `.aqueduct/observability/<blueprint_id>/observability.db`. READ commands
-    (`runs`, `report`, `lineage`, `heal`) need to find the right per-pipeline
+    ``.aqueduct/observability.db``, each blueprint writes to
+    ``.aqueduct/observability/<blueprint_id>/observability.db``. READ commands
+    (``runs``, ``report``, ``lineage``, ``heal``) need to find the right per-pipeline
     file — historically each command reinvented this with a naive
-    `Path(cfg.stores.observability.path).parent`, which only worked when the
+    ``Path(cfg.stores.observability.path).parent``, which only worked when the
     user explicitly set a non-default path.
 
     Resolution order:
-      1. `--store-dir <path>` flag (explicit user override) → `<path>/observability.db`
-      2. User set a non-default `stores.observability.path` in aqueduct.yml → use it verbatim
-      3. Default sentinel AND `run_id` provided → glob the per-pipeline dirs
+      1. ``--store-dir <path>`` flag (explicit user override) → ``<path>/observability.db``
+      2. User set a non-default ``stores.observability.path`` in aqueduct.yml → use it verbatim
+      3. Default sentinel AND ``run_id`` provided → glob the per-pipeline dirs
          and return the first DB containing a row for that run_id
-      4. Default sentinel AND no run_id → return the legacy shared path
-         `.aqueduct/observability.db` (may be missing; caller decides what to do)
-
-    Returns None when no candidate file exists, so the caller can render a
-    friendlier error than `FileNotFoundError`.
+      4. Fall back to the default file
     """
+    from aqueduct.config import DEFAULT_OBS_DB_FILENAME
     if store_dir:
-        candidate = Path(store_dir) / "observability.db"
+        candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
         return candidate if candidate.exists() else None
 
     obs_path = cfg.stores.observability.path
     if obs_path != _DEFAULT_OBS_PATH:
         explicit = Path(obs_path)
         if explicit.is_dir():
-            explicit = explicit / "observability.db"
+            explicit = explicit / DEFAULT_OBS_DB_FILENAME
         return explicit if explicit.exists() else None
 
     if run_id:
         import duckdb as _duckdb
-        for candidate in sorted(Path(".aqueduct/observability").glob("*/observability.db")):
+        for candidate in sorted(Path(".aqueduct/observability").glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
             try:
                 conn = _duckdb.connect(str(candidate), read_only=True)
                 try:

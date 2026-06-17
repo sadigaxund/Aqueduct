@@ -36,6 +36,7 @@ Skips: Ingress, Egress (no external I/O).
 from __future__ import annotations
 
 import logging
+from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -202,7 +203,7 @@ def _sql_literal(val: Any) -> str:
 
 # ── Module execution dispatch ─────────────────────────────────────────────────
 
-_TESTABLE_TYPES = frozenset({"Channel", "Junction", "Funnel", "Assert"})
+_TESTABLE_TYPES = frozenset({ModuleType.Channel, ModuleType.Junction, ModuleType.Funnel, ModuleType.Assert})
 
 
 def _execute_module(
@@ -211,22 +212,22 @@ def _execute_module(
     spark: "SparkSession",
 ) -> "DataFrame | dict[str, DataFrame]":
     """Run a single module against inline DataFrames. Returns result DataFrame(s)."""
-    if module.type == "Channel":
+    if module.type == ModuleType.Channel:
         from aqueduct.executor.spark.channel import execute_sql_channel
         return execute_sql_channel(module, input_dfs, spark)
 
-    elif module.type == "Junction":
+    elif module.type == ModuleType.Junction:
         from aqueduct.executor.spark.junction import execute_junction
         if len(input_dfs) != 1:
             raise TestSchemaError(f"Junction {module.id!r} expects exactly 1 input, got {len(input_dfs)}")
         df = next(iter(input_dfs.values()))
         return execute_junction(module, df)
 
-    elif module.type == "Funnel":
+    elif module.type == ModuleType.Funnel:
         from aqueduct.executor.spark.funnel import execute_funnel
         return execute_funnel(module, input_dfs)
 
-    elif module.type == "Assert":
+    elif module.type == ModuleType.Assert:
         from aqueduct.executor.spark.assert_ import execute_assert
         if len(input_dfs) != 1:
             raise TestSchemaError(f"Assert {module.id!r} expects exactly 1 input, got {len(input_dfs)}")

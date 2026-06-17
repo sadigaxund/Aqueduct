@@ -18,6 +18,7 @@ from __future__ import annotations
 
 
 from aqueduct.parser.models import Edge, Module
+from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
 
 
@@ -29,7 +30,7 @@ def validate_probes(modules: list[Module]) -> None:
     """Verify every Probe module has a valid attach_to target."""
     module_ids = {m.id for m in modules}
     for m in modules:
-        if m.type != "Probe":
+        if m.type != ModuleType.Probe:
             continue
         if not m.attach_to:
             raise WireError(
@@ -75,7 +76,7 @@ def compile_away_regulators(
     passive_regulator_ids = {
         m.id
         for m in modules
-        if m.type == "Regulator" and m.id not in active_regulator_ids
+        if m.type == ModuleType.Regulator and m.id not in active_regulator_ids
     }
 
     if not passive_regulator_ids:

@@ -182,3 +182,77 @@ rm -rf .aqueduct patches/pending/*
 ```
 
 Leaves the blueprints + CSV untouched so you can re-run.
+
+
+## Untested modules — candidate test blueprints
+
+These modules lack dedicated unit tests (tested only transitively via integration
+suites).  Blueprint snippets below trigger their core logic — write a `*.aqtest.yml`
+or a showcase Blueprint that exercises the path, then assert the expected error /
+warning / outcome.
+
+### `compiler/wirer.py` — Probe / Spillway validation
+```yaml
+# Probe with missing attach_to → CompileError
+modules:
+  - {id: ingress, type: Ingress, config: {format: parquet, path: data.parquet}}
+  - {id: probe,  type: Probe,   config: {type: null_rates, column: col}}
+```
+Expected: `CompileError` — Probe `probe` has no `attach_to`
+
+```yaml
+# Spillway edge with no error_types on assert → CompileError
+modules:
+  - {id: ingress, type: Ingress, config: {format: parquet, path: data.parquet}}
+  - {id: assert,  type: Assert, config: {rules: [{type: sql_row, expr: "1=0", on_fail: quarantine}]}}
+  - {id: egress,  type: Egress, config: {format: parquet, path: out/, mode: overwrite}}
+edges:
+  - {from: ingress, to: assert}
+  - {from: assert,  to: egress, port: spillway}  # spillway without error_types
+```
+Expected: `CompileError` or `WireError`
+
+### `cli/diagnostics.py` — validate / lint / schema / doctor
+```bash
+aqueduct validate bp.yml --format json   # expect exit 0, JSON with schema_version
+aqueduct lint bp.yml --strict            # expect warnings on SELECT * into Egress
+aqueduct schema                           # expect JSON schema output
+aqueduct doctor --skip-spark              # expect section-header grouping
+```
+
+### `doctor/checks_io.py` — backend connectivity
+```bash
+# With depot configured and backend=duckdb (default)
+aqueduct doctor   # expect check 6: depot store → pass
+# With depot configured and backend=redis (requires redis running)
+AQUEDUCT_DEPOT_URL=redis://localhost:6379 aqueduct doctor
+# expect check 6: depot store → pass | fail with clear error
+```
+
+### `stores/duckdb_.py` — DuckDB backend edge cases
+```python
+# concurrent-reader: open read_only=True → expect no write-lock error
+# path-is-directory: DuckDBDepotStore with _path.is_dir() → expect clear error
+# kv_get nonexistent key with empty file → returns default, no exception
+```
+
+### Compiler warnings — trigger each rule
+```yaml
+# count_col_likely_count_star
+channel: {op: sql, sql: "SELECT col, COUNT(col) FROM {ingress}"}  # → AQ-LINT202
+
+# file_format_no_repartition
+ingress: {format: csv, path: large.csv}   # → AQ-LINT301 if no repartition
+
+# jdbc_missing_partition
+ingress: {format: jdbc, options: {url: jdbc:..., dbtable: large}}  # → AQ-LINT302
+
+# nondeterministic_fanout
+junction: {op: partition, ...} with non-deterministic Channel upstream  # → AQ-LINT401
+```
+
+### `executor/spark/warnings/jar_availability.py`
+```bash
+# With Spark 4.0 + Delta 3.x local JAR path set
+aqueduct doctor   # expect "Delta Lake JARs found" or "missing" in Spark checks
+```

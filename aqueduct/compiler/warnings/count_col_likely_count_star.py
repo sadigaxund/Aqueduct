@@ -10,6 +10,7 @@ silence by switching to `COUNT(col + 0)` or adding a comment.
 from __future__ import annotations
 
 import re
+from aqueduct.parser.models import ModuleType
 from typing import Any
 
 RULE_ID = "count_col_likely_count_star"
@@ -24,7 +25,7 @@ _COUNT_COL = re.compile(
 def check(manifest: Any) -> list[str]:
     out: list[str] = []
     for m in manifest.modules:
-        if m.type != "Channel":
+        if m.type != ModuleType.Channel:
             continue
         cfg = m.config or {}
         if cfg.get("op") != "sql":

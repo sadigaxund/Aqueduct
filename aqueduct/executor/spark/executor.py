@@ -467,8 +467,8 @@ def _build_execution_order(manifest: Manifest) -> list[Module]:
     This guarantees that a Probe's signals are written to the store before the
     Regulator downstream of that Probe evaluates them.
     """
-    probe_modules = [m for m in manifest.modules if m.type == "Probe"]
-    non_probe_modules = tuple(m for m in manifest.modules if m.type != "Probe")
+    probe_modules = [m for m in manifest.modules if m.type == ModuleType.Probe]
+    non_probe_modules = tuple(m for m in manifest.modules if m.type != ModuleType.Probe)
 
     order = _topo_sort(non_probe_modules, manifest.edges)
 
@@ -538,7 +538,7 @@ def _find_connected_components(
     # ISSUE-042: bind Probes to their attach_to target's component (no edge exists).
     for m in modules:
         if (
-            m.type == "Probe"
+            m.type == ModuleType.Probe
             and m.attach_to
             and m.id in module_ids
             and m.attach_to in module_ids
@@ -688,7 +688,7 @@ def _find_downstream_egress_ids(
     reachable = _reachable_forward(channel_id, manifest.edges)
     return [
         m.id for m in manifest.modules
-        if m.id in reachable and m.id != channel_id and m.type == "Egress"
+        if m.id in reachable and m.id != channel_id and m.type == ModuleType.Egress
     ]
 
 
@@ -726,7 +726,7 @@ def _selector_included(
 
     # Probes: include when their tap target is included
     for m in modules:
-        if m.type == "Probe" and m.attach_to in included:
+        if m.type == ModuleType.Probe and m.attach_to in included:
             included.add(m.id)
 
     return included
@@ -907,11 +907,11 @@ def execute(
                 module_ckpt = resume_dir / module.id
                 done_marker = module_ckpt / "_aq_done"
                 if done_marker.exists():
-                    if module.type in ("Ingress", "Channel", "Funnel"):
+                    if module.type in (ModuleType.Ingress, ModuleType.Channel, ModuleType.Funnel):
                         data_ckpt = module_ckpt / "data"
                         if data_ckpt.exists():
                             frame_store[module.id] = spark.read.parquet(str(data_ckpt))
-                    elif module.type == "Junction":
+                    elif module.type == ModuleType.Junction:
                         for branch in module.config.get("branches", []):
                             bid = branch.get("id", "")
                             branch_ckpt = module_ckpt / bid
@@ -926,7 +926,7 @@ def execute(
                     continue
 
             # ── Ingress ───────────────────────────────────────────────────────
-            if module.type == "Ingress":
+            if module.type == ModuleType.Ingress:
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
                 _t0 = time.monotonic()
                 try:
@@ -959,7 +959,7 @@ def execute(
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Channel ───────────────────────────────────────────────────────
-            elif module.type == "Channel":
+            elif module.type == ModuleType.Channel:
                 main_edges = _incoming_main(module.id, manifest.edges)
                 if not main_edges:
                     err = f"[{module.id}] Channel has no main-port incoming edges"
@@ -1023,7 +1023,7 @@ def execute(
                         for _ds_m in manifest.modules:
                             if (
                                 _ds_m.id in _downstream_ids
-                                and _ds_m.type == "Egress"
+                                and _ds_m.type == ModuleType.Egress
                                 and _ds_m.config.get("mode") == "overwrite"
                             ):
                                 logger.warning(
@@ -1102,7 +1102,7 @@ def execute(
                     local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Junction ──────────────────────────────────────────────────────
-            elif module.type == "Junction":
+            elif module.type == ModuleType.Junction:
                 main_edges = _incoming_main(module.id, manifest.edges)
                 if not main_edges:
                     err = f"[{module.id}] Junction has no main-port incoming edges"
@@ -1162,7 +1162,7 @@ def execute(
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Funnel ────────────────────────────────────────────────────────
-            elif module.type == "Funnel":
+            elif module.type == ModuleType.Funnel:
                 data_edges = _incoming_data(module.id, manifest.edges)
                 if not data_edges:
                     err = f"[{module.id}] Funnel has no incoming data edges"
@@ -1224,7 +1224,7 @@ def execute(
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Assert ────────────────────────────────────────────────────────
-            elif module.type == "Assert":
+            elif module.type == ModuleType.Assert:
                 main_edges = _incoming_main(module.id, manifest.edges)
                 if not main_edges:
                     err = f"[{module.id}] Assert has no main-port incoming edges"
@@ -1276,7 +1276,7 @@ def execute(
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Regulator ─────────────────────────────────────────────────────
-            elif module.type == "Regulator":
+            elif module.type == ModuleType.Regulator:
                 main_edges = _incoming_main(module.id, manifest.edges)
                 if not main_edges:
                     err = f"[{module.id}] Regulator has no main-port incoming edges"
@@ -1364,7 +1364,7 @@ def execute(
                     local_results.append(ModuleResult(module_id=module.id, status="skipped"))
 
             # ── Egress ────────────────────────────────────────────────────────
-            elif module.type == "Egress":
+            elif module.type == ModuleType.Egress:
                 data_edges = _incoming_data(module.id, manifest.edges)
                 if not data_edges:
                     err = f"[{module.id}] no main-port edge arriving at this Egress module"
@@ -1462,7 +1462,7 @@ def execute(
                 local_results.append(ModuleResult(module_id=module.id, status="success"))
 
             # ── Probe ─────────────────────────────────────────────────────────
-            elif module.type == "Probe":
+            elif module.type == ModuleType.Probe:
                 source_id = module.attach_to
                 source_val = frame_store.get(source_id) if source_id else None
 
@@ -1554,7 +1554,7 @@ def execute(
             from aqueduct.patch.explain_gate import capture_plan_snapshot
             _succeeded = {r.module_id for r in module_results if r.status == "success"}
             for _mod in manifest.modules:
-                if _mod.id not in _succeeded or _mod.type == "Egress":
+                if _mod.id not in _succeeded or _mod.type == ModuleType.Egress:
                     continue
                 _df = frame_store.get(_mod.id)
                 if _df is None:

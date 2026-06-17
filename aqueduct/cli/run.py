@@ -6,6 +6,7 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
+from aqueduct.parser.models import ModuleType
 import sys
 from typing import Any
 
@@ -1076,13 +1077,13 @@ def run(
                                 continue
                             _mt = _m.get("type")
                             _cfg = _m.get("config") or {}
-                            if _mt == "Channel" and "op" not in _cfg:
+                            if _mt == ModuleType.Channel and "op" not in _cfg:
                                 return False, "schema_drift", (
                                     f"Patch leaves Channel module {_m.get('id')!r} without "
                                     f"required 'op' key in config. Use set_module_config_key "
                                     f"to update one key instead of replace_module_config."
                                 ), None
-                            if _mt in ("Ingress", "Egress") and "format" not in _cfg:
+                            if _mt in (ModuleType.Ingress, ModuleType.Egress) and "format" not in _cfg:
                                 return False, "schema_drift", (
                                     f"Patch leaves {_mt} module {_m.get('id')!r} without "
                                     f"required 'format' key in config."

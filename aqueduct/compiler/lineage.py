@@ -19,6 +19,7 @@ Limitations:
 from __future__ import annotations
 
 import logging
+from aqueduct.parser.models import ModuleType
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ def compute_lineage_rows(
     ``{channel_id, output_column, source_table, source_column}``; unresolved
     columns fall back to ``UNKNOWN`` inside ``_extract_sql_lineage``.
     """
-    channel_modules = [m for m in modules if m.type == "Channel" and m.config.get("op") == "sql"]
+    channel_modules = [m for m in modules if m.type == ModuleType.Channel and m.config.get("op") == "sql"]
     if not channel_modules:
         return []
 

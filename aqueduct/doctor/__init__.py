@@ -29,6 +29,7 @@ avoid a circular import.
 from __future__ import annotations
 
 import os
+from aqueduct.parser.models import ModuleType
 import sys
 import time
 from pathlib import Path
@@ -275,7 +276,7 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
         path_val: str | None = cfg.get("path")
         url_val: str | None = cfg.get("url")
 
-        if module.type not in ("Ingress", "Egress"):
+        if module.type not in (ModuleType.Ingress, ModuleType.Egress):
             continue
 
         t = time.monotonic()
@@ -309,7 +310,7 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
             p = (project_root / path_val).resolve() if not Path(path_val).is_absolute() else Path(path_val)
             is_glob = "*" in str(p) or "?" in str(p)
 
-            if module.type == "Ingress":
+            if module.type == ModuleType.Ingress:
                 if is_glob:
                     import glob as _glob
                     matches = _glob.glob(str(p))
@@ -340,7 +341,7 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
 
     if deployment_env in ("cluster", "cloud"):
         for module in manifest.modules:
-            if module.type not in ("Ingress", "Egress"):
+            if module.type not in (ModuleType.Ingress, ModuleType.Egress):
                 continue
             path_val = (module.config or {}).get("path", "")
             if path_val and "://" not in str(path_val) and not str(path_val).startswith("/"):
@@ -371,7 +372,7 @@ def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
 
     known: set[str] = {"SpillwayCondition", "freshness", "sql_row", "custom"}
     for module in getattr(manifest, "modules", []):
-        if getattr(module, "type", "") != "Assert":
+        if getattr(module, "type", "") != ModuleType.Assert:
             continue
         for rule in (module.config or {}).get("rules", []):
             et = rule.get("error_type")
@@ -420,7 +421,7 @@ def _check_heal_guardrail_typos(manifest: Any) -> "list[CheckResult]":
     # Collect all error_type labels declared in Assert rules
     known_error_types: set[str] = set()
     for module in getattr(manifest, "modules", []):
-        if getattr(module, "type", "") != "Assert":
+        if getattr(module, "type", "") != ModuleType.Assert:
             continue
         for rule in (module.config or {}).get("rules", []):
             et = rule.get("error_type")
@@ -549,7 +550,7 @@ def check_blueprint_sources(
         path_val: str | None = cfg.get("path")
         url_val: str | None = cfg.get("url")  # JDBC url key
 
-        if module.type not in ("Ingress", "Egress"):
+        if module.type not in (ModuleType.Ingress, ModuleType.Egress):
             continue
 
         t = time.monotonic()
@@ -585,7 +586,7 @@ def check_blueprint_sources(
             p = (project_root / path_val).resolve() if not Path(path_val).is_absolute() else Path(path_val)
             is_glob = "*" in str(p) or "?" in str(p)
 
-            if module.type == "Ingress":
+            if module.type == ModuleType.Ingress:
                 if is_glob:
                     import glob as _glob
                     matches = _glob.glob(str(p))
@@ -617,7 +618,7 @@ def check_blueprint_sources(
 
     # ── Recurse into Arcade sub-blueprints ────────────────────────────────────
     for module in bp.modules:
-        if module.type != "Arcade" or not module.ref:
+        if module.type != ModuleType.Arcade or not module.ref:
             continue
         sub_path = (blueprint_path.parent / module.ref).resolve()
         if not sub_path.exists():

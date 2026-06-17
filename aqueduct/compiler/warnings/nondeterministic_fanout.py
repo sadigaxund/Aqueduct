@@ -10,6 +10,7 @@ pure cache reasons; this rule is the data-correctness variant).
 from __future__ import annotations
 
 import re
+from aqueduct.parser.models import ModuleType
 from typing import Any
 
 RULE_ID = "nondeterministic_fanout"
@@ -30,7 +31,7 @@ def check(manifest: Any) -> list[str]:
     checkpointed = {m.id for m in manifest.modules if getattr(m, "checkpoint", False)}
 
     for m in manifest.modules:
-        if m.type != "Channel":
+        if m.type != ModuleType.Channel:
             continue
         if (m.config or {}).get("op") != "sql":
             continue

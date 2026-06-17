@@ -1,3 +1,4 @@
+from aqueduct.parser.models import ModuleType
 """Egress `format: parquet|json|csv` without `repartition` or `partition_by`.
 
 Spark writes one output file per partition. A pipeline with high task
@@ -19,7 +20,7 @@ _PROBLEM_FORMATS = {"parquet", "json", "csv"}
 def check(manifest: Any) -> list[str]:
     out: list[str] = []
     for m in manifest.modules:
-        if m.type != "Egress":
+        if m.type != ModuleType.Egress:
             continue
         cfg = m.config or {}
         fmt = (cfg.get("format") or "").lower()

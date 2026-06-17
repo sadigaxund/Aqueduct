@@ -23,6 +23,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from aqueduct.parser.models import Blueprint, Edge, Module
+from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
 
 
@@ -53,7 +54,7 @@ def _exit_modules(sub_bp: Blueprint) -> list[str]:
     sources = {e.from_id for e in sub_bp.edges}
     return [
         m.id for m in sub_bp.modules
-        if m.id not in sources and m.type not in ("Egress", "Probe")
+        if m.id not in sources and m.type not in (ModuleType.Egress, ModuleType.Probe)
     ]
 
 
@@ -211,7 +212,7 @@ def _expand_recursive(
     if depth > 10:
         raise ExpandError("Arcade nesting depth exceeds 10. Check for recursive Arcade refs.")
 
-    has_arcade = any(m.type == "Arcade" for m in modules)
+    has_arcade = any(m.type == ModuleType.Arcade for m in modules)
     if not has_arcade:
         return modules, edges, {}
 
@@ -219,7 +220,7 @@ def _expand_recursive(
     merged_provenance: dict = {}
 
     for m in modules:
-        if m.type != "Arcade":
+        if m.type != ModuleType.Arcade:
             result_modules.append(m)
             continue
 

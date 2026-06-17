@@ -1,3 +1,4 @@
+from aqueduct.parser.models import ModuleType
 """JDBC Ingress missing partitioning hints → single-partition read.
 
 Without `partitionColumn` + `lowerBound` + `upperBound` (or `predicates`),
@@ -17,7 +18,7 @@ RULE_ID = "jdbc_missing_partition"
 def check(manifest: Any) -> list[str]:
     out: list[str] = []
     for m in manifest.modules:
-        if m.type != "Ingress":
+        if m.type != ModuleType.Ingress:
             continue
         cfg = m.config or {}
         if (cfg.get("format") or "").lower() != "jdbc":

@@ -1,3 +1,4 @@
+from aqueduct.parser.models import ModuleType
 """Channel with `checkpoint: true` fed by a Kafka Ingress.
 
 Kafka is a moving target — each Spark micro-batch sees newer data. A cache /
@@ -25,13 +26,13 @@ def check(manifest: Any) -> list[str]:
         upstream.setdefault(e.to_id, []).append(e.from_id)
 
     for m in manifest.modules:
-        if m.type != "Channel":
+        if m.type != ModuleType.Channel:
             continue
         if not getattr(m, "checkpoint", False):
             continue
         for up_id in upstream.get(m.id, []):
             up = by_id.get(up_id)
-            if up is None or up.type != "Ingress":
+            if up is None or up.type != ModuleType.Ingress:
                 continue
             fmt = (up.config or {}).get("format", "")
             if fmt == "kafka":
