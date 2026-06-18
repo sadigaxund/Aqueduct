@@ -16,8 +16,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
-
-CLOUD_SCHEMES = ("s3://", "s3a://", "s3n://", "hdfs://", "gs://", "abfs://", "wasbs://", "wasb://", "dbfs://")
+from aqueduct.executor.path_keys import CLOUD_SCHEMES
 
 
 def observe_df(

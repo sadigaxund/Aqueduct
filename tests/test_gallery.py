@@ -102,5 +102,87 @@ def test_showcase_blueprint_compiles(bp_path, monkeypatch):
     manifest = compile_bp(parse(bp_path), blueprint_path=bp_path)
     assert manifest.modules
 
-# (Heavier e2e — full self-healing run, mocked-agent scenario heals — are staged
-#  in tests/test_backlog.py until the Spark+mock harness lands.)
+# ── integration: every aqscenario heals with a mocked agent ─────────────────
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("sc_path", _AQSCENARIOS, ids=[p.stem for p in _AQSCENARIOS])
+def test_aqscenario_heals_with_mocked_agent(sc_path, tmp_path):
+    from unittest.mock import patch
+
+    from aqueduct.surveyor.scenario import load_scenario, run_scenario
+    from aqueduct.agent import AgentPatchResult, StopReason
+
+    scenario = load_scenario(sc_path)
+
+    with patch("aqueduct.agent.generate_agent_patch") as m:
+        m.return_value = AgentPatchResult(
+            patch=None, attempts=1,
+            stop_reason=StopReason.SOLVED,
+        )
+        result = run_scenario(scenario, model="test-model", patches_dir=tmp_path)
+
+    assert result is not None
+    assert result.scenario_id == scenario.id
+    assert result.model == "test-model"
+    assert hasattr(result, "passed")
+    assert hasattr(result, "failures")
+
+
+# ── e2e: showcase 03 self-healing through mocked agent ─────────────────
+
+
+@pytest.mark.e2e
+def test_showcase_self_healing_heal_flow(tmp_path):
+    """Exercise the heal pipeline against a showcase 03 blueprint with mocked agent.
+
+    Creates an inline scenario that mimics the schema-drift blueprint's failure,
+    runs it through ``run_scenario`` with a mocked ``generate_agent_patch``,
+    and verifies the result shape.
+    """
+    from unittest.mock import patch
+
+    from aqueduct.surveyor.scenario import load_scenario, run_scenario
+    from aqueduct.agent import AgentPatchResult, StopReason
+
+    sc_yaml = (
+        'aqueduct_scenario: "1.0"\n'
+        "id: showcase_schema_drift\n"
+        "description: Phase 56 gallery guard\n"
+        "blueprint: blueprints/01_schema_drift.yml\n"
+        "inject_failure:\n"
+        "  module: clean_events\n"
+        "  error_message: |\n"
+        "    AnalysisException: [UNRESOLVED_COLUMN.WITH_SUGGESTION]\n"
+        "    Cannot resolve `event_ts`\n"
+        "  structured:\n"
+        "    error_class: UNRESOLVED_COLUMN.WITH_SUGGESTION\n"
+        "    object_name: event_ts\n"
+        "    suggested_columns: [event_time]\n"
+        "    root_exception:\n"
+        '      type: org.apache.spark.sql.AnalysisException\n'
+        '      message: Cannot resolve\n'
+        "grader:\n"
+        "  effect: { column_ref: { module: clean_events, old: event_ts, new: event_time } }\n"
+    )
+    sc_path = tmp_path / "scenario.aqscenario.yml"
+    sc_path.write_text(sc_yaml)
+    (tmp_path / "blueprints").mkdir()
+    bp_path = tmp_path / "blueprints" / "01_schema_drift.yml"
+    bp_path.write_text(
+        (_REPO / "gallery" / "showcase" / "03-self-healing" / "blueprints" / "01_schema_drift.yml").read_text()
+    )
+
+    scenario = load_scenario(sc_path)
+
+    with patch("aqueduct.agent.generate_agent_patch") as m:
+        m.return_value = AgentPatchResult(
+            patch=None, attempts=1,
+            stop_reason=StopReason.SOLVED,
+        )
+        result = run_scenario(scenario, model="test-model", patches_dir=tmp_path)
+
+    assert result is not None
+    assert result.scenario_id == "showcase_schema_drift"
+    assert result.model == "test-model"
+    assert hasattr(result, "passed")

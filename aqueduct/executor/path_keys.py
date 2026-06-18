@@ -66,4 +66,12 @@ def get_path_keys(module_type: str) -> tuple[str, ...]:
 # stat() on a non‑path value) and the executor (path‑required validation).
 PATHLESS_INGRESS_FORMATS: frozenset[str] = frozenset({"jdbc", "kafka", "depot"})
 
-__all__ = ["get_path_keys", "PATHLESS_INGRESS_FORMATS"]
+# Cloud storage URI schemes used by compiler and executor to skip
+# filesystem-based validation for remote paths. Engine-agnostic tuple
+# (no pyspark dependency).
+CLOUD_SCHEMES: tuple[str, ...] = (
+    "s3://", "s3a://", "s3n://", "hdfs://", "gs://",
+    "abfs://", "wasbs://", "wasb://", "dbfs://",
+)
+
+__all__ = ["get_path_keys", "PATHLESS_INGRESS_FORMATS", "CLOUD_SCHEMES"]

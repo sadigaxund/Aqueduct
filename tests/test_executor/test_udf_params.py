@@ -47,6 +47,37 @@ def test_factory_raising_is_wrapped():
         _apply_udf_params("u", "boom", "m", boom, {"a": 1})
 
 
+def test_register_udfs_invokes_factory_and_registers_product(tmp_path):
+    # End-to-end through register_udfs with a MagicMock spark (mirrors the
+    # existing UDF tests' approach — no real SparkSession needed to verify the
+    # factory is called and its product is what gets registered).
+    import sys
+    import types
+    from unittest.mock import MagicMock
+
+    from aqueduct.executor.spark.udf import register_udfs
+
+    mod = types.ModuleType("aq_test_udf_factory")
+
+    def make_adder(n=0):
+        return lambda x: x + n
+
+    mod.make_adder = make_adder
+    sys.modules["aq_test_udf_factory"] = mod
+    try:
+        spark = MagicMock()
+        register_udfs(
+            ({"id": "add5", "lang": "python", "module": "aq_test_udf_factory",
+              "entry": "make_adder", "return_type": "int", "params": {"n": 5}},),
+            spark,
+        )
+        name, fn, rt = spark.udf.register.call_args[0]
+        assert name == "add5" and rt == "int"
+        assert fn(10) == 15  # the produced callable, parameterized with n=5
+    finally:
+        del sys.modules["aq_test_udf_factory"]
+
+
 def test_params_resolve_context_tokens_through_parse():
     from aqueduct.parser.parser import parse_dict
 
