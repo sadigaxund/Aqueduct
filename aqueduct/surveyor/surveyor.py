@@ -122,6 +122,24 @@ CREATE TABLE IF NOT EXISTS column_lineage (
 );
 CREATE INDEX IF NOT EXISTS idx_lineage_channel
     ON column_lineage (blueprint_id, channel_id);
+
+-- Phase 56 (Lineage v2): SQL-AST normalised fingerprint per Channel.
+-- Changelog, NOT a run-log: one row per distinct fingerprint per
+-- (blueprint_id, channel_id). Repeat runs of unchanged SQL only bump
+-- last_seen/last_run_id (ON CONFLICT), so size tracks SQL edits, not runs.
+CREATE TABLE IF NOT EXISTS channel_fingerprints (
+    blueprint_id  VARCHAR NOT NULL,
+    channel_id    VARCHAR NOT NULL,
+    fingerprint   VARCHAR NOT NULL,
+    canonical_sql VARCHAR NOT NULL,
+    first_seen    TIMESTAMPTZ NOT NULL,
+    last_seen     TIMESTAMPTZ NOT NULL,
+    first_run_id  VARCHAR NOT NULL,
+    last_run_id   VARCHAR NOT NULL,
+    PRIMARY KEY (blueprint_id, channel_id, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_fingerprint_latest
+    ON channel_fingerprints (blueprint_id, channel_id, last_seen);
 """
 
 _SIGNAL_OVERRIDES_DDL = """

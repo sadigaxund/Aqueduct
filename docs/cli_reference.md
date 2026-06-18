@@ -148,7 +148,9 @@ aqueduct run bp.yml \
 | `aqueduct runs --failed` | Show only failed runs |
 | `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
+| `aqueduct report --trend <column> --blueprint <id>` | Cross-run quality trend for one column (null-rate + type history) from probe signals; `--since <ISO_DATE>` windows it (default 30 days) |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
+| `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
 | `aqueduct signal <signal_id>` | View or override Probe gates |
 
 ---

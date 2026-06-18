@@ -241,6 +241,45 @@ path. `blob_store.materialize()` transparently resolves blob paths to content on
 | `source_column` | VARCHAR | |
 | `captured_at`   | TIMESTAMPTZ | |
 
+### `channel_fingerprints`
+
+SQL-AST normalised fingerprint per `op: sql` Channel (Lineage v2). A
+**changelog, not a run-log**: one row per *distinct* fingerprint per
+`(blueprint_id, channel_id)`. A run whose Channel SQL is unchanged only bumps
+`last_seen`/`last_run_id` (via `ON CONFLICT`), so the table grows with the
+number of times the SQL semantically changed — not with the number of runs.
+The fingerprint is formatting/comment/keyword-case insensitive (sqlglot
+canonicalisation), so a pure reformat does **not** create a new row while a
+real predicate/column change does.
+
+| Column          | Type    | Notes |
+|-----------------|---------|-------|
+| `blueprint_id`  | VARCHAR | |
+| `channel_id`    | VARCHAR | |
+| `fingerprint`   | VARCHAR | SHA-256 of the canonical SQL |
+| `canonical_sql` | VARCHAR | Normalised SQL (for diffing two fingerprints) |
+| `first_seen`    | TIMESTAMPTZ | First run that produced this fingerprint |
+| `last_seen`     | TIMESTAMPTZ | Most recent run still on this fingerprint |
+| `first_run_id`  | VARCHAR | |
+| `last_run_id`   | VARCHAR | |
+
+PK `(blueprint_id, channel_id, fingerprint)`.
+
+**Diagnostic — did a Channel's SQL change, and when?**
+```sql
+SELECT channel_id, fingerprint, first_seen, last_seen
+FROM channel_fingerprints
+WHERE blueprint_id = 'my.pipeline'
+ORDER BY channel_id, first_seen;
+```
+More than one row for a `channel_id` = the SQL was edited; `first_seen` of the
+newest row is when the new version first ran.
+
+> **`report --trend <column>` adds no table.** The cross-run column-quality
+> trend is a **read-side aggregate** over `probe_signals` (`null_rates` +
+> `schema_snapshot` payloads unrolled at query time) — deliberately *not*
+> persisted, to avoid duplicating data the probes already store.
+
 ### `<scenarios_dir>/.aqueduct/benchmark.duckdb`
 
 #### `benchmark_results`

@@ -16,6 +16,11 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Lineage v2 — Channel SQL fingerprints.** Every `op: sql` Channel now gets a normalised AST fingerprint (sqlglot-canonicalised, SHA-256) recorded in a new `channel_fingerprints` table. The table is a *changelog* — a new row appears only when a Channel's SQL changes semantically (a pure reformat does not), so it grows with edits, not runs. Answers "did this transform change, and when".
+- **Lineage v2 — `aqueduct report --trend <column> --blueprint <id>`.** Cross-run quality trend for one column (null-rate + type history) with type-drift flagging. A read-side aggregate over `probe_signals` (`--since` windows it, default 30 days) — no new table, no duplicated storage.
+- **Lineage v2 — `aqueduct lineage <bp.yml> --chain <column> [--types]`.** Vertical source→output trace for one column, each hop annotated with the sqlglot-inferred SQL type and a `transform_op` classification, with type-change markers. Computed on demand from the compiled Manifest — nothing persisted, zero Spark actions. A human debugging tool, not part of the healing loop.
+
 ## [1.3.1] — 2026-06-18
 
 ### Fixed

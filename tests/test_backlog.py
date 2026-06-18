@@ -37,6 +37,28 @@ def test_aqscenarios_heal_with_mocked_agent():
     ...
 
 
+@pytest.mark.todo("fingerprint changelog round-trip: write_fingerprints twice with identical SQL → 1 row, last_seen/last_run_id bumped; edit SQL → 2nd row appended (real DuckDB store)")
+def test_channel_fingerprints_changelog_dedup():
+    # intended: tests/test_surveyor/test_fingerprints.py  (mark unit)
+    # context: Phase 56 — verify the ON CONFLICT changelog behaviour against a
+    # real store, not just compute_channel_fingerprints purity.
+    ...
+
+
+@pytest.mark.todo("report --trend <column> renders null-rate + type history and flags type drift across runs (seed probe_signals in a DuckDB store, invoke via CliRunner)")
+def test_report_trend_renders_column_history():
+    # intended: tests/test_cli/test_report_trend.py  (mark unit)
+    # context: Phase 56 — covers the read-side json_each unroll over probe_signals.
+    ...
+
+
+@pytest.mark.todo("lineage --chain --types CLI renders a vertical type-annotated trace end to end (compile a gallery snippet, invoke via CliRunner, assert hops + type-change marker)")
+def test_lineage_chain_types_cli():
+    # intended: tests/test_cli/test_lineage_chain.py  (mark unit)
+    # context: Phase 56 — compute_type_chain is unit-tested; this covers the CLI render path.
+    ...
+
+
 @pytest.mark.todo("sync-constants: PATHLESS_INGRESS_FORMATS, AQ_ERROR_*, PATCH_META_KEY values match their source-of-truth definitions; catch mismatch if a new format/column is added to one frozenset but not the other")
 def test_sync_constants_do_not_drift():
     # intended: tests/test_sync_constants.py  (mark unit)

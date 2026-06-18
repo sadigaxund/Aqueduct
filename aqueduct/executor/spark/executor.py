@@ -1536,14 +1536,24 @@ def execute(
 
     # ── Lineage — write after successful execution ─────────────────────────────
     if store_dir is not None:
+        _obs = _resolve_observability_store(store_dir, observability_store)
         try:
             from aqueduct.compiler.lineage import write_lineage
             write_lineage(
                 manifest.blueprint_id, run_id, manifest.modules, manifest.edges,
-                observability_store=_resolve_observability_store(store_dir, observability_store),
+                observability_store=_obs,
             )
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
+        # Phase 56 — Channel SQL fingerprints (changelog of semantic SQL changes).
+        try:
+            from aqueduct.compiler.fingerprint import write_fingerprints
+            write_fingerprints(
+                manifest.blueprint_id, run_id, manifest.modules,
+                observability_store=_obs,
+            )
+        except Exception as exc:
+            logger.debug("Fingerprint write skipped: %s", exc)
 
     # ── Phase 29b: capture explain() snapshots for Gate 4 ─────────────────────
     # Two sinks: `surveyor.record_explain_snapshot()` (real runs → persists into
