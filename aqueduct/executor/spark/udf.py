@@ -241,6 +241,41 @@ def _register_java_udf(
         ) from exc
 
 
+def _apply_udf_params(
+    udf_id: str,
+    entry_name: str,
+    module_path: str,
+    fn: Any,
+    params: dict[str, Any],
+) -> Any:
+    """Resolve a parameterized UDF: invoke ``fn`` as a factory with ``params``.
+
+    Pure (no Spark). When ``params`` is empty, ``fn`` is returned untouched
+    (back-compat with static UDFs). Otherwise ``fn`` must be a callable factory
+    and must return a callable or a Spark UDF object.
+    """
+    if not params:
+        return fn
+    if not callable(fn):
+        raise UDFError(
+            f"UDF {udf_id!r}: 'params' was given but {entry_name!r} in "
+            f"{module_path!r} is not callable — it must be a factory "
+            f"`{entry_name}(**params) -> callable`."
+        )
+    try:
+        produced = fn(**params)
+    except Exception as exc:
+        raise UDFError(
+            f"UDF {udf_id!r}: factory {entry_name}(**params) raised: {exc}"
+        ) from exc
+    if not (callable(produced) or isinstance(produced, UserDefinedFunction) or hasattr(produced, "returnType")):
+        raise UDFError(
+            f"UDF {udf_id!r}: factory {entry_name!r} must return a callable "
+            f"or a Spark UDF object, got {type(produced).__name__}."
+        )
+    return produced
+
+
 def _register_python_udf(
     udf_id: str,
     entry: dict[str, Any],
@@ -265,6 +300,11 @@ def _register_python_udf(
         raise UDFError(
             f"UDF {udf_id!r}: function {entry_name!r} not found in {module_path!r}"
         )
+
+    # Parameterized UDF: `entry` is a factory — call it with the resolved params
+    # to obtain the actual callable (or Spark UDF object) to register. Params are
+    # already context/secret-resolved by the compiler before they reach here.
+    fn = _apply_udf_params(udf_id, entry_name, module_path, fn, entry.get("params") or {})
 
     try:
         # If fn is already a Spark UDF object (class-based or duck-typed with returnType),

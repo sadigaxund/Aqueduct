@@ -61,6 +61,23 @@ def _resolve_module_tier1(m: Module, registry: AqFunctions) -> Module:
     return dataclasses.replace(m, config=resolved_config)
 
 
+def _resolve_udf_params_tier1(
+    udf_registry: tuple[dict[str, Any], ...], registry: AqFunctions
+) -> tuple[dict[str, Any], ...]:
+    """Resolve @aq.* tokens (incl. @aq.secret()) inside parameterized-UDF params.
+
+    Only the ``params`` sub-dict is run through Tier 1 — the rest of the entry
+    (id, module, entry, return_type) is structural and never carries tokens.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in udf_registry:
+        params = entry.get("params")
+        if params:
+            entry = {**entry, "params": resolve_tier1(params, registry)}
+        out.append(entry)
+    return tuple(out)
+
+
 def compile(  # noqa: A001
     blueprint: Blueprint,
     blueprint_path: Path | None = None,
@@ -440,7 +457,7 @@ def compile(  # noqa: A001
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
-        udf_registry=blueprint.udf_registry,
+        udf_registry=_resolve_udf_params_tier1(blueprint.udf_registry, registry),
         macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
         provenance_map=prov_map,

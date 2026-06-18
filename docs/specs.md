@@ -504,6 +504,29 @@ registering it with `spark.udf.register`. The module must be importable from the
 run's working directory / `PYTHONPATH`. Python UDFs execute row-at-a-time via the
 JVM bridge — for high-volume Channels prefer native Spark SQL.
 
+**Parameterized (context-aware) Python UDFs.** Add a `params:` map and `entry`
+becomes a **factory** — `entry(**params) -> callable` — so one importable
+function is reused across blueprints and environments with different settings:
+
+```yaml
+udf_registry:
+  - id: mask_pii
+    module: my_project.udfs
+    entry: make_masker             # factory: make_masker(char, keep_last, salt) -> callable
+    return_type: STRING
+    params:
+      char: "*"
+      keep_last: 4
+      salt: "@aq.secret('PII_SALT')"   # resolved before the factory is called
+```
+
+Param values support `${ctx.*}`/`${ENV}` (Tier 0) and `@aq.*` including
+`@aq.secret()` (Tier 1) — they are fully resolved at compile time, so the
+factory receives concrete values, never tokens. The factory must return a plain
+callable (or a Spark UDF object). Omitting `params:` keeps the static behaviour
+above (no factory call). UDF **bodies** remain out of scope for self-healing —
+`params` change *configuration*, not code.
+
 **Java/Scala UDFs** point at a JAR + class — pure JVM bytecode, no Python
 serialization:
 
@@ -522,7 +545,8 @@ udf_registry:
 | `lang` | all | `python` (default), `java`, or `scala`. |
 | `return_type` | all | Spark DDL type string (default `string`). |
 | `module` | python | Importable module path. Required for python. |
-| `entry` | python | Function name in `module` (defaults to `id`). |
+| `entry` | python | Function name in `module` (defaults to `id`). With `params`, treated as a factory `entry(**params) -> callable`. |
+| `params` | python | Optional keyword map passed to the `entry` factory. Values resolve `${ctx.*}`/`${ENV}` and `@aq.*` (incl. `@aq.secret()`) at compile time. |
 | `jar` | java/scala | JAR file path (relative paths anchor to the Blueprint dir). |
 | `class` | java/scala | Fully-qualified class name. |
 

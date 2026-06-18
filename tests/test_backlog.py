@@ -22,6 +22,15 @@ from __future__ import annotations
 
 import pytest
 
+
+@pytest.mark.todo("parameterized UDF registers + runs on a real SparkSession: factory entry(**params) produces a callable that a SQL Channel invokes, output reflects params (spark fixture)")
+def test_parameterized_udf_registers_on_spark():
+    # intended: tests/test_executor/test_udf_spark.py  (mark spark integration)
+    # context: Phase 57 — _apply_udf_params is unit-tested pure; this covers the
+    # real spark.udf.register path end to end with a factory-produced callable.
+    ...
+
+
 # ── Gallery — heavier e2e that needs external infra ───────────────────────────
 
 
