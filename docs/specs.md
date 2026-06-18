@@ -803,6 +803,39 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 - **No runaway loops.** Budgets bound wall-clock, tokens, and stuck-signature counts. A rolling rate-limit caps healing attempts per hour per blueprint.
 - **No black-box decisions.** Every LLM turn persists with the gate that rejected it, a stable error signature, and the prompt version.
 
+## **8.8 Proactive Drift Detection (`aqueduct drift`)**
+
+Self-healing has two arms. `run`'s heal is the **reactive arm** — it fixes a
+pipeline *after* it fails. `aqueduct drift` is the **proactive arm** — a
+standalone, schedulable command that catches an upstream schema change and heals
+it *before* the pipeline ever runs. Schedule it ahead of the batch (e.g. cron,
+30 min before the nightly job); `run` itself is untouched.
+
+Per Ingress, `drift`:
+
+1. Reads the **live source schema metadata-only** (`df.schema`, zero Spark
+   actions; parquet/delta from the footer/`_delta_log`, JDBC via a `LIMIT 0`
+   probe).
+2. Diffs against a **self-owned baseline** — the last-seen schema in
+   `drift_checks`. No baseline yet ⇒ it stores the current schema and exits
+   cleanly (no Probe dependency).
+3. **Classifies** each change: a *dropped* or *type-changed* column is
+   **breaking** (a downstream Channel that names it will fail); an *added*
+   column is **benign** (a `SELECT named_cols` pipeline tolerates a superset) and
+   never triggers a heal.
+4. On a breaking change, builds an **in-memory synthetic FailureContext**
+   (`error_class = PREDICTED_SCHEMA_DRIFT`, the missing column as `object_name`,
+   any added columns as `suggested_columns` rename candidates) and drives it
+   through the **same agent + apply gate** as a real failure, staging a patch or
+   firing the `ci` webhook.
+
+Scope is **schema drift only** — value-distribution / data-quality drift is out
+of scope (a noisier, separate concern). The synthetic FailureContext is **not**
+persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
+failure analytics a record of real failures. Exit codes: `0` (no drift /
+baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
+undiffable).
+
 ---
 
 # **9. Type System**

@@ -23,6 +23,14 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.mark.todo("aqueduct drift end-to-end: parquet source loses a column between two runs → 1st run sets baseline (exit 0), 2nd detects breaking drift, stages a patch (exit HEAL_PENDING), drift_checks row recorded (spark fixture + mocked agent)")
+def test_drift_command_detects_and_heals():
+    # intended: tests/test_drift/test_drift_command.py  (mark spark integration)
+    # context: Phase 58 — classifier/context/store are unit-tested; this covers
+    # read_source_schema on a real source + the CLI flow + exit codes.
+    ...
+
+
 @pytest.mark.todo("parameterized UDF registers + runs on a real SparkSession: factory entry(**params) produces a callable that a SQL Channel invokes, output reflects params (spark fixture)")
 def test_parameterized_udf_registers_on_spark():
     # intended: tests/test_executor/test_udf_spark.py  (mark spark integration)

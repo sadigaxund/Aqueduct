@@ -280,6 +280,39 @@ newest row is when the new version first ran.
 > `schema_snapshot` payloads unrolled at query time) — deliberately *not*
 > persisted, to avoid duplicating data the probes already store.
 
+### `drift_checks`
+
+Audit log for `aqueduct drift` — one row per Ingress per drift run. Created
+lazily by the `drift` command (not at every `run`). The **baseline is
+self-owned**: the most recent row's `live_schema` for an `(blueprint_id,
+module_id)` is the baseline the next check diffs against, so drift needs **no
+`schema_snapshot` Probe** to function.
+
+| Column             | Type    | Notes |
+|--------------------|---------|-------|
+| `id`               | VARCHAR | Row UUID |
+| `blueprint_id`     | VARCHAR | |
+| `module_id`        | VARCHAR | Ingress module checked |
+| `checked_at`       | TIMESTAMPTZ | |
+| `baseline_schema`  | JSON    | `{column: type}` diffed against (NULL on the first, baseline-setting check) |
+| `live_schema`      | JSON    | `{column: type}` read live; becomes the next baseline |
+| `status`           | VARCHAR | `baseline_set` \| `no_drift` \| `drift_benign` \| `drift_breaking` |
+| `breaking_changes` | JSON    | List of `{column, kind, baseline_type, live_type}` for dropped/type-changed |
+| `benign_changes`   | JSON    | List of added columns |
+| `patch_id`         | VARCHAR | Staged patch id when a breaking drift was healed |
+
+**Diagnostic — which sources drifted and got a patch?**
+```sql
+SELECT module_id, checked_at, status, patch_id
+FROM drift_checks
+WHERE blueprint_id = 'my.pipeline' AND status = 'drift_breaking'
+ORDER BY checked_at DESC;
+```
+
+> Predicted-drift FailureContexts are driven through the agent **in memory** and
+> are **not** written to `failure_contexts` — that table stays a record of real
+> run failures, so failure analytics are never skewed by predictions.
+
 ### `<scenarios_dir>/.aqueduct/benchmark.duckdb`
 
 #### `benchmark_results`
