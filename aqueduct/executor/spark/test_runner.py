@@ -98,8 +98,7 @@ def _create_df(spark: "SparkSession", schema_dict: dict[str, str], rows: list[li
 
     fields = []
     for col_name, col_type in schema_dict.items():
-        spark_type_str = _spark_type(col_type)
-        dtype = _parse_datatype_string(spark_type_str)
+        dtype = _parse_datatype_string(col_type)
         from pyspark.sql.types import StructField
         fields.append(StructField(col_name, dtype, nullable=True))
 

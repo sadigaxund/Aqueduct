@@ -16,7 +16,7 @@ from aqueduct.parser.models import Module
 
 def test_create_df_supported_types(spark: SparkSession):
     schema = {
-        "c_long": "long",
+        "c_bigint": "bigint",
         "c_string": "string",
         "c_double": "double",
         "c_boolean": "boolean",
@@ -31,7 +31,7 @@ def test_create_df_supported_types(spark: SparkSession):
     
     assert df.count() == 2
     types = dict(df.dtypes)
-    assert types["c_long"] == "bigint"
+    assert types["c_bigint"] == "bigint"
     assert types["c_string"] == "string"
     assert types["c_double"] == "double"
     assert types["c_boolean"] == "boolean"

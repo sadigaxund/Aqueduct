@@ -280,7 +280,7 @@ class TestRecordHealAttempt:
     def test_record_heal_attempt_success_row_writes_nulls(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        from aqueduct.agent.budget import AttemptRecord
+        from aqueduct.agent.budget import AttemptRecord, StopReason
 
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
