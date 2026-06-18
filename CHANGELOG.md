@@ -16,6 +16,8 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-06-18
+
 ### Fixed
 - **Guardrail exception no longer silently passes patches.** An unexpected error during the guardrail pre-staging check in `cli/run.py` previously set `guardrail_err = None` (meaning "passed"), allowing the patch to proceed unchecked. It now surfaces the error so the patch is properly staged for human review.
 - **`stores.blob.path` is now `FsPath`-anchored.** Relative paths in `stores.blob.path` (local backend) previously resolved against `CWD`. They now anchor against the config-file directory, consistent with every other `FsPath`-annotated store field. URI-style paths (`s3://`, `gs://`, `abfs://`) pass through untouched via `allow_uri=True`.
