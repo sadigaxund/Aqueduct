@@ -356,6 +356,43 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
 
     results.extend(_check_heal_guardrail_typos(manifest))
     results.extend(_check_spillway_error_types(manifest))
+    results.extend(_check_iceberg_catalog(manifest))
+    return results
+
+
+def _check_iceberg_catalog(manifest: Any) -> "list[CheckResult]":
+    """Warn if a `format: iceberg` module has no `spark.sql.catalog.*` configured.
+
+    Iceberg needs a catalog (`spark.sql.catalog.<name> = ...`), not just the
+    format string — `format: iceberg` with no catalog fails at runtime with a
+    cryptic Spark error. This is a `warn`, not a `fail`: the catalog may live in
+    `aqueduct.yml` (engine-level `spark_config`), which the Manifest does not
+    carry, so we only flag the common "forgot the catalog entirely" case.
+    """
+    results: list[CheckResult] = []
+    uses_iceberg = any(
+        getattr(m, "type", "") in (ModuleType.Ingress, ModuleType.Egress)
+        and (m.config or {}).get("format") == "iceberg"
+        for m in getattr(manifest, "modules", [])
+    )
+    if not uses_iceberg:
+        return results
+
+    bp_spark = getattr(manifest, "spark_config", {}) or {}
+    has_catalog = any(str(k).startswith("spark.sql.catalog.") for k in bp_spark)
+    if not has_catalog:
+        results.append(CheckResult(
+            name="iceberg_catalog",
+            status="warn",
+            detail=(
+                "A module uses format: iceberg but no `spark.sql.catalog.*` key is "
+                "set in the blueprint spark_config. Configure an Iceberg catalog "
+                "here or in aqueduct.yml (e.g. spark.sql.catalog.local = "
+                "org.apache.iceberg.spark.SparkCatalog), or reads/writes will fail "
+                "at runtime."
+            ),
+            group="spark",
+        ))
     return results
 
 

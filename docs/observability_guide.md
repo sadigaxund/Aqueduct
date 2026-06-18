@@ -210,7 +210,10 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 
 #### `maintenance_metrics`
 
-Delta `OPTIMIZE` / `VACUUM` timings (`optimize_ms`, `vacuum_ms`) per module.
+Post-write maintenance timings per module. The two columns are **engine-generic
+slots**: `optimize_ms` is the compaction-class op, `vacuum_ms` the cleanup-class
+op — Delta `OPTIMIZE`/`VACUUM`, Iceberg `rewrite_data_files`/`expire_snapshots`,
+or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 
 #### `probe_signals`
 

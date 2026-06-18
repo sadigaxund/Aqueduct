@@ -1419,13 +1419,17 @@ def execute(
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
 
-                # ── Post-write maintenance (Delta OPTIMIZE / VACUUM) ──────────
+                # ── Post-write maintenance (delta / iceberg / hudi) ───────────
                 _maintenance_cfg = module.config.get("maintenance")
                 if _maintenance_cfg and isinstance(_maintenance_cfg, dict):
                     _maint_path = module.config.get("path", "")
-                    if _maint_path:
+                    _maint_table = module.config.get("table")
+                    _maint_fmt = module.config.get("format", "delta")
+                    # iceberg drives procedures off `table`; delta/hudi off `path`.
+                    if _maint_path or _maint_table:
                         _maint_timing = run_maintenance(
-                            spark, module.id, _maint_path, _maintenance_cfg
+                            spark, module.id, _maint_path, _maintenance_cfg,
+                            fmt=_maint_fmt, table=_maint_table,
                         )
                         _write_maintenance_metrics(
                             module.id, run_id, _maint_timing, store_dir,

@@ -8,10 +8,11 @@ The .save() call is the sanctioned Spark action in this layer.  Per the
 zero-cost observability rule, no count()/show()/collect() is invoked (except
 for ``depot`` Egress with ``value_expr``, which opts-in to a single agg).
 
-Post-write maintenance (Delta only):
-  OPTIMIZE   — compacts small files; optional ZORDER BY columns
-  VACUUM     — removes files older than retention_hours from the Delta log
-Both run synchronously after the write action and are non-fatal (logged as
+Post-write maintenance (format-aware — delta / iceberg / hudi):
+  delta   — OPTIMIZE (+ optional ZORDER BY) / VACUUM RETAIN
+  iceberg — CALL <catalog>.system.rewrite_data_files / expire_snapshots
+  hudi    — CALL run_compaction / run_clean
+All run synchronously after the write action and are non-fatal (logged as
 warnings on failure so the pipeline does not abort on a maintenance error).
 """
 
@@ -196,52 +197,102 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 
 
+def build_maintenance_ops(
+    fmt: str,
+    path: str,
+    table: str | None,
+    maintenance_cfg: dict[str, Any],
+) -> list[tuple[str, str, str]]:
+    """Return the maintenance SQL to run for a table, as (slot, label, sql) tuples.
+
+    Pure — no Spark. ``slot`` is ``"optimize"`` (compaction-class) or
+    ``"vacuum"`` (cleanup-class); the timing for each lands in the matching
+    ``maintenance_metrics`` column regardless of format, so the two columns mean
+    "compaction op" and "cleanup op" across engines:
+
+      * **delta**   — OPTIMIZE (optimize) · VACUUM (vacuum)
+      * **iceberg** — rewrite_data_files (optimize) · expire_snapshots (vacuum);
+                      requires a catalog ``table`` (``catalog.db.tbl``), not a path
+      * **hudi**    — run_compaction (optimize) · run_clean (vacuum); path-based
+    """
+    ops: list[tuple[str, str, str]] = []
+    fmt = (fmt or "delta").lower()
+
+    if fmt == "delta":
+        if maintenance_cfg.get("optimize"):
+            zorder = maintenance_cfg.get("zorder_by", [])
+            if isinstance(zorder, str):
+                zorder = [zorder]
+            zorder_clause = f" ZORDER BY ({', '.join(str(c) for c in zorder)})" if zorder else ""
+            ops.append(("optimize", "OPTIMIZE", f"OPTIMIZE delta.`{path}`{zorder_clause}"))
+        vacuum_hours = maintenance_cfg.get("vacuum")
+        if vacuum_hours is not None:
+            ops.append(("vacuum", "VACUUM", f"VACUUM delta.`{path}` RETAIN {int(vacuum_hours)} HOURS"))
+
+    elif fmt == "iceberg":
+        # Iceberg procedures are catalog-scoped: CALL <catalog>.system.<proc>.
+        # `table` must be a fully-qualified catalog table (catalog.db.tbl).
+        if not table or table.count(".") < 2:
+            raise EgressError(
+                "iceberg maintenance requires a fully-qualified catalog table "
+                "(`table: catalog.db.tbl`); a path cannot drive Iceberg procedures."
+            )
+        catalog, _, ident = table.partition(".")
+        if maintenance_cfg.get("rewrite_data_files"):
+            ops.append((
+                "optimize", "rewrite_data_files",
+                f"CALL {catalog}.system.rewrite_data_files(table => '{ident}')",
+            ))
+        if maintenance_cfg.get("expire_snapshots"):
+            ops.append((
+                "vacuum", "expire_snapshots",
+                f"CALL {catalog}.system.expire_snapshots(table => '{ident}')",
+            ))
+
+    elif fmt == "hudi":
+        if maintenance_cfg.get("compaction"):
+            ops.append((
+                "optimize", "run_compaction",
+                f"CALL run_compaction(op => 'run', path => '{path}')",
+            ))
+        if maintenance_cfg.get("clean"):
+            ops.append(("vacuum", "run_clean", f"CALL run_clean(path => '{path}')"))
+
+    return ops
+
+
 def run_maintenance(
     spark: "SparkSession",
     module_id: str,
     path: str,
     maintenance_cfg: dict[str, Any],
+    fmt: str = "delta",
+    table: str | None = None,
 ) -> dict[str, Any]:
-    """Run post-write maintenance operations on a Delta table.
+    """Run post-write maintenance for delta / iceberg / hudi tables.
 
-    Runs synchronously after the Egress write action.  Both OPTIMIZE and VACUUM
-    are non-fatal — failures are logged as warnings and the pipeline continues.
+    Runs synchronously after the Egress write action. Every op is non-fatal —
+    failures are logged as warnings and the pipeline continues.
 
-    Args:
-        spark:           Active SparkSession.
-        module_id:       Egress module ID (used in log messages).
-        path:            Delta table path (must already exist on disk).
-        maintenance_cfg: The ``maintenance:`` dict from module.config.
-
-    Returns:
-        Timing dict: {"optimize_ms": int | None, "vacuum_ms": int | None}
+    Returns a timing dict ``{"optimize_ms": int | None, "vacuum_ms": int | None}``
+    where the two slots are the compaction-class and cleanup-class op for the
+    given format (see ``build_maintenance_ops``).
     """
     result: dict[str, Any] = {"optimize_ms": None, "vacuum_ms": None}
+    try:
+        ops = build_maintenance_ops(fmt, path, table, maintenance_cfg)
+    except EgressError as exc:
+        logger.warning("[%s] maintenance skipped (non-fatal): %s", module_id, exc)
+        return result
 
-    if maintenance_cfg.get("optimize"):
-        zorder = maintenance_cfg.get("zorder_by", [])
-        if isinstance(zorder, str):
-            zorder = [zorder]
-        zorder_clause = f" ZORDER BY ({', '.join(str(c) for c in zorder)})" if zorder else ""
-        sql = f"OPTIMIZE delta.`{path}`{zorder_clause}"
+    for slot, label, sql in ops:
         t0 = time.monotonic()
         try:
             spark.sql(sql)
-            result["optimize_ms"] = int((time.monotonic() - t0) * 1000)
-            logger.info("[%s] OPTIMIZE completed in %dms", module_id, result["optimize_ms"])
+            result[f"{slot}_ms"] = int((time.monotonic() - t0) * 1000)
+            logger.info("[%s] %s completed in %dms", module_id, label, result[f"{slot}_ms"])
         except Exception as exc:
-            logger.warning("[%s] OPTIMIZE failed (non-fatal): %s", module_id, exc)
-
-    vacuum_hours = maintenance_cfg.get("vacuum")
-    if vacuum_hours is not None:
-        sql = f"VACUUM delta.`{path}` RETAIN {int(vacuum_hours)} HOURS"
-        t0 = time.monotonic()
-        try:
-            spark.sql(sql)
-            result["vacuum_ms"] = int((time.monotonic() - t0) * 1000)
-            logger.info("[%s] VACUUM completed in %dms", module_id, result["vacuum_ms"])
-        except Exception as exc:
-            logger.warning("[%s] VACUUM failed (non-fatal): %s", module_id, exc)
+            logger.warning("[%s] %s failed (non-fatal): %s", module_id, label, exc)
 
     return result
 
