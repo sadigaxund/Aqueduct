@@ -16,6 +16,12 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Custom probe signals (`type: custom`).** Extend observability with your own metrics without forking the engine. Three forms, exactly one per signal: inline SQL (`sql:` for a metric value, optional `passed_when:` for a Regulator gate verdict — declarative, no code), a module pointer (`module:` + `entry:`, mirroring the UDF contract), or a setuptools entry-point plugin (`plugin:`, group `aqueduct.probe_signals`). Callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}` and land in `probe_signals` (`signal_type = custom`); a `passed` verdict drives a downstream Regulator exactly like `threshold`. Custom code is referenced by pointer only (never an inline body), so it stays in a packaged module and is never surfaced to the healing LLM. Callables run on the driver as trusted code (UDF trust model); a new `custom_probe_driver_code` compiler warning flags pointer/plugin signals since the engine cannot enforce zero-cost observability for arbitrary driver code (inline SQL is exempt).
+
+### Fixed
+- **Compiler warning package failed to import on a clean interpreter.** Three rule modules (`file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) had a `from aqueduct.parser.models import ModuleType` placed above their module docstring and `from __future__ import annotations`, which raises `SyntaxError` whenever the bytecode cache is cold. Moved the import below the `__future__` line.
+
 
 ## [1.3.2] — 2026-06-19
 

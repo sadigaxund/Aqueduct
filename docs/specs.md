@@ -376,10 +376,26 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   attach_to: dedup_orders          # module-level field, NOT inside config
   config:
     signals:
-      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold
+      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom
 ```
 
 Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
+
+**Custom signals (`type: custom`).** User-defined signals extend observability without forking the engine. Exactly one of three forms:
+
+```yaml
+signals:
+  - type: custom
+    sql: "percentile(amount, 0.99)"   # inline SQL → "estimate" (a Spark expression)
+    passed_when: "MAX(amount) < 1e6"  # optional boolean → "passed" (Regulator gate, like threshold)
+  - type: custom
+    module: myorg.aq_probes           # importable module + callable (mirrors the UDF pointer contract)
+    entry: p99_latency
+  - type: custom
+    plugin: p99_latency               # setuptools entry-point group "aqueduct.probe_signals"
+```
+
+The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt).
 
 See the [Observability Guide](observability_guide.md) for full signal reference and cost model.
 
