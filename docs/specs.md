@@ -413,6 +413,23 @@ signals:
 
 The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt).
 
+**Inline-SQL form — `sql` vs `passed_when`:** the two keys play different roles, so they are named differently. `sql` computes a **scalar metric** (any single-value Spark SQL aggregate over the probed DataFrame) and stores it as `estimate` for trending (`report --trend`/`--profile`). `passed_when` is an **optional boolean** that becomes the `passed` gate verdict (like `threshold`). Provide either or both:
+- **`sql` only** → record-only: captures the metric every run, never gates (a Regulator reading it stays open — an absent `passed` key is treated as open).
+- **`passed_when` only** → gate-only: one Spark action, no recorded metric.
+- **both** → records *and* gates; note these are **two separate Spark actions**, so the aggregate is scanned twice.
+
+Each is passed verbatim to `df.selectExpr(...)`, so any single-scalar Spark expression works (`percentile`, `approx_count_distinct`, `SUM(CASE WHEN …)/COUNT(*)`, etc.). For multi-value output, cross-table joins, or non-SQL logic, use the callable form. **Avoid duplicating a shared subquery** across `sql` and `passed_when` with a macro — macros expand inside probe config at compile time:
+
+```yaml
+macros:
+  error_rate: "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) / COUNT(*)"
+signals:
+  - type: custom
+    sql: "{{ macros.error_rate }}"
+    passed_when: "{{ macros.error_rate }} < 0.01"
+```
+(Macros dedupe the authored text, not the two runtime scans.)
+
 See the [Observability Guide](observability_guide.md) for full signal reference and cost model.
 
 ### Regulator
