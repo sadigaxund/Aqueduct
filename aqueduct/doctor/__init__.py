@@ -158,7 +158,7 @@ def check_spark(
     t = time.monotonic()
     try:
         import pyspark
-        from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
+        from aqueduct.executor.spark.session import make_spark_session
         spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
         spark.range(1).count()
         cluster_ver = spark.version
@@ -167,6 +167,7 @@ def check_spark(
         ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
         spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}  [preflight]{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
+        from aqueduct.executor.spark.session import stop_spark_session
         stop_spark_session(spark)
         return CheckResult("spark", "warn" if ver_mismatch else "ok", spark_detail, _ms(t)), storage_result
     except Exception as exc:

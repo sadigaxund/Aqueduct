@@ -5,11 +5,14 @@ Integration of the command end to end with the Spark boundary stubbed
 real compile → baseline → classify → heal → exit-code path is exercised without
 a cluster or a live LLM.
 
-The ``project`` fixture pre-seeds ``sys.modules`` for the spark submodules so
-the test works even when ``pyspark`` is not installed (the CI drift job runs
-with ``-m "not spark"``). The real spark modules are never loaded — only the
-functions needed by the drift CLI flow are mocked via ``monkeypatch.setattr`` on
-the pre-seeded stubs.
+Why stub via ``monkeypatch.setitem(sys.modules, …)``: the drift CLI ends with
+``session.stop()``. ``make_spark_session`` uses ``getOrCreate``, so a real call
+here would return the **session-scoped ``spark`` fixture** and stopping it would
+break every later Spark test (``sc is None``). Stubbing ``make_spark_session`` to
+a ``MagicMock`` makes ``.stop()`` a no-op and never touches a real session — and
+``setitem`` auto-restores ``sys.modules`` after each test, so nothing leaks (and
+it works whether or not ``pyspark`` is installed, since the drift CI job runs
+``-m "not spark"``).
 """
 from __future__ import annotations
 
@@ -44,53 +47,37 @@ edges:
 _AQ = "deployment:\n  engine: spark\n  master_url: local[1]\nagent:\n  model: test-model\n"
 
 
-def _stub_spark_modules():
-    """Pre-seed ``sys.modules`` with minimal stubs for spark submodules.
-
-    The drift CLI lazily imports ``make_spark_session`` from
-    ``aqueduct.executor.spark.session`` and ``read_source_schema`` from
-    ``aqueduct.executor.spark.ingress`` at call time.  Without ``pyspark``
-    installed these imports fail.  Pre-seeding stubs (which are then
-    monkeypatched by the tests) lets the test exercise the drift flow without
-    ever loading the real spark modules.
-
-    When pyspark IS installed these stubs are never used (the real spark
-    submodules are already in ``sys.modules``).
-    """
-    mods: dict[str, types.ModuleType] = {
-        "aqueduct.executor.spark": types.ModuleType("aqueduct.executor.spark"),
-        "aqueduct.executor.spark.session": types.ModuleType("aqueduct.executor.spark.session"),
-        "aqueduct.executor.spark.ingress": types.ModuleType("aqueduct.executor.spark.ingress"),
-    }
-    for name, mod in mods.items():
-        if name not in sys.modules:
-            sys.modules[name] = mod
-    # Wire parent-package bindings so dotted-import resolution works.
-    import aqueduct.executor
-    for name, mod in mods.items():
-        parts = name.split(".")
-        parent = ".".join(parts[:-1])
-        attr = parts[-1]
-        if parent in sys.modules:
-            setattr(sys.modules[parent], attr, mod)
-    # Default mocks — overridden per-test via monkeypatch.
-    sys.modules["aqueduct.executor.spark.session"].make_spark_session = MagicMock()
-    sys.modules["aqueduct.executor.spark.ingress"].read_source_schema = MagicMock(
-        return_value={"a": "int", "b": "string"}
-    )
-
-
-# Seed stubs at module load time so collection doesn't trigger real spark imports.
-_stub_spark_modules()
-
-
 @pytest.fixture
-def project(tmp_path):
+def project(tmp_path, monkeypatch):
+    """Write a tiny project and stub the Spark boundary (never a real session)."""
     (tmp_path / "bp.yml").write_text(_BP)
     (tmp_path / "aqueduct.yml").write_text(_AQ)
     store = tmp_path / "store"
     store.mkdir()
-    return tmp_path, store
+
+    # Stub the two spark submodules the drift CLI lazily imports. A mutable
+    # holder lets a test change the "live" schema between drift runs.
+    schema_holder: dict[str, dict[str, str]] = {"schema": {"a": "int", "b": "string"}}
+
+    session_stub = types.ModuleType("aqueduct.executor.spark.session")
+    session_stub.make_spark_session = lambda *a, **k: MagicMock()
+    ingress_stub = types.ModuleType("aqueduct.executor.spark.ingress")
+    ingress_stub.read_source_schema = lambda mod, spark: schema_holder["schema"]
+
+    # When pyspark is absent the parent package never imported — stub it too so
+    # `from aqueduct.executor.spark.session import …` resolves. When present,
+    # leave the real parent in place and only override the submodules.
+    if "aqueduct.executor.spark" not in sys.modules:
+        parent = types.ModuleType("aqueduct.executor.spark")
+        monkeypatch.setitem(sys.modules, "aqueduct.executor.spark", parent)
+    else:
+        parent = sys.modules["aqueduct.executor.spark"]
+    monkeypatch.setattr(parent, "session", session_stub, raising=False)
+    monkeypatch.setattr(parent, "ingress", ingress_stub, raising=False)
+    monkeypatch.setitem(sys.modules, "aqueduct.executor.spark.session", session_stub)
+    monkeypatch.setitem(sys.modules, "aqueduct.executor.spark.ingress", ingress_stub)
+
+    return tmp_path, store, schema_holder
 
 
 def _invoke(tmp_path, store):
@@ -100,10 +87,9 @@ def _invoke(tmp_path, store):
     )
 
 
-def test_first_run_sets_baseline(project, monkeypatch):
-    tmp_path, store = project
-    import aqueduct.executor.spark.ingress as ing
-    monkeypatch.setattr(ing, "read_source_schema", lambda mod, spark: {"a": "int", "b": "string"})
+def test_first_run_sets_baseline(project):
+    tmp_path, store, schema = project
+    schema["schema"] = {"a": "int", "b": "string"}
 
     res = _invoke(tmp_path, store)
     assert res.exit_code == 0, res.output
@@ -111,16 +97,15 @@ def test_first_run_sets_baseline(project, monkeypatch):
 
 
 def test_breaking_drift_stages_patch_and_exits_heal_pending(project, monkeypatch):
-    tmp_path, store = project
+    tmp_path, store, schema = project
     import aqueduct.agent as agent
-    import aqueduct.executor.spark.ingress as ing
 
     # Run 1 → baseline with both columns.
-    monkeypatch.setattr(ing, "read_source_schema", lambda mod, spark: {"a": "int", "b": "string"})
+    schema["schema"] = {"a": "int", "b": "string"}
     assert _invoke(tmp_path, store).exit_code == 0
 
     # Run 2 → column b dropped (breaking); mock the agent staging a patch.
-    monkeypatch.setattr(ing, "read_source_schema", lambda mod, spark: {"a": "int"})
+    schema["schema"] = {"a": "int"}
     fake = MagicMock()
     fake.patch = MagicMock(patch_id="pid-123")
     monkeypatch.setattr(agent, "generate_agent_patch", lambda *a, **k: fake)
@@ -133,15 +118,14 @@ def test_breaking_drift_stages_patch_and_exits_heal_pending(project, monkeypatch
     assert "pid-123" in res.output
 
 
-def test_benign_addition_does_not_heal(project, monkeypatch):
-    tmp_path, store = project
-    import aqueduct.executor.spark.ingress as ing
+def test_benign_addition_does_not_heal(project):
+    tmp_path, store, schema = project
 
-    monkeypatch.setattr(ing, "read_source_schema", lambda mod, spark: {"a": "int"})
+    schema["schema"] = {"a": "int"}
     assert _invoke(tmp_path, store).exit_code == 0  # baseline
 
     # add a column → benign, no heal, exit 0
-    monkeypatch.setattr(ing, "read_source_schema", lambda mod, spark: {"a": "int", "z": "string"})
+    schema["schema"] = {"a": "int", "z": "string"}
     res = _invoke(tmp_path, store)
     assert res.exit_code == 0, res.output
     assert "benign" in res.output
