@@ -1,4 +1,3 @@
-from aqueduct.parser.models import ModuleType
 """Channel with `checkpoint: true` fed by a Kafka Ingress.
 
 Kafka is a moving target — each Spark micro-batch sees newer data. A cache /
@@ -10,6 +9,8 @@ wants the live stream on both branches.
 from __future__ import annotations
 
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "kafka_checkpoint_stale"
 

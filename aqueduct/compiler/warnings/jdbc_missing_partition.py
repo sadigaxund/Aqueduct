@@ -1,4 +1,3 @@
-from aqueduct.parser.models import ModuleType
 """JDBC Ingress missing partitioning hints → single-partition read.
 
 Without `partitionColumn` + `lowerBound` + `upperBound` (or `predicates`),
@@ -11,6 +10,8 @@ rather than after the first painful production run.
 from __future__ import annotations
 
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "jdbc_missing_partition"
 

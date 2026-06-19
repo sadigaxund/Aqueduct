@@ -1,4 +1,3 @@
-from aqueduct.parser.models import ModuleType
 """Egress `format: parquet|json|csv` without `repartition` or `partition_by`.
 
 Spark writes one output file per partition. A pipeline with high task
@@ -11,6 +10,8 @@ misses. Skip Delta — Delta uses transaction log + OPTIMIZE for file sizing.
 from __future__ import annotations
 
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "file_format_no_repartition"
 
