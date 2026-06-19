@@ -30,7 +30,9 @@ from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore", "merge"})
+SUPPORTED_MODES: frozenset[str] = frozenset(
+    {"overwrite", "append", "error", "errorifexists", "ignore", "merge", "overwrite_partitions"}
+)
 
 
 class EgressError(AqueductError):
@@ -73,6 +75,10 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
     if mode == "merge":
         _write_merge(df, module)
+        return
+
+    if mode == "overwrite_partitions":
+        _write_overwrite_partitions(df, module, fmt, path)
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -195,6 +201,61 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
             pass
 
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
+
+
+def _write_overwrite_partitions(df: "DataFrame", module: Module, fmt: str, path: str) -> None:
+    """Idempotent partition overwrite — replace only the touched partitions.
+
+    Two strategies, selected by config:
+
+      * ``replace_where: <predicate>`` — Delta ``replaceWhere``. Atomically
+        replaces exactly the rows matching the predicate (the cleanest backfill
+        primitive). The predicate is resolved at compile time, so it can embed
+        ``@aq.date.*`` / ``${ctx.*}`` for ``--execution-date`` backfills, e.g.
+        ``replace_where: "event_date = '@aq.date.today()'"``.
+      * otherwise — Spark **dynamic** partition overwrite
+        (``partitionOverwriteMode=dynamic``). Only partitions present in ``df``
+        are overwritten; untouched partitions are preserved. Requires
+        ``partition_by`` (without it, dynamic mode would overwrite the whole
+        table — exactly the footgun this mode exists to avoid).
+    """
+    cfg = module.config
+    partition_by: list[str] | None = cfg.get("partition_by")
+    replace_where: str | None = cfg.get("replace_where")
+
+    writer = df.write.format(fmt).mode("overwrite")
+    if partition_by:
+        writer = writer.partitionBy(*partition_by)
+
+    if replace_where:
+        writer = writer.option("replaceWhere", replace_where)
+    else:
+        if not partition_by:
+            raise EgressError(
+                f"[{module.id}] mode=overwrite_partitions requires either "
+                "'replace_where' (Delta) or 'partition_by' (dynamic partition "
+                "overwrite). Without one, this would overwrite the entire table."
+            )
+        writer = writer.option("partitionOverwriteMode", "dynamic")
+
+    if cfg.get("merge_schema"):
+        writer = writer.option("mergeSchema", "true")
+
+    for key, value in cfg.get("options", {}).items():
+        writer = writer.option(str(key), str(value))
+
+    try:
+        writer.save(path)
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] overwrite_partitions write failed to {path!r}: {exc}"
+        ) from exc
+
+    logger.info(
+        "[%s] overwrite_partitions completed to %s (%s)",
+        module.id, path,
+        f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
+    )
 
 
 def build_maintenance_ops(

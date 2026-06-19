@@ -321,7 +321,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   type: Egress
   config:
     format: parquet
-    mode: overwrite                # overwrite | append | error | ignore | merge
+    mode: overwrite                # overwrite | append | error | ignore | merge | overwrite_partitions
     path: "${ctx.tables.orders_out}"
     partition_by: [event_date, region]
     options: { compression: snappy }
@@ -330,11 +330,17 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | Config field | Description |
 | :- | :- |
 | **format** | Spark write format. Standard: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc. `iceberg`/`hudi` need the matching `spark.jars.packages` (and an Iceberg catalog) — see the Spark Guide. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
-| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`). |
+| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`), `overwrite_partitions` (idempotent partition-scoped overwrite — see below). |
 | **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
+| **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
+
+**`mode: overwrite_partitions`** is the idempotent-backfill primitive — re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
+
+- **`replace_where: <predicate>`** (Delta) — atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
+- **no `replace_where`** — Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`** — without it the engine refuses (a plain `overwrite` would wipe the whole table).
 
 ### Junction (Fan-out)
 

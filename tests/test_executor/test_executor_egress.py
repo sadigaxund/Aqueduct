@@ -241,3 +241,36 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
     # Each merge key column should be backtick-quoted, including the reserved word
     assert "_aq_target.`id` = _aq_src.`id`" in sql
     assert "_aq_target.`order` = _aq_src.`order`" in sql
+
+
+# ── Phase 61 — overwrite_partitions ─────────────────────────────────────────
+
+def test_overwrite_partitions_dynamic(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "dyn")
+    # initial: two partitions
+    df0 = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "part"])
+    df0.write.format("parquet").partitionBy("part").mode("overwrite").save(path)
+
+    # dynamic overwrite touching only part=a
+    df1 = spark.createDataFrame([(9, "a")], ["id", "part"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite_partitions", "partition_by": ["part"]},
+    )
+    write_egress(df1, module)
+
+    out = {(r.id, r.part) for r in spark.read.parquet(path).collect()}
+    assert (9, "a") in out      # part=a replaced
+    assert (2, "b") in out      # part=b preserved
+    assert (1, "a") not in out  # old part=a gone
+
+
+def test_overwrite_partitions_requires_partition_or_predicate(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "bad")
+    df = spark.createDataFrame([(1, "a")], ["id", "part"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite_partitions"},
+    )
+    with pytest.raises(EgressError, match="requires either 'replace_where'"):
+        write_egress(df, module)
