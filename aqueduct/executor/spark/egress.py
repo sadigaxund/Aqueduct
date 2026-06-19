@@ -65,6 +65,11 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         _write_depot(df, module, depot)
         return
 
+    # ── Custom Python DataSource (Spark 4.0+) ──────────────────────────────────
+    if fmt == "custom":
+        _write_custom(df, module)
+        return
+
     # ── Spark writer ──────────────────────────────────────────────────────────
     path: str | None = cfg.get("path")
     if not path:
@@ -442,6 +447,39 @@ def run_maintenance(
             logger.warning("[%s] %s failed (non-fatal): %s", module_id, label, exc)
 
     return result
+
+
+def _write_custom(df: "DataFrame", module: Module) -> None:
+    """Write via a custom Python DataSource (``format: custom`` + ``class:``).
+
+    Path is optional — custom sinks may carry their target in ``options``.
+    """
+    cfg = module.config
+    class_path = cfg.get("class")
+    if not class_path:
+        raise EgressError(f"[{module.id}] format=custom requires 'class'")
+
+    from aqueduct.executor.spark.custom_source import register_custom_source
+
+    try:
+        name = register_custom_source(df.sparkSession, str(class_path))
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] custom DataSource {class_path!r}: {exc}"
+        ) from exc
+
+    writer = df.write.format(name).mode(cfg.get("mode", "error"))
+    for key, value in cfg.get("options", {}).items():
+        writer = writer.option(str(key), str(value))
+
+    path = cfg.get("path")
+    try:
+        writer.save(path) if path else writer.save()
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] custom DataSource write failed: {exc}"
+        ) from exc
+    logger.info("[%s] custom DataSource write completed via %s", module.id, name)
 
 
 def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:

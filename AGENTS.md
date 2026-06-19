@@ -179,6 +179,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
 | `session.py` | SparkSession management, Delta conf, cloudpickle patch |
 | `udf.py` | UDF registry, cloudpickle compatibility |
+| `custom_source.py` | Custom Python DataSource (`format: custom`) import/validate/register — Spark 4.0+ |
 | `metrics.py` | Zero-extra-action observe() wrapper, Hadoop FS byte count |
 | `test_runner.py` | Isolated module test framework (aqueduct test CLI) |
 | `warnings/` | Session-startup warning rules (jar_availability), registered in `RULES` list |

@@ -1,0 +1,26 @@
+# blueprint.yml
+# Custom Python DataSource (Spark 4.0+)
+
+aqueduct: "1.0"
+id: custom_ds_demo
+name: "Custom DataSource Snippet"
+
+modules:
+  - id: src
+    label: "Custom Source"
+    type: Ingress
+    config:
+      format: custom
+      class: datasource.MyDataSource   # importable subclass of DataSource
+
+  - id: out
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/out.parquet
+      mode: overwrite
+
+edges:
+  - from: src
+    to: out

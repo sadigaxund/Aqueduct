@@ -248,8 +248,9 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. Custom formats use the fully qualified DataSource class name. The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
-| **path** | Source path or URL. Context Registry references allowed. |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
+| **path** | Source path or URL. Context Registry references allowed. Optional for `format: custom` and the pathless formats (jdbc/kafka/depot). |
+| **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
 | **schema_hint** | Optional. Flat dict `{col: type}` or nested `{mode: strict\|additive\|subset, columns: [{name, type}]}`. |
 | **time_travel** | Optional (Delta/Iceberg). Pin a historical snapshot: `{version: N}` (`versionAsOf`) or `{timestamp: "..."}` (`timestampAsOf`). Mutually exclusive. Metadata-only — no Spark action. |
@@ -337,6 +338,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
+| **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass (Spark 4.0+). |
 | **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |
 | **merge_schema** | Optional (Delta/Iceberg). `true` sets `mergeSchema` — new DataFrame columns are added to the target schema instead of failing the write. |
 | **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema` — replaces the target schema entirely (`mode: overwrite` only). |
@@ -347,6 +349,8 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 - **`replace_where: <predicate>`** (Delta) — atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
 - **no `replace_where`** — Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`** — without it the engine refuses (a plain `overwrite` would wipe the whole table).
+
+**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer — never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
 
 ### Junction (Fan-out)
 

@@ -63,9 +63,26 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     if not fmt:
         raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
+    # Custom Python DataSource (Spark 4.0+): import + register the user class,
+    # then read by its own name(). Path is optional (custom sources may locate
+    # data via options instead).
+    is_custom = fmt == "custom"
+    if is_custom:
+        class_path = cfg.get("class")
+        if not class_path:
+            raise IngressError(f"[{module.id}] format=custom requires 'class'")
+        from aqueduct.executor.spark.custom_source import register_custom_source
+
+        try:
+            fmt = register_custom_source(spark, str(class_path))
+        except Exception as exc:
+            raise IngressError(
+                f"[{module.id}] custom DataSource {class_path!r}: {exc}"
+            ) from exc
+
     # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
     path: str | None = cfg.get("path")
-    if not path and fmt not in PATHLESS_INGRESS_FORMATS:
+    if not path and fmt not in PATHLESS_INGRESS_FORMATS and not is_custom:
         raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 
     reader = spark.read.format(fmt)
