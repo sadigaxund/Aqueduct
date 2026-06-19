@@ -72,6 +72,10 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         reader = reader.option("header", str(cfg.get("header", True)).lower())
         reader = reader.option("inferSchema", str(cfg.get("infer_schema", True)).lower())
 
+    # Time-travel reads (Delta / Iceberg): pin a historical snapshot by version
+    # or timestamp. Metadata-only — still no Spark action.
+    reader = _apply_time_travel(module, reader)
+
     for key, value in cfg.get("options", {}).items():
         reader = reader.option(str(key), str(value))
 
@@ -122,6 +126,41 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         _validate_schema_hint(module.id, df, schema_hint, mode=schema_hint_mode)
 
     return df
+
+
+def _apply_time_travel(module: Module, reader):
+    """Apply a ``time_travel:`` snapshot pin to a DataFrameReader.
+
+    Config (mutually exclusive)::
+
+        time_travel:
+          version: 12                    # Delta versionAsOf / Iceberg snapshot
+        # or
+        time_travel:
+          timestamp: "2026-01-01 00:00"  # Delta/Iceberg timestampAsOf
+
+    Returns the reader unchanged when no ``time_travel`` block is present.
+    """
+    tt = module.config.get("time_travel")
+    if not tt:
+        return reader
+    if not isinstance(tt, dict):
+        raise IngressError(
+            f"[{module.id}] time_travel must be a mapping with 'version' or 'timestamp'"
+        )
+    has_version = tt.get("version") is not None
+    has_timestamp = tt.get("timestamp") is not None
+    if has_version and has_timestamp:
+        raise IngressError(
+            f"[{module.id}] time_travel accepts 'version' OR 'timestamp', not both"
+        )
+    if has_version:
+        return reader.option("versionAsOf", int(tt["version"]))
+    if has_timestamp:
+        return reader.option("timestampAsOf", str(tt["timestamp"]))
+    raise IngressError(
+        f"[{module.id}] time_travel requires 'version' or 'timestamp'"
+    )
 
 
 def read_source_schema(module: Module, spark: SparkSession) -> dict[str, str]:

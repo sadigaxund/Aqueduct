@@ -87,6 +87,13 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     if partition_by:
         writer = writer.partitionBy(*partition_by)
 
+    # Schema-evolution flags (Delta/Iceberg). merge_schema adds new columns;
+    # overwrite_schema replaces the schema entirely (mode=overwrite only).
+    if cfg.get("merge_schema"):
+        writer = writer.option("mergeSchema", "true")
+    if cfg.get("overwrite_schema"):
+        writer = writer.option("overwriteSchema", "true")
+
     for key, value in cfg.get("options", {}).items():
         writer = writer.option(str(key), str(value))
 

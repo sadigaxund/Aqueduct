@@ -274,3 +274,15 @@ def test_overwrite_partitions_requires_partition_or_predicate(spark: SparkSessio
     )
     with pytest.raises(EgressError, match="requires either 'replace_where'"):
         write_egress(df, module)
+
+
+def test_egress_merge_schema_option_writes(spark: SparkSession, tmp_path):
+    # merge_schema is harmless for parquet; this exercises the option branch.
+    path = str(tmp_path / "ms")
+    df = spark.createDataFrame([(1, "a")], ["id", "v"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite", "merge_schema": True},
+    )
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 1

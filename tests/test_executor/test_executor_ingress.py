@@ -412,3 +412,49 @@ def test_pathless_ingress_formats_are_expected_set():
     from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 
     assert PATHLESS_INGRESS_FORMATS == {"jdbc", "kafka", "depot"}
+
+
+# ── Phase 61 — time-travel reads ────────────────────────────────────────────
+
+from unittest.mock import MagicMock
+from aqueduct.executor.spark.ingress import _apply_time_travel
+
+
+def test_time_travel_version_sets_option():
+    reader = MagicMock()
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "delta", "path": "/t", "time_travel": {"version": 12}})
+    _apply_time_travel(module, reader)
+    reader.option.assert_called_once_with("versionAsOf", 12)
+
+
+def test_time_travel_timestamp_sets_option():
+    reader = MagicMock()
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "delta", "path": "/t", "time_travel": {"timestamp": "2026-01-01"}})
+    _apply_time_travel(module, reader)
+    reader.option.assert_called_once_with("timestampAsOf", "2026-01-01")
+
+
+def test_time_travel_absent_is_noop():
+    reader = MagicMock()
+    module = Module(id="m1", type="Ingress", label="M1", config={"format": "delta", "path": "/t"})
+    assert _apply_time_travel(module, reader) is reader
+    reader.option.assert_not_called()
+
+
+def test_time_travel_both_raises():
+    reader = MagicMock()
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "delta", "path": "/t",
+                            "time_travel": {"version": 1, "timestamp": "x"}})
+    with pytest.raises(IngressError, match="not both"):
+        _apply_time_travel(module, reader)
+
+
+def test_time_travel_empty_raises():
+    reader = MagicMock()
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "delta", "path": "/t", "time_travel": {}})
+    with pytest.raises(IngressError, match="requires 'version' or 'timestamp'"):
+        _apply_time_travel(module, reader)

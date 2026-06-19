@@ -252,6 +252,7 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 | **path** | Source path or URL. Context Registry references allowed. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
 | **schema_hint** | Optional. Flat dict `{col: type}` or nested `{mode: strict\|additive\|subset, columns: [{name, type}]}`. |
+| **time_travel** | Optional (Delta/Iceberg). Pin a historical snapshot: `{version: N}` (`versionAsOf`) or `{timestamp: "..."}` (`timestampAsOf`). Mutually exclusive. Metadata-only — no Spark action. |
 | **options** | Passed directly to Spark DataFrameReader.option(k,v). |
 
 **Cloud credentials:** There is no per-Ingress `credentials:` field. Credentials live at the engine level in `spark_config:`, keyed by standard Hadoop/Spark property names. Use `@aq.secret('KEY')` or `${ENV_VAR}` inside those values.
@@ -335,6 +336,8 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | **partition_by** | Columns to partition the output by. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
 | **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |
+| **merge_schema** | Optional (Delta/Iceberg). `true` sets `mergeSchema` — new DataFrame columns are added to the target schema instead of failing the write. |
+| **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema` — replaces the target schema entirely (`mode: overwrite` only). |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
 
 **`mode: overwrite_partitions`** is the idempotent-backfill primitive — re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
