@@ -124,6 +124,18 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     return df
 
 
+def read_source_schema(module: Module, spark: SparkSession) -> dict[str, str]:
+    """Return the live source schema as ``{column: spark_simple_type}``.
+
+    Metadata-only: builds the lazy reader (``read_ingress``) and reads
+    ``df.schema`` — zero Spark actions. Used by ``aqueduct drift`` to compare a
+    source's current schema against its stored baseline without scanning data.
+    Skips any sandbox/schema_hint side effects by reading a fresh reader.
+    """
+    df = read_ingress(module, spark)
+    return {f.name: f.dataType.simpleString() for f in df.schema.fields}
+
+
 def _validate_schema_hint(
     module_id: str,
     df: DataFrame,

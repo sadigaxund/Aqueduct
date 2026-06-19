@@ -238,6 +238,11 @@ class UdfSchema(BaseModel):
     # python: import `entry` (defaults to `id`) from `module`
     module: str | None = None
     entry: str | None = None
+    # Optional keyword params. When present on a python UDF, `entry` is treated
+    # as a FACTORY — `make_x(**params) -> callable` — so one importable function
+    # is reused across blueprints/environments with different settings. Values
+    # support ${ctx.*}/${ENV} (Tier 0) and @aq.* incl. @aq.secret() (Tier 1).
+    params: dict[str, Any] = Field(default_factory=dict)
     # java / scala: load `class` from `jar` (or `path`)
     jar: str | None = None
     path: str | None = None

@@ -44,8 +44,7 @@ from aqueduct.compiler.wirer import (
 )
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
-from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
-from aqueduct.executor.spark.metrics import CLOUD_SCHEMES
+from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.errors import AqueductError
 
 
@@ -59,6 +58,23 @@ def _resolve_module_tier1(m: Module, registry: AqFunctions) -> Module:
     if resolved_config is m.config:
         return m
     return dataclasses.replace(m, config=resolved_config)
+
+
+def _resolve_udf_params_tier1(
+    udf_registry: tuple[dict[str, Any], ...], registry: AqFunctions
+) -> tuple[dict[str, Any], ...]:
+    """Resolve @aq.* tokens (incl. @aq.secret()) inside parameterized-UDF params.
+
+    Only the ``params`` sub-dict is run through Tier 1 — the rest of the entry
+    (id, module, entry, return_type) is structural and never carries tokens.
+    """
+    out: list[dict[str, Any]] = []
+    for entry in udf_registry:
+        params = entry.get("params")
+        if params:
+            entry = {**entry, "params": resolve_tier1(params, registry)}
+        out.append(entry)
+    return tuple(out)
 
 
 def compile(  # noqa: A001
@@ -440,7 +456,7 @@ def compile(  # noqa: A001
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,
         agent=blueprint.agent,
-        udf_registry=blueprint.udf_registry,
+        udf_registry=_resolve_udf_params_tier1(blueprint.udf_registry, registry),
         macros=dict(blueprint.macros),
         checkpoint=blueprint.checkpoint,
         provenance_map=prov_map,

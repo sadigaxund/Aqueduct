@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.3 — Reference Document**
+**Version 1.4 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -248,7 +248,7 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, csv, json, orc, avro, jdbc, kafka. Custom formats use the fully qualified DataSource class name. The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. Custom formats use the fully qualified DataSource class name. The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
 | **path** | Source path or URL. Context Registry references allowed. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
 | **schema_hint** | Optional. Flat dict `{col: type}` or nested `{mode: strict\|additive\|subset, columns: [{name, type}]}`. |
@@ -329,7 +329,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark write format. Standard: parquet, delta, csv, json, orc, avro, jdbc. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
+| **format** | Spark write format. Standard: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc. `iceberg`/`hudi` need the matching `spark.jars.packages` (and an Iceberg catalog) — see the Spark Guide. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
 | **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`). |
 | **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
@@ -504,6 +504,29 @@ registering it with `spark.udf.register`. The module must be importable from the
 run's working directory / `PYTHONPATH`. Python UDFs execute row-at-a-time via the
 JVM bridge — for high-volume Channels prefer native Spark SQL.
 
+**Parameterized (context-aware) Python UDFs.** Add a `params:` map and `entry`
+becomes a **factory** — `entry(**params) -> callable` — so one importable
+function is reused across blueprints and environments with different settings:
+
+```yaml
+udf_registry:
+  - id: mask_pii
+    module: my_project.udfs
+    entry: make_masker             # factory: make_masker(char, keep_last, salt) -> callable
+    return_type: STRING
+    params:
+      char: "*"
+      keep_last: 4
+      salt: "@aq.secret('PII_SALT')"   # resolved before the factory is called
+```
+
+Param values support `${ctx.*}`/`${ENV}` (Tier 0) and `@aq.*` including
+`@aq.secret()` (Tier 1) — they are fully resolved at compile time, so the
+factory receives concrete values, never tokens. The factory must return a plain
+callable (or a Spark UDF object). Omitting `params:` keeps the static behaviour
+above (no factory call). UDF **bodies** remain out of scope for self-healing —
+`params` change *configuration*, not code.
+
 **Java/Scala UDFs** point at a JAR + class — pure JVM bytecode, no Python
 serialization:
 
@@ -522,7 +545,8 @@ udf_registry:
 | `lang` | all | `python` (default), `java`, or `scala`. |
 | `return_type` | all | Spark DDL type string (default `string`). |
 | `module` | python | Importable module path. Required for python. |
-| `entry` | python | Function name in `module` (defaults to `id`). |
+| `entry` | python | Function name in `module` (defaults to `id`). With `params`, treated as a factory `entry(**params) -> callable`. |
+| `params` | python | Optional keyword map passed to the `entry` factory. Values resolve `${ctx.*}`/`${ENV}` and `@aq.*` (incl. `@aq.secret()`) at compile time. |
 | `jar` | java/scala | JAR file path (relative paths anchor to the Blueprint dir). |
 | `class` | java/scala | Fully-qualified class name. |
 
@@ -559,9 +583,30 @@ Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py
 - **Lineage gate:** Before a patch is applied, the lineage of the patched Blueprint is compared to the original. Lost columns or broken references are flagged.
 - **LLM context:** The structural lineage for the failed module's neighbourhood is included in the FailureContext, allowing the agent to trace column origins without accessing the original Spark session.
 
+### Channel SQL fingerprints
+
+Each `op: sql` Channel also gets a **normalised AST fingerprint** — sqlglot
+canonicalises the query (formatting/comment/keyword-case insensitive) and the
+SHA-256 of the canonical form is recorded in `channel_fingerprints`. The table
+is a *changelog*: a new row appears only when a Channel's SQL changes
+*semantically* (a reformat does not), so it answers "did this transform change,
+and when" without storing one row per run.
+
+### Type-tracked column chains
+
+`aqueduct lineage <bp.yml> --chain <column> --types` traces a single column
+source→output, annotating each hop with an sqlglot-inferred SQL `output_type`
+and a `transform_op` (`passthrough` | `rename` | `CAST` | `CONCAT` | a function
+name | `literal` | `expression`) and flagging type changes. It is computed **on
+demand** from the compiled Manifest — nothing extra is persisted and no Spark
+action runs. This is a human debugging tool ("why is this column a string now",
+rename-impact, type-drift); it is **not** part of the healing loop, which
+already reads full SQL from the manifest. sqlglot resolves ~90% of SparkSQL
+expressions; the rest fall back to `output_type=UNKNOWN`.
+
 ## **7.3 Runtime Flow Report**
 
-Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds.
+Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds. `aqueduct report --trend <column> --blueprint <id>` adds a **cross-run** view of one column's null-rate and type history — a read-side aggregate over `probe_signals` (no extra table).
 
 ## **7.4 OpenLineage Emission (1.2)**
 
@@ -757,6 +802,39 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.
 - **No runaway loops.** Budgets bound wall-clock, tokens, and stuck-signature counts. A rolling rate-limit caps healing attempts per hour per blueprint.
 - **No black-box decisions.** Every LLM turn persists with the gate that rejected it, a stable error signature, and the prompt version.
+
+## **8.8 Proactive Drift Detection (`aqueduct drift`)**
+
+Self-healing has two arms. `run`'s heal is the **reactive arm** — it fixes a
+pipeline *after* it fails. `aqueduct drift` is the **proactive arm** — a
+standalone, schedulable command that catches an upstream schema change and heals
+it *before* the pipeline ever runs. Schedule it ahead of the batch (e.g. cron,
+30 min before the nightly job); `run` itself is untouched.
+
+Per Ingress, `drift`:
+
+1. Reads the **live source schema metadata-only** (`df.schema`, zero Spark
+   actions; parquet/delta from the footer/`_delta_log`, JDBC via a `LIMIT 0`
+   probe).
+2. Diffs against a **self-owned baseline** — the last-seen schema in
+   `drift_checks`. No baseline yet ⇒ it stores the current schema and exits
+   cleanly (no Probe dependency).
+3. **Classifies** each change: a *dropped* or *type-changed* column is
+   **breaking** (a downstream Channel that names it will fail); an *added*
+   column is **benign** (a `SELECT named_cols` pipeline tolerates a superset) and
+   never triggers a heal.
+4. On a breaking change, builds an **in-memory synthetic FailureContext**
+   (`error_class = PREDICTED_SCHEMA_DRIFT`, the missing column as `object_name`,
+   any added columns as `suggested_columns` rename candidates) and drives it
+   through the **same agent + apply gate** as a real failure, staging a patch or
+   firing the `ci` webhook.
+
+Scope is **schema drift only** — value-distribution / data-quality drift is out
+of scope (a noisier, separate concern). The synthetic FailureContext is **not**
+persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
+failure analytics a record of real failures. Exit codes: `0` (no drift /
+baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
+undiffable).
 
 ---
 

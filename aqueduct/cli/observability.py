@@ -25,7 +25,7 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 # ── aqueduct report ───────────────────────────────────────────────────────────
 
 @cli.command()
-@click.argument("run_id")
+@click.argument("run_id", required=False, default=None)
 @click.option(
     "--store-dir",
     default=None,
@@ -38,6 +38,29 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
     help="Path to aqueduct.yml",
 )
 @click.option(
+    "--trend",
+    "trend_column",
+    default=None,
+    metavar="COLUMN",
+    help="Cross-run quality trend for one column (null-rate + type history) "
+         "from probe signals. Blueprint-scoped — pass --blueprint.",
+)
+@click.option(
+    "--blueprint",
+    "blueprint_arg",
+    default=None,
+    metavar="PATH_OR_ID",
+    help="Blueprint id or file path. Scopes --trend.",
+)
+@click.option(
+    "--since",
+    "since",
+    default=None,
+    metavar="ISO_DATE",
+    help="With --trend: only include signals captured on/after this date "
+         "(default: last 30 days).",
+)
+@click.option(
     "--format",
     "fmt",
     type=click.Choice(["table", "json", "csv"]),
@@ -46,10 +69,18 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 )
 @_env_options
 def report(
-    run_id: str, store_dir: str | None, config_path: str | None, fmt: str,
+    run_id: str | None, store_dir: str | None, config_path: str | None,
+    trend_column: str | None, blueprint_arg: str | None, since: str | None, fmt: str,
     env_file: str | None, cli_env: tuple[str, ...],
 ) -> None:
-    """Print the Flow Report for a completed run."""
+    """Print the Flow Report for a completed run, or a cross-run column trend."""
+    if trend_column:
+        _report_trend(trend_column, blueprint_arg, since, store_dir, config_path,
+                      fmt, env_file, cli_env)
+        return
+    if not run_id:
+        click.echo("✗ RUN_ID is required (or pass --trend COLUMN --blueprint ID)", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
     import csv as _csv
     import io
 
@@ -140,6 +171,140 @@ def report(
             err = err[:57] + "..."
         click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
 
+
+
+def _resolve_blueprint_id(blueprint_arg: str | None) -> str | None:
+    """Resolve a blueprint id from an id or a YAML file path."""
+    if not blueprint_arg:
+        return None
+    p = Path(blueprint_arg)
+    if p.suffix in (".yml", ".yaml") and p.exists():
+        try:
+            from aqueduct.parser.parser import parse
+            return parse(str(p)).id
+        except Exception:
+            return blueprint_arg
+    return blueprint_arg
+
+
+def _report_trend(
+    column: str,
+    blueprint_arg: str | None,
+    since: str | None,
+    store_dir: str | None,
+    config_path: str | None,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Cross-run quality trend for one column.
+
+    Read-side aggregate over ``probe_signals`` — no extra table, no duplicated
+    storage. Unrolls ``null_rates`` and ``schema_snapshot`` payloads into long
+    form, filters to ``column``, and reports null-rate + type history ordered by
+    capture time. Type changes between consecutive snapshots are flagged.
+    """
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+
+    try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    blueprint_id = _resolve_blueprint_id(blueprint_arg)
+
+    if store_dir:
+        obs_db = Path(store_dir) / "observability.db"
+    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+        obs_db = Path(cfg.stores.observability.path)
+        if obs_db.is_dir():
+            obs_db = obs_db / "observability.db"
+    elif blueprint_id:
+        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+    else:
+        obs_db = Path(_DEFAULT_OBS_PATH)
+    if not obs_db.exists():
+        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    if since is None:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat()
+
+    # Long-form unroll: null_rates map and schema_snapshot fields → one row per
+    # (run_id, column, captured_at). DuckDB json_each explodes the payload; no
+    # view is materialised, so nothing is duplicated on disk.
+    null_q = """
+        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
+               CAST(je.value AS DOUBLE) AS null_rate
+        FROM probe_signals ps,
+             json_each(json_extract(ps.payload, '$.null_rates')) je
+        WHERE ps.signal_type = 'null_rates'
+          AND je.key = ?
+          AND ps.captured_at >= ?
+        ORDER BY ps.captured_at
+    """
+    type_q = """
+        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
+               json_extract_string(f.value, '$.type') AS col_type
+        FROM probe_signals ps,
+             json_each(json_extract(ps.payload, '$.fields')) f
+        WHERE ps.signal_type = 'schema_snapshot'
+          AND json_extract_string(f.value, '$.name') = ?
+          AND ps.captured_at >= ?
+        ORDER BY ps.captured_at
+    """
+    conn = _duckdb.connect(str(obs_db), read_only=True)
+    try:
+        null_rows = conn.execute(null_q, [column, since]).fetchall()
+        type_rows = conn.execute(type_q, [column, since]).fetchall()
+    except Exception as exc:
+        click.echo(f"✗ trend query failed: {exc}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    finally:
+        conn.close()
+
+    if not null_rows and not type_rows:
+        click.echo(
+            f"No probe signals for column {column!r} since {since}. "
+            f"(Attach a null_rates or schema_snapshot Probe to track it.)"
+        )
+        return
+
+    if fmt == "json":
+        out = {
+            "column": column,
+            "blueprint_id": blueprint_id,
+            "since": since,
+            "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
+            "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
+        }
+        click.echo(json.dumps(out, indent=2))
+        return
+
+    click.echo(f"Quality trend — column: {column}"
+               + (f"  blueprint: {blueprint_id}" if blueprint_id else ""))
+    if null_rows:
+        click.echo("\n  null-rate:")
+        click.echo(f"    {'captured_at':<28} {'run_id':<20} null_rate")
+        for rid, ts, nr in null_rows:
+            click.echo(f"    {ts:<28} {rid[:18]:<20} {nr:.4f}" if nr is not None else
+                       f"    {ts:<28} {rid[:18]:<20} (n/a)")
+    if type_rows:
+        click.echo("\n  type history:")
+        click.echo(f"    {'captured_at':<28} {'run_id':<20} type")
+        prev = None
+        for rid, ts, ct in type_rows:
+            marker = "  ⚠ type drift" if (prev is not None and ct != prev) else ""
+            click.echo(f"    {ts:<28} {rid[:18]:<20} {ct}{marker}")
+            prev = ct
 
 
 # ── aqueduct runs ─────────────────────────────────────────────────────────────
@@ -357,6 +522,22 @@ def runs(
     help="Filter: only show lineage for this output column name",
 )
 @click.option(
+    "--chain",
+    "chain_column",
+    default=None,
+    metavar="COLUMN",
+    help="Trace one column source→output as a vertical type-annotated chain "
+         "(computed on demand from the blueprint; requires a blueprint file path).",
+)
+@click.option(
+    "--types",
+    "show_types",
+    is_flag=True,
+    default=False,
+    help="With --chain: annotate each hop with the sqlglot-inferred SQL type "
+         "and mark type changes.",
+)
+@click.option(
     "--format",
     "fmt",
     type=click.Choice(["table", "json"]),
@@ -370,6 +551,8 @@ def lineage(
     config_path: str | None,
     from_table: str | None,
     column_filter: str | None,
+    chain_column: str | None,
+    show_types: bool,
     fmt: str,
     env_file: str | None,
     cli_env: tuple[str, ...],
@@ -382,6 +565,12 @@ def lineage(
     import duckdb as _duckdb
 
     from aqueduct.config import ConfigError, load_config
+
+    # ── --chain: on-demand type-tracked trace, computed from the blueprint ──────
+    if chain_column:
+        _lineage_chain(blueprint_id_or_blueprint, chain_column, show_types, fmt,
+                       config_path, env_file, cli_env)
+        return
 
     try:
         _resolve_and_load_env(
@@ -466,6 +655,82 @@ def lineage(
     for channel_id, output_column, source_table, source_column in rows:
         click.echo(f"  {channel_id:<25} {output_column:<25} {source_table:<25} {source_column or ''}")
 
+
+
+def _lineage_chain(
+    blueprint_arg: str,
+    column: str,
+    show_types: bool,
+    fmt: str,
+    config_path: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Render a vertical, type-annotated source→output trace for one column.
+
+    Computed on demand from the compiled manifest (no store read, no Spark
+    action). Requires a blueprint *file* — an id alone cannot be recompiled.
+    """
+    arg_path = Path(blueprint_arg)
+    if arg_path.suffix not in (".yml", ".yaml") or not arg_path.exists():
+        click.echo("✗ --chain requires a blueprint file path (not a blueprint id)", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    from aqueduct.compiler.chain import compute_type_chain
+    from aqueduct.compiler.compiler import CompileError
+    from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.parser.parser import ParseError, parse
+
+    try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
+    except Exception:
+        pass  # env is best-effort for a pure compile
+
+    try:
+        bp = parse(str(arg_path))
+        manifest = compiler_compile(bp, blueprint_path=arg_path)
+    except (ParseError, CompileError) as exc:
+        click.echo(f"✗ could not compile {blueprint_arg!r}: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    hops = compute_type_chain(manifest.modules, manifest.edges, column)
+    if not hops:
+        click.echo(f"No SQL Channel produces column {column!r} in {bp.id!r}.")
+        return
+
+    if fmt == "json":
+        out = [
+            {
+                "channel_id": h.channel_id,
+                "output_column": h.output_column,
+                "source_table": h.source_table,
+                "source_column": h.source_column,
+                "output_type": h.output_type,
+                "transform_op": h.transform_op,
+            }
+            for h in hops
+        ]
+        click.echo(json.dumps(out, indent=2))
+        return
+
+    click.echo(f"Column chain — blueprint: {bp.id}  column: {column}")
+    click.echo("")
+    prev_type: str | None = None
+    for i, h in enumerate(hops):
+        connector = "  │" if i else "  "
+        if i:
+            click.echo("  │")
+        type_note = ""
+        if show_types:
+            marker = ""
+            if prev_type is not None and h.output_type != prev_type and h.output_type != "UNKNOWN":
+                marker = "  ⚠ type change"
+            type_note = f"  :: {h.output_type}{marker}"
+            prev_type = h.output_type if h.output_type != "UNKNOWN" else prev_type
+        click.echo(f"  ▸ {h.channel_id}.{h.output_column}{type_note}")
+        click.echo(f"{connector}    ← {h.source_table or '(source)'}.{h.source_column}  [{h.transform_op}]")
 
 
 # ── aqueduct signal ───────────────────────────────────────────────────────────

@@ -575,6 +575,19 @@ udf_registry: []
   #   return_type: string            # Spark DDL type string (omit if function uses @udf decorator)
   #   deterministic: true
 
+  # Parameterized (context-aware) Python UDF — `entry` is a factory
+  # `entry(**params) -> callable`, so one function is reused with different
+  # settings. params values resolve ${ctx.*}/${ENV} and @aq.* (incl.
+  # @aq.secret()) at compile time. Omit `params` for the static form above.
+  # - id: mask_pii
+  #   module: udfs.pii
+  #   entry: make_masker             # make_masker(char, keep_last, salt) -> callable
+  #   return_type: string
+  #   params:
+  #     char: "*"
+  #     keep_last: 4
+  #     salt: "@aq.secret('PII_SALT')"
+
   # Java/Scala UDF — no cloudpickle; runs as JVM bytecode
   # - id: haversine_distance
   #   lang: java                   # or scala

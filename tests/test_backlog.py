@@ -22,26 +22,11 @@ from __future__ import annotations
 
 import pytest
 
-# ── Gallery — heavier e2e that needs external infra ───────────────────────────
 
-
-@pytest.mark.todo("showcase 03-self-healing runs end to end: induced failure → staged patch → green re-run (scoped Spark + mocked agent)")
-def test_showcase_self_healing_e2e():
-    # intended: tests/test_gallery.py  (mark e2e)
-    ...
-
-
-@pytest.mark.todo("every aqscenario heals with a MOCKED agent through the full gate pyramid (deterministic, no live LLM)")
-def test_aqscenarios_heal_with_mocked_agent():
-    # intended: tests/test_gallery.py  (mark integration)
-    ...
-
-
-@pytest.mark.todo("sync-constants: PATHLESS_INGRESS_FORMATS, AQ_ERROR_*, PATCH_META_KEY values match their source-of-truth definitions; catch mismatch if a new format/column is added to one frozenset but not the other")
-def test_sync_constants_do_not_drift():
-    # intended: tests/test_sync_constants.py  (mark unit)
-    # context: Phase 2 Chunk A — constants extracted in Chunk 4 of the audit can
-    # independently drift if someone adds a new entry to a consuming frozenset
-    # without updating the canonical definition. A single file that asserts
-    # equality across all shared constants prevents lockstep-change regressions.
+@pytest.mark.todo("iceberg + hudi read/write + maintenance run on a real SparkSession with the format jars: write a table, rewrite_data_files/expire_snapshots (iceberg) and run_compaction/run_clean (hudi) execute, maintenance_metrics rows recorded")
+def test_iceberg_hudi_roundtrip_and_maintenance():
+    # intended: tests/test_executor/test_executor_lakehouse.py  (mark spark integration)
+    # context: Phase 59 — build_maintenance_ops + doctor check are unit-tested;
+    # this needs spark.jars.packages for iceberg/hudi, so it lives behind the
+    # spark marker and pulls the bundles at session build.
     ...

@@ -210,7 +210,10 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 
 #### `maintenance_metrics`
 
-Delta `OPTIMIZE` / `VACUUM` timings (`optimize_ms`, `vacuum_ms`) per module.
+Post-write maintenance timings per module. The two columns are **engine-generic
+slots**: `optimize_ms` is the compaction-class op, `vacuum_ms` the cleanup-class
+op — Delta `OPTIMIZE`/`VACUUM`, Iceberg `rewrite_data_files`/`expire_snapshots`,
+or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 
 #### `probe_signals`
 
@@ -240,6 +243,78 @@ path. `blob_store.materialize()` transparently resolves blob paths to content on
 | `source_table`  | VARCHAR | |
 | `source_column` | VARCHAR | |
 | `captured_at`   | TIMESTAMPTZ | |
+
+### `channel_fingerprints`
+
+SQL-AST normalised fingerprint per `op: sql` Channel (Lineage v2). A
+**changelog, not a run-log**: one row per *distinct* fingerprint per
+`(blueprint_id, channel_id)`. A run whose Channel SQL is unchanged only bumps
+`last_seen`/`last_run_id` (via `ON CONFLICT`), so the table grows with the
+number of times the SQL semantically changed — not with the number of runs.
+The fingerprint is formatting/comment/keyword-case insensitive (sqlglot
+canonicalisation), so a pure reformat does **not** create a new row while a
+real predicate/column change does.
+
+| Column          | Type    | Notes |
+|-----------------|---------|-------|
+| `blueprint_id`  | VARCHAR | |
+| `channel_id`    | VARCHAR | |
+| `fingerprint`   | VARCHAR | SHA-256 of the canonical SQL |
+| `canonical_sql` | VARCHAR | Normalised SQL (for diffing two fingerprints) |
+| `first_seen`    | TIMESTAMPTZ | First run that produced this fingerprint |
+| `last_seen`     | TIMESTAMPTZ | Most recent run still on this fingerprint |
+| `first_run_id`  | VARCHAR | |
+| `last_run_id`   | VARCHAR | |
+
+PK `(blueprint_id, channel_id, fingerprint)`.
+
+**Diagnostic — did a Channel's SQL change, and when?**
+```sql
+SELECT channel_id, fingerprint, first_seen, last_seen
+FROM channel_fingerprints
+WHERE blueprint_id = 'my.pipeline'
+ORDER BY channel_id, first_seen;
+```
+More than one row for a `channel_id` = the SQL was edited; `first_seen` of the
+newest row is when the new version first ran.
+
+> **`report --trend <column>` adds no table.** The cross-run column-quality
+> trend is a **read-side aggregate** over `probe_signals` (`null_rates` +
+> `schema_snapshot` payloads unrolled at query time) — deliberately *not*
+> persisted, to avoid duplicating data the probes already store.
+
+### `drift_checks`
+
+Audit log for `aqueduct drift` — one row per Ingress per drift run. Created
+lazily by the `drift` command (not at every `run`). The **baseline is
+self-owned**: the most recent row's `live_schema` for an `(blueprint_id,
+module_id)` is the baseline the next check diffs against, so drift needs **no
+`schema_snapshot` Probe** to function.
+
+| Column             | Type    | Notes |
+|--------------------|---------|-------|
+| `id`               | VARCHAR | Row UUID |
+| `blueprint_id`     | VARCHAR | |
+| `module_id`        | VARCHAR | Ingress module checked |
+| `checked_at`       | TIMESTAMPTZ | |
+| `baseline_schema`  | JSON    | `{column: type}` diffed against (NULL on the first, baseline-setting check) |
+| `live_schema`      | JSON    | `{column: type}` read live; becomes the next baseline |
+| `status`           | VARCHAR | `baseline_set` \| `no_drift` \| `drift_benign` \| `drift_breaking` |
+| `breaking_changes` | JSON    | List of `{column, kind, baseline_type, live_type}` for dropped/type-changed |
+| `benign_changes`   | JSON    | List of added columns |
+| `patch_id`         | VARCHAR | Staged patch id when a breaking drift was healed |
+
+**Diagnostic — which sources drifted and got a patch?**
+```sql
+SELECT module_id, checked_at, status, patch_id
+FROM drift_checks
+WHERE blueprint_id = 'my.pipeline' AND status = 'drift_breaking'
+ORDER BY checked_at DESC;
+```
+
+> Predicted-drift FailureContexts are driven through the agent **in memory** and
+> are **not** written to `failure_contexts` — that table stays a record of real
+> run failures, so failure analytics are never skewed by predictions.
 
 ### `<scenarios_dir>/.aqueduct/benchmark.duckdb`
 

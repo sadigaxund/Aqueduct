@@ -203,6 +203,50 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 
 ---
 
+### Iceberg & Hudi: Jars, Catalog, and Maintenance {#iceberg-hudi}
+
+`format: iceberg` and `format: hudi` are **mechanical** — Spark performs all I/O;
+Aqueduct only wires the config. Read/write need no special blueprint syntax
+beyond the `format:` value, but two prerequisites apply.
+
+**1. Jars (must match your Spark version exactly).** Add the runtime bundle via
+`spark_config` (blueprint or `aqueduct.yml`). The Hudi bundle in particular is
+Spark-version-pinned — a mismatch fails at session start.
+
+```yaml
+spark_config:
+  # Iceberg (Spark 3.5 line shown — bump the 3.5 to match your Spark)
+  spark.jars.packages: "org.apache.iceberg:iceberg-spark-runtime-3.5_2.12:1.6.1"
+  spark.sql.extensions: "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions"
+  spark.sql.catalog.local: "org.apache.iceberg.spark.SparkCatalog"
+  spark.sql.catalog.local.type: "hadoop"
+  spark.sql.catalog.local.warehouse: "/data/warehouse"
+  # Hudi (match the 3.5 to your Spark)
+  # spark.jars.packages: "org.apache.hudi:hudi-spark3.5-bundle_2.12:0.15.0"
+  # spark.serializer: "org.apache.spark.serializer.KryoSerializer"
+```
+
+**2. Iceberg needs a catalog, not just a path.** `format: iceberg` with no
+`spark.sql.catalog.*` fails at runtime; `aqueduct doctor` emits an
+`iceberg_catalog` **warning** when a `format: iceberg` module has no catalog key
+in the blueprint `spark_config`. Address Iceberg tables by their catalog
+identifier (`table: local.db.orders`).
+
+**Post-write maintenance** is format-aware (under the Egress `maintenance:` key):
+
+| Format | `maintenance:` keys | SQL run | Addressed by |
+|--------|---------------------|---------|--------------|
+| `delta` | `optimize`, `zorder_by`, `vacuum: <hours>` | `OPTIMIZE` / `VACUUM` | `path` |
+| `iceberg` | `rewrite_data_files: true`, `expire_snapshots: true` | `CALL <catalog>.system.rewrite_data_files` / `expire_snapshots` | `table` (`catalog.db.tbl`) |
+| `hudi` | `compaction: true`, `clean: true` | `CALL run_compaction` / `run_clean` | `path` |
+
+All maintenance ops are **non-fatal** (logged as warnings, pipeline continues).
+Timing lands in `maintenance_metrics`: `optimize_ms` is the compaction-class op
+(OPTIMIZE / rewrite_data_files / run_compaction) and `vacuum_ms` the cleanup-class
+op (VACUUM / expire_snapshots / run_clean), across all three engines.
+
+---
+
 ### JDBC Ingress: Parallelism Requires Explicit Partition Config {#jdbc-ingress-parallelism}
 
 `numPartitions` alone on a JDBC Ingress does **not** create multiple parallel read tasks. Spark opens a single connection and reads the full table unless you also provide:

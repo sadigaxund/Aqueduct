@@ -824,4 +824,5 @@ from .run import compile, run  # noqa: E402,F401
 from .patch import patch, patch_preview, patch_apply, patch_reject, patch_commit, patch_discard, patch_list, log_cmd, rollback_cmd  # noqa: E402,F401
 from .observability import report, runs, lineage, signal  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
+from .drift import drift  # noqa: E402,F401
 from .project import completion_cmd, test_cmd, init  # noqa: E402,F401

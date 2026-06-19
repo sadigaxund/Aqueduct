@@ -374,7 +374,8 @@ def parse_dict(
         # by_alias dumps `class_name` back to `class`; exclude_none keeps the dict
         # shape the executor expects (it applies its own field defaults).
         udf_registry=tuple(
-            u.model_dump(by_alias=True, exclude_none=True) for u in validated.udf_registry
+            resolve_value(u.model_dump(by_alias=True, exclude_none=True), ctx_map)
+            for u in validated.udf_registry
         ),
         macros=resolved_macros,
         required_context=tuple(validated.required_context),

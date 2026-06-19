@@ -1419,13 +1419,17 @@ def execute(
                 )
                 _write_checkpoint(module, checkpoint_dir, manifest)
 
-                # ── Post-write maintenance (Delta OPTIMIZE / VACUUM) ──────────
+                # ── Post-write maintenance (delta / iceberg / hudi) ───────────
                 _maintenance_cfg = module.config.get("maintenance")
                 if _maintenance_cfg and isinstance(_maintenance_cfg, dict):
                     _maint_path = module.config.get("path", "")
-                    if _maint_path:
+                    _maint_table = module.config.get("table")
+                    _maint_fmt = module.config.get("format", "delta")
+                    # iceberg drives procedures off `table`; delta/hudi off `path`.
+                    if _maint_path or _maint_table:
                         _maint_timing = run_maintenance(
-                            spark, module.id, _maint_path, _maintenance_cfg
+                            spark, module.id, _maint_path, _maintenance_cfg,
+                            fmt=_maint_fmt, table=_maint_table,
                         )
                         _write_maintenance_metrics(
                             module.id, run_id, _maint_timing, store_dir,
@@ -1536,14 +1540,24 @@ def execute(
 
     # ── Lineage — write after successful execution ─────────────────────────────
     if store_dir is not None:
+        _obs = _resolve_observability_store(store_dir, observability_store)
         try:
             from aqueduct.compiler.lineage import write_lineage
             write_lineage(
                 manifest.blueprint_id, run_id, manifest.modules, manifest.edges,
-                observability_store=_resolve_observability_store(store_dir, observability_store),
+                observability_store=_obs,
             )
         except Exception as exc:
             logger.debug("Lineage write skipped: %s", exc)
+        # Phase 56 — Channel SQL fingerprints (changelog of semantic SQL changes).
+        try:
+            from aqueduct.compiler.fingerprint import write_fingerprints
+            write_fingerprints(
+                manifest.blueprint_id, run_id, manifest.modules,
+                observability_store=_obs,
+            )
+        except Exception as exc:
+            logger.debug("Fingerprint write skipped: %s", exc)
 
     # ── Phase 29b: capture explain() snapshots for Gate 4 ─────────────────────
     # Two sinks: `surveyor.record_explain_snapshot()` (real runs → persists into

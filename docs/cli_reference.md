@@ -148,7 +148,9 @@ aqueduct run bp.yml \
 | `aqueduct runs --failed` | Show only failed runs |
 | `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
+| `aqueduct report --trend <column> --blueprint <id>` | Cross-run quality trend for one column (null-rate + type history) from probe signals; `--since <ISO_DATE>` windows it (default 30 days) |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
+| `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
 | `aqueduct signal <signal_id>` | View or override Probe gates |
 
 ---
@@ -196,7 +198,8 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 
 | Command | Description |
 |---------|-------------|
-| `aqueduct heal <run_id>` | Trigger self-healing on a failed run |
+| `aqueduct heal <run_id>` | Trigger self-healing on a failed run (the **reactive arm** — fix after a failure) |
+| `aqueduct drift <blueprint>` | Detect upstream schema drift and pre-emptively heal it (the **proactive arm** — fix before a failure) |
 | `aqueduct benchmark <path>` | Evaluate scenarios against models |
 | `aqueduct benchmark-diff` | Compare benchmark results for regressions |
 | `aqueduct benchmark-stats [path]` | Aggregate the store: model leaderboard, hardest scenarios, pass-rate trend |
@@ -208,6 +211,25 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `--module <module_id>` | failed module from the run record | Scope healing to a specific module |
 | `--print-prompt [text\|json]` | — (bare flag = `text`) | Print the LLM prompt that would be sent and exit without calling the model |
 | `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
+
+**Key flags for `drift`:**
+
+`drift` is standalone and schedulable — run it on a cron *ahead* of the batch so
+an upstream schema change is caught and a patch staged before the pipeline runs.
+It reads each Ingress's live schema metadata-only (zero Spark actions), diffs
+against a self-owned baseline (the `drift_checks` table — no Probe required), and
+heals only **breaking** changes (dropped / type-changed columns); added columns
+are benign and never trigger a heal.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--module <module_id>` | all Ingress | Limit the check to one Ingress module |
+| `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
+| `--store-dir <path>` | from config | Observability store directory |
+| `--format text\|json` | `text` | Output shape |
+
+Exit codes: `0` (no drift, or a baseline was established), `3` `HEAL_PENDING`
+(a patch was staged), `2` `DATA_OR_RUNTIME` (a source could not be read/diffed).
 
 **Key flags for `benchmark`:**
 
