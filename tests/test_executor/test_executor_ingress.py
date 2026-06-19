@@ -458,3 +458,40 @@ def test_time_travel_empty_raises():
                     config={"format": "delta", "path": "/t", "time_travel": {}})
     with pytest.raises(IngressError, match="requires 'version' or 'timestamp'"):
         _apply_time_travel(module, reader)
+
+
+# ── Phase 61 — on_new_columns (Ingress source contract) ─────────────────────
+
+from aqueduct.executor.spark.ingress import _enforce_on_new_columns
+
+
+def test_ingress_on_new_columns_fail(spark: SparkSession):
+    df = spark.createDataFrame([(1, "x")], ["id", "extra"])
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail",
+                            "known_columns": ["id"]})
+    with pytest.raises(IngressError, match="undeclared column"):
+        _enforce_on_new_columns(module, df, None)
+
+
+def test_ingress_on_new_columns_alert_ok(spark: SparkSession):
+    df = spark.createDataFrame([(1, "x")], ["id", "extra"])
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "parquet", "path": "/t", "on_new_columns": "alert",
+                            "known_columns": ["id"]})
+    _enforce_on_new_columns(module, df, None)  # warns, does not raise
+
+
+def test_ingress_on_new_columns_baseline_from_schema_hint(spark: SparkSession):
+    df = spark.createDataFrame([(1, "x")], ["id", "extra"])
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail"})
+    with pytest.raises(IngressError, match="undeclared column"):
+        _enforce_on_new_columns(module, df, [{"name": "id", "type": "int"}])
+
+
+def test_ingress_on_new_columns_no_baseline_skips(spark: SparkSession):
+    df = spark.createDataFrame([(1, "x")], ["id", "extra"])
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"format": "parquet", "path": "/t", "on_new_columns": "fail"})
+    _enforce_on_new_columns(module, df, None)  # no baseline → skip, no raise

@@ -34,6 +34,10 @@ SUPPORTED_MODES: frozenset[str] = frozenset(
     {"overwrite", "append", "error", "errorifexists", "ignore", "merge", "overwrite_partitions"}
 )
 
+# Schema-drift write contract — what to do when the incoming DataFrame carries
+# columns the existing target table does not have.
+ON_NEW_COLUMNS_POLICIES: frozenset[str] = frozenset({"allow", "fail", "alert"})
+
 
 class EgressError(AqueductError):
     """Raised when an Egress module fails to write."""
@@ -73,12 +77,21 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
             f"Supported: {sorted(SUPPORTED_MODES)}"
         )
 
+    # Schema-drift write contract (prevention side of the drift story). When the
+    # incoming columns extend the existing target, decide per policy. Returns
+    # True when new columns should be absorbed (allow/alert) → force mergeSchema.
+    force_merge_schema = False
+    if cfg.get("on_new_columns") and mode != "merge":
+        force_merge_schema = _enforce_on_new_columns(
+            df, module, fmt, path, cfg.get("table"), str(cfg["on_new_columns"])
+        )
+
     if mode == "merge":
         _write_merge(df, module)
         return
 
     if mode == "overwrite_partitions":
-        _write_overwrite_partitions(df, module, fmt, path)
+        _write_overwrite_partitions(df, module, fmt, path, force_merge_schema=force_merge_schema)
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -89,7 +102,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
     # Schema-evolution flags (Delta/Iceberg). merge_schema adds new columns;
     # overwrite_schema replaces the schema entirely (mode=overwrite only).
-    if cfg.get("merge_schema"):
+    if cfg.get("merge_schema") or force_merge_schema:
         writer = writer.option("mergeSchema", "true")
     if cfg.get("overwrite_schema"):
         writer = writer.option("overwriteSchema", "true")
@@ -210,7 +223,9 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 
 
-def _write_overwrite_partitions(df: "DataFrame", module: Module, fmt: str, path: str) -> None:
+def _write_overwrite_partitions(
+    df: "DataFrame", module: Module, fmt: str, path: str, force_merge_schema: bool = False
+) -> None:
     """Idempotent partition overwrite — replace only the touched partitions.
 
     Two strategies, selected by config:
@@ -245,7 +260,7 @@ def _write_overwrite_partitions(df: "DataFrame", module: Module, fmt: str, path:
             )
         writer = writer.option("partitionOverwriteMode", "dynamic")
 
-    if cfg.get("merge_schema"):
+    if cfg.get("merge_schema") or force_merge_schema:
         writer = writer.option("mergeSchema", "true")
 
     for key, value in cfg.get("options", {}).items():
@@ -263,6 +278,70 @@ def _write_overwrite_partitions(df: "DataFrame", module: Module, fmt: str, path:
         module.id, path,
         f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
     )
+
+
+def _existing_target_columns(
+    df: "DataFrame", fmt: str, path: str, table: str | None
+) -> "set[str] | None":
+    """Return the existing target's column names, or None if it does not exist.
+
+    Metadata-only: ``.schema`` on a lazy reader fires no Spark action. A missing
+    target (first-ever write) surfaces as an exception → None.
+    """
+    spark = df.sparkSession
+    try:
+        if table:
+            existing = spark.read.table(table)
+        else:
+            existing = spark.read.format(fmt).load(path)
+        return {f.name for f in existing.schema.fields}
+    except Exception:
+        return None
+
+
+def _enforce_on_new_columns(
+    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None, policy: str
+) -> bool:
+    """Apply the ``on_new_columns`` write contract. Returns force_merge_schema.
+
+    Compares the incoming DataFrame's columns against the existing target's
+    columns. ``policy``:
+
+      * ``fail``  — raise if the DataFrame introduces columns the target lacks.
+      * ``allow`` — absorb them silently (returns True → mergeSchema).
+      * ``alert`` — log a warning naming them, then absorb (returns True).
+
+    A non-existent target (first write) or no new columns is a no-op (False).
+    This is the prevention/policy half of the schema-drift story; ``aqueduct
+    drift`` is the proactive detection arm.
+    """
+    if policy not in ON_NEW_COLUMNS_POLICIES:
+        raise EgressError(
+            f"[{module.id}] on_new_columns={policy!r} is invalid; "
+            f"use one of {sorted(ON_NEW_COLUMNS_POLICIES)}"
+        )
+
+    target_cols = _existing_target_columns(df, fmt, path, table)
+    if target_cols is None:
+        return False  # first write — nothing to drift against
+
+    new_cols = [c for c in df.columns if c not in target_cols]
+    if not new_cols:
+        return False
+
+    if policy == "fail":
+        raise EgressError(
+            f"[{module.id}] on_new_columns=fail: incoming data adds column(s) "
+            f"{new_cols} not present in the target schema. Set on_new_columns: "
+            "allow (or alert) to evolve the schema, or fix the upstream transform."
+        )
+    if policy == "alert":
+        logger.warning(
+            "[%s] on_new_columns=alert: schema drift — new column(s) %s added to "
+            "the target. Absorbing (mergeSchema).",
+            module.id, new_cols,
+        )
+    return True  # allow + alert both evolve the schema
 
 
 def build_maintenance_ops(
