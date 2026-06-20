@@ -337,6 +337,50 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 ---
 
+## Remote-Submit Targets
+
+Remote‑submit targets (`databricks`) run `aqueduct run` on a **laptop or CI runner with no Spark** — the CLI packages the Blueprint, uploads it to the target's storage (DBFS), and triggers a remote job via the vendor API. The engine itself (`aqueduct-core[spark]`) must be installed on the cluster.
+
+**Self‑healing is disabled** for remote‑submit targets. On failure the exit code is `DATA_OR_RUNTIME(2)` — the calling orchestrator handles retry.
+
+### Databricks
+
+**Prerequisites.** `aqueduct-core[databricks]` (optional SDK) or plain `httpx` (already a base dep). The Databricks cluster must have `aqueduct-core[spark]` installed as a library (pypi or init script).
+
+**Configuration.** Add a `deployment.databricks` block to `aqueduct.yml`:
+
+```yaml
+deployment:
+  target: databricks
+  databricks:
+    workspace_url: "https://dbc-xxxx.cloud.databricks.com"
+    cluster_id: "0123-456789-abcdefgh"          # existing cluster — mutually exclusive with new_cluster
+    # new_cluster:                               # one-shot cluster spec per Jobs API
+    #   spark_version: "15.3.x-scala2.12"
+    #   node_type_id: "i3.xlarge"
+    #   num_workers: 4
+    # libraries:                                 # optional — pypi libraries installed on the job cluster
+    #   - pypi:
+    #       package: "aqueduct-core[spark]"
+    #   - pypi:
+    #       package: "delta-spark"
+```
+
+**Credentials.** Set `DATABRICKS_TOKEN` in the submitting environment or reference it via `@aq.secret('DATABRICKS_TOKEN')` in the Blueprint context. The token is never placed in `aqeduct.yml` plaintext.
+
+**Execution flow.**
+1. `aqueduct run blueprint.yml` on the submitting machine
+2. Blueprint + `aqeduct.yml` + bootstrap script uploaded to `dbfs:/aqueduct/jobs/<run_id>/`
+3. `POST /api/2.1/jobs/runs/submit` with a `spark_python_task` running `aqueduct run dbfs:/.../blueprint.yml`
+4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
+5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
+
+**Doctor check.** `aqueduct doctor` includes a `remote-target` check — it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Non-fatal: failures warn, never block.
+
+### EMR / Dataproc
+
+Deferred. These targets raise `NotImplementedError` at runtime. They will reuse the existing `aws` / `gcp` extras for their submit clients when implemented.
+
 ## Production Readiness Checklist
 
 Before promoting a Blueprint to production:

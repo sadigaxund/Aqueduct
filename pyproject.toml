@@ -67,6 +67,9 @@ object-store = [
     "gcsfs>=2024.0",
     "adlfs>=2024.0",
 ]
+# Phase 64 — Databricks Jobs API remote-submit target. Uses httpx directly
+# for the API calls; the databricks-sdk is optional for richer client features.
+databricks = ["databricks-sdk>=0.30"]
 # Aggregate convenience extra — pulls every networked store backend.
 stores = [
     "aqueduct-core[postgres]",
@@ -85,6 +88,7 @@ all = [
     "aqueduct-core[stores]",
     "aqueduct-core[schedulers]",
     "aqueduct-core[llm]",
+    "aqueduct-core[databricks]",
 ]
 dev = [
     "pytest>=8.0.0",

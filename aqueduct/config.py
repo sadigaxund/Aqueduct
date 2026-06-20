@@ -5,7 +5,7 @@ itself: deployment target, store backends, probe limits, secrets provider, and
 webhook endpoints.  It is NOT the blueprint definition.
 
 LLM agent connection config (provider, base_url, model, provider_options) lives
-here as engine-level defaults.  Per-blueprint policy (approval_mode,
+here as engine-level defaults.  Per-blueprint policy (approval,
 on_pending_patches, max_patches) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
 
@@ -45,6 +45,50 @@ class ConfigError(AqueductError):
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
 
+class DatabricksDeployConfig(BaseModel):
+    """Per-target settings for ``deployment.target: databricks``.
+
+    Required when ``target`` is ``databricks``.  Credentials flow through
+    ``DATABRICKS_TOKEN`` env var or ``@aq.secret(...)`` — never plaintext
+    in this block.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_url: str = Field(
+        ...,
+        description="Databricks workspace URL, e.g. https://dbc-xxxx.cloud.databricks.com",
+    )
+    cluster_id: str | None = Field(
+        default=None,
+        description="Existing all-purpose cluster ID. Mutually exclusive with new_cluster.",
+    )
+    new_cluster: dict | None = Field(
+        default=None,
+        description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
+                    "Mutually exclusive with cluster_id.",
+    )
+    libraries: list[dict] | None = Field(
+        default=None,
+        description="Libraries to install on the cluster, e.g. [{'pypi': {'package': 'aqueduct-core[spark]'}}].",
+    )
+    max_concurrent_runs: int | None = Field(
+        default=1,
+        description="Maximum concurrent runs for the generated one-shot job.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_cluster(self) -> "DatabricksDeployConfig":
+        if not self.cluster_id and not self.new_cluster:
+            raise ValueError(
+                "deployment.databricks: one of cluster_id or new_cluster is required"
+            )
+        if self.cluster_id and self.new_cluster:
+            raise ValueError(
+                "deployment.databricks: cluster_id and new_cluster are mutually exclusive"
+            )
+        return self
+
+
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -65,6 +109,10 @@ class DeploymentConfig(BaseModel):
     env: Literal["local", "cluster", "cloud"] = Field(
         default="local",
         description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
+    )
+    databricks: DatabricksDeployConfig | None = Field(
+        default=None,
+        description="Databricks Jobs API settings. Required when target=databricks.",
     )
 
 
@@ -347,12 +395,10 @@ class DangerConfig(BaseModel):
         default=False,
         description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
     )
-    # 1.1.0 — `allow_multi_patch` is the canonical name. `allow_aggressive_patching`
-    # is accepted as a deprecated alias and emits a warning when the multi-patch
-    # loop is opted into (max_patches > 1).
+    # `allow_multi_patch` gates the multi-patch loop (max_patches > 1). The former
+    # `allow_aggressive_patching` alias was removed in 2.0.
     allow_multi_patch: bool = Field(
         default=False,
-        validation_alias=AliasChoices("allow_multi_patch", "allow_aggressive_patching"),
         description=(
             "Allow `max_patches > 1` — the multi-patch reprompt loop. Auto-applies "
             "successive LLM patches without human review until success or budget exhaustion."
@@ -370,7 +416,7 @@ class DangerConfig(BaseModel):
         description=(
             "Allow agent.sandbox_mode: off — skip sandbox replay entirely; "
             "patches go straight to production data via the next execute(). "
-            "Most dangerous; combine with approval_mode: auto + max_patches > 1 "
+            "Most dangerous; combine with approval: auto + max_patches > 1 "
             "only when you fully trust the model and blueprint scope is tiny."
         ),
     )
@@ -464,7 +510,7 @@ class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
     Sets provider, endpoint, and model used by all blueprints unless overridden
-    in the Blueprint agent: block.  Policy fields (approval_mode,
+    in the Blueprint agent: block.  Policy fields (approval,
     on_pending_patches, max_patches) belong in the Blueprint, not here.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -496,7 +542,7 @@ class AgentConnectionConfig(BaseModel):
     )
     ci_webhook_url: str | None = Field(
         default=None,
-        description="Webhook URL for approval_mode: ci. POST target for external CI to create PR.",
+        description="Webhook URL for approval: ci. POST target for external CI to create PR.",
     )
     max_heal_attempts_per_hour: int | None = Field(
         default=None,
@@ -618,7 +664,7 @@ class WebhooksConfig(BaseModel):
     )
     on_ci_patch: WebhookEndpointConfig | None = Field(
         default=None,
-        description="Endpoint for approval_mode: ci — receives patch JSON for external PR creation.",
+        description="Endpoint for approval: ci — receives patch JSON for external PR creation.",
     )
 
     @field_validator("on_failure", "on_success", "on_patch_pending", "on_ci_patch", mode="before")
@@ -682,7 +728,7 @@ class AqueductConfig(BaseModel):
     (development / CI) works out of the box.
 
     LLM connection defaults (provider, base_url, model) live here.
-    Per-blueprint policy (approval_mode) lives in the Blueprint agent: block.
+    Per-blueprint policy (approval) lives in the Blueprint agent: block.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 

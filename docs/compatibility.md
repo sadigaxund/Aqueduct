@@ -30,6 +30,7 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 - **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle` — the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
 - **LLM providers**: Anthropic (default) and any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, NVIDIA NIM, together.ai, Groq). Per-provider quirks documented in `gallery/aqscenarios/README.md`.
 - **Stores**: DuckDB embedded (default), Postgres (`aqueduct-core[postgres]`), Redis (`aqueduct-core[redis]`). All tested against the matrix above.
+- **Remote-submit targets**: Databricks Jobs API (`aqueduct-core[databricks]` — optional `databricks-sdk>=0.30`; the submitter works with raw `httpx` as well). EMR / Dataproc deferred. See the [Production Guide](production_guide.md) for per-target setup.
 - **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger` — lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
 - **Secrets providers**: `env` (built-in, no SDK needed), `aws` (`aqueduct-core[aws]`), `gcp` (`aqueduct-core[gcp]`), `azure` (`aqueduct-core[azure]`). All tested against the matrix above.
 

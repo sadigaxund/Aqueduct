@@ -16,7 +16,14 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Phase 64 — Remote-submit: Databricks Jobs API target.** `deployment.target: databricks` is now a **remote‑submit** execution path: the CLI packages the Blueprint, uploads it to DBFS, triggers a one‑shot `spark_python_task` job run, and polls to completion. The submitting machine needs no Spark — `aqueduct run` works from a laptop or CI runner. New `aqueduct/deploy/` package (engine‑agnostic, `pyspark`‑free) with a `Submitter` ABC and `DatabricksSubmitter` implementation powered by raw `httpx` (no SDK required). Config lives under the new nested `deployment.databricks:` block (`workspace_url`, `cluster_id` / `new_cluster`, `libraries`). A `databricks` optional extra (`databricks-sdk>=0.30`) is available for richer client features. (`aqueduct-core[databricks]`)
+- **Remote‑target heal policy.** LLM self‑healing is **disabled** for remote‑submit targets with explicit stderr messaging. Any Blueprint `agent.approval_mode` setting is ignored. Failures exit `DATA_OR_RUNTIME(2)`. The `Submitter.fetch_failure_context()` hook is stubbed for a future release. (`deploy/base.py`)
+- **Doctor: `check_remote_target`.** A new non‑fatal check verifies Databricks workspace URL reachability and `DATABRICKS_TOKEN` presence. Wired into `aqueduct doctor` before the Spark section. (`aqueduct/doctor/checks_io.py`, `aqueduct/doctor/__init__.py`)
+- **Thin‑packaging contract.** Remote‑submit uploads only the Blueprint, `aqueduct.yml`, a bootstrap script, and referenced UDF files. The cluster must have `aqueduct-core[spark]` installed (Databricks library / EMR bootstrap / Dataproc init action). This avoids repackaging the entire engine and its transitive JVM/Python coupling inside the job artefact. (`docs/specs.md` §10.8)
+
 ### Removed
+- **BREAKING: deprecated agent/danger aliases removed.** Gone: the `agent.approval_mode` YAML key (use `agent.approval`), `agent.aggressive_max_patches` (use `agent.max_patches`), `danger.allow_aggressive_patching` (use `danger.allow_multi_patch`), and the `--allow-aggressive` CLI flag (use `--allow-multi-patch`). These now error (`extra=forbid`) instead of parsing with a deprecation warning. NOTE: `approval: aggressive` is still a **valid value** (it selects the multi-patch heal path); collapsing it into `auto`+`max_patches>1` is a separate heal-loop change, not done here.
 - **BREAKING: `stores.lineage` config option removed.** Column lineage has lived in the observability store since Phase 38; the `stores.lineage` block was inert. It is now gone from the schema. A legacy `stores.lineage:` block in `aqueduct.yml` is **tolerated** — stripped at load with a warning — so existing projects keep working; remove the block. `column_lineage` is read/written entirely in the observability store, and `bundle.lineage` aliases it.
 
 ### Fixed

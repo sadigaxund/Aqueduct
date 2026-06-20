@@ -43,6 +43,7 @@ from aqueduct.doctor.checks_io import (
     check_config,
     check_depot,
     check_observability,
+    check_remote_target,
     check_secrets,
     check_store_backend,
     check_webhook,
@@ -60,6 +61,7 @@ __all__ = [
     "check_config",
     "check_depot",
     "check_observability",
+    "check_remote_target",
     "check_secrets",
     "check_spark",
     "check_storage",
@@ -859,6 +861,7 @@ def run_doctor(
         results.append(CheckResult("secrets", "skip", "config failed"))
         results.append(CheckResult("agent", "skip", "config failed"))
         results.append(CheckResult("webhook", "skip", "config failed"))
+        results.append(CheckResult("remote-target", "skip", "config failed"))
         results.append(CheckResult("spark", "skip", "config failed"))
         results.append(CheckResult("storage", "skip", "config failed"))
         return results
@@ -937,6 +940,9 @@ def run_doctor(
         results.append(check_webhook(wh.url, wh.method, rendered_headers, wh.timeout))
     else:
         results.append(CheckResult("webhook", "skip", "not configured"))
+
+    # Remote-target credentials / API reachability (non-fatal)
+    results.append(check_remote_target(cfg))
 
     # Spark + storage (optional, slow — storage probe runs inside same session)
     if skip_spark:

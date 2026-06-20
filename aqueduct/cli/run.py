@@ -272,11 +272,11 @@ def _zero_token_attempt(sig_exact):
     help="Logical execution date for @aq.date.* functions — enables idempotent backfills",
 )
 @click.option(
-    "--allow-multi-patch", "--allow-aggressive",
-    "allow_aggressive",
+    "--allow-multi-patch",
+    "allow_multi_patch_flag",
     is_flag=True,
     default=False,
-    help="Allow `max_patches > 1` for this run (overrides danger.allow_multi_patch=false). `--allow-aggressive` is a deprecated alias.",
+    help="Allow `max_patches > 1` for this run (overrides danger.allow_multi_patch=false).",
 )
 @_env_options
 @click.option(
@@ -323,7 +323,7 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
-    allow_aggressive: bool = False,
+    allow_multi_patch_flag: bool = False,
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
     parallel: bool = False,
@@ -463,6 +463,59 @@ def run(
         except (NotImplementedError, ValueError) as exc:
             click.echo(f"✗ engine error: {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
+
+        # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
+        _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
+        if cfg.deployment.target in _REMOTE_TARGETS:
+            from aqueduct.deploy import get_submitter
+            _submitter = get_submitter(cfg.deployment.target, cfg)
+            click.echo(
+                "⚠ self-healing is disabled for remote targets — "
+                "failures must be handled by the orchestrator",
+                err=True,
+            )
+            try:
+                _bp_raw = parse(blueprint, profile=profile)
+                _bp_agent = getattr(_bp_raw, "agent", None)
+                _approval_mode = getattr(_bp_agent, "approval_mode", None) if _bp_agent else None
+                if _approval_mode and _approval_mode not in ("disabled", None):
+                    click.echo(
+                        f"  ⊘ agent.approval_mode={_approval_mode!r} is ignored for "
+                        "remote-submit targets",
+                        err=True,
+                    )
+            except ParseError:
+                pass
+            try:
+                _packaged = _submitter.package(blueprint, cfg)
+            except Exception as exc:
+                click.echo(f"✗ remote package failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+            try:
+                _job_id = _submitter.submit(_packaged, cfg)
+                click.echo(f"  → submitted remote job  id={_job_id}", err=True)
+            except Exception as exc:
+                click.echo(f"✗ remote submit failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+            _remote_result = _submitter.poll(_job_id, cfg)
+            _logs = _submitter.fetch_logs(_job_id, cfg) if _remote_result.status == "error" else ""
+
+            if _remote_result.status == "success":
+                for mr in _remote_result.module_results:
+                    icon = "✓" if mr.status == "success" else "✗"
+                    line = f"  {icon} {mr.module_id}"
+                    if mr.error:
+                        line += f"  — {mr.error}"
+                    click.echo(line)
+                click.echo(f"\n✓ blueprint complete  run_id={run_id}")
+                sys.exit(exit_codes.SUCCESS)
+            else:
+                if _logs:
+                    click.echo(f"\n── remote logs ──\n{_logs}\n──", err=True)
+                click.echo(f"\n✗ remote job failed  run_id={run_id}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
 
         cli_overrides: dict[str, str] = {}
         for item in ctx:
@@ -621,12 +674,11 @@ def run(
             _mode in ("auto", "aggressive")
             and (_max_patches > 1 or _mode == "aggressive")
         )
-        if _is_multi_patch and not allow_aggressive:
+        if _is_multi_patch and not allow_multi_patch_flag:
             if not cfg.danger.allow_multi_patch:
                 click.echo(
                     f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
-                    "in aqueduct.yml, or pass --allow-multi-patch for this run "
-                    "(legacy alias: --allow-aggressive).",
+                    "in aqueduct.yml, or pass --allow-multi-patch for this run.",
                     err=True,
                 )
                 sys.exit(exit_codes.CONFIG_ERROR)

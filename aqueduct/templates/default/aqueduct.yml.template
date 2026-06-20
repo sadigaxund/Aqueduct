@@ -25,8 +25,10 @@ deployment:
   # engine: execution engine. Currently supported: spark.
   engine: spark
 
-  # target: informational label only — never changes execution behaviour.
-  # Use it to tag the environment for monitoring/logging.
+  # target: deployment target. Controls execution path:
+  #   local/standalone/yarn/kubernetes — Aqueduct runs on the Spark driver (in-process).
+  #   databricks — remote-submit via Jobs API 2.x; Aqueduct packages + polls (no local Spark).
+  #   emr/dataproc — NOT YET IMPLEMENTED (raises NotImplementedError).
   # Values: local | standalone | yarn | kubernetes | databricks | emr | dataproc
   target: local
 
@@ -36,7 +38,6 @@ deployment:
   # master_url: "spark://host:7077"                # Spark Standalone
   # master_url: "yarn"                             # YARN (needs HADOOP_CONF_DIR)
   # master_url: "k8s://https://k8s-apiserver:443"  # Kubernetes
-  # master_url: "sc://databricks-host:443"         # Databricks Connect
 
   # env: deployment environment tier.
   # local (default) — dev machine, no cluster validation.
@@ -44,6 +45,17 @@ deployment:
   # cloud   — managed cloud (Databricks/EMR/Dataproc); same validation as cluster.
   env: local
   # env: cluster
+
+  # databricks:                                      # Per-target settings for target: databricks
+  #   workspace_url: "https://dbc-xxxx.cloud.databricks.com"
+  #   cluster_id: "0123-456789-abcdefgh"            # existing all-purpose cluster
+  #   # new_cluster:                                # OR a one-shot cluster spec
+  #   #   spark_version: "15.3.x-scala2.12"
+  #   #   node_type_id: "i3.xlarge"
+  #   #   num_workers: 4
+  #   # libraries:                                  # optional — pypi libraries installed on the job cluster
+  #   #   - pypi:
+  #   #       package: "aqueduct-core[spark]"
 
 
 # ── Spark Configuration ───────────────────────────────────────────────────────
@@ -643,8 +655,7 @@ agent:
 # danger:
 #   allow_multi_patch: false          # if true, max_patches > 1 is allowed
 #                                     # (multi-patch reprompt loop auto-applies patches
-#                                     # without human review). Legacy alias:
-#                                     # `allow_aggressive_patching` still parses.
+#                                     # without human review).
 #   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
 #                                     # (null_rates, value_distribution, distinct_count)
 #                                     # adds latency; leave false in production
