@@ -1,8 +1,8 @@
 import pytest
 from aqueduct.config import AqueductConfig
 from aqueduct.stores.base import get_stores, StoreBundle
-from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBLineageStore, DuckDBDepotStore
-from aqueduct.stores.postgres import PostgresObservabilityStore, PostgresLineageStore, PostgresDepotStore
+from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
+from aqueduct.stores.postgres import PostgresObservabilityStore, PostgresDepotStore
 from aqueduct.stores.redis_ import RedisDepotStore
 
 def test_get_stores_factory_duckdb():
@@ -10,7 +10,9 @@ def test_get_stores_factory_duckdb():
     bundle = get_stores(cfg)
     assert isinstance(bundle, StoreBundle)
     assert isinstance(bundle.observability, DuckDBObservabilityStore)
-    assert isinstance(bundle.lineage, DuckDBLineageStore)
+    # Phase 38: lineage is merged into observability — the lineage store aliases
+    # it (no separate lineage.db). See get_stores.
+    assert bundle.lineage is bundle.observability
     assert isinstance(bundle.depot, DuckDBDepotStore)
 
 def test_get_stores_factory_mixed():
@@ -23,7 +25,7 @@ def test_get_stores_factory_mixed():
     })
     bundle = get_stores(cfg)
     assert isinstance(bundle.observability, DuckDBObservabilityStore)
-    assert isinstance(bundle.lineage, DuckDBLineageStore)
+    assert bundle.lineage is bundle.observability  # aliased (Phase 38)
     assert isinstance(bundle.depot, RedisDepotStore)
 
 def test_get_stores_factory_postgres():
@@ -36,5 +38,5 @@ def test_get_stores_factory_postgres():
     })
     bundle = get_stores(cfg)
     assert isinstance(bundle.observability, PostgresObservabilityStore)
-    assert isinstance(bundle.lineage, PostgresLineageStore)
+    assert bundle.lineage is bundle.observability  # aliased (Phase 38)
     assert isinstance(bundle.depot, PostgresDepotStore)

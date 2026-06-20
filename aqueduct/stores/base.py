@@ -242,7 +242,6 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
     # Lazy imports keep optional backends optional.
     from aqueduct.stores.duckdb_ import (
         DuckDBDepotStore,
-        DuckDBLineageStore,
         DuckDBObservabilityStore,
     )
 
@@ -268,15 +267,13 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
         )
 
     # ── lineage ──────────────────────────────────────────────────────────────
-    if cfg.stores.lineage.backend == "duckdb":
-        lineage = DuckDBLineageStore(_resolve_duckdb_path(cfg.stores.lineage))
-    elif cfg.stores.lineage.backend == "postgres":
-        from aqueduct.stores.postgres import PostgresLineageStore
-        lineage = PostgresLineageStore(cfg.stores.lineage.path)
-    else:  # pragma: no cover
-        raise BackendUnsupportedError(
-            f"lineage.backend={cfg.stores.lineage.backend!r} is not a supported relational backend"
-        )
+    # Phase 38: column lineage was merged into the observability store; the
+    # `stores.lineage` config block is inert. Alias the lineage store to the
+    # observability store so `column_lineage` is always read/written in one place
+    # and NO separate (empty) lineage.db file / lineage schema is ever created.
+    # (Bug: previously a distinct DuckDBLineageStore spawned a stray empty
+    # lineage.db that nothing ever wrote to.)
+    lineage = obs  # type: ignore[assignment]  # ObservabilityStore satisfies the LineageStore interface (both _RelationalStore)
 
     # ── depot ────────────────────────────────────────────────────────────────
     if cfg.stores.depot.backend == "duckdb":
