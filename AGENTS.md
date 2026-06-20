@@ -158,6 +158,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `postgres.py` | Postgres implementations (connection-pool dedup, schema-per-store) |
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
 | `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
+| `read.py` | Canonical backend-aware READ resolver (Phase 69): `resolve_duckdb_obs_path` (single source for the duckdb obs file — `cli._resolve_obs_db` delegates here) + `open_obs_read` (returns an `ObservabilityStore` for duckdb *or* postgres). All read commands must use it instead of raw `duckdb.connect` + hardcoded `.aqueduct/...` paths |
 
 ### `aqueduct/depot/` — Cross-run KV state
 

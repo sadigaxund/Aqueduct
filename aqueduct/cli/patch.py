@@ -29,19 +29,16 @@ def _patch_index_obs_store(blueprint_path: "Path | None" = None):
     index update is best-effort and never blocks a local patch command."""
     try:
         from aqueduct.config import load_config
+        from aqueduct.stores.read import open_obs_read
+
         cfg = load_config(None)
-        if cfg.stores.observability.backend == "postgres":
-            from aqueduct.stores import get_stores
-            return get_stores(cfg).observability
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        bp_id = None
         if blueprint_path is not None:
             from aqueduct.parser.parser import parse as _parse
             bp_id = _parse(str(blueprint_path)).id
-            cand = Path(".aqueduct/observability") / bp_id / "observability.db"
-            if cand.exists():
-                return DuckDBObservabilityStore(cand)
-        default = Path(cfg.stores.observability.path)
-        return DuckDBObservabilityStore(default) if default.exists() else None
+        # Backend-aware (Phase 69): postgres → shared store; duckdb → per-blueprint
+        # file when known, else the configured/flat default.
+        return open_obs_read(cfg, blueprint_id=bp_id)
     except Exception:
         return None
 
