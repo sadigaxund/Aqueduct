@@ -16,6 +16,7 @@ All commands accept `--config <path>` to point to a non-default `aqueduct.yml`. 
 | Flag | Default | Purpose | Used by |
 |------|---------|---------|---------|
 | `--format table\|json\|csv` | `table` | Result data shape | `runs`, `report`, `benchmark`, etc. |
+| `--format html` | — | `report` only — self-contained single-file HTML run report (to stdout; redirect to a file) | `report` |
 | `-o`, `--output <path>` | `-` (stdout) | Write output to file | `compile`, `schema` |
 | `--show manifest\|provenance\|inputs\|all` | `manifest` | Choose what to display | `compile` |
 
@@ -151,6 +152,7 @@ aqueduct run bp.yml \
 | `aqueduct report --trend <column> --blueprint <id>` | Cross-run quality trend for one column (null-rate + type history) from probe signals; `--since <ISO_DATE>` windows it (default 30 days) |
 | `aqueduct report <run_id> --profile` | Per-module resource profile for one run (duration + I/O over `module_metrics`), heaviest module first, with each module's share of run time/bytes |
 | `aqueduct report --profile --blueprint <id> [--last N]` | Cross-run resource trend per module over the last N runs (default 10): runs count, avg/max/last duration, flags a module whose latest run is >1.5× its window average as a slowdown |
+| `aqueduct report <run_id> --format html > run.html` | Self-contained single-file HTML run report (status, module results, resource profile); no server, renders offline |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
 | `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
 | `aqueduct signal <signal_id>` | View or override Probe gates |

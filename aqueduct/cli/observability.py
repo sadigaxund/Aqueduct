@@ -80,9 +80,11 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 @click.option(
     "--format",
     "fmt",
-    type=click.Choice(["table", "json", "csv"]),
+    type=click.Choice(["table", "json", "csv", "html"]),
     default="table",
     show_default=True,
+    help="Output format. 'html' emits a self-contained run report to stdout "
+         "(redirect to a file, e.g. > run.html).",
 )
 @_env_options
 def report(
@@ -130,6 +132,7 @@ def report(
         )
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
+    metrics_rows: list = []
     conn = _duckdb.connect(str(observability_db), read_only=True)
     try:
         row = conn.execute(
@@ -142,6 +145,19 @@ def report(
             """,
             [run_id],
         ).fetchone()
+        if fmt == "html":
+            # Resource profile rows for the HTML report (reuses Phase 62 data).
+            try:
+                metrics_rows = conn.execute(
+                    """
+                    SELECT module_id, records_written, bytes_written, duration_ms
+                    FROM module_metrics WHERE run_id = ?
+                    ORDER BY duration_ms DESC NULLS LAST
+                    """,
+                    [run_id],
+                ).fetchall()
+            except Exception:
+                metrics_rows = []  # module_metrics table may not exist yet
     finally:
         conn.close()
 
@@ -151,6 +167,13 @@ def report(
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
     module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
+
+    if fmt == "html":
+        click.echo(_render_run_html(
+            run_id_val, blueprint_id, status, started_at, finished_at,
+            module_results, metrics_rows,
+        ))
+        return
 
     if fmt == "json":
         out = {
@@ -339,6 +362,90 @@ def _fmt_bytes(n: "int | None") -> str:
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
         size /= 1024
     return f"{size:.1f}TB"
+
+
+_HTML_CSS = """
+body{font:14px/1.5 system-ui,sans-serif;margin:2rem;color:#1a1a1a;background:#fff}
+h1{font-size:1.4rem;margin:0 0 .25rem}h2{font-size:1.05rem;margin:1.5rem 0 .5rem;border-bottom:1px solid #eee;padding-bottom:.25rem}
+.meta{color:#555;margin-bottom:1rem}
+.badge{display:inline-block;padding:.1rem .5rem;border-radius:.25rem;font-weight:600;font-size:.85rem}
+.ok{background:#e6f4ea;color:#137333}.err{background:#fce8e6;color:#c5221f}.skip{background:#f1f3f4;color:#5f6368}
+table{border-collapse:collapse;width:100%;margin:.25rem 0}
+th,td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #eee;font-variant-numeric:tabular-nums}
+th{color:#555;font-weight:600;font-size:.85rem}
+td.num{text-align:right}.muted{color:#999}
+.foot{margin-top:2rem;color:#999;font-size:.8rem}
+"""
+
+
+def _render_run_html(
+    run_id: str,
+    blueprint_id: str,
+    status: str,
+    started_at: str,
+    finished_at: "str | None",
+    module_results: list,
+    metrics_rows: list,
+) -> str:
+    """Render a single-file, self-contained HTML report for one run.
+
+    No server, no external assets — renders offline. Reuses the same data the
+    table/json formats already fetch, plus the Phase-62 resource profile rows.
+    """
+    from html import escape
+
+    def e(v: object) -> str:
+        return escape("" if v is None else str(v))
+
+    status_cls = "ok" if status == "success" else "err"
+
+    # Module results table
+    res_rows = []
+    for mr in module_results:
+        st = mr.get("status", "")
+        cls = "ok" if st == "success" else ("skip" if st == "skipped" else "err")
+        res_rows.append(
+            f"<tr><td>{e(mr.get('module_id'))}</td>"
+            f"<td><span class='badge {cls}'>{e(st)}</span></td>"
+            f"<td>{e(mr.get('error') or '')}</td></tr>"
+        )
+    results_html = "\n".join(res_rows) or "<tr><td colspan=3 class='muted'>no module results</td></tr>"
+
+    # Resource profile table (heaviest first; metrics_rows already ordered)
+    total_dur = sum((r[3] or 0) for r in metrics_rows)
+    prof_rows = []
+    for module_id, rec_w, by_w, dur in metrics_rows:
+        pct = (100.0 * (dur or 0) / total_dur) if total_dur else 0.0
+        prof_rows.append(
+            f"<tr><td>{e(module_id)}</td>"
+            f"<td class='num'>{e(dur) if dur is not None else '-'}</td>"
+            f"<td class='num'>{pct:.1f}%</td>"
+            f"<td class='num'>{('-' if rec_w is None else format(rec_w, ','))}</td>"
+            f"<td class='num'>{_fmt_bytes(by_w)}</td></tr>"
+        )
+    profile_html = (
+        "\n".join(prof_rows)
+        or "<tr><td colspan=5 class='muted'>no module_metrics for this run</td></tr>"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Aqueduct run {e(run_id)}</title><style>{_HTML_CSS}</style></head>
+<body>
+<h1>Aqueduct run report</h1>
+<div class="meta">
+  <span class="badge {status_cls}">{e(status)}</span>
+  &nbsp; run <strong>{e(run_id)}</strong> &nbsp; blueprint <strong>{e(blueprint_id)}</strong><br>
+  started {e(started_at)} &nbsp;·&nbsp; finished {e(finished_at) or '<span class="muted">(running)</span>'}
+</div>
+<h2>Modules</h2>
+<table><thead><tr><th>Module</th><th>Status</th><th>Error</th></tr></thead>
+<tbody>{results_html}</tbody></table>
+<h2>Resource profile</h2>
+<table><thead><tr><th>Module</th><th>Duration (ms)</th><th>% of run</th><th>Rows out</th><th>Bytes out</th></tr></thead>
+<tbody>{profile_html}</tbody></table>
+<div class="foot">Generated by <code>aqueduct report --format html</code> · self-contained, no external assets.</div>
+</body></html>"""
 
 
 def _report_profile(

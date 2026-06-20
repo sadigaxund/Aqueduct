@@ -14,6 +14,12 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
+## [Unreleased]
+
+### Added
+- **`aqueduct report --format html`.** Self-contained, single-file HTML run report (run status/timing + per-module results + the Phase-62 resource profile), emitted to stdout (redirect to a file). No server and no external assets — renders offline. Pure read-side over existing observability data; HTML-escaped. First slice of the monitor-surfaces work.
+
+
 ## [1.3.3] — 2026-06-20
 
 ### Added
