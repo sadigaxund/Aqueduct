@@ -480,6 +480,7 @@ def test_ingress_on_new_columns_alert_ok(spark: SparkSession):
                     config={"format": "parquet", "path": "/t", "on_new_columns": "alert",
                             "known_columns": ["id"]})
     _enforce_on_new_columns(module, df, None)  # warns, does not raise
+    assert df.columns == ["id", "extra"]
 
 
 def test_ingress_on_new_columns_baseline_from_schema_hint(spark: SparkSession):

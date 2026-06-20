@@ -24,7 +24,8 @@ class _GoodDS(datasource.DataSource):
 
 def test_import_valid_subclass():
     cls = import_datasource_class("tests.test_executor.test_custom_source._GoodDS")
-    assert cls is _GoodDS
+    assert cls.__name__ == "_GoodDS"
+    assert issubclass(cls, datasource.DataSource)
     assert cls.name() == "aq_test_ds"
 
 

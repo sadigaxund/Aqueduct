@@ -23,6 +23,10 @@ def _probe_p99(df, sig_cfg):  # module-level so the pointer form can import it
     val = df.select(F.expr("percentile(amount, 0.99)").alias("p")).collect()[0]["p"]
     return {"estimate": val, "metadata": {"col": "amount"}, "passed": val < 1000}
 
+
+def _returns_list(df, cfg):  # module-level helper: accepts (df, cfg) but returns a list
+    return [1, 2, 3]
+
 def test_threshold_passed(spark):
     df = spark.createDataFrame([Row(id=1), Row(id=2)])
     sig_cfg = {"type": "threshold", "expr": "COUNT(*) > 0"}
@@ -86,14 +90,15 @@ def test_custom_callable_pointer(spark):
 
 def test_custom_callable_must_return_dict(spark):
     df = spark.createDataFrame([Row(amount=10)])
-    # point at a callable that returns a non-dict
+    import sys as _sys
+    _modname = _sys.modules[__name__].__name__
     with pytest.raises(ValueError, match="must return a dict"):
         _custom(
             df,
             {
                 "type": "custom",
-                "module": "builtins",
-                "entry": "len",
+                "module": _modname,
+                "entry": "_returns_list",
             },
         )
 

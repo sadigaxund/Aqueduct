@@ -222,7 +222,7 @@ def _apply_time_travel(module: Module, reader):
     Returns the reader unchanged when no ``time_travel`` block is present.
     """
     tt = module.config.get("time_travel")
-    if not tt:
+    if tt is None:
         return reader
     if not isinstance(tt, dict):
         raise IngressError(

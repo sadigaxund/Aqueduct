@@ -310,7 +310,8 @@ def test_on_new_columns_allow_writes(spark: SparkSession, tmp_path):
     df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
     module = Module(id="m1", type="Egress", label="M1",
                     config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "allow"})
-    write_egress(df, module)  # must not raise
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 2
 
 
 def test_on_new_columns_fail_noop_on_first_write(spark: SparkSession, tmp_path):
