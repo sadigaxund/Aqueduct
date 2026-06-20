@@ -20,6 +20,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     _env_options,)
 import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
+from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
 
 
 # ── aqueduct report ───────────────────────────────────────────────────────────
@@ -108,8 +109,6 @@ def report(
     import csv as _csv
     import io
 
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     try:
@@ -122,10 +121,10 @@ def report(
         click.echo(f"✗ config error: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
         click.echo(
-            f"✗ observability.db not found for run_id={run_id!r} "
+            f"✗ observability store not found for run_id={run_id!r} "
             f"(searched: --store-dir, cfg.stores.observability.path, "
             f"and .aqueduct/observability/*/observability.db)",
             err=True,
@@ -133,9 +132,8 @@ def report(
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     metrics_rows: list = []
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        row = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, status,
                    CAST(started_at AS VARCHAR),
@@ -144,25 +142,25 @@ def report(
             FROM run_records WHERE run_id = ?
             """,
             [run_id],
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if fmt == "html":
             # Resource profile rows for the HTML report (reuses Phase 62 data).
             try:
-                metrics_rows = conn.execute(
+                cur.execute(
                     """
                     SELECT module_id, records_written, bytes_written, duration_ms
                     FROM module_metrics WHERE run_id = ?
                     ORDER BY duration_ms DESC NULLS LAST
                     """,
                     [run_id],
-                ).fetchall()
+                )
+                metrics_rows = cur.fetchall()
             except Exception:
                 metrics_rows = []  # module_metrics table may not exist yet
-    finally:
-        conn.close()
 
     if row is None:
-        click.echo(f"✗ run {run_id!r} not found in {observability_db}", err=True)
+        click.echo(f"✗ run {run_id!r} not found in the observability store", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
@@ -218,6 +216,16 @@ def report(
 
 
 
+def _first_module_id(module_results: Any) -> str:
+    """First module id from a run's module_results JSON (backend-portable —
+    computed in Python instead of duckdb-specific json_extract_string)."""
+    try:
+        data = json.loads(module_results) if isinstance(module_results, str) else (module_results or [])
+        return data[0].get("module_id", "") if data else ""
+    except Exception:
+        return ""
+
+
 def _resolve_blueprint_id(blueprint_arg: str | None) -> str | None:
     """Resolve a blueprint id from an id or a YAML file path."""
     if not blueprint_arg:
@@ -249,8 +257,6 @@ def _report_trend(
     form, filters to ``column``, and reports null-rate + type history ordered by
     capture time. Type changes between consecutive snapshots are flagged.
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     try:
@@ -264,19 +270,9 @@ def _report_trend(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
-
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-        if obs_db.is_dir():
-            obs_db = obs_db / "observability.db"
-    elif blueprint_id:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-    else:
-        obs_db = Path(_DEFAULT_OBS_PATH)
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        click.echo("✗ observability store not found", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     if since is None:
@@ -306,15 +302,15 @@ def _report_trend(
           AND ps.captured_at >= ?
         ORDER BY ps.captured_at
     """
-    conn = _duckdb.connect(str(obs_db), read_only=True)
     try:
-        null_rows = conn.execute(null_q, [column, since]).fetchall()
-        type_rows = conn.execute(type_q, [column, since]).fetchall()
+        with store.connect() as cur:
+            cur.execute(null_q, [column, since])
+            null_rows = cur.fetchall()
+            cur.execute(type_q, [column, since])
+            type_rows = cur.fetchall()
     except Exception as exc:
         click.echo(f"✗ trend query failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
-    finally:
-        conn.close()
 
     if not null_rows and not type_rows:
         click.echo(
@@ -474,8 +470,6 @@ def _report_profile(
         ``--last`` runs (count, avg/max duration, most-recent duration), flagging
         a module whose latest run is >1.5× its window average as a slowdown.
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     try:
@@ -489,23 +483,22 @@ def _report_profile(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     if run_id:
-        _profile_run(run_id, cfg, store_dir, fmt, _duckdb)
+        _profile_run(run_id, cfg, store_dir, fmt)
     elif blueprint_arg:
-        _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb)
+        _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt)
     else:
         click.echo("✗ --profile needs RUN_ID (one run) or --blueprint ID (trend)", err=True)
         sys.exit(exit_codes.USAGE_ERROR)
 
 
-def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
-        click.echo(f"✗ observability.db not found for run_id={run_id!r}", err=True)
+def _profile_run(run_id, cfg, store_dir, fmt) -> None:
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
+        click.echo(f"✗ observability store not found for run_id={run_id!r}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        rows = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT module_id, records_read, bytes_read, records_written,
                    bytes_written, duration_ms
@@ -513,9 +506,8 @@ def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
             ORDER BY duration_ms DESC NULLS LAST
             """,
             [run_id],
-        ).fetchall()
-    finally:
-        conn.close()
+        )
+        rows = cur.fetchall()
 
     if not rows:
         click.echo(f"No module_metrics for run {run_id!r}.")
@@ -555,36 +547,29 @@ def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
     click.echo(f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}")
 
 
-def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
+def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
     if not blueprint_id:
         click.echo(f"✗ could not resolve blueprint from {blueprint_arg!r}", err=True)
         sys.exit(exit_codes.USAGE_ERROR)
 
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-        if obs_db.is_dir():
-            obs_db = obs_db / "observability.db"
-    else:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        click.echo("✗ observability store not found", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
-    try:
-        run_ids = [r[0] for r in conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             "SELECT run_id FROM run_records WHERE blueprint_id = ? ORDER BY started_at DESC LIMIT ?",
             [blueprint_id, last_n],
-        ).fetchall()]
+        )
+        run_ids = [r[0] for r in cur.fetchall()]
         if not run_ids:
             click.echo(f"No runs for blueprint {blueprint_id!r}.")
             return
         latest = run_ids[0]
         placeholders = ",".join("?" * len(run_ids))
-        agg = conn.execute(
+        cur.execute(
             f"""
             SELECT module_id, COUNT(*) AS runs, AVG(duration_ms) AS avg_dur,
                    MAX(duration_ms) AS max_dur
@@ -592,13 +577,13 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
             GROUP BY module_id
             """,
             run_ids,
-        ).fetchall()
-        last_dur = dict(conn.execute(
+        )
+        agg = cur.fetchall()
+        cur.execute(
             "SELECT module_id, duration_ms FROM module_metrics WHERE run_id = ?",
             [latest],
-        ).fetchall())
-    finally:
-        conn.close()
+        )
+        last_dur = dict(cur.fetchall())
 
     records = []
     for module_id, runs, avg_dur, max_dur in agg:
@@ -671,7 +656,6 @@ def runs(
     cli_env: tuple[str, ...],
 ) -> None:
     """List recent blueprint runs."""
-    import duckdb as _duckdb
     from aqueduct.config import load_config
 
     _resolve_and_load_env(
@@ -693,34 +677,40 @@ def runs(
         else:
             blueprint_id = blueprint
 
-    # Collect candidate DBs across per-pipeline dirs + legacy shared path.
-    # When the user set an explicit obs path, honour it verbatim. When
-    # `--blueprint` is given, prefer that per-pipeline dir.
-    candidates: list[Path] = []
-    if store_dir:
-        c = Path(store_dir) / "observability.db"
-        if c.exists():
-            candidates.append(c)
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        c = Path(cfg.stores.observability.path)
-        if c.is_dir():
-            c = c / "observability.db"
-        if c.exists():
-            candidates.append(c)
+    # Build the observability stores to scan. Postgres keeps every run in one
+    # schema → a single store. DuckDB may have per-pipeline files → scan all
+    # candidates (honouring --store-dir / a non-default path / --blueprint).
+    stores: list = []
+    if cfg.stores.observability.backend == "postgres":
+        from aqueduct.stores.base import get_stores
+        stores = [get_stores(cfg).observability]
     else:
-        if blueprint_id:
-            c = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+        candidates: list[Path] = []
+        if store_dir:
+            c = Path(store_dir) / "observability.db"
             if c.exists():
                 candidates.append(c)
+        elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+            c = Path(cfg.stores.observability.path)
+            if c.is_dir():
+                c = c / "observability.db"
+            if c.exists():
+                candidates.append(c)
+        else:
+            if blueprint_id:
+                c = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+                if c.exists():
+                    candidates.append(c)
+            if not candidates:
+                candidates = sorted(Path(".aqueduct/observability").glob("*/observability.db"))
+            legacy = Path(_DEFAULT_OBS_PATH)
+            if legacy.exists():
+                candidates.append(legacy)
         if not candidates:
-            candidates = sorted(Path(".aqueduct/observability").glob("*/observability.db"))
-        legacy = Path(_DEFAULT_OBS_PATH)
-        if legacy.exists():
-            candidates.append(legacy)
-
-    if not candidates:
-        click.echo("No runs found (no observability.db files discovered)")
-        return
+            click.echo("No runs found (no observability.db files discovered)")
+            return
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        stores = [DuckDBObservabilityStore(c) for c in candidates]
 
     if heal_coverage:
         # Phase 45 — playbook coverage: how many heals were resolved with
@@ -728,20 +718,18 @@ def runs(
         # heal = one (parent_run_id-or-run_id, patch_id) outcome row group;
         # raw row counts are good enough at this granularity.
         _by_resolution: dict[str, int] = {}
-        for db in candidates:
+        for _s in stores:
             try:
-                conn = _duckdb.connect(str(db), read_only=True)
-                try:
-                    # healing_outcomes has no blueprint_id column — scoping
-                    # happens via the per-pipeline DB selection above.
-                    _rows = conn.execute(
+                # healing_outcomes has no blueprint_id column — scoping happens
+                # via the per-pipeline store selection above.
+                with _s.connect() as cur:
+                    cur.execute(
                         """
                         SELECT COALESCE(resolution, 'llm') AS res, COUNT(*)
                         FROM healing_outcomes GROUP BY res
                         """
-                    ).fetchall()
-                finally:
-                    conn.close()
+                    )
+                    _rows = cur.fetchall()
             except Exception:
                 continue
             for _res, _n in _rows:
@@ -776,21 +764,20 @@ def runs(
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     rows: list = []
-    for db in candidates:
+    for _s in stores:
         try:
-            conn = _duckdb.connect(str(db), read_only=True)
-            try:
-                rows.extend(conn.execute(
+            with _s.connect() as cur:
+                cur.execute(
                     f"""
                     SELECT run_id, blueprint_id, status, started_at, finished_at,
-                           json_extract_string(module_results, '$[0].module_id') AS first_failed
+                           module_results
                     FROM run_records
                     {where}
                     """,
                     params_base,
-                ).fetchall())
-            finally:
-                conn.close()
+                )
+                for run_id_v, bp_v, st_v, sa_v, fa_v, mr in cur.fetchall():
+                    rows.append((run_id_v, bp_v, st_v, sa_v, fa_v, _first_module_id(mr)))
         except Exception:
             continue
     # Sort merged result by started_at DESC (col index 3), then limit
@@ -894,8 +881,6 @@ def lineage(
     PIPELINE_ID_OR_BLUEPRINT: blueprint id (e.g. nyc_taxi_demo) or path to
     the blueprint YAML file (e.g. blueprint.yml — id is extracted automatically).
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     # ── --chain: on-demand type-tracked trace, computed from the blueprint ──────
@@ -927,18 +912,11 @@ def lineage(
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    # Phase 38: lineage merged into observability — column_lineage lives in
-    # observability.db alongside all other observability tables.
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-    else:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-        if not obs_db.exists():
-            obs_db = Path(".aqueduct/observability.db")
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
+    # Phase 38: lineage merged into observability — column_lineage lives in the
+    # observability store alongside all other observability tables.
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        click.echo("✗ observability store not found", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     params: list[Any] = [blueprint_id]
@@ -958,11 +936,9 @@ def lineage(
         ORDER BY channel_id, output_column
     """
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
-    try:
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
+    with store.connect() as cur:
+        cur.execute(query, params)
+        rows = cur.fetchall()
 
     if not rows:
         click.echo(f"No lineage records found for blueprint {blueprint_id!r}.")

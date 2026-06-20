@@ -37,6 +37,7 @@ def resolve_duckdb_obs_path(
     cfg: "AqueductConfig",
     store_dir: str | None = None,
     run_id: str | None = None,
+    blueprint_id: str | None = None,
 ) -> Path | None:
     """Resolve which DuckDB observability file a read should open (or None).
 
@@ -45,9 +46,10 @@ def resolve_duckdb_obs_path(
       1. ``--store-dir`` → ``<store_dir>/observability.db``.
       2. A non-default ``stores.observability.path`` → that file (or the file
          inside it if a directory).
-      3. Default sentinel + ``run_id`` → the per-pipeline routed file
-         (``.aqueduct/observability/<bp>/observability.db``) that contains the run.
-      4. The flat default ``.aqueduct/observability.db``.
+      3. Default sentinel + ``blueprint_id`` → the per-pipeline routed file
+         ``.aqueduct/observability/<blueprint_id>/observability.db``.
+      4. Default sentinel + ``run_id`` → the routed file that contains the run.
+      5. The flat default ``.aqueduct/observability.db``.
     """
     if store_dir:
         candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
@@ -59,6 +61,11 @@ def resolve_duckdb_obs_path(
         if explicit.is_dir():
             explicit = explicit / DEFAULT_OBS_DB_FILENAME
         return explicit if explicit.exists() else None
+
+    if blueprint_id:
+        routed = Path(_OBS_ROUTING_ROOT) / blueprint_id / DEFAULT_OBS_DB_FILENAME
+        if routed.exists():
+            return routed
 
     if run_id:
         import duckdb as _duckdb
@@ -86,6 +93,7 @@ def open_obs_read(
     cfg: "AqueductConfig",
     store_dir: str | None = None,
     run_id: str | None = None,
+    blueprint_id: str | None = None,
 ) -> "ObservabilityStore | None":
     """Backend-aware observability store for reads.
 
@@ -98,7 +106,7 @@ def open_obs_read(
 
         return get_stores(cfg, store_dir_override=store_dir).observability
 
-    path = resolve_duckdb_obs_path(cfg, store_dir, run_id)
+    path = resolve_duckdb_obs_path(cfg, store_dir, run_id, blueprint_id)
     if path is None:
         return None
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore

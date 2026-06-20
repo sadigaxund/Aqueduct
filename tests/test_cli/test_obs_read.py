@@ -63,6 +63,13 @@ def test_resolve_per_pipeline_by_run_id(tmp_path, monkeypatch):
     assert got == Path(".aqueduct/observability/alpha/observability.db")
 
 
+def test_resolve_per_pipeline_by_blueprint_id(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _make_db(tmp_path / ".aqueduct/observability/beta/observability.db")
+    got = resolve_duckdb_obs_path(_cfg(), blueprint_id="beta")
+    assert got == Path(".aqueduct/observability/beta/observability.db")
+
+
 # ── open_obs_read ────────────────────────────────────────────────────────────
 
 def test_open_duckdb_returns_store(tmp_path):
