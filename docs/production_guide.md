@@ -36,10 +36,15 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
 
+The `target` field is validated against `master_url` at config-load. A
+mismatch raises a `ConfigError` naming both values and the expected shape.
+Remote‑submit targets (`databricks`, `emr`, `dataproc`) are rejected — they
+require a packaging/submit layer planned for a future release.
+
 ```yaml
 deployment:
   env: cluster
-  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  target: standalone                   # local | standalone | yarn | kubernetes
   master_url: "spark://master:7077"    # consumed by SparkSession.builder.master()
 
 spark_config:
@@ -63,6 +68,75 @@ aqueduct run pipeline.yml --config aqueduct.cluster.yml
 ```
 
 In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observability state and patch history survive pod restarts.
+
+### Per‑target configuration
+
+#### local
+
+```yaml
+deployment:
+  target: local
+  master_url: "local[*]"              # or local[4], local[8], …
+```
+
+The session runs in‑process inside the driver JVM. No external connectivity
+needed — `aqueduct doctor` always reports `ok`.
+
+#### standalone
+
+```yaml
+deployment:
+  target: standalone
+  master_url: "spark://spark-master.internal:7077"
+```
+
+`master_url` must start with `spark://`. The doctor TCP‑probes `<host>:<port>`
+from the master URL (default port 7077) to verify the Spark master is reachable
+before a run.
+
+#### yarn
+
+```yaml
+deployment:
+  target: yarn
+  master_url: "yarn"
+  env: cluster
+```
+
+`master_url` must be exactly `"yarn"`. The driver uses the Hadoop configuration
+on the node to locate the ResourceManager. Set `HADOOP_CONF_DIR` (or
+`YARN_CONF_DIR`) to the directory containing `yarn-site.xml`:
+
+```bash
+export HADOOP_CONF_DIR=/etc/hadoop/conf
+```
+
+`aqueduct doctor` warns if neither env var is set — the session will fail at
+startup without them. The doctor does **not** build a SparkSession (that would
+trigger a full YARN negotiation); use `--preflight` for a real session test.
+
+#### kubernetes
+
+```yaml
+deployment:
+  target: kubernetes
+  master_url: "k8s://https://k8s-api.internal:6443"
+  env: cluster
+
+spark_config:
+  spark.kubernetes.namespace: "aqueduct"
+  spark.kubernetes.container.image: "my-registry/aqueduct:latest"
+  spark.kubernetes.authenticate.driver.serviceAccountName: "aqueduct-sa"
+```
+
+`master_url` must start with `k8s://`. The doctor parses the API server
+host:port from the URL and TCP‑probes it (port defaults to 443). It also warns
+if no `spark.kubernetes.*` keys are present in `spark_config` — at minimum a
+namespace and container image are normally required.
+
+Credentials come from the pod's service account (no `@aq.secret()` needed when
+using in‑cluster `spark.kubernetes.authenticate.*` config). For out‑of‑cluster
+submission, add a kubeconfig path under `spark_config`.
 
 ---
 
@@ -337,11 +411,16 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 ---
 
-## Remote-Submit Targets
+## Remote-Submit Targets (Future)
 
-Remote‑submit targets (`databricks`) run `aqueduct run` on a **laptop or CI runner with no Spark** — the CLI packages the Blueprint, uploads it to the target's storage (DBFS), and triggers a remote job via the vendor API. The engine itself (`aqueduct-core[spark]`) must be installed on the cluster.
+Remote‑submit targets (`databricks`, `emr`, `dataproc`) are **rejected at
+config‑load** in the current release.  Setting `deployment.target` to any of
+these three values raises a `ConfigError`. The packaging / submit / poll layer
+is planned for a future release — use
+`local | standalone | yarn | kubernetes` for the current release.
 
-**Self‑healing is disabled** for remote‑submit targets. On failure the exit code is `DATA_OR_RUNTIME(2)` — the calling orchestrator handles retry.
+The sections below (Databricks E2E, EMR, Dataproc) are forward‑looking
+reference — none of this is wired in the current CLI.
 
 ### Databricks
 

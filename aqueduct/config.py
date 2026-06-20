@@ -110,6 +110,54 @@ class DeploymentConfig(BaseModel):
         default="local",
         description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
     )
+
+    @model_validator(mode="after")
+    def _validate_target_master_url(self) -> "DeploymentConfig":
+        """Enforce target ↔ master_url consistency for in-cluster Spark targets.
+
+        Remote-submit targets (databricks / emr / dataproc) are rejected with
+        a forward pointer to Phase 64.
+        """
+        if self.engine != "spark":
+            return self
+
+        target = self.target
+        master = self.master_url
+
+        # ── Remote-submit targets (planned Phase 64) ──────────────────────────
+        if target in ("databricks", "emr", "dataproc"):
+            raise ConfigError(
+                f"deployment.target={target!r} is a remote-submit target not "
+                f"yet supported (planned: Phase 64). "
+                f"Use local | standalone | yarn | kubernetes."
+            )
+
+        # ── In-cluster targets ────────────────────────────────────────────────
+        _EXPECTED: dict[str, str] = {
+            "local":       "local",
+            "standalone":  "spark://",
+            "yarn":        "yarn",
+            "kubernetes":  "k8s://",
+        }
+        expected = _EXPECTED.get(target)
+        if expected is None:
+            return self
+
+        if expected == "yarn":
+            if master != "yarn":
+                raise ConfigError(
+                    f"deployment.target={target!r} requires "
+                    f"master_url={expected!r}, "
+                    f"got master_url={master!r}"
+                )
+        elif not master.startswith(expected):
+            raise ConfigError(
+                f"deployment.target={target!r} requires "
+                f"master_url starting with {expected!r}, "
+                f"got master_url={master!r}"
+            )
+
+        return self
     databricks: DatabricksDeployConfig | None = Field(
         default=None,
         description="Databricks Jobs API settings. Required when target=databricks.",

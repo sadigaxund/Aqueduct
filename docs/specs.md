@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.5 — Reference Document**
+**Version 1.6 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -954,19 +954,29 @@ Every relative path inside a YAML file resolves to **that YAML file's parent dir
 
 ## **10.5 Deployment Targets**
 
-| Target | Type | Description |
-| :- | :- | :- |
-| **local** | in‑process | `spark://local[*]`. Default for development. Aqueduct runs on the Spark driver. |
-| **standalone** | in‑process | Spark standalone cluster. Requires `master_url`. Aqueduct runs on the Spark driver. |
-| **yarn** | in‑process | YARN resource manager. Requires `hadoop_conf_dir`. Aqueduct runs on the Spark driver. |
-| **kubernetes** | in‑process | Driver pod via `spark-submit --master k8s://`. Aqueduct runs on the Spark driver. |
-| **databricks** | **remote** | Databricks Jobs API 2.x. Aqueduct **packages and submits** — it runs on a laptop / CI runner with **no Spark** and polls the remote job. Entrypoint: `aqueduct run <uploaded-blueprint>`. |
-| **emr** | **remote** (deferred) | AWS EMR Steps. Remote-submit target — not yet implemented; raises ``NotImplementedError``. |
-| **dataproc** | **remote** (deferred) | GCP Dataproc Jobs. Remote-submit target — not yet implemented; raises ``NotImplementedError``. |
+The `deployment.target` field selects the Spark cluster type. Aqueduct validates
+that `master_url` matches the declared `target` at config-load (for
+`engine: spark` only), and `aqueduct doctor` provides target-specific
+reachability and configuration guidance.
 
-Remote-submit targets follow the **thin-packaging contract**: the engine itself (`aqueduct-core[spark]`) is installed on the cluster (init script / library), while the submitter uploads only the Blueprint, ``aqueduct.yml``, and referenced UDF files. No ``pyspark`` is imported on the submitting machine.
+| Target | Status | Required `master_url` shape | Doctor checks |
+| :- | :- | :- | :- |
+| **local** | Supported (in-cluster) | Starts with `"local"` (e.g. `local[*]`) | In-process session — always ok |
+| **standalone** | Supported (in-cluster) | Starts with `"spark://"` (e.g. `spark://host:7077`) | TCP probe to master host:port |
+| **yarn** | Supported (in-cluster) | Exactly `"yarn"` | Warns if `HADOOP_CONF_DIR` / `YARN_CONF_DIR` env var is unset |
+| **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `spark_config` |
+| **databricks** | Deferred | — | Rejected at config-load with a "not yet supported" error |
+| **emr** | Deferred | — | Rejected at config-load with a "not yet supported" error |
+| **dataproc** | Deferred | — | Rejected at config-load with a "not yet supported" error |
 
-See the **[Production Guide](production_guide.md)** for per-target setup, and §10.8 for remote‑submit semantics.
+`databricks` / `emr` / `dataproc` are **remote-submit** targets — they require a
+packaging/submit/poll layer that ships the job to a managed service from a
+laptop or CI machine. That layer is planned for a future release. In the current
+release they are explicitly rejected with a "not yet supported" error, rather
+than being silently ignored.
+
+See the **[Production Guide](production_guide.md)** for per-target cluster setup,
+required env vars, `spark_config` keys, and the production readiness checklist.
 
 ## **10.6 `aqueduct test` — Isolated Module Testing**
 
@@ -987,17 +997,10 @@ Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wra
 
 ## **10.8 Remote-Submit Targets**
 
-Remote‑submit targets (`databricks`, and deferred `emr`/`dataproc`) operate under a different execution model from in‑process targets. The submitting machine runs `aqueduct run` but hosts **no SparkSession** — it packages the Blueprint, uploads it, triggers a remote job, and polls to completion.
-
-**Heal policy.** LLM self‑healing is **disabled** for remote‑submit targets in this release. The CLI emits a clear message to stderr and any Blueprint `agent.approval_mode` setting is ignored. On failure the exit code is `DATA_OR_RUNTIME(2)` and the orchestrator is responsible for retry. A future release will add a `FailureContext`‑fetch hook so the local agent loop can repair and re‑submit.
-
-**Thin‑packaging contract.** The submitter uploads only:
-- The Blueprint YAML file
-- ``aqueduct.yml`` (if present in the project root)
-- A bootstrap script that invokes ``aqueduct run`` on the cluster
-- Referenced UDF files
-
-The cluster must have ``aqueduct-core[spark]`` installed — via a Databricks library, EMR bootstrap action, or Dataproc init action. This avoids repackaging the entire engine and its transitive dependencies (cloudpickle, PySpark JVM, Python‑version coupling) inside the job artefact.
+Remote‑submit targets (`databricks`, `emr`, `dataproc`) are **rejected at
+config‑load** in the current release. Setting `deployment.target` to any of
+these three values raises a `ConfigError`. The packaging / submit / poll layer
+is planned for a future release.
 
 **Config.** Each remote target adds a nested optional block under ``deployment`` — e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
 

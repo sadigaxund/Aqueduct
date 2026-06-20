@@ -74,9 +74,16 @@ __all__ = [
 # ── Spark + network cluster ─────────────────────────────────────────────────
 
 def _host_port(url: str, default_port: int) -> tuple[str, int] | None:
-    """Extract (host, port) from spark://h:p / http://h:p / h:p. None if unparseable."""
+    """Extract (host, port) from spark://h:p / http://h:p / h:p / k8s://https://h:p.
+
+    Returns None if unparseable.  ``k8s://`` URLs carry a double scheme
+    (k8s://https://host:port) — the outer ``k8s://`` is stripped first so the
+    inner ``https://`` URL is parsed normally.
+    """
     import re
     from urllib.parse import urlparse
+    if url.startswith("k8s://"):
+        url = url[len("k8s://"):]
     if "://" in url:
         p = urlparse(url)
         if p.hostname:
@@ -97,34 +104,102 @@ def _tcp_ok(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
-def _reachability_probe(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
+def _reachability_probe(
+    master_url: str, spark_config: dict[str, Any], target: str = "local",
+) -> tuple[CheckResult, CheckResult]:
     """Fast, bounded default: TCP-reach the master + S3 endpoint. No SparkSession.
 
     Answers the 95% question — "is my master/endpoint wiring sane" — in ~3s,
     with no slow-vs-broken ambiguity. Full session test lives behind --preflight.
+
+    target-aware: adds yarn env-var checks and k8s API-server TCP probe +
+    spark.kubernetes.* key validation.
     """
     t = time.monotonic()
     hint = "  (reachability only — run `aqueduct doctor --preflight` for a full Spark session test)"
 
-    if master_url.startswith("local"):
+    if target == "local":
         spark_res = CheckResult(
             "spark", "ok",
-            f"master={master_url}  local mode — session built in-process at run time{hint}",
+            f"target={target}  master={master_url}  local mode — session built in-process at run time{hint}",
             _ms(t),
         )
-    else:
-        hp = _host_port(master_url, 7077)
+    elif target == "yarn":
+        hadoop_dir = os.environ.get("HADOOP_CONF_DIR") or os.environ.get("YARN_CONF_DIR")
+        if hadoop_dir:
+            spark_res = CheckResult(
+                "spark", "ok",
+                f"target={target}  master={master_url}  HADOOP_CONF_DIR/YARN_CONF_DIR={hadoop_dir}{hint}",
+                _ms(t),
+            )
+        else:
+            spark_res = CheckResult(
+                "spark", "warn",
+                f"target={target}  master={master_url}  "
+                f"Spark cannot locate the YARN ResourceManager without "
+                f"HADOOP_CONF_DIR or YARN_CONF_DIR. "
+                f"Set one in the environment.{hint}",
+                _ms(t),
+            )
+    elif target == "kubernetes":
+        # Parse API server host:port from k8s:// URL
+        hp = _host_port(master_url, 443)
         if hp is None:
-            spark_res = CheckResult("spark", "warn", f"master={master_url}  cannot parse host:port for TCP probe{hint}", _ms(t))
+            k8s_detail = f"master={master_url}  cannot parse API server host:port from k8s:// URL{hint}"
+            spark_res = CheckResult("spark", "warn", k8s_detail, _ms(t))
         elif _tcp_ok(*hp):
-            spark_res = CheckResult("spark", "ok", f"master={master_url}  reachable (TCP {hp[0]}:{hp[1]}){hint}", _ms(t))
+            k8s_detail = (
+                f"target={target}  master={master_url}  "
+                f"API server reachable (TCP {hp[0]}:{hp[1]}){hint}"
+            )
+            # Warn if no spark.kubernetes.* keys are present
+            has_k8s_keys = any(
+                k.startswith("spark.kubernetes.") for k in spark_config
+            )
+            if not has_k8s_keys:
+                k8s_detail += (
+                    "  no spark.kubernetes.* keys in spark_config — "
+                    "namespace and container image are normally required"
+                )
+            spark_res = CheckResult("spark", "ok" if has_k8s_keys else "warn", k8s_detail, _ms(t))
         else:
             spark_res = CheckResult(
                 "spark", "fail",
-                f"master={master_url}  TCP connect to {hp[0]}:{hp[1]} failed — master down, "
+                f"target={target}  master={master_url}  "
+                f"TCP connect to API server {hp[0]}:{hp[1]} failed — "
+                f"cluster unreachable, wrong URL, or firewall.",
+                _ms(t),
+            )
+    elif target == "standalone":
+        hp = _host_port(master_url, 7077)
+        if hp is None:
+            spark_res = CheckResult(
+                "spark", "warn",
+                f"target={target}  master={master_url}  cannot parse host:port for TCP probe{hint}",
+                _ms(t),
+            )
+        elif _tcp_ok(*hp):
+            spark_res = CheckResult(
+                "spark", "ok",
+                f"target={target}  master={master_url}  reachable (TCP {hp[0]}:{hp[1]}){hint}",
+                _ms(t),
+            )
+        else:
+            spark_res = CheckResult(
+                "spark", "fail",
+                f"target={target}  master={master_url}  "
+                f"TCP connect to {hp[0]}:{hp[1]} failed — master down, "
                 f"wrong HOST_IP, or firewall. (Not a timeout: no SparkSession was built.)",
                 _ms(t),
             )
+    else:
+        # Fallback for unknown targets (e.g. the remote-submit ones that were
+        # already rejected at config-load — doctor only sees valid config).
+        spark_res = CheckResult(
+            "spark", "ok",
+            f"target={target}  master={master_url}  (no target-specific probe){hint}",
+            _ms(t),
+        )
 
     # S3A endpoint reachability (only if object storage is configured).
     s3_ep = spark_config.get("spark.hadoop.fs.s3a.endpoint")
@@ -142,12 +217,15 @@ def _reachability_probe(master_url: str, spark_config: dict[str, Any]) -> tuple[
 
 
 def check_spark(
-    master_url: str, spark_config: dict[str, Any], preflight: bool = False
+    master_url: str, spark_config: dict[str, Any],
+    preflight: bool = False, target: str = "local",
 ) -> tuple[CheckResult, CheckResult]:
     """Probe Spark + object storage.
 
     Default (`preflight=False`): fast bounded TCP reachability of master +
     S3 endpoint. No SparkSession — no slow/broken ambiguity, no false timeout.
+    Target-aware: yarn checks HADOOP_CONF_DIR, k8s probes the API server
+    and validates spark.kubernetes.* keys.
 
     `preflight=True`: build a real SparkSession with the actual spark_config,
     run a task, check version + storage. **Unbounded** — you asked for the
@@ -155,7 +233,7 @@ def check_spark(
     (Ctrl-C to abort). This is the real "will my pipeline's Spark start" test.
     """
     if not preflight:
-        return _reachability_probe(master_url, spark_config)
+        return _reachability_probe(master_url, spark_config, target=target)
 
     t = time.monotonic()
     try:
@@ -957,7 +1035,8 @@ def run_doctor(
         return results
 
     spark_result, storage_result = check_spark(
-        cfg.deployment.master_url, cfg.spark_config, preflight=preflight
+        cfg.deployment.master_url, cfg.spark_config,
+        preflight=preflight, target=cfg.deployment.target,
     )
     results.append(spark_result)
     results.append(storage_result)

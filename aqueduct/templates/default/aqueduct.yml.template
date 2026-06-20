@@ -25,37 +25,27 @@ deployment:
   # engine: execution engine. Currently supported: spark.
   engine: spark
 
-  # target: deployment target. Controls execution path:
-  #   local/standalone/yarn/kubernetes — Aqueduct runs on the Spark driver (in-process).
-  #   databricks — remote-submit via Jobs API 2.x; Aqueduct packages + polls (no local Spark).
-  #   emr/dataproc — NOT YET IMPLEMENTED (raises NotImplementedError).
-  # Values: local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  # target: deployment target. Validated against master_url at config-load;
+  # a mismatch raises a clear ConfigError naming both values and the expected shape.
+  #   local | standalone | yarn | kubernetes — Aqueduct runs on the Spark driver (in-process).
+  #   databricks | emr | dataproc — remote-submit targets planned for a future release;
+  #   currently rejected at config-load with a "not yet supported" message.
   target: local
 
-  # master_url: passed verbatim to SparkSession.builder.master()
+  # master_url: passed verbatim to SparkSession.builder.master().
+  # Must match the declared target (validated at config-load):
+  #   local       → starts with "local"   (e.g. local[*], local[4])
+  #   standalone  → starts with "spark://" (e.g. spark://host:7077)
+  #   yarn        → exactly "yarn"         (needs HADOOP_CONF_DIR / YARN_CONF_DIR)
+  #   kubernetes  → starts with "k8s://"   (e.g. k8s://https://apiserver:443)
   master_url: "local[*]"
-  # master_url: "local[4]"                         # 4 threads
-  # master_url: "spark://host:7077"                # Spark Standalone
-  # master_url: "yarn"                             # YARN (needs HADOOP_CONF_DIR)
-  # master_url: "k8s://https://k8s-apiserver:443"  # Kubernetes
 
   # env: deployment environment tier.
   # local (default) — dev machine, no cluster validation.
-  # cluster — standalone/YARN/K8s; doctor errors on relative store paths.
-  # cloud   — managed cloud (Databricks/EMR/Dataproc); same validation as cluster.
+  # cluster — standalone/YARN/K8s; doctor warns on relative store paths.
+  # cloud   — future remote-submit targets (Databricks/EMR/Dataproc); same validation as cluster.
   env: local
   # env: cluster
-
-  # databricks:                                      # Per-target settings for target: databricks
-  #   workspace_url: "https://dbc-xxxx.cloud.databricks.com"
-  #   cluster_id: "0123-456789-abcdefgh"            # existing all-purpose cluster
-  #   # new_cluster:                                # OR a one-shot cluster spec
-  #   #   spark_version: "15.3.x-scala2.12"
-  #   #   node_type_id: "i3.xlarge"
-  #   #   num_workers: 4
-  #   # libraries:                                  # optional — pypi libraries installed on the job cluster
-  #   #   - pypi:
-  #   #       package: "aqueduct-core[spark]"
 
 
 # ── Spark Configuration ───────────────────────────────────────────────────────
