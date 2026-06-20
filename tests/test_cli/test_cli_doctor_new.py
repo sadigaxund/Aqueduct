@@ -346,7 +346,6 @@ stores:
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
             depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
         )
         return cfg.model_copy(update={"stores": new_stores})
@@ -524,7 +523,6 @@ edges: []
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
             depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
         )
         return cfg.model_copy(update={"stores": new_stores})

@@ -54,7 +54,6 @@ def stores_info(
     bundle = get_stores(cfg)
     rows = [
         ("observability", bundle.observability.backend, bundle.observability.location_label),
-        ("lineage",       bundle.lineage.backend,       bundle.lineage.location_label),
         ("depot",         bundle.depot.backend,         bundle.depot.location_label),
         ("blob",          cfg.stores.blob.backend,      cfg.stores.blob.path or "(default)"),
         ("benchmark",     cfg.stores.benchmark.backend,  cfg.stores.benchmark.path or "(default)"),

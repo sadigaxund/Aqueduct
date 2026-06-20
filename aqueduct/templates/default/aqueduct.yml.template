@@ -103,19 +103,18 @@ spark_config: {}
 # Terraform conventions.
 #
 # Each store is pluggable. Default DuckDB layout under .aqueduct/:
-#   observability.db      — run records, failure contexts, signal overrides, probe
-#                 signals, module + maintenance metrics, healing outcomes
-#   lineage.db  — column-level lineage
+#   observability.db  — run records, failure contexts, signal overrides, probe
+#                 signals, module + maintenance metrics, healing outcomes, AND
+#                 column-level lineage (column_lineage)
 #   depot.db    — depot KV store (@aq.depot.*)
-#   snapshots/  — schema_snapshot JSON files (one file per probe per run)
 #
 # Supported backends:
 #   duckdb    — embedded; single-writer file. Suits local / dev / NFS.
-#               Accepted by obs / lineage / depot.
-#   postgres  — networked DSN; MVCC concurrent writers. Accepted by all
-#               three stores. With a shared DSN the engine creates `observability`,
-#               `lineage`, `depot` schemas inside the target database.
-#   redis     — depot-only KV; rejected at config-load for obs / lineage.
+#               Accepted by obs / depot.
+#   postgres  — networked DSN; MVCC concurrent writers. Accepted by both
+#               stores. With a shared DSN the engine creates `observability`
+#               and `depot` schemas inside the target database.
+#   redis     — depot-only KV; rejected at config-load for observability.
 #
 # `aqueduct stores info` prints the resolved backend per store.
 # `aqueduct stores migrate --from-duckdb <old.db>` copies depot KV rows.
@@ -126,12 +125,6 @@ stores:
     backend: duckdb
     path: ".aqueduct/observability.db"
     # Postgres example (uncomment + install `aqueduct-core[postgres]`):
-    # backend: postgres
-    # path: "postgresql://aq@host:5432/aqueduct_db"
-
-  lineage:
-    backend: duckdb
-    path: ".aqueduct/lineage.db"
     # backend: postgres
     # path: "postgresql://aq@host:5432/aqueduct_db"
 
@@ -186,12 +179,9 @@ stores:
 #   env: cluster
 #
 # stores:
-#   obs:
+#   observability:
 #     backend: duckdb
 #     path: "/mnt/nfs/aqueduct/observability.db"
-#   lineage:
-#     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/lineage.db"
 #   depot:
 #     backend: duckdb
 #     path: "/mnt/nfs/aqueduct/depot.db"

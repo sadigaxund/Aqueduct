@@ -140,7 +140,7 @@ stores:
 
 The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
-> The `stores.lineage` config block is **inert** as of 1.1.2 — `column_lineage` lives in `observability.db`. Setting it emits a `DeprecationWarning` and is ignored.
+> The `stores.lineage` config option has been **removed** — `column_lineage` lives in `observability.db`. A legacy `stores.lineage` block in `aqueduct.yml` is ignored with a warning.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 

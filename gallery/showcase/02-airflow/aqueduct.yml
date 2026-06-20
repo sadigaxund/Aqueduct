@@ -21,9 +21,6 @@ stores:
   observability:
     backend: duckdb
     path: "/opt/airflow/.aqueduct/observability.duckdb"
-  lineage:
-    backend: duckdb
-    path: "/opt/airflow/.aqueduct/lineage.duckdb"
   depot:
     backend: duckdb
     path: "/opt/airflow/.aqueduct/depot.duckdb"

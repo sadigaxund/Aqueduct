@@ -42,7 +42,6 @@ def test_redis_depot_ok():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "duckdb", "path": "observability.db"},
-            "lineage": {"backend": "duckdb", "path": "lineage.db"},
             "depot": {"backend": "redis", "path": "redis://localhost:6379/15"}
         }
     })

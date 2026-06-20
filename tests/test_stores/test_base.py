@@ -19,7 +19,6 @@ def test_get_stores_factory_mixed():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "duckdb", "path": "observability.db"},
-            "lineage": {"backend": "duckdb", "path": "lineage.db"},
             "depot": {"backend": "redis", "path": "redis://localhost:6379/0"}
         }
     })
@@ -32,7 +31,6 @@ def test_get_stores_factory_postgres():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"},
-            "lineage": {"backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"},
             "depot": {"backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"}
         }
     })

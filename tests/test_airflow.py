@@ -547,15 +547,11 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  lineage:
-    backend: duckdb
-    path: "{lin}"
   depot:
     backend: duckdb
     path: "{dep}"
 """.format(
         obs=str(tmp_path / "obs.duckdb"),
-        lin=str(tmp_path / "lin.duckdb"),
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 
@@ -722,15 +718,11 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  lineage:
-    backend: duckdb
-    path: "{lin}"
   depot:
     backend: duckdb
     path: "{dep}"
 """.format(
         obs=str(tmp_path / "obs.duckdb"),
-        lin=str(tmp_path / "lin.duckdb"),
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 

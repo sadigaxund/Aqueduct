@@ -74,11 +74,11 @@ ObjectBackend = Literal["local", "s3", "gcs", "adls"]
 
 
 class RelationalStoreConfig(BaseModel):
-    """Backend config for stores that need SQL semantics (observability, lineage).
+    """Backend config for stores that need SQL semantics (observability).
 
     `redis` is rejected at parse time via the `RelationalBackend` Literal —
-    redis is KV-only and cannot satisfy joins/aggregates that the observability /
-    lineage queries rely on.
+    redis is KV-only and cannot satisfy joins/aggregates that the observability
+    queries rely on.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -109,8 +109,8 @@ class KVStoreConfig(BaseModel):
         description=(
             "Depot backend. `duckdb` (default) or `postgres` for relational; "
             "`redis` for high-QPS KV-only depot reads (watermarks, atomic "
-            "counters). `redis` is depot-only; choosing it for observability or "
-            "lineage is rejected at config load."
+            "counters). `redis` is depot-only; choosing it for observability "
+            "is rejected at config load."
         ),
     )
     path: Annotated[str, FsPath()] = Field(
@@ -216,7 +216,7 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
     if not isinstance(stores_raw, dict):
         return
 
-    # Map store-name (observability / lineage / depot) → sub-model class
+    # Map store-name (observability / depot) → sub-model class
     # via StoresConfig's own field annotations. Avoids a hardcoded mapping
     # that would drift if a new store is added.
     for store_name, field_info in StoresConfig.model_fields.items():
@@ -253,13 +253,6 @@ class StoresConfig(BaseModel):
             "`observability` schema of the target DB."
         ),
     )
-    lineage: RelationalStoreConfig = Field(
-        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/lineage.db"),
-        description=(
-            "Column-level lineage store. With postgres backend, tables live "
-            "in the `lineage` schema of the target DB."
-        ),
-    )
     depot: KVStoreConfig = Field(
         default_factory=lambda: KVStoreConfig(path=".aqueduct/depot.db"),
         description=(
@@ -284,30 +277,6 @@ class StoresConfig(BaseModel):
             "Postgres schema (`benchmark`); disjoint from observability rows."
         ),
     )
-
-    @model_validator(mode="after")
-    def _deprecate_lineage_store(self) -> "StoresConfig":
-        """Phase 38 — lineage merged into observability.
-        
-        The `lineage` config block is now inert.  ``column_lineage`` lives in
-        the observability store.  Emit a deprecation warning when the lineage
-        path is explicitly set to a different value, and normalise it so
-        downstream code sees one canonical path.
-        """
-        import warnings as _warnings
-        obs_path = self.observability.path
-        lin_path = self.lineage.path
-        if lin_path != obs_path:
-            _warnings.warn(
-                f"stores.lineage.path ({lin_path!r}) differs from "
-                f"stores.observability.path ({obs_path!r}). "
-                "Phase 38 merged lineage into the observability store — "
-                "the lineage config block is now inert. "
-                "Set only stores.observability.path.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        return self
 
     @model_validator(mode="after")
     def _warn_local_blob_under_remote_obs(self) -> "StoresConfig":
@@ -686,10 +655,10 @@ class WarningsConfig(BaseModel):
 class LineageConfig(BaseModel):
     """Phase 55 — OpenLineage emission.
 
-    Top-level `lineage:` block. **Naming collision:** this is NOT
-    `stores.lineage`, which has been inert since Phase 38 (column lineage merged
-    into the observability store). `stores.lineage` configures a (dead) store
-    backend; this block configures *emission* of OpenLineage run events.
+    Top-level `lineage:` block. **Naming note:** this is the OpenLineage
+    *emission* config — unrelated to the former `stores.lineage` store, which was
+    removed (column lineage merged into the observability store). This block
+    configures *emission* of OpenLineage run events.
 
     When `openlineage_url` is unset (default), no events are emitted — zero cost.
     """
@@ -776,7 +745,6 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
     seen: set[str] = set()
     for store_label, backend in (
         ("observability", stores_cfg.observability.backend),
-        ("lineage",       stores_cfg.lineage.backend),
         ("depot",         stores_cfg.depot.backend),
     ):
         if backend == "duckdb":
@@ -913,6 +881,31 @@ def _format_config_error(resolved: Path, exc: ValidationError) -> str:
     return "\n".join(lines)
 
 
+def _strip_removed_lineage_block(data: dict, *, warn: bool) -> None:
+    """Tolerate (and ignore) a legacy ``stores.lineage`` block.
+
+    ``stores.lineage`` was removed — column lineage lives entirely in the
+    observability store (Phase 38). ``StoresConfig`` is ``extra="forbid"``, so an
+    old ``aqueduct.yml`` carrying the block would hard-fail; strip it before
+    validation and warn instead, so existing projects keep loading.
+    """
+    stores = data.get("stores")
+    if isinstance(stores, dict) and "lineage" in stores:
+        stores.pop("lineage", None)
+        if warn:
+            import warnings as _warnings
+
+            from aqueduct import AqueductWarning
+
+            _warnings.warn(
+                "stores.lineage is no longer a config option — column lineage now "
+                "lives entirely in the observability store. The block is ignored; "
+                "remove it from aqueduct.yml.",
+                AqueductWarning,
+                stacklevel=2,
+            )
+
+
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
 
@@ -959,6 +952,8 @@ def load_config(path: Path | None = None) -> AqueductConfig:
 
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
+
+    _strip_removed_lineage_block(data, warn=True)
 
     # Schema-driven anchoring. The hand-rolled
     # ``data["stores"][name]["path"]`` walk has been replaced with a
@@ -1007,6 +1002,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             raise ConfigError(
                 f"Config file {resolved} must be a YAML mapping, not {type(data2).__name__}"
             )
+        _strip_removed_lineage_block(data2, warn=False)  # already warned in pass 1
         try:
             cfg = AqueductConfig.model_validate(data2)
         except ValidationError as exc:

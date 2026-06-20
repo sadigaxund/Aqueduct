@@ -97,7 +97,6 @@ def validate(
                 "master_url": cfg.deployment.master_url,
                 "stores": {
                     "observability": cfg.stores.observability.path,
-                    "lineage": cfg.stores.lineage.path,
                     "depot": cfg.stores.depot.path,
                 },
                 "secrets_provider": cfg.secrets.provider,
@@ -107,7 +106,7 @@ def validate(
             if text:
                 click.echo(f"✓ {path}  [engine config]")
                 click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-                click.echo(f"  stores:  observability={cfg.stores.observability.path}  lineage={cfg.stores.lineage.path}  depot={cfg.stores.depot.path}")
+                click.echo(f"  stores:  observability={cfg.stores.observability.path}  depot={cfg.stores.depot.path}")
                 click.echo(f"  secrets: provider={cfg.secrets.provider}")
                 click.echo(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}")
                 if cfg.spark_config:

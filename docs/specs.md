@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.4 — Reference Document**
+**Version 1.5 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -99,7 +99,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | Store | Description |
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
-| **Lineage Store** | Column lineage graphs and Flow Reports. Stored in `column_lineage` table inside `observability.db` (1.1.2+ — previously a separate `lineage.db`). The `stores.lineage` config block is still parsed and a `LineageStore` is constructed, but the write path goes through the observability store — the `stores.lineage` block is redundant and defaults to sharing the observability store's path. |
+| **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` is ignored with a warning. |
 | **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 | **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store — rows are not tied to a real `run_id`. |
@@ -673,7 +673,7 @@ lineage:
   openlineage_namespace: aqueduct          # namespace for jobs + datasets
 ```
 
-> **Naming collision:** this top-level `lineage:` block is **not** `stores.lineage`. `stores.lineage` is an inert store-backend config (column lineage merged into the observability store, §3.2); the `lineage:` block configures OpenLineage *emission*.
+> **Naming note:** this top-level `lineage:` block configures OpenLineage *emission*. It is unrelated to the former `stores.lineage` store-backend option, which has been **removed** (column lineage merged into the observability store, §3.2).
 
 ---
 
@@ -923,7 +923,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | Block | Owns |
 | :- | :- |
 | `deployment` | Engine selection (`spark`), cluster target, master URL |
-| `stores` | Backend selection for observability, lineage, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
+| `stores` | Backend selection for observability, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
 | `probes` | Default probe signal limits |
 | `danger` | Safety-gate overrides |
 | `secrets` | Secrets provider (env / aws / gcp / azure / hashicorp) |

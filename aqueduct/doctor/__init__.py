@@ -875,7 +875,6 @@ def run_doctor(
     if cfg.deployment.env in ("cluster", "cloud"):
         _store_specs = {
             "observability": (cfg.stores.observability.backend, cfg.stores.observability.path),
-            "lineage":        (cfg.stores.lineage.backend,       cfg.stores.lineage.path),
             "depot":          (cfg.stores.depot.backend,         cfg.stores.depot.path),
         }
         _duckdb_paths = {
@@ -910,7 +909,6 @@ def run_doctor(
     # file probes when a non-DuckDB backend is configured. For DuckDB
     # backends both probes still run and report the same OK signal.
     results.append(check_store_backend("observability", cfg.stores.observability))
-    results.append(check_store_backend("lineage",       cfg.stores.lineage))
     results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True))
 
     # Secrets

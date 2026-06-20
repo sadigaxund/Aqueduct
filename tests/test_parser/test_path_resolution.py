@@ -273,12 +273,10 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     cfg_file.write_text(
         "stores:\n"
         "  observability: { backend: duckdb, path: .aqueduct/obs.db }\n"
-        "  lineage:       { backend: duckdb, path: .aqueduct/lin.db }\n"
         "  depot:         { backend: redis,  path: 'redis://h:6379/0' }\n"
     )
     from aqueduct.config import load_config
     c = load_config(cfg_file)
     assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs.db").resolve())
-    assert c.stores.lineage.path == str((tmp_path / ".aqueduct/lin.db").resolve())
     # URI passthrough — walker bails on any ``://`` value.
     assert c.stores.depot.path == "redis://h:6379/0"

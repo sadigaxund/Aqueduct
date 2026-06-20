@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Removed
+- **BREAKING: `stores.lineage` config option removed.** Column lineage has lived in the observability store since Phase 38; the `stores.lineage` block was inert. It is now gone from the schema. A legacy `stores.lineage:` block in `aqueduct.yml` is **tolerated** — stripped at load with a warning — so existing projects keep working; remove the block. `column_lineage` is read/written entirely in the observability store, and `bundle.lineage` aliases it.
+
 ### Fixed
 - **No more stray empty `lineage.db`.** Phase 38 merged column lineage into the observability store, but `get_stores` still built a separate (dead) lineage store that could spawn an empty `.aqueduct/lineage.db`. `bundle.lineage` now aliases the observability store — one place for `column_lineage`, no spurious file or Postgres schema.
 

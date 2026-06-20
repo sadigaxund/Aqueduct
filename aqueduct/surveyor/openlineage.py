@@ -13,9 +13,10 @@ in Marquez/DataHub/Atlan. sqlglot resolves ~90% of SparkSQL; unresolved columns
 fall back to ``UNKNOWN``.
 
 Config lives in the top-level ``lineage:`` block (``openlineage_url`` /
-``openlineage_namespace``) — NOT ``stores.lineage``, which has been inert since
-Phase 38. When ``openlineage_url`` is unset, the Surveyor builds no emitter and
-nothing is emitted (zero cost).
+``openlineage_namespace``) — unrelated to the former ``stores.lineage`` store,
+which was removed (column lineage merged into observability). When
+``openlineage_url`` is unset, the Surveyor builds no emitter and nothing is
+emitted (zero cost).
 """
 from __future__ import annotations
 

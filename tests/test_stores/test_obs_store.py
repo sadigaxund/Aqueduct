@@ -41,7 +41,6 @@ def test_redis_obs_rejected():
         AqueductConfig(**{
             "stores": {
                 "observability": {"backend": "redis", "path": "redis://localhost:6379/15"},
-                "lineage": {"backend": "duckdb", "path": "lineage.db"},
                 "depot": {"backend": "duckdb", "path": "depot.db"}
             }
         })

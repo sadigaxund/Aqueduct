@@ -52,7 +52,7 @@ Each store is independently pluggable in `aqueduct.yml`:
 | Store           | Backends                       | Notes |
 |-----------------|--------------------------------|-------|
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
-| `lineage`       | _(inert — merged into `observability`)_ | Setting `stores.lineage.path` emits a `DeprecationWarning` and is ignored. |
+| ~~`lineage`~~   | **removed** | Column lineage was merged into `observability`. `stores.lineage` is no longer a config option; a legacy block is ignored with a warning. |
 | `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. Incremental-Channel watermarks persist here( dropped the local sidecar — no depot ⇒ no incremental state). |
 | `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec). `local` keeps the on-disk layout above. |
 
