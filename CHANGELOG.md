@@ -14,7 +14,7 @@ versioning follows [SemVer](https://semver.org/). The stability contract
 applies from v1.0.0 — during alpha/RC, breaking changes may land in any
 release and are marked **BREAKING**.
 
-## [Unreleased]
+## [1.3.3] — 2026-06-20
 
 ### Added
 - **`aqueduct report --profile` — per-module resource profiling.** A pure read-side view over the existing `module_metrics` table (no new Spark action, no `$` conversion — raw resource units). `report <run_id> --profile` ranks one run's modules by duration (heaviest first) with each module's share of total run time/bytes; `report --profile --blueprint <id> --last N` trends per-module duration across the last N runs (default 10) and flags a module whose latest run is >1.5× its window average as a slowdown. Supports `--format table|json|csv`.
@@ -26,6 +26,8 @@ release and are marked **BREAKING**.
 
 ### Fixed
 - **Compiler warning package failed to import on a clean interpreter.** Three rule modules (`file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) had a `from aqueduct.parser.models import ModuleType` placed above their module docstring and `from __future__ import annotations`, which raises `SyntaxError` whenever the bytecode cache is cold. Moved the import below the `__future__` line.
+- **`time_travel: {}` silently treated as no-op.** The validation guard used `if not tt` which caught empty dicts as falsy — `time_travel: {}` bypassed the "requires version or timestamp" check. Changed to `if tt is None` so an empty block reaches validation.
+- **Custom probe callable crashes with TypeError masked the "must return a dict" error.** Wrapped `fn(df, call_cfg)` in a try/except TypeError so the ValueError surface is consistent regardless of which arg‑count/mismatch the callable produces.
 
 
 ## [1.3.2] — 2026-06-19
