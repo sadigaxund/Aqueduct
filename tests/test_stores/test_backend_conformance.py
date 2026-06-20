@@ -1,0 +1,150 @@
+"""Backend conformance matrix (Storage Integrity).
+
+Runs the observability READ commands against each relational backend from one
+place, so "works on every backend" is a CI-proven fact, not a promise. The
+DuckDB lane runs everywhere; the Postgres lane runs in the stores-tests CI lane
+(real PG service) and skips locally without ``AQ_PG_DSN``.
+
+Known gaps are encoded as ``xfail(strict=True)`` so they FAIL the build the
+moment they're fixed — forcing the marker's removal. That makes the remaining
+work a finite, self-updating list instead of surprise slivers.
+"""
+from __future__ import annotations
+
+import json
+
+import pytest
+from click.testing import CliRunner
+
+from aqueduct.cli import cli
+from aqueduct.stores.base import get_stores
+from aqueduct.config import load_config
+from tests.conftest import _pg_dsn, _pg_is_reachable
+
+# Portable DDL (valid on both DuckDB and Postgres).
+_DDL = [
+    """CREATE TABLE IF NOT EXISTS run_records (
+        run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR,
+        started_at TIMESTAMPTZ, finished_at TIMESTAMPTZ, module_results VARCHAR)""",
+    """CREATE TABLE IF NOT EXISTS module_metrics (
+        run_id VARCHAR, module_id VARCHAR, records_read BIGINT, bytes_read BIGINT,
+        records_written BIGINT, bytes_written BIGINT, duration_ms BIGINT,
+        captured_at TIMESTAMPTZ)""",
+    """CREATE TABLE IF NOT EXISTS column_lineage (
+        blueprint_id VARCHAR, run_id VARCHAR, channel_id VARCHAR,
+        output_column VARCHAR, source_table VARCHAR, source_column VARCHAR,
+        captured_at TIMESTAMPTZ)""",
+]
+
+_TS = "2026-06-20T00:00:00+00:00"
+
+
+@pytest.fixture(
+    params=[
+        pytest.param("duckdb", id="duckdb"),
+        pytest.param(
+            "postgres",
+            id="postgres",
+            marks=[
+                pytest.mark.integration,
+                pytest.mark.skipif(not _pg_is_reachable(), reason="Postgres not reachable (set AQ_PG_DSN)"),
+            ],
+        ),
+    ]
+)
+def seeded_cfg(request, tmp_path):
+    """Write an aqueduct.yml for the backend, seed one run + metrics + lineage,
+    yield the config path. Cleans up Postgres rows afterward."""
+    backend = request.param
+    if backend == "duckdb":
+        obs_path = str(tmp_path / "observability.db")
+    else:
+        obs_path = _pg_dsn()
+
+    cfg_file = tmp_path / "aqueduct.yml"
+    cfg_file.write_text(
+        "aqueduct_config: \"1.0\"\n"
+        "stores:\n"
+        "  observability:\n"
+        f"    backend: {backend}\n"
+        f"    path: \"{obs_path}\"\n"
+    )
+
+    cfg = load_config(cfg_file)
+    store = get_stores(cfg).observability
+    with store.connect() as cur:
+        for ddl in _DDL:
+            cur.execute(ddl)
+        cur.execute(
+            "INSERT INTO run_records (run_id, blueprint_id, status, started_at, finished_at, module_results) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["rc1", "conf_bp", "success", _TS, _TS,
+             json.dumps([{"module_id": "m1", "status": "success", "error": ""}])],
+        )
+        cur.execute(
+            "INSERT INTO module_metrics (run_id, module_id, records_written, bytes_written, duration_ms, captured_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["rc1", "m1", 100, 2048, 1234, _TS],
+        )
+        cur.execute(
+            "INSERT INTO column_lineage (blueprint_id, run_id, channel_id, output_column, source_table, source_column, captured_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ["conf_bp", "rc1", "ch1", "out_col", "src_tbl", "src_col", _TS],
+        )
+
+    yield cfg_file, backend
+
+    if backend == "postgres":
+        with get_stores(cfg).observability.connect() as cur:
+            for tbl in ("run_records", "module_metrics", "column_lineage"):
+                try:
+                    cur.execute(f"DELETE FROM {tbl} WHERE run_id = ? OR blueprint_id = ?", ["rc1", "conf_bp"])
+                except Exception:
+                    pass
+
+
+def _run(cfg_file, *args):
+    return CliRunner().invoke(cli, [*args, "--config", str(cfg_file)])
+
+
+# ── read commands: must work on every relational backend ─────────────────────
+
+def test_report_run(seeded_cfg):
+    cfg_file, _ = seeded_cfg
+    res = _run(cfg_file, "report", "rc1")
+    assert res.exit_code == 0, res.output
+    assert "rc1" in res.output and "m1" in res.output
+
+
+def test_runs(seeded_cfg):
+    cfg_file, _ = seeded_cfg
+    res = _run(cfg_file, "runs")
+    assert res.exit_code == 0, res.output
+    assert "rc1" in res.output
+
+
+def test_report_profile(seeded_cfg):
+    cfg_file, _ = seeded_cfg
+    res = _run(cfg_file, "report", "rc1", "--profile")
+    assert res.exit_code == 0, res.output
+    assert "m1" in res.output
+
+
+def test_lineage(seeded_cfg):
+    cfg_file, _ = seeded_cfg
+    res = _run(cfg_file, "lineage", "conf_bp")
+    assert res.exit_code == 0, res.output
+    assert "out_col" in res.output
+
+
+# ── KNOWN GAPS — encoded so they flip the build green when fixed ──────────────
+
+@pytest.mark.xfail(strict=True, reason="report --trend uses DuckDB-specific json_each SQL; needs a pg dialect")
+@pytest.mark.skipif(not _pg_is_reachable(), reason="gap is postgres-only")
+@pytest.mark.integration
+def test_report_trend_on_postgres(seeded_cfg):
+    cfg_file, backend = seeded_cfg
+    if backend != "postgres":
+        pytest.skip("gap applies to postgres only")
+    res = _run(cfg_file, "report", "--trend", "out_col", "--blueprint", "conf_bp")
+    assert res.exit_code == 0, res.output
