@@ -47,6 +47,15 @@ leaf + add it to its aggregate. Never a standalone feature flag. (Example:
 Phase 53's object store became the `object-store` leaf inside `stores`; Phase 55
 OpenLineage adds **no** extra — `httpx` is already a base dep.)
 
+**Documented exception — dev-tooling extras.** The two-axis rule governs
+*runtime-capability* deps (vendor SDKs / store backends used while a pipeline
+runs). A small separate class is allowed for **developer/inspection tooling that
+never runs in the data path**: `dev` (pytest/black/ruff) and `tui` (`textual`, for
+`aqueduct studio`). These stay OUT of `all` and out of the runtime axes — a
+pipeline never needs them, so bundling them into base/`all` would bloat headless
+Spark-driver / CI installs. This is the *only* sanctioned feature-named-extra
+category; it is not a loophole for runtime features (those still follow the axes).
+
 ## Code Organization & Safety
 - **4-layer boundary**: `Parser` → `Compiler` → `Executor` → `Surveyor`. Put logic in the correct layer. Only modify the layer relevant to the task. Topological sort, Probe insertion, and parallel-component detection are sub-steps inside the Executor — not a separate "Planner" layer.
 - **Dual-format contract**: Humans write YAML (`Blueprint`); engine consumes JSON (`Manifest`, `FailureContext`).
@@ -262,6 +271,18 @@ the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
 `_aqcli._helper(...)` so test patch paths still bite. New commands go in the
 matching submodule (or a new one + a bottom-of-`__init__` re-export); new shared
 helpers go in `__init__`.
+
+### `aqueduct/tui/` — `aqueduct studio` interactive TUI (Phase 67)
+
+| Module | What it owns |
+|--------|--------------|
+| `data.py` | Read-only DuckDB query helpers (`discover_stores`, `list_runs`, `run_detail`, `run_sql`, `lineage`). **No `textual`, no `pyspark`** — unit-tested directly. Every connection is `read_only=True`. |
+| `app.py` | The `textual` application (`StudioApp`, `run_studio`). Imports `textual` (the `tui` extra); only loaded after the CLI confirms the dep is installed. Rendering + event wiring only — all data via `data.py`. |
+
+The `studio` command lives in `cli/observability.py` and guards on
+`importlib.util.find_spec("textual")` before importing `app.py`, printing an
+"install aqueduct-core[tui]" hint otherwise. `tui/__init__.py` must stay
+`textual`-free so `import aqueduct.tui.data` works on a base install.
 
 ## Git & Commit Conventions
 

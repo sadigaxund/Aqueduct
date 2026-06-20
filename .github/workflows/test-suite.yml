@@ -26,6 +26,7 @@ jobs:
       config:    ${{ steps.filter.outputs.config }}
       gallery:   ${{ steps.filter.outputs.gallery }}
       drift:     ${{ steps.filter.outputs.drift }}
+      tui:       ${{ steps.filter.outputs.tui }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -77,6 +78,9 @@ jobs:
             drift:
               - 'aqueduct/drift/**'
               - 'tests/test_drift/**'
+            tui:
+              - 'aqueduct/tui/**'
+              - 'tests/test_tui/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -167,6 +171,18 @@ jobs:
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm,redis]"
       - run: pytest tests/test_cli/
+
+  tui-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.tui == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,tui]"
+      - run: pytest tests/test_tui/ -m "not spark"
 
   config-tests:
     needs: changes

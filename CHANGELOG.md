@@ -17,6 +17,7 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Added
+- **`aqueduct studio` — interactive read-only TUI.** A `textual` terminal app (optional `tui` extra: `pip install aqueduct-core[tui]`) for inspecting the observability store: browse runs → module results + resource profile, an ad-hoc **read-only** SQL pane over the embedded DuckDB, a doctor view (`skip_spark`), a config/deployment inspector (structural fields only — no secrets), and a column-lineage view. No server and no production control — a transient local dev surface (works over SSH). The query layer (`aqueduct/tui/data.py`) is `textual`/`pyspark`-free and unit-tested; the `tui` extra is a documented dev-tooling exception to the extras policy (kept out of base and `[all]`).
 - **`aqueduct report --format html`.** Self-contained, single-file HTML run report (run status/timing + per-module results + the Phase-62 resource profile), emitted to stdout (redirect to a file). No server and no external assets — renders offline. Pure read-side over existing observability data; HTML-escaped. First slice of the monitor-surfaces work.
 
 

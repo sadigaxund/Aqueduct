@@ -92,6 +92,10 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.4.0",
 ]
+# Dev-tooling extra (NOT a runtime capability) for the `aqueduct studio` TUI.
+# Deliberately kept out of [all] and out of the two-axis runtime extras — see the
+# documented carve-out in AGENTS.md "Packaging & Extras Policy".
+tui = ["textual>=0.50"]
 
 [project.urls]
 Homepage = "https://github.com/sadigaxund/Aqueduct"

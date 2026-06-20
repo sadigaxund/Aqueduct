@@ -1179,3 +1179,45 @@ def signal(
             if msg_note:
                 click.echo(msg_note)
 
+
+
+# ── aqueduct studio (Phase 67) ────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store dir (default: scan .aqueduct/observability/*)",
+)
+@_env_options
+def studio(
+    config_path: str | None,
+    store_dir: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Launch the interactive Aqueduct studio (read-only TUI).
+
+    Requires the optional 'tui' extra: pip install aqueduct-core[tui]
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("textual") is None:
+        click.echo(
+            "✗ aqueduct studio needs the 'tui' extra: pip install aqueduct-core[tui]",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
+    except Exception:
+        pass  # env loading is best-effort for a read-only viewer
+
+    from aqueduct.tui.app import run_studio
+
+    code = run_studio(config_path=config_path, store_dir=store_dir)
+    sys.exit(0 if code == 0 else exit_codes.DATA_OR_RUNTIME)
