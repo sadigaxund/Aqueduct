@@ -15,7 +15,8 @@ from typing import Any
 
 import duckdb
 
-_DEFAULT_OBS_ROOT = ".aqueduct/observability"
+_DEFAULT_OBS_FILE = ".aqueduct/observability.db"   # flat default (single pipeline)
+_DEFAULT_OBS_ROOT = ".aqueduct/observability"       # per-blueprint routing dir
 
 
 @dataclass(frozen=True)
@@ -65,24 +66,49 @@ class LineageRow:
 
 
 def discover_stores(
-    store_dir: str | None = None, root: str = _DEFAULT_OBS_ROOT
+    store_dir: str | None = None,
+    obs_path: str | None = None,
+    root: str = _DEFAULT_OBS_ROOT,
 ) -> list[StoreInfo]:
-    """Locate observability DBs.
+    """Locate observability DB(s), covering every layout `aqueduct run` writes.
 
-    With ``store_dir`` → just ``<store_dir>/observability.db`` (blueprint id
-    unknown). Otherwise scan ``<root>/<blueprint_id>/observability.db``.
+    Resolution (mirrors ``cli._resolve_obs_db``):
+      1. ``store_dir`` → ``<store_dir>/observability.db`` only.
+      2. ``obs_path`` set to a NON-default value (from ``stores.observability.path``)
+         → that file, or if it is a directory, the file inside it + any
+         ``<dir>/*/observability.db`` per-blueprint children.
+      3. Default → the flat ``.aqueduct/observability.db`` (single-pipeline) AND
+         every ``.aqueduct/observability/<blueprint_id>/observability.db`` (routed).
     """
-    if store_dir:
-        p = Path(store_dir) / "observability.db"
-        return [StoreInfo("", p)] if p.exists() else []
-
-    base = Path(root)
     stores: list[StoreInfo] = []
+    seen: set[Path] = set()
+
+    def _add(blueprint_id: str, path: "str | Path") -> None:
+        p = Path(path)
+        if p.exists() and p.is_file() and p not in seen:
+            seen.add(p)
+            stores.append(StoreInfo(blueprint_id, p))
+
+    if store_dir:
+        _add("", Path(store_dir) / "observability.db")
+        return stores
+
+    if obs_path and obs_path != _DEFAULT_OBS_FILE:
+        ep = Path(obs_path)
+        if ep.is_dir():
+            _add("", ep / "observability.db")
+            for sub in sorted(ep.glob("*/observability.db")):
+                _add(sub.parent.name, sub)
+        else:
+            _add("", ep)
+        return stores
+
+    # Default layout: flat file + per-blueprint routing dir.
+    _add("", Path(_DEFAULT_OBS_FILE))
+    base = Path(root)
     if base.is_dir():
-        for sub in sorted(base.iterdir()):
-            db = sub / "observability.db"
-            if db.exists():
-                stores.append(StoreInfo(sub.name, db))
+        for sub in sorted(base.glob("*/observability.db")):
+            _add(sub.parent.name, sub)
     return stores
 
 

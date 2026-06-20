@@ -217,10 +217,16 @@ def run_studio(
         print(f"config error: {exc}")
         return 1
 
-    stores = d.discover_stores(store_dir=store_dir) if store_dir else d.discover_stores()
+    obs_path = None
+    try:
+        obs_path = cfg.stores.observability.path
+    except Exception:
+        pass
+
+    stores = d.discover_stores(store_dir=store_dir, obs_path=obs_path)
     if not stores:
-        where = store_dir or d._DEFAULT_OBS_ROOT
-        print(f"No observability stores found under {where!r}. Run a blueprint first.")
+        where = store_dir or obs_path or f"{d._DEFAULT_OBS_FILE} / {d._DEFAULT_OBS_ROOT}/*"
+        print(f"No observability stores found ({where}). Run a blueprint first.")
         return 1
 
     StudioApp(stores, cfg, config_path).run()

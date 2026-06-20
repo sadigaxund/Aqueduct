@@ -47,13 +47,33 @@ def test_discover_store_dir_missing(tmp_path):
     assert d.discover_stores(store_dir=str(tmp_path)) == []
 
 
-def test_discover_scans_root(tmp_path):
+def test_discover_scans_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # isolate the cwd-relative flat-default check
     root = tmp_path / "obs"
     for bp in ("alpha", "beta"):
         (root / bp).mkdir(parents=True)
         duckdb.connect(str(root / bp / "observability.db")).close()
     stores = d.discover_stores(root=str(root))
     assert [s.blueprint_id for s in stores] == ["alpha", "beta"]
+
+
+def test_discover_flat_default_file(tmp_path, monkeypatch):
+    # The reported bug: flat .aqueduct/observability.db (default single-pipeline layout).
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".aqueduct").mkdir()
+    duckdb.connect(str(tmp_path / ".aqueduct" / "observability.db")).close()
+    stores = d.discover_stores()
+    assert len(stores) == 1
+    assert stores[0].db_path.name == "observability.db"
+
+
+def test_discover_explicit_obs_path_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    custom = tmp_path / "custom" / "myobs.db"
+    custom.parent.mkdir()
+    duckdb.connect(str(custom)).close()
+    stores = d.discover_stores(obs_path=str(custom))
+    assert len(stores) == 1 and stores[0].db_path == custom
 
 
 # ── list_runs ───────────────────────────────────────────────────────────────
