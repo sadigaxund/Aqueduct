@@ -349,3 +349,100 @@ def test_channel_metrics(spark: SparkSession, sample_data, tmp_path):
     conn.close()
 
     assert metrics[1] > 0
+
+
+# ── Phase 65 — Table-first addressing ──────────────────────────────────────────
+
+def test_table_ingress_egress_round_trip(spark: SparkSession, tmp_path):
+    """Blueprints using table: address data via the local session catalog."""
+    spark.sql("DROP TABLE IF EXISTS _aq_bp_test_src_tbl")
+    spark.range(10).selectExpr("id", "id % 2 AS even").write.saveAsTable("_aq_bp_test_src_tbl")
+
+    bp_path = tmp_path / "bp_table.yml"
+    bp_path.write_text(f"""aqueduct: "1.0"
+id: table_test.rt
+name: "Table round trip"
+modules:
+  - id: src
+    type: Ingress
+    config:
+      table: _aq_bp_test_src_tbl
+  - id: sink
+    type: Egress
+    config:
+      format: parquet
+      table: _aq_bp_test_out
+      mode: overwrite
+edges:
+  - from: src
+    to: sink
+""")
+    bp = parse(str(bp_path))
+    manifest = _compile(bp, bp_path)
+    result = _exec(manifest, spark, store_dir=str(tmp_path / "store"))
+    assert result.status == "success", result.module_results
+
+    check = spark.read.table("_aq_bp_test_out")
+    assert check.count() == 10
+    assert "id" in check.columns
+    assert "even" in check.columns
+
+    spark.sql("DROP TABLE IF EXISTS _aq_bp_test_src_tbl")
+    spark.sql("DROP TABLE IF EXISTS _aq_bp_test_out")
+
+
+def test_table_and_path_mutually_exclusive_at_parse(spark: SparkSession, tmp_path):
+    """table: + path: together are rejected."""
+    bp_path = tmp_path / "bp_mutex.yml"
+    bp_path.write_text(f"""aqueduct: "1.0"
+id: table_test.mutex
+name: "mutual exclusivity"
+modules:
+  - id: src
+    type: Ingress
+    config:
+      table: t
+      path: /p
+      format: parquet
+  - id: sink
+    type: Egress
+    config:
+      format: parquet
+      path: /out
+      mode: overwrite
+edges:
+  - from: src
+    to: sink
+""")
+    bp = parse(str(bp_path))
+    from aqueduct.compiler.compiler import compile as compiler_compile
+    manifest = compiler_compile(bp, blueprint_path=bp_path)
+    with pytest.raises(Exception, match="mutually exclusive"):
+        _exec(manifest, spark, store_dir=str(tmp_path / "store"))
+
+    # Egress side mutual exclusivity
+    bp_path2 = tmp_path / "bp_mutex2.yml"
+    bp_path2.write_text(f"""aqueduct: "1.0"
+id: table_test.mutex2
+name: "mutual exclusivity"
+modules:
+  - id: src
+    type: Ingress
+    config:
+      format: parquet
+      path: /foo
+  - id: sink
+    type: Egress
+    config:
+      format: parquet
+      table: t
+      path: /out
+      mode: overwrite
+edges:
+  - from: src
+    to: sink
+""")
+    bp2 = parse(str(bp_path2))
+    manifest2 = compiler_compile(bp2, blueprint_path=bp_path2)
+    with pytest.raises(Exception, match="mutually exclusive"):
+        _exec(manifest2, spark, store_dir=str(tmp_path / "store"))

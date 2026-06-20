@@ -383,6 +383,24 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                 results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
             continue
 
+        # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
+        table_val: str | None = cfg.get("table")
+        if table_val:
+            try:
+                from pyspark.sql import SparkSession
+
+                spark = SparkSession.builder.getOrCreate()
+                exists = spark.catalog.tableExists(table_val)
+                if exists:
+                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"table not found: {table_val}", _ms(t)))
+            except ModuleNotFoundError:
+                results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify table existence", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
+            continue
+
         # ── JDBC ──────────────────────────────────────────────────────────────
         jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
         if jdbc_url or fmt == "jdbc":
@@ -712,6 +730,24 @@ def check_blueprint_sources(
                     results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
             except Exception as exc:
                 results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
+            continue
+
+        # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
+        table_val: str | None = cfg.get("table")
+        if table_val:
+            try:
+                from pyspark.sql import SparkSession
+
+                spark = SparkSession.builder.getOrCreate()
+                exists = spark.catalog.tableExists(table_val)
+                if exists:
+                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"table not found: {table_val}", _ms(t)))
+            except ModuleNotFoundError:
+                results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify table existence", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
             continue
 
         # ── JDBC ──────────────────────────────────────────────────────────────

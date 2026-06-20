@@ -202,6 +202,9 @@ def test_path_keys_registry_per_module_type():
     assert get_path_keys("Ingress") == ("path", "data_dir", "input_dir", "jar")
     assert get_path_keys("Egress") == ("path", "output_dir", "jar")
     assert get_path_keys("UDF") == ("jar",)
+    # Phase 65 — `table` is a catalog identifier, never a filesystem path
+    assert "table" not in get_path_keys("Ingress")
+    assert "table" not in get_path_keys("Egress")
     # Unknown / unregistered types fall back to the legacy blanket tuple.
     legacy = ("path", "data_dir", "input_dir", "output_dir", "jar")
     assert get_path_keys("Channel") == legacy

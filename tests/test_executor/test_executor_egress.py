@@ -331,3 +331,101 @@ def test_on_new_columns_invalid_policy(spark: SparkSession, tmp_path):
                     config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "bogus"})
     with pytest.raises(EgressError, match="on_new_columns='bogus' is invalid"):
         write_egress(df, module)
+
+
+# ── Table-first addressing (catalog.schema.table) ──────────────────────────────
+
+def test_egress_table_overwrite(spark: SparkSession):
+    """table: with mode=overwrite writes via saveAsTable."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_ow")
+    df = spark.range(5).toDF("num")
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "table": "_aq_test_tbl_ow", "mode": "overwrite"})
+    write_egress(df, module)
+    check = spark.read.table("_aq_test_tbl_ow")
+    assert check.count() == 5
+    assert "num" in check.columns
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_ow")
+
+
+def test_egress_table_append(spark: SparkSession):
+    """table: with mode=append adds rows to existing catalog table."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_app")
+    spark.range(3).toDF("num").write.saveAsTable("_aq_test_tbl_app")
+    df = spark.range(2).toDF("num")
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "table": "_aq_test_tbl_app", "mode": "append"})
+    write_egress(df, module)
+    check = spark.read.table("_aq_test_tbl_app")
+    assert check.count() == 5
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_app")
+
+
+def test_egress_table_and_path_mutually_exclusive(spark: SparkSession):
+    """table: and path: together raise EgressError."""
+    df = spark.range(1)
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "table": "t", "path": "/p"})
+    with pytest.raises(EgressError, match="mutually exclusive"):
+        write_egress(df, module)
+
+
+def test_egress_table_with_partition_by(spark: SparkSession):
+    """table: with partition_by writes partitioned catalog table."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_part")
+    df = spark.range(10).selectExpr("id", "id % 2 AS part")
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={
+                        "format": "parquet",
+                        "table": "_aq_test_tbl_part",
+                        "mode": "overwrite",
+                        "partition_by": ["part"],
+                    })
+    write_egress(df, module)
+    check = spark.read.table("_aq_test_tbl_part")
+    assert check.count() == 10
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_part")
+
+
+def test_egress_table_overwrite_partitions(spark: SparkSession):
+    """table: with overwrite_partitions works via saveAsTable."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_op")
+    # initial two partitions
+    df0 = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "part"])
+    df0.write.format("parquet").partitionBy("part").mode("overwrite").saveAsTable("_aq_test_tbl_op")
+    # overwrite partitions touching only part=a
+    df1 = spark.createDataFrame([(9, "a")], ["id", "part"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={
+                        "format": "parquet",
+                        "table": "_aq_test_tbl_op",
+                        "mode": "overwrite_partitions",
+                        "partition_by": ["part"],
+                    })
+    write_egress(df1, module)
+    out = {(r.id, r.part) for r in spark.read.table("_aq_test_tbl_op").collect()}
+    assert (9, "a") in out      # part=a replaced
+    assert (2, "b") in out      # part=b preserved
+    assert (1, "a") not in out  # old part=a gone
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_op")
+
+
+def test_egress_table_register_as_table_ignored(spark: SparkSession, caplog):
+    """register_as_table is ignored (non-fatal warning) when table: is set."""
+    import logging
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_reg")
+    df = spark.range(3).toDF("x")
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={
+                        "format": "parquet",
+                        "table": "_aq_test_tbl_reg",
+                        "mode": "overwrite",
+                        "register_as_table": "ignored_table",
+                    })
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
+        write_egress(df, module)
+    # The actual write must have used the table: identifier, not register_as_table
+    check = spark.read.table("_aq_test_tbl_reg")
+    assert check.count() == 3
+    spark.sql("DROP TABLE IF EXISTS _aq_test_tbl_reg")
+

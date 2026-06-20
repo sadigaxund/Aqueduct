@@ -28,6 +28,7 @@ SKIP_PATTERNS=(
     "04_ingress_jdbc_postgres"
     "12_assert_null_sampling"
     "22_custom_datasource"   # requires Spark 4.0+ (Python DataSource API)
+    "23_table_first"         # requires a real catalog (local session catalog ok, but populate step first)
 )
 
 # ---------------------------------------------------------------------------

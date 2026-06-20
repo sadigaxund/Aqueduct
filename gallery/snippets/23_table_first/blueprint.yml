@@ -1,0 +1,25 @@
+# blueprint.yml
+# Table-first addressing — catalog.schema.table
+
+aqueduct: "1.0"
+id: table_first_demo
+name: "Table-First Addressing Snippet"
+
+modules:
+  - id: src
+    label: "Read from session catalog table"
+    type: Ingress
+    config:
+      table: demo_table
+
+  - id: out
+    label: "Write back to catalog table"
+    type: Egress
+    config:
+      format: parquet
+      table: demo_output
+      mode: overwrite
+
+edges:
+  - from: src
+    to: out

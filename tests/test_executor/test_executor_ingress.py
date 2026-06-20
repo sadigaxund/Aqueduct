@@ -496,3 +496,67 @@ def test_ingress_on_new_columns_no_baseline_skips(spark: SparkSession):
     module = Module(id="m1", type="Ingress", label="M1",
                     config={"format": "parquet", "path": "/t", "on_new_columns": "fail"})
     _enforce_on_new_columns(module, df, None)  # no baseline → skip, no raise
+
+
+# ── Table-first addressing (catalog.schema.table) ──────────────────────────────
+
+def test_ingress_table_read_ok(spark: SparkSession):
+    """table: reads from local session catalog."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_table_read")
+    spark.range(5).toDF("num").write.saveAsTable("_aq_test_table_read")
+    module = Module(id="m1", type="Ingress", label="M1", config={"table": "_aq_test_table_read"})
+    df = read_ingress(module, spark)
+    assert df.count() == 5
+    assert "num" in df.columns
+    spark.sql("DROP TABLE IF EXISTS _aq_test_table_read")
+
+
+def test_ingress_table_missing_raises(spark: SparkSession):
+    """table: with non-existent table raises IngressError."""
+    module = Module(id="m1", type="Ingress", label="M1", config={"table": "_aq_nonexistent_xyz"})
+    with pytest.raises(IngressError, match="not found or unreadable"):
+        read_ingress(module, spark)
+
+
+def test_ingress_table_and_path_mutually_exclusive(spark: SparkSession):
+    """table: and path: together raise IngressError."""
+    module = Module(id="m1", type="Ingress", label="M1",
+                    config={"table": "t", "path": "/p", "format": "parquet"})
+    with pytest.raises(IngressError, match="mutually exclusive"):
+        read_ingress(module, spark)
+
+
+def test_ingress_table_with_schema_hint(spark: SparkSession):
+    """table: with schema_hint — validates columns against catalog table."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_schema_hint")
+    spark.range(5).toDF("num").write.saveAsTable("_aq_test_schema_hint")
+    module = Module(id="m1", type="Ingress", label="M1", config={
+        "table": "_aq_test_schema_hint",
+        "schema_hint": [{"name": "num", "type": "bigint"}],
+    })
+    df = read_ingress(module, spark)
+    assert df.count() == 5
+    spark.sql("DROP TABLE IF EXISTS _aq_test_schema_hint")
+
+
+def test_ingress_table_with_partition_filters(spark: SparkSession):
+    """table: with partition_filters — predicate is applied post-read."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_part_filter")
+    spark.range(10).toDF("num").write.saveAsTable("_aq_test_part_filter")
+    module = Module(id="m1", type="Ingress", label="M1", config={
+        "table": "_aq_test_part_filter",
+        "partition_filters": "num >= 5",
+    })
+    df = read_ingress(module, spark)
+    assert df.count() == 5
+    spark.sql("DROP TABLE IF EXISTS _aq_test_part_filter")
+
+
+def test_ingress_table_requires_no_format(spark: SparkSession):
+    """table: works without format: key."""
+    spark.sql("DROP TABLE IF EXISTS _aq_test_no_fmt")
+    spark.range(3).toDF("x").write.saveAsTable("_aq_test_no_fmt")
+    module = Module(id="m1", type="Ingress", label="M1", config={"table": "_aq_test_no_fmt"})
+    df = read_ingress(module, spark)
+    assert df.count() == 3
+    spark.sql("DROP TABLE IF EXISTS _aq_test_no_fmt")

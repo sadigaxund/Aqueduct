@@ -273,6 +273,7 @@ modules: []
   #   label: "Load raw orders"
   #   config:
   #     format: parquet               # any Spark format: parquet, delta, csv, json, jdbc, orc, avro...
+  #     table: "unity.sales.orders"   # OR: catalog.schema.table (mutually exclusive with path)
   #     path: "s3a://bucket/orders/date=${ctx.today}/"
   #     partition_filters: "event_date >= '${ctx.start_date}'"   # manual predicate pushdown hint
   #     options: {}                 # forwarded verbatim to df.read.options()
@@ -520,6 +521,7 @@ modules: []
   #   config:
   #     format: parquet
   #     path: "s3a://bucket/clean/date=${ctx.today}/"
+  #     table: "unity.sales.orders_clean"  # OR: catalog.schema.table (mutually exclusive with path)
   #     mode: overwrite             # overwrite | append | merge | error | ignore
   #     merge_key: [order_id]       # required for mode: merge (Delta Lake only)
   #     partition_by: [region]

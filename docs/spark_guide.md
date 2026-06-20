@@ -203,6 +203,55 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 
 ---
 
+### Table addressing — wiring an external catalog {#catalog-wiring}
+
+When a Blueprint uses `table:` (instead of `path:`) on an Ingress or Egress,
+Spark resolves `catalog.schema.table` through whichever catalog the session is
+configured to talk to. Aqueduct defines nothing about the table's internals ---
+the catalog (Unity Catalog, AWS Glue, Hive metastore, Iceberg REST, Polaris)
+owns the location, schema, format, and permissions.
+
+The catalog connection is configured through standard `spark.sql.catalog.*`
+properties in `spark_config:` (blueprint-level or `aqueduct.yml` engine-level).
+There is no Aqueduct-specific catalog config:
+
+```yaml
+spark_config:
+  # Spark session catalog (default in-memory — tables are session-scoped)
+  # No special config needed; `table: my_table` works out of the box.
+
+  # Unity Catalog (Databricks) — Spark automatically discovers UC tables
+  # through the Databricks Runtime; no extra spark_config needed when
+  # running on a Databricks cluster.
+
+  # Hive metastore
+  spark.sql.catalogImplementation: "hive"
+  spark.sql.warehouse.dir: "s3a://my-bucket/warehouse"
+  # spark.hadoop.hive.metastore.uris: "thrift://metastore:9083"
+
+  # Iceberg REST catalog
+  spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
+  spark.sql.catalog.iceberg.type: "rest"
+  spark.sql.catalog.iceberg.uri: "https://iceberg-rest.example.com/"
+
+  # Polaris (Iceberg catalog)
+  spark.sql.catalog.polaris: "org.apache.iceberg.spark.SparkCatalog"
+  spark.sql.catalog.polaris.type: "rest"
+  spark.sql.catalog.polaris.credential: "${POLARIS_CREDENTIAL}"
+  spark.sql.catalog.polaris.rest-catalog.uri: "https://polaris.example.com/api/catalog"
+```
+
+Once configured, use `table: catalog.db.table` in your Blueprint modules --- the
+identifier is resolved through the active catalog.
+
+**Limitations.** `time_travel` (version/timestamp pin) is not supported on
+`table:`-addressed Ingress reads (the `spark.read.table()` API does not accept
+DataFrameReader options). Use a Channel with `TIMESTAMP AS OF` / `VERSION AS OF`
+SQL syntax instead. `register_as_table` is meaningless when `table:` is set on
+an Egress --- the catalog table is already the direct write target.
+
+---
+
 ### Iceberg & Hudi: Jars, Catalog, and Maintenance {#iceberg-hudi}
 
 `format: iceberg` and `format: hudi` are **mechanical** — Spark performs all I/O;

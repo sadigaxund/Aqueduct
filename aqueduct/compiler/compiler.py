@@ -274,6 +274,12 @@ def compile(  # noqa: A001
             continue
         fmt = m.config.get("format", "")
         path = m.config.get("path", "")
+        table = m.config.get("table", "")
+        if table:
+            # Table-addressed Ingress — record the catalog identifier; no local
+            # file metadata to stat.
+            inputs_fingerprint[m.id] = {"table": table, "size_bytes": None, "last_modified": None}
+            continue
         if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in CLOUD_SCHEMES):
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
             continue

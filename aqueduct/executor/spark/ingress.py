@@ -59,7 +59,60 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     """
     cfg = module.config
 
+    # Table-addressable read via catalog identifier (catalog.schema.table).
+    # When ``table:`` is set, read via ``spark.read.table(table)`` — no ``path``
+    # and no ``format`` required. The catalog is wired through ``spark_config``
+    # (e.g. ``spark.sql.catalog.*``), entirely external to Aqueduct.
+    table: str | None = cfg.get("table")
+    path: str | None = cfg.get("path")
     fmt: str | None = cfg.get("format")
+
+    if table and path:
+        raise IngressError(
+            f"[{module.id}] 'table' and 'path' are mutually exclusive. "
+            f"Set one or the other, not both."
+        )
+
+    if table:
+        # Spark's ``spark.read.table()`` returns a lazy DataFrame — no action.
+        try:
+            df: DataFrame = spark.read.table(table)
+        except Exception as exc:
+            raise IngressError(
+                f"[{module.id}] table {table!r} not found or unreadable: {exc}"
+            ) from exc
+
+        # partition_filters still applies on table reads
+        partition_filters: str | None = cfg.get("partition_filters")
+        if partition_filters:
+            try:
+                df = df.where(partition_filters)
+            except Exception as exc:
+                raise IngressError(
+                    f"[{module.id}] partition_filters {partition_filters!r} is invalid: {exc}"
+                ) from exc
+
+        # schema_hint check — uses df.schema (metadata only, not an action)
+        schema_hint_raw = cfg.get("schema_hint")
+        schema_hint_mode = "strict"
+        schema_hint: list[dict[str, str]] | None = None
+        if isinstance(schema_hint_raw, dict):
+            if "columns" in schema_hint_raw:
+                schema_hint_mode = schema_hint_raw.get("mode", "strict")
+                schema_hint = schema_hint_raw.get("columns")
+            else:
+                schema_hint = [{"name": k, "type": str(v)} for k, v in schema_hint_raw.items()]
+        elif isinstance(schema_hint_raw, list):
+            schema_hint = schema_hint_raw
+        if schema_hint:
+            _validate_schema_hint(module.id, df, schema_hint, mode=schema_hint_mode)
+
+        # on_new_columns
+        if cfg.get("on_new_columns"):
+            _enforce_on_new_columns(module, df, schema_hint)
+
+        return df
+
     if not fmt:
         raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
@@ -81,7 +134,6 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
             ) from exc
 
     # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
-    path: str | None = cfg.get("path")
     if not path and fmt not in PATHLESS_INGRESS_FORMATS and not is_custom:
         raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 

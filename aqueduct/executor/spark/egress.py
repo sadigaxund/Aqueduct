@@ -72,8 +72,16 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
     # ── Spark writer ──────────────────────────────────────────────────────────
     path: str | None = cfg.get("path")
-    if not path:
-        raise EgressError(f"[{module.id}] 'path' is required in Egress config")
+    table: str | None = cfg.get("table")
+
+    if table and path:
+        raise EgressError(
+            f"[{module.id}] 'table' and 'path' are mutually exclusive. "
+            f"Set one or the other, not both."
+        )
+
+    if not table and not path and fmt not in ("depot", "custom"):
+        raise EgressError(f"[{module.id}] 'path' or 'table' is required in Egress config")
 
     mode: str = cfg.get("mode", "error")
     if mode not in SUPPORTED_MODES:
@@ -88,7 +96,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     force_merge_schema = False
     if cfg.get("on_new_columns") and mode != "merge":
         force_merge_schema = _enforce_on_new_columns(
-            df, module, fmt, path, cfg.get("table"), str(cfg["on_new_columns"])
+            df, module, fmt, path or "", table, str(cfg["on_new_columns"])
         )
 
     if mode == "merge":
@@ -96,7 +104,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         return
 
     if mode == "overwrite_partitions":
-        _write_overwrite_partitions(df, module, fmt, path, force_merge_schema=force_merge_schema)
+        _write_overwrite_partitions(df, module, fmt, path or "", table, force_merge_schema=force_merge_schema)
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -116,17 +124,28 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         writer = writer.option(str(key), str(value))
 
     try:
-        writer.save(path)
+        if table:
+            writer.saveAsTable(table)
+        else:
+            writer.save(path)
     except EgressError:
         raise
     except Exception as exc:
+        loc = f"as {table!r}" if table else f"to {path!r}"
         raise EgressError(
-            f"[{module.id}] write failed to {path!r}: {exc}"
+            f"[{module.id}] write failed {loc}: {exc}"
         ) from exc
 
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
-        _register_external_table(df, module.id, register_as, fmt, path)
+        if table:
+            logger.warning(
+                "[%s] register_as_table=%r ignored — module already writes to a "
+                "catalog table via 'table:'. Use 'table:' to write directly.",
+                module.id, register_as,
+            )
+        else:
+            _register_external_table(df, module.id, register_as, fmt, path)
 
 
 def _register_external_table(
@@ -229,7 +248,7 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
 
 
 def _write_overwrite_partitions(
-    df: "DataFrame", module: Module, fmt: str, path: str, force_merge_schema: bool = False
+    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None = None, force_merge_schema: bool = False
 ) -> None:
     """Idempotent partition overwrite — replace only the touched partitions.
 
@@ -245,6 +264,10 @@ def _write_overwrite_partitions(
         are overwritten; untouched partitions are preserved. Requires
         ``partition_by`` (without it, dynamic mode would overwrite the whole
         table — exactly the footgun this mode exists to avoid).
+
+    When ``table:`` is set instead of ``path:``, writes via
+    ``saveAsTable(table)`` — ``replaceWhere`` and dynamic partition overwrite
+    both work on Delta tables addressed by catalog identifier.
     """
     cfg = module.config
     partition_by: list[str] | None = cfg.get("partition_by")
@@ -272,15 +295,19 @@ def _write_overwrite_partitions(
         writer = writer.option(str(key), str(value))
 
     try:
-        writer.save(path)
+        if table:
+            writer.saveAsTable(table)
+        else:
+            writer.save(path)
     except Exception as exc:
+        loc = f"as {table!r}" if table else f"to {path!r}"
         raise EgressError(
-            f"[{module.id}] overwrite_partitions write failed to {path!r}: {exc}"
+            f"[{module.id}] overwrite_partitions write failed {loc}: {exc}"
         ) from exc
 
     logger.info(
         "[%s] overwrite_partitions completed to %s (%s)",
-        module.id, path,
+        module.id, table or path,
         f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
     )
 
