@@ -124,12 +124,20 @@ class DeploymentConfig(BaseModel):
         target = self.target
         master = self.master_url
 
-        # ── Remote-submit targets (planned Phase 64) ──────────────────────────
-        if target in ("databricks", "emr", "dataproc"):
+        # ── Remote-submit targets (not yet implemented) ─────────────────────
+        if target == "databricks":
+            if self.databricks is None:
+                raise ConfigError(
+                    "deployment.target=databricks requires the "
+                    "deployment.databricks block to be set"
+                )
+            return self
+
+        if target in ("emr", "dataproc"):
             raise ConfigError(
                 f"deployment.target={target!r} is a remote-submit target not "
-                f"yet supported (planned: Phase 64). "
-                f"Use local | standalone | yarn | kubernetes."
+                f"yet supported. "
+                f"Use local | standalone | yarn | kubernetes | databricks."
             )
 
         # ── In-cluster targets ────────────────────────────────────────────────

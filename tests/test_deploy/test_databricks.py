@@ -180,25 +180,13 @@ class TestDatabricksSubmitterSubmit:
 
     @mock.patch.dict("os.environ", {"DATABRICKS_TOKEN": "test-token"})
     def test_submit_missing_databricks_config_raises(self):
-        from aqueduct.config import AqueductConfig, DeploymentConfig, SecretsConfig
-        from aqueduct.deploy.base import PackagedBlueprint
+        from aqueduct.config import AqueductConfig, ConfigError, DeploymentConfig, SecretsConfig
 
-        cfg = AqueductConfig(
-            deployment=DeploymentConfig(target="databricks"),
-            secrets=SecretsConfig(provider="env"),
-        )
-
-        packaged = PackagedBlueprint(
-            blueprint_path="dbfs:/jobs/r1/blueprint.yml",
-            config_path="",
-            bootstrap_path="dbfs:/jobs/r1/bootstrap.py",
-            run_id="r1",
-        )
-
-        from aqueduct.deploy.databricks import DatabricksSubmitter
-        sub = DatabricksSubmitter()
-        with pytest.raises(ValueError, match="deployment.databricks"):
-            sub.submit(packaged, cfg)
+        with pytest.raises(ConfigError, match="databricks block"):
+            AqueductConfig(
+                deployment=DeploymentConfig(target="databricks"),
+                secrets=SecretsConfig(provider="env"),
+            )
 
 
 class TestDatabricksSubmitterPoll:
