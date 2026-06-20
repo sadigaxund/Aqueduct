@@ -1,9 +1,10 @@
-"""Read-only data layer for `aqueduct studio` (Phase 67).
+"""Read-only data layer for `aqueduct studio` (Phase 67 / Phase 69).
 
-Pure DuckDB queries — NO ``textual``, NO ``pyspark``. The studio TUI (``app.py``)
-renders what these return; keeping the queries here makes them unit-testable
-without a UI or a Spark install. **Every connection is opened read-only**, so the
-ad-hoc SQL pane physically cannot mutate the store.
+NO ``textual``, NO ``pyspark`` — unit-tested directly. Backend-agnostic: the
+structured queries run against an ``ObservabilityStore`` (DuckDB *or* Postgres)
+via its ``RelationalCursor`` (`?` placeholders work on both). The ad-hoc SQL pane
+is the one exception — it opens a dedicated **read-only DuckDB** connection so a
+typo can't mutate the store, and is therefore offered for the DuckDB backend only.
 """
 
 from __future__ import annotations
@@ -15,17 +16,18 @@ from typing import Any
 
 import duckdb
 
-from aqueduct.config import DEFAULT_OBS_DB_FILENAME  # canonical "observability.db"
+from aqueduct.config import DEFAULT_OBS_DB_FILENAME
 
-_DEFAULT_OBS_FILE = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"  # flat default (single pipeline)
-_DEFAULT_OBS_ROOT = ".aqueduct/observability"               # per-blueprint routing dir
+_DEFAULT_OBS_FILE = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"
+_DEFAULT_OBS_ROOT = ".aqueduct/observability"
 
 
-@dataclass(frozen=True)
-class StoreInfo:
-    """One discovered observability database."""
-    blueprint_id: str   # "" when discovered via an explicit --store-dir
-    db_path: Path
+@dataclass
+class StoreHandle:
+    """One selectable observability store for the picker."""
+    label: str               # blueprint id, "(postgres)", or a path stem
+    store: Any               # ObservabilityStore (anything with .connect())
+    duckdb_path: Path | None  # set for duckdb (enables the read-only SQL pane); None for pg
 
 
 @dataclass(frozen=True)
@@ -67,63 +69,64 @@ class LineageRow:
     source_column: str
 
 
-def discover_stores(
-    store_dir: str | None = None,
-    obs_path: str | None = None,
-    root: str = _DEFAULT_OBS_ROOT,
-) -> list[StoreInfo]:
-    """Locate observability DB(s), covering every layout `aqueduct run` writes.
-
-    Resolution (mirrors ``cli._resolve_obs_db``):
-      1. ``store_dir`` → ``<store_dir>/observability.db`` only.
-      2. ``obs_path`` set to a NON-default value (from ``stores.observability.path``)
-         → that file, or if it is a directory, the file inside it + any
-         ``<dir>/*/observability.db`` per-blueprint children.
-      3. Default → the flat ``.aqueduct/observability.db`` (single-pipeline) AND
-         every ``.aqueduct/observability/<blueprint_id>/observability.db`` (routed).
-    """
-    stores: list[StoreInfo] = []
+def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> list[tuple[str, Path]]:
+    """All DuckDB observability files for the picker → (blueprint_id, path)."""
+    out: list[tuple[str, Path]] = []
     seen: set[Path] = set()
 
-    def _add(blueprint_id: str, path: "str | Path") -> None:
-        p = Path(path)
-        if p.exists() and p.is_file() and p not in seen:
-            seen.add(p)
-            stores.append(StoreInfo(blueprint_id, p))
+    def add(bp: str, p: "str | Path") -> None:
+        path = Path(p)
+        if path.is_file() and path not in seen:
+            seen.add(path)
+            out.append((bp, path))
 
     if store_dir:
-        _add("", Path(store_dir) / DEFAULT_OBS_DB_FILENAME)
-        return stores
-
+        add("", Path(store_dir) / DEFAULT_OBS_DB_FILENAME)
+        return out
     if obs_path and obs_path != _DEFAULT_OBS_FILE:
         ep = Path(obs_path)
         if ep.is_dir():
-            _add("", ep / DEFAULT_OBS_DB_FILENAME)
+            add("", ep / DEFAULT_OBS_DB_FILENAME)
             for sub in sorted(ep.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
-                _add(sub.parent.name, sub)
+                add(sub.parent.name, sub)
         else:
-            _add("", ep)
-        return stores
-
-    # Default layout: flat file + per-blueprint routing dir.
-    _add("", Path(_DEFAULT_OBS_FILE))
+            add("", ep)
+        return out
+    add("", Path(_DEFAULT_OBS_FILE))
     base = Path(root)
     if base.is_dir():
         for sub in sorted(base.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
-            _add(sub.parent.name, sub)
-    return stores
+            add(sub.parent.name, sub)
+    return out
 
 
-def _connect(db_path: "str | Path") -> duckdb.DuckDBPyConnection:
-    # read_only=True: the ad-hoc SQL pane cannot DELETE/UPDATE/CREATE.
-    return duckdb.connect(str(db_path), read_only=True)
+def discover_stores(
+    cfg: Any, store_dir: str | None = None, root: str = _DEFAULT_OBS_ROOT
+) -> list[StoreHandle]:
+    """Selectable stores, backend-aware.
+
+    Postgres → a single handle (one schema holds every run; SQL pane disabled).
+    DuckDB   → one handle per discovered file (override / non-default path /
+    flat default / per-blueprint routing).
+    """
+    obs = cfg.stores.observability
+    if getattr(obs, "backend", "duckdb") == "postgres":
+        from aqueduct.stores.base import get_stores
+
+        return [StoreHandle("(postgres)", get_stores(cfg).observability, None)]
+
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+    handles: list[StoreHandle] = []
+    for bp, path in _duckdb_files(getattr(obs, "path", None), store_dir, root):
+        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path))
+    return handles
 
 
-def list_runs(db_path: "str | Path", limit: int = 50) -> list[RunRow]:
-    """Most-recent runs first."""
-    conn = _connect(db_path)
-    try:
-        rows = conn.execute(
+def list_runs(store: Any, limit: int = 50) -> list[RunRow]:
+    """Most-recent runs first (works on any ObservabilityStore backend)."""
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, status,
                    CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
@@ -132,17 +135,15 @@ def list_runs(db_path: "str | Path", limit: int = 50) -> list[RunRow]:
             LIMIT ?
             """,
             [limit],
-        ).fetchall()
-    finally:
-        conn.close()
+        )
+        rows = cur.fetchall()
     return [RunRow(*r) for r in rows]
 
 
-def run_detail(db_path: "str | Path", run_id: str) -> RunDetail | None:
+def run_detail(store: Any, run_id: str) -> RunDetail | None:
     """Module results + resource profile for one run, or None if not found."""
-    conn = _connect(db_path)
-    try:
-        row = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, status,
                    CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR),
@@ -150,22 +151,22 @@ def run_detail(db_path: "str | Path", run_id: str) -> RunDetail | None:
             FROM run_records WHERE run_id = ?
             """,
             [run_id],
-        ).fetchone()
+        )
+        row = cur.fetchone()
         if row is None:
             return None
         try:
-            prof = conn.execute(
+            cur.execute(
                 """
                 SELECT module_id, records_written, bytes_written, duration_ms
                 FROM module_metrics WHERE run_id = ?
                 ORDER BY duration_ms DESC NULLS LAST
                 """,
                 [run_id],
-            ).fetchall()
+            )
+            prof = cur.fetchall()
         except Exception:
             prof = []  # module_metrics may not exist yet
-    finally:
-        conn.close()
 
     run = RunRow(row[0], row[1], row[2], row[3], row[4])
     raw = row[5]
@@ -177,25 +178,7 @@ def run_detail(db_path: "str | Path", run_id: str) -> RunDetail | None:
     return RunDetail(run, modules, [ProfileRow(*p) for p in prof])
 
 
-def run_sql(db_path: "str | Path", query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
-    """Execute an ad-hoc read-only query → (column_names, rows).
-
-    The connection is read-only, so any write (INSERT/UPDATE/DELETE/CREATE) raises
-    rather than mutating the store — the error message is surfaced to the user.
-    """
-    conn = _connect(db_path)
-    try:
-        cur = conn.execute(query)
-        cols = [d[0] for d in cur.description] if cur.description else []
-        rows = cur.fetchall()
-    finally:
-        conn.close()
-    return cols, rows
-
-
-def lineage(
-    db_path: "str | Path", blueprint_id: str | None = None, limit: int = 500
-) -> list[LineageRow]:
+def lineage(store: Any, blueprint_id: str | None = None, limit: int = 500) -> list[LineageRow]:
     """Column-level lineage rows (empty if the table is absent)."""
     q = "SELECT channel_id, output_column, source_table, source_column FROM column_lineage"
     params: list[Any] = []
@@ -204,13 +187,27 @@ def lineage(
         params.append(blueprint_id)
     q += " LIMIT ?"
     params.append(limit)
-
-    conn = _connect(db_path)
     try:
-        try:
-            rows = conn.execute(q, params).fetchall()
-        except Exception:
-            rows = []  # column_lineage may not exist
+        with store.connect() as cur:
+            cur.execute(q, params)
+            rows = cur.fetchall()
+    except Exception:
+        rows = []  # column_lineage may not exist
+    return [LineageRow(*r) for r in rows]
+
+
+def run_sql_readonly(duckdb_path: "str | Path", query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
+    """Ad-hoc query over a **read-only** DuckDB connection → (columns, rows).
+
+    DuckDB-only: the read-only connection physically rejects writes, which is the
+    safety guarantee the SQL pane needs. (Postgres lacks an equally cheap per-call
+    read-only guarantee here, so the pane is disabled for it.)
+    """
+    conn = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        cur = conn.execute(query)
+        cols = [d[0] for d in cur.description] if cur.description else []
+        rows = cur.fetchall()
     finally:
         conn.close()
-    return [LineageRow(*r) for r in rows]
+    return cols, rows

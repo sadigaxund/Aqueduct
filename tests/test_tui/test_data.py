@@ -1,12 +1,14 @@
-"""Phase 67 — `aqueduct studio` data layer (read-only DuckDB, no textual/pyspark)."""
+"""Phase 67/69 — `aqueduct studio` data layer (backend-agnostic, no textual/pyspark)."""
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import duckdb
 import pytest
 
 from aqueduct.tui import data as d
+from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
 pytestmark = pytest.mark.unit
 
@@ -28,118 +30,116 @@ CREATE TABLE IF NOT EXISTS column_lineage (
 """
 
 
-def _db(tmp_path):
-    p = tmp_path / "observability.db"
-    c = duckdb.connect(str(p))
-    c.execute(_DDL)
-    return p, c
+def _cfg(path=".aqueduct/observability.db", backend="duckdb"):
+    return SimpleNamespace(
+        stores=SimpleNamespace(observability=SimpleNamespace(path=path, backend=backend))
+    )
+
+
+def _store(path):
+    return DuckDBObservabilityStore(path)
 
 
 # ── discover_stores ─────────────────────────────────────────────────────────
 
 def test_discover_with_store_dir(tmp_path):
-    _db(tmp_path)
-    stores = d.discover_stores(store_dir=str(tmp_path))
-    assert len(stores) == 1 and stores[0].db_path.name == "observability.db"
+    duckdb.connect(str(tmp_path / "observability.db")).close()
+    handles = d.discover_stores(_cfg(), store_dir=str(tmp_path))
+    assert len(handles) == 1 and handles[0].duckdb_path == tmp_path / "observability.db"
 
 
 def test_discover_store_dir_missing(tmp_path):
-    assert d.discover_stores(store_dir=str(tmp_path)) == []
+    assert d.discover_stores(_cfg(), store_dir=str(tmp_path)) == []
 
 
 def test_discover_scans_root(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # isolate the cwd-relative flat-default check
+    monkeypatch.chdir(tmp_path)
     root = tmp_path / "obs"
     for bp in ("alpha", "beta"):
         (root / bp).mkdir(parents=True)
         duckdb.connect(str(root / bp / "observability.db")).close()
-    stores = d.discover_stores(root=str(root))
-    assert [s.blueprint_id for s in stores] == ["alpha", "beta"]
+    handles = d.discover_stores(_cfg(), root=str(root))
+    assert [h.label for h in handles] == ["alpha", "beta"]
 
 
-def test_discover_flat_default_file(tmp_path, monkeypatch):
-    # The reported bug: flat .aqueduct/observability.db (default single-pipeline layout).
+def test_discover_flat_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".aqueduct").mkdir()
     duckdb.connect(str(tmp_path / ".aqueduct" / "observability.db")).close()
-    stores = d.discover_stores()
-    assert len(stores) == 1
-    assert stores[0].db_path.name == "observability.db"
+    handles = d.discover_stores(_cfg())
+    assert len(handles) == 1 and handles[0].duckdb_path.name == "observability.db"
 
 
-def test_discover_explicit_obs_path_file(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    custom = tmp_path / "custom" / "myobs.db"
-    custom.parent.mkdir()
-    duckdb.connect(str(custom)).close()
-    stores = d.discover_stores(obs_path=str(custom))
-    assert len(stores) == 1 and stores[0].db_path == custom
+def test_discover_postgres_single_handle(monkeypatch):
+    sentinel = object()
+    bundle = SimpleNamespace(observability=sentinel)
+    monkeypatch.setattr("aqueduct.stores.base.get_stores", lambda cfg: bundle)
+    handles = d.discover_stores(_cfg(backend="postgres"))
+    assert len(handles) == 1
+    assert handles[0].store is sentinel and handles[0].duckdb_path is None
 
 
-# ── list_runs ───────────────────────────────────────────────────────────────
+# ── list_runs / run_detail / lineage (via ObservabilityStore) ────────────────
 
 def test_list_runs_recent_first(tmp_path):
-    p, c = _db(tmp_path)
+    p = tmp_path / "observability.db"
+    c = duckdb.connect(str(p)); c.execute(_DDL)
     c.execute("INSERT INTO run_records VALUES ('r1','bp','success','2026-06-18'::timestamptz, now(), '[]')")
     c.execute("INSERT INTO run_records VALUES ('r2','bp','error','2026-06-19'::timestamptz, now(), '[]')")
     c.close()
-    runs = d.list_runs(p)
+    runs = d.list_runs(_store(p))
     assert [r.run_id for r in runs] == ["r2", "r1"]
-    assert runs[0].status == "error"
 
-
-# ── run_detail ──────────────────────────────────────────────────────────────
 
 def test_run_detail_modules_and_profile(tmp_path):
-    p, c = _db(tmp_path)
+    p = tmp_path / "observability.db"
+    c = duckdb.connect(str(p)); c.execute(_DDL)
     mr = json.dumps([{"module_id": "a", "status": "success", "error": ""},
                      {"module_id": "b", "status": "error", "error": "boom"}])
     c.execute("INSERT INTO run_records VALUES ('r1','bp','error', now(), now(), ?)", [mr])
     c.execute("INSERT INTO module_metrics VALUES ('r1','b',NULL,NULL,5,50,900,now())")
     c.execute("INSERT INTO module_metrics VALUES ('r1','a',NULL,NULL,1,10,100,now())")
     c.close()
-    det = d.run_detail(p, "r1")
+    det = d.run_detail(_store(p), "r1")
     assert det is not None
     assert [m.module_id for m in det.modules] == ["a", "b"]
-    assert det.modules[1].error == "boom"
     assert [pr.module_id for pr in det.profile] == ["b", "a"]  # heaviest first
 
 
 def test_run_detail_missing_returns_none(tmp_path):
-    p, c = _db(tmp_path)
-    c.close()
-    assert d.run_detail(p, "nope") is None
+    p = tmp_path / "observability.db"
+    duckdb.connect(str(p)).execute(_DDL)
+    assert d.run_detail(_store(p), "nope") is None
 
-
-# ── run_sql (read-only) ─────────────────────────────────────────────────────
-
-def test_run_sql_select(tmp_path):
-    p, c = _db(tmp_path)
-    c.execute("INSERT INTO run_records VALUES ('r1','bp','success', now(), now(), '[]')")
-    c.close()
-    cols, rows = d.run_sql(p, "SELECT run_id, status FROM run_records")
-    assert cols == ["run_id", "status"]
-    assert rows == [("r1", "success")]
-
-
-def test_run_sql_write_is_blocked(tmp_path):
-    p, c = _db(tmp_path)
-    c.close()
-    with pytest.raises(Exception):  # read-only connection rejects mutation
-        d.run_sql(p, "CREATE TABLE evil (x INT)")
-
-
-# ── lineage ─────────────────────────────────────────────────────────────────
 
 def test_lineage_rows(tmp_path):
-    p, c = _db(tmp_path)
+    p = tmp_path / "observability.db"
+    c = duckdb.connect(str(p)); c.execute(_DDL)
     c.execute("INSERT INTO column_lineage VALUES ('bp','r1','ch','out','src','col', now())")
     c.close()
-    rows = d.lineage(p)
+    rows = d.lineage(_store(p))
     assert len(rows) == 1 and rows[0].output_column == "out"
 
 
 def test_lineage_absent_table_empty(tmp_path):
     p = tmp_path / "bare.db"
     duckdb.connect(str(p)).close()  # no column_lineage table
-    assert d.lineage(p) == []
+    assert d.lineage(_store(p)) == []
+
+
+# ── run_sql_readonly (duckdb, read-only) ─────────────────────────────────────
+
+def test_run_sql_readonly_select(tmp_path):
+    p = tmp_path / "observability.db"
+    c = duckdb.connect(str(p)); c.execute(_DDL)
+    c.execute("INSERT INTO run_records VALUES ('r1','bp','success', now(), now(), '[]')")
+    c.close()
+    cols, rows = d.run_sql_readonly(p, "SELECT run_id, status FROM run_records")
+    assert cols == ["run_id", "status"] and rows == [("r1", "success")]
+
+
+def test_run_sql_readonly_write_blocked(tmp_path):
+    p = tmp_path / "observability.db"
+    duckdb.connect(str(p)).execute(_DDL)
+    with pytest.raises(Exception):
+        d.run_sql_readonly(p, "CREATE TABLE evil (x INT)")

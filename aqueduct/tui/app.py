@@ -43,12 +43,14 @@ class StudioApp(App):
     #sql_error { color: $error; height: auto; }
     """
 
-    def __init__(self, stores: list[d.StoreInfo], cfg: Any, config_path: str | None):
+    def __init__(self, handles: list[d.StoreHandle], cfg: Any, config_path: str | None):
         super().__init__()
-        self._stores = stores
+        self._handles = handles
         self._cfg = cfg
         self._config_path = config_path
-        self._db = stores[0].db_path  # first store; multi-store switch = future
+        self._handle = handles[0]  # first store; multi-store switch = future
+        self._store = self._handle.store
+        self._duckdb_path = self._handle.duckdb_path  # None for postgres → SQL pane off
         self._runs: list[d.RunRow] = []
 
     def compose(self) -> ComposeResult:
@@ -77,8 +79,8 @@ class StudioApp(App):
 
     # ── lifecycle ───────────────────────────────────────────────────────────
     def on_mount(self) -> None:
-        bp = self._stores[0].blueprint_id or self._db.parent.name
-        self.sub_title = f"{bp}  ·  {self._db}"
+        loc = str(self._duckdb_path) if self._duckdb_path else "postgres"
+        self.sub_title = f"{self._handle.label}  ·  {loc}"
         self._load_runs()
         self._load_lineage()
         self._load_doctor()
@@ -90,7 +92,7 @@ class StudioApp(App):
 
     # ── Runs ────────────────────────────────────────────────────────────────
     def _load_runs(self) -> None:
-        self._runs = d.list_runs(self._db)
+        self._runs = d.list_runs(self._store)
         t = self.query_one("#runs", DataTable)
         t.clear(columns=True)
         t.add_columns("", "run_id", "blueprint", "started")
@@ -100,7 +102,7 @@ class StudioApp(App):
             self._show_detail(self._runs[0].run_id)
 
     def _show_detail(self, run_id: str) -> None:
-        det = d.run_detail(self._db, run_id)
+        det = d.run_detail(self._store, run_id)
         mods = self.query_one("#modules", DataTable)
         prof = self.query_one("#profile", DataTable)
         mods.clear(columns=True)
@@ -133,8 +135,11 @@ class StudioApp(App):
         query = event.value.strip()
         if not query:
             return
+        if self._duckdb_path is None:
+            err.update("ad-hoc SQL pane is available for the duckdb backend only")
+            return
         try:
-            cols, rows = d.run_sql(self._db, query)
+            cols, rows = d.run_sql_readonly(self._duckdb_path, query)
         except Exception as exc:  # surface read-only / SQL errors to the user
             err.update(f"✗ {exc}")
             return
@@ -148,7 +153,7 @@ class StudioApp(App):
         t = self.query_one("#lineage", DataTable)
         t.clear(columns=True)
         t.add_columns("channel", "output_column", "source_table", "source_column")
-        for r in d.lineage(self._db):
+        for r in d.lineage(self._store):
             t.add_row(r.channel_id, r.output_column, r.source_table, r.source_column)
 
     # ── Doctor ──────────────────────────────────────────────────────────────
@@ -217,31 +222,12 @@ def run_studio(
         print(f"config error: {exc}")
         return 1
 
-    obs_path = None
-    backend = None
-    try:
-        obs_path = cfg.stores.observability.path
-        backend = cfg.stores.observability.backend
-    except Exception:
-        pass
-
-    # studio (like the rest of the read-side CLI) reads a local DuckDB file. A
-    # non-duckdb backend (e.g. postgres) has no local file to open — say so
-    # clearly instead of reporting "no stores found".
-    if backend and backend != "duckdb" and not store_dir:
-        print(
-            f"aqueduct studio reads the local duckdb observability backend only "
-            f"(configured backend: {backend!r}). The read-side CLI "
-            f"(report/runs/lineage) shares this limitation; non-duckdb read support "
-            f"is tracked separately. Use --store-dir to point at a local duckdb file."
-        )
+    # Backend-aware (Phase 69): duckdb → one handle per file; postgres → one store
+    # (all runs). The ad-hoc SQL pane self-disables for postgres (read-only-only).
+    handles = d.discover_stores(cfg, store_dir=store_dir)
+    if not handles:
+        print("No observability stores found. Run a blueprint first.")
         return 1
 
-    stores = d.discover_stores(store_dir=store_dir, obs_path=obs_path)
-    if not stores:
-        where = store_dir or obs_path or f"{d._DEFAULT_OBS_FILE} / {d._DEFAULT_OBS_ROOT}/*"
-        print(f"No observability stores found ({where}). Run a blueprint first.")
-        return 1
-
-    StudioApp(stores, cfg, config_path).run()
+    StudioApp(handles, cfg, config_path).run()
     return 0
