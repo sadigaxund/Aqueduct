@@ -157,11 +157,13 @@ def test_explain_formatted_plan_no_sql_ctx_access():
 # ── 7 & 8. TCP Reachability and Parsing Tests ─────────────────────────────────
 
 def test_host_port_parsing():
-    """_host_port parses spark://h:p, http://h:p, h:p; bad -> None."""
+    """_host_port parses spark://h:p, http://h:p, h:p, k8s://https://h:p; bad -> None."""
     assert _host_port("spark://localhost:7077", 7077) == ("localhost", 7077)
     assert _host_port("http://my-host:8080", 80) == ("my-host", 8080)
     assert _host_port("my-host:9000", 7077) == ("my-host", 9000)
     assert _host_port("bad-url-format", 7077) is None
+    assert _host_port("k8s://https://kube-api:6443", 443) == ("kube-api", 6443)
+    assert _host_port("k8s://https://hostname", 443) == ("hostname", 443)
 
 
 def test_tcp_ok_refused():
@@ -173,21 +175,85 @@ def test_tcp_ok_refused():
 def test_spark_check_tcp_reachability(monkeypatch):
     """Default check_spark (preflight=False) uses fast TCP probe and does not build session."""
     # Local mode is always ok
-    ok_local, _ = check_spark("local[*]", {}, preflight=False)
+    ok_local, _ = check_spark("local[*]", {}, preflight=False, target="local")
     assert ok_local.status == "ok"
     assert "local mode" in ok_local.detail
 
-    # Remote master reachable
+    # Remote master reachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=True):
-        ok_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False)
+        ok_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
         assert ok_remote.status == "ok"
         assert "reachable" in ok_remote.detail
 
-    # Remote master unreachable
+    # Remote master unreachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=False):
-        fail_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False)
+        fail_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
         assert fail_remote.status == "fail"
         assert "(Not a timeout: no SparkSession was built.)" in fail_remote.detail
+
+
+def test_yarn_reachability_warns_without_hadoop_conf_dir(monkeypatch):
+    """yarn target warns when HADOOP_CONF_DIR and YARN_CONF_DIR are both unset."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "warn"
+    assert "HADOOP_CONF_DIR" in spark_res.detail
+
+
+def test_yarn_reachability_ok_with_hadoop_conf_dir(monkeypatch):
+    """yarn target passes when HADOOP_CONF_DIR is set."""
+    monkeypatch.setenv("HADOOP_CONF_DIR", "/etc/hadoop/conf")
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "ok"
+    assert "/etc/hadoop/conf" in spark_res.detail
+
+
+def test_yarn_reachability_ok_with_yarn_conf_dir(monkeypatch):
+    """yarn target passes when YARN_CONF_DIR is set (fallback)."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.setenv("YARN_CONF_DIR", "/opt/yarn/conf")
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "ok"
+    assert "/opt/yarn/conf" in spark_res.detail
+
+
+def test_k8s_reachability_parses_api_server():
+    """kubernetes target parses k8s:// URL to host:port."""
+    hp = _host_port("k8s://https://kube-api.cluster.local:6443", 443)
+    assert hp == ("kube-api.cluster.local", 6443)
+
+
+def test_k8s_reachability_ok_when_api_server_tcp_ok(monkeypatch):
+    """kubernetes target with reachable API server and k8s keys -> ok."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    k8s_cfg = {"spark.kubernetes.namespace": "aqueduct", "spark.kubernetes.container.image": "img"}
+    with patch("aqueduct.doctor._tcp_ok", return_value=True):
+        spark_res, _ = check_spark("k8s://https://host:443", k8s_cfg, preflight=False, target="kubernetes")
+    assert spark_res.status == "ok"
+    assert "reachable" in spark_res.detail
+
+
+def test_k8s_reachability_warns_without_k8s_keys(monkeypatch):
+    """kubernetes target warns when no spark.kubernetes.* keys are present."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    with patch("aqueduct.doctor._tcp_ok", return_value=True):
+        spark_res, _ = check_spark("k8s://https://host:443", {}, preflight=False, target="kubernetes")
+    assert spark_res.status == "warn"
+    assert "spark.kubernetes" in spark_res.detail
+
+
+def test_k8s_reachability_fail_when_api_server_unreachable(monkeypatch):
+    """kubernetes target with unreachable API server -> fail."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    with patch("aqueduct.doctor._tcp_ok", return_value=False):
+        spark_res, _ = check_spark("k8s://https://host:6443", {}, preflight=False, target="kubernetes")
+    assert spark_res.status == "fail"
+    assert "unreachable" in spark_res.detail
 
 
 # ── 9. S3A Endpoint TCP Probe and bucketless design Test ──────────────────────

@@ -107,14 +107,14 @@ def test_config_overrides(tmp_path):
     """
     path = tmp_path / "override.yml"
     data = {
-        "deployment": {"master_url": "spark://host:7077"},
+        "deployment": {"master_url": "local[2]"},
         "spark_config": {"spark.driver.memory": "2g"}
     }
     path.write_text(yaml.dump(data))
     config = load_config(path)
     
     # Custom read back
-    assert config.deployment.master_url == "spark://host:7077"
+    assert config.deployment.master_url == "local[2]"
     
     # Partial fallback
     assert config.deployment.target == "local"
@@ -215,6 +215,115 @@ def test_deployment_config_literal_validation(tmp_path):
     path.write_text("deployment:\n  env: void")
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
+
+
+# ── Target ↔ master_url validation tests ──────────────────────────────────────
+
+def test_target_local_valid_master_url_ok(tmp_path):
+    """local target with matching master_url passes"""
+    for url in ("local[*]", "local[4]", "local"):
+        path = tmp_path / "cfg.yml"
+        path.write_text(f"deployment:\n  target: local\n  master_url: {url}")
+        cfg = load_config(path)
+        assert cfg.deployment.target == "local"
+        assert cfg.deployment.master_url == url
+
+
+def test_target_local_wrong_master_url_raises(tmp_path):
+    """local target with non-local master_url raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: local\n  master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'local'"):
+        load_config(path)
+
+
+def test_target_standalone_valid_master_url_ok(tmp_path):
+    """standalone target with spark:// master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: standalone\n  master_url: spark://my-master:7077")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "standalone"
+
+
+def test_target_standalone_wrong_master_url_raises(tmp_path):
+    """standalone target with non-spark:// master_url raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: standalone\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'spark://'"):
+        load_config(path)
+
+
+def test_target_yarn_valid_master_url_ok(tmp_path):
+    """yarn target with master_url='yarn' passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: yarn\n  master_url: yarn")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "yarn"
+
+
+def test_target_yarn_wrong_master_url_raises(tmp_path):
+    """yarn target with master_url != 'yarn' raises ConfigError (exact match)"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: yarn\n  master_url: \"yarn-client\"")
+    with pytest.raises(ConfigError, match="requires master_url='yarn'"):
+        load_config(path)
+
+
+def test_target_kubernetes_valid_master_url_ok(tmp_path):
+    """kubernetes target with k8s:// master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: kubernetes\n  master_url: k8s://https://apiserver:6443")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "kubernetes"
+
+
+def test_target_kubernetes_wrong_master_url_raises(tmp_path):
+    """kubernetes target without k8s:// prefix raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: kubernetes\n  master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'k8s://'"):
+        load_config(path)
+
+
+def test_target_databricks_raises_phase64(tmp_path):
+    """databricks target raises ConfigError with Phase 64 pointer"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: databricks\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+        load_config(path)
+
+
+def test_target_emr_raises_phase64(tmp_path):
+    """emr target raises ConfigError with Phase 64 pointer"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: emr\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+        load_config(path)
+
+
+def test_target_dataproc_raises_phase64(tmp_path):
+    """dataproc target raises ConfigError with Phase 64 pointer"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: dataproc\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+        load_config(path)
+
+
+def test_target_default_master_url_passes(tmp_path):
+    """Default local target with default local[*] master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: local\n  master_url: \"local[*]\"")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "local"
+    assert cfg.deployment.master_url == "local[*]"
+
+
+def test_target_validation_skips_flink_engine(tmp_path):
+    """target↔master_url validation only fires for engine=spark"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  engine: flink\n  target: databricks\n  master_url: local[*]")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "databricks"  # no error — engine != spark
 
 
 # ── Two-pass Secrets Loading tests ───────────────────────────────────────────
