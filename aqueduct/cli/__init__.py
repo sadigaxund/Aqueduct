@@ -171,44 +171,14 @@ def _resolve_obs_db(
     ``Path(cfg.stores.observability.path).parent``, which only worked when the
     user explicitly set a non-default path.
 
-    Resolution order:
-      1. ``--store-dir <path>`` flag (explicit user override) → ``<path>/observability.db``
-      2. User set a non-default ``stores.observability.path`` in aqueduct.yml → use it verbatim
-      3. Default sentinel AND ``run_id`` provided → glob the per-pipeline dirs
-         and return the first DB containing a row for that run_id
-      4. Fall back to the default file
+    Canonical logic now lives in ``aqueduct.stores.read.resolve_duckdb_obs_path``
+    (Phase 69) so every reader shares one resolver; this stays as a thin,
+    monkeypatch-friendly wrapper. For backend-aware reads (DuckDB *or* Postgres),
+    prefer ``aqueduct.stores.read.open_obs_read``.
     """
-    from aqueduct.config import DEFAULT_OBS_DB_FILENAME
-    if store_dir:
-        candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
-        return candidate if candidate.exists() else None
+    from aqueduct.stores.read import resolve_duckdb_obs_path
 
-    obs_path = cfg.stores.observability.path
-    if obs_path != _DEFAULT_OBS_PATH:
-        explicit = Path(obs_path)
-        if explicit.is_dir():
-            explicit = explicit / DEFAULT_OBS_DB_FILENAME
-        return explicit if explicit.exists() else None
-
-    if run_id:
-        import duckdb as _duckdb
-        for candidate in sorted(Path(".aqueduct/observability").glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
-            try:
-                conn = _duckdb.connect(str(candidate), read_only=True)
-                try:
-                    hit = conn.execute(
-                        "SELECT 1 FROM run_records WHERE run_id = ? LIMIT 1",
-                        [run_id],
-                    ).fetchone()
-                finally:
-                    conn.close()
-                if hit:
-                    return candidate
-            except Exception:
-                continue
-
-    legacy = Path(_DEFAULT_OBS_PATH)
-    return legacy if legacy.exists() else None
+    return resolve_duckdb_obs_path(cfg, store_dir, run_id)
 
 
 def _agent_usable(provider: str, base_url: str | None) -> bool:
