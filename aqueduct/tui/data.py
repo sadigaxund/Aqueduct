@@ -15,8 +15,10 @@ from typing import Any
 
 import duckdb
 
-_DEFAULT_OBS_FILE = ".aqueduct/observability.db"   # flat default (single pipeline)
-_DEFAULT_OBS_ROOT = ".aqueduct/observability"       # per-blueprint routing dir
+from aqueduct.config import DEFAULT_OBS_DB_FILENAME  # canonical "observability.db"
+
+_DEFAULT_OBS_FILE = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"  # flat default (single pipeline)
+_DEFAULT_OBS_ROOT = ".aqueduct/observability"               # per-blueprint routing dir
 
 
 @dataclass(frozen=True)
@@ -90,14 +92,14 @@ def discover_stores(
             stores.append(StoreInfo(blueprint_id, p))
 
     if store_dir:
-        _add("", Path(store_dir) / "observability.db")
+        _add("", Path(store_dir) / DEFAULT_OBS_DB_FILENAME)
         return stores
 
     if obs_path and obs_path != _DEFAULT_OBS_FILE:
         ep = Path(obs_path)
         if ep.is_dir():
-            _add("", ep / "observability.db")
-            for sub in sorted(ep.glob("*/observability.db")):
+            _add("", ep / DEFAULT_OBS_DB_FILENAME)
+            for sub in sorted(ep.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
                 _add(sub.parent.name, sub)
         else:
             _add("", ep)
@@ -107,7 +109,7 @@ def discover_stores(
     _add("", Path(_DEFAULT_OBS_FILE))
     base = Path(root)
     if base.is_dir():
-        for sub in sorted(base.glob("*/observability.db")):
+        for sub in sorted(base.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
             _add(sub.parent.name, sub)
     return stores
 

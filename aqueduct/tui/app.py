@@ -218,10 +218,24 @@ def run_studio(
         return 1
 
     obs_path = None
+    backend = None
     try:
         obs_path = cfg.stores.observability.path
+        backend = cfg.stores.observability.backend
     except Exception:
         pass
+
+    # studio (like the rest of the read-side CLI) reads a local DuckDB file. A
+    # non-duckdb backend (e.g. postgres) has no local file to open — say so
+    # clearly instead of reporting "no stores found".
+    if backend and backend != "duckdb" and not store_dir:
+        print(
+            f"aqueduct studio reads the local duckdb observability backend only "
+            f"(configured backend: {backend!r}). The read-side CLI "
+            f"(report/runs/lineage) shares this limitation; non-duckdb read support "
+            f"is tracked separately. Use --store-dir to point at a local duckdb file."
+        )
+        return 1
 
     stores = d.discover_stores(store_dir=store_dir, obs_path=obs_path)
     if not stores:
