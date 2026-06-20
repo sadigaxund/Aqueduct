@@ -57,6 +57,8 @@ OpenLineage adds **no** extra — `httpx` is already a base dep.)
 
 ## Executor Architecture (Extras Pattern)
 - `aqueduct/executor/models.py` — engine-agnostic (`ExecutionResult`, `ModuleResult`)
+- `aqueduct/executor/path_keys.py` — engine-agnostic path-field registry (imported by the parser)
+- `aqueduct/executor/probe_plugins.py` — engine-agnostic, **pyspark-free** custom-probe-signal resolver (`custom_signal_source`, `resolve_callable`, `AQ_PROBE_ENTRYPOINT_GROUP`). Lives at the top level (not under `spark/`) so the compiler (`wirer`) can validate `type: custom` signal shape and the Spark `probe.py` can resolve callables at runtime — same precedent as `path_keys.py`. Do not add `pyspark` imports here.
 - `aqueduct/executor/spark/` — all Spark code (`ingress`, `egress`, `channel`, `executor`, `junction`, `funnel`, `probe`, `session`, `udf`, `assert_`)
 - `aqueduct/executor/__init__.py` — `get_executor(manifest, config)` factory
 
@@ -177,6 +179,7 @@ whenever a package is restructured — use it as the first filter before greppin
 | `assert_.py` | Quality gates: min_rows, null_rate, freshness, sql, sql_row, spillway_rate |
 | `session.py` | SparkSession management, Delta conf, cloudpickle patch |
 | `udf.py` | UDF registry, cloudpickle compatibility |
+| `custom_source.py` | Custom Python DataSource (`format: custom`) import/validate/register — Spark 4.0+ |
 | `metrics.py` | Zero-extra-action observe() wrapper, Hadoop FS byte count |
 | `test_runner.py` | Isolated module test framework (aqueduct test CLI) |
 | `warnings/` | Session-startup warning rules (jar_availability), registered in `RULES` list |

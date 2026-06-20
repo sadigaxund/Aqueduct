@@ -20,11 +20,13 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 | Spark 4.0 (`pyspark>=4.0,<5.0`) | ✅ | ✅ | ⚠ |
 | Spark 3.x (`pyspark==3.5.8`) | ⚠ — tested via Legacy CI combo | ⚠ — tested via Legacy CI combo | ❌ |
 | Delta Lake (`delta-spark>=4.0,<5.0` for Spark 4.x; `delta-spark==3.3.0` for Spark 3.5) | ✅ | ✅ | ⚠ |
+| Custom Python DataSource (`format: custom`) | ✅ | ✅ | ⚠ |
 | Iceberg / Hudi | planned | planned | planned |
 
 ## Notes
 
 - **`pyspark>=4.0,<5.0`** is hard-pinned in `pyproject.toml`. The Legacy CI combo installs PySpark 3.5.8 explicitly by bypassing the pin — this is safe for testing but not recommended for production, where the pin is intentional. Widening the range would require runtime version gates throughout the executor — deliberately out of scope.
+- **Custom Python DataSource (`format: custom`) needs Spark 4.0+** — it uses the `spark.dataSource` registry introduced in Spark 4.0. Since the supported floor is already 4.0+ this affects no supported install; on the unsupported Legacy 3.5 lane the engine raises a clear `RuntimeError` (a per-feature capability gate, not a hard requirement bump). All other features run across the full supported matrix.
 - **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle` — the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
 - **LLM providers**: Anthropic (default) and any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, NVIDIA NIM, together.ai, Groq). Per-provider quirks documented in `gallery/aqscenarios/README.md`.
 - **Stores**: DuckDB embedded (default), Postgres (`aqueduct-core[postgres]`), Redis (`aqueduct-core[redis]`). All tested against the matrix above.

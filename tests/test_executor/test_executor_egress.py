@@ -241,3 +241,93 @@ def test_write_merge_sql_backticks_and_keys(spark: SparkSession, monkeypatch):
     # Each merge key column should be backtick-quoted, including the reserved word
     assert "_aq_target.`id` = _aq_src.`id`" in sql
     assert "_aq_target.`order` = _aq_src.`order`" in sql
+
+
+# ── Phase 61 — overwrite_partitions ─────────────────────────────────────────
+
+def test_overwrite_partitions_dynamic(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "dyn")
+    # initial: two partitions
+    df0 = spark.createDataFrame([(1, "a"), (2, "b")], ["id", "part"])
+    df0.write.format("parquet").partitionBy("part").mode("overwrite").save(path)
+
+    # dynamic overwrite touching only part=a
+    df1 = spark.createDataFrame([(9, "a")], ["id", "part"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite_partitions", "partition_by": ["part"]},
+    )
+    write_egress(df1, module)
+
+    out = {(r.id, r.part) for r in spark.read.parquet(path).collect()}
+    assert (9, "a") in out      # part=a replaced
+    assert (2, "b") in out      # part=b preserved
+    assert (1, "a") not in out  # old part=a gone
+
+
+def test_overwrite_partitions_requires_partition_or_predicate(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "bad")
+    df = spark.createDataFrame([(1, "a")], ["id", "part"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite_partitions"},
+    )
+    with pytest.raises(EgressError, match="requires either 'replace_where'"):
+        write_egress(df, module)
+
+
+def test_egress_merge_schema_option_writes(spark: SparkSession, tmp_path):
+    # merge_schema is harmless for parquet; this exercises the option branch.
+    path = str(tmp_path / "ms")
+    df = spark.createDataFrame([(1, "a")], ["id", "v"])
+    module = Module(
+        id="m1", type="Egress", label="M1",
+        config={"format": "parquet", "path": path, "mode": "overwrite", "merge_schema": True},
+    )
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 1
+
+
+# ── Phase 61 — on_new_columns (Egress write contract) ───────────────────────
+
+def _seed_target(spark, path):
+    spark.createDataFrame([(1, "a")], ["id", "v"]).write.format("parquet").mode("overwrite").save(path)
+
+
+def test_on_new_columns_fail_raises(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "t")
+    _seed_target(spark, path)
+    df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "fail"})
+    with pytest.raises(EgressError, match="on_new_columns=fail"):
+        write_egress(df, module)
+
+
+def test_on_new_columns_allow_writes(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "t")
+    _seed_target(spark, path)
+    df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "allow"})
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 2
+
+
+def test_on_new_columns_fail_noop_on_first_write(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "fresh")
+    df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "path": path, "mode": "overwrite", "on_new_columns": "fail"})
+    write_egress(df, module)  # no existing target → no drift → writes
+    assert spark.read.parquet(path).count() == 1
+
+
+def test_on_new_columns_invalid_policy(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "t")
+    _seed_target(spark, path)
+    df = spark.createDataFrame([(2, "b")], ["id", "v"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "bogus"})
+    with pytest.raises(EgressError, match="on_new_columns='bogus' is invalid"):
+        write_egress(df, module)

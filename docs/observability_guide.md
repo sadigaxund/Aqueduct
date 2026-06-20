@@ -208,6 +208,13 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 `bytes_written`, `duration_ms`) from SparkListener and `DataFrame.observe()`.
 `NULL` means "not collected", never "zero records".
 
+**Resource profiling.** `aqueduct report <run_id> --profile` ranks a run's
+modules by duration (heaviest first) with each module's share of total time and
+bytes; `aqueduct report --profile --blueprint <id> --last N` trends per-module
+duration across the last N runs and flags a module whose latest run is >1.5× its
+window average (a slowdown). Pure read-side over this table — no extra Spark
+action, no `$` conversion (raw resource units, map to cost yourself).
+
 #### `maintenance_metrics`
 
 Post-write maintenance timings per module. The two columns are **engine-generic

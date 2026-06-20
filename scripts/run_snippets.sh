@@ -27,6 +27,7 @@ SKIP_PATTERNS=(
     "02_ingress_parquet_s3"
     "04_ingress_jdbc_postgres"
     "12_assert_null_sampling"
+    "22_custom_datasource"   # requires Spark 4.0+ (Python DataSource API)
 )
 
 # ---------------------------------------------------------------------------

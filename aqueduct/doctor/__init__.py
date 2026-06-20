@@ -283,6 +283,26 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
         t = time.monotonic()
         name = f"{module.type.lower()}:{module.id}"
 
+        # ── Custom Python DataSource ───────────────────────────────────────────
+        if fmt == "custom":
+            class_path = cfg.get("class")
+            if not class_path:
+                results.append(CheckResult(name, "fail", "format=custom requires 'class'", _ms(t)))
+                continue
+            try:
+                from aqueduct.executor.spark.custom_source import import_datasource_class
+
+                import_datasource_class(str(class_path))
+                results.append(CheckResult(name, "ok", f"custom DataSource importable: {class_path}", _ms(t)))
+            except ModuleNotFoundError as exc:
+                if "pyspark" in str(exc):
+                    results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify custom DataSource", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
+            continue
+
         # ── JDBC ──────────────────────────────────────────────────────────────
         jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
         if jdbc_url or fmt == "jdbc":
@@ -593,6 +613,26 @@ def check_blueprint_sources(
 
         t = time.monotonic()
         name = f"{module.type.lower()}:{module.id}"
+
+        # ── Custom Python DataSource ───────────────────────────────────────────
+        if fmt == "custom":
+            class_path = cfg.get("class")
+            if not class_path:
+                results.append(CheckResult(name, "fail", "format=custom requires 'class'", _ms(t)))
+                continue
+            try:
+                from aqueduct.executor.spark.custom_source import import_datasource_class
+
+                import_datasource_class(str(class_path))
+                results.append(CheckResult(name, "ok", f"custom DataSource importable: {class_path}", _ms(t)))
+            except ModuleNotFoundError as exc:
+                if "pyspark" in str(exc):
+                    results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify custom DataSource", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
+            continue
 
         # ── JDBC ──────────────────────────────────────────────────────────────
         jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)

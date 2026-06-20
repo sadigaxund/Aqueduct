@@ -248,10 +248,14 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. Custom formats use the fully qualified DataSource class name. The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
-| **path** | Source path or URL. Context Registry references allowed. |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. |
+| **path** | Source path or URL. Context Registry references allowed. Optional for `format: custom` and the pathless formats (jdbc/kafka/depot). |
+| **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
 | **schema_hint** | Optional. Flat dict `{col: type}` or nested `{mode: strict\|additive\|subset, columns: [{name, type}]}`. |
+| **time_travel** | Optional (Delta/Iceberg). Pin a historical snapshot: `{version: N}` (`versionAsOf`) or `{timestamp: "..."}` (`timestampAsOf`). Mutually exclusive. Metadata-only — no Spark action. |
+| **on_new_columns** | Optional schema-drift contract: `allow` (default behaviour, explicit), `fail` (raise if the source has columns outside the baseline), `alert` (warn, then proceed). Baseline = `known_columns` or, failing that, `schema_hint` names; with neither it is skipped. |
+| **known_columns** | Optional explicit baseline column list for `on_new_columns`. |
 | **options** | Passed directly to Spark DataFrameReader.option(k,v). |
 
 **Cloud credentials:** There is no per-Ingress `credentials:` field. Credentials live at the engine level in `spark_config:`, keyed by standard Hadoop/Spark property names. Use `@aq.secret('KEY')` or `${ENV_VAR}` inside those values.
@@ -321,7 +325,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   type: Egress
   config:
     format: parquet
-    mode: overwrite                # overwrite | append | error | ignore | merge
+    mode: overwrite                # overwrite | append | error | ignore | merge | overwrite_partitions
     path: "${ctx.tables.orders_out}"
     partition_by: [event_date, region]
     options: { compression: snappy }
@@ -330,11 +334,23 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | Config field | Description |
 | :- | :- |
 | **format** | Spark write format. Standard: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc. `iceberg`/`hudi` need the matching `spark.jars.packages` (and an Iceberg catalog) — see the Spark Guide. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
-| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`). |
+| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`), `overwrite_partitions` (idempotent partition-scoped overwrite — see below). |
 | **path** | Output path or URL. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
+| **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass (Spark 4.0+). |
+| **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |
+| **merge_schema** | Optional (Delta/Iceberg). `true` sets `mergeSchema` — new DataFrame columns are added to the target schema instead of failing the write. |
+| **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema` — replaces the target schema entirely (`mode: overwrite` only). |
+| **on_new_columns** | Optional schema-drift contract comparing the incoming DataFrame against the existing target: `allow` (absorb new columns via `mergeSchema`), `fail` (raise if the data adds columns the target lacks), `alert` (warn, then absorb). No-op on first write or `mode: merge`. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
+
+**`mode: overwrite_partitions`** is the idempotent-backfill primitive — re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
+
+- **`replace_where: <predicate>`** (Delta) — atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
+- **no `replace_where`** — Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`** — without it the engine refuses (a plain `overwrite` would wipe the whole table).
+
+**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer — never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
 
 ### Junction (Fan-out)
 
@@ -376,10 +392,43 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   attach_to: dedup_orders          # module-level field, NOT inside config
   config:
     signals:
-      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold
+      - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom
 ```
 
 Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
+
+**Custom signals (`type: custom`).** User-defined signals extend observability without forking the engine. Exactly one of three forms:
+
+```yaml
+signals:
+  - type: custom
+    sql: "percentile(amount, 0.99)"   # inline SQL → "estimate" (a Spark expression)
+    passed_when: "MAX(amount) < 1e6"  # optional boolean → "passed" (Regulator gate, like threshold)
+  - type: custom
+    module: myorg.aq_probes           # importable module + callable (mirrors the UDF pointer contract)
+    entry: p99_latency
+  - type: custom
+    plugin: p99_latency               # setuptools entry-point group "aqueduct.probe_signals"
+```
+
+The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt).
+
+**Inline-SQL form — `sql` vs `passed_when`:** the two keys play different roles, so they are named differently. `sql` computes a **scalar metric** (any single-value Spark SQL aggregate over the probed DataFrame) and stores it as `estimate` for trending (`report --trend`/`--profile`). `passed_when` is an **optional boolean** that becomes the `passed` gate verdict (like `threshold`). Provide either or both:
+- **`sql` only** → record-only: captures the metric every run, never gates (a Regulator reading it stays open — an absent `passed` key is treated as open).
+- **`passed_when` only** → gate-only: one Spark action, no recorded metric.
+- **both** → records *and* gates; note these are **two separate Spark actions**, so the aggregate is scanned twice.
+
+Each is passed verbatim to `df.selectExpr(...)`, so any single-scalar Spark expression works (`percentile`, `approx_count_distinct`, `SUM(CASE WHEN …)/COUNT(*)`, etc.). For multi-value output, cross-table joins, or non-SQL logic, use the callable form. **Avoid duplicating a shared subquery** across `sql` and `passed_when` with a macro — macros expand inside probe config at compile time:
+
+```yaml
+macros:
+  error_rate: "SUM(CASE WHEN status='error' THEN 1 ELSE 0 END) / COUNT(*)"
+signals:
+  - type: custom
+    sql: "{{ macros.error_rate }}"
+    passed_when: "{{ macros.error_rate }} < 0.01"
+```
+(Macros dedupe the authored text, not the two runtime scans.)
 
 See the [Observability Guide](observability_guide.md) for full signal reference and cost model.
 

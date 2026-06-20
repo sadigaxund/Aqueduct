@@ -22,6 +22,7 @@ from typing import Any, Callable
 
 from . import (
     count_col_likely_count_star,
+    custom_probe_driver_code,
     file_format_no_repartition,
     jdbc_missing_partition,
     kafka_checkpoint_stale,
@@ -38,6 +39,7 @@ RULES: list[tuple[str, CheckFn]] = [
     (count_col_likely_count_star.RULE_ID,    count_col_likely_count_star.check),
     (file_format_no_repartition.RULE_ID,     file_format_no_repartition.check),
     (jdbc_missing_partition.RULE_ID,         jdbc_missing_partition.check),
+    (custom_probe_driver_code.RULE_ID,       custom_probe_driver_code.check),
 ]
 
 

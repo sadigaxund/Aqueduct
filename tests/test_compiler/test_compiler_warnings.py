@@ -444,3 +444,68 @@ modules:
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             _compile_yaml(yaml_str, tmp_path)
+
+
+class TestCustomProbe:
+    """Phase 60 — custom probe signal compile-time behaviour."""
+
+    def _bp(self, signal_block: str) -> str:
+        return f"""
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: m1
+    type: Ingress
+    label: M1
+    config:
+      format: parquet
+      path: /dummy/in
+  - id: e1
+    type: Egress
+    label: E1
+    config:
+      format: parquet
+      path: /dummy/out
+  - id: p1
+    type: Probe
+    label: P1
+    attach_to: m1
+    config:
+      signals:
+        - {signal_block}
+edges:
+  - from: m1
+    to: e1
+"""
+
+    def test_pointer_custom_signal_warns_driver_code(self, tmp_path):
+        yaml_str = self._bp("type: custom\n          module: myorg.p\n          entry: f")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert any(
+                "custom_probe_driver_code" in str(x.message) and "driver" in str(x.message)
+                for x in w
+            )
+
+    def test_inline_sql_custom_signal_no_warn(self, tmp_path):
+        yaml_str = self._bp('type: custom\n          sql: "MAX(amount)"')
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("custom_probe_driver_code" in str(x.message) for x in w)
+
+    def test_conflicting_custom_signal_fails_compile(self, tmp_path):
+        from aqueduct.errors import AqueductError
+
+        yaml_str = self._bp('type: custom\n          sql: "MAX(x)"\n          plugin: p')
+        with pytest.raises(AqueductError, match="conflicting sources"):
+            _compile_yaml(yaml_str, tmp_path)
+
+    def test_empty_custom_signal_fails_compile(self, tmp_path):
+        from aqueduct.errors import AqueductError
+
+        yaml_str = self._bp("type: custom")
+        with pytest.raises(AqueductError, match="exactly one source"):
+            _compile_yaml(yaml_str, tmp_path)

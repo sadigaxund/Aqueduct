@@ -30,7 +30,13 @@ from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_MODES: frozenset[str] = frozenset({"overwrite", "append", "error", "errorifexists", "ignore", "merge"})
+SUPPORTED_MODES: frozenset[str] = frozenset(
+    {"overwrite", "append", "error", "errorifexists", "ignore", "merge", "overwrite_partitions"}
+)
+
+# Schema-drift write contract — what to do when the incoming DataFrame carries
+# columns the existing target table does not have.
+ON_NEW_COLUMNS_POLICIES: frozenset[str] = frozenset({"allow", "fail", "alert"})
 
 
 class EgressError(AqueductError):
@@ -59,6 +65,11 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         _write_depot(df, module, depot)
         return
 
+    # ── Custom Python DataSource (Spark 4.0+) ──────────────────────────────────
+    if fmt == "custom":
+        _write_custom(df, module)
+        return
+
     # ── Spark writer ──────────────────────────────────────────────────────────
     path: str | None = cfg.get("path")
     if not path:
@@ -71,8 +82,21 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
             f"Supported: {sorted(SUPPORTED_MODES)}"
         )
 
+    # Schema-drift write contract (prevention side of the drift story). When the
+    # incoming columns extend the existing target, decide per policy. Returns
+    # True when new columns should be absorbed (allow/alert) → force mergeSchema.
+    force_merge_schema = False
+    if cfg.get("on_new_columns") and mode != "merge":
+        force_merge_schema = _enforce_on_new_columns(
+            df, module, fmt, path, cfg.get("table"), str(cfg["on_new_columns"])
+        )
+
     if mode == "merge":
         _write_merge(df, module)
+        return
+
+    if mode == "overwrite_partitions":
+        _write_overwrite_partitions(df, module, fmt, path, force_merge_schema=force_merge_schema)
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -80,6 +104,13 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     partition_by: list[str] | None = cfg.get("partition_by")
     if partition_by:
         writer = writer.partitionBy(*partition_by)
+
+    # Schema-evolution flags (Delta/Iceberg). merge_schema adds new columns;
+    # overwrite_schema replaces the schema entirely (mode=overwrite only).
+    if cfg.get("merge_schema") or force_merge_schema:
+        writer = writer.option("mergeSchema", "true")
+    if cfg.get("overwrite_schema"):
+        writer = writer.option("overwriteSchema", "true")
 
     for key, value in cfg.get("options", {}).items():
         writer = writer.option(str(key), str(value))
@@ -197,6 +228,127 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 
 
+def _write_overwrite_partitions(
+    df: "DataFrame", module: Module, fmt: str, path: str, force_merge_schema: bool = False
+) -> None:
+    """Idempotent partition overwrite — replace only the touched partitions.
+
+    Two strategies, selected by config:
+
+      * ``replace_where: <predicate>`` — Delta ``replaceWhere``. Atomically
+        replaces exactly the rows matching the predicate (the cleanest backfill
+        primitive). The predicate is resolved at compile time, so it can embed
+        ``@aq.date.*`` / ``${ctx.*}`` for ``--execution-date`` backfills, e.g.
+        ``replace_where: "event_date = '@aq.date.today()'"``.
+      * otherwise — Spark **dynamic** partition overwrite
+        (``partitionOverwriteMode=dynamic``). Only partitions present in ``df``
+        are overwritten; untouched partitions are preserved. Requires
+        ``partition_by`` (without it, dynamic mode would overwrite the whole
+        table — exactly the footgun this mode exists to avoid).
+    """
+    cfg = module.config
+    partition_by: list[str] | None = cfg.get("partition_by")
+    replace_where: str | None = cfg.get("replace_where")
+
+    writer = df.write.format(fmt).mode("overwrite")
+    if partition_by:
+        writer = writer.partitionBy(*partition_by)
+
+    if replace_where:
+        writer = writer.option("replaceWhere", replace_where)
+    else:
+        if not partition_by:
+            raise EgressError(
+                f"[{module.id}] mode=overwrite_partitions requires either "
+                "'replace_where' (Delta) or 'partition_by' (dynamic partition "
+                "overwrite). Without one, this would overwrite the entire table."
+            )
+        writer = writer.option("partitionOverwriteMode", "dynamic")
+
+    if cfg.get("merge_schema") or force_merge_schema:
+        writer = writer.option("mergeSchema", "true")
+
+    for key, value in cfg.get("options", {}).items():
+        writer = writer.option(str(key), str(value))
+
+    try:
+        writer.save(path)
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] overwrite_partitions write failed to {path!r}: {exc}"
+        ) from exc
+
+    logger.info(
+        "[%s] overwrite_partitions completed to %s (%s)",
+        module.id, path,
+        f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
+    )
+
+
+def _existing_target_columns(
+    df: "DataFrame", fmt: str, path: str, table: str | None
+) -> "set[str] | None":
+    """Return the existing target's column names, or None if it does not exist.
+
+    Metadata-only: ``.schema`` on a lazy reader fires no Spark action. A missing
+    target (first-ever write) surfaces as an exception → None.
+    """
+    spark = df.sparkSession
+    try:
+        if table:
+            existing = spark.read.table(table)
+        else:
+            existing = spark.read.format(fmt).load(path)
+        return {f.name for f in existing.schema.fields}
+    except Exception:
+        return None
+
+
+def _enforce_on_new_columns(
+    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None, policy: str
+) -> bool:
+    """Apply the ``on_new_columns`` write contract. Returns force_merge_schema.
+
+    Compares the incoming DataFrame's columns against the existing target's
+    columns. ``policy``:
+
+      * ``fail``  — raise if the DataFrame introduces columns the target lacks.
+      * ``allow`` — absorb them silently (returns True → mergeSchema).
+      * ``alert`` — log a warning naming them, then absorb (returns True).
+
+    A non-existent target (first write) or no new columns is a no-op (False).
+    This is the prevention/policy half of the schema-drift story; ``aqueduct
+    drift`` is the proactive detection arm.
+    """
+    if policy not in ON_NEW_COLUMNS_POLICIES:
+        raise EgressError(
+            f"[{module.id}] on_new_columns={policy!r} is invalid; "
+            f"use one of {sorted(ON_NEW_COLUMNS_POLICIES)}"
+        )
+
+    target_cols = _existing_target_columns(df, fmt, path, table)
+    if target_cols is None:
+        return False  # first write — nothing to drift against
+
+    new_cols = [c for c in df.columns if c not in target_cols]
+    if not new_cols:
+        return False
+
+    if policy == "fail":
+        raise EgressError(
+            f"[{module.id}] on_new_columns=fail: incoming data adds column(s) "
+            f"{new_cols} not present in the target schema. Set on_new_columns: "
+            "allow (or alert) to evolve the schema, or fix the upstream transform."
+        )
+    if policy == "alert":
+        logger.warning(
+            "[%s] on_new_columns=alert: schema drift — new column(s) %s added to "
+            "the target. Absorbing (mergeSchema).",
+            module.id, new_cols,
+        )
+    return True  # allow + alert both evolve the schema
+
+
 def build_maintenance_ops(
     fmt: str,
     path: str,
@@ -295,6 +447,39 @@ def run_maintenance(
             logger.warning("[%s] %s failed (non-fatal): %s", module_id, label, exc)
 
     return result
+
+
+def _write_custom(df: "DataFrame", module: Module) -> None:
+    """Write via a custom Python DataSource (``format: custom`` + ``class:``).
+
+    Path is optional — custom sinks may carry their target in ``options``.
+    """
+    cfg = module.config
+    class_path = cfg.get("class")
+    if not class_path:
+        raise EgressError(f"[{module.id}] format=custom requires 'class'")
+
+    from aqueduct.executor.spark.custom_source import register_custom_source
+
+    try:
+        name = register_custom_source(df.sparkSession, str(class_path))
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] custom DataSource {class_path!r}: {exc}"
+        ) from exc
+
+    writer = df.write.format(name).mode(cfg.get("mode", "error"))
+    for key, value in cfg.get("options", {}).items():
+        writer = writer.option(str(key), str(value))
+
+    path = cfg.get("path")
+    try:
+        writer.save(path) if path else writer.save()
+    except Exception as exc:
+        raise EgressError(
+            f"[{module.id}] custom DataSource write failed: {exc}"
+        ) from exc
+    logger.info("[%s] custom DataSource write completed via %s", module.id, name)
 
 
 def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:

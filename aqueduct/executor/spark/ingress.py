@@ -10,6 +10,7 @@ the execution plan is only materialised when downstream Egress calls .save().
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from pyspark.sql import SparkSession
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 from aqueduct.parser.models import Module
 from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 from aqueduct.errors import AqueductError
+
+logger = logging.getLogger(__name__)
 
 
 class IngressError(AqueductError):
@@ -60,9 +63,26 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     if not fmt:
         raise IngressError(f"[{module.id}] 'format' is required in Ingress config")
 
+    # Custom Python DataSource (Spark 4.0+): import + register the user class,
+    # then read by its own name(). Path is optional (custom sources may locate
+    # data via options instead).
+    is_custom = fmt == "custom"
+    if is_custom:
+        class_path = cfg.get("class")
+        if not class_path:
+            raise IngressError(f"[{module.id}] format=custom requires 'class'")
+        from aqueduct.executor.spark.custom_source import register_custom_source
+
+        try:
+            fmt = register_custom_source(spark, str(class_path))
+        except Exception as exc:
+            raise IngressError(
+                f"[{module.id}] custom DataSource {class_path!r}: {exc}"
+            ) from exc
+
     # Formats that locate data via options (url/dbtable/topic/etc.), not a file path
     path: str | None = cfg.get("path")
-    if not path and fmt not in PATHLESS_INGRESS_FORMATS:
+    if not path and fmt not in PATHLESS_INGRESS_FORMATS and not is_custom:
         raise IngressError(f"[{module.id}] 'path' is required in Ingress config for format={fmt!r}")
 
     reader = spark.read.format(fmt)
@@ -71,6 +91,10 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     if fmt == "csv":
         reader = reader.option("header", str(cfg.get("header", True)).lower())
         reader = reader.option("inferSchema", str(cfg.get("infer_schema", True)).lower())
+
+    # Time-travel reads (Delta / Iceberg): pin a historical snapshot by version
+    # or timestamp. Metadata-only — still no Spark action.
+    reader = _apply_time_travel(module, reader)
 
     for key, value in cfg.get("options", {}).items():
         reader = reader.option(str(key), str(value))
@@ -121,7 +145,102 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
     if schema_hint:
         _validate_schema_hint(module.id, df, schema_hint, mode=schema_hint_mode)
 
+    # on_new_columns — flag/forbid undeclared source columns (prevention side of
+    # the drift story; complements `aqueduct drift`). Compares the live source
+    # against a declared baseline (`known_columns` or `schema_hint` names).
+    if cfg.get("on_new_columns"):
+        _enforce_on_new_columns(module, df, schema_hint)
+
     return df
+
+
+ON_NEW_COLUMNS_POLICIES: frozenset[str] = frozenset({"allow", "fail", "alert"})
+
+
+def _enforce_on_new_columns(
+    module: Module,
+    df: DataFrame,
+    schema_hint: "list[dict[str, str]] | None",
+) -> None:
+    """Apply the Ingress ``on_new_columns`` contract against a declared baseline.
+
+    Baseline columns come from ``known_columns`` (explicit) or, failing that, the
+    ``schema_hint`` column names. With neither, there is nothing to diff against —
+    log once and skip (the policy needs a declared expectation to be meaningful).
+
+      * ``fail``  — raise if the source has columns outside the baseline.
+      * ``alert`` — log a warning naming them, then proceed.
+      * ``allow`` — no-op (the default engine behaviour, made explicit).
+    """
+    policy = str(module.config["on_new_columns"])
+    if policy not in ON_NEW_COLUMNS_POLICIES:
+        raise IngressError(
+            f"[{module.id}] on_new_columns={policy!r} is invalid; "
+            f"use one of {sorted(ON_NEW_COLUMNS_POLICIES)}"
+        )
+
+    known = module.config.get("known_columns")
+    if known:
+        baseline = {str(c) for c in known}
+    elif schema_hint:
+        baseline = {h["name"] for h in schema_hint if h.get("name")}
+    else:
+        logger.warning(
+            "[%s] on_new_columns set but no 'known_columns' or 'schema_hint' to "
+            "compare against; skipping.", module.id,
+        )
+        return
+
+    new_cols = [c for c in df.columns if c not in baseline]
+    if not new_cols:
+        return
+
+    if policy == "fail":
+        raise IngressError(
+            f"[{module.id}] on_new_columns=fail: source has undeclared column(s) "
+            f"{new_cols} not in the declared baseline {sorted(baseline)}. "
+            "Add them to known_columns/schema_hint, or set on_new_columns: alert."
+        )
+    if policy == "alert":
+        logger.warning(
+            "[%s] on_new_columns=alert: source added undeclared column(s) %s.",
+            module.id, new_cols,
+        )
+
+
+def _apply_time_travel(module: Module, reader):
+    """Apply a ``time_travel:`` snapshot pin to a DataFrameReader.
+
+    Config (mutually exclusive)::
+
+        time_travel:
+          version: 12                    # Delta versionAsOf / Iceberg snapshot
+        # or
+        time_travel:
+          timestamp: "2026-01-01 00:00"  # Delta/Iceberg timestampAsOf
+
+    Returns the reader unchanged when no ``time_travel`` block is present.
+    """
+    tt = module.config.get("time_travel")
+    if tt is None:
+        return reader
+    if not isinstance(tt, dict):
+        raise IngressError(
+            f"[{module.id}] time_travel must be a mapping with 'version' or 'timestamp'"
+        )
+    has_version = tt.get("version") is not None
+    has_timestamp = tt.get("timestamp") is not None
+    if has_version and has_timestamp:
+        raise IngressError(
+            f"[{module.id}] time_travel accepts 'version' OR 'timestamp', not both"
+        )
+    if has_version:
+        return reader.option("versionAsOf", int(tt["version"]))
+    if has_timestamp:
+        return reader.option("timestampAsOf", str(tt["timestamp"]))
+    raise IngressError(
+        f"[{module.id}] time_travel requires 'version' or 'timestamp'"
+    )
 
 
 def read_source_schema(module: Module, spark: SparkSession) -> dict[str, str]:

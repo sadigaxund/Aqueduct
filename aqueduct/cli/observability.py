@@ -61,6 +61,23 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
          "(default: last 30 days).",
 )
 @click.option(
+    "--profile",
+    "profile",
+    is_flag=True,
+    default=False,
+    help="Per-module resource profile (duration + I/O) over module_metrics. "
+         "With RUN_ID: one run, heaviest module first. With --blueprint (no "
+         "RUN_ID): cross-run trend over the last --last runs, flagging slowdowns.",
+)
+@click.option(
+    "--last",
+    "last_n",
+    default=10,
+    show_default=True,
+    metavar="N",
+    help="With --profile --blueprint: number of recent runs to trend over.",
+)
+@click.option(
     "--format",
     "fmt",
     type=click.Choice(["table", "json", "csv"]),
@@ -70,10 +87,15 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 @_env_options
 def report(
     run_id: str | None, store_dir: str | None, config_path: str | None,
-    trend_column: str | None, blueprint_arg: str | None, since: str | None, fmt: str,
+    trend_column: str | None, blueprint_arg: str | None, since: str | None,
+    profile: bool, last_n: int, fmt: str,
     env_file: str | None, cli_env: tuple[str, ...],
 ) -> None:
     """Print the Flow Report for a completed run, or a cross-run column trend."""
+    if profile:
+        _report_profile(run_id, blueprint_arg, last_n, store_dir, config_path,
+                        fmt, env_file, cli_env)
+        return
     if trend_column:
         _report_trend(trend_column, blueprint_arg, since, store_dir, config_path,
                       fmt, env_file, cli_env)
@@ -305,6 +327,203 @@ def _report_trend(
             marker = "  ⚠ type drift" if (prev is not None and ct != prev) else ""
             click.echo(f"    {ts:<28} {rid[:18]:<20} {ct}{marker}")
             prev = ct
+
+
+def _fmt_bytes(n: "int | None") -> str:
+    """Human-readable byte size for table output (raw ints kept in json/csv)."""
+    if n is None:
+        return "-"
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
+
+
+def _report_profile(
+    run_id: str | None,
+    blueprint_arg: str | None,
+    last_n: int,
+    store_dir: str | None,
+    config_path: str | None,
+    fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Per-module resource profile (Phase 62) over ``module_metrics``.
+
+    Pure read-side — no new table, no Spark action. Two modes:
+
+      * **run-scoped** (``RUN_ID``) — one run's modules, heaviest (by duration)
+        first, with each module's share of the run's total time and bytes.
+      * **trend** (``--blueprint``, no RUN_ID) — per-module stats across the last
+        ``--last`` runs (count, avg/max duration, most-recent duration), flagging
+        a module whose latest run is >1.5× its window average as a slowdown.
+    """
+    import duckdb as _duckdb
+
+    from aqueduct.config import ConfigError, load_config
+
+    try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
+        cfg = load_config(Path(config_path) if config_path else None)
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        click.echo(f"✗ config error: {exc}", err=True)
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    if run_id:
+        _profile_run(run_id, cfg, store_dir, fmt, _duckdb)
+    elif blueprint_arg:
+        _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb)
+    else:
+        click.echo("✗ --profile needs RUN_ID (one run) or --blueprint ID (trend)", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+
+
+def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
+    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
+    if observability_db is None or not observability_db.exists():
+        click.echo(f"✗ observability.db not found for run_id={run_id!r}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    conn = _duckdb.connect(str(observability_db), read_only=True)
+    try:
+        rows = conn.execute(
+            """
+            SELECT module_id, records_read, bytes_read, records_written,
+                   bytes_written, duration_ms
+            FROM module_metrics WHERE run_id = ?
+            ORDER BY duration_ms DESC NULLS LAST
+            """,
+            [run_id],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        click.echo(f"No module_metrics for run {run_id!r}.")
+        return
+
+    cols = ["module_id", "records_read", "bytes_read", "records_written", "bytes_written", "duration_ms"]
+    records = [dict(zip(cols, r)) for r in rows]
+    total_dur = sum((r["duration_ms"] or 0) for r in records)
+    total_bw = sum((r["bytes_written"] or 0) for r in records)
+
+    if fmt == "json":
+        click.echo(json.dumps(
+            {"run_id": run_id, "total_duration_ms": total_dur,
+             "total_bytes_written": total_bw, "modules": records}, indent=2))
+        return
+    if fmt == "csv":
+        import csv as _csv
+        import io
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(cols + ["pct_duration"])
+        for r in records:
+            pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
+            w.writerow([r[c] for c in cols] + [f"{pct:.1f}"])
+        click.echo(buf.getvalue(), nl=False)
+        return
+
+    click.echo(f"Resource profile — run_id={run_id}  modules={len(records)}")
+    click.echo(f"  {'Module':<26}{'Duration':>10}{'%Dur':>7}{'RowsOut':>12}{'BytesOut':>11}")
+    click.echo(f"  {'-'*26}{'-'*10:>10}{'-'*6:>7}{'-'*11:>12}{'-'*10:>11}")
+    for r in records:
+        pct = (100.0 * (r["duration_ms"] or 0) / total_dur) if total_dur else 0.0
+        dur = f"{r['duration_ms']}ms" if r["duration_ms"] is not None else "-"
+        rows_out = "-" if r["records_written"] is None else f"{r['records_written']:,}"
+        click.echo(f"  {r['module_id']:<26}{dur:>10}{pct:>6.1f}%{rows_out:>12}{_fmt_bytes(r['bytes_written']):>11}")
+    click.echo(f"  {'-'*66}")
+    click.echo(f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}")
+
+
+def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
+    blueprint_id = _resolve_blueprint_id(blueprint_arg)
+    if not blueprint_id:
+        click.echo(f"✗ could not resolve blueprint from {blueprint_arg!r}", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    if store_dir:
+        obs_db = Path(store_dir) / "observability.db"
+    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+        obs_db = Path(cfg.stores.observability.path)
+        if obs_db.is_dir():
+            obs_db = obs_db / "observability.db"
+    else:
+        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+    if not obs_db.exists():
+        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
+        sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    conn = _duckdb.connect(str(obs_db), read_only=True)
+    try:
+        run_ids = [r[0] for r in conn.execute(
+            "SELECT run_id FROM run_records WHERE blueprint_id = ? ORDER BY started_at DESC LIMIT ?",
+            [blueprint_id, last_n],
+        ).fetchall()]
+        if not run_ids:
+            click.echo(f"No runs for blueprint {blueprint_id!r}.")
+            return
+        latest = run_ids[0]
+        placeholders = ",".join("?" * len(run_ids))
+        agg = conn.execute(
+            f"""
+            SELECT module_id, COUNT(*) AS runs, AVG(duration_ms) AS avg_dur,
+                   MAX(duration_ms) AS max_dur
+            FROM module_metrics WHERE run_id IN ({placeholders})
+            GROUP BY module_id
+            """,
+            run_ids,
+        ).fetchall()
+        last_dur = dict(conn.execute(
+            "SELECT module_id, duration_ms FROM module_metrics WHERE run_id = ?",
+            [latest],
+        ).fetchall())
+    finally:
+        conn.close()
+
+    records = []
+    for module_id, runs, avg_dur, max_dur in agg:
+        ld = last_dur.get(module_id)
+        regressed = bool(ld is not None and avg_dur and ld > 1.5 * avg_dur)
+        records.append({
+            "module_id": module_id, "runs": runs,
+            "avg_duration_ms": round(avg_dur, 1) if avg_dur is not None else None,
+            "max_duration_ms": max_dur, "last_duration_ms": ld,
+            "regressed": regressed,
+        })
+    records.sort(key=lambda r: (r["avg_duration_ms"] or 0), reverse=True)
+
+    if fmt == "json":
+        click.echo(json.dumps(
+            {"blueprint_id": blueprint_id, "runs_analyzed": len(run_ids), "modules": records}, indent=2))
+        return
+    if fmt == "csv":
+        import csv as _csv
+        import io
+        buf = io.StringIO()
+        w = _csv.writer(buf)
+        cols = ["module_id", "runs", "avg_duration_ms", "max_duration_ms", "last_duration_ms", "regressed"]
+        w.writerow(cols)
+        for r in records:
+            w.writerow([r[c] for c in cols])
+        click.echo(buf.getvalue(), nl=False)
+        return
+
+    click.echo(f"Resource trend — blueprint={blueprint_id}  runs_analyzed={len(run_ids)}")
+    click.echo(f"  {'Module':<26}{'Runs':>6}{'AvgDur':>10}{'MaxDur':>10}{'LastDur':>10}")
+    click.echo(f"  {'-'*26}{'-'*6:>6}{'-'*9:>10}{'-'*9:>10}{'-'*9:>10}")
+    for r in records:
+        avg = f"{r['avg_duration_ms']}ms" if r["avg_duration_ms"] is not None else "-"
+        mx = f"{r['max_duration_ms']}ms" if r["max_duration_ms"] is not None else "-"
+        ld = f"{r['last_duration_ms']}ms" if r["last_duration_ms"] is not None else "-"
+        flag = "  ⚠ slowdown" if r["regressed"] else ""
+        click.echo(f"  {r['module_id']:<26}{r['runs']:>6}{avg:>10}{mx:>10}{ld:>10}{flag}")
 
 
 # ── aqueduct runs ─────────────────────────────────────────────────────────────

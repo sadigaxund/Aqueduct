@@ -41,6 +41,26 @@ def validate_probes(modules: list[Module]) -> None:
             raise WireError(
                 f"Probe {m.id!r} attach_to={m.attach_to!r} references a module that does not exist."
             )
+        _validate_custom_signals(m)
+
+
+def _validate_custom_signals(probe: Module) -> None:
+    """Fail fast on malformed ``type: custom`` signals (shape only, no import).
+
+    Resolution (importing the module / loading the entry point) happens at
+    execution time; here we only confirm exactly one source is configured so a
+    typo surfaces at compile, not mid-run.
+    """
+    # Imported here (engine-agnostic, pyspark-free) to keep the compiler clean.
+    from aqueduct.executor.probe_plugins import custom_signal_source
+
+    for sig in probe.config.get("signals", []) or []:
+        if not isinstance(sig, dict) or sig.get("type") != "custom":
+            continue
+        try:
+            custom_signal_source(sig)
+        except ValueError as exc:
+            raise WireError(f"Probe {probe.id!r}: {exc}") from exc
 
 
 def validate_spillway_edges(modules: list[Module], edges: list[Edge]) -> None:

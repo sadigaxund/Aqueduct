@@ -8,13 +8,24 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 from pyspark.sql import Row
 
-from aqueduct.executor.spark.probe import _threshold, execute_probe
+from aqueduct.executor.spark.probe import _threshold, _custom, execute_probe
 from aqueduct.executor.spark.executor import execute
 from aqueduct.surveyor.surveyor import Surveyor
 from aqueduct.parser.models import Module, Edge, RetryPolicy
 from aqueduct.compiler.models import Manifest
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
+
+
+def _probe_p99(df, sig_cfg):  # module-level so the pointer form can import it
+    from pyspark.sql import functions as F
+
+    val = df.select(F.expr("percentile(amount, 0.99)").alias("p")).collect()[0]["p"]
+    return {"estimate": val, "metadata": {"col": "amount"}, "passed": val < 1000}
+
+
+def _returns_list(df, cfg):  # module-level helper: accepts (df, cfg) but returns a list
+    return [1, 2, 3]
 
 def test_threshold_passed(spark):
     df = spark.createDataFrame([Row(id=1), Row(id=2)])
@@ -41,6 +52,82 @@ def test_threshold_missing_expr(spark):
     
     with pytest.raises(ValueError, match="threshold signal requires an 'expr' field"):
         _threshold(df, sig_cfg)
+
+def test_custom_inline_sql_estimate(spark):
+    df = spark.createDataFrame([Row(amount=10), Row(amount=20), Row(amount=30)])
+    result = _custom(df, {"type": "custom", "sql": "MAX(amount)"})
+    assert result["custom"] is True
+    assert result["estimate"] == 30
+    assert "passed" not in result
+
+
+def test_custom_inline_sql_passed_when_true(spark):
+    df = spark.createDataFrame([Row(amount=10), Row(amount=20)])
+    result = _custom(df, {"type": "custom", "passed_when": "MAX(amount) < 100"})
+    assert result["passed"] is True
+
+
+def test_custom_inline_sql_passed_when_false(spark):
+    df = spark.createDataFrame([Row(amount=10), Row(amount=200)])
+    result = _custom(df, {"type": "custom", "passed_when": "MAX(amount) < 100"})
+    assert result["passed"] is False
+
+
+def test_custom_callable_pointer(spark):
+    df = spark.createDataFrame([Row(amount=10), Row(amount=20)])
+    result = _custom(
+        df,
+        {
+            "type": "custom",
+            "module": "tests.test_executor.test_executor_probe",
+            "entry": "_probe_p99",
+        },
+    )
+    assert result["custom"] is True
+    assert result["passed"] is True
+    assert result["metadata"] == {"col": "amount"}
+
+
+def test_custom_callable_must_return_dict(spark):
+    df = spark.createDataFrame([Row(amount=10)])
+    import sys as _sys
+    _modname = _sys.modules[__name__].__name__
+    with pytest.raises(ValueError, match="must return a dict"):
+        _custom(
+            df,
+            {
+                "type": "custom",
+                "module": _modname,
+                "entry": "_returns_list",
+            },
+        )
+
+
+def test_execute_probe_custom_lands_in_db(spark, tmp_path):
+    df = spark.createDataFrame([Row(amount=5), Row(amount=15)])
+    module = Module(
+        id="cp1",
+        type="Probe",
+        label="Custom Probe",
+        config={"signals": [{"type": "custom", "sql": "AVG(amount)", "passed_when": "MIN(amount) >= 0"}]},
+    )
+
+    execute_probe(module, df, spark, "run_c", tmp_path)
+
+    db_path = tmp_path / "observability.db"
+    conn = duckdb.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT signal_type, payload FROM probe_signals WHERE probe_id = 'cp1'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[0] == "custom"
+    payload = json.loads(row[1])
+    assert payload["estimate"] == 10.0
+    assert payload["passed"] is True
+
 
 def test_execute_probe_writes_to_db(spark, tmp_path):
     df = spark.createDataFrame([Row(id=1)])

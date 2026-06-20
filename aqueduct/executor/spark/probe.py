@@ -89,9 +89,23 @@ config:
     - type: threshold
       expr: "MAX(amount) > 0"       # SQL aggregate expression; must evaluate to boolean
       # Writes {"passed": true/false, "value": <result>, "expr": "<expr>"} to probe_signals.
-      # This is the ONLY signal type that produces a "passed" key — required for Regulator
-      # gate evaluation. All other signal types write raw metrics only.
+      # This is the ONLY built-in signal type that produces a "passed" key — required for
+      # Regulator gate evaluation. All other built-in signal types write raw metrics only.
       # One Spark action (df.agg(expr).collect()).
+
+    - type: custom                  # Phase 60 — user-defined signal (exactly one form)
+      # form 1 — inline SQL (declarative, no code):
+      sql: "percentile(amount, 0.99)"   # value expression → "estimate"
+      passed_when: "MAX(amount) < 1e6"  # optional boolean → "passed" (Regulator gate)
+      # form 2 — module pointer (mirrors UDF contract; code lives in an importable pkg):
+      # module: myorg.aq_probes
+      # entry: p99_latency
+      # form 3 — entry-point plugin (setuptools group 'aqueduct.probe_signals'):
+      # plugin: p99_latency
+      # Callable contract: fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}.
+      # SECURITY: callables run on the driver as code (UDF trust model). The
+      # engine cannot enforce zero-cost — an inline-SQL/pointer callable that does
+      # .collect()/.count() is on you. See custom_probe_driver_code warning.
 """
 
 from __future__ import annotations
@@ -386,6 +400,54 @@ def _partition_stats(df: DataFrame) -> dict[str, Any]:
     return {"num_partitions": df.rdd.getNumPartitions()}
 
 
+def _custom(
+    df: DataFrame,
+    sig_cfg: dict[str, Any],
+    block_full_actions: bool = False,
+) -> dict[str, Any]:
+    """Execute a user-defined custom probe signal (Phase 60).
+
+    Three forms (resolved by ``executor/probe_plugins.py``, exactly one):
+
+    * **inline SQL** — evaluate ``sql`` (a value expression → ``estimate``)
+      and/or ``passed_when`` (a boolean expression → ``passed`` gate verdict).
+      Each is a single ``df.selectExpr(...).collect()`` action.
+    * **module pointer / entry-point plugin** — resolve a callable and invoke
+      ``fn(df, sig_cfg)``; it must return a dict (``estimate``/``metadata``/
+      ``passed``). ``block_full_actions`` is surfaced into the passed config so
+      well-behaved plugins can honour the zero-cost contract — but the engine
+      cannot enforce what arbitrary driver code does.
+
+    The returned payload always carries ``"custom": True``. A ``passed`` key (SQL
+    ``passed_when`` or returned by a callable) is read by the Regulator gate just
+    like the built-in ``threshold`` signal.
+    """
+    from aqueduct.executor.probe_plugins import custom_signal_source, resolve_callable
+
+    source = custom_signal_source(sig_cfg)
+
+    if source == "sql":
+        out: dict[str, Any] = {"custom": True}
+        sql_expr = sig_cfg.get("sql")
+        if sql_expr:
+            out["estimate"] = df.selectExpr(sql_expr).collect()[0][0]
+        passed_when = sig_cfg.get("passed_when")
+        if passed_when:
+            result = df.selectExpr(passed_when).collect()[0][0]
+            out["passed"] = bool(result) if result is not None else False
+        return out
+
+    # callable form (pointer or plugin)
+    fn = resolve_callable(sig_cfg)
+    call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
+    result = fn(df, call_cfg)
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"custom probe callable must return a dict, got {type(result).__name__}"
+        )
+    return {"custom": True, **result}
+
+
 def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
     """Evaluate a SQL aggregate expression and write a boolean 'passed' verdict.
 
@@ -483,6 +545,8 @@ def execute_probe(
                         payload = _partition_stats(df)
                     elif sig_type == "threshold":
                         payload = _threshold(df, sig_cfg)
+                    elif sig_type == "custom":
+                        payload = _custom(df, sig_cfg, block_full_actions=block_full_actions)
                     else:
                         logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
                         continue

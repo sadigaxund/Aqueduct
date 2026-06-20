@@ -1,0 +1,49 @@
+# blueprint.yml
+# Observability: Custom Probe Signals
+
+aqueduct: "1.0"
+id: probe_custom_demo
+name: "Custom Probe Signal Snippet"
+
+modules:
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: price_custom_probe
+    label: "Custom Price Probe"
+    type: Probe
+    attach_to: raw_products
+    config:
+      signals:
+        # Inline-SQL custom signal: declarative, no driver code.
+        # `sql` produces an arbitrary metric ("estimate"); `passed_when` is an
+        # optional boolean gate the Regulator can read (like `threshold`).
+        - type: custom
+          sql: "percentile(price, 0.99)"
+          passed_when: "MAX(price) < 1000"
+
+        # A pointer/plugin custom signal would instead run trusted driver code:
+        #   - type: custom
+        #     module: myorg.aq_probes   # importable package
+        #     entry: p99_latency        # fn(df, sig_cfg) -> {estimate, metadata, passed}
+        # or, distributed via a setuptools entry point in group
+        # 'aqueduct.probe_signals':
+        #   - type: custom
+        #     plugin: p99_latency
+
+  - id: output_save
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/output.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_products
+    to: output_save
