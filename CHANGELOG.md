@@ -16,6 +16,12 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- **No more stray empty `lineage.db`.** Phase 38 merged column lineage into the observability store, but `get_stores` still built a separate (dead) lineage store that could spawn an empty `.aqueduct/lineage.db`. `bundle.lineage` now aliases the observability store — one place for `column_lineage`, no spurious file or Postgres schema.
+
+### Added
+- **Storage-integrity guardrail — local-blob-under-remote-obs warning.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset (defaults to `local`), Aqueduct warns at config load that externalised blobs (manifests/stack traces/provenance) will be written to the *driver's* local disk. Fires only when blob was *not* explicitly chosen — an explicit `stores.blob.backend: local` is silent (informed choice), and unrelated configs never trigger it.
+
 ### Changed
 - **Backend-aware observability reads.** Read commands (`report`, `runs`, `lineage`, `report --profile`, `report --trend`, the `patch` index lookup, and `aqueduct studio`) now resolve the observability store through a single canonical helper (`aqueduct.stores.read.open_obs_read`) instead of opening DuckDB files directly with hand-built `.aqueduct/observability/...` paths. This fixes commands that previously ignored a non-default `stores.observability.path`, and lets the plain-SQL read commands work against a Postgres observability backend (not just DuckDB). `runs` no longer relies on DuckDB-specific `json_extract_string`. (`heal` still reads DuckDB only — it couples to the store file for blob materialization; `report --trend` still uses DuckDB-specific JSON SQL.)
 

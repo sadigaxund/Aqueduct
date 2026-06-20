@@ -309,6 +309,36 @@ class StoresConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _warn_local_blob_under_remote_obs(self) -> "StoresConfig":
+        """Storage-integrity guardrail: a remote observability backend with an
+        IMPLICITLY-local blob store silently writes large payloads (manifests,
+        stack traces, provenance) to the driver's local disk — a surprise that can
+        fill the driver. Warn ONLY when blob was left at its default (not an
+        explicit `local` choice) so users who deliberately keep blobs local are
+        never nagged, and unrelated features never trigger it.
+        """
+        import warnings as _warnings
+
+        from aqueduct import AqueductWarning
+
+        obs_remote = self.observability.backend != "duckdb"
+        blob_defaulted_local = (
+            self.blob.backend == "local" and "backend" not in self.blob.model_fields_set
+        )
+        if obs_remote and blob_defaulted_local:
+            _warnings.warn(
+                f"stores.observability.backend is {self.observability.backend!r} but "
+                "stores.blob.backend is unset and defaults to 'local' — externalised "
+                "blobs (manifests/stack traces/provenance) will be written to the "
+                "DRIVER's local disk, not your remote backend. Set stores.blob.backend "
+                "(e.g. s3/gcs/adls) to keep them remote, or set it explicitly to 'local' "
+                "to acknowledge and silence this.",
+                AqueductWarning,
+                stacklevel=2,
+            )
+        return self
+
 
 class MetricsConfig(BaseModel):
     """Per-module observability tuning.

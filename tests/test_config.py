@@ -77,3 +77,35 @@ class TestAgentMemoryConfig:
         cfg = AgentConnectionConfig()
         assert cfg.memory.replay is True
         assert cfg.memory.coaching is True
+
+
+class TestBlobLeakGuardrail:
+    """Phase: storage integrity — warn on implicitly-local blobs under remote obs."""
+
+    def _warns(self, stores_dict):
+        import warnings
+        from aqueduct.config import StoresConfig
+        from aqueduct import AqueductWarning
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            StoresConfig(**stores_dict)
+            return [x for x in w if issubclass(x.category, AqueductWarning)
+                    and "blob" in str(x.message)]
+
+    def test_remote_obs_implicit_local_blob_warns(self):
+        assert self._warns({"observability": {"backend": "postgres", "path": "postgresql://x/y"}})
+
+    def test_explicit_local_blob_is_silent(self):
+        assert not self._warns({
+            "observability": {"backend": "postgres", "path": "postgresql://x/y"},
+            "blob": {"backend": "local"},
+        })
+
+    def test_duckdb_default_is_silent(self):
+        assert not self._warns({})
+
+    def test_remote_obs_remote_blob_is_silent(self):
+        assert not self._warns({
+            "observability": {"backend": "postgres", "path": "postgresql://x/y"},
+            "blob": {"backend": "s3", "path": "s3://b/k"},
+        })
