@@ -19,7 +19,7 @@ aqueduct: '1.0'
 id: fail_bp
 name: Fail BP
 agent:
-  approval_mode: aggressive
+  approval: aggressive
   max_heal_attempts_per_hour: 1
 modules:
   - id: m1
@@ -38,9 +38,9 @@ edges: []
         m.setattr("aqueduct.agent.generate_agent_patch", fail_if_called)
         
         config_path = tmp_path / "aqueduct.yml"
-        config_path.write_text("danger:\n  allow_aggressive_patching: true\n", encoding="utf-8")
+        config_path.write_text("danger:\n  allow_multi_patch: true\n", encoding="utf-8")
         
-        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     assert "LLM rate-limit reached" in result.output
     assert result.exit_code == 2   # DATA_OR_RUNTIME: spend-cap doesn't stage a patch
@@ -56,7 +56,7 @@ aqueduct: '1.0'
 id: ok_bp
 name: OK BP
 agent:
-  approval_mode: aggressive
+  approval: aggressive
   max_heal_attempts_per_hour: null
 modules:
   - id: m1
@@ -78,9 +78,9 @@ edges: []
         m.setattr("aqueduct.agent.generate_agent_patch", mock_patch)
         
         config_path = tmp_path / "aqueduct.yml"
-        config_path.write_text("danger:\n  allow_aggressive_patching: true\n", encoding="utf-8")
+        config_path.write_text("danger:\n  allow_multi_patch: true\n", encoding="utf-8")
         
-        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     assert patch_called is True
     assert "LLM rate-limit reached" not in result.output
@@ -97,7 +97,7 @@ aqueduct: '1.0'
 id: override_bp
 name: Override BP
 agent:
-  approval_mode: aggressive
+  approval: aggressive
   max_heal_attempts_per_hour: 1
 modules:
   - id: m1
@@ -122,10 +122,10 @@ edges: []
 agent:
   max_heal_attempts_per_hour: 10
 danger:
-  allow_aggressive_patching: true
+  allow_multi_patch: true
 """, encoding="utf-8")
         
-        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     # If BP wins, 2 >= 1 -> BLOCKS
     assert "LLM rate-limit reached" in result.output

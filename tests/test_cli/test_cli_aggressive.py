@@ -20,8 +20,8 @@ aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
 agent:
-  approval_mode: aggressive
-  aggressive_max_patches: 2
+  approval: aggressive
+  max_patches: 2
 modules:
   - id: in
     type: Ingress
@@ -91,7 +91,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, False)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
     assert "✗ LLM patch produces invalid Blueprint, discarding" in result.output
     # Loop should have stopped after the first invalid patch
@@ -146,7 +146,7 @@ def test_aggressive_mode_fails_then_continues(
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._stage_failed_patch") as mock_stage:
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
     assert "✗ LLM patch did not fix the issue (1/2)" in result.output
     assert "✗ LLM patch did not fix the issue (2/2)" in result.output
@@ -189,7 +189,7 @@ def test_aggressive_mode_succeeds_stops_loop(
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._write_patch_to_blueprint") as mock_write:
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
     assert "✓ LLM patch validated and applied (1/2)" in result.output
     assert mock_gen_patch.call_count == 1
@@ -214,7 +214,7 @@ def test_trigger_agent_escalation(
     mock_surveyor_cls.return_value.patch_store.return_value = None
     
     # Update blueprint to disabled
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: disabled"))
     
     # 1. First run fails but triggers agent
     mock_exec.side_effect = [
@@ -246,7 +246,7 @@ def test_trigger_agent_false_disabled_breaks(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: disabled"))
     
     mock_exec.return_value = ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", module_results=(), trigger_agent=False)
     
@@ -273,7 +273,7 @@ def test_block_full_actions_propagation(
     mock_cfg = AqueductConfig(
         danger=DangerConfig(
             allow_full_probe_actions=False,
-            allow_aggressive_patching=True
+            allow_multi_patch=True
         ),
         deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
         stores={
@@ -306,7 +306,7 @@ def test_trigger_agent_stays_human(
     mock_get_executor.return_value = mock_exec
     
     # Set to human
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: human"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: human"))
     
     mock_exec.side_effect = [
         ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", 

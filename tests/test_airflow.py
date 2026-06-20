@@ -702,7 +702,7 @@ aqueduct: '1.0'
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: human
+  approval: human
 modules:
   - id: src
     type: Ingress

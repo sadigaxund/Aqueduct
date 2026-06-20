@@ -98,7 +98,7 @@ aqueduct: "1.0"
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: aggressive
+  approval: aggressive
   sandbox_mode: "off"
   guardrails:
     forbidden_ops: ["remove_module"]
@@ -119,7 +119,7 @@ agent:
   provider: openai_compat
   base_url: "http://localhost:8000"
 danger:
-  allow_aggressive_patching: true
+  allow_multi_patch: true
   allow_skip_sandbox: true
 """, encoding="utf-8")
 

@@ -73,7 +73,9 @@ class CascadeTierSchema(BaseModel):
 
 
 class AgentSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # No populate_by_name: the `approval_mode` attr is settable from YAML ONLY via
+    # its `approval` alias — the former `approval_mode` YAML key is rejected (2.0).
+    model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="before")
     @classmethod
@@ -100,21 +102,21 @@ class AgentSchema(BaseModel):
                 data["cascade"] = [{"model": m} for m in models]
         return data
 
-    # `approval` is the canonical YAML key (since 1.x). `approval_mode` stays a
-    # deprecated input alias until 2.0 (parser emits a warning). The Python
-    # attribute name remains `approval_mode` — internal, unchanged. Both YAML
-    # keys populate it via AliasChoices.
+    # `approval` is the YAML key; the Python attribute name stays `approval_mode`
+    # (internal — keyed in via the alias). The former `approval_mode` YAML key was
+    # removed in 2.0 (no populate_by_name → the field name is not accepted as a
+    # key). NOTE: `aggressive` is still a live value — it drives the multi-patch
+    # heal-loop branch in cli/run.py; collapsing it into `auto`+`max_patches>1` is
+    # a separate heal-loop refactor, not an alias removal.
     approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = Field(
         default="disabled",
-        validation_alias=AliasChoices("approval", "approval_mode"),
+        validation_alias=AliasChoices("approval"),
     )
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
-    # 1.1.0 — `max_patches` is the canonical name. `aggressive_max_patches` is
-    # accepted as a deprecated alias and emits a warning at parse time.
-    # Default 1 = single-patch try (former `auto` mode behavior). Set > 1 to
-    # opt into the multi-patch reprompt loop; that path also requires
-    # `danger.allow_multi_patch: true` (alias: `allow_aggressive_patching`).
-    max_patches: int = Field(default=1, ge=1, validation_alias=AliasChoices("max_patches", "aggressive_max_patches"))
+    # `max_patches` (default 1 = single-patch try). Set > 1 to opt into the
+    # multi-patch reprompt loop; that path also requires
+    # `danger.allow_multi_patch: true`.
+    max_patches: int = Field(default=1, ge=1)
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None

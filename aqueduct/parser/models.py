@@ -70,11 +70,10 @@ class CascadeTierConfig:
 
 @dataclass(frozen=True)
 class AgentConfig:
-    approval_mode: str = "disabled"       # "disabled" | "human" | "auto" | "aggressive" (deprecated alias for auto)
+    approval_mode: str = "disabled"       # YAML key `approval`: "disabled" | "human" | "auto" | "ci"
     on_pending_patches: str = "warn"      # "ignore" | "warn" | "block"
-    # 1.1.0 — `max_patches` is the canonical name (default 1). Multi-patch loop
-    # opt-in: set > 1 AND set `danger.allow_multi_patch: true` (alias:
-    # `allow_aggressive_patching`).
+    # `max_patches` (default 1). Multi-patch loop opt-in: set > 1 AND
+    # `danger.allow_multi_patch: true`.
     max_patches: int = 1
     # Connection fields — None = inherit from aqueduct.yml agent: defaults
     provider: str | None = None

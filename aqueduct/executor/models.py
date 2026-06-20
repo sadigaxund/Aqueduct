@@ -30,7 +30,7 @@ class ExecutionResult:
     run_id: str
     status: str                          # "success" | "error"
     module_results: tuple[ModuleResult, ...]
-    trigger_agent: bool = False          # LLM loop should fire even if approval_mode=disabled
+    trigger_agent: bool = False          # LLM loop should fire even if approval=disabled
 
     def to_dict(self) -> dict:
         return {

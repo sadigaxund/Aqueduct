@@ -363,7 +363,7 @@ modules:
     config: {{format: csv, path: /missing.csv}}
 edges: []
 agent:
-  approval_mode: human
+  approval: human
 """)
         config_path = tmp_path / "aq.yml"
         config_path.write_text(f"""

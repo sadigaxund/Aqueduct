@@ -107,13 +107,13 @@ agent:
   #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   #
-  # `approval_mode:` is a deprecated alias for `approval:` (parses with a warning until 2.0).
+  # `approval:` is a deprecated alias for `approval:` (parses with a warning until 2.0).
   # Legacy: `approval: aggressive` still parses but is deprecated → use `auto` + max_patches.
   approval: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
   max_patches: 1                  # 1 = single auto patch (default); > 1 enables the multi-patch loop
-                                  # (legacy alias: aggressive_max_patches)
+                                  # (needs danger.allow_multi_patch: true or --allow-multi-patch)
 
   # on_heal_failure: what to do when a patch is generated but the re-run still fails
   #   stage   — stage failed patch to patches/pending/ for human inspection (default)

@@ -166,44 +166,6 @@ def parse_dict(
     if not isinstance(raw, dict):
         raise ParseError(f"Blueprint must be a mapping, got {type(raw).__name__}")
 
-    # 1.1.0 — Deprecation warnings: `approval_mode: aggressive` and
-    # `aggressive_max_patches` are aliases that still parse but should migrate
-    # to `approval_mode: auto` + `max_patches`. Print to stderr (does not block).
-    # When both canonical and alias keys are present in the same dict, drop the
-    # alias before pydantic validation — `extra="forbid"` would otherwise reject
-    # the second key as an unknown field even though it maps to an alias.
-    # Clone the agent sub-dict before the alias-stripping pops below, so callers
-    # reusing `raw` (in-memory patch / sandbox flows) don't see their keys mutated.
-    if isinstance(raw.get("agent"), dict):
-        raw = {**raw, "agent": dict(raw["agent"])}
-    _agent_raw = raw.get("agent") if isinstance(raw, dict) else None
-    if isinstance(_agent_raw, dict):
-        import sys as _sys
-        # `approval` is canonical; `approval_mode` is a deprecated input alias.
-        if "approval_mode" in _agent_raw:
-            _sys.stderr.write(
-                "[deprecated] agent.approval_mode → use agent.approval "
-                "(same values: disabled/human/auto/ci). The alias parses until 2.0.\n"
-            )
-            # Both keys present → canonical `approval` wins; drop the alias so
-            # AgentSchema's AliasChoices + extra=forbid don't see a duplicate.
-            if "approval" in _agent_raw:
-                _agent_raw.pop("approval_mode", None)
-        # `aggressive` value (under either key) is itself deprecated.
-        if _agent_raw.get("approval") == "aggressive" or _agent_raw.get("approval_mode") == "aggressive":
-            _sys.stderr.write(
-                "[deprecated] approval: aggressive → use approval: auto "
-                "with max_patches: N (and danger.allow_multi_patch: true for N > 1).\n"
-            )
-        if "aggressive_max_patches" in _agent_raw:
-            _sys.stderr.write(
-                "[deprecated] aggressive_max_patches → use max_patches "
-                "(same semantics, shorter name).\n"
-            )
-            if "max_patches" in _agent_raw:
-                # Canonical wins; drop the alias to keep the AgentSchema strict.
-                _agent_raw.pop("aggressive_max_patches", None)
-
     # ── 2. Pydantic schema validation ─────────────────────────────────────────
     try:
         validated = BlueprintSchema.model_validate(raw)

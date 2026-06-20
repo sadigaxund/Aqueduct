@@ -11,7 +11,7 @@ aqueduct: '1.0'
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: {approval}
+  approval: {approval}
   sandbox_mode: "{sandbox}"
 modules:
   - id: src
@@ -26,7 +26,7 @@ aqueduct_config: "1.0"
 danger:
   allow_full_preflight: {allow_preflight}
   allow_skip_sandbox: {allow_skip}
-  allow_aggressive_patching: {allow_aggressive}
+  allow_multi_patch: {allow_aggressive}
 """
 
 def _write_project(tmp_path, approval, sandbox, allow_preflight=False, allow_skip=False, allow_aggressive=False):
@@ -101,7 +101,7 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
 
     1.1.0: combo gate is now keyed on max_patches > 1, not the legacy
     `approval_mode=aggressive` literal. The blueprint sets
-    `aggressive_max_patches: 2` (deprecated alias) to opt into the loop
+    `max_patches: 2` (deprecated alias) to opt into the loop
     so this test also covers alias-resolution for the gate.
     """
     bp = tmp_path / "bp.yml"
@@ -110,9 +110,9 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
         "id: test_bp\n"
         "name: Test BP\n"
         "agent:\n"
-        "  approval_mode: aggressive\n"
+        "  approval: aggressive\n"
         "  sandbox_mode: 'off'\n"
-        "  aggressive_max_patches: 2\n"
+        "  max_patches: 2\n"
         "modules:\n"
         "  - id: src\n"
         "    type: Ingress\n"
@@ -242,7 +242,7 @@ def test_multi_patch_blocks_without_danger_gate(mock_get_exec, mock_surveyor_cls
         "id: test_bp\n"
         "name: Test BP\n"
         "agent:\n"
-        "  approval_mode: auto\n"
+        "  approval: auto\n"
         "  max_patches: 2\n"
         "modules:\n"
         "  - id: src\n"
@@ -278,7 +278,7 @@ def test_multi_patch_allowed_with_danger_gate(mock_get_exec, mock_surveyor_cls, 
         "id: test_bp\n"
         "name: Test BP\n"
         "agent:\n"
-        "  approval_mode: auto\n"
+        "  approval: auto\n"
         "  max_patches: 2\n"
         "modules:\n"
         "  - id: src\n"
@@ -318,7 +318,7 @@ def test_multi_patch_cli_flag_overrides_danger_gate(mock_get_exec, mock_surveyor
         "id: test_bp\n"
         "name: Test BP\n"
         "agent:\n"
-        "  approval_mode: auto\n"
+        "  approval: auto\n"
         "  max_patches: 2\n"
         "modules:\n"
         "  - id: src\n"

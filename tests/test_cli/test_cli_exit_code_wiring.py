@@ -70,7 +70,7 @@ aqueduct: '1.0'
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: {mode}
+  approval: {mode}
 modules:
   - id: src
     type: Ingress
@@ -95,9 +95,9 @@ stores:
 """
 
 
-def _write_project(tmp_path: Path, approval_mode: str) -> tuple[Path, Path]:
+def _write_project(tmp_path: Path, approval: str) -> tuple[Path, Path]:
     bp = tmp_path / "bp.yml"
-    bp.write_text(_MINIMAL_BP.format(mode=approval_mode), encoding="utf-8")
+    bp.write_text(_MINIMAL_BP.format(mode=approval), encoding="utf-8")
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
         _MINIMAL_CFG.format(
@@ -131,7 +131,7 @@ def _make_failure_context(run_id: str) -> FailureContext:
 def test_run_human_mode_stages_patch_exits_3(
     mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
 ):
-    """approval_mode: human — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
+    """approval: human — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
     bp, cfg = _write_project(tmp_path, "human")
 
     exec_res = _failed_exec_result()
@@ -165,7 +165,7 @@ def test_run_human_mode_stages_patch_exits_3(
 def test_run_ci_mode_stages_patch_exits_3(
     mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
 ):
-    """approval_mode: ci — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
+    """approval: ci — runtime failure → patch staged → exit 3 (HEAL_PENDING)."""
     bp, cfg = _write_project(tmp_path, "ci")
 
     exec_res = _failed_exec_result()
@@ -197,7 +197,7 @@ def test_run_ci_mode_stages_patch_exits_3(
 def test_run_disabled_mode_no_patch_exits_2(
     mock_get_exec, mock_surveyor_cls, tmp_path
 ):
-    """approval_mode: disabled — runtime failure → no staging → exit 2 (DATA_OR_RUNTIME)."""
+    """approval: disabled — runtime failure → no staging → exit 2 (DATA_OR_RUNTIME)."""
     bp, cfg = _write_project(tmp_path, "disabled")
 
     exec_res = _failed_exec_result()
@@ -226,7 +226,7 @@ def test_run_disabled_mode_no_patch_exits_2(
 def test_run_auto_mode_patch_succeeds_exits_0(
     mock_gen, mock_get_exec, mock_surveyor_cls, tmp_path
 ):
-    """approval_mode: auto — failure → patch applied in-memory → re-run succeeds → exit 0."""
+    """approval: auto — failure → patch applied in-memory → re-run succeeds → exit 0."""
     bp, cfg = _write_project(tmp_path, "auto")
 
     # First execute fails, second succeeds

@@ -80,7 +80,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
     """Pending hit → LLM skipped, HEAL_PENDING(3) exit."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: human")
+    _write_bp(bp_path, "approval: human")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -105,7 +105,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     """Replay candidate passes gates → zero LLM calls."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -147,7 +147,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
     """Replay candidate fails sandbox → falls through to LLM."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -184,7 +184,7 @@ def test_replay_human_mode_stages_pending(tmp_path):
     """Replay in human mode → staged to pending with source='replay'."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: human")
+    _write_bp(bp_path, "approval: human")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -218,7 +218,7 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
     """agent.memory.replay: false → pending/replay lookups skipped, LLM called."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path, 'memory: {replay: false, coaching: false}')
 
@@ -337,7 +337,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
     """LLM-generated patch records resolution='llm' and failure_signature in healing_outcomes."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 

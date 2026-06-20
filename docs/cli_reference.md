@@ -110,7 +110,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--profile <name>` | — | Activate a `context_profiles:` block |
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |
 | `--webhook <url>` | from `aqueduct.yml` | Override failure webhook |
-| `--allow-multi-patch` / `--allow-aggressive` | off | Permit `max_patches > 1` for this run (overrides `danger.allow_multi_patch=false`). `--allow-aggressive` is a deprecated alias. |
+| `--allow-multi-patch` | off | Permit `max_patches > 1` for this run (overrides `danger.allow_multi_patch=false`). |
 | `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `-e KEY=VAL` / `--env KEY=VAL` | — | Inline env override (highest precedence). Repeatable. |
 | `--env-file <path>` | anchored `<dir>/.env` | Explicit fallback `.env` (used only when no anchored project `.env` exists) |
@@ -191,7 +191,7 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 | `ci` | Patch staged for CI | Replay still runs |
 | `auto` | Auto-apply. `max_patches: 1` = single shot. `max_patches > 1` = multi-patch reprompt loop (requires `danger.allow_multi_patch: true`). | Replay gates apply every iteration |
 
-`agent.approval` is the canonical key; `agent.approval_mode` is a deprecated input alias (still parses, emits a `[deprecated]` warning, removed in `aqueduct: "2.0"`). `approval: aggressive` is a deprecated alias for `auto` + `max_patches > 1`. `aggressive_max_patches` is an alias for `max_patches`. All are slated for removal in the `2.0` schema.
+`agent.approval` is the config key (values: `disabled` | `human` | `auto` | `aggressive` | `ci`). The former `agent.approval_mode` key, the `aggressive_max_patches` alias, the `danger.allow_aggressive_patching` alias, and the `--allow-aggressive` flag were removed in 2.0 — use `agent.approval`, `agent.max_patches`, `danger.allow_multi_patch`, and `--allow-multi-patch`.
 
 **Double-danger combo** — `sandbox_mode: off` + `max_patches > 1` means every LLM patch hits production data without pre-validation, in a loop. Engine prints a `⚠ DANGER COMBO` line at startup when both are set; use only on tiny scopes you fully trust.
 

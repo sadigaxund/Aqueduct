@@ -735,7 +735,7 @@ class TestSurveyorLlmIntegration:
     # Surveyor.record() now only persists the run outcome and fires webhooks.
     # These tests document the current behavior (LLM NOT called from record()).
 
-    def _make_manifest_with_approval(self, approval_mode: str):
+    def _make_manifest_with_approval(self, approval: str):
         from aqueduct.compiler.models import Manifest
         from aqueduct.parser.models import AgentConfig
 
@@ -745,7 +745,7 @@ class TestSurveyorLlmIntegration:
             edges=(),
             context={},
             spark_config={},
-            agent=AgentConfig(approval_mode=approval_mode),
+            agent=AgentConfig(approval_mode=approval),
         )
 
     def test_record_failure_returns_failure_context(self, tmp_path):
@@ -1226,7 +1226,7 @@ class TestProviderOptionsDispatch:
         from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError):
-            AgentSchema(**{"approval_mode": "disabled", "ollama_options": {"num_thread": 4}})
+            AgentSchema(**{"approval": "disabled", "ollama_options": {"num_thread": 4}})
 
 
 # ── Guardrails ────────────────────────────────────────────────────────────────

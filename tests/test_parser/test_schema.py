@@ -210,7 +210,7 @@ class TestPromptContext:
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n  approval_mode: auto\n  prompt_context: 'Use PySpark version 3.5.'\n"
+            "agent:\n  approval: auto\n  prompt_context: 'Use PySpark version 3.5.'\n"
             "modules:\n  - id: m\n    type: Channel\n    label: M\n"
             "edges: []\n"
         )
@@ -222,7 +222,7 @@ class TestPromptContext:
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n  approval_mode: auto\n  prompt_context: 'Contextual info'\n"
+            "agent:\n  approval: auto\n  prompt_context: 'Contextual info'\n"
             "modules:\n  - id: m\n    type: Channel\n    label: M\n"
             "edges: []\n"
         )
@@ -295,7 +295,7 @@ edges:
 class TestAgentModelListSugar:
     def test_list_two_models_synthesises_cascade(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is not None
         assert len(s.cascade) == 2
@@ -304,24 +304,24 @@ class TestAgentModelListSugar:
 
     def test_single_item_list_collapses_to_plain_string(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude"], "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": ["claude"], "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is None
 
     def test_empty_list_raises_validation_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": [], "approval": "auto"})
 
     def test_list_with_non_string_item_raises_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": ["claude", 42], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": ["claude", 42], "approval": "auto"})
 
     def test_list_with_empty_string_raises_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [""], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": [""], "approval": "auto"})
 
     def test_list_and_explicit_cascade_mutually_exclusive(self):
         from aqueduct.parser.schema import AgentSchema
@@ -329,12 +329,12 @@ class TestAgentModelListSugar:
             AgentSchema.model_validate({
                 "model": ["claude", "gpt4"],
                 "cascade": [{"model": "claude"}],
-                "approval_mode": "auto",
+                "approval": "auto",
             })
 
     def test_plain_string_model_no_list_preserved(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": "claude", "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": "claude", "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is None
 
@@ -342,7 +342,7 @@ class TestAgentModelListSugar:
         from aqueduct.parser.schema import AgentSchema
         s = AgentSchema.model_validate({
             "model": ["claude", "gpt4", "gemini"],
-            "approval_mode": "auto",
+            "approval": "auto",
         })
         assert s.model == "claude"
         assert len(s.cascade) == 3
