@@ -624,7 +624,7 @@ class _AqueductJsonLogFormatter:
         return _json.dumps(payload, default=str)
 
 
-@click.group()
+@click.group(invoke_without_command=True, no_args_is_help=False)
 @click.version_option(
     version=_aqueduct_version,
     prog_name="aqueduct",
@@ -689,6 +689,22 @@ def cli(
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
 
     _install_secret_redaction_hooks()
+
+    # Bare `aqueduct` (no subcommand) → branded banner above the help.
+    if ctx.invoked_subcommand is None:
+        click.echo(_render_banner())
+        click.echo(ctx.get_help())
+        ctx.exit()
+
+
+def _render_banner() -> str:
+    """Small branded wordmark for the bare `aqueduct` command (not per-run)."""
+    aq = click.style("aq", fg="red", bold=True)
+    ueduct = click.style("ueduct", fg="yellow", bold=True)   # sand
+    arches = click.style("∩∩∩", fg="cyan")
+    tag = click.style("declarative · self-healing · Apache Spark", dim=True)
+    ver = click.style(f"v{_aqueduct_version}", dim=True)
+    return f"\n  {arches}  {aq}{ueduct}  {ver}\n  {tag}\n"
 
 
 
