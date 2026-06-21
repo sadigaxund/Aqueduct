@@ -767,6 +767,9 @@ def run(
                     + click.style("  ·  aqueduct patch list", dim=True),
                     err=True,
                 )
+                if verbose:
+                    for p in pending_patches:
+                        click.echo(f"  · {p.stem}", err=True)
 
         # ── Uncommitted applied patch warning ──────────────────────────────────────
         uncommitted_applied = _uncommitted_applied_patches(
@@ -1761,11 +1764,44 @@ def run(
         depot.close()
 
         # ── Report ────────────────────────────────────────────────────────────────
+        # Per-module metrics for the inline summary (best-effort post-run read;
+        # surveyor uses short-lived connections, so the store is free by now).
+        _metrics: dict[str, tuple] = {}
+        try:
+            from aqueduct.stores.read import open_obs_read
+            from aqueduct.stores.queries import run_detail as _run_detail
+            _rs = open_obs_read(cfg, store_dir=store_dir, run_id=run_id,
+                                blueprint_id=manifest.blueprint_id)
+            if _rs is not None:
+                _det = _run_detail(_rs, run_id)
+                if _det:
+                    for _p in _det.profile:
+                        _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
+        except Exception:
+            pass
+
+        def _fmt_dur(ms):
+            return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
+
+        _w = max((len(mr.module_id) for mr in result.module_results), default=0)
         for mr in result.module_results:
-            icon = "✓" if mr.status == "success" else "✗"
-            line = f"  {icon} {mr.module_id}"
-            if mr.error:
-                line += f"  — {mr.error}"
+            if mr.status == "success":
+                icon = click.style("✓", fg="green")
+            elif mr.status == "skipped":
+                icon = click.style("⏭", fg="cyan")
+            else:
+                icon = click.style("✗", fg="red", bold=True)
+            if mr.status == "error" and mr.error:
+                line = f"  {icon} {mr.module_id}  {click.style('— ' + mr.error, fg='red')}"
+            else:
+                rows, dur = _metrics.get(mr.module_id, (None, None))
+                meta = []
+                if rows is not None:
+                    meta.append(f"{rows:,} rows")
+                if _fmt_dur(dur):
+                    meta.append(_fmt_dur(dur))
+                tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
+                line = f"  {icon} {mr.module_id.ljust(_w)}   {tail}".rstrip()
             click.echo(line)
 
         if result.status not in ("success", "patched"):
