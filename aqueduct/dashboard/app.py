@@ -135,25 +135,39 @@ def _fleet_tab(cfg, store_dir):
         return
     total_runs = sum(s.runs for s in summ)
     total_succ = sum(s.successes for s in summ)
-    c1, c2, c3, c4 = st.columns(4)
+
+    hc = q.heal_coverage(cfg, store_dir=store_dir)
+    zero_token = hc.get("cached", 0) + hc.get("replayed", 0)
+    total_resolved = zero_token + hc.get("llm", 0)
+    cov_pct = f"{zero_token / total_resolved * 100:.0f}%" if total_resolved else "\u2014"
+
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Blueprints", len(summ))
     c2.metric("Runs", total_runs)
     c3.metric("Success rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
     c4.metric("Heal attempts", sum(s.heal_attempts for s in summ))
+    c5.metric("Heal coverage \u2014 zero-token", cov_pct)
 
     rot = q.runs_over_time(cfg, store_dir=store_dir)
     dist = q.failure_categories(cfg, store_dir=store_dir)
+    gates = q.gate_rejection_rates(cfg, store_dir=store_dir)
     has_rot = bool(rot)
     has_dist = bool(dist)
+    has_gates = bool(gates)
 
-    if has_rot and has_dist:
+    ncharts = sum([has_rot, has_dist, has_gates])
+    if ncharts == 3:
+        cols = st.columns(3)
+        lc, mc, rc = cols[0], cols[1], cols[2]
+    elif ncharts == 2:
         lc, rc = st.columns(2)
+        mc = None
     elif has_rot:
         lc = st.container()
-        rc = None
+        mc = rc = None
     else:
-        lc = None
-        rc = st.container() if has_dist else None
+        lc = mc = None
+        rc = st.container() if (has_dist or has_gates) else None
 
     if has_rot:
         days = sorted({d.day for d in rot})
@@ -177,6 +191,18 @@ def _fleet_tab(cfg, store_dir):
             st.caption("Failure categories")
             fig = px.bar(
                 x=list(dist.keys()), y=list(dist.values()),
+                labels={"x": "", "y": "count"},
+            )
+            fig.update_xaxes(tickangle=45, title=None)
+            fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
+            st.plotly_chart(fig, width="stretch")
+
+    if has_gates:
+        target = mc if mc is not None else (rc if has_dist else lc) if has_dist else lc
+        with target:
+            st.caption("Gate rejections")
+            fig = px.bar(
+                x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
             )
             fig.update_xaxes(tickangle=45, title=None)
@@ -471,6 +497,88 @@ def _lineage_tab(handles):
                         st.code(diff_text, language="diff")
 
 
+def _heal_tab(cfg, store_dir):
+    hc = q.heal_coverage(cfg, store_dir=store_dir)
+    gates = q.gate_rejection_rates(cfg, store_dir=store_dir)
+    detail = q.heal_attempt_details(cfg, store_dir=store_dir)
+    if not detail and not hc:
+        st.info("No healing data yet. Run a blueprint that fails with `agent:` configured.")
+        return
+
+    # ── KPI row ──────────────────────────────────────────────────────────
+    total = sum(hc.values())
+    zero_token = hc.get("cached", 0) + hc.get("replayed", 0)
+    total_llm = hc.get("llm", 0)
+    avg_latency = sum(d["latency_ms"] or 0 for d in detail) // len(detail) if detail else 0
+    total_tokens = sum((d["tokens_in"] or 0) + (d["tokens_out"] or 0) for d in detail)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Heal events", total)
+    c2.metric("Zero-token", f"{zero_token / total * 100:.0f}%" if total else "\u2014")
+    c3.metric("Cache hit", hc.get("cached", 0))
+    c4.metric("Avg latency", f"{avg_latency // 1000}s" if avg_latency else "\u2014")
+    c5.metric("Total tokens", f"{total_tokens:,}")
+
+    # ── Charts row ───────────────────────────────────────────────────────
+    left, right = st.columns(2)
+    with left:
+        st.caption("Resolution distribution")
+        if hc:
+            fig = px.pie(
+                values=list(hc.values()), names=list(hc.keys()),
+                hole=0.4,
+            )
+            fig.update_layout(height=300, margin=dict(l=8, r=8, t=8, b=8))
+            st.plotly_chart(fig, width="stretch")
+
+    with right:
+        st.caption("Gate rejections")
+        if gates:
+            fig = px.bar(
+                x=list(gates.keys()), y=list(gates.values()),
+                labels={"x": "", "y": "count"},
+            )
+            fig.update_xaxes(tickangle=45, title=None)
+            fig.update_layout(height=300, margin=dict(l=8, r=8, t=8, b=8))
+            st.plotly_chart(fig, width="stretch")
+
+    # ── Success by failure category ──────────────────────────────────────
+    categories: dict[str, dict[str, int]] = {}
+    for d in detail:
+        cat = d["failure_category"] or "unknown"
+        c = categories.setdefault(cat, {"total": 0, "success": 0})
+        c["total"] += 1
+        if d["run_success_after_patch"]:
+            c["success"] += 1
+    if categories:
+        st.caption("Heal success rate by failure category")
+        cat_df = pd.DataFrame([
+            {"category": cat, "success rate": v["success"] / v["total"] * 100,
+             "count": v["total"]}
+            for cat, v in categories.items()
+        ])
+        fig = px.bar(cat_df, x="category", y="success rate", text="count",
+                     labels={"category": "", "success rate": "%"})
+        fig.update_xaxes(tickangle=45, title=None)
+        fig.update_layout(height=300, margin=dict(l=8, r=8, t=8, b=8))
+        st.plotly_chart(fig, width="stretch")
+
+    # ── Attempt-waterfall table ──────────────────────────────────────────
+    if detail:
+        st.caption(f"Recent heal attempts ({len(detail)} rows)")
+        _table([
+            {"run": d["run_id"][:12], "attempt": d["attempt_num"],
+             "latency": f"{d['latency_ms'] // 1000}s" if d.get("latency_ms") else "\u2014",
+             "gate": d["gate_that_rejected"] or "\u2014",
+             "stop": d["stop_reason"] or "\u2014", "tokens": (d["tokens_in"] or 0) + (d["tokens_out"] or 0),
+             "category": d.get("failure_category") or "\u2014",
+             "resolution": d.get("resolution") or "\u2014",
+             "patched": "\u2713" if d.get("patch_applied") else "\u2014",
+             "success": "\u2713" if d.get("run_success_after_patch") else "\u2014"}
+            for d in detail[:50]
+        ], status_cols=("resolution",),
+           formats={"tokens": "{:,}"})
+
+
 def _doctor_tab(config_path):
     # Config health, not run data → memoise per session; F5 re-runs.
     if "doctor_results" not in st.session_state:
@@ -528,14 +636,16 @@ def main() -> None:
     st.caption(f"observability backend: **{backend}** · read-only viewer · F5 to refresh")
     handles = q.discover_stores(cfg, store_dir=store_dir)
 
-    fleet, runs, lineage, doctor, config = st.tabs(
-        ["Fleet", "Runs", "Lineage", "Doctor", "Config"])
+    fleet, runs, lineage, healing, doctor, config = st.tabs(
+        ["Fleet", "Runs", "Lineage", "Healing", "Doctor", "Config"])
     with fleet:
         _fleet_tab(cfg, store_dir)
     with runs:
         _runs_tab(handles)
     with lineage:
         _lineage_tab(handles)
+    with healing:
+        _heal_tab(cfg, store_dir)
     with doctor:
         _doctor_tab(config_path)
     with config:

@@ -520,3 +520,97 @@ def failure_categories(cfg: Any, store_dir: str | None = None) -> dict[str, int]
             except Exception:
                 continue
     return dist
+
+
+def heal_coverage(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
+    """Zero-token (cached/replayed) vs LLM heal resolution counts across fleet."""
+    agg: dict[str, int] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    "SELECT resolution, COUNT(*) FROM healing_outcomes "
+                    "WHERE resolution IS NOT NULL GROUP BY resolution"
+                )
+                for res, n in cur.fetchall():
+                    agg[res] = agg.get(res, 0) + n
+        except Exception:
+            continue
+    return agg
+
+
+def heal_stop_vs_success(cfg: Any, store_dir: str | None = None
+                         ) -> list[dict[str, Any]]:
+    """Cross-reference heal_attempts.stop_reason with run success after patch."""
+    rows: list[dict[str, Any]] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT ha.stop_reason, ho.run_success_after_patch, COUNT(*) AS cnt
+                    FROM heal_attempts ha
+                    JOIN healing_outcomes ho ON ho.run_id = ha.run_id
+                    WHERE ha.stop_reason IS NOT NULL
+                    GROUP BY ha.stop_reason, ho.run_success_after_patch
+                    """
+                )
+                for stop_reason, success, cnt in cur.fetchall():
+                    rows.append({
+                        "stop_reason": stop_reason,
+                        "run_success_after_patch": "success" if success else "failed",
+                        "count": cnt,
+                    })
+        except Exception:
+            continue
+    return rows
+
+
+def heal_attempt_details(cfg: Any, store_dir: str | None = None,
+                          limit: int = 100) -> list[dict[str, Any]]:
+    """Cross-store heal attempts with outcome enrichment (latest *limit* rows)."""
+    out: list[dict[str, Any]] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT ha.run_id, ha.attempt_num, ha.latency_ms,
+                           ha.tokens_in, ha.tokens_out, ha.stop_reason,
+                           ha.gate_that_rejected, ha.error_class,
+                           ho.failure_category, ho.resolution,
+                           ho.patch_applied, ho.run_success_after_patch
+                    FROM heal_attempts ha
+                    LEFT JOIN healing_outcomes ho ON ho.run_id = ha.run_id
+                    ORDER BY ha.recorded_at DESC
+                    LIMIT ?
+                    """,
+                    [limit],
+                )
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    out.append(dict(zip(cols, row)))
+        except Exception:
+            continue
+    return out
+
+
+def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
+    """Gate rejection counts across fleet (from patch_simulation or heal_attempts)."""
+    agg: dict[str, int] = {}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        for sql in (
+            "SELECT gate, status FROM patch_simulation WHERE status != 'passed'",
+            "SELECT gate_that_rejected, COUNT(*) FROM heal_attempts "
+            "WHERE gate_that_rejected IS NOT NULL GROUP BY gate_that_rejected",
+        ):
+            try:
+                with h.store.connect() as cur:
+                    cur.execute(sql)
+                    for row in cur.fetchall():
+                        gate = row[0] or "unknown"
+                        agg[gate] = agg.get(gate, 0) + (row[1] if len(row) > 1 else 1)
+                break
+            except Exception:
+                continue
+    return agg
