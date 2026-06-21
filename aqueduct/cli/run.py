@@ -287,6 +287,14 @@ def _zero_token_attempt(sig_exact):
          "Only beneficial when the Blueprint has multiple fully-independent source trees.",
 )
 @click.option(
+    "-v", "--verbose",
+    is_flag=True,
+    default=False,
+    help="Show the full Spark/JVM startup banner (incubator notice, log4j init, "
+         "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
+         "warnings always print.",
+)
+@click.option(
     "--sandbox",
     is_flag=True,
     default=False,
@@ -323,6 +331,7 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
+    verbose: bool = False,
     allow_multi_patch_flag: bool = False,
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
@@ -522,7 +531,10 @@ def run(
                     if mr.error:
                         line += f"  — {mr.error}"
                     click.echo(line)
-                click.echo(f"\n✓ blueprint complete  run_id={run_id}")
+                click.echo(click.style("─" * 64, dim=True))
+                click.echo(
+                    f"{click.style('✓', fg='green', bold=True)} blueprint complete  ·  run {run_id}"
+                )
                 sys.exit(exit_codes.SUCCESS)
             else:
                 if _logs:
@@ -617,7 +629,7 @@ def run(
             )
 
             from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
+            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
             atexit.register(session.stop)
 
             try:
@@ -772,11 +784,15 @@ def run(
                 parts.append(f"to={to_module}")
             selector_note = "  [" + ", ".join(parts) + "]"
         exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
+        _rule = "─" * 64
+        click.echo(click.style(_rule, dim=True))
         click.echo(
-            f"▶ {manifest.blueprint_id}  ({len(manifest.modules)} modules)"
-            f"  run={run_id}  engine={engine}  master={master_url}"
+            f"{click.style('▶', fg='cyan', bold=True)} "
+            f"{click.style(manifest.blueprint_id, bold=True)}  ·  "
+            f"{len(manifest.modules)} modules  ·  run {run_id}  ·  {engine} {master_url}"
             f"{selector_note}{exec_date_note}"
         )
+        click.echo(click.style(_rule, dim=True))
 
         # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
         from aqueduct.cli import resolve_agent_connection
@@ -841,7 +857,7 @@ def run(
         merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
         if engine == "spark":
             from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
+            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
         else:
             raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
 
@@ -1784,7 +1800,10 @@ def run(
             )
 
         status_label = "patched" if result.status == "patched" else "complete"
-        click.echo(f"\n✓ blueprint {status_label}  run_id={run_id}")
+        click.echo(click.style("─" * 64, dim=True))
+        click.echo(
+            f"{click.style('✓', fg='green', bold=True)} blueprint {status_label}  ·  run {run_id}"
+        )
     finally:
         os.chdir(_original_cwd)
 

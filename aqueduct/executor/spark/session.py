@@ -48,6 +48,7 @@ def make_spark_session(
     spark_config: dict[str, Any],
     master_url: str = _DEFAULT_MASTER,
     quiet: bool = False,
+    quiet_startup: bool = False,
 ) -> SparkSession:
     """Build or reuse a SparkSession for the given blueprint.
 
@@ -65,8 +66,12 @@ def make_spark_session(
                         ``"k8s://https://..."`` — Kubernetes
                       Passed verbatim to ``SparkSession.builder.master()``.
         quiet:        Suppress all Spark/JVM log output during and after session
-                      startup. Use for health-check commands (doctor). Leave
-                      False for blueprint runs so Spark warnings remain visible.
+                      startup. Use for health-check commands (doctor).
+        quiet_startup: Suppress only the JVM/Spark *startup banner* (incubator
+                      notice, log4j profile lines, NativeCodeLoader warning) by
+                      muting stderr around session creation — but leave the
+                      runtime log level at WARN so genuine Spark warnings during
+                      execution still print. The clean default for `aqueduct run`.
 
     Returns:
         An active SparkSession.
@@ -94,6 +99,10 @@ def make_spark_session(
         with _suppress_stderr():
             session = builder.getOrCreate()
         session.sparkContext.setLogLevel("ERROR")
+    elif quiet_startup:
+        # Mute only the startup banner; keep the default (WARN) runtime level.
+        with _suppress_stderr():
+            session = builder.getOrCreate()
     else:
         session = builder.getOrCreate()
 
