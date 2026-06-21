@@ -135,6 +135,7 @@ The provenance section tells you the `source_type` of each config value. Pick th
 - SQL query wrong → `set_module_config_key` with key="query".
 - SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
 - If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
+- If `error_class` is `PREDICTED_SCHEMA_DRIFT`, the upstream SOURCE physically changed (a column was added, dropped, or renamed) — the format/header rule above does NOT apply. Do NOT change the Ingress `format`, `header`, or `options`; the provenance shows these are intentional authored values, and a real source change is not fixed by reinterpreting the file. Instead update the downstream Channel SQL / `schema_hint` to match the new column set, or make NO change if a dropped column is genuinely gone and unused.
 
 ## Required output — complete example
 Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.

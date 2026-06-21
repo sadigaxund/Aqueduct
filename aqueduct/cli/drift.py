@@ -138,8 +138,13 @@ def drift(
             patch_id = None
 
             if result.has_breaking:
+                try:
+                    _src_yaml = Path(blueprint).read_text(encoding="utf-8")
+                except Exception:
+                    _src_yaml = None
                 patch_id = _heal_drift(
                     cfg, manifest.blueprint_id, mod.id, result, manifest_json, Path(patches_dir),
+                    blueprint_source_yaml=_src_yaml,
                 )
                 if patch_id:
                     staged_any = True
@@ -202,6 +207,7 @@ def _heal_drift(
     result: Any,
     manifest_json: str,
     patches_path: Path,
+    blueprint_source_yaml: str | None = None,
 ) -> str | None:
     """Run the agent on a synthetic drift FailureContext; stage a patch. Returns patch_id."""
     from aqueduct.agent import generate_agent_patch, resolve_budget, stage_patch_for_human
@@ -212,7 +218,10 @@ def _heal_drift(
         click.echo(f"  (agent disabled — set agent.model to auto-heal {module_id!r})", err=True)
         return None
 
-    failure_ctx = build_synthetic_failure_context(blueprint_id, module_id, result, manifest_json)
+    failure_ctx = build_synthetic_failure_context(
+        blueprint_id, module_id, result, manifest_json,
+        blueprint_source_yaml=blueprint_source_yaml,
+    )
     budget = resolve_budget(getattr(eng, "budget", None), max_reprompts=eng.max_reprompts)
 
     agent_result = generate_agent_patch(

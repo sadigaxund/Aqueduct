@@ -64,7 +64,9 @@ logger = logging.getLogger(__name__)
 #       selection, multi-key wrapper unwrap, reprompt char cap).
 # 1.3 — Phase 47: replace_macro op added to the grammar/schema; macro hint
 #       now points at it for in-macro root causes.
-PROMPT_VERSION = "1.3"
+# 1.4 — drift rule: PREDICTED_SCHEMA_DRIFT means the source changed; do NOT
+#       flip Ingress format/header/options — fix downstream or do nothing.
+PROMPT_VERSION = "1.4"
 
 
 @dataclass
