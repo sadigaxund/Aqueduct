@@ -751,7 +751,9 @@ def run(
                 click.echo(msg, err=True)
 
         # ── Uncommitted applied patch warning ──────────────────────────────────────
-        uncommitted_applied = _uncommitted_applied_patches(Path(blueprint), patches_dir)
+        uncommitted_applied = _uncommitted_applied_patches(
+            Path(blueprint), patches_dir, blueprint_id=manifest.blueprint_id
+        )
         if uncommitted_applied:
             n_uc = len(uncommitted_applied)
             click.echo(

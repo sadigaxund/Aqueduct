@@ -696,11 +696,16 @@ def cli(
 
 # ── patch helpers ────────────────────────────────────────────────────────────
 
-def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> list[Path]:
+def _uncommitted_applied_patches(
+    blueprint_path: Path, patches_root: Path, blueprint_id: str | None = None
+) -> list[Path]:
     """Return applied patches with applied_at newer than the last git commit for blueprint_path.
 
     Falls back to returning all applied patches when not in a git repo or blueprint
-    has never been committed.
+    has never been committed. When ``blueprint_id`` is given, only patches OWNED by
+    that blueprint are considered — the ``patches/applied/`` dir is shared across a
+    project, so without this filter running blueprint B would warn about (and
+    mis-suggest committing) blueprint A's patches.
     """
     import subprocess
 
@@ -711,6 +716,23 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
     all_applied = sorted(applied_dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
     if not all_applied:
         return []
+
+    # Keep only patches owned by this blueprint (via _aq_meta.blueprint_id).
+    # Patches without a recorded blueprint_id are kept (conservative).
+    if blueprint_id is not None:
+        from aqueduct.patch.grammar import PATCH_META_KEY as _PMK
+        owned = []
+        for _p in all_applied:
+            try:
+                _d = json.loads(_p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            _bp = (_d.get(_PMK) or {}).get("blueprint_id")
+            if _bp is None or _bp == blueprint_id:
+                owned.append(_p)
+        all_applied = owned
+        if not all_applied:
+            return []
 
     # Get ISO timestamp of last git commit touching this blueprint.
     # Tolerate environments without git (containerized workers, etc.) — the
