@@ -119,6 +119,17 @@ class DayCount:
     count: int
 
 
+@dataclass(frozen=True)
+class PlanMetricRow:
+    """Per-module plan complexity from explain_snapshot (zero-Spark-action, every run)."""
+    run_id: str
+    started_at: str
+    module_id: str
+    exchange_count: int       # Exchange nodes ≈ shuffles
+    python_udf_count: int     # row-at-a-time python UDFs (non-vectorized)
+    broadcast_count: int
+
+
 # ── Store discovery ─────────────────────────────────────────────────────────
 
 def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> list[tuple[str, Path]]:
@@ -439,6 +450,32 @@ def channel_fingerprints(store: Any, blueprint_id: str) -> list[FingerprintRow]:
                 [blueprint_id],
             )
             return [FingerprintRow(*r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def plan_metrics(store: Any, blueprint_id: str, limit: int = 200) -> list[PlanMetricRow]:
+    """Per-module plan complexity across recent runs of *blueprint_id*.
+
+    Reads ``explain_snapshot`` (captured every real run at zero Spark action by
+    analysing the query plan): exchange_count ≈ shuffles, python_udf_count =
+    non-vectorized python UDFs, broadcast_count. Empty if the table is absent.
+    """
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT e.run_id, CAST(r.started_at AS VARCHAR), e.module_id,
+                       e.exchange_count, e.python_udf_count, e.broadcast_count
+                FROM explain_snapshot e
+                JOIN run_records r ON r.run_id = e.run_id
+                WHERE r.blueprint_id = ?
+                ORDER BY r.started_at DESC
+                LIMIT ?
+                """,
+                [blueprint_id, limit],
+            )
+            return [PlanMetricRow(*row) for row in cur.fetchall()]
     except Exception:
         return []
 
