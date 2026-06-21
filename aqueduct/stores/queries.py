@@ -374,7 +374,13 @@ def probe_signals(store: Any, blueprint_id: str,
                 [blueprint_id, signal_type, limit],
             )
             rows = cur.fetchall()
-        return [ProbeSignalRow(r[0], r[1], r[2], json.loads(r[3])) for r in rows]
+        # payload is a JSON column: DuckDB returns a str, psycopg2 returns a
+        # parsed dict — handle both.
+        return [
+            ProbeSignalRow(r[0], r[1], r[2],
+                           json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {}))
+            for r in rows
+        ]
     except Exception:
         return []
 
@@ -415,10 +421,17 @@ def run_sql_readonly(duckdb_path: "str | Path", query: str) -> tuple[list[str], 
 # ── Fleet (cross-run + cross-blueprint) aggregates — read-time, no duplication ─
 
 def _heal_attempts(cur: Any) -> dict[str, int]:
-    """Best-effort heal-attempt counts per blueprint (0 / {} if table absent)."""
+    """Best-effort heal-outcome counts per blueprint (0 / {} if table absent).
+
+    ``healing_outcomes`` has no ``blueprint_id`` column — it is reached via a join
+    on ``run_records.run_id`` (works on both DuckDB per-blueprint files and the
+    single Postgres schema).
+    """
     try:
         cur.execute(
-            "SELECT blueprint_id, COUNT(*) FROM healing_outcomes GROUP BY blueprint_id"
+            "SELECT r.blueprint_id, COUNT(*) "
+            "FROM healing_outcomes h JOIN run_records r ON r.run_id = h.run_id "
+            "GROUP BY r.blueprint_id"
         )
         return {bp: n for bp, n in cur.fetchall()}
     except Exception:
