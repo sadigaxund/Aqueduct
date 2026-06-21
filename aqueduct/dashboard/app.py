@@ -176,7 +176,7 @@ def _fleet_tab(cfg, store_dir):
         for d in rot:
             grid[d.status][d.day] = d.count
         with lc:
-            st.caption("Runs over time")
+            st.caption("Runs Over Time")
             fig = px.line(
                 pd.DataFrame({s: [grid[s][d] for d in days] for s in statuses}, index=days),
                 x=days, y=statuses,
@@ -188,7 +188,7 @@ def _fleet_tab(cfg, store_dir):
 
     if has_dist and rc is not None:
         with rc:
-            st.caption("Failure categories")
+            st.caption("Failure Categories")
             fig = px.bar(
                 x=list(dist.keys()), y=list(dist.values()),
                 labels={"x": "", "y": "count"},
@@ -200,7 +200,7 @@ def _fleet_tab(cfg, store_dir):
     if has_gates:
         target = mc if mc is not None else (rc if has_dist else lc) if has_dist else lc
         with target:
-            st.caption("Gate rejections")
+            st.caption("Gate Rejections")
             fig = px.bar(
                 x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
@@ -489,7 +489,7 @@ def _lineage_tab(handles):
     if has_fp:
         fps = q.channel_fingerprints(handle.store, handle.label)
         st.divider()
-        st.markdown("**SQL changelog** · click to expand")
+        st.markdown("**SQL Changelog**")
         import difflib as _dl
         from collections import defaultdict as _dd
         by_ch: dict[str, list] = _dd(list)
@@ -525,7 +525,7 @@ def _lineage_tab(handles):
     drift = q.drift_events(handle.store, handle.label)
     if drift:
         st.divider()
-        st.markdown("**Schema drift** · click to expand")
+        st.markdown("**Schema Drift**")
         with st.expander(f"Timeline ({len(drift)} check{'s' if len(drift) > 1 else ''})"):
             fig = go.Figure()
             st_colors = {
@@ -617,23 +617,22 @@ def _heal_tab(cfg, store_dir):
         st.info("No healing data yet. Run a blueprint that fails with `agent:` configured.")
         return
 
-    # ── KPI row ──────────────────────────────────────────────────────────
+    # ── KPI row — heal pipeline → patch outcomes ────────────────────────
     total = sum(hc.values())
     zero_token = hc.get("cached", 0) + hc.get("replayed", 0)
-    total_llm = hc.get("llm", 0)
-    avg_latency = sum(d["latency_ms"] or 0 for d in detail) // len(detail) if detail else 0
-    total_tokens = sum((d["tokens_in"] or 0) + (d["tokens_out"] or 0) for d in detail)
-    c1, c2, c3, c4, c5 = st.columns(5)
+    pl = q.patch_lifecycle_counts(cfg, store_dir=store_dir)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Heal events", total)
     c2.metric("Zero-token", f"{zero_token / total * 100:.0f}%" if total else "\u2014")
     c3.metric("Cache hit", hc.get("cached", 0))
-    c4.metric("Avg latency", f"{avg_latency // 1000}s" if avg_latency else "\u2014")
-    c5.metric("Total tokens", f"{total_tokens:,}")
+    c4.metric("Pending patches", pl.get("pending", 0))
+    c5.metric("Applied patches", pl.get("applied", 0))
+    c6.metric("Rejected patches", pl.get("rejected", 0))
 
     # ── Charts row ───────────────────────────────────────────────────────
     left, right = st.columns(2)
     with left:
-        st.caption("Resolution distribution")
+        st.caption("Resolution Distribution")
         if hc:
             fig = px.pie(
                 values=list(hc.values()), names=list(hc.keys()),
@@ -643,7 +642,7 @@ def _heal_tab(cfg, store_dir):
             st.plotly_chart(fig, width="stretch")
 
     with right:
-        st.caption("Gate rejections")
+        st.caption("Gate Rejections")
         if gates:
             fig = px.bar(
                 x=list(gates.keys()), y=list(gates.values()),
@@ -662,7 +661,7 @@ def _heal_tab(cfg, store_dir):
         if d["run_success_after_patch"]:
             c["success"] += 1
     if categories:
-        st.caption("Heal success rate by failure category")
+        st.caption("Heal Success Rate By Failure Category")
         cat_df = pd.DataFrame([
             {"category": cat, "success rate": v["success"] / v["total"] * 100,
              "count": v["total"]}

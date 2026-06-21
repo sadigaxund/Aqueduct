@@ -674,6 +674,22 @@ def drift_events(store: Any, blueprint_id: str) -> list[dict[str, Any]]:
     return rows
 
 
+def patch_lifecycle_counts(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
+    """Aggregate patch_index status counts (pending, applied, rejected) across fleet."""
+    counts: dict[str, int] = {"pending": 0, "applied": 0, "rejected": 0}
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    "SELECT status, COUNT(*) FROM patch_index GROUP BY status"
+                )
+                for status, cnt in cur.fetchall():
+                    counts[status] = counts.get(status, 0) + cnt
+        except Exception:
+            continue
+    return counts
+
+
 def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     """Gate rejection counts across fleet (from patch_simulation or heal_attempts)."""
     agg: dict[str, int] = {}
