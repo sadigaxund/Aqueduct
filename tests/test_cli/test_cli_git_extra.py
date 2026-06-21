@@ -47,7 +47,7 @@ def test_run_warning_uncommitted_patches(git_setup):
             
             result = runner.invoke(cli, ["run", str(bp_path)])
             
-            assert "applied patch(es) not yet committed to git" in result.output
+            assert "uncommitted" in result.output
 
 def test_run_succeeds_when_git_binary_missing(git_setup):
     """1.0.1 fix: `git` not on PATH (containerized worker) → run does not crash.
@@ -75,7 +75,7 @@ def test_run_succeeds_when_git_binary_missing(git_setup):
             # Run must NOT crash with FileNotFoundError; should complete cleanly.
             assert result.exit_code == 0, result.output
             # Fallback path treats the patch as uncommitted → warning surfaces.
-            assert "applied patch(es) not yet committed to git" in result.output
+            assert "uncommitted" in result.output
 
 
 def test_run_succeeds_when_git_permission_denied(git_setup):
@@ -98,7 +98,7 @@ def test_run_succeeds_when_git_permission_denied(git_setup):
             )
             result = runner.invoke(cli, ["run", str(bp_path)])
             assert result.exit_code == 0, result.output
-            assert "applied patch(es) not yet committed to git" in result.output
+            assert "uncommitted" in result.output
 
 
 def test_run_no_warning_when_committed(git_setup):
@@ -122,4 +122,4 @@ def test_run_no_warning_when_committed(git_setup):
             
             result = runner.invoke(cli, ["run", str(bp_path)])
             
-            assert "applied patch(es) not yet committed to git" not in result.output
+            assert "uncommitted" not in result.output

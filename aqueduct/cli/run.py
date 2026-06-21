@@ -750,17 +750,23 @@ def run(
         pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
         if pending_patches:
             policy = manifest.agent.on_pending_patches
-            names = ", ".join(p.stem for p in pending_patches)
-            msg = (
-                f"⚠ {len(pending_patches)} pending patch(es) unreviewed: {names}\n"
-                f"  Review with: aqueduct patch apply <file> --blueprint {blueprint}\n"
-                f"  Reject with: aqueduct patch reject <patch_id> --reason '...'"
-            )
+            _np = len(pending_patches)
+            _noun = "patch" if _np == 1 else "patches"
             if policy == "block":
-                click.echo(f"✗ blocked — {msg}", err=True)
+                names = ", ".join(p.stem for p in pending_patches)
+                click.echo(
+                    f"✗ blocked — {_np} pending {_noun} unreviewed: {names}\n"
+                    f"  Review: aqueduct patch apply <file> --blueprint {blueprint}\n"
+                    f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
+                    err=True,
+                )
                 sys.exit(exit_codes.CONFIG_ERROR)
             elif policy == "warn":
-                click.echo(msg, err=True)
+                click.echo(
+                    click.style(f"⚠ {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
+                    + click.style("  ·  aqueduct patch list", dim=True),
+                    err=True,
+                )
 
         # ── Uncommitted applied patch warning ──────────────────────────────────────
         uncommitted_applied = _uncommitted_applied_patches(
@@ -768,9 +774,12 @@ def run(
         )
         if uncommitted_applied:
             n_uc = len(uncommitted_applied)
+            _noun = "patch" if n_uc == 1 else "patches"
             click.echo(
-                f"⚠ {n_uc} applied patch(es) not yet committed to git — "
-                f"run 'aqueduct patch commit --blueprint {blueprint}'",
+                click.style(f"⚠ {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
+                + click.style(
+                    f"  ·  aqueduct patch commit --blueprint {Path(blueprint).name}", dim=True
+                ),
                 err=True,
             )
 
