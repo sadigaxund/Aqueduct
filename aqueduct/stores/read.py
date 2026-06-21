@@ -94,6 +94,50 @@ def resolve_duckdb_obs_path(
     return flat_default if flat_default.exists() else None
 
 
+def resolve_obs_store_dir(
+    cfg: "AqueductConfig", blueprint_id: str, store_dir: str | None = None
+) -> Path:
+    """The directory holding a blueprint's ``observability.db`` on WRITE.
+
+    The single source of truth for per-blueprint write routing (mirrors the inline
+    logic in ``cli/run.py``): ``--store-dir`` wins; else the configured DuckDB path
+    decides — the default sentinel OR a suffix-less directory → per-blueprint
+    ``<base>/<blueprint_id>``; an explicit ``.db`` file → its parent (one shared
+    file). DuckDB-only (Postgres self-manages its DSN).
+    """
+    if store_dir:
+        return Path(store_dir)
+    path = cfg.stores.observability.path
+    if path == _DEFAULT_OBS_PATH:
+        return Path(_OBS_ROUTING_ROOT) / blueprint_id
+    p = Path(path)
+    if not p.suffix:  # location-only base directory
+        return p / blueprint_id
+    return p.parent  # explicit single .db file
+
+
+def open_obs_write(
+    cfg: "AqueductConfig", blueprint_id: str, store_dir: str | None = None
+) -> "ObservabilityStore":
+    """Writable observability store at the per-blueprint path (mirrors ``run``).
+
+    Postgres → the configured DSN store. DuckDB → a ``DuckDBObservabilityStore``
+    at ``<resolve_obs_store_dir>/observability.db`` (the directory is created).
+    Use this for commands that WRITE outside the run loop (e.g. ``drift``) so they
+    land in the same per-blueprint file ``run`` uses, instead of opening the
+    routing directory as a file.
+    """
+    if cfg.stores.observability.backend != "duckdb":
+        from aqueduct.stores.base import get_stores
+
+        return get_stores(cfg).observability
+    d = resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+
+    return DuckDBObservabilityStore(d / DEFAULT_OBS_DB_FILENAME)
+
+
 def open_obs_read(
     cfg: "AqueductConfig",
     store_dir: str | None = None,

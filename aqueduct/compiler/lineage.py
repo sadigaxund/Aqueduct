@@ -76,15 +76,29 @@ def _extract_sql_lineage(
         else:
             out_col = str(inner)[:64]
 
-        # Walk expression to find all Column references
-        col_refs = list(inner.find_all(exp.Column))
+        # Columns inside a window's OVER spec (PARTITION BY / ORDER BY) only
+        # control framing, not the computed value — exclude them. So
+        # `row_number() OVER (ORDER BY id)` derives from nothing (→ "*"), and
+        # `lag(price) OVER (ORDER BY dt)` derives from `price` only, not `dt`.
+        has_window = next(inner.find_all(exp.Window), None) is not None
+        spec_col_ids: set[int] = set()
+        for win in inner.find_all(exp.Window):
+            for part in (win.args.get("partition_by") or []):
+                spec_col_ids.update(id(c) for c in part.find_all(exp.Column))
+            order = win.args.get("order")
+            if order is not None:
+                spec_col_ids.update(id(c) for c in order.find_all(exp.Column))
+
+        # Walk expression to find all value Column references (minus window spec)
+        col_refs = [c for c in inner.find_all(exp.Column) if id(c) not in spec_col_ids]
         if not col_refs:
-            # Literal or function with no column refs
+            # Window function with no value columns, a literal, or a set function:
+            # no single source column. Window/expression → "*"; literal → its text.
             rows.append({
                 "channel_id": channel_id,
                 "output_column": out_col,
                 "source_table": "",
-                "source_column": str(inner)[:64],
+                "source_column": "*" if has_window else str(inner)[:64],
             })
             continue
 

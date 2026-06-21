@@ -72,7 +72,7 @@ def drift(
     from aqueduct.drift import store as drift_store
     from aqueduct.drift.classifier import diff_schemas
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.stores import get_stores
+    from aqueduct.stores.read import open_obs_write
 
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
@@ -96,8 +96,9 @@ def drift(
         click.echo("✗ no Ingress modules to check" + (f" (module {only_module!r} not found)" if only_module else ""), err=True)
         sys.exit(exit_codes.USAGE_ERROR)
 
-    bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
-    obs = bundle.observability
+    # Per-blueprint write store (mirrors `run` — must not open the routing
+    # directory as a file; see resolve_obs_store_dir).
+    obs = open_obs_write(cfg, manifest.blueprint_id, store_dir)
     drift_store.ensure_schema(obs)
 
     manifest_json = _json.dumps(manifest.to_dict())

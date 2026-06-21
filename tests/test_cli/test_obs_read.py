@@ -8,7 +8,12 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
-from aqueduct.stores.read import open_obs_read, resolve_duckdb_obs_path
+from aqueduct.stores.read import (
+    open_obs_read,
+    open_obs_write,
+    resolve_duckdb_obs_path,
+    resolve_obs_store_dir,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -116,3 +121,36 @@ def test_open_postgres_uses_get_stores():
         got = open_obs_read(_cfg(backend="postgres"))
     assert got is sentinel
     gs.assert_called_once()
+
+
+# ── resolve_obs_store_dir / open_obs_write (ISSUE-036: per-blueprint write) ────
+
+def test_write_dir_default_routes_per_blueprint():
+    assert resolve_obs_store_dir(_cfg(), "beta") == Path(".aqueduct/observability/beta")
+
+
+def test_write_dir_location_only_dir(tmp_path):
+    base = tmp_path / "obs"
+    assert resolve_obs_store_dir(_cfg(path=str(base)), "beta") == base / "beta"
+
+
+def test_write_dir_explicit_file_is_parent(tmp_path):
+    f = tmp_path / "x" / "shared.db"
+    assert resolve_obs_store_dir(_cfg(path=str(f)), "beta") == f.parent
+
+
+def test_write_dir_cli_store_dir_wins(tmp_path):
+    assert resolve_obs_store_dir(_cfg(path="anything"), "beta", store_dir=str(tmp_path)) == tmp_path
+
+
+def test_open_obs_write_creates_per_blueprint_file(tmp_path):
+    """A location-only DIRECTORY config must NOT be opened as a file (the drift bug)."""
+    base = tmp_path / "obs"
+    base.mkdir()
+    store = open_obs_write(_cfg(path=str(base)), "beta")
+    # writes land in <base>/beta/observability.db, not by opening <base> as a file
+    with store.connect() as cur:
+        cur.execute("CREATE TABLE t (x INT); INSERT INTO t VALUES (1)")
+        cur.execute("SELECT COUNT(*) FROM t")
+        assert cur.fetchone()[0] == 1
+    assert (base / "beta" / "observability.db").exists()
