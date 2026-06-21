@@ -15,6 +15,7 @@ health, not run data — is memoised per browser session; F5 re-runs it.)
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -30,26 +31,95 @@ _COLOR = {
     "warn": "#9a6700", "skip": "#57606a", "skipped": "#57606a",
 }
 
+# Columns that hold numbers — right-aligned, narrow.
+_NUMERIC = frozenset({
+    "runs", "success %", "errors", "heal attempts",
+    "duration_ms", "rows_out", "bytes_out", "count",
+    "records_read", "bytes_read", "duration",
+})
 
-def _style(df: pd.DataFrame, status_cols=("status",)):
-    cols = [c for c in status_cols if c in df.columns]
+# Per-column min-width hints so narrow values don't hog space.
+_COL_WIDTH: dict[str, str] = {
+    "status": "80px",
+    "runs": "60px",
+    "success %": "80px",
+    "errors": "60px",
+    "heal attempts": "100px",
+    "duration_ms": "90px",
+    "rows_out": "80px",
+    "bytes_out": "80px",
+    "records_read": "90px",
+    "bytes_read": "80px",
+    "duration": "80px",
+    "run_id": "220px",
+    "blueprint": "180px",
+    "channel": "150px",
+    "module": "150px",
+    "output": "150px",
+    "source_table": "140px",
+    "source_column": "140px",
+    "check": "200px",
+    "key": "200px",
+}
+
+
+def _style(df: pd.DataFrame, status_cols=("status",),
+           numeric_cols: frozenset[str] | None = None,
+           col_width: dict[str, str] | None = None,
+           formats: dict[str, str] | None = None):
+    """Apply status coloring, numeric right-alignment, formatting, and column widths."""
+    if numeric_cols is None:
+        numeric_cols = _NUMERIC
+    if col_width is None:
+        col_width = _COL_WIDTH
 
     def paint(v):
         c = _COLOR.get(str(v).lower())
         return f"background-color:{c};color:white;font-weight:600" if c else ""
 
     sty = df.style
-    if cols:
-        sty = sty.map(paint, subset=list(cols))
+
+    # status colours
+    scols = [c for c in status_cols if c in df.columns]
+    if scols:
+        sty = sty.map(paint, subset=list(scols))
+
+    # right-align known numeric columns
+    ncols = [c for c in df.columns if c in numeric_cols]
+    if ncols:
+        sty = sty.set_properties(subset=ncols, **{"text-align": "right"})
+
+    # column-level CSS — min-width for known widths, prevent date wrapping
+    styles = []
+    for c in df.columns:
+        w = col_width.get(c)
+        if w:
+            styles.append({"selector": f"th.col_heading.col{c} , td.col{c}",
+                           "props": [(f"min-width", w), ("white-space", "nowrap")]})
+        else:
+            styles.append({"selector": f"td.col{c}",
+                           "props": [("white-space", "nowrap")]})
+    if styles:
+        sty = sty.set_table_styles(styles, overwrite=False)
+
+    # formatted display (%, commas, etc.)
+    if formats:
+        fmtd = {c: f for c, f in formats.items() if c in df.columns}
+        if fmtd:
+            sty = sty.format(fmtd)
+
     return sty
 
 
-def _table(rows: list[dict], status_cols=("status",)):
+def _table(rows: list[dict], status_cols=("status",),
+           numeric_cols: frozenset[str] | None = None,
+           col_width: dict[str, str] | None = None,
+           formats: dict[str, str] | None = None):
     """Static, full-length table with colored status cells (no chrome / no nudge)."""
     if not rows:
         st.caption("— nothing here —")
         return
-    st.table(_style(pd.DataFrame(rows), status_cols))
+    st.table(_style(pd.DataFrame(rows), status_cols, numeric_cols, col_width, formats))
 
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -67,26 +137,56 @@ def _fleet_tab(cfg, store_dir):
     c3.metric("Success rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
     c4.metric("Heal attempts", sum(s.heal_attempts for s in summ))
 
-    _table([
-        {"blueprint": s.blueprint_id, "runs": s.runs, "success %": round(s.success_rate * 100, 1),
-         "errors": s.errors, "heal attempts": s.heal_attempts, "last run": s.last_run or ""}
-        for s in summ
-    ], status_cols=())
+    import plotly.express as px
 
     rot = q.runs_over_time(cfg, store_dir=store_dir)
-    if rot:
+    dist = q.failure_categories(cfg, store_dir=store_dir)
+    has_rot = bool(rot)
+    has_dist = bool(dist)
+
+    if has_rot and has_dist:
+        lc, rc = st.columns(2)
+    elif has_rot:
+        lc = st.container()
+        rc = None
+    else:
+        lc = None
+        rc = st.container() if has_dist else None
+
+    if has_rot:
         days = sorted({d.day for d in rot})
         statuses = sorted({d.status for d in rot})
         grid = {s: {d: 0 for d in days} for s in statuses}
         for d in rot:
             grid[d.status][d.day] = d.count
-        st.caption("Runs over time")
-        st.line_chart(pd.DataFrame({s: [grid[s][d] for d in days] for s in statuses}, index=days))
+        with lc:
+            st.caption("Runs over time")
+            fig = px.line(
+                pd.DataFrame({s: [grid[s][d] for d in days] for s in statuses}, index=days),
+                x=days, y=statuses,
+                labels={"value": "runs", "index": "", "variable": "status"},
+            )
+            fig.update_xaxes(tickangle=45, title=None)
+            fig.update_layout(legend=dict(orientation="h", y=1.02, x=0), height=400, margin=dict(l=8, r=8, t=8, b=8))
+            st.plotly_chart(fig, width="stretch")
 
-    dist = q.failure_categories(cfg, store_dir=store_dir)
-    if dist:
-        st.caption("Failure categories")
-        st.bar_chart(pd.Series(dist, name="count"))
+    if has_dist and rc is not None:
+        with rc:
+            st.caption("Failure categories")
+            fig = px.bar(
+                x=list(dist.keys()), y=list(dist.values()),
+                labels={"x": "", "y": "count"},
+            )
+            fig.update_xaxes(tickangle=45, title=None)
+            fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
+            st.plotly_chart(fig, width="stretch")
+
+    _table([
+        {"blueprint": s.blueprint_id, "runs": s.runs, "success %": round(s.success_rate * 100, 1),
+         "errors": s.errors, "heal attempts": s.heal_attempts, "last run": s.last_run or ""}
+        for s in summ
+    ], status_cols=(),
+       formats={"success %": "{:.1f}%", "runs": "{:,}", "errors": "{:,}", "heal attempts": "{:,}"})
 
 
 def _collect_runs(handles):
@@ -101,6 +201,21 @@ def _collect_runs(handles):
             continue
     order = sorted(range(len(runs)), key=lambda i: runs[i].started_at or "", reverse=True)
     return [runs[i] for i in order], [owners[i] for i in order]
+
+
+def _duration(started: str | None, finished: str | None) -> str:
+    """Human-readable duration (e.g. '35s', '2m 15s') or '—'."""
+    if not started or not finished:
+        return "\u2014"
+    try:
+        s = datetime.fromisoformat(started)
+        f = datetime.fromisoformat(finished)
+        secs = int((f - s).total_seconds())
+        if secs < 60:
+            return f"{secs}s"
+        return f"{secs // 60}m {secs % 60}s"
+    except Exception:
+        return "\u2014"
 
 
 def _runs_tab(handles):
@@ -129,17 +244,21 @@ def _runs_tab(handles):
         return
 
     df = pd.DataFrame([
-        {"status": r.status, "run_id": r.run_id, "blueprint": r.blueprint_id, "started": r.started_at or ""}
+        {"status": r.status, "run_id": r.run_id, "blueprint": r.blueprint_id,
+         "duration": _duration(r.started_at, r.finished_at), "started": r.started_at or ""}
         for r in fruns
     ])
-    st.caption("Click a row to inspect · click a header to sort")
+    st.caption("Click a row to inspect detail")
     event = st.dataframe(
         _style(df), width="stretch", hide_index=True,
         height=min(38 + 36 * len(fruns), 560),
         on_select="rerun", selection_mode="single-row", key="runs_table",
     )
-    sel = event.selection.rows if event and event.selection else []
-    run, owner = (fruns[sel[0]], fowners[sel[0]]) if sel else (fruns[0], fowners[0])
+    sel_rows = event.selection.rows if event and event.selection else []
+    if not sel_rows:
+        return
+    run = fruns[sel_rows[0]]
+    owner = fowners[sel_rows[0]]
 
     st.divider()
     st.markdown(f"### Run `{run.run_id}`  ·  {run.blueprint_id}")
@@ -147,14 +266,21 @@ def _runs_tab(handles):
     if det is None:
         return
     prof = {p.module_id: p for p in det.profile}
+    def _v(p, attr):
+        v = getattr(p, attr, None) if p else None
+        return 0 if v is None else v
+
     _table([
         {"status": m.status, "module": m.module_id,
-         "duration_ms": getattr(prof.get(m.module_id), "duration_ms", None),
-         "rows_out": getattr(prof.get(m.module_id), "records_written", None),
-         "bytes_out": getattr(prof.get(m.module_id), "bytes_written", None),
+         "records_read": _v(prof.get(m.module_id), "records_read"),
+         "rows_out": _v(prof.get(m.module_id), "records_written"),
+         "bytes_read": _v(prof.get(m.module_id), "bytes_read"),
+         "bytes_out": _v(prof.get(m.module_id), "bytes_written"),
+         "duration_ms": _v(prof.get(m.module_id), "duration_ms"),
          "error": (m.error or "")[:200]}
         for m in det.modules
-    ])
+    ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
+                "records_read": "{:,}", "bytes_read": "{:,}"})
 
 
 def _lineage_tab(handles):

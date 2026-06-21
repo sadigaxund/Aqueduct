@@ -426,6 +426,12 @@ def check_store_backend(
             import duckdb as _duckdb
             from pathlib import Path as _Path
             p = _Path(path_or_dsn)
+            # Per-blueprint routing: path is a directory, not a db file.
+            # Verify write access instead of trying duckdb.connect().
+            if p.is_dir():
+                from tempfile import NamedTemporaryFile as _Ntf
+                _Ntf(dir=str(p), delete=True).close()
+                return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}  (routing base)", _ms(t))
             p.parent.mkdir(parents=True, exist_ok=True)
             conn = _duckdb.connect(str(p))
             try:
@@ -499,7 +505,7 @@ def check_remote_target(cfg: Any) -> CheckResult:
     t = time.monotonic()
     target = getattr(cfg.deployment, "target", "local")
     if target not in ("databricks", "emr", "dataproc"):
-        return CheckResult("remote-target", "warn", "not a remote target — skipped", _ms(t))
+        return CheckResult("remote-target", "skip", "target is local — no remote cluster to check", _ms(t))
 
     if target == "databricks":
         db_cfg = getattr(cfg.deployment, "databricks", None)

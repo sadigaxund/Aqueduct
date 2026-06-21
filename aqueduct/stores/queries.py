@@ -66,6 +66,8 @@ class ProfileRow:
     records_written: int | None
     bytes_written: int | None
     duration_ms: int | None
+    records_read: int | None = None
+    bytes_read: int | None = None
 
 
 @dataclass(frozen=True)
@@ -208,14 +210,31 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
         try:
             cur.execute(
                 """
-                SELECT module_id, records_written, bytes_written, duration_ms
+                SELECT module_id, records_written, bytes_written, duration_ms,
+                       records_read, bytes_read
                 FROM module_metrics WHERE run_id = ?
                 """,
                 [run_id],
             )
-            prof_rows = cur.fetchall()
+            prof_rows = [
+                {d[0]: v for d, v in zip(cur.description, row)}
+                for row in cur.fetchall()
+            ]
         except Exception:
-            prof_rows = []  # module_metrics may not exist yet
+            try:
+                cur.execute(
+                    """
+                    SELECT module_id, records_written, bytes_written, duration_ms
+                    FROM module_metrics WHERE run_id = ?
+                    """,
+                    [run_id],
+                )
+                prof_rows = [
+                    {d[0]: v for d, v in zip(cur.description, row)}
+                    for row in cur.fetchall()
+                ]
+            except Exception:
+                prof_rows = []  # module_metrics may not exist yet
 
     run = RunRow(row[0], row[1], row[2], row[3], row[4])
     raw = row[5]
@@ -225,7 +244,17 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
         for m in mr
     ]
     # Order the profile to match execution order (the module_results order).
-    by_id = {p[0]: ProfileRow(*p) for p in prof_rows}
+    by_id = {
+        p["module_id"]: ProfileRow(
+            module_id=p["module_id"],
+            records_written=p.get("records_written"),
+            bytes_written=p.get("bytes_written"),
+            duration_ms=p.get("duration_ms"),
+            records_read=p.get("records_read"),
+            bytes_read=p.get("bytes_read"),
+        )
+        for p in prof_rows
+    }
     order = {m.module_id: i for i, m in enumerate(modules)}
     profile = sorted(by_id.values(), key=lambda p: order.get(p.module_id, len(order)))
     return RunDetail(run, modules, profile)
