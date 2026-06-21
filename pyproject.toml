@@ -117,6 +117,7 @@ packages = ["aqueduct"]
 include = [
     "/aqueduct",
     "/README.md",
+    "/SKILL.md",
     "/LICENSE",
     "/pyproject.toml",
     "/CHANGELOG.md",

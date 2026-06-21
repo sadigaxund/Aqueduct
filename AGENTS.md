@@ -16,6 +16,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 | `docs/production_guide.md` | Cluster deployment, env config, Spark cluster config, path conventions, danger settings, Delta operational notes, production patch lifecycle, security, readiness checklist | Anything related to running Aqueduct on a cluster (k8s, YARN, Databricks, …) |
 | `docs/compatibility.md` | Python × Spark support matrix, cloudpickle constraint, production pinning | Changing version pins in `pyproject.toml`, or answering "does X version combo work" |
 | `docs/roadmap.md` | Deferred / aspirational items removed from specs.md: streaming, resume-from, MCP, ML inference, Flink, multi-pipeline orchestration | Discussing scope or future direction; never write fresh "deferred" prose into specs.md — push to roadmap.md instead |
+| `SKILL.md` (repo root) | Distilled LLM **Blueprint-authoring** guide: grammar, the 9 module types, edges/ports, Context Registry, UDFs, the `agent:` block, gotchas, a worked example, and the OpenAI-compatible provider `base_url` table. The authoring counterpart to specs.md (specs = exhaustive reference; SKILL = signal-dense how-to-author). | Any change to the Blueprint grammar / module config keys / `agent:` block / provider wiring — keep it in sync with specs.md (it restates the same contracts compactly, so drift = wrong guidance to authoring LLMs) |
 
 AGENTS.md itself is process and constraint guidance only.
 
@@ -114,6 +115,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
 | Any new flag, command, or behaviour visible from the CLI | `docs/cli_reference.md` |
 | Any user-facing engine semantic (architecture, module semantics, configs, gates, runtime behaviour) NOT covered by a dedicated guide above | `docs/specs.md` — NO `Phase NN` artefacts |
+| Any change to the **Blueprint grammar** (module types/config keys, edges/ports, Context fns, UDF/macro syntax), the **`agent:` block** fields/values, or **LLM provider wiring** (`provider`/`base_url`/auth env var) | `SKILL.md` (repo root) — it restates these contracts compactly for authoring LLMs; update it in the SAME commit as `specs.md` or the schema, else authoring guidance drifts |
 | Any new testable feature | A real test at the right layer (`unit` / `integration` / `e2e`), OR a `@pytest.mark.todo("why")` stub if you're deferring it. NEVER an entry in `TEST_MANIFEST.md` (retired → `docs/archive/`). See the Testing section. |
 | Any phase / sprint / shippable change | `CHANGELOG.md` `[Unreleased]` only — never bump version, never add a versioned header (user controls release timing) |
 | Any new `@aq.*` function in `aqueduct/compiler/runtime.py` | `docs/specs.md` §5.3 function table + `_DISPATCH` table in `runtime.py` |

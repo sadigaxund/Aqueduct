@@ -39,7 +39,7 @@ A Spark job fails at 3 a.m. on a column rename upstream. Today that means a page
 - **Declarative, not DAG code.** Pipelines are YAML *Blueprints* — no PySpark boilerplate, no scheduler glue, no operator classes. Bring your own scheduler; Aqueduct is the control plane on top of Spark.
 - **Self-healing, not just alerting.** On failure an LLM agent diagnoses the root cause and emits a structured patch that passes guardrail, lineage, and sandbox gates *before* it touches your pipeline. No codegen, no shell access, no silent mutation — and a failure it has solved before heals from memory with **zero tokens**.
 - **Observable by construction.** Every run, every heal attempt, every column-lineage edge lands in a queryable store — at zero extra Spark actions on the hot path.
-- **Model-agnostic.** Any LLM — a local 7B on Ollama up to a frontier API. The constrained patch grammar (14 deterministic operations, no code generation) is what keeps small models reliable; multi-model cascades escalate to bigger models only when needed.
+- **Model-agnostic.** Anthropic natively, or **any OpenAI-compatible endpoint** (OpenRouter, DeepSeek, Groq, Gemini-compat, a local 7B on Ollama / LM Studio) — set `provider` + `base_url`. The constrained patch grammar (14 deterministic operations, no code generation) is what keeps small models reliable; multi-model cascades escalate to bigger models only when needed.
 
 > **Wake up to a pending patch — not a wall of Spark errors.**
 
@@ -256,6 +256,7 @@ Aqueduct sits where a Spark transformation engine and an autonomous repair loop 
 ## References
 
 - **[Blueprint & Engine Spec](docs/specs.md)** — Module types, configs, architecture, healing loop
+- **[SKILL.md](SKILL.md)** — Distilled Blueprint-authoring guide for LLMs (grammar, patterns, provider base_urls)
 - **[CLI Reference](docs/cli_reference.md)** — All commands and flags
 - **[Spark Guide](docs/spark_guide.md)** — Warnings, performance, tuning
 - **[Observability Guide](docs/observability_guide.md)** — Schemas + diagnostic query cookbook
