@@ -21,20 +21,31 @@ import streamlit as st
 from aqueduct.config import load_config
 from aqueduct.stores import queries as q
 
-_STATUS_ICON = {"success": "✓", "error": "✗", "skipped": "⏭"}
+# status → (emoji circle for table cells, st.badge colour)
+_STATUS = {
+    "success": ("🟢", "green"),
+    "ok": ("🟢", "green"),
+    "error": ("🔴", "red"),
+    "fail": ("🔴", "red"),
+    "warn": ("🟡", "orange"),
+    "skip": ("⚪", "gray"),
+    "skipped": ("⚪", "gray"),
+}
 
 
-def _cfg():
-    cp = os.environ.get("AQ_DASH_CONFIG") or None
-    return load_config(Path(cp) if cp else None)
+def _dot(status: str) -> str:
+    return _STATUS.get(status, ("⚫", "gray"))[0]
 
 
-def _store_dir() -> str | None:
-    return os.environ.get("AQ_DASH_STORE_DIR") or None
+def _full_df(rows: list[dict], **kw) -> None:
+    """A dataframe sized to its content (no inner scroll / no empty gap → page scrolls)."""
+    height = 38 + 36 * max(len(rows), 1)
+    st.dataframe(rows, use_container_width=True, hide_index=True, height=min(height, 1600), **kw)
 
+
+# ── Tabs ─────────────────────────────────────────────────────────────────────
 
 def _fleet_tab(cfg, store_dir):
-    st.subheader("Fleet")
     summ = q.fleet_summary(cfg, store_dir=store_dir)
     if not summ:
         st.info("No observability stores found yet. Run a blueprint first.")
@@ -49,23 +60,18 @@ def _fleet_tab(cfg, store_dir):
     c3.metric("Success rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
     c4.metric("Heal attempts", total_heal)
 
-    st.dataframe(
-        [
-            {
-                "blueprint": s.blueprint_id,
-                "runs": s.runs,
-                "success %": round(s.success_rate * 100, 1),
-                "errors": s.errors,
-                "heal attempts": s.heal_attempts,
-                "last run": s.last_run or "",
-            }
-            for s in summ
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+    _full_df([
+        {
+            "blueprint": s.blueprint_id,
+            "runs": s.runs,
+            "success %": round(s.success_rate * 100, 1),
+            "errors": s.errors,
+            "heal attempts": s.heal_attempts,
+            "last run": s.last_run or "",
+        }
+        for s in summ
+    ])
 
-    # Runs over time
     rot = q.runs_over_time(cfg, store_dir=store_dir)
     if rot:
         days = sorted({d.day for d in rot})
@@ -76,145 +82,142 @@ def _fleet_tab(cfg, store_dir):
         st.caption("Runs over time")
         st.line_chart({st_: [grid[st_][d] for d in days] for st_ in statuses})
 
-    # Failure categories
     dist = q.failure_categories(cfg, store_dir=store_dir)
     if dist:
         st.caption("Failure categories")
         st.bar_chart(dist)
 
 
-def _runs_tab(cfg, store_dir):
-    st.subheader("Runs")
-    handles = q.discover_stores(cfg, store_dir=store_dir)
-    if not handles:
+def _runs_tab(handle):
+    if handle is None:
         st.info("No observability stores found yet.")
         return
-    labels = [h.label for h in handles]
-    pick = st.selectbox("Store / blueprint", labels, key="runs_store")
-    handle = handles[labels.index(pick)]
-
-    runs = q.list_runs(handle.store, limit=100)
+    runs = q.list_runs(handle.store, limit=200)
     if not runs:
         st.info("No runs in this store yet.")
         return
-    st.dataframe(
-        [
-            {
-                "": _STATUS_ICON.get(r.status, "?"),
-                "run_id": r.run_id,
-                "blueprint": r.blueprint_id,
-                "status": r.status,
-                "started": r.started_at or "",
-            }
-            for r in runs
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
 
-    run_ids = [r.run_id for r in runs]
-    sel = st.selectbox("Inspect run", run_ids, key="runs_detail")
-    det = q.run_detail(handle.store, sel)
+    st.caption("Select a run to inspect")
+    rows = [
+        {"status": _dot(r.status), "run_id": r.run_id, "blueprint": r.blueprint_id, "started": r.started_at or ""}
+        for r in runs
+    ]
+    height = min(38 + 36 * max(len(rows), 1), 700)
+    event = st.dataframe(
+        rows, use_container_width=True, hide_index=True, height=height,
+        on_select="rerun", selection_mode="single-row", key="runs_table",
+    )
+    sel = event.selection.rows if event and event.selection else []
+    run = runs[sel[0]] if sel else runs[0]
+
+    st.markdown(f"**Run** `{run.run_id}` · {run.blueprint_id}")
+    st.badge(run.status, color=_STATUS.get(run.status, ("", "gray"))[1])
+
+    det = q.run_detail(handle.store, run.run_id)
     if det is None:
         return
-    # Merged per-module metrics table, execution order.
     prof = {p.module_id: p for p in det.profile}
     st.caption("Modules (execution order)")
-    st.dataframe(
-        [
-            {
-                "": _STATUS_ICON.get(m.status, "?"),
-                "module": m.module_id,
-                "status": m.status,
-                "duration_ms": getattr(prof.get(m.module_id), "duration_ms", None),
-                "rows_out": getattr(prof.get(m.module_id), "records_written", None),
-                "bytes_out": getattr(prof.get(m.module_id), "bytes_written", None),
-                "error": (m.error or "")[:200],
-            }
-            for m in det.modules
-        ],
-        use_container_width=True,
-        hide_index=True,
-    )
+    _full_df([
+        {
+            "status": _dot(m.status),
+            "module": m.module_id,
+            "duration_ms": getattr(prof.get(m.module_id), "duration_ms", None),
+            "rows_out": getattr(prof.get(m.module_id), "records_written", None),
+            "bytes_out": getattr(prof.get(m.module_id), "bytes_written", None),
+            "error": (m.error or "")[:200],
+        }
+        for m in det.modules
+    ])
 
 
-def _lineage_tab(cfg, store_dir):
-    st.subheader("Column lineage")
-    handles = q.discover_stores(cfg, store_dir=store_dir)
-    if not handles:
+def _lineage_tab(handle):
+    if handle is None:
         st.info("No observability stores found yet.")
         return
-    labels = [h.label for h in handles]
-    pick = st.selectbox("Store / blueprint", labels, key="lin_store")
-    handle = handles[labels.index(pick)]
     rows = q.lineage(handle.store)
     if not rows:
         st.info("No column-lineage rows captured for this store (needs a SQL Channel).")
         return
 
-    # Plotly Sankey: source_table.source_column → output_column.
     import plotly.graph_objects as go
 
-    nodes: list[str] = []
-    idx: dict[str, int] = {}
+    src_labels: dict[str, int] = {}
+    dst_labels: dict[str, int] = {}
+    labels: list[str] = []
+    colors: list[str] = []
 
-    def node(name: str) -> int:
-        if name not in idx:
-            idx[name] = len(nodes)
-            nodes.append(name)
-        return idx[name]
+    def node(name: str, is_src: bool) -> int:
+        cache = src_labels if is_src else dst_labels
+        if name not in cache:
+            cache[name] = len(labels)
+            labels.append(name)
+            colors.append("#4C78A8" if is_src else "#54A24B")  # source=blue, output=green
+        return cache[name]
 
-    src_i, dst_i = [], []
+    s_idx, t_idx = [], []
     for r in rows:
         s = f"{r.source_table}.{r.source_column}" if r.source_table else r.source_column
-        src_i.append(node(s))
-        dst_i.append(node(r.output_column))
+        s_idx.append(node(s, True))
+        t_idx.append(node(r.output_column, False))
+
     fig = go.Figure(
         go.Sankey(
-            node=dict(label=nodes, pad=12, thickness=14),
-            link=dict(source=src_i, target=dst_i, value=[1] * len(src_i)),
+            arrangement="snap",
+            node=dict(
+                label=labels, color=colors, pad=18, thickness=16,
+                line=dict(color="rgba(0,0,0,0)", width=0),
+                hovertemplate="%{label}<extra></extra>",
+            ),
+            link=dict(
+                source=s_idx, target=t_idx, value=[1] * len(s_idx),
+                color="rgba(120,120,120,0.35)",
+                hovertemplate="%{source.label} → %{target.label}<extra></extra>",
+            ),
         )
     )
-    fig.update_layout(height=max(300, 22 * len(nodes)), margin=dict(l=0, r=0, t=10, b=10))
+    n = max(len(src_labels), len(dst_labels))
+    fig.update_layout(
+        height=min(max(260, 26 * n), 800),
+        margin=dict(l=10, r=10, t=10, b=10),
+        font=dict(size=13, color="#222"),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
     st.plotly_chart(fig, use_container_width=True)
-    with st.expander("Lineage rows"):
-        st.dataframe(
-            [
-                {"channel": r.channel_id, "output": r.output_column,
-                 "source_table": r.source_table, "source_column": r.source_column}
-                for r in rows
-            ],
-            use_container_width=True,
-            hide_index=True,
+
+    st.caption("Lineage rows")
+    _full_df([
+        {"channel": r.channel_id, "output": r.output_column,
+         "source_table": r.source_table, "source_column": r.source_column}
+        for r in rows
+    ])
+
+
+def _doctor_tab(config_path):
+    cols = st.columns([6, 1])
+    cols[0].caption("Health checks (Spark probe skipped — read-only).")
+    rerun = cols[1].button("Rerun", use_container_width=True)
+    # Auto-run on first open; rerun on button.
+    if "doctor_ran" not in st.session_state or rerun:
+        st.session_state["doctor_ran"] = True
+    try:
+        from aqueduct.doctor import run_doctor
+
+        results = run_doctor(
+            config_path=Path(config_path) if config_path else None, skip_spark=True
         )
-
-
-def _doctor_tab(cfg, config_path):
-    st.subheader("Doctor")
-    if st.button("Run checks"):
-        try:
-            from aqueduct.doctor import run_doctor
-
-            results = run_doctor(
-                config_path=Path(config_path) if config_path else None,
-                skip_spark=True,
-            )
-            st.dataframe(
-                [
-                    {"": _STATUS_ICON.get(r.status, r.status), "check": r.name, "detail": r.detail}
-                    for r in results
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface to the read-only viewer
-            st.error(f"doctor failed: {exc}")
-    else:
-        st.caption("Read-only health checks (Spark probe skipped). Click to run.")
+    except Exception as exc:  # noqa: BLE001 — surface to the read-only viewer
+        st.error(f"doctor failed: {exc}")
+        return
+    for r in results:
+        emoji, color = _STATUS.get(r.status, ("⚫", "gray"))
+        b, name, detail = st.columns([1, 2, 7])
+        b.badge(r.status, color=color)
+        name.markdown(f"**{r.name}**")
+        detail.markdown(r.detail or "")
 
 
 def _config_tab(cfg):
-    st.subheader("Config")
     rows: list[tuple[str, str]] = []
     dep = getattr(cfg, "deployment", None)
     if dep is not None:
@@ -233,28 +236,39 @@ def _config_tab(cfg):
         for f in ("provider", "model"):
             if getattr(agent, f, None):
                 rows.append((f"agent.{f}", str(getattr(agent, f))))
-    st.dataframe(
-        [{"key": k, "value": v} for k, v in rows],
-        use_container_width=True, hide_index=True,
-    )
+    _full_df([{"key": k, "value": v} for k, v in rows])
     st.caption("Read-only. Secret values are never read or displayed.")
 
 
 def main() -> None:
     st.set_page_config(page_title="Aqueduct Dashboard", layout="wide")
     config_path = os.environ.get("AQ_DASH_CONFIG") or None
-    store_dir = _store_dir()
+    store_dir = os.environ.get("AQ_DASH_STORE_DIR") or None
     try:
-        cfg = _cfg()
+        cfg = load_config(Path(config_path) if config_path else None)
     except Exception as exc:  # noqa: BLE001
         st.error(f"config error: {exc}")
         return
 
-    st.title("Aqueduct")
-    backend = getattr(cfg.stores.observability, "backend", "duckdb")
-    st.caption(f"observability backend: **{backend}**  ·  read-only viewer")
-    if st.button("🔄 Refresh"):
+    # Header: title + right-aligned refresh (no emoji, no lonely row).
+    left, right = st.columns([8, 1])
+    left.title("Aqueduct")
+    if right.button("Refresh", use_container_width=True):
         st.rerun()
+
+    # Global store/blueprint picker (shared by Runs + Lineage).
+    backend = getattr(cfg.stores.observability, "backend", "duckdb")
+    handles = q.discover_stores(cfg, store_dir=store_dir)
+    with st.sidebar:
+        st.caption(f"observability backend: **{backend}**")
+        handle = None
+        if handles:
+            labels = [h.label for h in handles]
+            pick = st.selectbox("Store / blueprint", labels, key="global_store")
+            handle = handles[labels.index(pick)]
+        else:
+            st.info("No stores found.")
+        st.caption("Read-only viewer · manual refresh")
 
     fleet, runs, lineage, doctor, config = st.tabs(
         ["Fleet", "Runs", "Lineage", "Doctor", "Config"]
@@ -262,11 +276,11 @@ def main() -> None:
     with fleet:
         _fleet_tab(cfg, store_dir)
     with runs:
-        _runs_tab(cfg, store_dir)
+        _runs_tab(handle)
     with lineage:
-        _lineage_tab(cfg, store_dir)
+        _lineage_tab(handle)
     with doctor:
-        _doctor_tab(cfg, config_path)
+        _doctor_tab(config_path)
     with config:
         _config_tab(cfg)
 
