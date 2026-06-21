@@ -279,7 +279,6 @@ def _runs_tab(handles):
     st.caption("Click a row to inspect detail")
     event = st.dataframe(
         _style(df), width="stretch", hide_index=True,
-        height=min(38 + 36 * len(fruns), 560),
         on_select="rerun", selection_mode="single-row", key="runs_table",
     )
     sel_rows = event.selection.rows if event and event.selection else []
@@ -298,21 +297,22 @@ def _runs_tab(handles):
         v = getattr(p, attr, None) if p else None
         return 0 if v is None else v
 
-    _table([
-        {"status": m.status, "module": m.module_id,
-         "records_read": _v(prof.get(m.module_id), "records_read"),
-         "rows_out": _v(prof.get(m.module_id), "records_written"),
-         "bytes_read": _v(prof.get(m.module_id), "bytes_read"),
-         "bytes_out": _v(prof.get(m.module_id), "bytes_written"),
-         "duration_ms": _v(prof.get(m.module_id), "duration_ms"),
-         "error": (m.error or "")[:200]}
-        for m in det.modules
-    ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
-                "records_read": "{:,}", "bytes_read": "{:,}"})
+    mt1, mt2, mt3 = st.tabs(["Modules", "Quality", "Trends"])
 
-    # ── Full failure detail (the table cell only previews the error) ──────
-    if run.status == "error" or any(m.status == "error" for m in det.modules):
-        with st.expander("Failure detail", expanded=True):
+    with mt1:
+        _table([
+            {"status": m.status, "module": m.module_id,
+             "records_read": _v(prof.get(m.module_id), "records_read"),
+             "rows_out": _v(prof.get(m.module_id), "records_written"),
+             "bytes_read": _v(prof.get(m.module_id), "bytes_read"),
+             "bytes_out": _v(prof.get(m.module_id), "bytes_written"),
+             "duration_ms": _v(prof.get(m.module_id), "duration_ms"),
+             "error": (m.error or "")[:200]}
+            for m in det.modules
+        ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
+                    "records_read": "{:,}", "bytes_read": "{:,}"})
+
+        if run.status == "error" or any(m.status == "error" for m in det.modules):
             fc = q.failure_context(owner.store, run.run_id)
             if fc is not None:
                 head = f"**module** `{fc.failed_module}`"
@@ -329,40 +329,40 @@ def _runs_tab(handles):
                     with st.expander("stack trace"):
                         st.code(fc.stack_trace, language="text")
             else:
-                # No structured failure_contexts row → show full module errors.
                 for m in det.modules:
                     if m.error:
                         st.markdown(f"**`{m.module_id}`**")
                         st.code(m.error, language="text")
 
-    # ── Module metric trend ──────────────────────────────────────────────
-    mod_ids = sorted({p.module_id for p in det.profile})
-    tc1, tc2 = st.columns([2, 3])
-    trend_mod = tc1.selectbox("Module", mod_ids, key="trend_mod")
-    metric_key = tc2.selectbox("Metric", list(q.METRIC_LABELS),
-                               format_func=lambda k: q.METRIC_LABELS[k], key="trend_metric")
-    trend = q.module_trends(owner.store, run.blueprint_id, trend_mod)
-    if len(trend) >= 2:
-        trend_df = pd.DataFrame([
-            {"run": t.run_id[:8], "started": t.started_at[:19] if t.started_at else "?",
-             metric_key: getattr(t, metric_key) or 0}
-            for t in reversed(trend)
-        ])
-        fig = px.line(trend_df, x="started", y=metric_key,
-                      title=f"{trend_mod} — {q.METRIC_LABELS[metric_key]} across recent runs",
-                      markers=True)
-        fig.update_layout(xaxis_title=None, height=280, margin=dict(l=8, r=8, t=32, b=8))
-        st.plotly_chart(fig, width="stretch")
-    elif trend:
-        st.caption(f"Only one data point for {trend_mod} — need ≥2 runs with profile data.")
-    else:
-        st.caption(f"No trend data for {trend_mod}.")
+    with mt3:
+        mod_ids = sorted({p.module_id for p in det.profile})
+        tc1, tc2 = st.columns([2, 3])
+        trend_mod = tc1.selectbox("Module", mod_ids, key="trend_mod")
+        metric_key = tc2.selectbox("Metric", list(q.METRIC_LABELS),
+                                   format_func=lambda k: q.METRIC_LABELS[k], key="trend_metric")
+        trend = q.module_trends(owner.store, run.blueprint_id, trend_mod)
+        if len(trend) >= 2:
+            trend_df = pd.DataFrame([
+                {"run": t.run_id[:8], "started": t.started_at[:19] if t.started_at else "?",
+                 metric_key: getattr(t, metric_key) or 0}
+                for t in reversed(trend)
+            ])
+            fig = px.line(trend_df, x="started", y=metric_key,
+                          title=f"{trend_mod} — {q.METRIC_LABELS[metric_key]} across recent runs",
+                          markers=True)
+            fig.update_layout(xaxis_title=None, height=280, margin=dict(l=8, r=8, t=32, b=8))
+            st.plotly_chart(fig, width="stretch")
+        elif trend:
+            st.caption(f"Only one data point for {trend_mod} — need ≥2 runs with profile data.")
+        else:
+            st.caption(f"No trend data for {trend_mod}.")
 
-    # ── Column quality (probe signals) ──────────────────────────────────
-    avail_sigs = [s for s in q.PROBE_METRIC_LABELS
-                  if q.probe_signals(owner.store, run.blueprint_id, s, limit=1)]
-    if avail_sigs:
-        with st.expander("Column quality", expanded=False):
+    with mt2:
+        avail_sigs = [s for s in q.PROBE_METRIC_LABELS
+                      if q.probe_signals(owner.store, run.blueprint_id, s, limit=1)]
+        if not avail_sigs:
+            st.caption("No probe signals for this blueprint.")
+        else:
             sig_type = st.selectbox("Signal type", avail_sigs,
                                     format_func=lambda k: q.PROBE_METRIC_LABELS[k],
                                     key="cq_sig")
@@ -609,6 +609,67 @@ def _lineage_tab(handles):
             ], status_cols=("status",))
 
 
+def _performance_tab(handles):
+    rows = []
+    for h in handles:
+        try:
+            latest = q.list_runs(h.store, limit=5)
+        except Exception:
+            continue
+        for r in latest:
+            det = q.run_detail(h.store, r.run_id)
+            if det is None or not det.profile:
+                continue
+            for p in det.profile:
+                rows.append({
+                    "blueprint": h.label, "run": r.run_id[:8],
+                    "module": p.module_id,
+                    "duration_ms": p.duration_ms or 0,
+                    "records_read": p.records_read or 0,
+                    "bytes_read": p.bytes_read or 0,
+                    "records_written": p.records_written or 0,
+                    "bytes_written": p.bytes_written or 0,
+                })
+    if not rows:
+        st.info("No module profile data yet.")
+        return
+
+    df = pd.DataFrame(rows)
+    total = len(df)
+    avg_dur = int(df["duration_ms"].mean())
+    total_bytes = int(df["bytes_read"].sum())
+    slowest_row = df.loc[df["duration_ms"].idxmax()]
+    slowest_label = f"{slowest_row['blueprint']} / {slowest_row['module']}"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Modules profiled", f"{total:,}")
+    c2.metric("Avg duration", f"{avg_dur:,} ms")
+    c3.metric("Total bytes read", f"{total_bytes:,}")
+    c4.metric("Slowest module", slowest_label)
+
+    top_n = df.nlargest(20, "duration_ms")
+    fig_bar = px.bar(top_n, x="duration_ms", y="module", color="blueprint",
+                     orientation="h", title="Slowest Modules (top 20 by duration)",
+                     labels={"duration_ms": "ms", "module": ""},
+                     height=400)
+    fig_bar.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+    st.plotly_chart(fig_bar, width="stretch")
+
+    has_io = df["bytes_read"].sum() > 0
+    if has_io and len(df) >= 3:
+        fig_scatter = px.scatter(
+            df, x="bytes_read", y="duration_ms", color="blueprint",
+            hover_data=["module", "run"],
+            title="Duration vs. Bytes Read",
+            labels={"bytes_read": "bytes read", "duration_ms": "duration (ms)"},
+            height=360)
+        fig_scatter.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+        st.plotly_chart(fig_scatter, width="stretch")
+
+    st.caption("Recent module profiles (latest 5 runs per blueprint)")
+    st.dataframe(_style(df), width="stretch", hide_index=True)
+
+
 def _heal_tab(cfg, store_dir):
     hc = q.heal_coverage(cfg, store_dir=store_dir)
     gates = q.gate_rejection_rates(cfg, store_dir=store_dir)
@@ -747,8 +808,8 @@ def main() -> None:
     st.caption(f"observability backend: **{backend}** · read-only viewer · F5 to refresh")
     handles = q.discover_stores(cfg, store_dir=store_dir)
 
-    fleet, runs, lineage, healing, doctor, config = st.tabs(
-        ["Fleet", "Runs", "Lineage", "Healing", "Doctor", "Config"])
+    fleet, runs, lineage, healing, performance, doctor, config = st.tabs(
+        ["Fleet", "Runs", "Lineage", "Healing", "Performance", "Doctor", "Config"])
     with fleet:
         _fleet_tab(cfg, store_dir)
     with runs:
@@ -757,6 +818,8 @@ def main() -> None:
         _lineage_tab(handles)
     with healing:
         _heal_tab(cfg, store_dir)
+    with performance:
+        _performance_tab(handles)
     with doctor:
         _doctor_tab(config_path)
     with config:
