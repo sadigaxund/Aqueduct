@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from aqueduct.config import load_config
@@ -139,8 +140,6 @@ def _fleet_tab(cfg, store_dir):
     c2.metric("Runs", total_runs)
     c3.metric("Success rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
     c4.metric("Heal attempts", sum(s.heal_attempts for s in summ))
-
-    import plotly.express as px
 
     rot = q.runs_over_time(cfg, store_dir=store_dir)
     dist = q.failure_categories(cfg, store_dir=store_dir)
@@ -285,19 +284,21 @@ def _runs_tab(handles):
     ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
                 "records_read": "{:,}", "bytes_read": "{:,}"})
 
-    # ── Module duration trend ────────────────────────────────────────────
+    # ── Module metric trend ──────────────────────────────────────────────
     mod_ids = sorted({p.module_id for p in det.profile})
-    trend_mod = st.selectbox("Module duration trend", mod_ids, key="trend_mod")
+    tc1, tc2 = st.columns([2, 3])
+    trend_mod = tc1.selectbox("Module", mod_ids, key="trend_mod")
+    metric_key = tc2.selectbox("Metric", list(q.METRIC_LABELS),
+                               format_func=lambda k: q.METRIC_LABELS[k], key="trend_metric")
     trend = q.module_trends(owner.store, run.blueprint_id, trend_mod)
     if len(trend) >= 2:
         trend_df = pd.DataFrame([
             {"run": t.run_id[:8], "started": t.started_at[:19] if t.started_at else "?",
-             "duration_ms": t.duration_ms or 0}
+             metric_key: getattr(t, metric_key) or 0}
             for t in reversed(trend)
         ])
-        import plotly.express as px
-        fig = px.line(trend_df, x="started", y="duration_ms",
-                      title=f"{trend_mod} duration across recent runs",
+        fig = px.line(trend_df, x="started", y=metric_key,
+                      title=f"{trend_mod} — {q.METRIC_LABELS[metric_key]} across recent runs",
                       markers=True)
         fig.update_layout(xaxis_title=None, height=280, margin=dict(l=8, r=8, t=32, b=8))
         st.plotly_chart(fig, width="stretch")
@@ -305,6 +306,71 @@ def _runs_tab(handles):
         st.caption(f"Only one data point for {trend_mod} — need ≥2 runs with profile data.")
     else:
         st.caption(f"No trend data for {trend_mod}.")
+
+    # ── Column quality (probe signals) ──────────────────────────────────
+    avail_sigs = [s for s in q.PROBE_METRIC_LABELS
+                  if q.probe_signals(owner.store, run.blueprint_id, s, limit=1)]
+    if avail_sigs:
+        with st.expander("Column quality", expanded=False):
+            sig_type = st.selectbox("Signal type", avail_sigs,
+                                    format_func=lambda k: q.PROBE_METRIC_LABELS[k],
+                                    key="cq_sig")
+            sigs = q.probe_signals(owner.store, run.blueprint_id, sig_type)
+            if sig_type == "null_rates":
+                cols = sorted({c for s in sigs for c in (s.payload.get("null_rates") or {})})
+                col = st.selectbox("Column", cols, key="cq_col")
+                vals = [(s.started_at[:19], s.payload.get("null_rates", {}).get(col))
+                        for s in reversed(sigs)]
+                df = pd.DataFrame(vals, columns=["run", f"null_rate_{col}"])
+                st.dataframe(df, width="stretch", hide_index=True)
+                if len(vals) >= 2:
+                    fig = px.line(df, x="run", y=f"null_rate_{col}", markers=True,
+                                  title=f"Null rate — {col}")
+                    fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            elif sig_type == "value_distribution":
+                cols = sorted({c for s in sigs for c in (s.payload.get("stats") or {})})
+                col = st.selectbox("Column", cols, key="cq_vd_col")
+                stat_key = st.selectbox("Stat", ["min", "max", "mean", "stddev"],
+                                        key="cq_vd_stat")
+                vals = []
+                for s in reversed(sigs):
+                    st_ = (s.payload.get("stats") or {}).get(col, {})
+                    vals.append((s.started_at[:19], st_.get(stat_key)))
+                df = pd.DataFrame(vals, columns=["run", stat_key])
+                st.dataframe(df, width="stretch", hide_index=True)
+                if len(vals) >= 2:
+                    fig = px.line(df, x="run", y=stat_key, markers=True,
+                                  title=f"{stat_key} — {col}")
+                    fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            elif sig_type == "distinct_count":
+                cols = sorted({c for s in sigs for c in (s.payload.get("distinct_counts") or {})})
+                rows_l = []
+                for s in reversed(sigs):
+                    dc = s.payload.get("distinct_counts") or {}
+                    rows_l.append({"run": s.started_at[:19], **dc})
+                df = pd.DataFrame(rows_l)
+                st.dataframe(_style(df), width="stretch", hide_index=True)
+                if len(rows_l) >= 2:
+                    fig = px.line(df, x="run", y=cols, markers=True,
+                                  title="Distinct count per column")
+                    fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            elif sig_type == "schema_snapshot":
+                prev: dict[str, str] = {}
+                for s in sigs:
+                    fields = {f["name"]: f["type"] for f in (s.payload.get("fields") or [])}
+                    changed = {c: (prev[c], fields[c]) for c in fields
+                               if c in prev and prev[c] != fields[c]}
+                    prev = fields
+                rows_l = []
+                for s in reversed(sigs):
+                    fields = s.payload.get("fields") or []
+                    rows_l.append({"run": s.started_at[:19],
+                                   **{f["name"]: f["type"] for f in fields}})
+                df = pd.DataFrame(rows_l)
+                st.dataframe(df, width="stretch", hide_index=True)
 
 
 def _lineage_tab(handles):

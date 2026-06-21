@@ -302,16 +302,31 @@ class ModuleTrendRow:
     started_at: str
     module_id: str
     duration_ms: int | None
+    records_read: int | None = None
+    bytes_read: int | None = None
+    records_written: int | None = None
+    bytes_written: int | None = None
+
+
+METRIC_LABELS: dict[str, str] = {
+    "duration_ms": "Duration (ms)",
+    "records_read": "Records Read",
+    "records_written": "Records Written",
+    "bytes_read": "Bytes Read",
+    "bytes_written": "Bytes Written",
+}
 
 
 def module_trends(store: Any, blueprint_id: str,
                    module_id: str, limit: int = 20) -> list[ModuleTrendRow]:
-    """Duration for *module_id* across the *limit* most recent runs of *blueprint_id*."""
+    """Module metrics across the *limit* most recent runs of *blueprint_id*."""
     try:
         with store.connect() as cur:
             cur.execute(
                 """
-                SELECT m.run_id, CAST(r.started_at AS VARCHAR), m.module_id, m.duration_ms
+                SELECT m.run_id, CAST(r.started_at AS VARCHAR), m.module_id,
+                       m.duration_ms, m.records_read, m.bytes_read,
+                       m.records_written, m.bytes_written
                 FROM module_metrics m
                 JOIN run_records r ON r.run_id = m.run_id
                 WHERE r.blueprint_id = ? AND m.module_id = ?
@@ -322,6 +337,44 @@ def module_trends(store: Any, blueprint_id: str,
             )
             rows = cur.fetchall()
         return [ModuleTrendRow(*r) for r in rows]
+    except Exception:
+        return []
+
+
+@dataclass(frozen=True)
+class ProbeSignalRow:
+    run_id: str
+    started_at: str
+    signal_type: str
+    payload: dict
+
+
+PROBE_METRIC_LABELS: dict[str, str] = {
+    "null_rates": "Null Rates",
+    "value_distribution": "Value Distribution",
+    "distinct_count": "Distinct Count",
+    "schema_snapshot": "Schema Snapshot",
+}
+
+
+def probe_signals(store: Any, blueprint_id: str,
+                   signal_type: str, limit: int = 20) -> list[ProbeSignalRow]:
+    """Probe signal payloads across recent runs of *blueprint_id*."""
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT p.run_id, CAST(r.started_at AS VARCHAR), p.signal_type, p.payload
+                FROM probe_signals p
+                JOIN run_records r ON r.run_id = p.run_id
+                WHERE r.blueprint_id = ? AND p.signal_type = ?
+                ORDER BY r.started_at DESC
+                LIMIT ?
+                """,
+                [blueprint_id, signal_type, limit],
+            )
+            rows = cur.fetchall()
+        return [ProbeSignalRow(r[0], r[1], r[2], json.loads(r[3])) for r in rows]
     except Exception:
         return []
 
