@@ -51,8 +51,10 @@ OpenLineage adds **no** extra — `httpx` is already a base dep.)
 **Documented exception — dev-tooling extras.** The two-axis rule governs
 *runtime-capability* deps (vendor SDKs / store backends used while a pipeline
 runs). A small separate class is allowed for **developer/inspection tooling that
-never runs in the data path**: `dev` (pytest/black/ruff) and `tui` (`textual`, for
-`aqueduct studio`). These stay OUT of `all` and out of the runtime axes — a
+never runs in the data path**: `dev` (pytest/black/ruff), `tui` (`textual`, for
+`aqueduct studio`), and `dashboard` (`streamlit`+`plotly`, for `aqueduct
+dashboard` — a local, read-only, on-demand observability viewer like the Spark
+UI). These stay OUT of `all` and out of the runtime axes — a
 pipeline never needs them, so bundling them into base/`all` would bloat headless
 Spark-driver / CI installs. This is the *only* sanctioned feature-named-extra
 category; it is not a loophole for runtime features (those still follow the axes).

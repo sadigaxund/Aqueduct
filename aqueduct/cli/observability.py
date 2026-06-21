@@ -6,6 +6,7 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -1197,3 +1198,57 @@ def studio(
 
     code = run_studio(config_path=config_path, store_dir=store_dir)
     sys.exit(0 if code == 0 else exit_codes.DATA_OR_RUNTIME)
+
+
+# ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────
+
+@cli.command()
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store dir (default: scan .aqueduct/observability/*)",
+)
+@click.option("--port", default=8501, show_default=True, help="Local port for the Streamlit server.")
+@click.option("--no-browser", is_flag=True, default=False, help="Do not auto-open a browser.")
+def dashboard(
+    config_path: str | None,
+    store_dir: str | None,
+    port: int,
+    no_browser: bool,
+) -> None:
+    """Launch the local, read-only observability dashboard (Streamlit).
+
+    Requires the optional 'dashboard' extra: pip install aqueduct-core[dashboard]
+
+    This is a LOCAL dev viewer (like the Spark UI) — on-demand, read-only, never a
+    production server and never required by a pipeline. Shells out to
+    `streamlit run` on the dashboard app; Ctrl-C to stop.
+    """
+    import importlib.util
+    import subprocess
+
+    if importlib.util.find_spec("streamlit") is None:
+        click.echo(
+            "✗ aqueduct dashboard needs the 'dashboard' extra: "
+            "pip install aqueduct-core[dashboard]",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    app_path = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
+    env = dict(os.environ)
+    if config_path:
+        env["AQ_DASH_CONFIG"] = config_path
+    if store_dir:
+        env["AQ_DASH_STORE_DIR"] = store_dir
+
+    args = [
+        sys.executable, "-m", "streamlit", "run", app_path,
+        "--server.port", str(port),
+        "--server.headless", "true" if no_browser else "false",
+    ]
+    try:
+        sys.exit(subprocess.call(args, env=env))
+    except KeyboardInterrupt:
+        sys.exit(130)

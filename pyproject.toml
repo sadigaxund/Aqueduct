@@ -96,10 +96,13 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.4.0",
 ]
-# Dev-tooling extra (NOT a runtime capability) for the `aqueduct studio` TUI.
+# Dev-tooling extras (NOT runtime capabilities) for the local observability
+# viewers — `aqueduct studio` (textual TUI) and `aqueduct dashboard` (Streamlit).
 # Deliberately kept out of [all] and out of the two-axis runtime extras — see the
-# documented carve-out in AGENTS.md "Packaging & Extras Policy".
+# documented carve-out in AGENTS.md "Packaging & Extras Policy". Both are local,
+# read-only, on-demand dev tools (like the Spark UI) — never required at runtime.
 tui = ["textual>=0.50"]
+dashboard = ["streamlit>=1.30", "plotly>=5.18"]
 
 [project.urls]
 Homepage = "https://github.com/sadigaxund/Aqueduct"
