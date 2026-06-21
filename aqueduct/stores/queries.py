@@ -290,6 +290,8 @@ class FailureContext:
     object_name: str | None
     suggested_columns: list
     stack_trace: str | None
+    manifest_json: str | None = None
+    provenance_json: str | None = None
 
 
 def failure_context(store: Any, run_id: str) -> "FailureContext | None":
@@ -300,14 +302,28 @@ def failure_context(store: Any, run_id: str) -> "FailureContext | None":
             cur.execute(
                 """
                 SELECT failed_module, error_message, error_class, object_name,
-                       suggested_columns, stack_trace
+                       suggested_columns, stack_trace, manifest_json, provenance_json
                 FROM failure_contexts WHERE run_id = ?
                 """,
                 [run_id],
             )
             row = cur.fetchone()
     except Exception:
-        return None
+        try:
+            with store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT failed_module, error_message, error_class, object_name,
+                           suggested_columns, stack_trace
+                    FROM failure_contexts WHERE run_id = ?
+                    """,
+                    [run_id],
+                )
+                row = cur.fetchone()
+            if row:
+                row = tuple(row) + (None, None)
+        except Exception:
+            return None
     if not row:
         return None
     sc = row[4]
@@ -316,7 +332,10 @@ def failure_context(store: Any, run_id: str) -> "FailureContext | None":
             sc = json.loads(sc)
         except Exception:
             sc = []
-    return FailureContext(row[0] or "", row[1] or "", row[2], row[3], list(sc or []), row[5])
+    mj = row[6] if len(row) > 6 else None
+    pj = row[7] if len(row) > 7 else None
+    return FailureContext(row[0] or "", row[1] or "", row[2], row[3],
+                          list(sc or []), row[5], mj, pj)
 
 
 def lineage(store: Any, blueprint_id: str | None = None,
@@ -708,6 +727,148 @@ def drift_events(store: Any, blueprint_id: str) -> list[dict[str, Any]]:
                 rows.append(d)
     except Exception:
         return []
+    return rows
+
+
+@dataclass(frozen=True)
+class AssertFailureRow:
+    blueprint_id: str
+    run_id: str
+    started_at: str
+    module_id: str
+    error_type: str
+    error_message: str
+
+
+_ASSERT_FAIL_PREFIXES = ("failed:", "null_rate[", "min_rows:", "max_rows:",
+                         "freshness:", "sql assertion failed:", "spillway_rate:")
+
+def assert_failures(cfg: Any, store_dir: str | None = None,
+                    limit: int = 100) -> list[AssertFailureRow]:
+    """Assert rule failures across recent runs (joined across stores).
+
+    Parses the ``module_results`` JSON column from ``run_records`` and
+    returns entries where ``error_type`` is set, or where a module has
+    ``status=error`` with a message matching known assert failure patterns.
+    Empty list when no assert failures exist.
+    """
+    rows: list[AssertFailureRow] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, blueprint_id,
+                           CAST(started_at AS VARCHAR), module_results
+                    FROM run_records
+                    ORDER BY started_at DESC LIMIT ?
+                    """,
+                    [limit],
+                )
+                for rec in cur.fetchall():
+                    run_id, bp_id, started, raw = rec
+                    mr = json.loads(raw) if isinstance(raw, str) else (raw or [])
+                    for m in mr:
+                        et = m.get("error_type")
+                        err = m.get("error") or ""
+                        if et:
+                            rows.append(AssertFailureRow(
+                                blueprint_id=bp_id, run_id=run_id,
+                                started_at=started, module_id=m.get("module_id", ""),
+                                error_type=et, error_message=err,
+                            ))
+                        elif m.get("status") == "error" and err:
+                            match = next(
+                                (p for p in _ASSERT_FAIL_PREFIXES if err.startswith(p)),
+                                None,
+                            )
+                            if match:
+                                rows.append(AssertFailureRow(
+                                    blueprint_id=bp_id, run_id=run_id,
+                                    started_at=started, module_id=m.get("module_id", ""),
+                                    error_type=match.rstrip(":"),
+                                    error_message=err,
+                                ))
+        except Exception:
+            continue
+    rows.sort(key=lambda r: r.started_at, reverse=True)
+    return rows[:limit]
+
+
+@dataclass(frozen=True)
+class QuarantineVolumeRow:
+    blueprint_id: str
+    run_id: str
+    started_at: str
+    module_id: str
+    records_written: int
+
+
+def quarantine_volumes(cfg: Any, store_dir: str | None = None,
+                       limit: int = 100) -> list[QuarantineVolumeRow]:
+    """Per-run quarantine/spillway write volume across the fleet.
+
+    Returns rows from ``module_metrics`` for modules whose ``module_id``
+    indicates a spillway consumer (contains "spillway") or that are Egress
+    modules with non-zero ``records_written`` that ran after an Assert module.
+    Falls back to all ``records_written`` per blueprint/run so rising volumes
+    are still visible.
+    """
+    rows: list[QuarantineVolumeRow] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT m.run_id, r.blueprint_id,
+                           CAST(r.started_at AS VARCHAR),
+                           m.module_id, m.records_written
+                    FROM module_metrics m
+                    JOIN run_records r ON r.run_id = m.run_id
+                    WHERE m.records_written IS NOT NULL AND m.records_written > 0
+                    ORDER BY r.started_at DESC LIMIT ?
+                    """,
+                    [limit],
+                )
+                for rec in cur.fetchall():
+                    rows.append(QuarantineVolumeRow(
+                        blueprint_id=rec[1], run_id=rec[0],
+                        started_at=rec[2], module_id=rec[3],
+                        records_written=rec[4] or 0,
+                    ))
+        except Exception:
+            continue
+    return rows
+
+
+def maintenance_metrics(cfg: Any, store_dir: str | None = None,
+                        limit: int = 50) -> list[dict]:
+    """Post-write maintenance (optimize/vacuum) durations.
+
+    Returns empty list when no maintenance ops have run yet —
+    which is the common case in development.
+    """
+    rows: list[dict] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    """
+                    SELECT run_id, module_id, optimize_ms, vacuum_ms,
+                           CAST(captured_at AS VARCHAR)
+                    FROM maintenance_metrics
+                    ORDER BY captured_at DESC LIMIT ?
+                    """,
+                    [limit],
+                )
+                for rec in cur.fetchall():
+                    rows.append({
+                        "run_id": rec[0], "module_id": rec[1],
+                        "optimize_ms": rec[2], "vacuum_ms": rec[3],
+                        "captured_at": rec[4],
+                    })
+        except Exception:
+            continue
     return rows
 
 

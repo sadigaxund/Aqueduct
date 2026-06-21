@@ -183,6 +183,7 @@ def _fleet_tab(cfg, store_dir):
                 labels={"value": "runs", "index": "", "variable": "status"},
             )
             fig.update_xaxes(tickangle=45, title=None)
+            fig.update_yaxes(dtick=1)
             fig.update_layout(legend=dict(orientation="h", y=1.02, x=0), height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
 
@@ -193,6 +194,7 @@ def _fleet_tab(cfg, store_dir):
                 x=list(dist.keys()), y=list(dist.values()),
                 labels={"x": "", "y": "count"},
             )
+            fig.update_yaxes(dtick=1)
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -205,6 +207,7 @@ def _fleet_tab(cfg, store_dir):
                 x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
             )
+            fig.update_yaxes(dtick=1)
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -277,8 +280,11 @@ def _runs_tab(handles):
         for r in fruns
     ])
     st.caption("Click a row to inspect detail")
+    nrows = len(df)
+    table_h = min(36 + 35 * nrows, 560) if nrows > 0 else None
     event = st.dataframe(
         _style(df), width="stretch", hide_index=True,
+        height=table_h,
         on_select="rerun", selection_mode="single-row", key="runs_table",
     )
     sel_rows = event.selection.rows if event and event.selection else []
@@ -326,8 +332,14 @@ def _runs_tab(handles):
                                 + ", ".join(f"`{c}`" for c in fc.suggested_columns))
                 st.code(fc.error_message or "(no message)", language="text")
                 if fc.stack_trace:
-                    with st.expander("stack trace"):
+                    with st.expander("Stack trace"):
                         st.code(fc.stack_trace, language="text")
+                if fc.manifest_json:
+                    with st.expander("Manifest"):
+                        st.json(fc.manifest_json)
+                if fc.provenance_json:
+                    with st.expander("Provenance"):
+                        st.json(fc.provenance_json)
             else:
                 for m in det.modules:
                     if m.error:
@@ -406,6 +418,7 @@ def _runs_tab(handles):
                 if len(rows_l) >= 2:
                     fig = px.line(df, x="run", y=cols, markers=True,
                                   title="Distinct count per column")
+                    fig.update_yaxes(dtick=1)
                     fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
                     st.plotly_chart(fig, width="stretch")
             elif sig_type == "schema_snapshot":
@@ -609,6 +622,14 @@ def _lineage_tab(handles):
             ], status_cols=("status",))
 
 
+def _fmt_dur(ms: int) -> str:
+    if ms < 1000:
+        return f"{ms}ms"
+    if ms < 60_000:
+        return f"{ms / 1000:.1f}s"
+    return f"{ms // 60_000}m {ms % 60_000 // 1000}s"
+
+
 def _performance_tab(handles):
     rows = []
     for h in handles:
@@ -643,31 +664,164 @@ def _performance_tab(handles):
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Modules profiled", f"{total:,}")
-    c2.metric("Avg duration", f"{avg_dur:,} ms")
+    c2.metric("Avg duration", f"{_fmt_dur(avg_dur)}")
     c3.metric("Total bytes read", f"{total_bytes:,}")
     c4.metric("Slowest module", slowest_label)
 
     top_n = df.nlargest(20, "duration_ms")
-    fig_bar = px.bar(top_n, x="duration_ms", y="module", color="blueprint",
-                     orientation="h", title="Slowest Modules (top 20 by duration)",
-                     labels={"duration_ms": "ms", "module": ""},
-                     height=400)
+    top_n["_dur_label"] = top_n["duration_ms"].apply(_fmt_dur)
+    fig_bar = px.bar(
+        top_n, x="duration_ms", y="module", color="blueprint",
+        orientation="h", title="Slowest Modules (top 20 by duration)",
+        labels={"duration_ms": "", "module": ""},
+        hover_data={"blueprint": True, "run": True, "duration_ms": False,
+                     "_dur_label": True, "records_read": True,
+                     "records_written": True},
+        height=400)
+    fig_bar.update_xaxes(title_text="duration")
+    fig_bar.update_traces(hovertemplate=
+        "<b>%{y}</b><br>" +
+        "blueprint: %{customdata[0]}<br>" +
+        "run: %{customdata[1]}<br>" +
+        "duration: %{customdata[2]}<br>" +
+        "records read: %{customdata[3]:,}<br>" +
+        "records written: %{customdata[4]:,}<extra></extra>")
     fig_bar.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+
+    max_dur = df["duration_ms"].max()
+    min_dur = df["duration_ms"].min()
+    ratio = max_dur / min_dur if min_dur else 1
+    log_on = False
+    if ratio > 100:
+        log_on = st.checkbox("Log scale", key="perf_log")
+
+    if log_on:
+        fig_bar.update_xaxes(type="log")
+
     st.plotly_chart(fig_bar, width="stretch")
 
-    has_io = df["bytes_read"].sum() > 0
-    if has_io and len(df) >= 3:
-        fig_scatter = px.scatter(
-            df, x="bytes_read", y="duration_ms", color="blueprint",
-            hover_data=["module", "run"],
-            title="Duration vs. Bytes Read",
-            labels={"bytes_read": "bytes read", "duration_ms": "duration (ms)"},
-            height=360)
-        fig_scatter.update_layout(margin=dict(l=8, r=8, t=32, b=8))
-        st.plotly_chart(fig_scatter, width="stretch")
+    fig_hist = px.histogram(
+        df, x="duration_ms", nbins=30, color="blueprint",
+        title="Duration Distribution",
+        labels={"duration_ms": "duration (ms)", "count": "modules"},
+        height=320)
+    if log_on:
+        fig_hist.update_xaxes(type="log")
+    fig_hist.update_yaxes(dtick=1)
+    fig_hist.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+    st.plotly_chart(fig_hist, width="stretch")
 
     st.caption("Recent module profiles (latest 5 runs per blueprint)")
     st.dataframe(_style(df), width="stretch", hide_index=True)
+
+
+def _quality_tab(cfg, store_dir):
+    st.markdown("**Assert Failures**")
+    af = q.assert_failures(cfg, store_dir=store_dir)
+    if af:
+        af_df = pd.DataFrame([
+            {"run": a.run_id[:8], "blueprint": a.blueprint_id,
+             "rule": a.error_type, "error": a.error_message[:120]}
+            for a in af
+        ])
+        _table(af_df.to_dict("records"), status_cols=())
+
+        if len(af) >= 2:
+            af_trend = pd.DataFrame([
+                {"run": a.run_id[:8], "blueprint": a.blueprint_id,
+                 "started": a.started_at[:19]}
+                for a in reversed(af)
+            ])
+            af_agg = af_trend.groupby(["run", "blueprint"]).size().reset_index(name="failures")
+            fig = px.line(af_agg, x="run", y="failures", color="blueprint",
+                          markers=True, title="Assert Failures Per Run",
+                          hover_data={"run": True, "blueprint": True, "failures": True})
+            fig.update_traces(hovertemplate=
+                "<b>%{x}</b><br>blueprint: %{customdata[0]}<br>failures: %{y}<extra></extra>")
+            fig.update_yaxes(dtick=1)
+            fig.update_layout(height=280, margin=dict(l=8, r=8, t=32, b=8))
+            st.plotly_chart(fig, width="stretch")
+    else:
+        st.caption("No assert failures recorded yet.")
+
+    st.markdown("**Spillway Volume**")
+    qv = q.quarantine_volumes(cfg, store_dir=store_dir)
+    qv_filt = [v for v in qv if any(k in v.module_id.lower()
+                                     for k in ("quarantine", "spill", "reject", "bad", "error"))]
+    if qv_filt:
+        qv_rows = sorted(qv_filt, key=lambda v: v.started_at)
+        qv_df = pd.DataFrame([
+            {"run": v.run_id[:8], "blueprint": v.blueprint_id,
+             "module": v.module_id, "spillway rows": v.records_written,
+             "started": v.started_at[:19]}
+            for v in qv_rows
+        ])
+        if len(qv_rows) >= 2:
+            max_r = max(v.records_written for v in qv_rows)
+            min_r = min(v.records_written for v in qv_rows)
+            ratio = max_r / min_r if min_r else 1
+            show_log = ratio > 100
+            if show_log:
+                log_on = st.checkbox("Log scale", key="spill_log")
+            fig = px.bar(qv_df, x="run", y="spillway rows", color="blueprint",
+                         title="Spillway Rows Per Run",
+                         labels={"spillway rows": "rows"})
+            fig.update_traces(hovertemplate=
+                "<b>%{x}</b><br>%{y} rows<extra></extra>")
+            if show_log and log_on:
+                fig.update_yaxes(type="log")
+            else:
+                fig.update_yaxes(dtick=1)
+            fig.update_layout(height=280, margin=dict(l=8, r=8, t=32, b=8))
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.metric("Spillway rows", qv_rows[0].records_written)
+        with st.expander("Detail"):
+            st.dataframe(_style(qv_df), width="stretch", hide_index=True)
+    else:
+        st.caption("No spillway rows recorded yet.")
+
+    st.markdown("**Null-Rate Trends**")
+    bps = sorted({
+        h.label for h in q.discover_stores(cfg, store_dir=store_dir)
+    })
+    if bps:
+        c_bp, c_col = st.columns([1, 1])
+        pick = c_bp.selectbox("Blueprint", bps, key="quality_bp")
+        handle = next(
+            (h for h in q.discover_stores(cfg, store_dir=store_dir)
+             if h.label == pick), None)
+        if handle:
+            sigs = q.probe_signals(handle.store, pick, "null_rates", limit=30)
+            if sigs:
+                cols = sorted({c for s in sigs
+                               for c in (s.payload.get("null_rates") or {})})
+                col = c_col.selectbox("Column", cols, key="quality_null_col")
+                vals = [
+                    (s.started_at[:19], s.payload.get("null_rates", {}).get(col))
+                    for s in reversed(sigs)
+                ]
+                ndf = pd.DataFrame(vals, columns=["run", f"null_rate_{col}"])
+                st.dataframe(ndf, width="stretch", hide_index=True)
+                if len(vals) >= 2:
+                    fig = px.line(ndf, x="run", y=f"null_rate_{col}", markers=True,
+                                  title=f"Null Rate — {col}",
+                                  hover_data={"run": True, f"null_rate_{col}": ":.4%"})
+                    fig.update_traces(hovertemplate=
+                        "<b>%{x}</b><br>null rate: %{y:.4%}<extra></extra>")
+                    fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            else:
+                st.caption("No null-rate probe signals for this blueprint.")
+    else:
+        st.caption("No blueprints found.")
+
+    st.markdown("**Maintenance**")
+    maint = q.maintenance_metrics(cfg, store_dir=store_dir)
+    if maint:
+        st.dataframe(pd.DataFrame(maint), width="stretch", hide_index=True)
+    else:
+        st.caption("No maintenance ops recorded yet (vacuum/optimize).")
 
 
 def _heal_tab(cfg, store_dir):
@@ -709,6 +863,7 @@ def _heal_tab(cfg, store_dir):
                 x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
             )
+            fig.update_yaxes(dtick=1)
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=300, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -808,12 +963,14 @@ def main() -> None:
     st.caption(f"observability backend: **{backend}** · read-only viewer · F5 to refresh")
     handles = q.discover_stores(cfg, store_dir=store_dir)
 
-    fleet, runs, lineage, healing, performance, doctor, config = st.tabs(
-        ["Fleet", "Runs", "Lineage", "Healing", "Performance", "Doctor", "Config"])
+    fleet, runs, quality, lineage, healing, performance, doctor, config = st.tabs(
+        ["Fleet", "Runs", "Quality", "Lineage", "Healing", "Performance", "Doctor", "Config"])
     with fleet:
         _fleet_tab(cfg, store_dir)
     with runs:
         _runs_tab(handles)
+    with quality:
+        _quality_tab(cfg, store_dir)
     with lineage:
         _lineage_tab(handles)
     with healing:
