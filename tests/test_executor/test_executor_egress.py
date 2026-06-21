@@ -19,7 +19,7 @@ def test_egress_unsupported_format(spark: SparkSession):
 def test_egress_missing_path(spark: SparkSession):
     df = spark.range(1)
     module = Module(id="m1", type="Egress", label="M1", config={"format": "parquet"})
-    with pytest.raises(EgressError, match="'path' is required"):
+    with pytest.raises(EgressError, match="'path' or 'table' is required"):
         write_egress(df, module)
 
 

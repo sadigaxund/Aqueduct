@@ -296,7 +296,28 @@ def _write_overwrite_partitions(
 
     try:
         if table:
-            writer.saveAsTable(table)
+            if replace_where:
+                # Delta replaceWhere — atomic predicate overwrite on a catalog table.
+                writer.saveAsTable(table)
+            else:
+                # Dynamic partition overwrite on an existing catalog table.
+                # saveAsTable(mode=overwrite) would truncate the WHOLE table, and the
+                # per-writer partitionOverwriteMode option is NOT honoured by
+                # insertInto — only the SESSION conf is. Set it around the write so
+                # insertInto replaces only the partitions present in df. insertInto is
+                # POSITIONAL and uses the table's declared partitioning (no partitionBy).
+                spark = df.sparkSession
+                _prev = spark.conf.get("spark.sql.sources.partitionOverwriteMode", "STATIC")
+                spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+                try:
+                    ins = df.write.format(fmt).mode("overwrite")
+                    if cfg.get("merge_schema") or force_merge_schema:
+                        ins = ins.option("mergeSchema", "true")
+                    for key, value in cfg.get("options", {}).items():
+                        ins = ins.option(str(key), str(value))
+                    ins.insertInto(table, overwrite=True)
+                finally:
+                    spark.conf.set("spark.sql.sources.partitionOverwriteMode", _prev)
         else:
             writer.save(path)
     except Exception as exc:

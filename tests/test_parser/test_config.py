@@ -285,27 +285,27 @@ def test_target_kubernetes_wrong_master_url_raises(tmp_path):
         load_config(path)
 
 
-def test_target_databricks_raises_phase64(tmp_path):
-    """databricks target raises ConfigError with Phase 64 pointer"""
+def test_target_databricks_requires_block(tmp_path):
+    """databricks is now an implemented remote-submit target; without its config block it errors."""
     path = tmp_path / "cfg.yml"
     path.write_text("deployment:\n  target: databricks\n  master_url: local[*]")
-    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+    with pytest.raises(ConfigError, match="requires the deployment.databricks block"):
         load_config(path)
 
 
-def test_target_emr_raises_phase64(tmp_path):
-    """emr target raises ConfigError with Phase 64 pointer"""
+def test_target_emr_raises(tmp_path):
+    """emr target is not yet supported → ConfigError"""
     path = tmp_path / "cfg.yml"
     path.write_text("deployment:\n  target: emr\n  master_url: local[*]")
-    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+    with pytest.raises(ConfigError, match="not yet supported"):
         load_config(path)
 
 
-def test_target_dataproc_raises_phase64(tmp_path):
-    """dataproc target raises ConfigError with Phase 64 pointer"""
+def test_target_dataproc_raises(tmp_path):
+    """dataproc target is not yet supported → ConfigError"""
     path = tmp_path / "cfg.yml"
     path.write_text("deployment:\n  target: dataproc\n  master_url: local[*]")
-    with pytest.raises(ConfigError, match="not yet supported.*Phase 64"):
+    with pytest.raises(ConfigError, match="not yet supported"):
         load_config(path)
 
 

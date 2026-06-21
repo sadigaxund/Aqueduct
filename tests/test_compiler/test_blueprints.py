@@ -365,10 +365,12 @@ name: "Table round trip"
 modules:
   - id: src
     type: Ingress
+    label: Src
     config:
       table: _aq_bp_test_src_tbl
   - id: sink
     type: Egress
+    label: Sink
     config:
       format: parquet
       table: _aq_bp_test_out
@@ -379,7 +381,7 @@ edges:
 """)
     bp = parse(str(bp_path))
     manifest = _compile(bp, bp_path)
-    result = _exec(manifest, spark, store_dir=str(tmp_path / "store"))
+    result = _exec(manifest, spark, store_dir=tmp_path / "store")
     assert result.status == "success", result.module_results
 
     check = spark.read.table("_aq_bp_test_out")
@@ -400,12 +402,14 @@ name: "mutual exclusivity"
 modules:
   - id: src
     type: Ingress
+    label: Src
     config:
       table: t
       path: /p
       format: parquet
   - id: sink
     type: Egress
+    label: Sink
     config:
       format: parquet
       path: /out
@@ -417,32 +421,11 @@ edges:
     bp = parse(str(bp_path))
     from aqueduct.compiler.compiler import compile as compiler_compile
     manifest = compiler_compile(bp, blueprint_path=bp_path)
-    with pytest.raises(Exception, match="mutually exclusive"):
-        _exec(manifest, spark, store_dir=str(tmp_path / "store"))
-
-    # Egress side mutual exclusivity
-    bp_path2 = tmp_path / "bp_mutex2.yml"
-    bp_path2.write_text(f"""aqueduct: "1.0"
-id: table_test.mutex2
-name: "mutual exclusivity"
-modules:
-  - id: src
-    type: Ingress
-    config:
-      format: parquet
-      path: /foo
-  - id: sink
-    type: Egress
-    config:
-      format: parquet
-      table: t
-      path: /out
-      mode: overwrite
-edges:
-  - from: src
-    to: sink
-""")
-    bp2 = parse(str(bp_path2))
-    manifest2 = compiler_compile(bp2, blueprint_path=bp_path2)
-    with pytest.raises(Exception, match="mutually exclusive"):
-        _exec(manifest2, spark, store_dir=str(tmp_path / "store"))
+    # The executor captures module failures into the ExecutionResult (it does not
+    # propagate). The mutex error surfaces as a failed module with the message.
+    result = _exec(manifest, spark, store_dir=tmp_path / "store")
+    assert result.status == "error"
+    assert any("mutually exclusive" in (m.error or "") for m in result.module_results)
+    # Egress-side mutual exclusivity is covered directly in
+    # tests/test_executor/test_executor_egress.py (a pipeline check here would need a
+    # valid upstream source, since a failing Ingress short-circuits the Egress).

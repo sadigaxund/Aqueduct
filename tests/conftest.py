@@ -1,10 +1,18 @@
 import os
+import tempfile
 import pytest
 
 try:
     from pyspark.sql import SparkSession
 except ImportError:
     SparkSession = None  # type: ignore[assignment,misc]
+
+# `spark.sql.warehouse.dir` is a STATIC conf — it binds at the FIRST SparkSession
+# created in the process and is a no-op on every getOrCreate after. The health
+# probe below builds that first session, so the warehouse must be pinned HERE (and
+# reused by the `spark` fixture); otherwise managed tables (saveAsTable) land in
+# the repo's cwd `spark-warehouse/` and collide run-over-run.
+_SPARK_WAREHOUSE = tempfile.mkdtemp(prefix="aq_test_warehouse_")
 
 # Signals short-lived CLI commands (`aqueduct test` / `doctor`) NOT to call
 # SparkSession.stop() — under pytest make_spark_session().getOrCreate() returns
@@ -131,7 +139,11 @@ def _spark_is_healthy():
     if SparkSession is None:
         return False
     try:
-        spark = SparkSession.builder.master(_spark_master()).getOrCreate()
+        spark = (
+            SparkSession.builder.master(_spark_master())
+            .config("spark.sql.warehouse.dir", _SPARK_WAREHOUSE)
+            .getOrCreate()
+        )
         spark.range(1).count()
         return True
     except Exception:
@@ -168,7 +180,7 @@ def spark(tmp_path_factory) -> SparkSession:
     session = make_spark_session(
         blueprint_id="aqueduct-tests",
         spark_config={
-            "spark.sql.warehouse.dir": str(scratch / "warehouse"),
+            "spark.sql.warehouse.dir": _SPARK_WAREHOUSE,  # matches the health-probe session (static conf)
             "spark.local.dir": str(scratch / "local"),
             "javax.jdo.option.ConnectionURL": "jdbc:derby:memory:aqueduct_test_metastore;create=true",
             "derby.stream.error.file": str(scratch / "derby.log"),
