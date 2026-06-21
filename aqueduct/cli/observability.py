@@ -280,38 +280,38 @@ def _report_trend(
         from datetime import datetime, timedelta, timezone
         since = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat()
 
-    # Long-form unroll: null_rates map and schema_snapshot fields → one row per
-    # (run_id, column, captured_at). DuckDB json_each explodes the payload; no
-    # view is materialised, so nothing is duplicated on disk.
-    null_q = """
-        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
-               CAST(je.value AS DOUBLE) AS null_rate
-        FROM probe_signals ps,
-             json_each(json_extract(ps.payload, '$.null_rates')) je
-        WHERE ps.signal_type = 'null_rates'
-          AND je.key = ?
-          AND ps.captured_at >= ?
-        ORDER BY ps.captured_at
-    """
-    type_q = """
-        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
-               json_extract_string(f.value, '$.type') AS col_type
-        FROM probe_signals ps,
-             json_each(json_extract(ps.payload, '$.fields')) f
-        WHERE ps.signal_type = 'schema_snapshot'
-          AND json_extract_string(f.value, '$.name') = ?
-          AND ps.captured_at >= ?
-        ORDER BY ps.captured_at
+    # Fetch the raw probe payloads (portable SQL — no `json_each`/`json_extract`,
+    # which are DuckDB-only) and explode the JSON in Python so this works
+    # identically on DuckDB and Postgres. `payload` is a str on DuckDB and an
+    # already-parsed dict via psycopg2 on Postgres — handle both.
+    payload_q = """
+        SELECT run_id, CAST(captured_at AS VARCHAR) AS ts, signal_type, payload
+        FROM probe_signals
+        WHERE signal_type IN ('null_rates', 'schema_snapshot')
+          AND captured_at >= ?
+        ORDER BY captured_at
     """
     try:
         with store.connect() as cur:
-            cur.execute(null_q, [column, since])
-            null_rows = cur.fetchall()
-            cur.execute(type_q, [column, since])
-            type_rows = cur.fetchall()
+            cur.execute(payload_q, [since])
+            _raw = cur.fetchall()
     except Exception as exc:
         click.echo(f"✗ trend query failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+    null_rows: list[tuple] = []
+    type_rows: list[tuple] = []
+    for run_id, ts, sig_type, payload in _raw:
+        data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        if sig_type == "null_rates":
+            nr = (data.get("null_rates") or {}).get(column)
+            if nr is not None:
+                null_rows.append((run_id, ts, float(nr)))
+        elif sig_type == "schema_snapshot":
+            for f in data.get("fields", []):
+                if f.get("name") == column:
+                    type_rows.append((run_id, ts, f.get("type")))
+                    break
 
     if not null_rows and not type_rows:
         click.echo(

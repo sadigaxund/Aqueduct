@@ -781,38 +781,114 @@ def _quality_tab(cfg, store_dir):
     else:
         st.caption("No spillway rows recorded yet.")
 
-    st.markdown("**Null-Rate Trends**")
+    st.markdown("**Probe Signals**")
     bps = sorted({
         h.label for h in q.discover_stores(cfg, store_dir=store_dir)
     })
     if bps:
-        c_bp, c_col = st.columns([1, 1])
-        pick = c_bp.selectbox("Blueprint", bps, key="quality_bp")
+        c_bp, c_sig = st.columns([1, 1])
+        pick = c_bp.selectbox("Blueprint", bps, key="quality_probe_bp")
+        sig_type = c_sig.selectbox(
+            "Signal type", list(q.PROBE_METRIC_LABELS),
+            format_func=lambda k: q.PROBE_METRIC_LABELS[k],
+            key="quality_probe_sig")
         handle = next(
             (h for h in q.discover_stores(cfg, store_dir=store_dir)
              if h.label == pick), None)
-        if handle:
-            sigs = q.probe_signals(handle.store, pick, "null_rates", limit=30)
-            if sigs:
-                cols = sorted({c for s in sigs
-                               for c in (s.payload.get("null_rates") or {})})
-                col = c_col.selectbox("Column", cols, key="quality_null_col")
-                vals = [
-                    (s.started_at[:19], s.payload.get("null_rates", {}).get(col))
-                    for s in reversed(sigs)
-                ]
-                ndf = pd.DataFrame(vals, columns=["run", f"null_rate_{col}"])
-                st.dataframe(ndf, width="stretch", hide_index=True)
-                if len(vals) >= 2:
-                    fig = px.line(ndf, x="run", y=f"null_rate_{col}", markers=True,
-                                  title=f"Null Rate — {col}",
-                                  hover_data={"run": True, f"null_rate_{col}": ":.4%"})
-                    fig.update_traces(hovertemplate=
-                        "<b>%{x}</b><br>null rate: %{y:.4%}<extra></extra>")
-                    fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
-                    st.plotly_chart(fig, width="stretch")
-            else:
-                st.caption("No null-rate probe signals for this blueprint.")
+
+        if not handle:
+            st.caption("Store not found.")
+            return
+
+        sigs = q.probe_signals(handle.store, pick, sig_type, limit=30)
+        if not sigs:
+            st.caption(f"No {q.PROBE_METRIC_LABELS[sig_type].lower()} signals for this blueprint.")
+            return
+
+        if sig_type == "null_rates":
+            cols = sorted({c for s in sigs
+                           for c in (s.payload.get("null_rates") or {})})
+            if not cols:
+                st.caption("No columns in null-rate payload.")
+                return
+            col = st.selectbox("Column", cols, key="quality_null_col")
+            vals = [
+                (s.run_id[:8], s.started_at[:19],
+                 s.payload.get("null_rates", {}).get(col))
+                for s in reversed(sigs)
+            ]
+            ndf = pd.DataFrame(vals, columns=["run", "started", f"null_rate_{col}"])
+            st.dataframe(ndf, width="stretch", hide_index=True)
+            if len(vals) >= 2:
+                fig = px.line(ndf, x="run", y=f"null_rate_{col}", markers=True,
+                              title=f"Null Rate — {col}",
+                              hover_name="run",
+                              hover_data={"started": True, f"null_rate_{col}": ":.4%"})
+                fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                st.plotly_chart(fig, width="stretch")
+
+        elif sig_type == "value_distribution":
+            cols = sorted({c for s in sigs
+                           for c in (s.payload.get("stats") or {})})
+            if not cols:
+                st.caption("No columns in value-distribution payload.")
+                return
+            c_col, c_stat = st.columns([1, 1])
+            col = c_col.selectbox("Column", cols, key="quality_vd_col")
+            stat_key = c_stat.selectbox("Statistic", ["min", "max", "mean", "stddev"],
+                                        key="quality_vd_stat")
+            vals = []
+            for s in reversed(sigs):
+                st_ = (s.payload.get("stats") or {}).get(col, {})
+                vals.append((s.run_id[:8], s.started_at[:19],
+                             st_.get(stat_key)))
+            df = pd.DataFrame(vals, columns=["run", "started", stat_key])
+            st.dataframe(df, width="stretch", hide_index=True)
+            if len(vals) >= 2:
+                fig = px.line(df, x="run", y=stat_key, markers=True,
+                              title=f"{stat_key} — {col}",
+                              hover_name="run",
+                              hover_data={"started": True, stat_key: ":.2f"})
+                fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                st.plotly_chart(fig, width="stretch")
+
+        elif sig_type == "distinct_count":
+            cols = sorted({c for s in sigs
+                           for c in (s.payload.get("distinct_counts") or {})})
+            if not cols:
+                st.caption("No columns in distinct-count payload.")
+                return
+            rows_l = []
+            for s in reversed(sigs):
+                dc = s.payload.get("distinct_counts") or {}
+                rows_l.append({"run": s.run_id[:8], "started": s.started_at[:19],
+                               **dc})
+            df = pd.DataFrame(rows_l)
+            st.dataframe(_style(df), width="stretch", hide_index=True)
+            if len(rows_l) >= 2:
+                fig = px.line(df, x="run", y=cols, markers=True,
+                              title="Distinct count per column",
+                              hover_name="run",
+                              hover_data={"started": True})
+                fig.update_yaxes(dtick=1)
+                fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                st.plotly_chart(fig, width="stretch")
+
+        elif sig_type == "schema_snapshot":
+            prev: dict[str, str] = {}
+            for s in sigs:
+                fields = {f["name"]: f["type"]
+                          for f in (s.payload.get("fields") or [])}
+                changed = {c: (prev[c], fields[c]) for c in fields
+                           if c in prev and prev[c] != fields[c]}
+                prev = fields
+            rows_l = []
+            for s in reversed(sigs):
+                fields = s.payload.get("fields") or []
+                rows_l.append({"run": s.run_id[:8], "started": s.started_at[:19],
+                               **{f["name"]: f["type"] for f in fields}})
+            df = pd.DataFrame(rows_l)
+            st.dataframe(df, width="stretch", hide_index=True)
     else:
         st.caption("No blueprints found.")
 
