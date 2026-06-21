@@ -645,6 +645,35 @@ def heal_attempt_details(cfg: Any, store_dir: str | None = None,
     return out
 
 
+def drift_events(store: Any, blueprint_id: str) -> list[dict[str, Any]]:
+    """Drift-check timeline for a single blueprint, ordered by check time."""
+    rows: list[dict[str, Any]] = []
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT id, checked_at, status, baseline_schema, live_schema,
+                       breaking_changes, benign_changes, patch_id
+                FROM drift_checks
+                WHERE blueprint_id = ?
+                ORDER BY checked_at
+                """,
+                [blueprint_id],
+            )
+            cols = [d[0] for d in cur.description]
+            for row in cur.fetchall():
+                d = dict(zip(cols, row))
+                d["checked_at"] = str(d["checked_at"]) if d.get("checked_at") else ""
+                d["breaking_changes"] = json.loads(d["breaking_changes"]) if d.get("breaking_changes") else []
+                d["benign_changes"] = json.loads(d["benign_changes"]) if d.get("benign_changes") else []
+                d["baseline_schema"] = json.loads(d["baseline_schema"]) if d.get("baseline_schema") else {}
+                d["live_schema"] = json.loads(d["live_schema"]) if d.get("live_schema") else {}
+                rows.append(d)
+    except Exception:
+        return []
+    return rows
+
+
 def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     """Gate rejection counts across fleet (from patch_simulation or heal_attempts)."""
     agg: dict[str, int] = {}

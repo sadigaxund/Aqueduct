@@ -489,7 +489,7 @@ def _lineage_tab(handles):
     if has_fp:
         fps = q.channel_fingerprints(handle.store, handle.label)
         st.divider()
-        st.caption("SQL changelog per channel  ·  click to expand SQL / diff")
+        st.markdown("**SQL changelog** · click to expand")
         import difflib as _dl
         from collections import defaultdict as _dd
         by_ch: dict[str, list] = _dd(list)
@@ -520,6 +520,93 @@ def _lineage_tab(handles):
                     if diff_text:
                         st.caption(f"diff v{num - 1} → v{num}")
                         st.code(diff_text, language="diff")
+
+    # ── Drift timeline ──────────────────────────────────────────────────
+    drift = q.drift_events(handle.store, handle.label)
+    if drift:
+        st.divider()
+        st.markdown("**Schema drift** · click to expand")
+        with st.expander(f"Timeline ({len(drift)} check{'s' if len(drift) > 1 else ''})"):
+            fig = go.Figure()
+            st_colors = {
+                "baseline_set": "#4C78A8",
+                "no_drift": "#54A24B",
+                "drift_benign": "#F58518",
+                "drift_breaking": "#E45756",
+            }
+            xs = [ev["checked_at"] for ev in drift]
+            # Dashed connector line
+            fig.add_trace(go.Scatter(
+                x=xs, y=[0] * len(xs),
+                mode="lines", line=dict(dash="dash", color="#aaa", width=1.5),
+                hoverinfo="skip", showlegend=False,
+            ))
+            # Markers with concise labels + rich hover
+            marker_colors, marker_sizes, text_labels, hover_texts = [], [], [], []
+            for ev in drift:
+                cls = st_colors.get(ev["status"], "#999")
+                marker_colors.append(cls)
+                marker_sizes.append(16)
+                if ev["status"] == "baseline_set":
+                    text_labels.append(f"{len(ev['live_schema'])} cols")
+                elif ev["status"] == "no_drift":
+                    text_labels.append("✓")
+                elif ev["status"] == "drift_benign":
+                    names = [c["column"] for c in ev.get("benign_changes", [])]
+                    text_labels.append(f"+{', '.join(names)}" if names else "benign")
+                elif ev["status"] == "drift_breaking":
+                    names = [c["column"] for c in ev.get("breaking_changes", [])]
+                    text_labels.append(f"-{', '.join(names)}" if names else "breaking")
+                else:
+                    text_labels.append(ev["status"])
+
+                h = f"<b>{ev['status']}</b><br>{ev['checked_at'][:19]}<br>"
+                h += "<b>Schema:</b> " + ", ".join(
+                    f"{k}: {v}" for k, v in ev.get("live_schema", {}).items()
+                ) + "<br>"
+                for c in ev.get("breaking_changes", []):
+                    h += f"<span style='color:#E45756'>BREAKING:</span> {c['column']} dropped (was {c.get('baseline_type', '?')})<br>"
+                for c in ev.get("benign_changes", []):
+                    h += f"<span style='color:#F58518'>benign:</span> {c['column']} added ({c.get('live_type', '')})<br>"
+                if ev.get("patch_id"):
+                    h += f"<b>patch:</b> {ev['patch_id']}<br>"
+                hover_texts.append(h)
+
+            fig.add_trace(go.Scatter(
+                x=xs, y=[0] * len(xs),
+                mode="markers+text",
+                marker=dict(size=marker_sizes, color=marker_colors,
+                            line=dict(width=1.5, color="white")),
+                text=text_labels, textposition="top center",
+                hovertext=hover_texts, hoverinfo="text",
+                showlegend=False,
+            ))
+            fig.update_layout(
+                height=200, showlegend=False,
+                margin=dict(l=8, r=8, t=8, b=8),
+                yaxis=dict(visible=False, range=[-1.5, 1.5]),
+                xaxis=dict(title=""),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+            # Detail table
+            _table([
+                {
+                    "time": ev["checked_at"][:19].replace("T", " "),
+                    "status": ev["status"],
+                    "live_schema": ", ".join(f"{k}: {v}" for k, v in ev.get("live_schema", {}).items()),
+                    "breaking": "; ".join(
+                        f"{c['column']} ({c['kind']}{', was ' + c['baseline_type'] if c.get('baseline_type') else ''})"
+                        for c in ev.get("breaking_changes", [])
+                    ) or "\u2014",
+                    "benign": "; ".join(
+                        f"{c['column']} ({c['kind']}: {c.get('live_type', '')})"
+                        for c in ev.get("benign_changes", [])
+                    ) or "\u2014",
+                    "patch": ev.get("patch_id") or "\u2014",
+                }
+                for ev in drift
+            ], status_cols=("status",))
 
 
 def _heal_tab(cfg, store_dir):
