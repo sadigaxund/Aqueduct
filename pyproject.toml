@@ -102,7 +102,7 @@ dev = [
 # documented carve-out in AGENTS.md "Packaging & Extras Policy". Both are local,
 # read-only, on-demand dev tools (like the Spark UI) — never required at runtime.
 tui = ["textual>=0.50"]
-dashboard = ["streamlit>=1.30", "plotly>=5.18"]
+dashboard = ["streamlit>=1.50", "plotly>=5.18"]
 
 [project.urls]
 Homepage = "https://github.com/sadigaxund/Aqueduct"
