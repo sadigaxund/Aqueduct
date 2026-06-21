@@ -310,6 +310,31 @@ def _runs_tab(handles):
     ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
                 "records_read": "{:,}", "bytes_read": "{:,}"})
 
+    # ── Full failure detail (the table cell only previews the error) ──────
+    if run.status == "error" or any(m.status == "error" for m in det.modules):
+        with st.expander("Failure detail", expanded=True):
+            fc = q.failure_context(owner.store, run.run_id)
+            if fc is not None:
+                head = f"**module** `{fc.failed_module}`"
+                if fc.error_class:
+                    head += f"  ·  **{fc.error_class}**"
+                if fc.object_name:
+                    head += f"  ·  object `{fc.object_name}`"
+                st.markdown(head)
+                if fc.suggested_columns:
+                    st.markdown("**suggested columns:** "
+                                + ", ".join(f"`{c}`" for c in fc.suggested_columns))
+                st.code(fc.error_message or "(no message)", language="text")
+                if fc.stack_trace:
+                    with st.expander("stack trace"):
+                        st.code(fc.stack_trace, language="text")
+            else:
+                # No structured failure_contexts row → show full module errors.
+                for m in det.modules:
+                    if m.error:
+                        st.markdown(f"**`{m.module_id}`**")
+                        st.code(m.error, language="text")
+
     # ── Module metric trend ──────────────────────────────────────────────
     mod_ids = sorted({p.module_id for p in det.profile})
     tc1, tc2 = st.columns([2, 3])

@@ -271,6 +271,43 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
     return RunDetail(run, modules, profile)
 
 
+@dataclass(frozen=True)
+class FailureContext:
+    failed_module: str
+    error_message: str
+    error_class: str | None
+    object_name: str | None
+    suggested_columns: list
+    stack_trace: str | None
+
+
+def failure_context(store: Any, run_id: str) -> "FailureContext | None":
+    """Full structured failure for a run (None if absent). The engine stores the
+    complete error here — the Runs table only shows a preview."""
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT failed_module, error_message, error_class, object_name,
+                       suggested_columns, stack_trace
+                FROM failure_contexts WHERE run_id = ?
+                """,
+                [run_id],
+            )
+            row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    sc = row[4]
+    if isinstance(sc, str):
+        try:
+            sc = json.loads(sc)
+        except Exception:
+            sc = []
+    return FailureContext(row[0] or "", row[1] or "", row[2], row[3], list(sc or []), row[5])
+
+
 def lineage(store: Any, blueprint_id: str | None = None,
             run_id: str | None = None, limit: int = 500) -> list[LineageRow]:
     """Column-level lineage rows (empty if the table is absent)."""
