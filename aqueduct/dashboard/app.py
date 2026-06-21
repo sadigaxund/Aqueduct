@@ -60,6 +60,9 @@ _COL_WIDTH: dict[str, str] = {
     "source_column": "140px",
     "check": "200px",
     "key": "200px",
+    "fingerprint": "100px",
+    "first seen": "180px",
+    "last seen": "180px",
 }
 
 
@@ -261,7 +264,7 @@ def _runs_tab(handles):
     owner = fowners[sel_rows[0]]
 
     st.divider()
-    st.markdown(f"### Run `{run.run_id}`  ·  {run.blueprint_id}")
+    st.markdown(f"### `{run.run_id}`  ·  {run.blueprint_id}")
     det = q.run_detail(owner.store, run.run_id)
     if det is None:
         return
@@ -282,60 +285,124 @@ def _runs_tab(handles):
     ], formats={"duration_ms": "{:,}", "rows_out": "{:,}", "bytes_out": "{:,}",
                 "records_read": "{:,}", "bytes_read": "{:,}"})
 
+    # ── Module duration trend ────────────────────────────────────────────
+    mod_ids = sorted({p.module_id for p in det.profile})
+    trend_mod = st.selectbox("Module duration trend", mod_ids, key="trend_mod")
+    trend = q.module_trends(owner.store, run.blueprint_id, trend_mod)
+    if len(trend) >= 2:
+        trend_df = pd.DataFrame([
+            {"run": t.run_id[:8], "started": t.started_at[:19] if t.started_at else "?",
+             "duration_ms": t.duration_ms or 0}
+            for t in reversed(trend)
+        ])
+        import plotly.express as px
+        fig = px.line(trend_df, x="started", y="duration_ms",
+                      title=f"{trend_mod} duration across recent runs",
+                      markers=True)
+        fig.update_layout(xaxis_title=None, height=280, margin=dict(l=8, r=8, t=32, b=8))
+        st.plotly_chart(fig, width="stretch")
+    elif trend:
+        st.caption(f"Only one data point for {trend_mod} — need ≥2 runs with profile data.")
+    else:
+        st.caption(f"No trend data for {trend_mod}.")
+
 
 def _lineage_tab(handles):
     if not handles:
         st.info("No observability stores found yet.")
         return
-    # Lineage is inherently per-blueprint → inline picker of stores that HAVE it.
-    options = []
+    # Pick a blueprint from all stores that have lineage OR fingerprint data.
+    scored = []
     for h in handles:
-        try:
-            if q.lineage(h.store, limit=1):
-                options.append(h)
-        except Exception:
-            continue
-    if not options:
-        st.info("No column-lineage captured yet (needs a SQL Channel).")
+        has_col = q.lineage(h.store, limit=1) != []
+        has_fp = q.channel_fingerprints(h.store, h.label) != []
+        if has_col or has_fp:
+            scored.append((h, has_col, has_fp))
+    if not scored:
+        st.info("No column-lineage or SQL fingerprint data yet (needs a SQL Channel).")
         return
-    labels = [h.label for h in options]
+    labels = [f"{h.label}  [col-lineage]" if c and not f else
+              f"{h.label}  [sql-changelog]" if f and not c else
+              f"{h.label}  [col-lineage + sql-changelog]" if c and f else
+              h.label
+              for h, c, f in scored]
     pick = st.selectbox("Blueprint", labels)
-    handle = options[labels.index(pick)]
-    rows = q.lineage(handle.store)
+    handle, has_col, has_fp = scored[labels.index(pick)]
 
     import plotly.graph_objects as go
 
-    labels_n: list[str] = []
-    colors: list[str] = []
-    src_idx: dict[str, int] = {}
-    dst_idx: dict[str, int] = {}
+    if has_col:
+        # Only the latest run's lineage — each run appends its own set.
+        latest = q.list_runs(handle.store, blueprint_id=handle.label, limit=1)
+        lp_run = latest[0].run_id if latest else None
+        rows = q.lineage(handle.store, run_id=lp_run) if lp_run else []
 
-    def node(name, is_src):
-        cache = src_idx if is_src else dst_idx
-        if name not in cache:
-            cache[name] = len(labels_n)
-            labels_n.append(name)
-            colors.append("#4C78A8" if is_src else "#54A24B")
-        return cache[name]
+        labels_n: list[str] = []
+        colors: list[str] = []
+        src_idx: dict[str, int] = {}
+        dst_idx: dict[str, int] = {}
 
-    s, t = [], []
-    for r in rows:
-        src = f"{r.source_table}.{r.source_column}" if r.source_table else r.source_column
-        s.append(node(src, True))
-        t.append(node(r.output_column, False))
-    fig = go.Figure(go.Sankey(
-        arrangement="snap",
-        node=dict(label=labels_n, color=colors, pad=20, thickness=16,
-                  line=dict(width=0), hovertemplate="%{label}<extra></extra>"),
-        link=dict(source=s, target=t, value=[1] * len(s), color="rgba(130,130,130,0.3)",
-                  hovertemplate="%{source.label} → %{target.label}<extra></extra>"),
-    ))
-    fig.update_layout(height=min(max(260, 28 * max(len(src_idx), len(dst_idx))), 800),
-                      margin=dict(l=8, r=8, t=8, b=8), font=dict(size=13))
-    st.plotly_chart(fig, width="stretch")
-    _table([{"channel": r.channel_id, "output": r.output_column,
-             "source_table": r.source_table, "source_column": r.source_column} for r in rows],
-           status_cols=())
+        def node(name, is_src):
+            cache = src_idx if is_src else dst_idx
+            if name not in cache:
+                cache[name] = len(labels_n)
+                labels_n.append(name)
+                colors.append("#4C78A8" if is_src else "#54A24B")
+            return cache[name]
+
+        s, t = [], []
+        for r in rows:
+            src = f"{r.source_table}.{r.source_column}" if r.source_table else r.source_column
+            s.append(node(src, True))
+            t.append(node(r.output_column, False))
+        fig = go.Figure(go.Sankey(
+            arrangement="snap",
+            node=dict(label=labels_n, color=colors, pad=20, thickness=16,
+                      line=dict(width=0), hovertemplate="%{label}<extra></extra>"),
+            link=dict(source=s, target=t, value=[1] * len(s), color="rgba(130,130,130,0.3)",
+                      hovertemplate="%{source.label} → %{target.label}<extra></extra>"),
+        ))
+        fig.update_layout(height=min(max(260, 28 * max(len(src_idx), len(dst_idx))), 800),
+                          margin=dict(l=8, r=8, t=8, b=8), font=dict(size=13))
+        st.plotly_chart(fig, width="stretch")
+        _table([{"channel": r.channel_id, "output": r.output_column,
+                 "source_table": r.source_table, "source_column": r.source_column} for r in rows],
+               status_cols=())
+
+    if has_fp:
+        fps = q.channel_fingerprints(handle.store, handle.label)
+        st.divider()
+        st.caption("SQL changelog per channel  ·  click to expand SQL / diff")
+        import difflib as _dl
+        from collections import defaultdict as _dd
+        by_ch: dict[str, list] = _dd(list)
+        for f in fps:
+            by_ch[f.channel_id].append(f)
+        for ch in sorted(by_ch):
+            versions = sorted(by_ch[ch], key=lambda x: x.first_seen)
+            # Build diff pairs so each version shows the diff from its predecessor
+            pairs: list[tuple] = []
+            for i, v in enumerate(versions):
+                diff_text = ""
+                if i > 0:
+                    prev = versions[i - 1]
+                    diff_text = "\n".join(_dl.unified_diff(
+                        prev.canonical_sql.splitlines(),
+                        v.canonical_sql.splitlines(),
+                        fromfile=f"v{i}",
+                        tofile=f"v{i + 1}",
+                        lineterm="",
+                    ))
+                pairs.append((v, diff_text, i + 1))
+            label = f"{ch}  —  {len(versions)} version{'s' if len(versions) > 1 else ''}"
+            with st.expander(label):
+                for v, diff_text, num in reversed(pairs):
+                    st.caption(f"v{num}")
+                    st.code(v.fingerprint, language="text")
+                    st.code(v.canonical_sql, language="sql")
+                    if diff_text:
+                        st.caption(f"diff v{num - 1} → v{num}")
+                        st.code(diff_text, language="diff")
 
 
 def _doctor_tab(config_path):

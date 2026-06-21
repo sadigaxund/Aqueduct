@@ -102,6 +102,17 @@ class BlueprintSummary:
 
 
 @dataclass(frozen=True)
+class FingerprintRow:
+    channel_id: str
+    fingerprint: str
+    first_seen: str
+    last_seen: str
+    first_run_id: str
+    last_run_id: str
+    canonical_sql: str = ""
+
+
+@dataclass(frozen=True)
 class DayCount:
     day: str
     status: str
@@ -260,13 +271,20 @@ def run_detail(store: Any, run_id: str) -> RunDetail | None:
     return RunDetail(run, modules, profile)
 
 
-def lineage(store: Any, blueprint_id: str | None = None, limit: int = 500) -> list[LineageRow]:
+def lineage(store: Any, blueprint_id: str | None = None,
+            run_id: str | None = None, limit: int = 500) -> list[LineageRow]:
     """Column-level lineage rows (empty if the table is absent)."""
     q = "SELECT channel_id, output_column, source_table, source_column FROM column_lineage"
     params: list[Any] = []
+    clauses: list[str] = []
     if blueprint_id:
-        q += " WHERE blueprint_id = ?"
+        clauses.append("blueprint_id = ?")
         params.append(blueprint_id)
+    if run_id:
+        clauses.append("run_id = ?")
+        params.append(run_id)
+    if clauses:
+        q += " WHERE " + " AND ".join(clauses)
     q += " LIMIT ?"
     params.append(limit)
     try:
@@ -276,6 +294,57 @@ def lineage(store: Any, blueprint_id: str | None = None, limit: int = 500) -> li
     except Exception:
         rows = []  # column_lineage may not exist
     return [LineageRow(*r) for r in rows]
+
+
+@dataclass(frozen=True)
+class ModuleTrendRow:
+    run_id: str
+    started_at: str
+    module_id: str
+    duration_ms: int | None
+
+
+def module_trends(store: Any, blueprint_id: str,
+                   module_id: str, limit: int = 20) -> list[ModuleTrendRow]:
+    """Duration for *module_id* across the *limit* most recent runs of *blueprint_id*."""
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT m.run_id, CAST(r.started_at AS VARCHAR), m.module_id, m.duration_ms
+                FROM module_metrics m
+                JOIN run_records r ON r.run_id = m.run_id
+                WHERE r.blueprint_id = ? AND m.module_id = ?
+                ORDER BY r.started_at DESC
+                LIMIT ?
+                """,
+                [blueprint_id, module_id, limit],
+            )
+            rows = cur.fetchall()
+        return [ModuleTrendRow(*r) for r in rows]
+    except Exception:
+        return []
+
+
+def channel_fingerprints(store: Any, blueprint_id: str) -> list[FingerprintRow]:
+    """SQL fingerprint changelog per channel (empty if table absent)."""
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT channel_id, fingerprint,
+                       CAST(first_seen AS VARCHAR), CAST(last_seen AS VARCHAR),
+                       first_run_id, last_run_id,
+                       canonical_sql
+                FROM channel_fingerprints
+                WHERE blueprint_id = ?
+                ORDER BY channel_id, last_seen DESC
+                """,
+                [blueprint_id],
+            )
+            return [FingerprintRow(*r) for r in cur.fetchall()]
+    except Exception:
+        return []
 
 
 def run_sql_readonly(duckdb_path: "str | Path", query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
