@@ -70,6 +70,29 @@ def test_resolve_per_pipeline_by_blueprint_id(tmp_path, monkeypatch):
     assert got == Path(".aqueduct/observability/beta/observability.db")
 
 
+def test_resolve_location_only_dir_routes_per_blueprint(tmp_path):
+    """A suffix-less custom path is a base DIR → route <dir>/<blueprint_id>/."""
+    base = tmp_path / "custom_obs"
+    _make_db(base / "beta" / "observability.db")
+    got = resolve_duckdb_obs_path(_cfg(path=str(base)), blueprint_id="beta")
+    assert got == base / "beta" / "observability.db"
+
+
+def test_resolve_location_only_dir_by_run_id(tmp_path):
+    base = tmp_path / "custom_obs"
+    _make_db(base / "alpha" / "observability.db", with_run="rZ")
+    got = resolve_duckdb_obs_path(_cfg(path=str(base)), run_id="rZ")
+    assert got == base / "alpha" / "observability.db"
+
+
+def test_resolve_explicit_db_file_ignores_blueprint_routing(tmp_path):
+    """A custom path ending in .db is a single file — no per-blueprint routing."""
+    f = tmp_path / "shared.db"
+    _make_db(f)
+    # even with a blueprint_id, the explicit single file wins
+    assert resolve_duckdb_obs_path(_cfg(path=str(f)), blueprint_id="beta") == f
+
+
 # ── open_obs_read ────────────────────────────────────────────────────────────
 
 def test_open_duckdb_returns_store(tmp_path):

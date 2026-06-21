@@ -44,33 +44,39 @@ def resolve_duckdb_obs_path(
     Resolution order (the single source of truth — `cli._resolve_obs_db`
     delegates here):
       1. ``--store-dir`` → ``<store_dir>/observability.db``.
-      2. A non-default ``stores.observability.path`` → that file (or the file
-         inside it if a directory).
-      3. Default sentinel + ``blueprint_id`` → the per-pipeline routed file
-         ``.aqueduct/observability/<blueprint_id>/observability.db``.
-      4. Default sentinel + ``run_id`` → the routed file that contains the run.
-      5. The flat default ``.aqueduct/observability.db``.
+      2. A non-default ``stores.observability.path`` **ending in a file suffix**
+         (e.g. ``.../obs.db``) → that single file (one store for all blueprints).
+      3. Otherwise the path is a **base directory** (default ``.aqueduct/
+         observability`` OR a suffix-less custom path = location-only routing):
+         route ``<base>/<blueprint_id>/observability.db``, else the routed file
+         whose ``run_records`` contains ``run_id``, else the flat file directly
+         under the base.
     """
     if store_dir:
         candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
         return candidate if candidate.exists() else None
 
     obs_path = cfg.stores.observability.path
+    routing_root = _OBS_ROUTING_ROOT
+    flat_default = Path(_DEFAULT_OBS_PATH)
     if obs_path != _DEFAULT_OBS_PATH:
         explicit = Path(obs_path)
-        if explicit.is_dir():
-            explicit = explicit / DEFAULT_OBS_DB_FILENAME
-        return explicit if explicit.exists() else None
+        if explicit.suffix and not explicit.is_dir():
+            # Explicit single file — one store for every blueprint (no parallel).
+            return explicit if explicit.exists() else None
+        # Location-only base directory → route per-blueprint files under it.
+        routing_root = str(explicit)
+        flat_default = explicit / DEFAULT_OBS_DB_FILENAME
 
     if blueprint_id:
-        routed = Path(_OBS_ROUTING_ROOT) / blueprint_id / DEFAULT_OBS_DB_FILENAME
+        routed = Path(routing_root) / blueprint_id / DEFAULT_OBS_DB_FILENAME
         if routed.exists():
             return routed
 
     if run_id:
         import duckdb as _duckdb
 
-        for candidate in sorted(Path(_OBS_ROUTING_ROOT).glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
+        for candidate in sorted(Path(routing_root).glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
             try:
                 conn = _duckdb.connect(str(candidate), read_only=True)
                 try:
@@ -85,8 +91,7 @@ def resolve_duckdb_obs_path(
             except Exception:
                 continue
 
-    legacy = Path(_DEFAULT_OBS_PATH)
-    return legacy if legacy.exists() else None
+    return flat_default if flat_default.exists() else None
 
 
 def open_obs_read(

@@ -421,6 +421,7 @@ def run(
         # user-set observability.path / lineage.path is already honoured
         # verbatim by get_stores() and must NOT be clobbered (ISSUE-024).
         _using_default_obs_path = False
+        _obs_routing_base = ".aqueduct/observability"  # per-blueprint routing root
         if store_dir_abs:
             resolved_store_dir = store_dir_abs
         else:
@@ -438,7 +439,19 @@ def run(
                 _using_default_obs_path = True
                 # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
                 resolved_store_dir = None  # set below after manifest
+            elif not Path(_observability_path).suffix:
+                # Location-only: a custom path with NO file suffix is a BASE
+                # DIRECTORY. Route per-blueprint files under it
+                # (<dir>/<blueprint_id>/observability.db) — parallel-safe, like
+                # the default — instead of one shared file. (specs §3.2)
+                _using_default_obs_path = True
+                _obs_routing_base = _observability_path
+                resolved_store_dir = None  # set below after manifest
             else:
+                # Explicit single file (e.g. .../obs.db): ONE DuckDB file for every
+                # blueprint using this config → single-writer, so those blueprints
+                # must not run in parallel. Use a suffix-less base dir for
+                # per-blueprint routing if you need concurrency on DuckDB.
                 resolved_store_dir = Path(_observability_path).parent
         # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
         resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
@@ -644,7 +657,7 @@ def run(
 
         # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
         if resolved_store_dir is None:
-            resolved_store_dir = Path(f".aqueduct/observability/{manifest.blueprint_id}")
+            resolved_store_dir = Path(_obs_routing_base) / manifest.blueprint_id
             resolved_store_dir.mkdir(parents=True, exist_ok=True)
 
         # ── Cluster-mode store path warning ───────────────────────────────────────
