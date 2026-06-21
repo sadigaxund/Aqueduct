@@ -34,6 +34,11 @@ _DDL = [
         blueprint_id VARCHAR, run_id VARCHAR, channel_id VARCHAR,
         output_column VARCHAR, source_table VARCHAR, source_column VARCHAR,
         captured_at TIMESTAMPTZ)""",
+    # healing_outcomes has NO blueprint_id (matches the real schema) — fleet
+    # aggregates must reach blueprint via a run_records join.
+    """CREATE TABLE IF NOT EXISTS healing_outcomes (
+        id VARCHAR, run_id VARCHAR, failure_category VARCHAR,
+        resolution VARCHAR, run_success_after_patch BOOLEAN)""",
 ]
 
 _TS = "2026-06-20T00:00:00+00:00"
@@ -91,14 +96,19 @@ def seeded_cfg(request, tmp_path):
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             ["conf_bp", "rc1", "ch1", "out_col", "src_tbl", "src_col", _TS],
         )
+        cur.execute(
+            "INSERT INTO healing_outcomes (id, run_id, failure_category, resolution, run_success_after_patch) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ["ho1", "rc1", "SchemaError", "llm", True],
+        )
 
     yield cfg_file, backend
 
     if backend == "postgres":
         with get_stores(cfg).observability.connect() as cur:
-            for tbl in ("run_records", "module_metrics", "column_lineage"):
+            for tbl in ("run_records", "module_metrics", "column_lineage", "healing_outcomes"):
                 try:
-                    cur.execute(f"DELETE FROM {tbl} WHERE run_id = ? OR blueprint_id = ?", ["rc1", "conf_bp"])
+                    cur.execute(f"DELETE FROM {tbl} WHERE run_id = ?", ["rc1"])  # run_id in all 4
                 except Exception:
                     pass
 
@@ -148,3 +158,34 @@ def test_report_trend_on_postgres(seeded_cfg):
         pytest.skip("gap applies to postgres only")
     res = _run(cfg_file, "report", "--trend", "out_col", "--blueprint", "conf_bp")
     assert res.exit_code == 0, res.output
+
+
+# ── fleet query layer: must produce identical results on every backend ────────
+
+def test_fleet_summary_conformance(seeded_cfg):
+    from aqueduct.stores import queries as q
+    cfg_file, _ = seeded_cfg
+    cfg = load_config(cfg_file)
+    summ = {s.blueprint_id: s for s in q.fleet_summary(cfg)}
+    assert "conf_bp" in summ
+    s = summ["conf_bp"]
+    assert s.runs == 1 and s.successes == 1
+    assert s.heal_attempts == 1   # heal count via run_records join (no blueprint_id col)
+
+
+def test_runs_over_time_conformance(seeded_cfg):
+    from aqueduct.stores import queries as q
+    cfg_file, _ = seeded_cfg
+    counts = q.runs_over_time(load_config(cfg_file))
+    assert any(d.count >= 1 and d.status == "success" for d in counts)
+
+
+def test_failure_categories_conformance(seeded_cfg):
+    from aqueduct.stores import queries as q
+    dist = q.failure_categories(load_config(seeded_cfg[0]))
+    assert dist.get("SchemaError") == 1
+
+
+def test_heal_coverage_conformance(seeded_cfg):
+    from aqueduct.stores import queries as q
+    assert q.heal_coverage(load_config(seeded_cfg[0])).get("llm") == 1
