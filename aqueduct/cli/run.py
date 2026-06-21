@@ -20,6 +20,7 @@ from aqueduct.cli import (
     _check_heal_guardrails,
     _resolve_and_load_env,
     _env_options,
+    _rule,
     _uncommitted_applied_patches,)
 import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 
@@ -531,10 +532,8 @@ def run(
                     if mr.error:
                         line += f"  — {mr.error}"
                     click.echo(line)
-                click.echo(click.style("─" * 64, dim=True))
-                click.echo(
-                    f"{click.style('✓', fg='green', bold=True)} blueprint complete  ·  run {run_id}"
-                )
+                click.echo(click.style(_rule(), dim=True))
+                click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
                 sys.exit(exit_codes.SUCCESS)
             else:
                 if _logs:
@@ -599,6 +598,7 @@ def run(
                 secrets_provider=cfg.secrets.provider,
                 secrets_region=cfg.secrets.region,
                 secrets_resolver=cfg.secrets.resolver,
+                _verbose=verbose,
             )
         except CompileError as exc:
             click.echo(f"✗ compile error: {exc}", err=True)
@@ -784,15 +784,15 @@ def run(
                 parts.append(f"to={to_module}")
             selector_note = "  [" + ", ".join(parts) + "]"
         exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-        _rule = "─" * 64
-        click.echo(click.style(_rule, dim=True))
+        _r = click.style(_rule(), dim=True)
+        click.echo(_r)
         click.echo(
             f"{click.style('▶', fg='cyan', bold=True)} "
             f"{click.style(manifest.blueprint_id, bold=True)}  ·  "
             f"{len(manifest.modules)} modules  ·  run {run_id}  ·  {engine} {master_url}"
             f"{selector_note}{exec_date_note}"
         )
-        click.echo(click.style(_rule, dim=True))
+        click.echo(_r)
 
         # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
         from aqueduct.cli import resolve_agent_connection
@@ -1800,10 +1800,8 @@ def run(
             )
 
         status_label = "patched" if result.status == "patched" else "complete"
-        click.echo(click.style("─" * 64, dim=True))
-        click.echo(
-            f"{click.style('✓', fg='green', bold=True)} blueprint {status_label}  ·  run {run_id}"
-        )
+        click.echo(click.style(_rule(), dim=True))
+        click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint {status_label}")
     finally:
         os.chdir(_original_cwd)
 

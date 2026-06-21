@@ -32,7 +32,15 @@ def _apply_warnings_from_cfg(cfg) -> None:
     set_default_suppress(suppress=merged)
 
 
-def _compile_with_warnings(compile_fn, *args, **kwargs):
+def _short_warning(msg: str, limit: int = 100) -> str:
+    """First clause of a warning message (before ' — ' or first sentence), capped."""
+    seg = msg.split(" — ", 1)[0].split(". ", 1)[0].strip()
+    if len(seg) > limit:
+        seg = seg[: limit - 1].rstrip() + "…"
+    return seg
+
+
+def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, **kwargs):
     """Call compile_fn, intercept warnings, reprint as clean CLI output.
 
     Aqueduct's own diagnostics (AqueductWarning category, prefix
@@ -45,20 +53,40 @@ def _compile_with_warnings(compile_fn, *args, **kwargs):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         result = compile_fn(*args, **kwargs)
+    aq: list[tuple[str, str]] = []
     for w in caught:
         msg = str(w.message)
         if issubclass(w.category, AqueductWarning) and msg.startswith(_AQ_PREFIX):
             body = msg[len(_AQ_PREFIX):]
             try:
                 rid, rest = body.split("] ", 1)
-                click.echo(f"AQ-WARN [{rid}] {rest}", err=True)
             except ValueError:
-                click.echo(f"AQ-WARN {body}", err=True)
+                rid, rest = "", body
+            aq.append((rid, rest))
         elif issubclass(w.category, UserWarning):
             click.echo(f"WARNING: {w.message}", err=True)
         else:
             warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+    # Group Aqueduct diagnostics into one tidy block (was one naked AQ-WARN line
+    # each). rule_ids stay copy-pasteable for `warnings.suppress` / lint.
+    if aq:
+        n = len(aq)
+        hint = "" if _verbose else click.style("  ·  -v for full text", dim=True)
+        click.echo(
+            click.style(f"⚠ {n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
+            err=True,
+        )
+        for rid, rest in aq:
+            tag = click.style(f"[{rid}]", fg="yellow") if rid else ""
+            body = rest if _verbose else _short_warning(rest)
+            click.echo(f"  · {tag} {body}", err=True)
     return result
+
+
+def _rule(char: str = "─") -> str:
+    """A horizontal rule spanning the terminal width (fallback 64)."""
+    import shutil
+    return char * shutil.get_terminal_size(fallback=(64, 20)).columns
 
 
 # ── Self-healing helpers ──────────────────────────────────────────────────────
