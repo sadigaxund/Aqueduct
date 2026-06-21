@@ -103,7 +103,7 @@ def test_run_detail_modules_and_profile(tmp_path):
     det = d.run_detail(_store(p), "r1")
     assert det is not None
     assert [m.module_id for m in det.modules] == ["a", "b"]
-    assert [pr.module_id for pr in det.profile] == ["b", "a"]  # heaviest first
+    assert [pr.module_id for pr in det.profile] == ["a", "b"]  # execution order (matches modules)
 
 
 def test_run_detail_missing_returns_none(tmp_path):
