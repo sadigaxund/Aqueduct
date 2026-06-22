@@ -19,7 +19,7 @@ def test_get_stores_factory_mixed():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "duckdb", "path": "observability.db"},
-            "depot": {"backend": "redis", "path": "redis://localhost:6379/0"}
+            "depots": [{"name": "default", "backend": "redis", "path": "redis://localhost:6379/0"}]
         }
     })
     bundle = get_stores(cfg)
@@ -31,7 +31,7 @@ def test_get_stores_factory_postgres():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"},
-            "depot": {"backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"}
+            "depots": [{"name": "default", "backend": "postgres", "path": "postgresql://usr:pass@localhost:5432/aq"}]
         }
     })
     bundle = get_stores(cfg)

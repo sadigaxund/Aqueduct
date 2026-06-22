@@ -42,7 +42,7 @@ def test_redis_depot_ok():
     cfg = AqueductConfig(**{
         "stores": {
             "observability": {"backend": "duckdb", "path": "observability.db"},
-            "depot": {"backend": "redis", "path": "redis://localhost:6379/15"}
+            "depots": [{"name": "default", "backend": "redis", "path": "redis://localhost:6379/15"}]
         }
     })
     assert cfg.stores.depot.backend == "redis"

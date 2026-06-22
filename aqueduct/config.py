@@ -226,6 +226,44 @@ class KVStoreConfig(BaseModel):
     )
 
 
+class DepotMountConfig(BaseModel):
+    """One depot mount in the ``stores.depots:`` list.
+
+    The depot is the cross-run KV store (`@aq.depot.*`). There is always an
+    implicit **default** mount (per-blueprint isolated, DuckDB) even when
+    ``depots:`` is omitted; add an entry named ``default`` only to re-back it
+    (different backend/path). Any other name is an additional mount accessed via
+    ``@aq.depot.<name>.get(...)``.
+
+    Isolation: every mount is **per-blueprint isolated by default** — keys are
+    transparently prefixed with the ``blueprint_id`` so two blueprints sharing a
+    physical depot never collide. Set ``shared: true`` to opt a mount into
+    **cross-blueprint** sharing (raw, unprefixed keys) — the *only* place key
+    collisions are possible, and an explicit choice.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = Field(
+        default="default",
+        description="Mount name. `default` re-backs the built-in per-blueprint depot; "
+                    "any other name is an extra mount reached via `@aq.depot.<name>.get()`.",
+    )
+    backend: KVBackend = Field(
+        default="duckdb",
+        description="`duckdb` (default) / `postgres` (relational) or `redis` (KV-only).",
+    )
+    path: Annotated[str, FsPath()] = Field(
+        ...,
+        description="DuckDB: local file path. Postgres: libpq DSN. Redis: `redis://host:port/db`.",
+    )
+    shared: bool = Field(
+        default=False,
+        description="False (default) = per-blueprint isolated (keys prefixed by blueprint_id). "
+                    "True = cross-blueprint shared (raw keys) — collisions become your "
+                    "deliberate semantics; for parallel writers use postgres/redis.",
+    )
+
+
 class ObjectStoreConfig(BaseModel):
     """Backend config for opaque driver artefacts — observability blobs and the
     patch lifecycle (Phase 53).
@@ -320,21 +358,12 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
     if not isinstance(stores_raw, dict):
         return
 
-    # Map store-name (observability / depot) → sub-model class
-    # via StoresConfig's own field annotations. Avoids a hardcoded mapping
-    # that would drift if a new store is added.
-    for store_name, field_info in StoresConfig.model_fields.items():
-        sub_model_cls = field_info.annotation
-        if not (isinstance(sub_model_cls, type) and issubclass(sub_model_cls, BaseModel)):
-            continue
-        store_val = stores_raw.get(store_name)
-        if not isinstance(store_val, dict):
-            continue
-        for sub_field_name, sub_field_info in sub_model_cls.model_fields.items():
+    def _anchor_entry(entry: dict, model_cls: type[BaseModel]) -> None:
+        for sub_field_name, sub_field_info in model_cls.model_fields.items():
             marker = field_is_fs_path(tuple(sub_field_info.metadata))
             if marker is None:
                 continue
-            raw_val = store_val.get(sub_field_name)
+            raw_val = entry.get(sub_field_name)
             if not isinstance(raw_val, str) or not raw_val:
                 continue
             if marker.allow_uri and "://" in raw_val:
@@ -342,7 +371,23 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
             pp = Path(raw_val)
             if pp.is_absolute():
                 continue
-            store_val[sub_field_name] = str((base_dir / pp).resolve())
+            entry[sub_field_name] = str((base_dir / pp).resolve())
+
+    # Map store-name → sub-model class via StoresConfig's own field annotations.
+    for store_name, field_info in StoresConfig.model_fields.items():
+        sub_model_cls = field_info.annotation
+        if not (isinstance(sub_model_cls, type) and issubclass(sub_model_cls, BaseModel)):
+            continue
+        store_val = stores_raw.get(store_name)
+        if isinstance(store_val, dict):
+            _anchor_entry(store_val, sub_model_cls)
+
+    # `depots` is a LIST of sub-models, not a single one — anchor each entry.
+    depots_raw = stores_raw.get("depots")
+    if isinstance(depots_raw, list):
+        for entry in depots_raw:
+            if isinstance(entry, dict):
+                _anchor_entry(entry, DepotMountConfig)
 
 
 class StoresConfig(BaseModel):
@@ -357,14 +402,37 @@ class StoresConfig(BaseModel):
             "`observability` schema of the target DB."
         ),
     )
-    depot: KVStoreConfig = Field(
-        default_factory=lambda: KVStoreConfig(path=".aqueduct/depot.db"),
+    depots: tuple[DepotMountConfig, ...] = Field(
+        default_factory=tuple,
         description=(
-            "Depot KV store (`@aq.depot.*`). With postgres backend, the "
-            "`depot_kv` table lives in the `depot` schema. With redis "
-            "backend, keys live directly in the configured Redis database."
+            "Depot KV mounts (`@aq.depot.*`). A single list: the implicit "
+            "`default` mount (per-blueprint isolated, DuckDB) always exists even "
+            "when omitted; add an entry named `default` to re-back it, and other "
+            "named entries as extra mounts (`@aq.depot.<name>.get()`). Set "
+            "`shared: true` on a mount for cross-blueprint (raw-key) sharing. A "
+            "legacy `depot:` mapping is auto-migrated to the `default` mount."
         ),
     )
+
+    @property
+    def depot(self) -> DepotMountConfig:
+        """The effective **default** depot mount (back-compat accessor).
+
+        Returns the `name == "default"` entry, or an implicit DuckDB default when
+        `depots:` is empty (e.g. ``AqueductConfig()`` built in-memory). Every
+        ``cfg.stores.depot.backend/.path`` call site keeps working unchanged.
+        """
+        for d in self.depots:
+            if d.name == "default":
+                return d
+        return DepotMountConfig(name="default", backend="duckdb", path=".aqueduct/depot.db")
+
+    def effective_depots(self) -> tuple[DepotMountConfig, ...]:
+        """All mounts including the implicit default (if not explicitly given)."""
+        if any(d.name == "default" for d in self.depots):
+            return self.depots
+        return (DepotMountConfig(name="default", backend="duckdb", path=".aqueduct/depot.db"),
+                *self.depots)
     blob: ObjectStoreConfig = Field(
         default_factory=ObjectStoreConfig,
         description=(
@@ -1008,6 +1076,50 @@ def _strip_removed_lineage_block(data: dict, *, warn: bool) -> None:
             )
 
 
+def _migrate_depot_block(data: dict, *, warn: bool) -> None:
+    """Normalise depot config to the ``stores.depots:`` list.
+
+    - A legacy single ``stores.depot:`` mapping is migrated to a ``depots:``
+      entry named ``default`` (``StoresConfig`` is ``extra="forbid"``, so the old
+      key would otherwise hard-fail) — with a deprecation warning.
+    - Ensures a ``default`` entry exists so it is path-anchored like any other and
+      ``stores.depot`` (the back-compat property) always resolves it.
+
+    Only runs when a ``stores:`` block is present; a config with no ``stores:``
+    keeps the in-memory implicit default (cwd-relative), unchanged.
+    """
+    stores = data.get("stores")
+    if not isinstance(stores, dict):
+        return
+
+    legacy = stores.pop("depot", None)
+    depots = stores.get("depots")
+    if depots is None:
+        depots = []
+        stores["depots"] = depots
+    if not isinstance(depots, list):
+        return  # let model validation surface the type error
+
+    def _has_default() -> bool:
+        return any(isinstance(d, dict) and d.get("name", "default") == "default" for d in depots)
+
+    if isinstance(legacy, dict) and not _has_default():
+        depots.insert(0, {"name": "default", **legacy})
+        if warn:
+            import warnings as _warnings
+            from aqueduct import AqueductWarning
+            _warnings.warn(
+                "stores.depot is deprecated — use the stores.depots: list. The "
+                "block was migrated to a `default` mount; rename it to remove this "
+                "warning.",
+                AqueductWarning,
+                stacklevel=2,
+            )
+
+    if not _has_default():
+        depots.insert(0, {"name": "default", "backend": "duckdb", "path": ".aqueduct/depot.db"})
+
+
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
 
@@ -1056,6 +1168,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
     _strip_removed_lineage_block(data, warn=True)
+    _migrate_depot_block(data, warn=True)
 
     # Schema-driven anchoring. The hand-rolled
     # ``data["stores"][name]["path"]`` walk has been replaced with a
