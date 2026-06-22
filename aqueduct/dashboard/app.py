@@ -1328,8 +1328,19 @@ def _config_tab(cfg):
     st.caption("Read-only. Secret values are never read or displayed.")
 
 
+_ASSETS = Path(__file__).parent / "assets"
+_ICON = _ASSETS / "icon.svg"
+_LOGO = _ASSETS / "logo.svg"
+
+
 def main() -> None:
-    st.set_page_config(page_title="Aqueduct Dashboard", layout="wide")
+    st.set_page_config(
+        page_title="Aqueduct Dashboard",
+        page_icon=str(_ICON) if _ICON.is_file() else "\U0001f30a",
+        layout="wide",
+    )
+    if _LOGO.is_file():
+        st.logo(str(_LOGO), icon_image=str(_ICON) if _ICON.is_file() else None, size="large")
     config_path = os.environ.get("AQ_DASH_CONFIG") or None
     store_dir = os.environ.get("AQ_DASH_STORE_DIR") or None
     try:
@@ -1339,7 +1350,10 @@ def main() -> None:
         return
 
     backend = getattr(cfg.stores.observability, "backend", "duckdb")
-    st.title("Aqueduct")
+    if _LOGO.is_file():
+        st.image(str(_LOGO), width=210)
+    else:
+        st.title("Aqueduct")
     st.caption(f"observability backend: **{backend}** · read-only viewer · F5 to refresh")
     handles = q.discover_stores(cfg, store_dir=store_dir)
 
