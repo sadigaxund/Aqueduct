@@ -151,6 +151,21 @@ def _count_yaxis(fig, max_val: float = 0) -> None:
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
+def _st_blob(store, path_str: str) -> None:
+    """Read a blob file (zstd-compressed JSON), parse, and display with st.json()."""
+    if not store.duckdb_path:
+        st.caption("Blob viewing not supported for this backend.")
+        return
+    import zstandard
+    blob_path = store.duckdb_path.parent / path_str
+    try:
+        with open(blob_path, "rb") as f:
+            data = zstandard.decompress(f.read())
+        st.json(json.loads(data))
+    except Exception as exc:
+        st.caption(f"Could not load blob: {exc}")
+
+
 def _fleet_tab(cfg, store_dir):
     summ = q.fleet_summary(cfg, store_dir=store_dir)
     if not summ:
@@ -359,10 +374,10 @@ def _runs_tab(handles):
                         st.code(fc.stack_trace, language="text")
                 if fc.manifest_json:
                     with st.expander("Manifest"):
-                        st.json(fc.manifest_json)
+                        _st_blob(owner.store, fc.manifest_json)
                 if fc.provenance_json:
                     with st.expander("Provenance"):
-                        st.json(fc.provenance_json)
+                        _st_blob(owner.store, fc.provenance_json)
             else:
                 for m in det.modules:
                     if m.error:
@@ -648,7 +663,7 @@ def _fmt_dur(ms: int) -> str:
     return f"{ms // 60_000}m {ms % 60_000 // 1000}s"
 
 
-def _performance_tab(handles):
+def _performance_tab(handles, cfg, store_dir):
     if not handles:
         st.info("No observability stores found yet.")
         return
@@ -781,6 +796,25 @@ def _performance_tab(handles):
            formats={"avg_duration_ms": "{:,.0f}", "max_duration_ms": "{:,.0f}",
                     "total_records_read": "{:,}",
                     "total_records_written": "{:,}"})
+
+    # ── 5. Table Maintenance (OPTIMIZE / VACUUM cost) ──────────────────────
+    # A write-side storage-hygiene cost, not a data-quality signal — lives here
+    # with the other timing metrics. Empty unless an Egress runs `maintenance:`
+    # on a lakehouse table (Delta/Iceberg/Hudi).
+    st.markdown("**Table Maintenance**")
+    maint = q.maintenance_metrics(cfg, store_dir=store_dir)
+    if maint:
+        _table([
+            {"run": (m["run_id"] or "")[:8], "module": m["module_id"],
+             "optimize_ms": m["optimize_ms"], "vacuum_ms": m["vacuum_ms"],
+             "when": (m["captured_at"] or "")[:19]}
+            for m in maint
+        ], status_cols=(),
+           numeric_cols=_NUMERIC | {"optimize_ms", "vacuum_ms"},
+           formats={"optimize_ms": "{:,}", "vacuum_ms": "{:,}"})
+    else:
+        st.caption("No OPTIMIZE / VACUUM ops recorded — set `maintenance:` on a "
+                   "Delta/Iceberg/Hudi Egress to compact & clean tables post-write.")
 
 
 def _quality_tab(cfg, store_dir):
@@ -970,13 +1004,6 @@ def _quality_tab(cfg, store_dir):
             st.dataframe(df, width="stretch", hide_index=True)
     else:
         st.caption("No blueprints found.")
-
-    st.markdown("**Maintenance**")
-    maint = q.maintenance_metrics(cfg, store_dir=store_dir)
-    if maint:
-        st.dataframe(pd.DataFrame(maint), width="stretch", hide_index=True)
-    else:
-        st.caption("No maintenance ops recorded yet (vacuum/optimize).")
 
 
 def _heal_tab(cfg, store_dir):
@@ -1370,7 +1397,7 @@ def main() -> None:
     with healing:
         _heal_tab(cfg, store_dir)
     with performance:
-        _performance_tab(handles)
+        _performance_tab(handles, cfg, store_dir)
     with doctor:
         _doctor_tab(config_path)
     with config:
