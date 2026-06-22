@@ -63,7 +63,7 @@ stores:
     assert res1.exit_code == 0, res1.output
     from aqueduct.depot.depot import DepotStore
     store = DepotStore(tmp_path / "depot.db")
-    run_1_id = store.get("_last_run_id")
+    run_1_id = store.get("t1:_last_run_id")  # per-blueprint isolated key
     assert run_1_id != ""
     store.close()
     
@@ -72,7 +72,7 @@ stores:
     assert res2.exit_code == 0
     
     store = DepotStore(tmp_path / "depot.db")
-    run_2_id = store.get("_last_run_id")
+    run_2_id = store.get("t1:_last_run_id")
     assert run_2_id != ""
     assert run_2_id != run_1_id
     store.close()

@@ -559,14 +559,10 @@ def run(
                 click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
                 sys.exit(exit_codes.USAGE_ERROR)
 
-        # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
-        # Depot must be ready before compile() so @aq.depot.get() in the
-        # Blueprint can resolve.
-        from aqueduct.stores import get_stores
-        bundle = get_stores(cfg, store_dir_override=store_dir_abs)
-        depot = DepotStore(backend=bundle.depot)
-
         # ── Parse ──────────────────────────────────────────────────────────────────
+        # Parse BEFORE building stores so the depot mounts can be key-isolated by
+        # blueprint_id (per-blueprint depot isolation lives in the backend wiring,
+        # not in @aq — see specs §5.3.1 / §6).
         try:
             if blueprint_set_nested:
                 # Overlay blueprint-targeted --set values (e.g. agent.approval_mode)
@@ -587,6 +583,17 @@ def run(
             click.echo(f"✗ parse error: {exc}", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
 
+        # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
+        # Depot must be ready before compile() so @aq.depot.* in the Blueprint can
+        # resolve. Pass blueprint_id so default + non-shared mounts isolate their
+        # keys per blueprint.
+        from aqueduct.stores import get_stores
+        bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
+        depot = DepotStore(backend=bundle.depot)
+        # get/put-interface wrappers for @aq.depot.* resolution (keys already
+        # per-blueprint-isolated at the raw layer for non-shared mounts).
+        depots_wrapped = {n: DepotStore(backend=s) for n, s in bundle.depots.items()}
+
         # ── Compile ────────────────────────────────────────────────────────────────
         try:
             manifest = _compile_with_warnings(
@@ -594,6 +601,7 @@ def run(
                 bp,
                 blueprint_path=Path(blueprint),
                 depot=depot,
+                depots=depots_wrapped,
                 execution_date=execution_date,
                 secrets_provider=cfg.secrets.provider,
                 secrets_region=cfg.secrets.region,

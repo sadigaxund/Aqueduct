@@ -49,6 +49,7 @@ class AqFunctions:
         self,
         run_id: str | None = None,
         depot: Any = None,
+        depots: "dict[str, Any] | None" = None,
         execution_date: date | None = None,
         secrets_provider: str = "env",
         secrets_region: str | None = None,
@@ -60,7 +61,15 @@ class AqFunctions:
         deployment_target: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
-        self._depot = depot
+        # Depot mounts (name → store). `depot=` (single) is the legacy form → the
+        # default mount. `@aq.depot.get` uses default; `@aq.depot.<name>.get` a mount.
+        if depots:
+            self._depots = dict(depots)
+        elif depot is not None:
+            self._depots = {"default": depot}
+        else:
+            self._depots = {}
+        self._depot = self._depots.get("default", depot)
         self._execution_date = execution_date  # None = use system clock
         self._secrets_provider = secrets_provider
         self._secrets_region = secrets_region
@@ -141,6 +150,17 @@ class AqFunctions:
         )
         return default
 
+    def depot_get_named(self, name: str, key: str, default: str = "") -> str:
+        """`@aq.depot.<name>.get('key')` — read from a named depot mount."""
+        store = self._depots.get(name)
+        if store is None:
+            known = ", ".join(sorted(self._depots)) or "(none configured)"
+            raise RuntimeError(
+                f"@aq.depot.{name}.get: no depot mount named {name!r}. "
+                f"Configured mounts: {known}. Add it under stores.depots in aqueduct.yml."
+            )
+        return str(store.get(key, default))
+
     # ── blueprint / deployment / version — identity & deploy context ─────────────
     # Resolvable only during blueprint compilation (NOT in aqueduct.yml, where no
     # blueprint/run exists yet). Grouped by subject, not by dynamic-vs-static.
@@ -205,12 +225,22 @@ _DISPATCH: dict[str, str] = {
 }
 
 
+_NAMED_DEPOT_RE = re.compile(r"^aq\.depot\.([A-Za-z_][\w-]*)\.get$")
+
+
 def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
     """Dispatch a parsed @aq.* call to the registry method."""
     method_name = _DISPATCH.get(func_path)
-    if not method_name:
-        raise ValueError(f"Unknown @aq function: {func_path!r}")
-    method = getattr(registry, method_name)
+    if method_name:
+        method = getattr(registry, method_name)
+    else:
+        # Dynamic: @aq.depot.<name>.get('key'[, default]) → a named mount.
+        nm = _NAMED_DEPOT_RE.match(func_path)
+        if nm:
+            _name = nm.group(1)
+            method = lambda *a, **k: registry.depot_get_named(_name, *a, **k)  # noqa: E731
+        else:
+            raise ValueError(f"Unknown @aq function: {func_path!r}")
 
     if not args_str.strip():
         return str(method())

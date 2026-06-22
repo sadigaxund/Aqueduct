@@ -205,6 +205,34 @@ class _RelationalDepotMixin:
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
+class _NamespacedDepot:
+    """Transparently prefixes every depot key with ``<blueprint_id>:`` so two
+    blueprints sharing a physical depot are isolated (no key collisions). Applied
+    to the default mount + any mount without ``shared: true``; shared mounts use
+    raw keys. Wraps the **raw** KV store at the ``kv_*`` level, so all access —
+    the ``DepotStore`` wrapper (``@aq.depot.*`` reads + ``format: depot`` Egress
+    writes + ``_last_run_id``) and any direct ``kv_*`` call — stays consistent.
+    Everything else (``backend``, ``location_label``, ``relational_connect`` …)
+    passes through.
+    """
+
+    def __init__(self, inner: "DepotStore", prefix: str) -> None:
+        self._inner = inner
+        self._prefix = prefix
+
+    def kv_get(self, key: str, default: Any = "") -> Any:
+        return self._inner.kv_get(f"{self._prefix}{key}", default)
+
+    def kv_put(self, key: str, value: Any) -> None:
+        self._inner.kv_put(f"{self._prefix}{key}", value)
+
+    def kv_delete(self, key: str) -> None:
+        self._inner.kv_delete(f"{self._prefix}{key}")
+
+    def __getattr__(self, name: str) -> Any:  # passthrough (backend, location_label, …)
+        return getattr(self._inner, name)
+
+
 @dataclass(frozen=True)
 class StoreBundle:
     """Resolved per-run stores. Each store may share an underlying connection
@@ -213,10 +241,15 @@ class StoreBundle:
 
     observability: ObservabilityStore
     lineage: LineageStore
-    depot: DepotStore
+    depot: DepotStore                          # the default mount (key-isolated per blueprint)
+    depots: dict[str, DepotStore] = field(default_factory=dict)   # name → mount (incl. "default")
 
 
-def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = None) -> StoreBundle:
+def get_stores(
+    cfg: "AqueductConfig",
+    store_dir_override: "Path | str | None" = None,
+    blueprint_id: str | None = None,
+) -> StoreBundle:
     """Construct the per-run store bundle from validated config.
 
     Backend dispatch:
@@ -275,21 +308,32 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
     # lineage.db that nothing ever wrote to.)
     lineage = obs  # type: ignore[assignment]  # ObservabilityStore satisfies the LineageStore interface (both _RelationalStore)
 
-    # ── depot ────────────────────────────────────────────────────────────────
-    if cfg.stores.depot.backend == "duckdb":
-        depot = DuckDBDepotStore(_resolve_duckdb_path(cfg.stores.depot))
-    elif cfg.stores.depot.backend == "postgres":
-        from aqueduct.stores.postgres import PostgresDepotStore
-        depot = PostgresDepotStore(cfg.stores.depot.path)
-    elif cfg.stores.depot.backend == "redis":
-        from aqueduct.stores.redis_ import RedisDepotStore
-        depot = RedisDepotStore(cfg.stores.depot.path)
-    else:  # pragma: no cover
-        raise BackendUnsupportedError(
-            f"depot.backend={cfg.stores.depot.backend!r} is not a supported KV backend"
-        )
+    # ── depot mounts ───────────────────────────────────────────────────────────
+    # Build every mount in stores.depots (incl. the implicit `default`). Each is
+    # per-blueprint key-isolated (prefixed) unless shared: true. With no
+    # blueprint_id (some non-run contexts) keys are raw — same as pre-isolation.
+    def _build_depot(mount: Any) -> DepotStore:
+        if mount.backend == "duckdb":
+            return DuckDBDepotStore(_resolve_duckdb_path(mount))
+        if mount.backend == "postgres":
+            from aqueduct.stores.postgres import PostgresDepotStore
+            return PostgresDepotStore(mount.path)
+        if mount.backend == "redis":
+            from aqueduct.stores.redis_ import RedisDepotStore
+            return RedisDepotStore(mount.path)
+        raise BackendUnsupportedError(  # pragma: no cover — guarded at config layer
+            f"depot.backend={mount.backend!r} is not a supported KV backend")
 
-    return StoreBundle(observability=obs, lineage=lineage, depot=depot)
+    depots: dict[str, DepotStore] = {}
+    for name, mount in cfg.stores.effective_depots().items():
+        raw = _build_depot(mount)
+        if blueprint_id and not mount.shared:
+            depots[name] = _NamespacedDepot(raw, f"{blueprint_id}:")  # type: ignore[assignment]
+        else:
+            depots[name] = raw
+    depot = depots["default"]
+
+    return StoreBundle(observability=obs, lineage=lineage, depot=depot, depots=depots)
 
 
 # Field placeholder so static analysis tools don't complain about the

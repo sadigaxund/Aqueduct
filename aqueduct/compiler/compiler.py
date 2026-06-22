@@ -82,6 +82,7 @@ def compile(  # noqa: A001
     blueprint_path: Path | None = None,
     run_id: str | None = None,
     depot: Any = None,
+    depots: "dict[str, Any] | None" = None,
     execution_date: Any = None,
     secrets_provider: str = "env",
     secrets_region: str | None = None,
@@ -109,6 +110,7 @@ def compile(  # noqa: A001
     registry = AqFunctions(
         run_id=run_id,
         depot=depot,
+        depots=depots,
         execution_date=execution_date,
         secrets_provider=secrets_provider,
         secrets_region=secrets_region,

@@ -403,6 +403,7 @@ stores:
         load_config as _real_load_config,
         RelationalStoreConfig,
         KVStoreConfig,
+        DepotMountConfig,
     )
 
     def _load_with_relative_paths(path=None):
@@ -412,7 +413,7 @@ stores:
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})
 
@@ -581,6 +582,7 @@ edges: []
         load_config as _real_load_config,
         RelationalStoreConfig,
         KVStoreConfig,
+        DepotMountConfig,
     )
 
     def _load_with_relative_paths(path=None):
@@ -589,7 +591,7 @@ edges: []
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
             observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})
 

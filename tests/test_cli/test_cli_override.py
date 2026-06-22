@@ -62,10 +62,10 @@ class TestOverrideCli:
         assert result.exit_code == 0
 
     def test_override_depot_watermark(self, tmp_path):
-        """--set stores.depot.backend=duckdb parses on benchmark-stats."""
+        """--set stores.depots.default.backend=duckdb parses on benchmark-stats."""
         result = RUNNER.invoke(cli, [
             "benchmark-stats", "--store-path", str(tmp_path / "s.duckdb"),
-            "--set", "stores.depot.backend=duckdb",
+            "--set", "stores.depots.default.backend=duckdb",
         ])
         assert result.exit_code == 0
 
