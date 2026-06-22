@@ -14,8 +14,17 @@ health, not run data — is memoised per browser session; F5 re-runs it.)
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+
+# Force pyspark initialisation early so narwhals/plotly don't trigger a
+# circular import when type-checking DataFrames.
+try:
+    import pyspark.sql  # noqa: F401
+except Exception:
+    pass
+
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +33,7 @@ import plotly.express as px
 import streamlit as st
 
 from aqueduct.config import load_config
+from aqueduct.redaction import redact
 from aqueduct.stores import queries as q
 
 # status → cell colour (real colored cells, no emoji)
@@ -151,17 +161,21 @@ def _count_yaxis(fig, max_val: float = 0) -> None:
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-def _st_blob(store, path_str: str) -> None:
-    """Read a blob file (zstd-compressed JSON), parse, and display with st.json()."""
-    if not store.duckdb_path:
+def _st_blob(handle, path_str: str) -> None:
+    """Read a blob file (zstd-compressed JSON or text), redact, and display."""
+    if not handle.duckdb_path:
         st.caption("Blob viewing not supported for this backend.")
         return
     import zstandard
-    blob_path = store.duckdb_path.parent / path_str
+    blob_path = handle.duckdb_path.parent / path_str
     try:
         with open(blob_path, "rb") as f:
-            data = zstandard.decompress(f.read())
-        st.json(json.loads(data))
+            raw = zstandard.decompress(f.read())
+        try:
+            obj = json.loads(raw)
+            st.json(redact(obj))
+        except json.JSONDecodeError:
+            st.code(redact(raw.decode("utf-8")), language="text")
     except Exception as exc:
         st.caption(f"Could not load blob: {exc}")
 
@@ -371,13 +385,13 @@ def _runs_tab(handles):
                 st.code(fc.error_message or "(no message)", language="text")
                 if fc.stack_trace:
                     with st.expander("Stack trace"):
-                        st.code(fc.stack_trace, language="text")
-                if fc.manifest_json:
-                    with st.expander("Manifest"):
-                        _st_blob(owner.store, fc.manifest_json)
+                        _st_blob(owner, fc.stack_trace)
                 if fc.provenance_json:
                     with st.expander("Provenance"):
-                        _st_blob(owner.store, fc.provenance_json)
+                        _st_blob(owner, fc.provenance_json)
+                if fc.manifest_json:
+                    with st.expander("Manifest"):
+                        _st_blob(owner, fc.manifest_json)
             else:
                 for m in det.modules:
                     if m.error:
@@ -1356,18 +1370,24 @@ def _config_tab(cfg):
 
 
 _ASSETS = Path(__file__).parent / "assets"
-_ICON = _ASSETS / "icon.svg"
-_LOGO = _ASSETS / "logo.svg"
+_TAB_ICON = _ASSETS / "favicon.svg"        # browser tab favicon
+_SIDEBAR_LOGO = _ASSETS / "logo.svg"    # sidebar wordmark
+_HEADER_LOGO = _ASSETS / "header.svg"     # main content area header
 
 
 def main() -> None:
     st.set_page_config(
         page_title="Aqueduct Dashboard",
-        page_icon=str(_ICON) if _ICON.is_file() else "\U0001f30a",
+        page_icon=str(_TAB_ICON) if _TAB_ICON.is_file() else "\U0001f30a",
         layout="wide",
     )
-    if _LOGO.is_file():
-        st.logo(str(_LOGO), icon_image=str(_ICON) if _ICON.is_file() else None, size="large")
+    if _SIDEBAR_LOGO.is_file():
+        st.logo(str(_SIDEBAR_LOGO), size="large")
+        st.markdown(
+            "<style>[data-testid='stSidebarHeader'] img{transform:scale(1.5);"
+            "transform-origin:top left;margin-bottom:16px;}</style>",
+            unsafe_allow_html=True,
+        )
     config_path = os.environ.get("AQ_DASH_CONFIG") or None
     store_dir = os.environ.get("AQ_DASH_STORE_DIR") or None
     try:
@@ -1377,8 +1397,8 @@ def main() -> None:
         return
 
     backend = getattr(cfg.stores.observability, "backend", "duckdb")
-    if _LOGO.is_file():
-        st.image(str(_LOGO), width=210)
+    if _HEADER_LOGO.is_file():
+        st.image(str(_HEADER_LOGO), width=315)
     else:
         st.title("Aqueduct")
     st.caption(f"observability backend: **{backend}** · read-only viewer · F5 to refresh")
