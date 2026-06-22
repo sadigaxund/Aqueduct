@@ -79,7 +79,7 @@ def compile(
         _cfg = load_config(None)
         _apply_warnings_from_cfg(_cfg)
     except ConfigError:
-        pass  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
+        _cfg = None  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -105,8 +105,11 @@ def compile(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
+        _dep = getattr(_cfg, "deployment", None) if _cfg is not None else None
         manifest = _compile_with_warnings(
-            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date
+            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date,
+            deployment_env=getattr(_dep, "env", None),
+            deployment_target=getattr(_dep, "target", None),
         )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)

@@ -84,7 +84,11 @@ def drift(
 
     try:
         bp = parse(blueprint)
-        manifest = compiler_compile(bp, blueprint_path=Path(blueprint))
+        manifest = compiler_compile(
+            bp, blueprint_path=Path(blueprint),
+            deployment_env=getattr(cfg.deployment, "env", None),
+            deployment_target=getattr(cfg.deployment, "target", None),
+        )
     except (ParseError, CompileError) as exc:
         click.echo(f"✗ could not compile {blueprint!r}: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
