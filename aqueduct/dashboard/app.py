@@ -451,13 +451,8 @@ def _lineage_tab(handles):
     if not scored:
         st.info("No column-lineage or SQL fingerprint data yet (needs a SQL Channel).")
         return
-    labels = [f"{h.label}  [col-lineage]" if c and not f else
-              f"{h.label}  [sql-changelog]" if f and not c else
-              f"{h.label}  [col-lineage + sql-changelog]" if c and f else
-              h.label
-              for h, c, f in scored]
-    pick = st.selectbox("Blueprint", labels)
-    handle, has_col, has_fp = scored[labels.index(pick)]
+    pick = st.selectbox("Blueprint", [h.label for h, _, _ in scored])
+    handle, has_col, has_fp = next((h, c, f) for h, c, f in scored if h.label == pick)
 
     import plotly.graph_objects as go
 
@@ -631,88 +626,135 @@ def _fmt_dur(ms: int) -> str:
 
 
 def _performance_tab(handles):
+    if not handles:
+        st.info("No observability stores found yet.")
+        return
+
+    bps = sorted([h.label for h in handles])
+    c_bp, c_mod = st.columns([1, 1])
+    pick = c_bp.selectbox("Blueprint", bps, key="perf_bp")
+    handle = next(h for h in handles if h.label == pick)
+
+    runs = q.list_runs(handle.store, limit=20)
+    if not runs:
+        st.info("No runs for this blueprint yet.")
+        return
+
     rows = []
-    for h in handles:
-        try:
-            latest = q.list_runs(h.store, limit=5)
-        except Exception:
+    for r in runs:
+        det = q.run_detail(handle.store, r.run_id)
+        if det is None or not det.profile:
             continue
-        for r in latest:
-            det = q.run_detail(h.store, r.run_id)
-            if det is None or not det.profile:
-                continue
-            for p in det.profile:
-                rows.append({
-                    "blueprint": h.label, "run": r.run_id[:8],
-                    "module": p.module_id,
-                    "duration_ms": p.duration_ms or 0,
-                    "records_read": p.records_read or 0,
-                    "bytes_read": p.bytes_read or 0,
-                    "records_written": p.records_written or 0,
-                    "bytes_written": p.bytes_written or 0,
-                })
+        for p in det.profile:
+            rows.append({
+                "run": r.run_id[:8], "started": (r.started_at or "")[:19],
+                "module": p.module_id,
+                "duration_ms": p.duration_ms or 0,
+                "records_read": p.records_read or 0,
+                "records_written": p.records_written or 0,
+                "bytes_read": p.bytes_read or 0,
+                "bytes_written": p.bytes_written or 0,
+            })
+
     if not rows:
         st.info("No module profile data yet.")
         return
 
     df = pd.DataFrame(rows)
-    total = len(df)
-    avg_dur = int(df["duration_ms"].mean())
-    total_bytes = int(df["bytes_read"].sum())
-    slowest_row = df.loc[df["duration_ms"].idxmax()]
-    slowest_label = f"{slowest_row['blueprint']} / {slowest_row['module']}"
+    mods = sorted(df["module"].unique())
+    sel = c_mod.selectbox("Module", mods, key="perf_mod")
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Modules profiled", f"{total:,}")
-    c2.metric("Avg duration", f"{_fmt_dur(avg_dur)}")
-    c3.metric("Total bytes read", f"{total_bytes:,}")
-    c4.metric("Slowest module", slowest_label)
+    mdf = df[df["module"] == sel].sort_values("started").reset_index(drop=True)
 
-    top_n = df.nlargest(20, "duration_ms")
-    top_n["_dur_label"] = top_n["duration_ms"].apply(_fmt_dur)
-    fig_bar = px.bar(
-        top_n, x="duration_ms", y="module", color="blueprint",
-        orientation="h", title="Slowest Modules (top 20 by duration)",
-        labels={"duration_ms": "", "module": ""},
-        hover_data={"blueprint": True, "run": True, "duration_ms": False,
-                     "_dur_label": True, "records_read": True,
-                     "records_written": True},
-        height=400)
-    fig_bar.update_xaxes(title_text="duration")
-    fig_bar.update_traces(hovertemplate=
-        "<b>%{y}</b><br>" +
-        "blueprint: %{customdata[0]}<br>" +
-        "run: %{customdata[1]}<br>" +
-        "duration: %{customdata[2]}<br>" +
-        "records read: %{customdata[3]:,}<br>" +
-        "records written: %{customdata[4]:,}<extra></extra>")
-    fig_bar.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+    # ── 1. Cost vs Data ────────────────────────────────────────────────────
+    st.markdown("**Cost vs Data**")
+    if len(mdf) >= 2:
+        first = mdf.iloc[0]
+        last = mdf.iloc[-1]
+        dur_growth = last["duration_ms"] / first["duration_ms"] if first["duration_ms"] else 1
+        row_growth = last["records_read"] / first["records_read"] if first["records_read"] else 1
+        if dur_growth >= 3 and row_growth < 1.5:
+            st.warning(
+                f"**{sel}**: duration ↑{dur_growth:.1f}× but rows ↑{row_growth:.1f}× "
+                "— likely skew or a non-scaling query; inspect shuffles below.")
 
-    max_dur = df["duration_ms"].max()
-    min_dur = df["duration_ms"].min()
-    ratio = max_dur / min_dur if min_dur else 1
-    log_on = False
-    if ratio > 100:
-        log_on = st.checkbox("Log scale", key="perf_log")
+        fig = px.scatter(mdf, x="records_read", y="duration_ms",
+                         hover_data={"run": True, "started": True},
+                         title=f"{sel} — duration vs records read",
+                         labels={"records_read": "records read",
+                                 "duration_ms": "duration (ms)"},
+                         height=300)
+        fig.update_layout(margin=dict(l=8, r=8, t=32, b=8))
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.caption("Need ≥2 runs with profile data for this module.")
 
-    if log_on:
-        fig_bar.update_xaxes(type="log")
+    # ── 2. Throughput Trend ────────────────────────────────────────────────
+    st.markdown("**Throughput Trend**")
+    if len(mdf) >= 2:
+        mdf["throughput"] = mdf["records_written"] / (mdf["duration_ms"] / 1000)
+        mdf["throughput"] = mdf["throughput"].replace(
+            [float("inf"), -float("inf")], 0).fillna(0)
+        fig = px.line(mdf, x="run", y="throughput", markers=True,
+                      title=f"{sel} — rows/sec over runs",
+                      hover_data={"started": True, "throughput": ":.1f"})
+        fig.update_layout(height=300, margin=dict(l=8, r=8, t=32, b=8))
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.caption("Need ≥2 runs to show throughput trend.")
 
-    st.plotly_chart(fig_bar, width="stretch")
+    # ── 3. Plan Complexity ─────────────────────────────────────────────────
+    st.markdown("**Plan Complexity**")
+    plans = q.plan_metrics(handle.store, pick, limit=200)
+    plan_rows = [p for p in plans if p.module_id == sel]
+    if plan_rows:
+        pdf = pd.DataFrame([{
+            "run": p.run_id[:8], "started": p.started_at[:19],
+            "shuffles": p.exchange_count, "python UDFs": p.python_udf_count,
+            "broadcasts": p.broadcast_count,
+        } for p in reversed(plan_rows)])
+        if len(plan_rows) >= 2:
+            st.dataframe(pdf, width="stretch", hide_index=True)
+            fig = px.line(pdf, x="run",
+                          y=["shuffles", "python UDFs", "broadcasts"],
+                          markers=True,
+                          title=f"{sel} — plan metrics over runs",
+                          hover_data={"started": True})
+            fig.update_yaxes(dtick=1)
+            fig.update_layout(height=300, margin=dict(l=8, r=8, t=32, b=8))
+            st.plotly_chart(fig, width="stretch")
+        else:
+            st.dataframe(pdf, width="stretch", hide_index=True)
+            st.caption("Only one data point for plan complexity.")
+    else:
+        st.caption(
+            "No plan-complexity data for this module "
+            "(requires a real pipeline run — sandbox runs don't produce "
+            "explain snapshots).")
 
-    fig_hist = px.histogram(
-        df, x="duration_ms", nbins=30, color="blueprint",
-        title="Duration Distribution",
-        labels={"duration_ms": "duration (ms)", "count": "modules"},
-        height=320)
-    if log_on:
-        fig_hist.update_xaxes(type="log")
-    fig_hist.update_yaxes(dtick=1)
-    fig_hist.update_layout(margin=dict(l=8, r=8, t=32, b=8))
-    st.plotly_chart(fig_hist, width="stretch")
-
-    st.caption("Recent module profiles (latest 5 runs per blueprint)")
-    st.dataframe(_style(df), width="stretch", hide_index=True)
+    # ── 4. Actionable Module Table ─────────────────────────────────────────
+    st.markdown("**Module Profile Summary**")
+    summ = df.groupby("module").agg(
+        runs=("run", "nunique"),
+        avg_duration_ms=("duration_ms", "mean"),
+        total_records_read=("records_read", "sum"),
+        total_records_written=("records_written", "sum"),
+    ).reset_index()
+    summ = summ.sort_values("avg_duration_ms", ascending=False)
+    if plans:
+        plan_summ = pd.DataFrame([{
+            "module": p.module_id, "shuffles": p.exchange_count,
+            "python UDFs": p.python_udf_count, "broadcasts": p.broadcast_count,
+        } for p in plans]).groupby("module").last().reset_index()
+        summ = summ.merge(plan_summ, on="module", how="left").fillna(0)
+        for c in ("shuffles", "python UDFs", "broadcasts"):
+            summ[c] = summ[c].astype(int)
+    _table(summ.to_dict("records"), status_cols=(),
+           numeric_cols=_NUMERIC | {"avg_duration_ms", "total_records_read",
+                                     "total_records_written", "shuffles",
+                                     "python UDFs", "broadcasts"},
+           formats={"avg_duration_ms": "{:,.0f}", "total_records_read": "{:,}",
+                    "total_records_written": "{:,}"})
 
 
 def _quality_tab(cfg, store_dir):
