@@ -5,7 +5,7 @@ name: "Main Provenance"
 context:
   my_ctx: "ctx_value"
   my_env: "${MY_VAR:-default_env}"
-  my_tier1: "@aq.runtime.run_id()"
+  my_tier1: "@aq.run.id()"
 
 modules:
   - id: "m1"

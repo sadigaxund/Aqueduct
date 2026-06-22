@@ -65,7 +65,7 @@ class AqFunctions:
         self._secrets_provider = secrets_provider
         self._secrets_region = secrets_region
         self._secrets_resolver = secrets_resolver
-        # @aq.meta.* — pipeline identity / deployment context, known at compile time.
+        # @aq.blueprint.* / @aq.deployment.* / @aq.version — identity & deploy context.
         self._blueprint_id = blueprint_id
         self._blueprint_name = blueprint_name
         self._blueprint_path = Path(blueprint_path) if blueprint_path else None
@@ -92,17 +92,17 @@ class AqFunctions:
     def date_format(self, date_str: str, pattern: str) -> str:
         return date.fromisoformat(date_str).strftime(_java_to_strftime(pattern))
 
-    # ── runtime ───────────────────────────────────────────────────────────────
+    # ── run — this execution ────────────────────────────────────────────────────
 
-    def runtime_timestamp(self) -> str:
+    def run_timestamp(self) -> str:
         if self._execution_date is not None:
             return datetime.combine(self._execution_date, time.min, tzinfo=timezone.utc).isoformat()
         return datetime.now(tz=timezone.utc).isoformat()
 
-    def runtime_run_id(self) -> str:
+    def run_id(self) -> str:
         return self._run_id
 
-    def runtime_prev_run_id(self) -> str:
+    def run_prev_id(self) -> str:
         return self.depot_get("_last_run_id", "")
 
     # ── secret / env ──────────────────────────────────────────────────────────
@@ -141,42 +141,47 @@ class AqFunctions:
         )
         return default
 
-    # ── meta — pipeline identity / deployment context ───────────────────────────
+    # ── blueprint / deployment / version — identity & deploy context ─────────────
+    # Resolvable only during blueprint compilation (NOT in aqueduct.yml, where no
+    # blueprint/run exists yet). Grouped by subject, not by dynamic-vs-static.
 
-    def _require_meta(self, name: str, value: Any) -> str:
+    def _require(self, token: str, value: Any) -> str:
         if value is None or value == "":
             raise RuntimeError(
-                f"@aq.meta.{name} is not available in this context "
-                "(no blueprint/deployment metadata was threaded into the compiler)."
+                f"@aq.{token} is not available here — it resolves only during blueprint "
+                "compilation, not in aqueduct.yml (no blueprint/run context exists at "
+                "config-load time)."
             )
         return str(value)
 
-    def meta_blueprint_id(self) -> str:
-        return self._require_meta("blueprint_id", self._blueprint_id)
+    def blueprint_id(self) -> str:
+        return self._require("blueprint.id", self._blueprint_id)
 
-    def meta_blueprint_name(self) -> str:
-        return self._require_meta("blueprint_name", self._blueprint_name)
+    def blueprint_name(self) -> str:
+        return self._require("blueprint.name", self._blueprint_name)
 
-    def meta_blueprint_path(self) -> str:
-        return self._require_meta(
-            "blueprint_path", str(self._blueprint_path) if self._blueprint_path else None)
+    def blueprint_path(self) -> str:
+        return self._require(
+            "blueprint.path", str(self._blueprint_path) if self._blueprint_path else None)
 
-    def meta_blueprint_dir(self) -> str:
-        return self._require_meta(
-            "blueprint_dir", str(self._blueprint_path.parent) if self._blueprint_path else None)
+    def blueprint_dir(self) -> str:
+        return self._require(
+            "blueprint.dir", str(self._blueprint_path.parent) if self._blueprint_path else None)
 
-    def meta_env(self) -> str:
-        return self._require_meta("env", self._deployment_env)
+    def deployment_env(self) -> str:
+        return self._require("deployment.env", self._deployment_env)
 
-    def meta_target(self) -> str:
-        return self._require_meta("target", self._deployment_target)
+    def deployment_target(self) -> str:
+        return self._require("deployment.target", self._deployment_target)
 
-    def meta_version(self) -> str:
+    def engine_version(self) -> str:
         from aqueduct import __version__
         return __version__
 
 
 # ── Dispatch table ─────────────────────────────────────────────────────────────
+# Subject-grouped namespaces: date · run · blueprint · deployment · depot ·
+# secret · env · version. The namespace names what the value is ABOUT.
 
 _DISPATCH: dict[str, str] = {
     "aq.date.today": "date_today",
@@ -184,19 +189,19 @@ _DISPATCH: dict[str, str] = {
     "aq.date.offset": "date_offset",
     "aq.date.month_start": "date_month_start",
     "aq.date.format": "date_format",
-    "aq.runtime.timestamp": "runtime_timestamp",
-    "aq.runtime.run_id": "runtime_run_id",
-    "aq.runtime.prev_run_id": "runtime_prev_run_id",
+    "aq.run.id": "run_id",
+    "aq.run.timestamp": "run_timestamp",
+    "aq.run.prev_id": "run_prev_id",
     "aq.secret": "secret",
     "aq.env": "env",
     "aq.depot.get": "depot_get",
-    "aq.meta.blueprint_id": "meta_blueprint_id",
-    "aq.meta.blueprint_name": "meta_blueprint_name",
-    "aq.meta.blueprint_path": "meta_blueprint_path",
-    "aq.meta.blueprint_dir": "meta_blueprint_dir",
-    "aq.meta.env": "meta_env",
-    "aq.meta.target": "meta_target",
-    "aq.meta.version": "meta_version",
+    "aq.blueprint.id": "blueprint_id",
+    "aq.blueprint.name": "blueprint_name",
+    "aq.blueprint.path": "blueprint_path",
+    "aq.blueprint.dir": "blueprint_dir",
+    "aq.deployment.env": "deployment_env",
+    "aq.deployment.target": "deployment_target",
+    "aq.version": "engine_version",
 }
 
 

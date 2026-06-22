@@ -29,8 +29,8 @@ context:
   env: dev
   today: "@aq.date.today()"
   yesterday: "@aq.date.yesterday()"
-  run_id: "@aq.runtime.run_id()"
-  prev_run: "@aq.runtime.prev_run_id()"
+  run_id: "@aq.run.id()"
+  prev_run: "@aq.run.prev_id()"
 
 
 # ── Context profiles ─────────────────────────────────────────────────────────

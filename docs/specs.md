@@ -125,7 +125,7 @@ The compile step is not cosmetic — the Executor consumes the Manifest, never t
 | Blueprint construct | Why resolve at compile, not run |
 | :- | :- |
 | `${ctx.foo}` Tier 0 context refs | Substitution must happen before any module sees its config to ensure consistency. |
-| `@aq.date.today()`, `@aq.runtime.timestamp()` Tier 1 calls | Resolving at execution time would tie the value to the moment each module ran — two modules calling `today()` at different stages of a 4-hour pipeline could see different dates. |
+| `@aq.date.today()`, `@aq.run.timestamp()` Tier 1 calls | Resolving at execution time would tie the value to the moment each module ran — two modules calling `today()` at different stages of a 4-hour pipeline could see different dates. |
 | `@aq.secret('KEY')` | One network round-trip per run, not one per module per worker thread. |
 | `@aq.depot.get('watermark')` | A single DuckDB read at compile time prevents race conditions with runtime writes. |
 | Arcade `ref: arcades/foo.yml` | Sub-Blueprints are expanded inline so the executor sees a single flat module list. |
@@ -527,21 +527,43 @@ Resolution order (highest priority wins):
 | `@aq.date.offset(base, days)` | Offset a date string by N days. Useful for backfill windows: `@aq.date.offset(base=@aq.date.today(), days=-7)`. |
 | `@aq.date.month_start(format="%Y-%m-%d")` | First day of the current month. |
 | `@aq.date.format(date_str, pattern)` | Reformat an ISO date string into a custom pattern. |
-| `@aq.runtime.run_id()` | Auto-generated UUID for this pipeline run. |
-| `@aq.runtime.timestamp()` | ISO-8601 timestamp of compilation. |
-| `@aq.runtime.prev_run_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
+| `@aq.run.id()` | Auto-generated UUID for this pipeline run. |
+| `@aq.run.timestamp()` | ISO-8601 timestamp of compilation. |
+| `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
 | `@aq.env('KEY')` | Read environment variable. Fails fast when absent — unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
 | `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see §6 Depot). |
-| `@aq.meta.blueprint_id()` | This Blueprint's `id`. |
-| `@aq.meta.blueprint_name()` | This Blueprint's `name`. |
-| `@aq.meta.blueprint_dir()` | Absolute directory of the Blueprint file — the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.meta.blueprint_dir()/out`). |
-| `@aq.meta.blueprint_path()` | Absolute path of the Blueprint file. |
-| `@aq.meta.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`) — branch paths/behaviour by environment. |
-| `@aq.meta.target()` | `deployment.target` (e.g. `local` / `databricks`). |
-| `@aq.meta.version()` | The Aqueduct engine version — useful for stamping outputs. |
+| `@aq.blueprint.id()` | This Blueprint's `id`. |
+| `@aq.blueprint.name()` | This Blueprint's `name`. |
+| `@aq.blueprint.dir()` | Absolute directory of the Blueprint file — the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
+| `@aq.blueprint.path()` | Absolute path of the Blueprint file. |
+| `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`) — branch paths/behaviour by environment. |
+| `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `databricks`). |
+| `@aq.version()` | The Aqueduct engine version — useful for stamping outputs. |
 
-> `@aq.meta.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host — those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.meta.blueprint_dir()` as the stable anchor instead.
+> `@aq.blueprint.* / @aq.deployment.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host — those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.blueprint.dir()` as the stable anchor instead.
+
+### 5.3.1 Resolution scopes — *where* each `@aq.*` resolves
+
+The config and Blueprints resolve at **different times**, and a scope is usable
+only where it exists:
+
+| Resolution point | Allowed syntax | Why |
+| :- | :- | :- |
+| **`aqueduct.yml`** (engine config) | `${ENV}`, `${VAR:-default}`, `@aq.secret('KEY')` only | Loaded first, standalone — no Blueprint and no run exist yet, so per-pipeline / per-run scopes have nothing to resolve against. |
+| **Blueprint compile** (per run — `context`, module `config`, blueprint-level `agent:` / `retry_policy:` / `spark_config:`, …) | **All `@aq.*`** — `date`, `run`, `blueprint`, `deployment`, `depot`, `secret`, `env`, `version` | The single point where the whole stack is in scope: deployment (from the loaded config) ⊃ blueprint (id/path) ⊃ run (run_id), plus the depot built from config. |
+
+The model is **override-downstream, not propagate-uphill**: one config is shared
+by many Blueprints, and one Blueprint by many runs; values flow config → blueprint
+→ run, and each lower layer overrides what it inherits. There is no path back
+*up* — a Blueprint cannot inject per-run values into `aqueduct.yml`, because the
+config is fully resolved *before* any Blueprint is parsed.
+
+Consequently, a non-secret `@aq.*` (e.g. `@aq.run.id()`, `@aq.blueprint.id()`) in
+`aqueduct.yml` is a **hard error** — those scopes do not exist at config-load
+time; use them inside the Blueprint. Per-pipeline store isolation (a depot / obs
+store per Blueprint) needs no `@aq` in config — the backend handles it
+automatically, keyed on `blueprint_id` (see §6).
 
 ## **5.4 UDF Registry**
 

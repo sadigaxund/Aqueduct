@@ -1077,6 +1077,23 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # `aqueduct.yml` validation, not a generic ImportError mid-compile.
     _validate_secrets_backend(cfg_pass1.secrets)
 
+    # Guard: only @aq.secret() resolves in aqueduct.yml. Any other @aq.* token
+    # (run / blueprint / deployment / date / depot / version) needs a Blueprint
+    # + run context that does not exist at config-load time (override-downstream,
+    # not propagate-uphill — see specs §5.3.1). Reject with a clear pointer
+    # instead of letting an unresolved literal leak into a config value.
+    _bad_aq = sorted({
+        f"@aq.{m.group(1)}"
+        for m in re.finditer(r"@aq\.(?!secret\b)([a-zA-Z_][\w.]*)", pass1_text)
+    })
+    if _bad_aq:
+        raise ConfigError(
+            f"{resolved}: {', '.join(_bad_aq)} cannot be used in aqueduct.yml — only "
+            "@aq.secret(...) and ${ENV} resolve in the engine config. The "
+            "run / blueprint / deployment scopes don't exist until a Blueprint "
+            "compiles; move these into the Blueprint instead."
+        )
+
     # ── Pass 2: resolve @aq.secret() via the configured provider ──────────────
     # Short-circuit when the file has no @aq.secret() tokens — keeps the common
     # case (no secrets) at one YAML parse and one validation.

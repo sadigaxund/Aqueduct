@@ -109,3 +109,31 @@ class TestBlobLeakGuardrail:
             "observability": {"backend": "postgres", "path": "postgresql://x/y"},
             "blob": {"backend": "s3", "path": "s3://b/k"},
         })
+
+
+class TestConfigAqGuard:
+    """aqueduct.yml resolves only ${ENV} + @aq.secret(); other @aq.* is rejected."""
+
+    def _write(self, tmp_path, body):
+        p = tmp_path / "aqueduct.yml"
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    def test_non_secret_aq_in_config_rejected(self, tmp_path):
+        from aqueduct.config import ConfigError
+        p = self._write(tmp_path,
+            'stores:\n  depot:\n    path: ".aqueduct/@aq.blueprint.id().db"\n')
+        with pytest.raises(ConfigError, match=r"@aq\.blueprint\.id cannot be used in aqueduct\.yml"):
+            load_config(p)
+
+    def test_run_scope_in_config_rejected(self, tmp_path):
+        from aqueduct.config import ConfigError
+        p = self._write(tmp_path, 'deployment:\n  master_url: "@aq.run.id()"\n')
+        with pytest.raises(ConfigError, match=r"@aq\.run\.id"):
+            load_config(p)
+
+    def test_env_and_plain_config_ok(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("AQ_CFG_ENV", "cluster")
+        p = self._write(tmp_path, 'deployment:\n  env: ${AQ_CFG_ENV}\n')
+        cfg = load_config(p)
+        assert cfg.deployment.env == "cluster"

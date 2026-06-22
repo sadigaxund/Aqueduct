@@ -42,11 +42,11 @@ class TestTier1Resolution:
         assert result == date.today().replace(day=1).isoformat()
 
     def test_runtime_run_id(self):
-        result = resolve_tier1_str("@aq.runtime.run_id()", self.reg)
+        result = resolve_tier1_str("@aq.run.id()", self.reg)
         assert result == "test-run-001"
 
     def test_runtime_prev_run_id_empty(self):
-        result = resolve_tier1_str("@aq.runtime.prev_run_id()", self.reg)
+        result = resolve_tier1_str("@aq.run.prev_id()", self.reg)
         assert result == ""
 
     def test_runtime_prev_run_id_exists(self, tmp_path):
@@ -55,11 +55,11 @@ class TestTier1Resolution:
         store.put("_last_run_id", "test-run-999")
         
         reg = AqFunctions(run_id="test-run-001", depot=store)
-        result = resolve_tier1_str("@aq.runtime.prev_run_id()", reg)
+        result = resolve_tier1_str("@aq.run.prev_id()", reg)
         assert result == "test-run-999"
 
     def test_runtime_timestamp_is_iso(self):
-        result = resolve_tier1_str("@aq.runtime.timestamp()", self.reg)
+        result = resolve_tier1_str("@aq.run.timestamp()", self.reg)
         from datetime import datetime
         dt = datetime.fromisoformat(result)
         assert dt.tzinfo is not None
@@ -130,7 +130,7 @@ class TestLogicalExecutionDate:
     def test_runtime_timestamp_with_execution_date_is_midnight_utc(self):
         from datetime import datetime
         aq = AqFunctions(execution_date=date(2026, 1, 15))
-        ts = aq.runtime_timestamp()
+        ts = aq.run_timestamp()
         parsed = datetime.fromisoformat(ts)
         assert parsed.hour == 0
         assert parsed.tzinfo is not None
@@ -179,7 +179,7 @@ class TestCompilerEdgeCases:
 
 
 class TestAqMeta:
-    """@aq.meta.* — pipeline identity / deployment context."""
+    """@aq.blueprint.* / @aq.deployment.* — pipeline identity / deployment context."""
 
     def test_meta_resolves(self):
         reg = AqFunctions(
@@ -187,29 +187,29 @@ class TestAqMeta:
             blueprint_path="/proj/blueprints/my_bp.yml",
             deployment_env="cluster", deployment_target="databricks",
         )
-        assert resolve_tier1_str("@aq.meta.blueprint_id()", reg) == "my_bp"
-        assert resolve_tier1_str("@aq.meta.blueprint_name()", reg) == "My BP"
-        assert resolve_tier1_str("@aq.meta.blueprint_path()", reg) == "/proj/blueprints/my_bp.yml"
-        assert resolve_tier1_str("@aq.meta.blueprint_dir()", reg) == "/proj/blueprints"
-        assert resolve_tier1_str("@aq.meta.env()", reg) == "cluster"
-        assert resolve_tier1_str("@aq.meta.target()", reg) == "databricks"
-        assert resolve_tier1_str("@aq.meta.version()", reg)  # non-empty
+        assert resolve_tier1_str("@aq.blueprint.id()", reg) == "my_bp"
+        assert resolve_tier1_str("@aq.blueprint.name()", reg) == "My BP"
+        assert resolve_tier1_str("@aq.blueprint.path()", reg) == "/proj/blueprints/my_bp.yml"
+        assert resolve_tier1_str("@aq.blueprint.dir()", reg) == "/proj/blueprints"
+        assert resolve_tier1_str("@aq.deployment.env()", reg) == "cluster"
+        assert resolve_tier1_str("@aq.deployment.target()", reg) == "databricks"
+        assert resolve_tier1_str("@aq.version()", reg)  # non-empty
 
     def test_meta_in_path_expression(self):
         reg = AqFunctions(blueprint_id="sales", blueprint_path="/p/sales.yml")
-        out = resolve_tier1_str("out/@aq.meta.blueprint_id()/data", reg)
+        out = resolve_tier1_str("out/@aq.blueprint.id()/data", reg)
         assert out == "out/sales/data"
 
     def test_meta_unavailable_raises(self):
         reg = AqFunctions()  # no metadata threaded
-        with pytest.raises(RuntimeError, match="not available in this context"):
-            resolve_tier1_str("@aq.meta.env()", reg)
+        with pytest.raises(RuntimeError, match="not available here"):
+            resolve_tier1_str("@aq.deployment.env()", reg)
 
     def test_meta_resolves_through_compile(self, tmp_path):
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: meta_demo\nname: Meta Demo\n"
-            "context:\n  tag: \"@aq.meta.blueprint_id()-@aq.meta.env()\"\n"
+            "context:\n  tag: \"@aq.blueprint.id()-@aq.deployment.env()\"\n"
             "modules:\n"
             "  - id: out\n    type: Egress\n    label: Out\n"
             "    config:\n      format: parquet\n      path: /tmp/${ctx.tag}\n      mode: overwrite\n"

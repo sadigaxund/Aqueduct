@@ -1758,7 +1758,7 @@ def run(
         # ── Surveyor stop ─────────────────────────────────────────────────────────
         surveyor.stop()
 
-        # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
+        # ── Depot — persist run_id for @aq.run.prev_id() ─────────────────
         try:
             depot.put("_last_run_id", run_id)
         except Exception:
