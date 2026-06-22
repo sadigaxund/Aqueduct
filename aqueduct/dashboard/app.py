@@ -119,12 +119,34 @@ def _style(df: pd.DataFrame, status_cols=("status",),
 def _table(rows: list[dict], status_cols=("status",),
            numeric_cols: frozenset[str] | None = None,
            col_width: dict[str, str] | None = None,
-           formats: dict[str, str] | None = None):
-    """Static, full-length table with colored status cells (no chrome / no nudge)."""
+           formats: dict[str, str] | None = None,
+           max_static: int = 20):
+    """Colored-status table. Static + full-length when small; past `max_static`
+    rows it switches to a height-capped scrollable dataframe so a busy fleet
+    (many blueprints / modules / lineage columns) can't blow the page open."""
     if not rows:
         st.caption("— nothing here —")
         return
-    st.table(_style(pd.DataFrame(rows), status_cols, numeric_cols, col_width, formats))
+    styled = _style(pd.DataFrame(rows), status_cols, numeric_cols, col_width, formats)
+    if len(rows) > max_static:
+        st.dataframe(styled, width="stretch", hide_index=True, height=560)
+    else:
+        st.table(styled)
+
+
+def _count_yaxis(fig, max_val: float = 0) -> None:
+    """Integer y-ticks that stay readable at ANY scale.
+
+    `dtick=1` is right for small counts (no fractional 0.5 ticks) but
+    catastrophic for large ones — a gridline every unit means thousands of ticks
+    (e.g. a distinct-count in the millions would hang the browser). Force unit
+    ticks only when the max is small; otherwise let Plotly auto-space and format
+    ticks as integers. Pass max_val=0 (default) when the range is unknown/large.
+    """
+    if 0 < max_val <= 12:
+        fig.update_yaxes(dtick=1, tickformat="d")
+    else:
+        fig.update_yaxes(tickformat="d")
 
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
@@ -145,9 +167,9 @@ def _fleet_tab(cfg, store_dir):
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Blueprints", len(summ))
     c2.metric("Runs", total_runs)
-    c3.metric("Success rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
-    c4.metric("Heal attempts", sum(s.heal_attempts for s in summ))
-    c5.metric("Heal coverage \u2014 zero-token", cov_pct)
+    c3.metric("Success Rate", f"{(total_succ / total_runs * 100) if total_runs else 0:.0f}%")
+    c4.metric("Heal Attempts", sum(s.heal_attempts for s in summ))
+    c5.metric("Zero-Token Coverage", cov_pct)
 
     rot = q.runs_over_time(cfg, store_dir=store_dir)
     dist = q.failure_categories(cfg, store_dir=store_dir)
@@ -184,7 +206,7 @@ def _fleet_tab(cfg, store_dir):
                 labels={"value": "runs", "index": "", "variable": "status"},
             )
             fig.update_xaxes(tickangle=45, title=None)
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, max((grid[s][d] for s in statuses for d in days), default=0))
             fig.update_layout(legend=dict(orientation="h", y=1.02, x=0), height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
 
@@ -195,7 +217,7 @@ def _fleet_tab(cfg, store_dir):
                 x=list(dist.keys()), y=list(dist.values()),
                 labels={"x": "", "y": "count"},
             )
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, max(dist.values(), default=0))
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -208,7 +230,7 @@ def _fleet_tab(cfg, store_dir):
                 x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
             )
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, max(gates.values(), default=0))
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=400, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -419,7 +441,7 @@ def _runs_tab(handles):
                 if len(rows_l) >= 2:
                     fig = px.line(df, x="run", y=cols, markers=True,
                                   title="Distinct count per column")
-                    fig.update_yaxes(dtick=1)
+                    _count_yaxis(fig, 0)
                     fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
                     st.plotly_chart(fig, width="stretch")
             elif sig_type == "schema_snapshot":
@@ -721,7 +743,7 @@ def _performance_tab(handles):
                           markers=True,
                           title=f"{sel} — plan metrics over runs",
                           hover_data={"started": True})
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, pdf[["shuffles", "python UDFs", "broadcasts"]].to_numpy().max())
             fig.update_layout(height=300, margin=dict(l=8, r=8, t=32, b=8))
             st.plotly_chart(fig, width="stretch")
         else:
@@ -738,10 +760,11 @@ def _performance_tab(handles):
     summ = df.groupby("module").agg(
         runs=("run", "nunique"),
         avg_duration_ms=("duration_ms", "mean"),
+        max_duration_ms=("duration_ms", "max"),          # slowest run — tail latency avg hides
         total_records_read=("records_read", "sum"),
         total_records_written=("records_written", "sum"),
     ).reset_index()
-    summ = summ.sort_values("avg_duration_ms", ascending=False)
+    summ = summ.sort_values("max_duration_ms", ascending=False)  # worst-case first
     if plans:
         plan_summ = pd.DataFrame([{
             "module": p.module_id, "shuffles": p.exchange_count,
@@ -751,10 +774,12 @@ def _performance_tab(handles):
         for c in ("shuffles", "python UDFs", "broadcasts"):
             summ[c] = summ[c].astype(int)
     _table(summ.to_dict("records"), status_cols=(),
-           numeric_cols=_NUMERIC | {"avg_duration_ms", "total_records_read",
+           numeric_cols=_NUMERIC | {"avg_duration_ms", "max_duration_ms",
+                                     "total_records_read",
                                      "total_records_written", "shuffles",
                                      "python UDFs", "broadcasts"},
-           formats={"avg_duration_ms": "{:,.0f}", "total_records_read": "{:,}",
+           formats={"avg_duration_ms": "{:,.0f}", "max_duration_ms": "{:,.0f}",
+                    "total_records_read": "{:,}",
                     "total_records_written": "{:,}"})
 
 
@@ -781,7 +806,7 @@ def _quality_tab(cfg, store_dir):
                           hover_data={"run": True, "blueprint": True, "failures": True})
             fig.update_traces(hovertemplate=
                 "<b>%{x}</b><br>blueprint: %{customdata[0]}<br>failures: %{y}<extra></extra>")
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, af_agg["failures"].max())
             fig.update_layout(height=280, margin=dict(l=8, r=8, t=32, b=8))
             st.plotly_chart(fig, width="stretch")
     else:
@@ -814,11 +839,11 @@ def _quality_tab(cfg, store_dir):
             if show_log and log_on:
                 fig.update_yaxes(type="log")
             else:
-                fig.update_yaxes(dtick=1)
+                _count_yaxis(fig, max_r)
             fig.update_layout(height=280, margin=dict(l=8, r=8, t=32, b=8))
             st.plotly_chart(fig, width="stretch")
         else:
-            st.metric("Spillway rows", qv_rows[0].records_written)
+            st.metric("Spillway Rows", qv_rows[0].records_written)
         with st.expander("Detail"):
             st.dataframe(_style(qv_df), width="stretch", hide_index=True)
     else:
@@ -909,11 +934,22 @@ def _quality_tab(cfg, store_dir):
             df = pd.DataFrame(rows_l)
             st.dataframe(_style(df), width="stretch", hide_index=True)
             if len(rows_l) >= 2:
+                # Columns can differ by orders of magnitude (a flag with 2
+                # distinct values vs an id with millions) — offer a log axis so
+                # the small series don't flatten to the baseline.
+                _nums = [v for r in rows_l for c in cols
+                         if isinstance((v := r.get(c)), (int, float)) and v > 0]
+                log_on = False
+                if _nums and max(_nums) / min(_nums) > 100:
+                    log_on = st.checkbox("Log scale", key="quality_dc_log")
                 fig = px.line(df, x="run", y=cols, markers=True,
                               title="Distinct count per column",
                               hover_name="run",
                               hover_data={"started": True})
-                fig.update_yaxes(dtick=1)
+                if log_on:
+                    fig.update_yaxes(type="log")
+                else:
+                    _count_yaxis(fig, 0)
                 fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
                 st.plotly_chart(fig, width="stretch")
 
@@ -965,12 +1001,12 @@ def _heal_overview(cfg, store_dir, hc, detail):
     zero_token = hc.get("cached", 0) + hc.get("replayed", 0)
     pl = q.patch_lifecycle_counts(cfg, store_dir=store_dir)
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Heal events", total)
-    c2.metric("Zero-token", f"{zero_token / total * 100:.0f}%" if total else "\u2014")
-    c3.metric("Cache hit", hc.get("cached", 0))
-    c4.metric("Pending patches", pl.get("pending", 0))
-    c5.metric("Applied patches", pl.get("applied", 0))
-    c6.metric("Rejected patches", pl.get("rejected", 0))
+    c1.metric("Heal Events", total)
+    c2.metric("Zero-Token %", f"{zero_token / total * 100:.0f}%" if total else "\u2014")
+    c3.metric("Cache Hits", hc.get("cached", 0))
+    c4.metric("Pending Patches", pl.get("pending", 0))
+    c5.metric("Applied Patches", pl.get("applied", 0))
+    c6.metric("Rejected Patches", pl.get("rejected", 0))
 
     # ── Charts row ───────────────────────────────────────────────────────
     left, right = st.columns(2)
@@ -991,7 +1027,7 @@ def _heal_overview(cfg, store_dir, hc, detail):
                 x=list(gates.keys()), y=list(gates.values()),
                 labels={"x": "", "y": "count"},
             )
-            fig.update_yaxes(dtick=1)
+            _count_yaxis(fig, max(gates.values(), default=0))
             fig.update_xaxes(tickangle=45, title=None)
             fig.update_layout(height=300, margin=dict(l=8, r=8, t=8, b=8))
             st.plotly_chart(fig, width="stretch")
@@ -1069,10 +1105,61 @@ def _render_op(op: dict) -> str:
     return f"{t}  {mid}  ({json.dumps({k: v for k, v in op.items() if k not in ('op', 'type', 'module_id', 'target')})})"
 
 
-def _patches_subtab(cfg, store_dir):
-    import difflib
-    from pathlib import Path
+def _find_blueprint_file(path_str: str | None, bp_id: str) -> Path | None:
+    """Locate the blueprint YAML on disk (explicit path, then blueprints/ globs)."""
+    if path_str and Path(path_str).is_file():
+        return Path(path_str)
+    for base in (Path.cwd() / "blueprints", Path("blueprints")):
+        if not base.is_dir():
+            continue
+        exact = base / f"{bp_id}.yml"
+        if exact.is_file():
+            return exact
+        matches = sorted(base.glob(f"*{bp_id}.yml"))
+        if matches:
+            return matches[0]
+    return None
 
+
+def _render_patch_diff(picked, patch_data) -> None:
+    """Before/after YAML diff via the REAL engine path — identical machinery to
+    `aqueduct patch preview` / `patch apply` (PatchSpec.model_validate →
+    apply_patch_to_dict → render_unified_diff). No bespoke op-apply: the diff is
+    exactly what approving the patch produces.
+    """
+    if not patch_data or not (patch_data.get("operations") or []):
+        return
+    is_pending = picked.status == "pending"
+    label = ("Before / After Diff  ·  simulated preview" if is_pending
+             else "Before / After Diff  ·  what these operations would change")
+    with st.expander(label, expanded=is_pending):
+        bp_path = _find_blueprint_file(patch_data.get("blueprint_path"), picked.blueprint_id)
+        if bp_path is None:
+            st.caption("Blueprint file not found on disk — cannot render diff.")
+            return
+        if not is_pending:
+            st.caption(
+                "Already applied — the change is in the blueprint on disk. Showing what "
+                "these operations would change against the *current* file (empty = already "
+                "present). Use `git diff` / `aqueduct rollback` for the historical view.")
+        try:
+            from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
+            from aqueduct.patch.grammar import PatchSpec
+            from aqueduct.patch.preview import render_unified_diff
+
+            spec = PatchSpec.model_validate(patch_data)
+            before = _yaml_load(bp_path)            # apply_patch_to_dict copies; before unmutated
+            after = apply_patch_to_dict(before, spec)
+            diff_text = render_unified_diff(before, after)
+            if diff_text.strip():
+                st.code(diff_text, language="diff")
+            else:
+                st.caption("No changes — operations already reflected in the blueprint.")
+        except Exception as exc:  # noqa: BLE001 — degrade to the operations list below
+            st.caption(f"Diff unavailable ({exc}). See Operations below.")
+
+
+def _patches_subtab(cfg, store_dir):
     patches = q.patch_list(cfg, store_dir=store_dir)
     if not patches:
         st.info("No patches have been generated yet. Run a blueprint with `agent:` configured and a deliberate failure.")
@@ -1117,19 +1204,28 @@ def _patches_subtab(cfg, store_dir):
 
     # ── Header ───────────────────────────────────────────────────────────
     st.divider()
-    st.markdown(f"**{picked.patch_id}**  \u00b7  `{picked.status}`")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Blueprint", picked.blueprint_id)
-    c2.metric("Module", picked.where_field or "\u2014")
-    c3.metric("Error", picked.error_class or "\u2014")
-    c4.metric("Source", picked.source or "\u2014")
-
-    # Generation info row
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Created", picked.created_at[:10] if picked.created_at else "\u2014")
-    c2.metric("Prompt version", picked.prompt_version or "\u2014")
-    if patch_data and patch_data.get("confidence") is not None:
-        c3.metric("Confidence", f"{patch_data['confidence']:.0%}")
+    _badge = {"pending": "#9a6700", "applied": "#1a7f37",
+              "rejected": "#cf222e"}.get(picked.status, "#57606a")
+    st.markdown(
+        f"#### `{picked.patch_id}` "
+        f"<span style='background:{_badge};color:white;padding:1px 8px;border-radius:4px;"
+        f"font-size:0.55em;vertical-align:middle;text-transform:uppercase;"
+        f"letter-spacing:0.5px'>{picked.status}</span>",
+        unsafe_allow_html=True,
+    )
+    # Identity attributes are text, not numbers \u2014 markdown, not metric tiles.
+    st.markdown(
+        f"**Blueprint** `{picked.blueprint_id}`  \u00b7  "
+        f"**Module** `{picked.where_field or '\u2014'}`  \u00b7  "
+        f"**Error** `{picked.error_class or '\u2014'}`  \u00b7  "
+        f"**Source** {picked.source or '\u2014'}"
+    )
+    conf = patch_data.get("confidence") if patch_data else None
+    _meta = (f"Created {picked.created_at[:19] if picked.created_at else '\u2014'} "
+             f"\u00b7 prompt v{picked.prompt_version or '\u2014'}")
+    if conf is not None:
+        _meta += f" \u00b7 confidence {conf:.0%}"
+    st.caption(_meta)
 
     # ── Rationale & Root Cause ───────────────────────────────────────────
     with st.expander("Rationale & Root Cause", expanded=True):
@@ -1187,97 +1283,7 @@ def _patches_subtab(cfg, store_dir):
         ], status_cols=("status",))
 
     # ── Before / After Diff ──────────────────────────────────────────────
-    if not patch_data:
-        return
-    ops_list = patch_data.get("operations") or []
-    if not ops_list:
-        return
-
-    diff_type = picked.status
-    with st.expander(
-        f"Before / After Diff  \u00b7  "
-        f"{'simulated (pending)' if diff_type == 'pending' else 'recorded (already applied)'}",
-        expanded=diff_type == "pending",
-    ):
-        try:
-            from types import SimpleNamespace
-            from aqueduct.patch.operations import apply_operation
-            from ruamel.yaml import YAML
-
-            # Find the blueprint file
-            bp_path_str = patch_data.get("blueprint_path") or ""
-            if not bp_path_str:
-                bp_id = picked.blueprint_id
-                for base in [Path.cwd() / "blueprints", Path("blueprints")]:
-                    if not base.is_dir():
-                        continue
-                    exact = base / f"{bp_id}.yml"
-                    if exact.is_file():
-                        bp_path_str = str(exact)
-                        break
-                    matches = sorted(base.glob(f"*{bp_id}.yml"))
-                    if matches:
-                        bp_path_str = str(matches[0])
-                        break
-
-            if not bp_path_str or not Path(bp_path_str).is_file():
-                st.caption("Blueprint file not found on disk.")
-                return
-
-            bp_path = Path(bp_path_str)
-            yaml = YAML()
-            yaml.preserve_quotes = True
-            yaml.indent(mapping=2, sequence=4, offset=2)
-
-            def _to_op_obj(op_dict):
-                """Convert raw operation dict to object with attribute access.
-                Uses setattr to avoid issues with Python keyword field names (from, to)."""
-                ns = SimpleNamespace()
-                for k, v in op_dict.items():
-                    setattr(ns, k, v)
-                if not hasattr(ns, "op") and hasattr(ns, "type"):
-                    ns.op = ns.type
-                return ns
-
-            if diff_type == "pending":
-                before_text = bp_path.read_text()
-                bp_dict = yaml.load(before_text)
-                for op_dict in ops_list:
-                    apply_operation(bp_dict, _to_op_obj(op_dict))
-                import io
-                buf = io.StringIO()
-                yaml.dump(bp_dict, buf)
-                after_text = buf.getvalue()
-            else:
-                backup_pattern = f"{picked.patch_id}_*{bp_path.name}"
-                backup_dir = bp_path.parent.parent / "patches" / "backups"
-                backup = None
-                if backup_dir.is_dir():
-                    matches = sorted(backup_dir.glob(backup_pattern))
-                    if matches:
-                        backup = matches[-1]
-                if not backup:
-                    st.caption(
-                        "This patch was already applied to the blueprint file. "
-                        "No pre-patch backup found to diff against."
-                    )
-                    return
-                before_text = backup.read_text()
-                after_text = bp_path.read_text()
-
-            diff = difflib.unified_diff(
-                before_text.splitlines(keepends=True),
-                after_text.splitlines(keepends=True),
-                fromfile=bp_path.name,
-                tofile=bp_path.name,
-            )
-            diff_text = "".join(diff)
-            if diff_text.strip():
-                st.code(diff_text, language="diff")
-            else:
-                st.caption("No differences detected.")
-        except Exception as exc:
-            st.caption(f"Diff unavailable: {exc}")
+    _render_patch_diff(picked, patch_data)
 
 
 def _doctor_tab(config_path):
