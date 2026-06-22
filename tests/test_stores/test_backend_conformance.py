@@ -39,6 +39,9 @@ _DDL = [
     """CREATE TABLE IF NOT EXISTS healing_outcomes (
         id VARCHAR, run_id VARCHAR, failure_category VARCHAR,
         resolution VARCHAR, run_success_after_patch BOOLEAN)""",
+    """CREATE TABLE IF NOT EXISTS probe_signals (
+        run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR,
+        payload JSON, captured_at TIMESTAMPTZ)""",
 ]
 
 _TS = "2026-06-20T00:00:00+00:00"
@@ -101,12 +104,18 @@ def seeded_cfg(request, tmp_path):
             "VALUES (?, ?, ?, ?, ?)",
             ["ho1", "rc1", "SchemaError", "llm", True],
         )
+        cur.execute(
+            "INSERT INTO probe_signals (run_id, probe_id, signal_type, payload, captured_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ["rc1", "p1", "null_rates", json.dumps({"null_rates": {"out_col": 0.25}}), _TS],
+        )
 
     yield cfg_file, backend
 
     if backend == "postgres":
         with get_stores(cfg).observability.connect() as cur:
-            for tbl in ("run_records", "module_metrics", "column_lineage", "healing_outcomes"):
+            for tbl in ("run_records", "module_metrics", "column_lineage",
+                        "healing_outcomes", "probe_signals"):
                 try:
                     cur.execute(f"DELETE FROM {tbl} WHERE run_id = ?", ["rc1"])  # run_id in all 4
                 except Exception:

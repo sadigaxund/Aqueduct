@@ -685,7 +685,8 @@ def heal_attempt_details(cfg: Any, store_dir: str | None = None,
                            ha.tokens_in, ha.tokens_out, ha.stop_reason,
                            ha.gate_that_rejected, ha.error_class,
                            ho.failure_category, ho.resolution,
-                           ho.patch_applied, ho.run_success_after_patch
+                           ho.patch_applied, ho.run_success_after_patch,
+                           ho.patch_id, ho.model
                     FROM heal_attempts ha
                     LEFT JOIN healing_outcomes ho ON ho.run_id = ha.run_id
                     ORDER BY ha.recorded_at DESC
@@ -886,6 +887,139 @@ def patch_lifecycle_counts(cfg: Any, store_dir: str | None = None) -> dict[str, 
         except Exception:
             continue
     return counts
+
+
+@dataclass(frozen=True)
+class PatchRow:
+    patch_id: str
+    blueprint_id: str
+    run_id: str
+    status: str
+    error_class: str | None
+    where_field: str | None
+    rationale: str | None
+    ops: list[str]
+    source: str | None
+    prompt_version: str | None
+    created_at: str | None
+
+
+@dataclass(frozen=True)
+class PatchSimulationRow:
+    patch_id: str
+    gate: str
+    status: str
+    detail: str | None
+    duration_ms: int | None
+
+
+def patch_list(cfg: Any, store_dir: str | None = None) -> list[PatchRow]:
+    """All patches across the fleet, most recent first."""
+    out: list[PatchRow] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    "SELECT patch_id, blueprint_id, run_id, status, "
+                    "error_class, where_field, rationale, ops, "
+                    "source, prompt_version, "
+                    "CAST(created_at AS VARCHAR) AS created_at "
+                    "FROM patch_index ORDER BY created_at DESC"
+                )
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    d = dict(zip(cols, row))
+                    ops_raw = d.get("ops", [])
+                    if isinstance(ops_raw, str):
+                        try:
+                            ops_raw = json.loads(ops_raw)
+                        except Exception:
+                            ops_raw = []
+                    out.append(PatchRow(
+                        patch_id=d["patch_id"],
+                        blueprint_id=d["blueprint_id"],
+                        run_id=d["run_id"],
+                        status=d["status"],
+                        error_class=d["error_class"],
+                        where_field=d["where_field"],
+                        rationale=d["rationale"],
+                        ops=list(ops_raw or []),
+                        source=d["source"],
+                        prompt_version=d["prompt_version"],
+                        created_at=d["created_at"],
+                    ))
+        except Exception:
+            continue
+    out.sort(key=lambda r: r.created_at, reverse=True)
+    return out
+
+
+def patch_simulation_for_patch(cfg: Any, patch_id: str,
+                                store_dir: str | None = None) -> list[PatchSimulationRow]:
+    """Gate validation results for a specific patch (from patch_simulation table)."""
+    out: list[PatchSimulationRow] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    "SELECT patch_id, gate, status, detail, duration_ms "
+                    "FROM patch_simulation WHERE patch_id = ? "
+                    "ORDER BY gate",
+                    [patch_id],
+                )
+                cols = [d[0] for d in cur.description]
+                for row in cur.fetchall():
+                    d = dict(zip(cols, row))
+                    out.append(PatchSimulationRow(
+                        patch_id=d["patch_id"],
+                        gate=d["gate"],
+                        status=d["status"],
+                        detail=d.get("detail"),
+                        duration_ms=d.get("duration_ms"),
+                    ))
+        except Exception:
+            continue
+    return out
+
+
+def _find_patch_file(patches_root: str | Path, patch_id: str) -> Path | None:
+    """Find a patch file by patch_id in any status subdirectory."""
+    root = Path(patches_root)
+    for sub in ("pending", "applied", "rejected"):
+        d = root / sub
+        if not d.is_dir():
+            continue
+        for f in d.iterdir():
+            if f.suffix == ".json" and (patch_id in f.stem or f.stem.endswith(f"_{patch_id}")):
+                return f
+    return None
+
+
+def load_patch_file(patch_id: str, patches_root: str | Path = "") -> dict | None:
+    """Load a patch JSON file by patch_id.
+
+    Searches ``patches_root/{pending,applied,rejected}/`` for a matching file.
+    If ``patches_root`` is empty, searches CWD-relative ``patches/``,
+    ``tmp/test_studio/patches/``, and the absolute project root ``patches/``.
+    """
+    roots: list[Path] = [Path(patches_root)] if patches_root else []
+    if not roots:
+        roots = [Path("patches"), Path("tmp/test_studio/patches")]
+        # Also try the absolute project root (one level above tmp/test_studio)
+        proj = Path.cwd().parent / "patches"
+        if proj.is_dir():
+            roots.append(proj)
+    for root in roots:
+        if not root.is_dir():
+            continue
+        found = _find_patch_file(root, patch_id)
+        if found:
+            try:
+                with open(found) as f:
+                    return json.load(f)
+            except Exception:
+                return None
+    return None
 
 
 def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:

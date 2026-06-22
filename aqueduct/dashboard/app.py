@@ -14,6 +14,7 @@ health, not run data — is memoised per browser session; F5 re-runs it.)
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -944,11 +945,20 @@ def _quality_tab(cfg, store_dir):
 
 def _heal_tab(cfg, store_dir):
     hc = q.heal_coverage(cfg, store_dir=store_dir)
-    gates = q.gate_rejection_rates(cfg, store_dir=store_dir)
     detail = q.heal_attempt_details(cfg, store_dir=store_dir)
     if not detail and not hc:
         st.info("No healing data yet. Run a blueprint that fails with `agent:` configured.")
         return
+
+    subtabs = st.tabs(["Overview", "Patches"])
+    with subtabs[0]:
+        _heal_overview(cfg, store_dir, hc, detail)
+    with subtabs[1]:
+        _patches_subtab(cfg, store_dir)
+
+
+def _heal_overview(cfg, store_dir, hc, detail):
+    gates = q.gate_rejection_rates(cfg, store_dir=store_dir)
 
     # ── KPI row — heal pipeline → patch outcomes ────────────────────────
     total = sum(hc.values())
@@ -1022,6 +1032,252 @@ def _heal_tab(cfg, store_dir):
             for d in detail[:50]
         ], status_cols=("resolution",),
            formats={"tokens": "{:,}"})
+
+
+def _render_op(op: dict) -> str:
+    """Render a patch operation dict as a readable one-liner."""
+    t = op.get("op") or op.get("type") or "unknown"
+    mid = op.get("module_id") or op.get("target") or ""
+    if t == "set_module_config_key":
+        return f"set config  {mid}.{op.get('key', '')} = \"{op.get('value', '')}\""
+    if t == "replace_module_config":
+        return f"replace config  {mid}"
+    if t == "replace_module_label":
+        return f"rename  {mid}  \u2192 \"{op.get('label', '')}\""
+    if t == "insert_module":
+        return f"insert {op.get('type', 'module')} \"{op.get('label', '')}\""
+    if t == "remove_module":
+        return f"remove module  {mid}"
+    if t == "replace_context_value":
+        return f"set context  {op.get('key', '')} = \"{op.get('value', '')}\""
+    if t == "add_probe":
+        return f"attach probe  {mid}  on {op.get('attach_to', '')}"
+    if t == "replace_edge":
+        return f"rewire  {op.get('from', '')} \u2192 {op.get('to', '')}"
+    if t == "set_module_on_failure":
+        return f"set on_failure  {mid}"
+    if t == "replace_retry_policy":
+        return "replace retry policy"
+    if t == "add_arcade_ref":
+        return f"add arcade ref  {op.get('ref', '')}"
+    if t == "defer_to_human":
+        return "\u26a0 cannot auto-fix \u2014 needs human intervention"
+    if t == "replace_macro":
+        return f"replace macro  {op.get('name', '')}"
+    if t == "set_spark_config":
+        return f"set spark config  {op.get('key', '')} = \"{op.get('value', '')}\""
+    return f"{t}  {mid}  ({json.dumps({k: v for k, v in op.items() if k not in ('op', 'type', 'module_id', 'target')})})"
+
+
+def _patches_subtab(cfg, store_dir):
+    import difflib
+    from pathlib import Path
+
+    patches = q.patch_list(cfg, store_dir=store_dir)
+    if not patches:
+        st.info("No patches have been generated yet. Run a blueprint with `agent:` configured and a deliberate failure.")
+        return
+
+    sel = st.dataframe(
+        pd.DataFrame([
+            {
+                "status": p.status,
+                "patch_id": p.patch_id,
+                "blueprint": p.blueprint_id,
+                "error": p.error_class or "\u2014",
+                "module": p.where_field or "\u2014",
+                "source": p.source or "\u2014",
+                "ops": ", ".join(p.ops),
+                "created": p.created_at[:19] if p.created_at else "\u2014",
+            }
+            for p in patches
+        ]),
+        width="stretch",
+        column_config={
+            "status": st.column_config.TextColumn("Status", width="small"),
+            "patch_id": st.column_config.TextColumn("Patch ID", width="medium"),
+            "blueprint": st.column_config.TextColumn("Blueprint", width="medium"),
+            "error": st.column_config.TextColumn("Error", width="medium"),
+            "module": st.column_config.TextColumn("Module", width="small"),
+            "source": st.column_config.TextColumn("Source", width="small"),
+            "ops": st.column_config.TextColumn("Operations", width="medium"),
+        },
+        on_select="rerun",
+        selection_mode="single-row",
+        key="patch_selector",
+    )
+
+    if not sel["selection"]["rows"]:
+        st.caption("Select a patch to see its detail.")
+        return
+
+    idx = sel["selection"]["rows"][0]
+    picked = patches[idx]
+    patch_data = q.load_patch_file(picked.patch_id)
+
+    # ── Header ───────────────────────────────────────────────────────────
+    st.divider()
+    st.markdown(f"**{picked.patch_id}**  \u00b7  `{picked.status}`")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Blueprint", picked.blueprint_id)
+    c2.metric("Module", picked.where_field or "\u2014")
+    c3.metric("Error", picked.error_class or "\u2014")
+    c4.metric("Source", picked.source or "\u2014")
+
+    # Generation info row
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Created", picked.created_at[:10] if picked.created_at else "\u2014")
+    c2.metric("Prompt version", picked.prompt_version or "\u2014")
+    if patch_data and patch_data.get("confidence") is not None:
+        c3.metric("Confidence", f"{patch_data['confidence']:.0%}")
+
+    # ── Rationale & Root Cause ───────────────────────────────────────────
+    with st.expander("Rationale & Root Cause", expanded=True):
+        if picked.rationale:
+            st.markdown(picked.rationale)
+        else:
+            st.caption("No rationale recorded.")
+        if patch_data and patch_data.get("root_cause"):
+            st.markdown("---")
+            st.markdown("**Root cause**")
+            st.markdown(patch_data["root_cause"])
+
+    # ── Generation Metrics ───────────────────────────────────────────────
+    ho_rows = q.heal_attempt_details(cfg, store_dir=store_dir, limit=500)
+    gen = [d for d in ho_rows if d.get("patch_id") == picked.patch_id]
+    # Prefer llm resolution (has real model/metrics) over replayed
+    gen.sort(key=lambda d: 0 if d.get("resolution") == "llm" else 1)
+    if gen:
+        g = gen[0]
+        metrics = []
+        if g.get("model"):
+            metrics.append(("Model", g["model"]))
+        if (g.get("tokens_in") or 0) + (g.get("tokens_out") or 0) > 0:
+            metrics.append(("Tokens", f"{g.get('tokens_in') or 0:,} in / {g.get('tokens_out') or 0:,} out"))
+        if g.get("latency_ms"):
+            metrics.append(("Latency", f"{g['latency_ms'] // 1000}s"))
+        if g.get("stop_reason"):
+            metrics.append(("Stop reason", g["stop_reason"]))
+        if g.get("resolution"):
+            metrics.append(("Resolution", g["resolution"]))
+        if metrics:
+            st.caption("Generation Metrics")
+            _table([{"metric": k, "value": v} for k, v in metrics], status_cols=())
+
+    # ── Operations ───────────────────────────────────────────────────────
+    ops_list = (patch_data or {}).get("operations", []) or []
+    if ops_list:
+        st.caption("Operations")
+        ops_text = "\n".join(f"  {i+1}. {_render_op(op)}" for i, op in enumerate(ops_list))
+        st.code(ops_text, language="text")
+    elif picked.ops:
+        st.caption("Operations")
+        ops_text = "\n".join(f"  {i+1}. {op}" for i, op in enumerate(picked.ops))
+        st.code(ops_text, language="text")
+
+    # ── Gate Validation ──────────────────────────────────────────────────
+    sim = q.patch_simulation_for_patch(cfg, picked.patch_id, store_dir=store_dir)
+    if sim:
+        st.caption("Gate Validation Results")
+        _table([
+            {"gate": s.gate, "status": s.status,
+             "detail": s.detail or "",
+             "duration_ms": f"{s.duration_ms}ms" if s.duration_ms else "\u2014"}
+            for s in sim
+        ], status_cols=("status",))
+
+    # ── Before / After Diff ──────────────────────────────────────────────
+    if not patch_data:
+        return
+    ops_list = patch_data.get("operations") or []
+    if not ops_list:
+        return
+
+    diff_type = picked.status
+    with st.expander(
+        f"Before / After Diff  \u00b7  "
+        f"{'simulated (pending)' if diff_type == 'pending' else 'recorded (already applied)'}",
+        expanded=diff_type == "pending",
+    ):
+        try:
+            from types import SimpleNamespace
+            from aqueduct.patch.operations import apply_operation
+            from ruamel.yaml import YAML
+
+            # Find the blueprint file
+            bp_path_str = patch_data.get("blueprint_path") or ""
+            if not bp_path_str:
+                bp_id = picked.blueprint_id
+                for base in [Path.cwd() / "blueprints", Path("blueprints")]:
+                    if not base.is_dir():
+                        continue
+                    exact = base / f"{bp_id}.yml"
+                    if exact.is_file():
+                        bp_path_str = str(exact)
+                        break
+                    matches = sorted(base.glob(f"*{bp_id}.yml"))
+                    if matches:
+                        bp_path_str = str(matches[0])
+                        break
+
+            if not bp_path_str or not Path(bp_path_str).is_file():
+                st.caption("Blueprint file not found on disk.")
+                return
+
+            bp_path = Path(bp_path_str)
+            yaml = YAML()
+            yaml.preserve_quotes = True
+            yaml.indent(mapping=2, sequence=4, offset=2)
+
+            def _to_op_obj(op_dict):
+                """Convert raw operation dict to object with attribute access.
+                Uses setattr to avoid issues with Python keyword field names (from, to)."""
+                ns = SimpleNamespace()
+                for k, v in op_dict.items():
+                    setattr(ns, k, v)
+                if not hasattr(ns, "op") and hasattr(ns, "type"):
+                    ns.op = ns.type
+                return ns
+
+            if diff_type == "pending":
+                before_text = bp_path.read_text()
+                bp_dict = yaml.load(before_text)
+                for op_dict in ops_list:
+                    apply_operation(bp_dict, _to_op_obj(op_dict))
+                import io
+                buf = io.StringIO()
+                yaml.dump(bp_dict, buf)
+                after_text = buf.getvalue()
+            else:
+                backup_pattern = f"{picked.patch_id}_*{bp_path.name}"
+                backup_dir = bp_path.parent.parent / "patches" / "backups"
+                backup = None
+                if backup_dir.is_dir():
+                    matches = sorted(backup_dir.glob(backup_pattern))
+                    if matches:
+                        backup = matches[-1]
+                if not backup:
+                    st.caption(
+                        "This patch was already applied to the blueprint file. "
+                        "No pre-patch backup found to diff against."
+                    )
+                    return
+                before_text = backup.read_text()
+                after_text = bp_path.read_text()
+
+            diff = difflib.unified_diff(
+                before_text.splitlines(keepends=True),
+                after_text.splitlines(keepends=True),
+                fromfile=bp_path.name,
+                tofile=bp_path.name,
+            )
+            diff_text = "".join(diff)
+            if diff_text.strip():
+                st.code(diff_text, language="diff")
+            else:
+                st.caption("No differences detected.")
+        except Exception as exc:
+            st.caption(f"Diff unavailable: {exc}")
 
 
 def _doctor_tab(config_path):
