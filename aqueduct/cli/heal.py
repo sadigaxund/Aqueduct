@@ -148,22 +148,26 @@ def heal(
     patches_path = Path(patches_dir)
 
     # ── Live run mode ─────────────────────────────────────────────────────────
-    import duckdb as _duckdb
     from aqueduct.surveyor.models import FailureContext
+    from aqueduct.stores.read import (
+        open_obs_read,
+        resolve_duckdb_obs_path,
+        resolve_obs_store_dir,
+    )
 
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
+    # Backend-aware: DuckDB file (resolved) OR the configured Postgres store.
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
         click.echo(
-            f"✗ observability.db not found for run_id={run_id!r} "
+            f"✗ observability store not found for run_id={run_id!r} "
             f"(searched: --store-dir, cfg.stores.observability.path, "
             f"and .aqueduct/observability/*/observability.db)",
             err=True,
         )
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        fc_row = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, failed_module, error_message,
                    stack_trace, manifest_json,
@@ -171,9 +175,8 @@ def heal(
             FROM failure_contexts WHERE run_id = ?
             """,
             [run_id],
-        ).fetchone()
-    finally:
-        conn.close()
+        )
+        fc_row = cur.fetchone()
 
     if fc_row is None:
         click.echo(
@@ -191,8 +194,16 @@ def heal(
     # Phase 39/53 — materialize blob-externalised columns transparently.
     # If the DB row stores a blob marker ("blobs/<run_id>/manifest.json.zst"),
     # load and decompress via the configured object store; otherwise inline text.
+    # Local blobs live next to the per-blueprint store: the DuckDB file's dir, or
+    # (Postgres — no obs file) the per-blueprint routing dir the run materialised
+    # them into. Object-store blob backends (s3/gcs/adls) ignore this base.
     from aqueduct.stores.object_store import make_blob_store
-    _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, observability_db.parent)
+    if cfg.stores.observability.backend == "duckdb":
+        _obs_file = resolve_duckdb_obs_path(cfg, store_dir, run_id=run_id, blueprint_id=blueprint_id)
+        _blob_base = _obs_file.parent if _obs_file else resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+    else:
+        _blob_base = resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+    _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, _blob_base)
     _manifest_str = _blob.materialize(manifest_json_raw if isinstance(manifest_json_raw, str) else "")
     _stack_str = _blob.materialize(stack_trace or "")
 

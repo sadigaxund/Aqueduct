@@ -36,11 +36,13 @@ agent:
     return config_path
 
 
-@patch("duckdb.connect")
-def test_heal_print_prompt_text(mock_connect, mock_fc_row, test_config, tmp_path):
-    mock_conn = MagicMock()
-    mock_connect.return_value = mock_conn
-    mock_conn.execute.return_value.fetchone.return_value = mock_fc_row
+@patch("aqueduct.stores.read.open_obs_read")
+def test_heal_print_prompt_text(mock_open, mock_fc_row, test_config, tmp_path):
+    mock_cur = MagicMock()
+    mock_cur.fetchone.return_value = mock_fc_row
+    mock_store = MagicMock()
+    mock_store.connect.return_value.__enter__.return_value = mock_cur
+    mock_open.return_value = mock_store
 
     runner = CliRunner()
     store_dir = tmp_path / ".aqueduct"
@@ -52,11 +54,13 @@ def test_heal_print_prompt_text(mock_connect, mock_fc_row, test_config, tmp_path
     assert "id: test_bp" in result.output or "test_bp" in result.output
 
 
-@patch("duckdb.connect")
-def test_heal_print_prompt_json(mock_connect, mock_fc_row, test_config, tmp_path):
-    mock_conn = MagicMock()
-    mock_connect.return_value = mock_conn
-    mock_conn.execute.return_value.fetchone.return_value = mock_fc_row
+@patch("aqueduct.stores.read.open_obs_read")
+def test_heal_print_prompt_json(mock_open, mock_fc_row, test_config, tmp_path):
+    mock_cur = MagicMock()
+    mock_cur.fetchone.return_value = mock_fc_row
+    mock_store = MagicMock()
+    mock_store.connect.return_value.__enter__.return_value = mock_cur
+    mock_open.return_value = mock_store
 
     runner = CliRunner()
     store_dir = tmp_path / ".aqueduct"
@@ -74,11 +78,13 @@ def test_heal_print_prompt_json(mock_connect, mock_fc_row, test_config, tmp_path
     assert "test_bp" in data["user"]
 
 
-@patch("duckdb.connect")
-def test_heal_print_prompt_no_model_succeeds(mock_connect, mock_fc_row, tmp_path):
-    mock_conn = MagicMock()
-    mock_connect.return_value = mock_conn
-    mock_conn.execute.return_value.fetchone.return_value = mock_fc_row
+@patch("aqueduct.stores.read.open_obs_read")
+def test_heal_print_prompt_no_model_succeeds(mock_open, mock_fc_row, tmp_path):
+    mock_cur = MagicMock()
+    mock_cur.fetchone.return_value = mock_fc_row
+    mock_store = MagicMock()
+    mock_store.connect.return_value.__enter__.return_value = mock_cur
+    mock_open.return_value = mock_store
 
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("""

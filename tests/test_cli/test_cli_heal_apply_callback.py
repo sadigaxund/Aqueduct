@@ -191,16 +191,17 @@ danger:
     assert err_class == "guardrail_violation"
 
 @patch("aqueduct.agent.generate_agent_patch")
-@patch("aqueduct.cli._resolve_obs_db")
-@patch("duckdb.connect")
+@patch("aqueduct.stores.read.open_obs_read")
 def test_cli_heal_wires_apply_callback(
-    mock_connect, mock_resolve_obs_db, mock_generate_patch, tmp_path
+    mock_open, mock_generate_patch, tmp_path
 ):
     """Verify that `aqueduct heal` wires the apply_callback correctly and validates guardrails from store metadata."""
-    # 1. Setup db failure context row
-    mock_conn = MagicMock()
-    mock_connect.return_value = mock_conn
-    
+    # 1. Setup db failure context row (backend-aware store read)
+    mock_cur = MagicMock()
+    mock_store = MagicMock()
+    mock_store.connect.return_value.__enter__.return_value = mock_cur
+    mock_open.return_value = mock_store
+
     # row_records mock query results
     # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, started_at, finished_at
     fc_row = (
@@ -214,7 +215,7 @@ def test_cli_heal_wires_apply_callback(
         "2023-01-01T00:00:00Z",
         "2023-01-01T00:01:00Z"
     )
-    mock_conn.execute.return_value.fetchone.return_value = fc_row
+    mock_cur.fetchone.return_value = fc_row
 
     # Mock generate_agent_patch
     from aqueduct.agent import AgentPatchResult

@@ -156,17 +156,13 @@ def test_lineage(seeded_cfg):
     assert "out_col" in res.output
 
 
-# ── KNOWN GAPS — encoded so they flip the build green when fixed ──────────────
-
-@pytest.mark.xfail(strict=True, reason="report --trend uses DuckDB-specific json_each SQL; needs a pg dialect")
-@pytest.mark.skipif(not _pg_is_reachable(), reason="gap is postgres-only")
-@pytest.mark.integration
-def test_report_trend_on_postgres(seeded_cfg):
-    cfg_file, backend = seeded_cfg
-    if backend != "postgres":
-        pytest.skip("gap applies to postgres only")
+def test_report_trend(seeded_cfg):
+    """`report --trend` must work identically on DuckDB and Postgres (the JSON
+    payload is now exploded in Python, no DuckDB-only json_each/json_extract)."""
+    cfg_file, _ = seeded_cfg
     res = _run(cfg_file, "report", "--trend", "out_col", "--blueprint", "conf_bp")
     assert res.exit_code == 0, res.output
+    assert "out_col" in res.output and "0.25" in res.output  # the seeded null-rate
 
 
 # ── fleet query layer: must produce identical results on every backend ────────
