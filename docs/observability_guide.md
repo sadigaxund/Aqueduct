@@ -53,7 +53,7 @@ Each store is independently pluggable in `aqueduct.yml`:
 |-----------------|--------------------------------|-------|
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
 | ~~`lineage`~~   | **removed** | Column lineage was merged into `observability`. `stores.lineage` is no longer a config option; a legacy block is ignored with a warning. |
-| `depot`         | `duckdb` (default) \| `postgres` \| `redis` | KV. `redis` allowed here only. Incremental-Channel watermarks persist here( dropped the local sidecar — no depot ⇒ no incremental state). |
+| `depots`        | name-keyed map; each mount `duckdb` (default) \| `postgres` \| `redis` | Cross-run KV (`@aq.depot.*`). `redis` allowed here only. The `default` mount always exists; keys are **per-blueprint isolated** (prefixed by blueprint_id) unless a mount sets `shared: true`. Incremental-Channel watermarks persist here (no depot ⇒ no incremental state). Legacy `depot:` mapping auto-migrates to `depots.default`. |
 | `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec). `local` keeps the on-disk layout above. |
 
 With `postgres`, tables live in named schemas (`observability`, `depot`).
@@ -359,9 +359,14 @@ One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in
 
 #### `depot_kv`
 
-Cross-run KV state (`@aq.depot.*`). Keyed by `key` alone — the depot is
-project-wide, so two blueprints reading the same key share state (prefix
-keys per pipeline, e.g. `sales.watermark`, if you need isolation).
+Cross-run KV state (`@aq.depot.*`). Keys are **per-blueprint isolated** by
+default: the engine transparently prefixes every key with `<blueprint_id>:`, so
+two blueprints sharing a physical depot never collide (you'll see rows like
+`sales:watermark`, `orders:watermark`). Configure mounts under `stores.depots`
+(a name-keyed map); set `shared: true` on a mount for deliberate cross-blueprint
+sharing (raw, unprefixed keys) — read those via `@aq.depot.<name>.get(...)`. For
+parallel writers on a shared mount, use postgres/redis (concurrent), not a single
+DuckDB file.
 
 ---
 

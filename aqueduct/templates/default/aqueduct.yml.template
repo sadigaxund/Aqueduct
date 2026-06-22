@@ -138,14 +138,25 @@ stores:
     # backend: postgres
     # path: "postgresql://aq@host:5432/aqueduct_db"
 
-  depot:
-    backend: duckdb
-    path: ".aqueduct/depot.db"
-    # backend: postgres
-    # path: "postgresql://aq@host:5432/aqueduct_db"
-    # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
-    # backend: redis
-    # path: "redis://host:6379/0"
+  # Depot — cross-run KV state (@aq.depot.*). A name-keyed MAP of mounts. The
+  # `default` mount always exists even if omitted; every mount is per-blueprint
+  # KEY-ISOLATED (keys prefixed by blueprint_id) so blueprints never collide on a
+  # shared depot. Read with @aq.depot.get('k') (default) / @aq.depot.<name>.get('k').
+  depots:
+    default:
+      backend: duckdb
+      path: ".aqueduct/depot.db"
+      # backend: postgres
+      # path: "postgresql://aq@host:5432/aqueduct_db"
+      # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
+      # backend: redis
+      # path: "redis://host:6379/0"
+    # An extra, explicitly CROSS-BLUEPRINT mount (raw keys — the one place
+    # collisions are possible; use postgres/redis for parallel writers):
+    # fleet:
+    #   backend: postgres
+    #   path: "postgresql://aq@host:5432/fleet_db"
+    #   shared: true
 
   # Object store for observability blobs (fat manifest/stack/provenance
   # columns) + the patch lifecycle (pending/applied/rejected). `local`
@@ -192,9 +203,10 @@ stores:
 #   observability:
 #     backend: duckdb
 #     path: "/mnt/nfs/aqueduct/observability.db"
-#   depot:
-#     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/depot.db"
+#   depots:
+#     default:
+#       backend: duckdb
+#       path: "/mnt/nfs/aqueduct/depot.db"
 #
 # spark_config:
 #   spark.executor.memory: "8g"

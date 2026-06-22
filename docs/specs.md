@@ -100,7 +100,7 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` is ignored with a warning. |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Project-wide (not per-pipeline) so blueprints can read each other's watermarks. As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default — transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 | **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store — rows are not tied to a real `run_id`. |
 
@@ -532,7 +532,7 @@ Resolution order (highest priority wins):
 | `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
 | `@aq.env('KEY')` | Read environment variable. Fails fast when absent — unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
-| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see §6 Depot). |
+| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). |
 | `@aq.blueprint.id()` | This Blueprint's `id`. |
 | `@aq.blueprint.name()` | This Blueprint's `name`. |
 | `@aq.blueprint.dir()` | Absolute directory of the Blueprint file — the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
@@ -563,7 +563,7 @@ Consequently, a non-secret `@aq.*` (e.g. `@aq.run.id()`, `@aq.blueprint.id()`) i
 `aqueduct.yml` is a **hard error** — those scopes do not exist at config-load
 time; use them inside the Blueprint. Per-pipeline store isolation (a depot / obs
 store per Blueprint) needs no `@aq` in config — the backend handles it
-automatically, keyed on `blueprint_id` (see §6).
+automatically, keyed on `blueprint_id`.
 
 ## **5.4 UDF Registry**
 
