@@ -598,6 +598,8 @@ def run(
                 secrets_provider=cfg.secrets.provider,
                 secrets_region=cfg.secrets.region,
                 secrets_resolver=cfg.secrets.resolver,
+                deployment_env=getattr(cfg.deployment, "env", None),
+                deployment_target=getattr(cfg.deployment, "target", None),
                 _verbose=verbose,
             )
         except CompileError as exc:

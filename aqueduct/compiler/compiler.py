@@ -86,6 +86,8 @@ def compile(  # noqa: A001
     secrets_provider: str = "env",
     secrets_region: str | None = None,
     secrets_resolver: str | None = None,
+    deployment_env: str | None = None,
+    deployment_target: str | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
 ) -> Manifest:
@@ -111,6 +113,11 @@ def compile(  # noqa: A001
         secrets_provider=secrets_provider,
         secrets_region=secrets_region,
         secrets_resolver=secrets_resolver,
+        blueprint_id=blueprint.id,
+        blueprint_name=blueprint.name,
+        blueprint_path=blueprint_path,
+        deployment_env=deployment_env,
+        deployment_target=deployment_target,
     )
 
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────

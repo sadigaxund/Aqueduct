@@ -17,6 +17,7 @@ import os
 import re
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 # Matches the innermost @aq.* call — args must not contain another @aq.
@@ -52,6 +53,11 @@ class AqFunctions:
         secrets_provider: str = "env",
         secrets_region: str | None = None,
         secrets_resolver: str | None = None,
+        blueprint_id: str | None = None,
+        blueprint_name: str | None = None,
+        blueprint_path: "str | Path | None" = None,
+        deployment_env: str | None = None,
+        deployment_target: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
         self._depot = depot
@@ -59,6 +65,12 @@ class AqFunctions:
         self._secrets_provider = secrets_provider
         self._secrets_region = secrets_region
         self._secrets_resolver = secrets_resolver
+        # @aq.meta.* — pipeline identity / deployment context, known at compile time.
+        self._blueprint_id = blueprint_id
+        self._blueprint_name = blueprint_name
+        self._blueprint_path = Path(blueprint_path) if blueprint_path else None
+        self._deployment_env = deployment_env
+        self._deployment_target = deployment_target
 
     def _base_date(self) -> date:
         return self._execution_date if self._execution_date is not None else date.today()
@@ -129,6 +141,40 @@ class AqFunctions:
         )
         return default
 
+    # ── meta — pipeline identity / deployment context ───────────────────────────
+
+    def _require_meta(self, name: str, value: Any) -> str:
+        if value is None or value == "":
+            raise RuntimeError(
+                f"@aq.meta.{name} is not available in this context "
+                "(no blueprint/deployment metadata was threaded into the compiler)."
+            )
+        return str(value)
+
+    def meta_blueprint_id(self) -> str:
+        return self._require_meta("blueprint_id", self._blueprint_id)
+
+    def meta_blueprint_name(self) -> str:
+        return self._require_meta("blueprint_name", self._blueprint_name)
+
+    def meta_blueprint_path(self) -> str:
+        return self._require_meta(
+            "blueprint_path", str(self._blueprint_path) if self._blueprint_path else None)
+
+    def meta_blueprint_dir(self) -> str:
+        return self._require_meta(
+            "blueprint_dir", str(self._blueprint_path.parent) if self._blueprint_path else None)
+
+    def meta_env(self) -> str:
+        return self._require_meta("env", self._deployment_env)
+
+    def meta_target(self) -> str:
+        return self._require_meta("target", self._deployment_target)
+
+    def meta_version(self) -> str:
+        from aqueduct import __version__
+        return __version__
+
 
 # ── Dispatch table ─────────────────────────────────────────────────────────────
 
@@ -144,6 +190,13 @@ _DISPATCH: dict[str, str] = {
     "aq.secret": "secret",
     "aq.env": "env",
     "aq.depot.get": "depot_get",
+    "aq.meta.blueprint_id": "meta_blueprint_id",
+    "aq.meta.blueprint_name": "meta_blueprint_name",
+    "aq.meta.blueprint_path": "meta_blueprint_path",
+    "aq.meta.blueprint_dir": "meta_blueprint_dir",
+    "aq.meta.env": "meta_env",
+    "aq.meta.target": "meta_target",
+    "aq.meta.version": "meta_version",
 }
 
 

@@ -176,3 +176,47 @@ class TestCompilerEdgeCases:
             warnings.simplefilter("always")
             compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
         assert any("append" in str(warning.message) for warning in w)
+
+
+class TestAqMeta:
+    """@aq.meta.* — pipeline identity / deployment context."""
+
+    def test_meta_resolves(self):
+        reg = AqFunctions(
+            blueprint_id="my_bp", blueprint_name="My BP",
+            blueprint_path="/proj/blueprints/my_bp.yml",
+            deployment_env="cluster", deployment_target="databricks",
+        )
+        assert resolve_tier1_str("@aq.meta.blueprint_id()", reg) == "my_bp"
+        assert resolve_tier1_str("@aq.meta.blueprint_name()", reg) == "My BP"
+        assert resolve_tier1_str("@aq.meta.blueprint_path()", reg) == "/proj/blueprints/my_bp.yml"
+        assert resolve_tier1_str("@aq.meta.blueprint_dir()", reg) == "/proj/blueprints"
+        assert resolve_tier1_str("@aq.meta.env()", reg) == "cluster"
+        assert resolve_tier1_str("@aq.meta.target()", reg) == "databricks"
+        assert resolve_tier1_str("@aq.meta.version()", reg)  # non-empty
+
+    def test_meta_in_path_expression(self):
+        reg = AqFunctions(blueprint_id="sales", blueprint_path="/p/sales.yml")
+        out = resolve_tier1_str("out/@aq.meta.blueprint_id()/data", reg)
+        assert out == "out/sales/data"
+
+    def test_meta_unavailable_raises(self):
+        reg = AqFunctions()  # no metadata threaded
+        with pytest.raises(RuntimeError, match="not available in this context"):
+            resolve_tier1_str("@aq.meta.env()", reg)
+
+    def test_meta_resolves_through_compile(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: meta_demo\nname: Meta Demo\n"
+            "context:\n  tag: \"@aq.meta.blueprint_id()-@aq.meta.env()\"\n"
+            "modules:\n"
+            "  - id: out\n    type: Egress\n    label: Out\n"
+            "    config:\n      format: parquet\n      path: /tmp/${ctx.tag}\n      mode: overwrite\n"
+            "edges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        manifest = compile(bp, blueprint_path=bp_file, deployment_env="dev")
+        out = next(m for m in manifest.modules if m.id == "out")
+        assert out.config["path"] == "/tmp/meta_demo-dev"

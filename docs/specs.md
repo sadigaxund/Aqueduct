@@ -532,7 +532,16 @@ Resolution order (highest priority wins):
 | `@aq.runtime.prev_run_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
 | `@aq.env('KEY')` | Read environment variable. Fails fast when absent — unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
-| `@aq.depot.get('key')` | Read from Depot KV store at compile time. |
+| `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see §6 Depot). |
+| `@aq.meta.blueprint_id()` | This Blueprint's `id`. |
+| `@aq.meta.blueprint_name()` | This Blueprint's `name`. |
+| `@aq.meta.blueprint_dir()` | Absolute directory of the Blueprint file — the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.meta.blueprint_dir()/out`). |
+| `@aq.meta.blueprint_path()` | Absolute path of the Blueprint file. |
+| `@aq.meta.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`) — branch paths/behaviour by environment. |
+| `@aq.meta.target()` | `deployment.target` (e.g. `local` / `databricks`). |
+| `@aq.meta.version()` | The Aqueduct engine version — useful for stamping outputs. |
+
+> `@aq.meta.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host — those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.meta.blueprint_dir()` as the stable anchor instead.
 
 ## **5.4 UDF Registry**
 
