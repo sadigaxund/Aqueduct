@@ -179,7 +179,8 @@ def benchmark(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        from aqueduct.cli.style import error as _error
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── -s/--set overrides (config-only; no blueprint in benchmark) ────────────

@@ -119,7 +119,8 @@ def report(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        from aqueduct.cli.style import error as _error
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     store = open_obs_read(cfg, store_dir, run_id=run_id)
