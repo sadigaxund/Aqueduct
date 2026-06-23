@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
-import warnings
-
 import click
+
+_PROJECT_ROOT_MAX_DEPTH = 8
+_DEFAULT_CONFIG_FILENAME = "aqueduct.yml"
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +35,6 @@ def _apply_warnings_from_cfg(cfg) -> None:
     merged = set(_DEFAULT_SUPPRESS) | set(getattr(cfg.warnings, "suppress", []) or [])
     set_default_suppress(suppress=merged)
 
-
-def _short_warning(msg: str, limit: int = 100) -> str:
-    """First clause of a warning message (before ' — ' or first sentence), capped."""
-    seg = msg.split(" — ", 1)[0].split(". ", 1)[0].strip()
-    if len(seg) > limit:
-        seg = seg[: limit - 1].rstrip() + "…"
-    return seg
 
 
 def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, **kwargs):
@@ -167,8 +164,8 @@ def _resolve_project_root(
 ) -> "Path":
     """Walk up from blueprint or config to find the project root.
 
-    Returns the directory containing ``aqueduct.yml`` when found (walking up
-    to 8 levels from the blueprint), or falls back to the file's immediate
+    Returns the directory containing ``aqueduct.yml`` (the _DEFAULT_CONFIG_FILENAME) when found (walking up
+    to _PROJECT_ROOT_MAX_DEPTH levels from the blueprint), or falls back to the file's immediate
     parent directory.  ``config_path``, when given, always wins — its parent
     is the project root.
     """
@@ -178,8 +175,8 @@ def _resolve_project_root(
     if blueprint_path is not None:
         root = blueprint_path.parent
         search = blueprint_path.parent
-        for _ in range(8):
-            if (search / "aqueduct.yml").exists():
+        for _ in range(_PROJECT_ROOT_MAX_DEPTH):
+            if (search / _DEFAULT_CONFIG_FILENAME).exists():
                 return search
             if search.parent == search:
                 break
@@ -838,8 +835,8 @@ def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
     """Return <project_root>/patches by walking up from blueprint to find aqueduct.yml."""
     _search = blueprint_path.parent
     project_root = blueprint_path.parent
-    for _ in range(8):
-        if (_search / "aqueduct.yml").exists():
+    for _ in range(_PROJECT_ROOT_MAX_DEPTH):
+        if (_search / _DEFAULT_CONFIG_FILENAME).exists():
             project_root = _search
             break
         if _search.parent == _search:

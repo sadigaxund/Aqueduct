@@ -16,6 +16,7 @@ from aqueduct import exit_codes
 from aqueduct.cli import (
     cli,
     _apply_warnings_from_cfg,
+    _DEFAULT_CONFIG_FILENAME,
     _env_options,
     _resolve_and_load_env,
     _sniff_file_kind,
@@ -52,7 +53,7 @@ def validate(
 
     targets = [Path(f) for f in files]
     if not targets:
-        default_cfg = Path.cwd() / "aqueduct.yml"
+        default_cfg = Path.cwd() / _DEFAULT_CONFIG_FILENAME
         if default_cfg.exists():
             if fmt == "text":
                 click.echo(f"(no file given → validating {default_cfg.name})", err=True)
@@ -422,7 +423,7 @@ def doctor(
             )
             sys.exit(exit_codes.CONFIG_ERROR)
     else:
-        default_cfg = Path.cwd() / "aqueduct.yml"
+        default_cfg = Path.cwd() / _DEFAULT_CONFIG_FILENAME
         if default_cfg.exists():
             _info(f"(no file given \u2192 checking {default_cfg.name})", err=True)
             config_path = default_cfg
@@ -432,7 +433,7 @@ def doctor(
     # `${HOST_IP}` / `${DRIVER_HOST}` resolve for --preflight.
     from aqueduct.cli import _resolve_project_root
     _anchor = _resolve_project_root(blueprint_path=blueprint_path, config_path=config_path)
-    _resolve_and_load_env(env_file, _anchor / (blueprint_path or config_path or Path("aqueduct.yml")).name, cli_env=cli_env)
+    _resolve_and_load_env(env_file, _anchor / (blueprint_path or config_path or Path(_DEFAULT_CONFIG_FILENAME)).name, cli_env=cli_env)
 
     _STATUS_ICON = _ICON
     _STATUS_COLOR = _COLOR

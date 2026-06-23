@@ -1199,8 +1199,8 @@ def load_config(path: Path | None = None) -> AqueductConfig:
                 import warnings as _warnings
                 from aqueduct.warnings import AqueductWarning
                 _warnings.warn(
-                    "[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
-                    "aqueduct.yml — prefer @aq.secret('NAME') or ${ENV_VAR}. The value is "
+                    f"[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
+                    f"{resolved} — prefer @aq.secret('NAME') or ${ENV_VAR}. The value is "
                     "redacted from logs and LLM payloads, but a literal in a committed config "
                     "is a credential leak risk.",
                     AqueductWarning,
