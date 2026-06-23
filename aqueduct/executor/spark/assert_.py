@@ -191,6 +191,7 @@ def execute_assert(
                         f"[{module.id}] not_null rule requires 'column'",
                         rule_id="not_null",
                     )
+                from pyspark.sql import functions as F
                 is_null = F.col(col).isNull()
                 q_df = (
                     passing_df.filter(is_null)
