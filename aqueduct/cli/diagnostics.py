@@ -393,6 +393,7 @@ def doctor(
     """
     from pathlib import Path
     from aqueduct.doctor import run_doctor
+    from aqueduct.cli.style import ICON as _ICON, COLOR as _COLOR, info as _info, error as _error, success as _success, emit_warnings as _emit_warnings
 
     config_path: Path | None = None
     blueprint_path: Path | None = None
@@ -425,8 +426,6 @@ def doctor(
     # Anchor .env discovery to the resolved input file's directory.
     _anchor = config_path or blueprint_path
     _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
-
-    from aqueduct.cli.style import ICON as _ICON, COLOR as _COLOR, info as _info, error as _error, success as _success, emit_warnings as _emit_warnings
 
     _STATUS_ICON = _ICON
     _STATUS_COLOR = _COLOR
