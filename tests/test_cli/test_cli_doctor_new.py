@@ -24,8 +24,9 @@ pytestmark = pytest.mark.unit
 
 # ── 1 & 2 & 14 & 15. Render Collapse and Verbose Tests ────────────────────────
 
-def test_doctor_render_hides_skip_and_quiet_ok(tmp_path):
-    """Default view omits skip/quiet_ok rows; collapses to '· more' row. --verbose shows all."""
+@pytest.mark.parametrize("verbose_flag", ["-v", "--verbose"])
+def test_doctor_render_hides_skip_and_quiet_ok(tmp_path, verbose_flag):
+    """Default view omits skip/quiet_ok rows; collapses to '· more' row. --verbose/-v shows all."""
     runner = CliRunner()
     config = tmp_path / "aqueduct.yml"
     config.write_text("""
@@ -48,7 +49,7 @@ deployment:
     ]
 
     with patch("aqueduct.doctor.run_doctor", return_value=mock_results):
-        # 1. Default (no --verbose)
+        # 1. Default (no verbose flag)
         result = runner.invoke(cli, ["doctor", str(config), "--skip-spark"])
         assert result.exit_code == 0
         assert "config" in result.output
@@ -61,8 +62,8 @@ deployment:
         assert "cloudpickle" in result.output
         assert "(ok / not applicable / not configured — --verbose)" in result.output
 
-        # 2. --verbose
-        result_verbose = runner.invoke(cli, ["doctor", str(config), "--skip-spark", "--verbose"])
+        # 2. Verbose (via -v or --verbose)
+        result_verbose = runner.invoke(cli, ["doctor", str(config), "--skip-spark", verbose_flag])
         assert result_verbose.exit_code == 0
         assert "config" in result_verbose.output
         assert "observability" in result_verbose.output

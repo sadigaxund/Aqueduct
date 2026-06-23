@@ -49,7 +49,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct doctor --preflight` | Full Spark session + storage validation |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
 | `aqueduct doctor --aqscenario <file>` | Schema pre-flight on a `.aqscenario.yml` (verifies blueprint ref + `inject_failure.module`) |
-| `aqueduct doctor --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
+| `aqueduct doctor -v, --verbose` | Also show skipped checks (not-applicable / not-configured), not just the collapsed summary |
 | `aqueduct doctor --format json` | Machine-readable result of every check (`{schema_version, summary, checks[]}`); implies `--verbose` (nothing collapsed). Text mode groups checks into sections (Config, Stores, Spark, …). |
 | `aqueduct completion {bash\|zsh\|fish}` | Emit a shell-completion script for installation |
 

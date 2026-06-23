@@ -349,7 +349,7 @@ def schema(target: str, output: str) -> None:
     help="Schema pre-flight on a .aqscenario.yml file (verifies blueprint ref + inject_failure.module).",
 )
 @click.option(
-    "--verbose",
+    "-v", "--verbose",
     "verbose",
     is_flag=True,
     default=False,
@@ -419,15 +419,17 @@ def doctor(
     else:
         default_cfg = Path.cwd() / "aqueduct.yml"
         if default_cfg.exists():
-            click.echo(f"(no file given → checking {default_cfg.name})", err=True)
+            _info(f"(no file given \u2192 checking {default_cfg.name})", err=True)
             config_path = default_cfg
 
     # Anchor .env discovery to the resolved input file's directory.
     _anchor = config_path or blueprint_path
     _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
 
-    _STATUS_ICON = {"ok": "✓", "fail": "✗", "warn": "⚠", "skip": "-"}
-    _STATUS_COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None}
+    from aqueduct.cli.style import ICON as _ICON, COLOR as _COLOR, info as _info, error as _error, success as _success, emit_warnings as _emit_warnings
+
+    _STATUS_ICON = _ICON
+    _STATUS_COLOR = _COLOR
 
     # Group assignment for sectioned display + JSON. Most checks already carry
     # a `group`; leaf checks default to "general" — stamp those by name here so
@@ -458,22 +460,28 @@ def doctor(
 
     if fmt == "text":
         if skip_spark:
-            click.echo("Running connectivity checks (--skip-spark: Spark check skipped)...")
+            _info("Running connectivity checks (--skip-spark: Spark check skipped)...", err=True)
         elif preflight:
-            click.echo("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...")
+            _info("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...", err=True)
         else:
-            click.echo("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...")
+            _info("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...", err=True)
 
-    results = run_doctor(
-        config_path=config_path,
-        skip_spark=skip_spark,
-        blueprint_path=blueprint_path,
-        aqtest_path=Path(aqtest_path) if aqtest_path else None,
-        aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
-        preflight=preflight,
-    )
+    import warnings as _w
+    with _w.catch_warnings(record=True) as _caught:
+        _w.simplefilter("always")
+        results = run_doctor(
+            config_path=config_path,
+            skip_spark=skip_spark,
+            blueprint_path=blueprint_path,
+            aqtest_path=Path(aqtest_path) if aqtest_path else None,
+            aqscenario_path=Path(aqscenario_path) if aqscenario_path else None,
+            preflight=preflight,
+        )
 
     any_fail = any(r.status == "fail" for r in results)
+
+    # ── Emit any warnings caught during config-load / run_doctor before the grid ──
+    _emit_warnings(_caught, verbose=verbose)
 
     # ── JSON output (no row collapsing — every check is emitted) ──────────────
     if fmt == "json":
@@ -539,8 +547,8 @@ def doctor(
 
     click.echo()
     if any_fail:
-        click.echo(click.style("✗ one or more checks failed", fg="red"), err=True)
+        _error("one or more checks failed")
         sys.exit(exit_codes.CONFIG_ERROR)
     else:
-        click.echo(click.style("✓ all checks passed", fg="green"))
+        _success("all checks passed")
 
