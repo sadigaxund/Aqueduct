@@ -104,6 +104,7 @@ class _ProviderConfig:
     max_tokens: int = 4096
     provider: str = "anthropic"
     base_url: str | None = None
+    api_key: str | None = None
     provider_options: dict[str, Any] | None = None
     timeout: float = 120.0
     patches_dir: Path = Path()
@@ -223,6 +224,7 @@ def _call_agent(
         return _call_openai_compat(
             messages, cfg.model, cfg.max_tokens, cfg.base_url, system_prompt,
             cfg.provider_options, timeout=cfg.timeout,
+            api_key=cfg.api_key,
             temperature_override=temperature_override,
             deadline=deadline,
             max_retries=cfg.retry_max_retries,
@@ -232,6 +234,7 @@ def _call_agent(
         return _call_anthropic(
             messages, cfg.model, cfg.max_tokens, system_prompt,
             timeout=cfg.timeout,
+            api_key=cfg.api_key,
             temperature_override=temperature_override,
             deadline=deadline,
             base_url=cfg.base_url,
@@ -247,6 +250,7 @@ def _call_anthropic(
     max_tokens: int,
     system_prompt: str,
     timeout: float = 120.0,
+    api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
     base_url: str | None = None,
@@ -256,7 +260,7 @@ def _call_anthropic(
 ) -> tuple[str, int, int]:
     import httpx
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError(
             "ANTHROPIC_API_KEY environment variable not set. "
@@ -324,6 +328,7 @@ def _call_openai_compat(
     system_prompt: str,
     provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
+    api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
     max_retries: int = 2,
@@ -338,7 +343,7 @@ def _call_openai_compat(
             "(e.g. http://localhost:11434/v1)"
         )
 
-    api_key = os.environ.get("OPENAI_API_KEY", "ollama")
+    api_key = api_key or os.environ.get("OPENAI_API_KEY", "ollama")
     url = base_url.rstrip("/") + "/chat/completions"
 
     payload: dict[str, Any] = {

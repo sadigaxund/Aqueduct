@@ -79,7 +79,8 @@ def drift(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        from aqueduct.cli.style import error as _error
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
@@ -234,6 +235,7 @@ def _heal_drift(
         patches_dir=patches_path,
         provider=eng.provider or "anthropic",
         base_url=eng.base_url,
+        api_key=eng.api_key,
         provider_options=eng.provider_options,
         timeout=eng.timeout,
         max_reprompts=eng.max_reprompts,

@@ -267,11 +267,12 @@ agent:
   provider: openai_compat     # anthropic | openai_compat
   base_url: "https://openrouter.ai/api/v1"
   model: "anthropic/claude-3.5-sonnet"
+  api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated single patch) · `ci` (stage + webhook) · `aggressive` (multi-patch loop; legacy-named, equals `auto`+`max_patches>1`). Engine-level defaults for provider/model/base_url live in `aqueduct.yml`; the Blueprint `agent:` block overrides them.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated single patch) · `ci` (stage + webhook) · `aggressive` (multi-patch loop; legacy-named, equals `auto`+`max_patches>1`). Engine-level defaults for provider/model/base_url/api_key live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
-Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depot/blob/benchmark + backend), `agent` (provider/base_url/model defaults), `danger` (allow_multi_patch, allow_full_probe_actions). See `aqueduct/templates/default/aqueduct.yml.template`.
+Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depot/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
 
 ## Path resolution
 Relative paths in a Blueprint anchor to **the Blueprint file's directory**, never the cwd (portable across run locations). `s3://`, `postgresql://`, absolute paths pass through unchanged. Same rule for `aqueduct.yml` (anchors to the config file dir).
@@ -335,4 +336,6 @@ Aqueduct talks to **Anthropic natively** OR **any OpenAI-compatible endpoint**
 *every* endpoint above — set that one env var to the chosen provider's key (e.g.
 your OpenRouter/DeepSeek/Groq key goes in `OPENAI_API_KEY`). Keyless local servers
 (Ollama / LM Studio) need nothing (it defaults to a dummy value). Set `model:` to
-the provider's model id.
+the provider's model id. These env vars are the fallback; configure `agent.api_key`
+(via `@aq.secret()` or literal) in `aqueduct.yml`, the Blueprint `agent:` block, or
+per cascade tier for finer control.

@@ -59,6 +59,7 @@ class CascadeTierConfig:
     model: str
     provider: str | None = None
     base_url: str | None = None
+    api_key: str | None = None
     provider_options: dict | None = None
     timeout: float | None = None
     max_tokens: int | None = None
@@ -78,6 +79,7 @@ class AgentConfig:
     # Connection fields — None = inherit from aqueduct.yml agent: defaults
     provider: str | None = None
     base_url: str | None = None
+    api_key: str | None = None
     model: str | None = None
     provider_options: dict | None = None
     timeout: float | None = None

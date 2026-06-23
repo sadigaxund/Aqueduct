@@ -48,6 +48,7 @@ def _build_cascade(raw: list | None) -> tuple | None:
             model=t.model,
             provider=t.provider,
             base_url=t.base_url,
+            api_key=t.api_key,
             provider_options=t.provider_options,
             timeout=t.timeout,
             max_tokens=t.max_tokens,
@@ -288,6 +289,7 @@ def parse_dict(
             max_patches=validated.agent.max_patches,
             provider=validated.agent.provider,
             base_url=resolve_value(validated.agent.base_url, ctx_map),
+            api_key=resolve_value(validated.agent.api_key, ctx_map),
             provider_options=resolve_value(validated.agent.provider_options, ctx_map),
             guardrails=GuardrailsConfig(
                 forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),

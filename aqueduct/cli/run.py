@@ -404,7 +404,8 @@ def run(
             cfg = load_config(config_path_abs)
             _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
-            click.echo(f"✗ config error: {exc}", err=True)
+            from aqueduct.cli.style import error as _error
+            _error(f"config error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
@@ -487,7 +488,8 @@ def run(
         try:
             execute = get_executor(engine)
         except (NotImplementedError, ValueError) as exc:
-            click.echo(f"✗ engine error: {exc}", err=True)
+            from aqueduct.cli.style import error as _error
+            _error(f"engine error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
@@ -583,7 +585,7 @@ def run(
             else:
                 bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
         except ParseError as exc:
-            click.echo(f"✗ parse error: {exc}", err=True)
+            _error(f"parse error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
@@ -614,7 +616,7 @@ def run(
                 _verbose=verbose,
             )
         except CompileError as exc:
-            click.echo(f"✗ compile error: {exc}", err=True)
+            _error(f"compile error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
         # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
@@ -828,9 +830,15 @@ def run(
         resolved_agent_provider_options = _rac.provider_options
         resolved_agent_timeout = _rac.timeout
         resolved_agent_max_reprompts = _rac.max_reprompts
+        resolved_agent_api_key = _rac.api_key
         resolved_agent_engine_prompt_context = _rac.engine_prompt_context
         resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
         resolved_sandbox_master_url = cfg.agent.sandbox_master_url
+
+        # ── Register agent API key for redaction ─────────────────────────────────
+        if resolved_agent_api_key:
+            from aqueduct.redaction import register as _register_secret
+            _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
 
         # ── Multi-patch disclaimer ────────────────────────────────────────────────
         approval_mode = manifest.agent.approval_mode
@@ -952,7 +960,7 @@ def run(
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url):
+                if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
                     click.echo(
                         "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
@@ -961,7 +969,7 @@ def run(
             if effective_mode == "disabled" or failure_ctx is None:
                 break
 
-            if not _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url):
+            if not _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
                 click.echo(
                     f"  ⚠  LLM not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
                     "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
@@ -1219,7 +1227,7 @@ def run(
             # Cascade tiers can opt into deep_loop individually, so the
             # callback must exist whenever ANY tier (or the top level) wants it.
             _deep_loop = manifest.agent.deep_loop if manifest.agent else False
-            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
+            _cascade_tiers = _rac.cascade
             _any_deep_loop = _deep_loop or any(
                 bool(t.deep_loop) for t in (_cascade_tiers or [])
             )
@@ -1279,6 +1287,7 @@ def run(
                     patches_dir=patches_dir,
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
+                    api_key=resolved_agent_api_key,
                     provider_options=resolved_agent_provider_options,
                     timeout=resolved_agent_timeout,
                     max_tokens=4096,
@@ -1305,6 +1314,7 @@ def run(
                     patches_dir=patches_dir,
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
+                    api_key=resolved_agent_api_key,
                     provider_options=resolved_agent_provider_options,
                     timeout=resolved_agent_timeout,
                     max_reprompts=resolved_agent_max_reprompts,

@@ -116,7 +116,8 @@ def heal(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        from aqueduct.cli.style import error as _error
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── -s/--set overrides (config-only) ───────────────────────────────────────
@@ -133,10 +134,16 @@ def heal(
     resolved_provider = eng.provider
     resolved_base_url = eng.base_url
     resolved_model = eng.model
+    resolved_api_key = eng.api_key
     resolved_provider_options = eng.provider_options
     resolved_timeout = eng.timeout
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
+
+    # ── Register agent API key for redaction ─────────────────────────────────
+    if resolved_api_key:
+        from aqueduct.redaction import register as _register_secret
+        _register_secret(resolved_api_key, key_hint="agent.api_key")
 
     if resolved_model is None and not print_prompt:
         click.echo(
@@ -274,6 +281,7 @@ def heal(
         patches_dir=patches_path,
         provider=resolved_provider or "anthropic",
         base_url=resolved_base_url,
+        api_key=resolved_api_key,
         provider_options=resolved_provider_options,
         timeout=resolved_timeout,
         max_reprompts=resolved_max_reprompts,

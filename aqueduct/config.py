@@ -31,6 +31,7 @@ import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
+from aqueduct.parser.schema import CascadeTierSchema
 
 from aqueduct.errors import AqueductError
 
@@ -639,6 +640,26 @@ class AgentConnectionConfig(BaseModel):
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
     model: str = "claude-sonnet-4-6"
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "LLM API key. Optional — falls back to ANTHROPIC_API_KEY / "
+            "OPENAI_API_KEY in the environment when unset. Prefer "
+            "@aq.secret('NAME') or ${ENV_VAR} over a plaintext literal; "
+            "a literal triggers an insecure-config warning and is redacted "
+            "from logs and LLM payloads."
+        ),
+    )
+    cascade: list[CascadeTierSchema] | None = Field(
+        default=None,
+        description=(
+            "Engine-wide default multi-model healing cascade. Each tier is tried "
+            "in order; cheaper models first, escalate on stuck/exhausted/deferred. "
+            "A blueprint's own agent.cascade (or model: [list] shorthand) fully "
+            "overrides this default. The engine cascade does NOT support the "
+            "model: [list] shorthand — use an explicit list of tiers."
+        ),
+    )
     provider_options: dict[str, Any] | None = None
     timeout: float = Field(
         default=300.0,
@@ -1163,6 +1184,30 @@ def load_config(path: Path | None = None) -> AqueductConfig:
 
     _strip_removed_lineage_block(data, warn=True)
     _migrate_depot_block(data, warn=True)
+
+    # ── Agent API key insecure-literal check ──────────────────────────────────
+    # Inspect the raw pre-expansion text so we can distinguish
+    # @aq.secret('X') / ${X} from plaintext. By the time the value reaches
+    # AgentConnectionConfig it is already resolved; only the raw text tells us
+    # whether the user baked a literal key into the file.
+    try:
+        _raw_data = yaml.safe_load(raw_text)
+        if isinstance(_raw_data, dict):
+            _raw_agent = _raw_data.get("agent") or {}
+            _raw_key = _raw_agent.get("api_key") if isinstance(_raw_agent, dict) else None
+            if isinstance(_raw_key, str) and _raw_key.strip() and not _raw_key.startswith("@aq.secret(") and "${" not in _raw_key:
+                import warnings as _warnings
+                from aqueduct.warnings import AqueductWarning
+                _warnings.warn(
+                    "[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
+                    "aqueduct.yml — prefer @aq.secret('NAME') or ${ENV_VAR}. The value is "
+                    "redacted from logs and LLM payloads, but a literal in a committed config "
+                    "is a credential leak risk.",
+                    AqueductWarning,
+                    stacklevel=2,
+                )
+    except Exception:
+        pass  # best-effort; real parse errors surface later
 
     # Schema-driven anchoring. The hand-rolled
     # ``data["stores"][name]["path"]`` walk has been replaced with a

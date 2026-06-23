@@ -484,7 +484,8 @@ agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────
   provider: "anthropic"              # "anthropic" | "openai_compat"
   model: "claude-sonnet-4-6"
-  # ANTHROPIC_API_KEY env var required at runtime
+  # api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # optional; falls back to ANTHROPIC_API_KEY env var
+  # ANTHROPIC_API_KEY env var required at runtime when api_key is unset
 
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
@@ -610,6 +611,21 @@ agent:
   # model: "deepseek-r1:14b"
   # timeout: 600.0              # large local models need more time
   # provider_options:
+
+  # ── Engine-wide cascade default ────────────────────────────────────────────
+  # A multi-model healing cascade tried in order; cheaper models first, escalate
+  # on stuck/exhausted/deferred. A blueprint's own agent.cascade (or
+  # model: [list] shorthand) fully overrides this engine default. The engine
+  # cascade does NOT support the model: [list] shorthand — use explicit tiers.
+  # cascade:
+  #   - model: qwen2.5-coder:7b
+  #     max_reprompts: 2
+  #     max_seconds: 30
+  #   - model: claude-sonnet-4-6
+  #     max_reprompts: 3
+  #     max_seconds: 120
+  #     deep_loop: true
+  #     allow_defer: true
   #   # Standard OpenAI params — merged into payload top-level (all openai_compat providers)
   #   temperature: 0.7
   #   top_p: 0.9

@@ -38,6 +38,7 @@ def generate_cascade_patch(
     # ── Defaults shared across all tiers (overridden per-tier) ──────
     provider: str = "anthropic",
     base_url: str | None = None,
+    api_key: str | None = None,
     provider_options: dict[str, Any] | None = None,
     timeout: float = 120.0,
     max_tokens: int = 4096,
@@ -113,6 +114,7 @@ def generate_cascade_patch(
             patches_dir=patches_dir,
             provider=tier.provider if tier.provider is not None else provider,
             base_url=tier.base_url if tier.base_url is not None else base_url,
+            api_key=tier.api_key if tier.api_key is not None else api_key,
             provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
             timeout=tier.timeout if tier.timeout is not None else timeout,
             max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,

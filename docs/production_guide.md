@@ -280,7 +280,7 @@ agent:
   approval: human
 ```
 
-Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`.
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`. As of 1.9, `agent.api_key` can be configured per blueprint or per cascade tier — always use `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A project-wide cascade default can live in `aqueduct.yml` under `agent.cascade` (useful for fleets of blueprints sharing a heal policy); each Blueprint's own `agent.cascade` overrides it.
 
 ---
 

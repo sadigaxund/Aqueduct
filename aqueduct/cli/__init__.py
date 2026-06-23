@@ -48,38 +48,12 @@ def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, **kwargs):
     rule_id is easy to copy into `warnings.suppress` in aqueduct.yml.
     Non-Aqueduct UserWarnings fall back to the legacy `WARNING:` prefix.
     """
-    from aqueduct.warnings import AqueductWarning
-    _AQ_PREFIX = "[aqueduct:"
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    import warnings as _w
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
         result = compile_fn(*args, **kwargs)
-    aq: list[tuple[str, str]] = []
-    for w in caught:
-        msg = str(w.message)
-        if issubclass(w.category, AqueductWarning) and msg.startswith(_AQ_PREFIX):
-            body = msg[len(_AQ_PREFIX):]
-            try:
-                rid, rest = body.split("] ", 1)
-            except ValueError:
-                rid, rest = "", body
-            aq.append((rid, rest))
-        elif issubclass(w.category, UserWarning):
-            click.echo(f"WARNING: {w.message}", err=True)
-        else:
-            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
-    # Group Aqueduct diagnostics into one tidy block (was one naked AQ-WARN line
-    # each). rule_ids stay copy-pasteable for `warnings.suppress` / lint.
-    if aq:
-        n = len(aq)
-        hint = "" if _verbose else click.style("  ·  -v for full text", dim=True)
-        click.echo(
-            click.style(f"⚠ {n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
-            err=True,
-        )
-        for rid, rest in aq:
-            tag = click.style(f"[{rid}]", fg="yellow") if rid else ""
-            body = rest if _verbose else _short_warning(rest)
-            click.echo(f"  · {tag} {body}", err=True)
+    from aqueduct.cli.style import emit_warnings
+    emit_warnings(caught, verbose=_verbose)
     return result
 
 
@@ -162,7 +136,8 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     are kept separate so the agent loop can concatenate them.
     """
     class _Resolved:
-        __slots__ = ("provider", "base_url", "model", "provider_options",
+        __slots__ = ("provider", "base_url", "model", "api_key", "cascade",
+                      "provider_options",
                       "timeout", "max_reprompts", "engine_prompt_context",
                       "blueprint_prompt_context")
 
@@ -171,10 +146,16 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r = _Resolved()
     r.provider = (bp.provider or eng.provider) if bp else eng.provider
     r.base_url = (bp.base_url or eng.base_url) if bp else eng.base_url
+    r.api_key = (bp.api_key or eng.api_key) if bp else eng.api_key
     r.model = (bp.model or eng.model) if bp else eng.model
     r.provider_options = (bp.provider_options or eng.provider_options) if bp else eng.provider_options
     r.timeout = (bp.timeout or eng.timeout) if bp else eng.timeout
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
+    # Cascade: blueprint wins when present; fall back to engine cascade default
+    from aqueduct.parser.parser import _build_cascade
+    _bp_cascade = bp.cascade if bp else None
+    _eng_cascade = _build_cascade(eng.cascade) if eng.cascade else None
+    r.cascade = _bp_cascade if _bp_cascade else _eng_cascade
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
     return r
@@ -209,17 +190,17 @@ def _resolve_obs_db(
     return resolve_duckdb_obs_path(cfg, store_dir, run_id)
 
 
-def _agent_usable(provider: str, base_url: str | None) -> bool:
+def _agent_usable(provider: str, base_url: str | None, api_key: str | None = None) -> bool:
     """Return True if the LLM provider appears reachable without making a network call.
 
-    anthropic:     requires ANTHROPIC_API_KEY in os.environ
-    openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY
+    anthropic:     requires ANTHROPIC_API_KEY in os.environ (or api_key param)
+    openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY (or api_key param)
     """
     import os as _os
     if provider == "anthropic":
-        return bool(_os.environ.get("ANTHROPIC_API_KEY"))
+        return bool(api_key or _os.environ.get("ANTHROPIC_API_KEY"))
     if provider == "openai_compat":
-        return bool(base_url or _os.environ.get("OPENAI_API_KEY"))
+        return bool(base_url or api_key or _os.environ.get("OPENAI_API_KEY"))
     return False
 
 

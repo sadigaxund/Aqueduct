@@ -144,6 +144,7 @@ agent:
   #     max_seconds: 120
   #     deep_loop: true
   #     allow_defer: true
+  #     api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # per-tier key override
   #
   # Shorthand: a model LIST expands to a default-settings cascade.
   # Mutually exclusive with an explicit cascade: block.
@@ -234,6 +235,7 @@ agent:
   # provider: "openai_compat"
   # base_url: "http://ollama.internal:11434/v1"
   # model: "claude-sonnet-4-6"
+  # api_key: "@aq.secret('OPENAI_API_KEY')"       # optional; overrides engine-level api_key
   # timeout: 300.0               # seconds; increase for slow local models
   # provider_options: {}         # extra payload keys for openai_compat endpoints
   #                              # (ollama_* keys land in Ollama's options block)

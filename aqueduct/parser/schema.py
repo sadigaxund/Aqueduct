@@ -63,6 +63,7 @@ class CascadeTierSchema(BaseModel):
     model: str
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None
+    api_key: str | None = None
     provider_options: dict[str, Any] | None = None
     timeout: float | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -76,6 +77,8 @@ class AgentSchema(BaseModel):
     # No populate_by_name: the `approval_mode` attr is settable from YAML ONLY via
     # its `approval` alias — the former `approval_mode` YAML key is rejected (2.0).
     model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = None
 
     @model_validator(mode="before")
     @classmethod
