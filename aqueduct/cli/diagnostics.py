@@ -423,9 +423,12 @@ def doctor(
             _info(f"(no file given \u2192 checking {default_cfg.name})", err=True)
             config_path = default_cfg
 
-    # Anchor .env discovery to the resolved input file's directory.
-    _anchor = config_path or blueprint_path
-    _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+    # Anchor .env discovery to the project root (walk up to aqueduct.yml),
+    # not the blueprint's immediate directory.  Matches run.py behaviour so
+    # `${HOST_IP}` / `${DRIVER_HOST}` resolve for --preflight.
+    from aqueduct.cli import _resolve_project_root
+    _anchor = _resolve_project_root(blueprint_path=blueprint_path, config_path=config_path)
+    _resolve_and_load_env(env_file, _anchor / (blueprint_path or config_path or Path("aqueduct.yml")).name, cli_env=cli_env)
 
     _STATUS_ICON = _ICON
     _STATUS_COLOR = _COLOR

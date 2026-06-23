@@ -161,6 +161,33 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     return r
 
 
+def _resolve_project_root(
+    blueprint_path: "Path | None" = None,
+    config_path: "Path | None" = None,
+) -> "Path":
+    """Walk up from blueprint or config to find the project root.
+
+    Returns the directory containing ``aqueduct.yml`` when found (walking up
+    to 8 levels from the blueprint), or falls back to the file's immediate
+    parent directory.  ``config_path``, when given, always wins — its parent
+    is the project root.
+    """
+    from pathlib import Path as _Path
+    if config_path is not None:
+        return config_path.parent
+    if blueprint_path is not None:
+        root = blueprint_path.parent
+        search = blueprint_path.parent
+        for _ in range(8):
+            if (search / "aqueduct.yml").exists():
+                return search
+            if search.parent == search:
+                break
+            search = search.parent
+        return root
+    return _Path.cwd()
+
+
 _DEFAULT_OBS_PATH = ".aqueduct/observability.db"
 
 

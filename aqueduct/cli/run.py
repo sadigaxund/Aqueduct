@@ -376,15 +376,8 @@ def run(
     if config_path_abs:
         _project_root = config_path_abs.parent
     else:
-        _project_root = blueprint_abs.parent
-        _search = blueprint_abs.parent
-        for _ in range(8):
-            if (_search / "aqueduct.yml").exists():
-                _project_root = _search
-                break
-            if _search.parent == _search:
-                break
-            _search = _search.parent
+        from aqueduct.cli import _resolve_project_root
+        _project_root = _resolve_project_root(blueprint_path=blueprint_abs)
 
     _original_cwd = os.getcwd()
     os.chdir(_project_root)
