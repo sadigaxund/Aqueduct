@@ -73,13 +73,13 @@ def drift(
     from aqueduct.drift.classifier import diff_schemas
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.stores.read import open_obs_write
+    from aqueduct.cli.style import error as _error
 
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        from aqueduct.cli.style import error as _error
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 

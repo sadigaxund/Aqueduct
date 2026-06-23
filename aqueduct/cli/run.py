@@ -357,6 +357,7 @@ def run(
     from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
+    from aqueduct.cli.style import error as _error
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -397,7 +398,6 @@ def run(
             cfg = load_config(config_path_abs)
             _apply_warnings_from_cfg(cfg)
         except ConfigError as exc:
-            from aqueduct.cli.style import error as _error
             _error(f"config error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
@@ -481,7 +481,6 @@ def run(
         try:
             execute = get_executor(engine)
         except (NotImplementedError, ValueError) as exc:
-            from aqueduct.cli.style import error as _error
             _error(f"engine error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 

@@ -112,6 +112,7 @@ def test_cmd(
     from pathlib import Path
 
     from aqueduct.config import ConfigError, load_config
+    from aqueduct.cli.style import error as _error
     from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
     from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 
@@ -126,7 +127,6 @@ def test_cmd(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        from aqueduct.cli.style import error as _error
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 

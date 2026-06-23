@@ -167,6 +167,7 @@ def benchmark(
         )
         sys.exit(exit_codes.USAGE_ERROR)
     scenarios_dir = target
+    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.scenario import format_benchmark_table, run_benchmark
 
@@ -179,7 +180,6 @@ def benchmark(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        from aqueduct.cli.style import error as _error
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
