@@ -72,8 +72,11 @@ def validate(
     text = fmt == "text"
     any_fail = False
     file_results: list[dict] = []
+    from aqueduct.cli import _resolve_project_root
+    if targets:
+        _root = _resolve_project_root(blueprint_path=targets[0])
+        _resolve_and_load_env(env_file, _root / targets[0].name, cli_env=cli_env)
     for path in targets:
-        _resolve_and_load_env(env_file, path, cli_env=cli_env)
         kind = _sniff_file_kind(path)
 
         if kind == "config":
@@ -201,7 +204,8 @@ def lint_cmd(
     from aqueduct.lint import LINT_SCHEMA_VERSION, run_lint
     from aqueduct.parser.parser import ParseError, parse
 
-    _resolve_and_load_env(env_file, Path(blueprint), cli_env=cli_env)
+    from aqueduct.cli import _resolve_project_root
+    _resolve_and_load_env(env_file, _resolve_project_root(blueprint_path=Path(blueprint)) / Path(blueprint).name, cli_env=cli_env)
     try:
         bp = parse(blueprint, profile=profile)
     except ParseError as exc:
