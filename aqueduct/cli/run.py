@@ -674,136 +674,144 @@ def run(
                 )
             sys.exit(exit_codes.SUCCESS)
 
-        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
-        if resolved_store_dir is None:
-            resolved_store_dir = Path(_obs_routing_base) / manifest.blueprint_id
-            resolved_store_dir.mkdir(parents=True, exist_ok=True)
+        import warnings as _w
+        with _w.catch_warnings(record=True) as _setup_caught:
+            _w.simplefilter("always")
 
-        # ── Cluster-mode store path warning ───────────────────────────────────────
-        # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
-        # doctor's `cluster-stores` check — single source of truth, one wording.
-        if cfg.deployment.env in ("cluster", "cloud") and not resolved_store_dir.is_absolute():
-            from aqueduct.warnings import emit as _emit_warning
-            _emit_warning(
-                "cluster_store_path_relative",
-                f"relative store dir {str(resolved_store_dir)!r} on env="
-                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
-                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
+            # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
+            if resolved_store_dir is None:
+                resolved_store_dir = Path(_obs_routing_base) / manifest.blueprint_id
+                resolved_store_dir.mkdir(parents=True, exist_ok=True)
+
+            # ── Cluster-mode store path warning ───────────────────────────────────────
+            # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
+            # doctor's `cluster-stores` check — single source of truth, one wording.
+            if cfg.deployment.env in ("cluster", "cloud") and not resolved_store_dir.is_absolute():
+                from aqueduct.warnings import emit as _emit_warning
+                _emit_warning(
+                    "cluster_store_path_relative",
+                    f"relative store dir {str(resolved_store_dir)!r} on env="
+                    f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
+                    "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
+                )
+
+            # ── Multi-patch danger gate ───────────────────────────────────────────────
+            # 1.1.0 — gate now keys off `max_patches > 1`, not the legacy
+            # `approval_mode: aggressive` string. The legacy `aggressive` string
+            # is preserved on the Manifest so downstream branching that still
+            # checks for it keeps working; deprecation warning is emitted at
+            # parse time.
+            _max_patches = manifest.agent.max_patches if manifest.agent else 1
+            _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
+            # Only auto / aggressive actually drive the multi-patch loop; for
+            # human / ci / disabled the `max_patches` value is inert, so don't
+            # fail closed on the danger gate just because the field is set high.
+            _is_multi_patch = (
+                _mode in ("auto", "aggressive")
+                and (_max_patches > 1 or _mode == "aggressive")
             )
+            if _is_multi_patch and not allow_multi_patch_flag:
+                if not cfg.danger.allow_multi_patch:
+                    click.echo(
+                        f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
+                        "in aqueduct.yml, or pass --allow-multi-patch for this run.",
+                        err=True,
+                    )
+                    sys.exit(exit_codes.CONFIG_ERROR)
 
-        # ── Multi-patch danger gate ───────────────────────────────────────────────
-        # 1.1.0 — gate now keys off `max_patches > 1`, not the legacy
-        # `approval_mode: aggressive` string. The legacy `aggressive` string
-        # is preserved on the Manifest so downstream branching that still
-        # checks for it keeps working; deprecation warning is emitted at
-        # parse time.
-        _max_patches = manifest.agent.max_patches if manifest.agent else 1
-        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-        # Only auto / aggressive actually drive the multi-patch loop; for
-        # human / ci / disabled the `max_patches` value is inert, so don't
-        # fail closed on the danger gate just because the field is set high.
-        _is_multi_patch = (
-            _mode in ("auto", "aggressive")
-            and (_max_patches > 1 or _mode == "aggressive")
-        )
-        if _is_multi_patch and not allow_multi_patch_flag:
-            if not cfg.danger.allow_multi_patch:
+            # ── Sandbox-mode danger gates ─────────────────────────────────────────────
+            _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+            if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
                 click.echo(
-                    f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
-                    "in aqueduct.yml, or pass --allow-multi-patch for this run.",
+                    "✗ agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
+                    "in aqueduct.yml (full-dataset sandbox replay).",
                     err=True,
                 )
                 sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
-        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
-            click.echo(
-                "✗ agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
-                "in aqueduct.yml (full-dataset sandbox replay).",
-                err=True,
-            )
-            sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
-            click.echo(
-                "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
-                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
-                err=True,
-            )
-            sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "preflight":
-            click.echo(
-                "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
-                err=True,
-            )
-        elif _sandbox_mode == "off":
-            click.echo(
-                "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
-                err=True,
-            )
-        # Double-danger combo — sandbox off + auto multi-patch loop
-        if _sandbox_mode == "off" and _is_multi_patch:
-            click.echo(
-                "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
-                f"applies to real data without pre-validation, up to max_patches="
-                f"{_max_patches} times per failure. Use only when you "
-                "fully trust the model and blueprint scope is tiny.",
-                err=True,
-            )
-
-        # ── Pending patch check ────────────────────────────────────────────────────
-        patches_dir = _project_root / "patches"
-        pending_dir = patches_dir / "pending"
-        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
-        if pending_patches:
-            policy = manifest.agent.on_pending_patches
-            _np = len(pending_patches)
-            _noun = "patch" if _np == 1 else "patches"
-            if policy == "block":
-                names = ", ".join(p.stem for p in pending_patches)
+            if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
                 click.echo(
-                    f"✗ blocked — {_np} pending {_noun} unreviewed: {names}\n"
-                    f"  Review: aqueduct patch apply <file> --blueprint {blueprint}\n"
-                    f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
+                    "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
+                    "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
                     err=True,
                 )
                 sys.exit(exit_codes.CONFIG_ERROR)
-            elif policy == "warn":
+            if _sandbox_mode == "preflight":
                 click.echo(
-                    click.style(f"⚠ {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
-                    + click.style("  ·  aqueduct patch list", dim=True),
+                    "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
                     err=True,
                 )
-                if verbose:
-                    for p in pending_patches:
-                        click.echo(f"  · {p.stem}", err=True)
+            elif _sandbox_mode == "off":
+                click.echo(
+                    "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
+                    err=True,
+                )
+            # Double-danger combo — sandbox off + auto multi-patch loop
+            if _sandbox_mode == "off" and _is_multi_patch:
+                click.echo(
+                    "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
+                    f"applies to real data without pre-validation, up to max_patches="
+                    f"{_max_patches} times per failure. Use only when you "
+                    "fully trust the model and blueprint scope is tiny.",
+                    err=True,
+                )
 
-        # ── Uncommitted applied patch warning ──────────────────────────────────────
-        uncommitted_applied = _uncommitted_applied_patches(
-            Path(blueprint), patches_dir, blueprint_id=manifest.blueprint_id
-        )
-        if uncommitted_applied:
-            n_uc = len(uncommitted_applied)
-            _noun = "patch" if n_uc == 1 else "patches"
-            click.echo(
-                click.style(f"⚠ {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
-                + click.style(
-                    f"  ·  aqueduct patch commit --blueprint {Path(blueprint).name}", dim=True
-                ),
-                err=True,
+            # ── Pending patch check ────────────────────────────────────────────────────
+            patches_dir = _project_root / "patches"
+            pending_dir = patches_dir / "pending"
+            pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
+            if pending_patches:
+                policy = manifest.agent.on_pending_patches
+                _np = len(pending_patches)
+                _noun = "patch" if _np == 1 else "patches"
+                if policy == "block":
+                    names = ", ".join(p.stem for p in pending_patches)
+                    click.echo(
+                        f"✗ blocked — {_np} pending {_noun} unreviewed: {names}\n"
+                        f"  Review: aqueduct patch apply <file> --blueprint {blueprint}\n"
+                        f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
+                        err=True,
+                    )
+                    sys.exit(exit_codes.CONFIG_ERROR)
+                elif policy == "warn":
+                    click.echo(
+                        click.style(f"⚠ {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
+                        + click.style("  ·  aqueduct patch list", dim=True),
+                        err=True,
+                    )
+                    if verbose:
+                        for p in pending_patches:
+                            click.echo(f"  · {p.stem}", err=True)
+
+            # ── Uncommitted applied patch warning ──────────────────────────────────────
+            uncommitted_applied = _uncommitted_applied_patches(
+                Path(blueprint), patches_dir, blueprint_id=manifest.blueprint_id
             )
+            if uncommitted_applied:
+                n_uc = len(uncommitted_applied)
+                _noun = "patch" if n_uc == 1 else "patches"
+                click.echo(
+                    click.style(f"⚠ {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
+                    + click.style(
+                        f"  ·  aqueduct patch commit --blueprint {Path(blueprint).name}", dim=True
+                    ),
+                    err=True,
+                )
 
-        run_id = run_id or str(uuid.uuid4())
-        selector_note = ""
-        if from_module or to_module:
-            parts = []
-            if from_module:
-                parts.append(f"from={from_module}")
-            if to_module:
-                parts.append(f"to={to_module}")
-            selector_note = "  [" + ", ".join(parts) + "]"
-        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-        _r = click.style(_rule(), dim=True)
+            run_id = run_id or str(uuid.uuid4())
+            selector_note = ""
+            if from_module or to_module:
+                parts = []
+                if from_module:
+                    parts.append(f"from={from_module}")
+                if to_module:
+                    parts.append(f"to={to_module}")
+                selector_note = "  [" + ", ".join(parts) + "]"
+            exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
+            _r = click.style(_rule(), dim=True)
+        from aqueduct.cli.style import emit_warnings as _emit_warnings
+        _emit_warnings(_setup_caught, verbose=verbose)
+
+
         click.echo(_r)
         click.echo(
             f"{click.style('▶', fg='cyan', bold=True)} "
