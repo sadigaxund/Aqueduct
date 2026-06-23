@@ -23,7 +23,11 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
+import shutil
 import sys
+import tempfile
+import zipfile
 from aqueduct.errors import AqueductError
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -44,6 +48,61 @@ def _ensure_project_root_on_path() -> None:
     cwd = str(Path.cwd())
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
+
+_shipped_packages: set[str] = set()
+
+
+def _ship_module_to_executors(mod, spark: SparkSession) -> None:
+    """Zip the module's package directory and ship it to executors via addPyFile.
+
+    Called after a successful import on the driver.  Modules in site-packages
+    are skipped (already available on every executor).  Each distinct package
+    root is shipped at most once per session.
+    """
+    mod_file = getattr(mod, "__file__", None)
+    if mod_file is None:
+        return
+
+    mod_path = Path(mod_file).resolve()
+    if "site-packages" in mod_path.parts or "dist-packages" in mod_path.parts:
+        return
+
+    # Determine the package root: if the module lives in a directory with an
+    # __init__.py, the package root is that directory's parent; otherwise it
+    # is the directory containing the .py file itself.
+    if mod_path.name == "__init__.py":
+        pkg_dir = mod_path.parent
+        root = pkg_dir.parent
+    else:
+        pkg_dir = mod_path.parent
+        # Walk up one level if this looks like a package (dir with __init__.py)
+        init = pkg_dir / "__init__.py"
+        if init.exists():
+            root = pkg_dir.parent
+        else:
+            root = pkg_dir
+
+    cache_key = str(root.resolve())
+    if cache_key in _shipped_packages:
+        return
+    _shipped_packages.add(cache_key)
+
+    # Zip everything under the package root directory.
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    try:
+        tmp.close()
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+            _top = root.resolve()
+            for py_file in sorted(root.rglob("*.py")):
+                arcname = str(py_file.resolve().relative_to(_top))
+                zf.write(py_file, arcname)
+        spark.sparkContext.addPyFile(tmp.name)
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+
 
 def _patch_pyspark_cloudpickle() -> None:
     """Replace pyspark's bundled cloudpickle 2.x with system cloudpickle 3.x.
@@ -294,6 +353,8 @@ def _register_python_udf(
         raise UDFError(
             f"UDF {udf_id!r}: cannot import module {module_path!r}: {exc}"
         ) from exc
+
+    _ship_module_to_executors(mod, spark)
 
     fn = getattr(mod, entry_name, None)
     if fn is None:
