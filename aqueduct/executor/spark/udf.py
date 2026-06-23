@@ -24,7 +24,6 @@ from __future__ import annotations
 import importlib
 import logging
 import os
-import shutil
 import sys
 import tempfile
 import zipfile
@@ -87,21 +86,18 @@ def _ship_module_to_executors(mod, spark: SparkSession) -> None:
         return
     _shipped_packages.add(cache_key)
 
-    # Zip everything under the package root directory.
-    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
-    try:
-        tmp.close()
-        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-            _top = root.resolve()
-            for py_file in sorted(root.rglob("*.py")):
-                arcname = str(py_file.resolve().relative_to(_top))
-                zf.write(py_file, arcname)
-        spark.sparkContext.addPyFile(tmp.name)
-    finally:
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
+    # Zip everything under the package root directory.  Use mkdtemp — the
+    # file must survive for the Spark session's lifetime because addPyFile
+    # queues it for distribution when the next job starts; executors may
+    # not pull it until well after this function returns.
+    tmp_dir = tempfile.mkdtemp(prefix="aq_udf_")
+    zip_path = os.path.join(tmp_dir, root.name + ".zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        _top = root.resolve()
+        for py_file in sorted(root.rglob("*.py")):
+            arcname = str(py_file.resolve().relative_to(_top))
+            zf.write(py_file, arcname)
+    spark.sparkContext.addPyFile(zip_path)
 
 
 def _patch_pyspark_cloudpickle() -> None:
