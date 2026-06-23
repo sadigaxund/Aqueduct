@@ -809,7 +809,7 @@ def run(
             exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
             _r = click.style(_rule(), dim=True)
         from aqueduct.cli.style import emit_warnings as _emit_warnings
-        _emit_warnings(_setup_caught, verbose=verbose)
+        _emit_warnings(_setup_caught, verbose=verbose, label="session:")
 
 
         click.echo(_r)

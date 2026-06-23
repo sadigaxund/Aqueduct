@@ -35,13 +35,16 @@ def _short_warning(msg: str, limit: int = 100) -> str:
     return seg
 
 
-def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True) -> None:
+def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, label: str = "") -> None:
     """Render a list of ``warnings.catch_warnings(record=True)`` records as one
     collapsed ``\u26a0 N warnings`` block.  AqueductWarning bodies of the form
     ``[aqueduct:rule_id] msg`` keep the copy-pasteable rule_id; other UserWarnings
     fall back to a ``WARNING:`` line.  Pulled out of
     ``cli.__init__._compile_with_warnings`` so ``doctor`` (and anything else)
     renders warnings identically.
+
+    ``label``, when set, is prepended to the header (e.g. ``compile: ``) so
+    adjacent warning blocks from different lifecycle phases are distinguishable.
     """
     import warnings as _warnings
     from aqueduct.warnings import AqueductWarning
@@ -64,9 +67,10 @@ def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True) -> N
 
     if aq:
         n = len(aq)
+        prefix = f"{label} " if label else ""
         hint = "" if verbose else click.style("  \u00b7  -v for full text", dim=True)
         click.echo(
-            click.style(f"{ICON['warn']} {n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
+            click.style(f"{ICON['warn']} {prefix}{n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
             err=err,
         )
         for rid, rest in aq:

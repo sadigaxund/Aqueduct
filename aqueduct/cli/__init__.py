@@ -50,7 +50,7 @@ def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, **kwargs):
         _w.simplefilter("always")
         result = compile_fn(*args, **kwargs)
     from aqueduct.cli.style import emit_warnings
-    emit_warnings(caught, verbose=_verbose)
+    emit_warnings(caught, verbose=_verbose, label="compile:")
     return result
 
 
