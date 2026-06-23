@@ -59,6 +59,7 @@ class AssertRuleType(StrEnum):
     MIN_ROWS = "min_rows"
     MAX_ROWS = "max_rows"
     FRESHNESS = "freshness"
+    NOT_NULL = "not_null"
     SQL = "sql"
     SQL_ROW = "sql_row"
     CUSTOM = "custom"
@@ -179,6 +180,27 @@ def execute_assert(
                     .withColumn(AQ_ERROR_TS, F.current_timestamp())
                 )
                 passing_df = passing_df.filter(passing_filter)
+                quarantine_parts.append(q_df)
+        elif rtype == AssertRuleType.NOT_NULL:
+            on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
+            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", AssertOnFailAction.ABORT)
+            if action == AssertOnFailAction.QUARANTINE:
+                col = rule.get("column")
+                if not col:
+                    raise AssertError(
+                        f"[{module.id}] not_null rule requires 'column'",
+                        rule_id="not_null",
+                    )
+                is_null = F.col(col).isNull()
+                q_df = (
+                    passing_df.filter(is_null)
+                    .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
+                    .withColumn(AQ_ERROR_RULE, F.lit(AssertRuleType.NOT_NULL.value))
+                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "not_null"))
+                    .withColumn(AQ_ERROR_MSG, F.lit(f"column {col!r} contains null"))
+                    .withColumn(AQ_ERROR_TS, F.current_timestamp())
+                )
+                passing_df = passing_df.filter(~is_null)
                 quarantine_parts.append(q_df)
 
     quarantine_df: DataFrame | None = None
@@ -302,6 +324,11 @@ def _batch_aggregate_rules(
             if expr_str:
                 agg_cols[f"_sql_{i}"] = F.expr(expr_str)
                 agg_rule_indices.append(i)
+        elif rtype == AssertRuleType.NOT_NULL:
+            col = rule.get("column")
+            if col:
+                agg_cols[f"_notnull_{i}"] = F.sum(F.col(col).isNull().cast("int"))
+                agg_rule_indices.append(i)
 
     agg_row = None
     if agg_cols:
@@ -362,6 +389,16 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, AssertRuleType.SQL,
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                    )
+
+            elif rtype == AssertRuleType.NOT_NULL and f"_notnull_{i}" in agg_cols:
+                null_count = agg_row[f"_notnull_{i}"] or 0
+                col = rule.get("column", "?")
+                if null_count > 0:
+                    _handle_fail(
+                        on_fail, module_id, AssertRuleType.NOT_NULL,
+                        f"not_null[{col!r}]: {null_count} null value(s) found",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 

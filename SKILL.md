@@ -172,8 +172,9 @@ Downstream edges use `port: high` / `port: low`.
       - { type: null_rate, column: order_id, max: 0.0, on_fail: abort }
       - { type: freshness, column: order_ts, max_age_hours: 26, on_fail: webhook }
       - { type: sql_row, expr: "amount > 0", on_fail: quarantine }   # bad rows → spillway
+      - { type: not_null, column: order_id, on_fail: quarantine }  # per-row null → spillway (not population gate)
 ```
-Rule types: `schema_match | min_rows | max_rows | null_rate | freshness | sql | sql_row | spillway_rate | custom`. `on_fail`: `abort | warn | webhook | quarantine`.
+Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshness | sql | sql_row | spillway_rate | custom`. `on_fail`: `abort | warn | webhook | quarantine`.  Quarantine-eligible rule types: `not_null`, `sql_row`, `custom`, `freshness` (per-row predicates).  The rest are aggregate / population gates — quarantining is rejected at compile time with a clear pointer.
 
 ### Probe — non-blocking observability tap
 ```yaml

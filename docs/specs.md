@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 1.9 — Reference Document**
+**Version 2.0 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -480,12 +480,42 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
         column: order_ts
         max_age_hours: 26
         on_fail: webhook
+      - type: not_null
+        column: order_id
+        on_fail: quarantine   # routes null rows to spillway; needs spillway edge
       - type: sql_row
         expr: "amount > 0 AND order_id IS NOT NULL"
         on_fail: quarantine
 ```
 
-Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
+Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
+
+#### Quarantine eligibility
+
+`on_fail: quarantine` routes failing rows to a spillway edge.  A rule is quarantine-able **iff it clears three gates**:
+
+| Gate | Requirement | Why |
+|------|-------------|-----|
+| 1. Logical | Failure is per-row attributable: ∃ boolean predicate `P(row)` with `bad ⟺ P(row)` | Quarantine splits rows; aggregate rules have no per-row split |
+| 2. Semantic | Removing `P`-rows makes the rule pass AND serves its intent (a per-row contract) | A population-gate breach IS the signal; quarantining nulls when `null_rate` trips masks what you're measuring |
+| 3. Performance | `P` is already computed in a row-wise pass | No extra Spark action — the zero-cost-observability rule |
+
+**Verdict table:**
+
+| Rule | Quarantine? | Why blocked |
+|------|------------|-------------|
+| `not_null` | ✅ | Per-row `col IS NULL`; the rule's contract; row-wise pass |
+| `sql_row` | ✅ | Per-row SQL expression; semantic contract; row-wise pass |
+| `custom` | ✅ | User-supplied predicate; any contract; row-wise pass |
+| `freshness` | ✅ | Per-row `col >= cutoff`; freshness contract; row-wise pass |
+| `null_rate` | ❌ | Gate 1 passes but Gate 2: population-gate — quarantining all nulls at 25% > 20% masks the signal. Gate 3: today it uses `df.sample().agg()`, not a full scan — deriving quarantine would force a full scan + filter/split. For per-row null filtering use `not_null`. |
+| `min_rows` | ❌ | Gate 1: aggregate — no per-row `P(row)` exists |
+| `max_rows` | ❌ | Gate 1: aggregate |
+| `sql` | ❌ | Gate 1: aggregate |
+| `spillway_rate` | ❌ | Not a row rule — it measures the quarantine rate itself |
+| `schema_match` | ❌ | Gate 1: metadata check, not row-level |
+
+`not_null` and `freshness` additionally require a `spillway` edge when `on_fail: quarantine` (compiler-enforced), same as `sql_row` and `custom`.
 
 ---
 

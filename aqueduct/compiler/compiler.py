@@ -258,14 +258,27 @@ def compile(  # noqa: A001
             action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
             if action == "quarantine":
                 if rtype in _AGG_NO_QUARANTINE:
-                    raise CompileError(
-                        f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
-                        "but quarantine requires a per-row predicate. "
-                        f"{rtype!r} is an aggregate rule with no derivable row filter. "
-                        "Use on_fail=abort or on_fail=warn instead. "
-                        "Row-level quarantine is supported by: sql_row, custom, freshness."
-                    )
-                if rtype in ("freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
+                    if rtype == "null_rate":
+                        raise CompileError(
+                            f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
+                            "but null_rate is a population-level gate — when it trips, the "
+                            "fraction of nulls itself IS the signal.  Quarantining every null "
+                            "row would mask that signal and would also force a full scan "
+                            "(null_rate uses df.sample().agg() to avoid scanning).  "
+                            "Use on_fail=abort or on_fail=warn instead.  "
+                            "For a per-row null filter that IS quarantine-able, use "
+                            "type=not_null, which routes null rows to the spillway with "
+                            "zero extra Spark actions."
+                        )
+                    else:
+                        raise CompileError(
+                            f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
+                            "but quarantine requires a per-row predicate — "
+                            f"{rtype!r} is an aggregate rule with no derivable row filter. "
+                            "Use on_fail=abort or on_fail=warn instead. "
+                            "Row-level quarantine is supported by: not_null, sql_row, custom, freshness."
+                        )
+                if rtype in ("not_null", "freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
                     raise CompileError(
                         f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine "
                         "but no spillway edge is connected to this Assert module. "

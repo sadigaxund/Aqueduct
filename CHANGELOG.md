@@ -17,6 +17,7 @@ release and are marked **BREAKING**.
 ## [Unreleased]
 
 ### Added
+- **`not_null` per-row Assert rule.** Quarantine-able — routes null rows to the spillway port with zero extra Spark actions. Companion to `null_rate` (population-level sampled alarm); choose `not_null` when you want to drop null rows, `null_rate` when you want a sampled-gate alarm.
 - **Engine-level `agent.cascade` default in `aqueduct.yml`.** A project-wide multi-model healing cascade (blueprint `agent.cascade` overrides). Resolves ISSUE-038 (cascade scope).
 - **Configurable `agent.api_key`** (engine, blueprint, and per-cascade-tier). Resolved from `@aq.secret()`/`${ENV}`/literal with env-var fallback. Plaintext literals in `aqueduct.yml` emit an `insecure_api_key` warning and are redacted from logs and LLM payloads. Precedence: per-cascade-tier → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`).
 - **`aqueduct doctor`** now accepts `-v` as a short alias for `--verbose`.
@@ -35,6 +36,7 @@ release and are marked **BREAKING**.
 - **Thin‑packaging contract.** Remote‑submit uploads only the Blueprint, `aqueduct.yml`, a bootstrap script, and referenced UDF files. The cluster must have `aqueduct-core[spark]` installed (Databricks library / EMR bootstrap / Dataproc init action). This avoids repackaging the entire engine and its transitive JVM/Python coupling inside the job artefact. (`docs/specs.md` §10.8)
 
 ### Changed
+- **Clearer compile error for `on_fail: quarantine` on non-quarantineable rules.** The rejection message now distinguishes "no per-row predicate" (aggregate rules: `min_rows`, `max_rows`, `sql`) from "population gate" (`null_rate` — sampled alarm; quarantine would mask the signal and add a full scan). Points `null_rate` users at the new `not_null` rule.
 - **Consistent colored error output across CLI commands.** New `aqueduct/cli/style.py` centralizes icons, colors, error/status/warning rendering so all commands share a single presentation vocabulary. `aqueduct doctor` preamble is dimmed and warnings are collapsed into the standard `\u26a0 N warnings` block (no more raw mid-grid `AQ-WARN` lines).
 
 ### Removed

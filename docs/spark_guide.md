@@ -139,6 +139,13 @@ orchestrator-level retry handling.
 | Assert aggregate rules | Full scan | 1 (batched `agg`) | — |
 | Assert `spillway_rate` | Full scan × 2 | 2 extra | — |
 
+**Assert `not_null` vs `null_rate` performance.** `not_null` with `on_fail: quarantine` runs a row-wise
+`df.filter(col IS NULL)` — a single lazy transformation, zero extra Spark actions beyond the original
+pipeline. `null_rate` uses `df.sample(fraction).agg()` to avoid a full scan on large data; if it were made
+quarantine-able, the engine would need a full scan + filter + split (2 extra actions), defeating its
+performance-through-sampling design. Choose `not_null` when you want to drop null rows; choose `null_rate`
+when you want a sampled population alarm that does not pay the cost of a full scan.
+
 ---
 
 ### SparkListener Row Estimates — Stage Fusion Caveat

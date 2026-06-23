@@ -489,7 +489,11 @@ modules: []
   #         column: order_id
   #         fraction: 0.1            # sample fraction for speed
   #         max: 0.001               # max allowed null fraction
-  #         on_fail: abort
+  #         on_fail: abort           # population gate — sampled, not per-row
+
+  #       - type: not_null
+  #         column: order_id          # per-row null check — quarantine-able
+  #         on_fail: quarantine       # routes null rows to spillway port
 
   #       - type: freshness
   #         column: event_ts
