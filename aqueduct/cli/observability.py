@@ -19,6 +19,7 @@ from aqueduct.cli import (
     _apply_warnings_from_cfg,
     _resolve_and_load_env,
     _env_options,)
+from aqueduct.cli.style import error as _error
 import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 from aqueduct.stores.read import _OBS_ROUTING_ROOT, open_obs_read  # Phase 69 — backend-aware reads
 
@@ -103,6 +104,7 @@ def report(
         _report_trend(trend_column, blueprint_arg, since, store_dir, config_path,
                       fmt, env_file, cli_env)
         return
+    from aqueduct.cli.style import error as _error
     if not run_id:
         _error("RUN_ID is required (or pass --trend COLUMN --blueprint ID)")
         sys.exit(exit_codes.USAGE_ERROR)
@@ -110,7 +112,6 @@ def report(
     import io
 
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.cli.style import error as _error
 
     try:
         _resolve_and_load_env(

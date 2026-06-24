@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from aqueduct import exit_codes
+from aqueduct.cli.style import error as _error
 from aqueduct.cli import (
     cli,
     _apply_warnings_from_cfg,
