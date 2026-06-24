@@ -32,6 +32,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+_md = "\u2014"  # em-dash, pre-computed for Python 3.11 f-string compat
+
 from aqueduct.config import load_config
 from aqueduct.redaction import redact
 from aqueduct.stores import queries as q
@@ -1257,13 +1259,13 @@ def _patches_subtab(cfg, store_dir):
     # Identity attributes are text, not numbers \u2014 markdown, not metric tiles.
     st.markdown(
         f"**Blueprint** `{picked.blueprint_id}`  \u00b7  "
-        f"**Module** `{picked.where_field or '\u2014'}`  \u00b7  "
-        f"**Error** `{picked.error_class or '\u2014'}`  \u00b7  "
-        f"**Source** {picked.source or '\u2014'}"
+        f"**Module** `{picked.where_field or _md}`  \u00b7  "
+        f"**Error** `{picked.error_class or _md}`  \u00b7  "
+        f"**Source** {picked.source or _md}"
     )
     conf = patch_data.get("confidence") if patch_data else None
-    _meta = (f"Created {picked.created_at[:19] if picked.created_at else '\u2014'} "
-             f"\u00b7 prompt v{picked.prompt_version or '\u2014'}")
+    _meta = (f"Created {picked.created_at[:19] if picked.created_at else _md} "
+             f"\u00b7 prompt v{picked.prompt_version or _md}")
     if conf is not None:
         _meta += f" \u00b7 confidence {conf:.0%}"
     st.caption(_meta)
