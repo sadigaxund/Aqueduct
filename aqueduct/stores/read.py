@@ -29,18 +29,12 @@ if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
     from aqueduct.stores.base import ObservabilityStore
 
-_DEFAULT_OBS_PATH = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"
 _OBS_ROUTING_ROOT = ".aqueduct/observability"
 
 
 def _is_default_obs_path(path: str | None) -> bool:
-    """True when the observability path was not user-specified.
-
-    ``None`` means the field was never set (1.2.0+ default).
-    The legacy sentinel ``".aqueduct/observability.db"`` is also treated
-    as default for backward compatibility with configs written before 1.2.0.
-    """
-    return path is None or path.endswith(_DEFAULT_OBS_PATH)
+    """True when the observability path was not user-specified (None)."""
+    return path is None
 
 
 def resolve_duckdb_obs_path(
