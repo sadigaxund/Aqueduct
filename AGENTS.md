@@ -328,6 +328,41 @@ When building a phase from a sequence of changes:
 
 - **Immutable dataclasses across compile steps.** Every compilation pass returns a new frozen dataclass. Mutating a Module/Edge/Manifest in place will silently work (Python dataclasses aren't truly immutable) but breaks the provenance chain. Always use `dataclasses.replace()` and test with `FrozenInstanceError`.
 
+## Bug-Family Prevention Rules
+
+These rules come from the recurring failure patterns that caused the most fixes across releases. Each one prevented 2+ future bugs. The audit guide (`.claude/skills/code-audit/SKILL.md`) checks for violations of every rule below.
+
+### Path anchoring
+Every path-typed field in a schema model must use `Annotated[str, FsPath()]`. Every YAML parse must go through `parse_dict(base_dir=…)`, never round-trip through temp files. A relative path resolved against the wrong base directory (CWD, /tmp, an arcade file's dir instead of the parent blueprint's) has been the single most recurring bug class — tempfile detours, sandbox replay, and arcade expansion all hit it independently before `FsPath` anchoring made it structural.
+
+### No silent no-ops
+When you add a config field, a callback, a flag, or a schema field — trace it to every consumer. Code that executes but produces no effect and no error is worse than a crash because it silently lies to the user. Examples: a pydantic field with a docstring that no code reads (user thinks they're tuning behavior), a field in the schema that's accepted but never consumed at runtime (user sets it, nothing happens), a callback that's wired but silently skipped under a condition the caller doesn't know about.
+
+### Falsy-trap on optional values
+`if not x` on optional values must be `if x is None` unless every falsy value (`0`, `""`, `[]`, `{}`) is semantically identical to "not set." Empty dicts caught by `if not tt` (`time_travel: {}` was silently treated as no-op), empty strings caught by `or` merge (`""` provider fires the wrong fallback), zero caught by `if not count` (a legitimate count of 0 triggers the "do nothing" path). The safe default is `if x is None` everywhere except where you've explicitly reasoned through the falsy cases.
+
+### Over-broad except must carry justification
+`except Exception: pass` is allowed only with a comment explaining why silence is correct for *every* exception that could reach it. `except:` (bare) is forbidden. A silent catch that swallowed guardrail errors let invalid patches through; silent DDL migration failures accumulated stale schemas; silent JSON parse failures returned empty defaults with no diagnostic. Every such bug was a one-line comment away from being intentional instead of accidental.
+
+### String-in-context transforms
+Any regex or string transform applied to raw text for structural clean-up must verify the target text is outside quoted strings first, or run only as a recovery pass after strict parsing fails (never on valid input). A line-comment regex applied to raw JSON response text corrupted valid patches containing `//` inside string values (like `"value": "SELECT a // 2 FROM t"` was truncated to `"SELECT a"`). The fix: run comment-stripping only after `json.loads` fails, on the recovery path.
+
+### Schema/template sync at change time
+When you change a pydantic field, its key name, its nesting level, or its allowed values — update the corresponding template comment block in the same commit. A template showing `guardrails:` flat when the schema requires `agent.guardrails:` nested cost users parse errors when they uncommented the example. A renamed file (`SPARK_GUIDE.md` → `spark_guide.md`) left 8 compiler warnings pointing to dead links for an entire release.
+
+### Import ordering
+`from __future__ import annotations` must be the first import in every file (after the module docstring). An import placed above it raises `SyntaxError` whenever bytecode cache is cold — it passes CI (warm cache) and fails in production. Ruff I002 enforces this; the pre-commit hook catches it locally, CI catches it on push.
+
+### Constants, not literals
+When a string value appears in 3+ files — especially if it's also a pydantic `Literal` or `StrEnum` — hoist it to a shared constant and import it. Bare strings like `"trigger_agent"`, `"abort"`, `"quarantine"` are compared against in 5+ files while the `StrEnum` that defines them sits unused in the same package. A typo in one comparison silently falls through to the wrong branch. The enum is the single source of truth; every comparison site imports it.
+
+### Dict dispatch over fragile dispatch
+When dispatching on a fixed set of types, prefer a `_DISPATCH` dict (add a type → one line) over a long if-elif chain where adding a type needs surgery in N parallel chains. This is a preference, not a rule — long if-elif chains are defensible when each branch does substantially different work and the type set is stable. The test: "when a new type is added, how many files need changes?" Dict dispatch → 1 file. If-elif → at least the chain file plus any parallel chains (test runner, openlineage, etc.). The existing if-elif chains in `executor.py` and `test_runner.py` are acceptable.
+
+## Audit Guide
+
+The audit skill at `.claude/skills/code-audit/SKILL.md` provides 17 systematic detection patterns that check for violations of every prevention rule above. Run it after a phase completes or before a release. Its detection→prevention cross-reference table maps each pattern to the AGENTS.md rule it checks, so gaps found in audits feed back into this document.
+
 ## Testing
 
 ### The three layers (every test carries exactly one marker)
