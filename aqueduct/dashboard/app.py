@@ -118,11 +118,12 @@ def _style(df: pd.DataFrame, status_cols=("status",),
     if styles:
         sty = sty.set_table_styles(styles, overwrite=False)
 
-    # formatted display (%, commas, etc.)
+    # formatted display (%, commas, etc.) — na_rep prevents None values
+    # from crashing pandas Styler.format with "{:,}" et al.
     if formats:
         fmtd = {c: f for c, f in formats.items() if c in df.columns}
         if fmtd:
-            sty = sty.format(fmtd)
+            sty = sty.format(fmtd, na_rep="")
 
     return sty
 
