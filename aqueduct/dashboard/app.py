@@ -164,25 +164,27 @@ def _count_yaxis(fig, max_val: float = 0) -> None:
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
 def _st_blob(handle, path_str: str, blueprint_id: str = "") -> None:
-    """Read a blob file (zstd-compressed JSON or text), redact, and display."""
-    root = handle.duckdb_path
+    """Read a blob via the configured object store, redact, and display."""
+    from aqueduct.stores.object_store import make_blob_store
+    root = handle.duckdb_path.parent if handle.duckdb_path else None
     if root is None and handle.blob_root and blueprint_id:
         root = handle.blob_root / blueprint_id
     if root is None:
         st.caption("Blob viewing not supported for this backend.")
         return
-    import zstandard
-    blob_path = root / path_str
+    blob = make_blob_store(handle.blob_backend, handle.blob_location, root)
     try:
-        with open(blob_path, "rb") as f:
-            raw = zstandard.decompress(f.read())
-        try:
-            obj = json.loads(raw)
-            st.json(redact(obj))
-        except json.JSONDecodeError:
-            st.code(redact(raw.decode("utf-8")), language="text")
+        raw = blob.materialize(path_str)
     except Exception as exc:
         st.caption(f"Could not load blob: {exc}")
+        return
+    if not raw or raw == path_str:
+        return
+    try:
+        obj = json.loads(raw)
+        st.json(redact(obj))
+    except json.JSONDecodeError:
+        st.code(redact(raw), language="text")
 
 
 def _fleet_tab(cfg, store_dir):

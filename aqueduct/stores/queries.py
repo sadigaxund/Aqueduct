@@ -43,6 +43,8 @@ class StoreHandle:
     store: Any               # ObservabilityStore (anything with .connect())
     duckdb_path: Path | None  # set for duckdb (enables read-only SQL pane); None for pg
     blob_root: Path | None = None  # local blob dir (duckdb parent or obs store dir)
+    blob_backend: str = "local"    # blob store backend (local, s3, gcs, adls)
+    blob_location: str = ""        # blob store path/location
 
 
 @dataclass(frozen=True)
@@ -187,19 +189,26 @@ def discover_stores(
             _blob_root = Path(store_dir)
         else:
             _raw = getattr(obs, "path", "") or ""
-            if not any(_raw.startswith(p) for p in ("postgresql://", "postgres://")):
-                if _is_default_obs_path(_raw):
-                    _blob_root = Path(_OBS_ROUTING_ROOT)
-                else:
-                    _p = Path(_raw)
-                    _blob_root = _p if not _p.suffix else _p.parent
-        return [StoreHandle("(postgres)", get_stores(cfg).observability, None, _blob_root)]
+            if _is_default_obs_path(_raw):
+                _blob_root = Path(_OBS_ROUTING_ROOT)
+            elif not any(_raw.startswith(p) for p in ("postgresql://", "postgres://")):
+                _p = Path(_raw)
+                _blob_root = _p if not _p.suffix else _p.parent
+            else:
+                _blob_root = Path(_OBS_ROUTING_ROOT)
+        _blob_be = getattr(cfg.stores.blob, "backend", "local") or "local"
+        _blob_loc = getattr(cfg.stores.blob, "path", "") or ""
+        return [StoreHandle("(postgres)", get_stores(cfg).observability, None, _blob_root,
+                           _blob_be, _blob_loc)]
 
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
+    _blob_be = getattr(cfg.stores.blob, "backend", "local") or "local"
+    _blob_loc = getattr(cfg.stores.blob, "path", "") or ""
     handles: list[StoreHandle] = []
     for bp, path in _duckdb_files(getattr(obs, "path", None), store_dir, root):
-        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path, path.parent))
+        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path,
+                                   path.parent, _blob_be, _blob_loc))
     return handles
 
 
