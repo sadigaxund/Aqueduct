@@ -109,7 +109,7 @@ def stores_migrate(
     from aqueduct.stores import get_stores
 
     if store.lower() != "depot":
-        click.echo(f"✗ unsupported --store: {store}", err=True)
+        _error(f"unsupported --store: {store}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
@@ -119,26 +119,26 @@ def stores_migrate(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg)
     target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
     if bundle.depot.backend == "duckdb" and Path(bundle.depot.location_label) == Path(from_path).resolve():
-        click.echo("✗ source and target depot are the same DuckDB file; nothing to migrate", err=True)
+        _error("source and target depot are the same DuckDB file; nothing to migrate")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         import duckdb as _duckdb
     except ImportError as exc:
-        click.echo(f"✗ duckdb not installed: {exc}", err=True)
+        _error(f"duckdb not installed: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     conn = _duckdb.connect(str(Path(from_path).resolve()), read_only=True)
     try:
         rows = conn.execute("SELECT key, value FROM depot_kv").fetchall()
     except Exception as exc:
-        click.echo(f"✗ could not read depot_kv from {from_path}: {exc}", err=True)
+        _error(f"could not read depot_kv from {from_path}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         conn.close()

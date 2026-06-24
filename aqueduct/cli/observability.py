@@ -105,7 +105,7 @@ def report(
                       fmt, env_file, cli_env)
         return
     if not run_id:
-        click.echo("✗ RUN_ID is required (or pass --trend COLUMN --blueprint ID)", err=True)
+        _error("RUN_ID is required (or pass --trend COLUMN --blueprint ID)")
         sys.exit(exit_codes.USAGE_ERROR)
     import csv as _csv
     import io
@@ -162,7 +162,7 @@ def report(
                 metrics_rows = []  # module_metrics table may not exist yet
 
     if row is None:
-        click.echo(f"✗ run {run_id!r} not found in the observability store", err=True)
+        _error(f"run {run_id!r} not found in the observability store")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
@@ -268,13 +268,13 @@ def _report_trend(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        click.echo("✗ observability store not found", err=True)
+        _error("observability store not found")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     if since is None:
@@ -297,7 +297,7 @@ def _report_trend(
             cur.execute(payload_q, [since])
             _raw = cur.fetchall()
     except Exception as exc:
-        click.echo(f"✗ trend query failed: {exc}", err=True)
+        _error(f"trend query failed: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     null_rows: list[tuple] = []
@@ -481,7 +481,7 @@ def _report_profile(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     if run_id:
@@ -489,14 +489,14 @@ def _report_profile(
     elif blueprint_arg:
         _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt)
     else:
-        click.echo("✗ --profile needs RUN_ID (one run) or --blueprint ID (trend)", err=True)
+        _error("--profile needs RUN_ID (one run) or --blueprint ID (trend)")
         sys.exit(exit_codes.USAGE_ERROR)
 
 
 def _profile_run(run_id, cfg, store_dir, fmt) -> None:
     store = open_obs_read(cfg, store_dir, run_id=run_id)
     if store is None:
-        click.echo(f"✗ observability store not found for run_id={run_id!r}", err=True)
+        _error(f"observability store not found for run_id={run_id!r}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     with store.connect() as cur:
@@ -552,12 +552,12 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
 def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
     if not blueprint_id:
-        click.echo(f"✗ could not resolve blueprint from {blueprint_arg!r}", err=True)
+        _error(f"could not resolve blueprint from {blueprint_arg!r}")
         sys.exit(exit_codes.USAGE_ERROR)
 
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        click.echo("✗ observability store not found", err=True)
+        _error("observability store not found")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     with store.connect() as cur:
@@ -898,7 +898,7 @@ def lineage(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # Accept blueprint file path — extract blueprint id from it
@@ -909,7 +909,7 @@ def lineage(
             bp = parse(str(arg_path))
             blueprint_id = bp.id
         except Exception as exc:
-            click.echo(f"✗ could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}", err=True)
+            _error(f"could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
     else:
         blueprint_id = blueprint_id_or_blueprint
@@ -918,7 +918,7 @@ def lineage(
     # observability store alongside all other observability tables.
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        click.echo("✗ observability store not found", err=True)
+        _error("observability store not found")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     params: list[Any] = [blueprint_id]
@@ -983,7 +983,7 @@ def _lineage_chain(
     """
     arg_path = Path(blueprint_arg)
     if arg_path.suffix not in (".yml", ".yaml") or not arg_path.exists():
-        click.echo("✗ --chain requires a blueprint file path (not a blueprint id)", err=True)
+        _error("--chain requires a blueprint file path (not a blueprint id)")
         sys.exit(exit_codes.USAGE_ERROR)
 
     from aqueduct.compiler.chain import compute_type_chain
@@ -1002,7 +1002,7 @@ def _lineage_chain(
         bp = parse(str(arg_path))
         manifest = compiler_compile(bp, blueprint_path=arg_path)
     except (ParseError, CompileError) as exc:
-        click.echo(f"✗ could not compile {blueprint_arg!r}: {exc}", err=True)
+        _error(f"could not compile {blueprint_arg!r}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     hops = compute_type_chain(manifest.modules, manifest.edges, column)
@@ -1104,7 +1104,7 @@ def signal(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
@@ -1127,7 +1127,7 @@ def signal(
         return
 
     if error_msg is not None and value_str == "true":
-        click.echo("✗ --error implies gate closed; cannot combine with --value true", err=True)
+        _error("--error implies gate closed; cannot combine with --value true")
         sys.exit(exit_codes.USAGE_ERROR)
 
     # Resolve passed value

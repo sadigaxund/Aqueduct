@@ -190,7 +190,7 @@ def benchmark(
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
         except OverrideError as exc:
-            click.echo(f"✗ {exc}", err=True)
+            _error(f"{exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
     # Deprecated single-purpose flags → fold into --set.
@@ -367,7 +367,7 @@ def benchmark(
         else:
             bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
     except ValueError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     regression_exit = False
@@ -462,13 +462,13 @@ def benchmark_diff_cmd(
 
     store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
     if not store_path.exists():
-        click.echo(f"✗ benchmark store not found: {store_path}", err=True)
+        _error(f"benchmark store not found: {store_path}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
         con = _connect(store_path)
     except Exception as exc:  # noqa: BLE001
-        click.echo(f"✗ cannot open benchmark store {store_path}: {exc}", err=True)
+        _error(f"cannot open benchmark store {store_path}: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     where_parts: list[str] = []
@@ -528,7 +528,7 @@ def benchmark_diff_cmd(
 
     if has_regressions(entries):
         if fmt != "json":
-            click.echo("✗ regression(s) detected", err=True)
+            _error("regression(s) detected")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
 
@@ -587,7 +587,7 @@ def benchmark_stats_cmd(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     if set_items:
@@ -596,7 +596,7 @@ def benchmark_stats_cmd(
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
         except OverrideError as exc:
-            click.echo(f"✗ {exc}", err=True)
+            _error(f"{exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
     anchor = Path(scenarios) if scenarios else Path(".")
@@ -606,7 +606,7 @@ def benchmark_stats_cmd(
         else:
             store = BenchmarkStore.from_config(cfg.stores.benchmark, anchor)
     except ValueError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     stats = compute_stats(store)

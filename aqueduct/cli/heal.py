@@ -105,7 +105,7 @@ def heal(
     from aqueduct.agent import build_prompt, generate_agent_patch, stage_patch_for_human
 
     if not run_id:
-        click.echo("✗ provide a run_id argument", err=True)
+        _error("provide a run_id argument")
         sys.exit(exit_codes.USAGE_ERROR)
 
     try:
@@ -127,7 +127,7 @@ def heal(
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
         except OverrideError as exc:
-            click.echo(f"✗ {exc}", err=True)
+            _error(f"{exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
