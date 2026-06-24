@@ -66,6 +66,7 @@ category; it is not a loophole for runtime features (those still follow the axes
 - **Spillway rules**: Transform channels and UDFs must use `try/except` (or Spark `try_*` functions) to catch row-level errors and populate `_aq_error_*` columns without aborting the Spark stage.
 - **Immutability**: `@dataclass(frozen=True)` on all internal representations (`Module`, `Edge`, `Manifest`). Each compilation step returns a new immutable object.
 - **UDF bodies are out of scope for self-healing.** Aqueduct's PatchSpec grammar cannot modify UDF bodies (Python/Scala/Java code in the `udfs:` block). A pipeline failing because of a bug in UDF logic is a `defer_to_human` situation — the agent diagnoses the UDF as the root cause but cannot rewrite its implementation. This is by design: arbitrary code modification breaks the P5 principle (patch grammar over codegen).
+- **Trace every consumer before changing a type or output path.** When you change a field's type (e.g. `str` → `str | None`), a function's output destination (e.g. stdout → stderr), or a sentinel value, grep for every call site and every attribute access on that field FIRST — before making the change. A `Path(None)` crash, an `UnboundLocalError` from a scoped import, or a test assertion on the old sentinel each cost multiple fix rounds that a 30-second grep would have avoided.
 
 ## Executor Architecture (Extras Pattern)
 - `aqueduct/executor/models.py` — engine-agnostic (`ExecutionResult`, `ModuleResult`)
