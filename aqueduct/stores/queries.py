@@ -196,15 +196,17 @@ def discover_stores(
                 _blob_root = _p if not _p.suffix else _p.parent
             else:
                 _blob_root = Path(_OBS_ROUTING_ROOT)
-        _blob_be = getattr(cfg.stores.blob, "backend", "local") or "local"
-        _blob_loc = getattr(cfg.stores.blob, "path", "") or ""
+        _blob_cfg = getattr(getattr(cfg, "stores", None), "blob", None)
+        _blob_be = getattr(_blob_cfg, "backend", None) or "local"
+        _blob_loc = getattr(_blob_cfg, "path", None) or ""
         return [StoreHandle("(postgres)", get_stores(cfg).observability, None, _blob_root,
                            _blob_be, _blob_loc)]
 
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
-    _blob_be = getattr(cfg.stores.blob, "backend", "local") or "local"
-    _blob_loc = getattr(cfg.stores.blob, "path", "") or ""
+    _blob_cfg = getattr(getattr(cfg, "stores", None), "blob", None)
+    _blob_be = getattr(_blob_cfg, "backend", None) or "local"
+    _blob_loc = getattr(_blob_cfg, "path", None) or ""
     handles: list[StoreHandle] = []
     for bp, path in _duckdb_files(getattr(obs, "path", None), store_dir, root):
         handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path,
@@ -470,6 +472,24 @@ def probe_signals(store: Any, blueprint_id: str,
                            json.loads(r[3]) if isinstance(r[3], str) else (r[3] or {}))
             for r in rows
         ]
+    except Exception:
+        return []
+
+
+def probe_signal_types(store: Any, blueprint_id: str) -> list[str]:
+    """Distinct signal types recorded for *blueprint_id*."""
+    try:
+        with store.connect() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT p.signal_type
+                FROM probe_signals p
+                JOIN run_records r ON r.run_id = p.run_id
+                WHERE r.blueprint_id = ?
+                """,
+                [blueprint_id],
+            )
+            return [row[0] for row in cur.fetchall()]
     except Exception:
         return []
 
