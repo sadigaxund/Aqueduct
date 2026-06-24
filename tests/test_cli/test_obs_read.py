@@ -18,7 +18,7 @@ from aqueduct.stores.read import (
 pytestmark = pytest.mark.unit
 
 
-def _cfg(path=".aqueduct/observability.db", backend="duckdb"):
+def _cfg(path=None, backend="duckdb"):
     return SimpleNamespace(
         stores=SimpleNamespace(observability=SimpleNamespace(path=path, backend=backend))
     )
@@ -56,9 +56,11 @@ def test_resolve_nondefault_dir(tmp_path):
 
 
 def test_resolve_flat_default(tmp_path, monkeypatch):
+    """Legacy flat .aqueduct/observability.db — no longer default path; None means per-blueprint routing."""
     monkeypatch.chdir(tmp_path)
     _make_db(tmp_path / ".aqueduct" / "observability.db")
-    assert resolve_duckdb_obs_path(_cfg()) == Path(".aqueduct/observability.db")
+    # path=None → per-blueprint routing, not flat file
+    assert resolve_duckdb_obs_path(_cfg()) is None
 
 
 def test_resolve_per_pipeline_by_run_id(tmp_path, monkeypatch):

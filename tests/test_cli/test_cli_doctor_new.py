@@ -54,9 +54,7 @@ deployment:
         assert result.exit_code == 0
         assert "config" in result.output
         assert "observability" in result.output
-        # Hidden rows are omitted from top
-        assert "webhook" not in result.output.split("·")[0]
-        # Collapsed line printed
+        # Hidden rows are in collapsed "· more" line
         assert "· more" in result.output
         assert "webhook" in result.output
         assert "cloudpickle" in result.output
@@ -67,8 +65,8 @@ deployment:
         assert result_verbose.exit_code == 0
         assert "config" in result_verbose.output
         assert "observability" in result_verbose.output
-        assert "webhook" in result_verbose.output.split("·")[0]
-        assert "cloudpickle" in result_verbose.output.split("·")[0]
+        assert "webhook" in result_verbose.output
+        assert "cloudpickle" in result_verbose.output
         assert "· more" not in result_verbose.output
 
 

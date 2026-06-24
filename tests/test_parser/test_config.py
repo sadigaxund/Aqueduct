@@ -84,7 +84,7 @@ def test_config_defaults():
     config = AqueductConfig()
     assert config.deployment.target == "local"
     assert config.deployment.master_url == "local[*]"
-    assert config.stores.observability.path == ".aqueduct/observability.db"
+    assert config.stores.observability.path is None
     assert not hasattr(config.stores, "lineage")  # removed — merged into observability
     assert config.stores.depot.path == ".aqueduct/depot.db"
     assert config.agent.model == "claude-sonnet-4-6"

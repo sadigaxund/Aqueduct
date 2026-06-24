@@ -279,6 +279,12 @@ def get_stores(
     )
 
     def _resolve_duckdb_path(store_cfg: "StoreBackendConfig") -> Path:
+        if store_cfg.path is None:
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
+            from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+            _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
+            _bid = blueprint_id or "default"
+            return _base / _bid / DEFAULT_OBS_DB_FILENAME
         p = Path(store_cfg.path)
         if store_dir_override is not None and not p.is_absolute():
             return Path(store_dir_override) / p.name

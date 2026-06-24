@@ -35,19 +35,43 @@ class FsPath:
     allow_uri: bool = True
 
 
-def field_is_fs_path(metadata: tuple) -> FsPath | None:
-    """Return the ``FsPath`` marker from a pydantic field's metadata tuple, or None.
+def field_is_fs_path(metadata: tuple, annotation: type | None = None) -> FsPath | None:
+    """Return the ``FsPath`` marker from a pydantic field, or None.
 
-    Pydantic v2 surfaces ``Annotated[...]`` extras via ``FieldInfo.metadata``;
-    the marker may be an instance OR the class itself (in case a caller
-    passes ``FsPath`` without parens). Both forms are accepted so the
-    schema stays forgiving.
+    Checks both ``FieldInfo.metadata`` and the field's type annotation.
+    Handles ``Optional[Annotated[str, FsPath()]]`` where pydantic strips
+    metadata from the union.
     """
+    from typing import Union, get_args as _ga, get_origin as _go
+
+    # Check metadata first (direct Annotated[...])
     for m in metadata:
         if isinstance(m, FsPath):
             return m
         if m is FsPath:
             return FsPath()
+
+    # Check annotation — handles `Annotated[str, FsPath()] | None` et al.
+    if annotation is not None:
+        origin = _go(annotation)
+        if origin is Union:
+            for arg in _ga(annotation):
+                sub_origin = _go(arg)
+                if sub_origin is not None:
+                    # It's Annotated[str, FsPath()] — FsPath is in __metadata__
+                    sub_meta = getattr(arg, "__metadata__", ())
+                    for sm in sub_meta:
+                        if isinstance(sm, FsPath):
+                            return sm
+                        if sm is FsPath:
+                            return FsPath()
+        elif hasattr(annotation, "__metadata__"):
+            for sm in annotation.__metadata__:
+                if isinstance(sm, FsPath):
+                    return sm
+                if sm is FsPath:
+                    return FsPath()
+
     return None
 
 

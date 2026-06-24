@@ -259,8 +259,9 @@ def test_fs_path_marker_visible_on_store_fields():
     from aqueduct.config import RelationalStoreConfig, KVStoreConfig
     from aqueduct.parser.fs_path import field_is_fs_path
     for cls in (RelationalStoreConfig, KVStoreConfig):
-        meta = tuple(cls.model_fields["path"].metadata)
-        assert field_is_fs_path(meta) is not None, f"{cls.__name__}.path missing FsPath()"
+        field_info = cls.model_fields["path"]
+        meta = tuple(field_info.metadata)
+        assert field_is_fs_path(meta, field_info.annotation) is not None, f"{cls.__name__}.path missing FsPath()"
 
 
 def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):

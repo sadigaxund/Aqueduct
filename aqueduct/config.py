@@ -357,7 +357,7 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
 
     def _anchor_entry(entry: dict, model_cls: type[BaseModel]) -> None:
         for sub_field_name, sub_field_info in model_cls.model_fields.items():
-            marker = field_is_fs_path(tuple(sub_field_info.metadata))
+            marker = field_is_fs_path(tuple(sub_field_info.metadata), sub_field_info.annotation)
             if marker is None:
                 continue
             raw_val = entry.get(sub_field_name)

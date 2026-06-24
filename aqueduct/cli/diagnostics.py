@@ -484,22 +484,8 @@ def doctor(
     any_fail = any(r.status == "fail" for r in results)
 
     # ── Emit any warnings caught during config-load / run_doctor before the grid ──
-    _emit_warnings(_caught, verbose=verbose)
-
-    # ── Framed header (matches aqueduct run style) ──────────────────────────────
-    _file_label = (
-        str(blueprint_path or config_path or _DEFAULT_CONFIG_FILENAME)
-        if target else _DEFAULT_CONFIG_FILENAME
-    )
-    _r = click.style(_rule(), dim=True)
-    click.echo(_r)
-    click.echo(
-        f"{click.style(_ICON['header'], fg=_COLOR['header'], bold=True)} "
-        f"{click.style('doctor', bold=True)}  \u00b7  "
-        f"{_file_label}  \u00b7  "
-        f"{len(results)} checks"
-    )
-    click.echo(_r)
+    if fmt == "text":
+        _emit_warnings(_caught, verbose=verbose)
 
     # ── JSON output (no row collapsing — every check is emitted) ──────────────
     if fmt == "json":
@@ -523,6 +509,21 @@ def doctor(
             ],
         }, indent=2))
         sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
+
+    # ── Framed header (text mode only, matches aqueduct run style) ─────────────
+    _file_label = (
+        str(blueprint_path or config_path or _DEFAULT_CONFIG_FILENAME)
+        if target else _DEFAULT_CONFIG_FILENAME
+    )
+    _r = click.style(_rule(), dim=True)
+    click.echo(_r)
+    click.echo(
+        f"{click.style(_ICON['header'], fg=_COLOR['header'], bold=True)} "
+        f"{click.style('doctor', bold=True)}  \u00b7  "
+        f"{_file_label}  \u00b7  "
+        f"{len(results)} checks"
+    )
+    click.echo(_r)
 
     # ── Text output (grouped sections) ────────────────────────────────────────
     # Default view = actionable rows only. Hidden (collapsed into one aligned
