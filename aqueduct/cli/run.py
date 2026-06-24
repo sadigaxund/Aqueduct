@@ -686,7 +686,11 @@ def run(
             # ── Cluster-mode store path warning ───────────────────────────────────────
             # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
             # doctor's `cluster-stores` check — single source of truth, one wording.
-            if cfg.deployment.env in ("cluster", "cloud") and not resolved_store_dir.is_absolute():
+            if (
+                cfg.deployment.env in ("cluster", "cloud")
+                and cfg.stores.observability.backend == "duckdb"
+                and not resolved_store_dir.is_absolute()
+            ):
                 from aqueduct.warnings import emit as _emit_warning
                 _emit_warning(
                     "cluster_store_path_relative",
