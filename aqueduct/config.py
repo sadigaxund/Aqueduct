@@ -196,11 +196,12 @@ class RelationalStoreConfig(BaseModel):
             "processes. `s3 | gcs | adls` are deferred (TODOs.md Phase 28+)."
         ),
     )
-    path: Annotated[str, FsPath()] = Field(
-        ...,
+    path: Annotated[str, FsPath()] | None = Field(
+        default=None,
         description=(
             "DuckDB: local file path. Postgres: libpq DSN such as "
-            "`postgresql://user:pass@host/aqueduct_db`."
+            "`postgresql://user:pass@host/aqueduct_db`. "
+            "None (default) → per-blueprint routing under .aqueduct/observability/."
         ),
     )
 
@@ -390,7 +391,7 @@ class StoresConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     observability: RelationalStoreConfig = Field(
-        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/observability.db"),
+        default_factory=lambda: RelationalStoreConfig(path=None),
         description=(
             "Observability store. Contains run records, failure contexts, "
             "healing outcomes, signal overrides, probe signals, module + "

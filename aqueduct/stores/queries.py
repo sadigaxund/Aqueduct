@@ -180,7 +180,7 @@ def discover_stores(
     obs = cfg.stores.observability
     if getattr(obs, "backend", "duckdb") == "postgres":
         from aqueduct.stores.base import get_stores
-        from aqueduct.stores.read import _DEFAULT_OBS_PATH, _OBS_ROUTING_ROOT
+        from aqueduct.stores.read import _OBS_ROUTING_ROOT, _is_default_obs_path
 
         _blob_root: Path | None = None
         if store_dir:
@@ -188,7 +188,7 @@ def discover_stores(
         else:
             _raw = getattr(obs, "path", "") or ""
             if not any(_raw.startswith(p) for p in ("postgresql://", "postgres://")):
-                if not _raw or _raw == _DEFAULT_OBS_PATH:
+                if _is_default_obs_path(_raw):
                     _blob_root = Path(_OBS_ROUTING_ROOT)
                 else:
                     _p = Path(_raw)

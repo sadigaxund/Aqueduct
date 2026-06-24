@@ -293,7 +293,7 @@ def get_stores(
         obs = DuckDBObservabilityStore(_resolve_duckdb_path(cfg.stores.observability))
     elif cfg.stores.observability.backend == "postgres":
         from aqueduct.stores.postgres import PostgresObservabilityStore
-        obs = PostgresObservabilityStore(cfg.stores.observability.path)
+        obs = PostgresObservabilityStore(cfg.stores.observability.path or "")
     else:  # pragma: no cover — guarded at config layer
         raise BackendUnsupportedError(
             f"obs.backend={cfg.stores.observability.backend!r} is not a supported relational backend"

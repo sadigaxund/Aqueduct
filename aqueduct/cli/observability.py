@@ -692,7 +692,7 @@ def runs(
             c = Path(store_dir) / "observability.db"
             if c.exists():
                 candidates.append(c)
-        elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
+        elif cfg.stores.observability.path is not None:
             c = Path(cfg.stores.observability.path)
             if c.is_dir():
                 c = c / "observability.db"

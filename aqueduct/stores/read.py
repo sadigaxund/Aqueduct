@@ -33,6 +33,16 @@ _DEFAULT_OBS_PATH = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"
 _OBS_ROUTING_ROOT = ".aqueduct/observability"
 
 
+def _is_default_obs_path(path: str | None) -> bool:
+    """True when the observability path was not user-specified.
+
+    ``None`` means the field was never set (1.2.0+ default).
+    The legacy sentinel ``".aqueduct/observability.db"`` is also treated
+    as default for backward compatibility with configs written before 1.2.0.
+    """
+    return path is None or path.endswith(_DEFAULT_OBS_PATH)
+
+
 def resolve_duckdb_obs_path(
     cfg: "AqueductConfig",
     store_dir: str | None = None,
@@ -58,8 +68,8 @@ def resolve_duckdb_obs_path(
 
     obs_path = cfg.stores.observability.path
     routing_root = _OBS_ROUTING_ROOT
-    flat_default = Path(_DEFAULT_OBS_PATH)
-    if obs_path != _DEFAULT_OBS_PATH:
+    flat_default = Path(_OBS_ROUTING_ROOT) / DEFAULT_OBS_DB_FILENAME
+    if not _is_default_obs_path(obs_path):
         explicit = Path(obs_path)
         if explicit.suffix and not explicit.is_dir():
             # Explicit single file — one store for every blueprint (no parallel).
@@ -108,7 +118,7 @@ def resolve_obs_store_dir(
     if store_dir:
         return Path(store_dir)
     path = cfg.stores.observability.path
-    if path == _DEFAULT_OBS_PATH:
+    if _is_default_obs_path(path):
         return Path(_OBS_ROUTING_ROOT) / blueprint_id
     p = Path(path)
     if not p.suffix:  # location-only base directory
