@@ -203,3 +203,34 @@ stores:
     # The output should show the resolved path
     assert "my_obs.db" in result.output
     assert "loaded 1 var(s) from" in result.output
+
+
+def test_load_config_with_env_resolves_dotenv(tmp_path, clean_env):
+    """_load_config_with_env resolves ${VAR} from .env found via project-root walking."""
+    from aqueduct.cli import _load_config_with_env
+    (tmp_path / ".env").write_text("AQ_DASH_TEST_VAR=resolved_from_env", encoding="utf-8")
+    # Use a field with a ${VAR} reference; posix path so anchoring is a no-op
+    (tmp_path / "aqueduct.yml").write_text("""
+aqueduct_config: '1.0'
+stores:
+  observability: {path: "/tmp/${AQ_DASH_TEST_VAR}"}
+""", encoding="utf-8")
+
+    old = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        cfg = _load_config_with_env()
+        assert cfg.stores.observability.path == f"/tmp/resolved_from_env"
+    finally:
+        os.chdir(old)
+
+
+def test_load_config_with_env_explicit_path(tmp_path, clean_env):
+    """_load_config_with_env with explicit config_path discovers .env from its dir."""
+    from aqueduct.cli import _load_config_with_env
+    (tmp_path / ".env").write_text("EXPLICIT_VAR=explicit", encoding="utf-8")
+    cfg_p = tmp_path / "aqueduct.yml"
+    cfg_p.write_text("aqueduct_config: '1.0'\n" + 'deployment: {engine: spark, target: local, master_url: "local[*]"}', encoding="utf-8")
+
+    cfg = _load_config_with_env(cfg_p)
+    assert os.environ.get("EXPLICIT_VAR") == "explicit"
