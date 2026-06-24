@@ -22,7 +22,7 @@ def clean_aqueduct_dir():
 def test_resolve_obs_db_store_dir(tmp_path):
     """_resolve_obs_db honours store_dir parameter first."""
     mock_cfg = MagicMock()
-    mock_cfg.stores.observability.path = ".aqueduct/observability.db"
+    mock_cfg.stores.observability.path = None
     
     # Store dir does not have the db file yet -> returns None
     assert _resolve_obs_db(mock_cfg, str(tmp_path), "run-1") is None
@@ -47,7 +47,7 @@ def test_resolve_obs_db_explicit_path(tmp_path):
 def test_resolve_obs_db_per_pipeline_glob(tmp_path):
     """_resolve_obs_db globs per-pipeline dirs when using default obs path and run_id is supplied."""
     mock_cfg = MagicMock()
-    mock_cfg.stores.observability.path = ".aqueduct/observability.db"
+    mock_cfg.stores.observability.path = None
     
     # 1. Create a dummy per-pipeline DB
     pipeline_dir = Path(".aqueduct/observability/my_pipeline")
