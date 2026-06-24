@@ -42,6 +42,7 @@ class StoreHandle:
     label: str               # blueprint id, "(postgres)", or a path stem
     store: Any               # ObservabilityStore (anything with .connect())
     duckdb_path: Path | None  # set for duckdb (enables read-only SQL pane); None for pg
+    blob_root: Path | None = None  # local blob dir (duckdb parent or obs store dir)
 
 
 @dataclass(frozen=True)
@@ -179,14 +180,26 @@ def discover_stores(
     obs = cfg.stores.observability
     if getattr(obs, "backend", "duckdb") == "postgres":
         from aqueduct.stores.base import get_stores
+        from aqueduct.stores.read import _DEFAULT_OBS_PATH, _OBS_ROUTING_ROOT
 
-        return [StoreHandle("(postgres)", get_stores(cfg).observability, None)]
+        _blob_root: Path | None = None
+        if store_dir:
+            _blob_root = Path(store_dir)
+        else:
+            _raw = getattr(obs, "path", "") or ""
+            if not any(_raw.startswith(p) for p in ("postgresql://", "postgres://")):
+                if not _raw or _raw == _DEFAULT_OBS_PATH:
+                    _blob_root = Path(_OBS_ROUTING_ROOT)
+                else:
+                    _p = Path(_raw)
+                    _blob_root = _p if not _p.suffix else _p.parent
+        return [StoreHandle("(postgres)", get_stores(cfg).observability, None, _blob_root)]
 
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 
     handles: list[StoreHandle] = []
     for bp, path in _duckdb_files(getattr(obs, "path", None), store_dir, root):
-        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path))
+        handles.append(StoreHandle(bp or path.parent.name, DuckDBObservabilityStore(path), path, path.parent))
     return handles
 
 

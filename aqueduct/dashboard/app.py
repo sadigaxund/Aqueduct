@@ -163,13 +163,16 @@ def _count_yaxis(fig, max_val: float = 0) -> None:
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-def _st_blob(handle, path_str: str) -> None:
+def _st_blob(handle, path_str: str, blueprint_id: str = "") -> None:
     """Read a blob file (zstd-compressed JSON or text), redact, and display."""
-    if not handle.duckdb_path:
+    root = handle.duckdb_path
+    if root is None and handle.blob_root and blueprint_id:
+        root = handle.blob_root / blueprint_id
+    if root is None:
         st.caption("Blob viewing not supported for this backend.")
         return
     import zstandard
-    blob_path = handle.duckdb_path.parent / path_str
+    blob_path = root / path_str
     try:
         with open(blob_path, "rb") as f:
             raw = zstandard.decompress(f.read())
@@ -387,13 +390,13 @@ def _runs_tab(handles):
                 st.code(fc.error_message or "(no message)", language="text")
                 if fc.stack_trace:
                     with st.expander("Stack trace"):
-                        _st_blob(owner, fc.stack_trace)
+                        _st_blob(owner, fc.stack_trace, run.blueprint_id)
                 if fc.provenance_json:
                     with st.expander("Provenance"):
-                        _st_blob(owner, fc.provenance_json)
+                        _st_blob(owner, fc.provenance_json, run.blueprint_id)
                 if fc.manifest_json:
                     with st.expander("Manifest"):
-                        _st_blob(owner, fc.manifest_json)
+                        _st_blob(owner, fc.manifest_json, run.blueprint_id)
             else:
                 for m in det.modules:
                     if m.error:
