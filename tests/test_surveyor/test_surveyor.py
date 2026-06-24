@@ -172,14 +172,13 @@ class TestSurveyorStores:
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
         from aqueduct.stores import StoreBundle
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBLineageStore, DuckDBDepotStore
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore, DuckDBDepotStore
         
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         
         obs = DuckDBObservabilityStore(tmp_path / "observability.db")
-        lineage = DuckDBLineageStore(tmp_path / "lineage.db")
         depot = DuckDBDepotStore(tmp_path / "depot.db")
-        bundle = StoreBundle(observability=obs, lineage=lineage, depot=depot)
+        bundle = StoreBundle(observability=obs, depot=depot)
         
         surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
         assert surveyor._observability is obs

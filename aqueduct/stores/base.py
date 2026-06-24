@@ -107,11 +107,7 @@ class _RelationalStore(ABC):
 
 
 class ObservabilityStore(_RelationalStore):
-    """Run records, failures, healing outcomes, signal overrides, probe signals, metrics."""
-
-
-class LineageStore(_RelationalStore):
-    """Column-level lineage."""
+    """Run records, failures, healing outcomes, signal overrides, probe signals, metrics, column lineage."""
 
 
 class DepotStore(ABC):
@@ -240,7 +236,6 @@ class StoreBundle:
     """
 
     observability: ObservabilityStore
-    lineage: LineageStore
     depot: DepotStore                          # the default mount (key-isolated per blueprint)
     depots: dict[str, DepotStore] = field(default_factory=dict)   # name → mount (incl. "default")
 
@@ -291,10 +286,9 @@ def get_stores(
         return p
 
     obs: ObservabilityStore
-    lineage: LineageStore
     depot: DepotStore
 
-    # ── observability ──────────────────────────────────────────────────────────────────
+    # ── observability (includes column lineage — merged in Phase 38) ──────────
     if cfg.stores.observability.backend == "duckdb":
         obs = DuckDBObservabilityStore(_resolve_duckdb_path(cfg.stores.observability))
     elif cfg.stores.observability.backend == "postgres":
@@ -304,15 +298,6 @@ def get_stores(
         raise BackendUnsupportedError(
             f"obs.backend={cfg.stores.observability.backend!r} is not a supported relational backend"
         )
-
-    # ── lineage ──────────────────────────────────────────────────────────────
-    # Phase 38: column lineage was merged into the observability store; the
-    # `stores.lineage` config block is inert. Alias the lineage store to the
-    # observability store so `column_lineage` is always read/written in one place
-    # and NO separate (empty) lineage.db file / lineage schema is ever created.
-    # (Bug: previously a distinct DuckDBLineageStore spawned a stray empty
-    # lineage.db that nothing ever wrote to.)
-    lineage = obs  # type: ignore[assignment]  # ObservabilityStore satisfies the LineageStore interface (both _RelationalStore)
 
     # ── depot mounts ───────────────────────────────────────────────────────────
     # Build every mount in stores.depots (incl. the implicit `default`). Each is
@@ -339,7 +324,7 @@ def get_stores(
             depots[name] = raw
     depot = depots["default"]
 
-    return StoreBundle(observability=obs, lineage=lineage, depot=depot, depots=depots)
+    return StoreBundle(observability=obs, depot=depot, depots=depots)
 
 
 # Field placeholder so static analysis tools don't complain about the

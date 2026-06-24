@@ -44,8 +44,7 @@ edges: []
     mock_surveyor = MagicMock()
     mock_bundle = MagicMock()
     mock_bundle.observability = None
-    mock_bundle.lineage = None
-
+    
     # Call with iteration_run_id
     res = _run_patch_gates_inline(
         patch=patch_spec,

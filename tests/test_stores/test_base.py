@@ -10,9 +10,8 @@ def test_get_stores_factory_duckdb():
     bundle = get_stores(cfg)
     assert isinstance(bundle, StoreBundle)
     assert isinstance(bundle.observability, DuckDBObservabilityStore)
-    # Phase 38: lineage is merged into observability — the lineage store aliases
-    # it (no separate lineage.db). See get_stores.
-    assert bundle.lineage is bundle.observability
+    # Phase 38/Phase ∞: lineage lives in the observability store — no separate store.
+    assert bundle.observability is not None
     assert isinstance(bundle.depot, DuckDBDepotStore)
 
 def test_get_stores_factory_mixed():
@@ -24,7 +23,7 @@ def test_get_stores_factory_mixed():
     })
     bundle = get_stores(cfg)
     assert isinstance(bundle.observability, DuckDBObservabilityStore)
-    assert bundle.lineage is bundle.observability  # aliased (Phase 38)
+    assert bundle.observability is not None  # lineage merged into observability (Phase ∞)
     assert isinstance(bundle.depot, RedisDepotStore)
 
 def test_get_stores_factory_postgres():
@@ -36,5 +35,5 @@ def test_get_stores_factory_postgres():
     })
     bundle = get_stores(cfg)
     assert isinstance(bundle.observability, PostgresObservabilityStore)
-    assert bundle.lineage is bundle.observability  # aliased (Phase 38)
+    assert bundle.observability is not None  # lineage merged into observability (Phase ∞)
     assert isinstance(bundle.depot, PostgresDepotStore)

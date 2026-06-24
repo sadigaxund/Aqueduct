@@ -870,7 +870,6 @@ def run(
             from aqueduct.stores import StoreBundle
             bundle = StoreBundle(
                 observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
-                lineage=None,  # Phase 38: lineage merged into observability
                 depot=bundle.depot,
             )
             depot = DepotStore(backend=bundle.depot)

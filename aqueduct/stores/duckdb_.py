@@ -19,7 +19,6 @@ import duckdb
 
 from aqueduct.stores.base import (
     DepotStore,
-    LineageStore,
     ObservabilityStore,
     RelationalCursor,
     _RelationalDepotMixin,
@@ -84,11 +83,7 @@ class _DuckDBRelational:
 
 
 class DuckDBObservabilityStore(_DuckDBRelational, ObservabilityStore):
-    """Single-file DuckDB observability.db."""
-
-
-class DuckDBLineageStore(_DuckDBRelational, LineageStore):
-    """Single-file DuckDB lineage.db."""
+    """Single-file DuckDB observability.db (includes column lineage since Phase 38)."""
 
 
 class DuckDBDepotStore(_DuckDBRelational, _RelationalDepotMixin, DepotStore):

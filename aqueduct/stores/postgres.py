@@ -34,7 +34,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from aqueduct.stores.base import DepotStore, LineageStore, ObservabilityStore, RelationalCursor, _RelationalDepotMixin
+from aqueduct.stores.base import DepotStore, ObservabilityStore, RelationalCursor, _RelationalDepotMixin
 
 logger = logging.getLogger(__name__)
 
@@ -155,10 +155,6 @@ class _PostgresRelational:
 
 class PostgresObservabilityStore(_PostgresRelational, ObservabilityStore):
     _SCHEMA = "observability"
-
-
-class PostgresLineageStore(_PostgresRelational, LineageStore):
-    _SCHEMA = "lineage"
 
 
 class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore):

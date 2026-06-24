@@ -118,7 +118,7 @@ def test_surveyor_upserts_postgres():
         backend = "postgres"
         location_label = "dummy"
     
-    bundle = StoreBundle(observability=obs_store, lineage=obs_store, depot=DummyDepot())
+    bundle = StoreBundle(observability=obs_store, depot=DummyDepot())
     surveyor = Surveyor(manifest, store_dir=Path("/tmp"), stores=bundle)
     run_id = uuid.uuid4().hex
     
@@ -152,7 +152,7 @@ def test_surveyor_upserts_postgres():
 def test_phase33_matrix_postgres_redis(spark, tmp_path):
     """Verify that a real blueprint run with Postgres relational stores + Redis depot completes successfully."""
     from tests.conftest import _redis_url
-    from aqueduct.stores.postgres import PostgresObservabilityStore, PostgresLineageStore
+    from aqueduct.stores.postgres import PostgresObservabilityStore
     from aqueduct.stores.redis_ import RedisDepotStore
     from aqueduct.executor.spark.executor import execute
     from aqueduct.stores.base import StoreBundle
@@ -161,12 +161,9 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     redis_conn_url = _redis_url()
     
     obs_schema = f"obs_p33_{uuid.uuid4().hex[:8]}"
-    lin_schema = f"lin_p33_{uuid.uuid4().hex[:8]}"
     
     obs_store = PostgresObservabilityStore(dsn)
     obs_store._SCHEMA = obs_schema
-    lin_store = PostgresLineageStore(dsn)
-    lin_store._SCHEMA = lin_schema
     depot_store = RedisDepotStore(redis_conn_url)
     
     in_path = str(tmp_path / "in_p33.parquet")
@@ -198,7 +195,7 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     import psycopg2
     try:
         # Patch get_stores to return our bundle
-        bundle = StoreBundle(observability=obs_store, lineage=lin_store, depot=depot_store)
+        bundle = StoreBundle(observability=obs_store, depot=depot_store)
         surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
         run_id = f"run_{uuid.uuid4().hex[:8]}"
         
