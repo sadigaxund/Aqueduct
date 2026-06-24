@@ -34,7 +34,6 @@ import streamlit as st
 
 _md = "\u2014"  # em-dash, pre-computed for Python 3.11 f-string compat
 
-from aqueduct.config import load_config
 from aqueduct.redaction import redact
 from aqueduct.stores import queries as q
 
@@ -1393,7 +1392,8 @@ def main() -> None:
     config_path = os.environ.get("AQ_DASH_CONFIG") or None
     store_dir = os.environ.get("AQ_DASH_STORE_DIR") or None
     try:
-        cfg = load_config(Path(config_path) if config_path else None)
+        from aqueduct.cli import _load_config_with_env
+        cfg = _load_config_with_env(Path(config_path) if config_path else None)
     except Exception as exc:  # noqa: BLE001
         st.error(f"config error: {exc}")
         return

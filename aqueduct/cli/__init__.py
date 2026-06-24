@@ -185,6 +185,30 @@ def _resolve_project_root(
     return _Path.cwd()
 
 
+def _load_config_with_env(
+    config_path: "Path | None" = None,
+    *,
+    env_file: "str | None" = None,
+    cli_env: "tuple[str, ...] | list[str] | None" = None,
+) -> "Any":
+    """Load engine config after resolving .env / CI-injected env vars.
+
+    Single entry point so ``load_config()`` is never called without first
+    populating ``os.environ`` from the project ``.env`` file.  When
+    ``config_path`` is ``None`` the project root is discovered by walking up
+    from CWD (same ``_resolve_project_root`` logic as every CLI command).
+    """
+    from pathlib import Path as _Path2
+    _cfg = _Path2(config_path) if config_path is not None else None
+    _anchor = (
+        _cfg if _cfg is not None
+        else _resolve_project_root() / _DEFAULT_CONFIG_FILENAME
+    )
+    _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+    from aqueduct.config import load_config as _load_config
+    return _load_config(_cfg)
+
+
 _DEFAULT_OBS_PATH = ".aqueduct/observability.db"
 
 
