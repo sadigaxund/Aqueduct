@@ -190,6 +190,7 @@ def _load_config_with_env(
     *,
     env_file: "str | None" = None,
     cli_env: "tuple[str, ...] | list[str] | None" = None,
+    quiet: bool = False,
 ) -> "Any":
     """Load engine config after resolving .env / CI-injected env vars.
 
@@ -197,6 +198,9 @@ def _load_config_with_env(
     populating ``os.environ`` from the project ``.env`` file.  When
     ``config_path`` is ``None`` the project root is discovered by walking up
     from CWD (same ``_resolve_project_root`` logic as every CLI command).
+
+    ``quiet`` suppresses the stderr notice — useful for long-running
+    processes (dashboard) that re-load config on every refresh.
     """
     from pathlib import Path as _Path2
     _cfg = _Path2(config_path) if config_path is not None else None
@@ -204,7 +208,16 @@ def _load_config_with_env(
         _cfg if _cfg is not None
         else _resolve_project_root() / _DEFAULT_CONFIG_FILENAME
     )
-    _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+    if quiet:
+        import click as _click
+        _real_echo = _click.echo
+        _click.echo = lambda *a, **kw: None
+        try:
+            _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+        finally:
+            _click.echo = _real_echo
+    else:
+        _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
     from aqueduct.config import load_config as _load_config
     return _load_config(_cfg)
 

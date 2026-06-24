@@ -1394,7 +1394,7 @@ def main() -> None:
     store_dir = os.environ.get("AQ_DASH_STORE_DIR") or None
     try:
         from aqueduct.cli import _load_config_with_env
-        cfg = _load_config_with_env(Path(config_path) if config_path else None)
+        cfg = _load_config_with_env(Path(config_path) if config_path else None, quiet=True)
     except Exception as exc:  # noqa: BLE001
         st.error(f"config error: {exc}")
         return
