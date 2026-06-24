@@ -494,7 +494,7 @@ def doctor(
     _r = click.style(_rule(), dim=True)
     click.echo(_r)
     click.echo(
-        f"{click.style('\u25b6', fg='cyan', bold=True)} "
+        f"{click.style(_ICON['header'], fg=_COLOR['header'], bold=True)} "
         f"{click.style('doctor', bold=True)}  \u00b7  "
         f"{_file_label}  \u00b7  "
         f"{len(results)} checks"
@@ -546,7 +546,7 @@ def doctor(
         rows = by_group.get(grp)
         if not rows:
             continue
-        click.echo(click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg="cyan", bold=True))
+        click.echo(click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR['header'], bold=True))
         for r in rows:
             icon = _STATUS_ICON[r.status]
             color = _STATUS_COLOR[r.status]

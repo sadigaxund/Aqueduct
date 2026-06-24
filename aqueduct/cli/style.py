@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import click
 
-ICON = {"ok": "\u2713", "fail": "\u2717", "warn": "\u26a0", "skip": "-", "info": "\u00b7"}
-COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None, "info": "bright_black"}
+ICON = {"ok": "\u2713", "fail": "\u2717", "warn": "\u26a0", "skip": "-", "info": "\u00b7", "header": "\u25b6"}
+COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None, "info": "bright_black", "header": "cyan"}
 
 
 def error(msg: str, *, err: bool = True) -> None:
