@@ -19,6 +19,7 @@ from aqueduct.cli import (
     _DEFAULT_CONFIG_FILENAME,
     _env_options,
     _resolve_and_load_env,
+    _rule,
     _sniff_file_kind,
 )
 
@@ -466,12 +467,7 @@ def doctor(
         return _GROUP_FOR_NAME.get(r.name, "general")
 
     if fmt == "text":
-        if skip_spark:
-            _info("Running connectivity checks (--skip-spark: Spark check skipped)...", err=True)
-        elif preflight:
-            _info("Running connectivity checks (--preflight: full Spark session, unbounded — Ctrl-C to abort)...", err=True)
-        else:
-            _info("Running connectivity checks (Spark = fast TCP reachability; --preflight for full session)...", err=True)
+        pass  # header rendered below — no preamble needed
 
     import warnings as _w
     with _w.catch_warnings(record=True) as _caught:
@@ -489,6 +485,21 @@ def doctor(
 
     # ── Emit any warnings caught during config-load / run_doctor before the grid ──
     _emit_warnings(_caught, verbose=verbose)
+
+    # ── Framed header (matches aqueduct run style) ──────────────────────────────
+    _file_label = (
+        str(blueprint_path or config_path or _DEFAULT_CONFIG_FILENAME)
+        if target else _DEFAULT_CONFIG_FILENAME
+    )
+    _r = click.style(_rule(), dim=True)
+    click.echo(_r)
+    click.echo(
+        f"{click.style('\u25b6', fg='cyan', bold=True)} "
+        f"{click.style('doctor', bold=True)}  \u00b7  "
+        f"{_file_label}  \u00b7  "
+        f"{len(results)} checks"
+    )
+    click.echo(_r)
 
     # ── JSON output (no row collapsing — every check is emitted) ──────────────
     if fmt == "json":
@@ -552,7 +563,7 @@ def doctor(
             fg="bright_black",
         ))
 
-    click.echo()
+    click.echo(click.style(_rule(), dim=True))
     if any_fail:
         _error("one or more checks failed")
         sys.exit(exit_codes.CONFIG_ERROR)
