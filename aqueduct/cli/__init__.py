@@ -222,9 +222,6 @@ def _load_config_with_env(
     return _load_config(_cfg)
 
 
-_DEFAULT_OBS_PATH = ".aqueduct/observability.db"
-
-
 def _resolve_obs_db(
     cfg,
     store_dir: str | None,
