@@ -19,16 +19,28 @@ Phase 5 scope: logging + webhook only.  LLM patch loop wired in Phase 7.
 from __future__ import annotations
 
 import json
+import logging
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import logging
-
-from aqueduct.models import Manifest
 from aqueduct.executor.models import ExecutionResult
+from aqueduct.models import Manifest
 from aqueduct.redaction import redact as _redact
+from aqueduct.surveyor.ddl import (
+    _DDL,
+    _EXPLAIN_SNAPSHOT_DDL,
+    _HEAL_ATTEMPTS_DDL,
+    _PHASE45_MIGRATION_DDL,
+    _SIGNAL_OVERRIDES_DDL,
+)
+from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
+    _COLUMN_SUGGEST_CLASSES,
+    _PY4J_CAUSE_HOP_LIMIT,
+    _extract_structured_error,
+    _parse_suggested_columns,
+)
 from aqueduct.surveyor.models import FailureContext
 from aqueduct.surveyor.webhook import fire_webhook
 
@@ -38,165 +50,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── DDL ───────────────────────────────────────────────────────────────────────
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS run_records (
-    run_id         VARCHAR PRIMARY KEY,
-    blueprint_id   VARCHAR NOT NULL,
-    status         VARCHAR NOT NULL,
-    started_at     TIMESTAMPTZ NOT NULL,
-    finished_at    TIMESTAMPTZ,
-    module_results JSON,
-    parent_run_id  VARCHAR
-);
-
-CREATE TABLE IF NOT EXISTS failure_contexts (
-    run_id            VARCHAR PRIMARY KEY,
-    blueprint_id      VARCHAR NOT NULL,
-    failed_module     VARCHAR NOT NULL,
-    error_message     VARCHAR NOT NULL,
-    stack_trace       VARCHAR,
-    manifest_json     VARCHAR,     -- Phase 39: blob path or inline JSON
-    provenance_json   VARCHAR,     -- Phase 39: blob path or inline JSON
-    started_at        TIMESTAMPTZ NOT NULL,
-    finished_at       TIMESTAMPTZ NOT NULL,
-    -- Structured Spark-error extraction. Populated when PySparkException or
-    -- Py4JJavaError surfaces enough metadata to identify the failure class,
-    -- offending object, and suggested column names — much cheaper for the
-    -- agent to consume than a raw multi-kilobyte JVM stack trace.
-    error_class       VARCHAR,
-    root_exception    JSON,
-    sql_state         VARCHAR,
-    object_name       VARCHAR,
-    suggested_columns JSON
-);
-
-CREATE TABLE IF NOT EXISTS healing_outcomes (
-    id           VARCHAR PRIMARY KEY,
-    run_id       VARCHAR NOT NULL,
-    parent_run_id VARCHAR,
-    failed_module VARCHAR,
-    failure_category VARCHAR,
-    model        VARCHAR,
-    patch_id     VARCHAR,
-    confidence   DOUBLE PRECISION,
-    patch_applied BOOLEAN,
-    run_success_after_patch BOOLEAN,
-    applied_at   VARCHAR,
-    prompt_version VARCHAR,
-    -- Phase 45 signature memory: exact failure-signature hash + how the heal
-    -- was resolved ('llm' fresh agent patch, 'cached' pending-patch reuse,
-    -- 'replayed' zero-token replay of an archived successful patch).
-    failure_signature VARCHAR,
-    resolution   VARCHAR,
-    failure_signature_coarse VARCHAR,
-    -- Phase 46: 0-based cascade tier index of the model that produced the
-    -- patch; NULL outside multi-model cascade (or when no LLM was involved).
-    model_cascade_position INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS patch_simulation (
-    id           VARCHAR PRIMARY KEY,
-    run_id       VARCHAR,
-    blueprint_id VARCHAR,
-    patch_id     VARCHAR NOT NULL,
-    gate         VARCHAR NOT NULL,
-    status       VARCHAR NOT NULL,
-    detail       VARCHAR,
-    sample_rows  BIGINT,
-    duration_ms  BIGINT,
-    recorded_at  VARCHAR NOT NULL
-);
-
--- Column-level lineage extracted at compile time (driver-side, zero Spark actions).
--- Merged from the former lineage.db in Phase 38.
-CREATE TABLE IF NOT EXISTS column_lineage (
-    blueprint_id   VARCHAR NOT NULL,
-    run_id         VARCHAR NOT NULL,
-    channel_id     VARCHAR NOT NULL,
-    output_column  VARCHAR NOT NULL,
-    source_table   VARCHAR NOT NULL,
-    source_column  VARCHAR NOT NULL,
-    captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_lineage_channel
-    ON column_lineage (blueprint_id, channel_id);
-
--- Phase 56 (Lineage v2): SQL-AST normalised fingerprint per Channel.
--- Changelog, NOT a run-log: one row per distinct fingerprint per
--- (blueprint_id, channel_id). Repeat runs of unchanged SQL only bump
--- last_seen/last_run_id (ON CONFLICT), so size tracks SQL edits, not runs.
-CREATE TABLE IF NOT EXISTS channel_fingerprints (
-    blueprint_id  VARCHAR NOT NULL,
-    channel_id    VARCHAR NOT NULL,
-    fingerprint   VARCHAR NOT NULL,
-    canonical_sql VARCHAR NOT NULL,
-    first_seen    TIMESTAMPTZ NOT NULL,
-    last_seen     TIMESTAMPTZ NOT NULL,
-    first_run_id  VARCHAR NOT NULL,
-    last_run_id   VARCHAR NOT NULL,
-    PRIMARY KEY (blueprint_id, channel_id, fingerprint)
-);
-CREATE INDEX IF NOT EXISTS idx_fingerprint_latest
-    ON channel_fingerprints (blueprint_id, channel_id, last_seen);
-"""
-
-_SIGNAL_OVERRIDES_DDL = """
-CREATE TABLE IF NOT EXISTS signal_overrides (
-    signal_id     VARCHAR PRIMARY KEY,
-    passed        BOOLEAN NOT NULL,
-    error_message VARCHAR,
-    set_at        TIMESTAMPTZ NOT NULL
-);
-"""
-
-_EXPLAIN_SNAPSHOT_DDL = """
-CREATE TABLE IF NOT EXISTS explain_snapshot (
-    blueprint_id     VARCHAR NOT NULL,
-    run_id           VARCHAR NOT NULL,
-    module_id        VARCHAR NOT NULL,
-    captured_at      VARCHAR NOT NULL,
-    exchange_count   INTEGER NOT NULL,
-    python_udf_count INTEGER NOT NULL,
-    broadcast_count  INTEGER NOT NULL,
-    plan_text        VARCHAR NOT NULL,
-    PRIMARY KEY (blueprint_id, run_id, module_id)
-);
-"""
-
-# Per-attempt log for the unified reprompt loop.
-# One row per LLM turn (success or failure) so post-mortem can answer
-# "what did attempt 2 actually say" — which `healing_outcomes` alone could
-# not (it only carries the final patch outcome).
-_HEAL_ATTEMPTS_DDL = """
-CREATE TABLE IF NOT EXISTS heal_attempts (
-    id                    VARCHAR PRIMARY KEY,
-    run_id                VARCHAR NOT NULL,
-    attempt_num           INTEGER NOT NULL,
-    error_class           VARCHAR,
-    where_field           VARCHAR,
-    normalized_message    VARCHAR,
-    signature_hash        VARCHAR,
-    tokens_in             INTEGER NOT NULL DEFAULT 0,
-    tokens_out            INTEGER NOT NULL DEFAULT 0,
-    latency_ms            INTEGER NOT NULL DEFAULT 0,
-    gate_that_rejected    VARCHAR,
-    escalated             BOOLEAN NOT NULL DEFAULT FALSE,
-    stop_reason           VARCHAR,
-    prompt_version        VARCHAR,
-    recorded_at           VARCHAR NOT NULL
-);
-"""
-
-# Phase 45/46 columns for observability DBs created before the schema change.
-# Both DuckDB and Postgres support ADD COLUMN IF NOT EXISTS.
-_PHASE45_MIGRATION_DDL = """
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS resolution VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature_coarse VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS model_cascade_position INTEGER;
-"""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -223,164 +76,6 @@ def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
     if exc is not None:
         return str(exc)
     return "unknown error"
-
-
-_PY4J_CAUSE_HOP_LIMIT = 10
-# Spark 4.0 error-class names we recognise as carrying column-suggestion data.
-_COLUMN_SUGGEST_CLASSES = frozenset({
-    "UNRESOLVED_COLUMN.WITH_SUGGESTION",
-    "UNRESOLVED_FIELD.WITH_SUGGESTION",
-    "UNRESOLVED_MAP_KEY.WITH_SUGGESTION",
-})
-
-
-def _parse_suggested_columns(blob: str) -> tuple[str, ...]:
-    """Parse Spark 'Did you mean one of the following? [`a`, `b`]' segment.
-
-    Spark's UNRESOLVED_COLUMN.WITH_SUGGESTION message embeds the suggestion
-    list as backtick-quoted identifiers separated by commas. Extracting them
-    explicitly lets the prompt show "actual columns: …" without asking the
-    LLM to parse the trace.
-    """
-    import re as _re
-    if not blob:
-        return ()
-    out: list[str] = []
-    for m in _re.finditer(r"`([^`]+)`", blob):
-        name = m.group(1).strip()
-        if name and name not in out:
-            out.append(name)
-    return tuple(out)
-
-
-def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | None:
-    """Return a dict of structured error fields, or None if extraction fails.
-
-    Best-effort: lazy-imports pyspark/py4j and swallows any failure so that a
-    bug in extraction can never block self-heal. Used by Surveyor.record()
-    before the exception is stringified into FailureContext.error_message.
-
-    Resolution order:
-      1. PySparkException (Spark 4.0): getCondition / getErrorClass +
-         getMessageParameters + getSqlState. Highest-fidelity path.
-      2. Py4JJavaError: walk .java_exception.getCause() up to
-         _PY4J_CAUSE_HOP_LIMIT to find innermost Java throwable.
-      3. Python cause chain: traceback.TracebackException root.
-
-    Returns mapping with keys: error_class, root_exception, sql_state,
-    suggested_columns, object_name. Any field may be None / empty tuple.
-    """
-    if exc is None:
-        return None
-    out: dict[str, Any] = {
-        "error_class": None,
-        "root_exception": None,
-        "sql_state": None,
-        "suggested_columns": (),
-        "object_name": None,
-    }
-    try:
-        # --- 1. Spark 4.0 PySparkException ---------------------------------
-        try:
-            from pyspark.errors import PySparkException  # type: ignore
-        except Exception:
-            PySparkException = None  # type: ignore[assignment]
-
-        spark_exc = None
-        if PySparkException is not None:
-            cur = exc
-            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                if isinstance(cur, PySparkException):
-                    spark_exc = cur
-                    break
-                cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
-                if cur is None:
-                    break
-
-        if spark_exc is not None:
-            try:
-                if hasattr(spark_exc, "getCondition"):
-                    out["error_class"] = spark_exc.getCondition()
-                elif hasattr(spark_exc, "getErrorClass"):
-                    out["error_class"] = spark_exc.getErrorClass()
-            except Exception:
-                pass  # structured-error enrichment is best-effort; fall back to raw trace
-            try:
-                if hasattr(spark_exc, "getSqlState"):
-                    out["sql_state"] = spark_exc.getSqlState()
-            except Exception:
-                pass  # sql-state inspection is diagnostic only; missing sql_state is not an error
-            params: dict[str, Any] = {}
-            try:
-                if hasattr(spark_exc, "getMessageParameters"):
-                    raw = spark_exc.getMessageParameters() or {}
-                    params = {str(k): str(v) for k, v in dict(raw).items()}
-            except Exception:
-                params = {}
-            if params:
-                for k in ("objectName", "fieldName", "tableName", "relationName", "columnName"):
-                    if k in params:
-                        out["object_name"] = params[k]
-                        break
-                if out["error_class"] in _COLUMN_SUGGEST_CLASSES:
-                    for k in ("proposal", "suggestion", "suggestions"):
-                        if k in params:
-                            out["suggested_columns"] = _parse_suggested_columns(params[k])
-                            break
-
-        # --- 2. Py4JJavaError cause chain ----------------------------------
-        if out["error_class"] is None:
-            try:
-                from py4j.protocol import Py4JJavaError  # type: ignore
-            except Exception:
-                Py4JJavaError = None  # type: ignore[assignment]
-
-            if Py4JJavaError is not None:
-                cur = exc
-                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                    if isinstance(cur, Py4JJavaError):
-                        java_exc = getattr(cur, "java_exception", None)
-                        if java_exc is not None:
-                            try:
-                                innermost = java_exc
-                                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                                    nxt = innermost.getCause()
-                                    if nxt is None or nxt is innermost:
-                                        break
-                                    innermost = nxt
-                                jclass = innermost.getClass().getName()
-                                jmsg = innermost.getMessage() or ""
-                                out["error_class"] = out["error_class"] or jclass
-                                out["root_exception"] = {"type": jclass, "message": jmsg}
-                            except Exception:
-                                pass  # getCause() chain walk is best-effort; root cause extraction is diagnostic only
-                        break
-                    cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
-                    if cur is None:
-                        break
-
-        # --- 3. Python cause chain (root fallback) -------------------------
-        if out["root_exception"] is None:
-            root = exc
-            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                nxt = getattr(root, "__cause__", None) or getattr(root, "__context__", None)
-                if nxt is None or nxt is root:
-                    break
-                root = nxt
-            out["root_exception"] = {
-                "type": type(root).__name__,
-                "message": str(root),
-            }
-            if out["error_class"] is None:
-                out["error_class"] = type(root).__name__
-
-        if not any((out["error_class"], out["root_exception"], out["sql_state"],
-                    out["suggested_columns"], out["object_name"])):
-            return None
-        return out
-    except Exception:
-        logger.debug("_extract_structured_error failed", exc_info=True)
-        return None
 
 
 def _first_error_type(result: ExecutionResult) -> str | None:

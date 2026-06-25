@@ -150,7 +150,9 @@ modules.
 
 | Module | What it owns |
 |--------|--------------|
-| `surveyor.py` | Main Surveyor class: start/record/stop lifecycle, DDL, structured error extraction |
+| `surveyor.py` | Main Surveyor class: start/record/stop lifecycle. Re-imports the DDL constants and `_extract_structured_error` (kept under `aqueduct.surveyor.surveyor.*` for callers/tests) |
+| `ddl.py` | Observability-store `CREATE TABLE`/`ALTER TABLE` string constants (`_DDL`, `_SIGNAL_OVERRIDES_DDL`, `_EXPLAIN_SNAPSHOT_DDL`, `_HEAL_ATTEMPTS_DDL`, `_PHASE45_MIGRATION_DDL`). Pure SQL, no imports — re-exported by `surveyor.py` |
+| `error_extraction.py` | Structured Spark/Py4J error extraction (`_extract_structured_error`, `_parse_suggested_columns`). Lazily imports `pyspark.errors`/`py4j` INSIDE the function — top-level `import aqueduct.surveyor` stays `pyspark`-free. Re-exported by `surveyor.py` |
 | `models.py` | Frozen dataclasses: `RunRecord`, `FailureContext` (the LLM agent's input) |
 | `scenario.py` | Scenario benchmark framework: `load_scenario`, `_build_failure_ctx`, effect-based grader |
 | `webhook.py` | HTTP dispatch in daemon thread, `${VAR}` template rendering, redaction |
