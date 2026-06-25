@@ -18,10 +18,8 @@ from aqueduct.cli import (
     _apply_warnings_from_cfg,
     _compile_with_warnings,
     _check_heal_guardrails,
-    _resolve_and_load_env,
     _env_options,
-    _rule,
-    _uncommitted_applied_patches,)
+    _rule,)
 import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 
 
@@ -240,6 +238,548 @@ def _zero_token_attempt(sig_exact):
                            gate_that_rejected=None, escalated=False)
 
 
+from dataclasses import dataclass as _dc_frozen
+from typing import TYPE_CHECKING as _t
+if _t:
+    from aqueduct.config import AqueductConfig, WebhookEndpointConfig
+    from aqueduct.executor.spark.probe import ProbeSampling as _PS
+
+
+@_dc_frozen(frozen=True)
+class _LoadConfigResult:
+    """Return-type bundle for ``_load_engine_config`` — all values derived from
+    config/env/CLI resolution, before parse/compile/execute."""
+    cfg: "AqueductConfig"
+    resolved_store_dir: "str | None"
+    resolved_webhook: "WebhookEndpointConfig | None"
+    engine: str
+    master_url: str
+    probe_sampling: "_PS"
+    blueprint_set_nested: dict
+    _using_default_obs_path: bool
+    _obs_routing_base: str
+    execute: object  # get_executor callable — deferred type
+    blueprint_str: str  # = str(blueprint_abs)
+
+
+def _load_engine_config(
+    blueprint_abs,
+    config_path_abs,
+    store_dir_abs,
+    webhook,
+    set_items,
+    env_file,
+    cli_env,
+    _project_root,
+):
+    """Phase 1 — config load + env + --set overrides → ``_LoadConfigResult``.
+
+    Extracted from the ``run()`` god-function (T18).  No behaviour change.
+    """
+    import sys as _sys
+    from pathlib import Path as _P
+    from aqueduct.cli import _resolve_and_load_env as _renv
+    from aqueduct.cli.style import error as _err
+
+    # ── .env loading ───────────────────────────────────────────────────────────
+    _renv(env_file, _project_root / blueprint_abs.name, cli_env=cli_env)
+    blueprint_str = str(blueprint_abs)
+
+    # ── Load engine config ─────────────────────────────────────────────────────
+    try:
+        from aqueduct.config import ConfigError, WebhookEndpointConfig, load_config as _load_cfg
+        cfg = _load_cfg(config_path_abs)
+        from aqueduct.cli import _apply_warnings_from_cfg
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        _err(f"config error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
+    blueprint_set_nested: dict = {}
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _config_set_nested, blueprint_set_nested = route_overrides(
+                set_items, allow_blueprint=True
+            )
+            cfg = apply_to_model(cfg, _config_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _config_set_nested.get("danger"):
+            click.echo(click.style(
+                f"\u26a0  --set DANGER override(s) (single-run, NOT persisted): "
+                f"{_config_set_nested['danger']}", fg="red", bold=True,
+            ), err=True)
+
+    # ── Store dir resolution ───────────────────────────────────────────────────
+    _using_default_obs_path = False
+    _obs_routing_base = ".aqueduct/observability"
+    if store_dir_abs:
+        resolved_store_dir = store_dir_abs
+    else:
+        _observability_path = cfg.stores.observability.path
+        if _observability_path is None:
+            _using_default_obs_path = True
+        if cfg.stores.observability.backend != "duckdb":
+            resolved_store_dir = None
+        elif _observability_path is None:
+            _using_default_obs_path = True
+            resolved_store_dir = None
+        elif not _P(_observability_path).suffix:
+            _using_default_obs_path = True
+            _obs_routing_base = _observability_path
+            resolved_store_dir = None
+        else:
+            resolved_store_dir = _P(_observability_path).parent
+
+    resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
+    engine = cfg.deployment.engine
+    master_url = cfg.deployment.master_url
+
+    # ── Danger settings startup warning ──────────────────────────────────────
+    danger_active = []
+    if cfg.danger.allow_full_probe_actions:
+        danger_active.append("allow_full_probe_actions=true")
+    if cfg.danger.allow_multi_patch:
+        danger_active.append("allow_multi_patch=true")
+    if danger_active:
+        click.echo(
+            f"\u26a0  DANGER settings active: {', '.join(danger_active)}",
+            err=True,
+        )
+
+    # ── Executor resolve ──────────────────────────────────────────────────────
+    try:
+        from aqueduct.executor import get_executor
+        execute = get_executor(engine)
+    except (NotImplementedError, ValueError) as exc:
+        _err(f"engine error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── Probe sampling ────────────────────────────────────────────────────────
+    from aqueduct.executor.spark.probe import ProbeSampling
+    probes_cfg = cfg.probes
+    probe_sampling = ProbeSampling(
+        max_sample_rows=probes_cfg.max_sample_rows,
+        default_sample_fraction=probes_cfg.default_sample_fraction,
+    )
+
+    return _LoadConfigResult(
+        cfg=cfg,
+        resolved_store_dir=resolved_store_dir,
+        resolved_webhook=resolved_webhook,
+        engine=engine,
+        master_url=master_url,
+        probe_sampling=probe_sampling,
+        blueprint_set_nested=blueprint_set_nested,
+        _using_default_obs_path=_using_default_obs_path,
+        _obs_routing_base=_obs_routing_base,
+        execute=execute,
+        blueprint_str=blueprint_str,
+    )
+
+
+@_dc_frozen(frozen=True)
+class _CompileResult:
+    """Return-type bundle for ``_do_compile`` — parse + compile → manifest + store wiring."""
+    manifest: object  # Manifest
+    bundle: object     # StoreBundle
+    depot: object      # DepotStore
+    depots_wrapped: dict
+    execution_date: object
+    cli_overrides: dict
+
+
+def _do_compile(
+    blueprint,
+    profile,
+    ctx,
+    execution_date_str,
+    store_dir_abs,
+    cfg,
+    verbose,
+    blueprint_set_nested,
+):
+    """Phase 2 — parse blueprint + build stores + compile → ``_CompileResult``."""
+    try:
+        import sys as _sys
+        from pathlib import Path as _P
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.config import load_config as _unused
+        from aqueduct.depot.depot import DepotStore as _DS
+        from aqueduct.parser.parser import ParseError, parse as _parse
+        from aqueduct.cli import _compile_with_warnings
+        from aqueduct.cli.style import error as _err
+    except ImportError as exc:
+        raise RuntimeError(f"compile dependencies missing: {exc}") from exc
+
+    cli_overrides: dict[str, str] = {}
+    for item in ctx:
+        if "=" not in item:
+            click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
+            _sys.exit(exit_codes.USAGE_ERROR)
+        k, _, v = item.partition("=")
+        cli_overrides[k.strip()] = v
+
+    # ── Parse --execution-date ─────────────────────────────────────────────────
+    execution_date = None
+    if execution_date_str:
+        from datetime import date as _date
+        try:
+            execution_date = _date.fromisoformat(execution_date_str)
+        except ValueError:
+            click.echo(f"\u2717 --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
+            _sys.exit(exit_codes.USAGE_ERROR)
+
+    # ── Parse ──────────────────────────────────────────────────────────────────
+    try:
+        if blueprint_set_nested:
+            import yaml as _yaml
+            from aqueduct.overrides import deep_merge as _deep_merge
+            from aqueduct.parser.parser import parse_dict
+            _raw_bp = _yaml.safe_load(_P(blueprint).read_text(encoding="utf-8")) or {}
+            _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
+            bp = parse_dict(
+                _raw_bp, base_dir=_P(blueprint).parent,
+                profile=profile, cli_overrides=cli_overrides or None,
+            )
+        else:
+            bp = _parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
+    except ParseError as exc:
+        _err(f"parse error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── Build per-run store bundle ─────────────────────────────────────────────
+    from aqueduct.stores import get_stores
+    bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
+    depot = _DS(backend=bundle.depot)
+    depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
+
+    # ── Compile ────────────────────────────────────────────────────────────────
+    try:
+        manifest = _compile_with_warnings(
+            compiler_compile,
+            bp,
+            blueprint_path=_P(blueprint),
+            depot=depot,
+            depots=depots_wrapped,
+            execution_date=execution_date,
+            secrets_provider=cfg.secrets.provider,
+            secrets_region=cfg.secrets.region,
+            secrets_resolver=cfg.secrets.resolver,
+            deployment_env=getattr(cfg.deployment, "env", None),
+            deployment_target=getattr(cfg.deployment, "target", None),
+            _verbose=verbose,
+        )
+    except CompileError as exc:
+        _err(f"compile error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    return _CompileResult(
+        manifest=manifest,
+        bundle=bundle,
+        depot=depot,
+        depots_wrapped=depots_wrapped,
+        execution_date=execution_date,
+        cli_overrides=cli_overrides,
+    )
+
+
+@_dc_frozen(frozen=True)
+class _SurveyorSetupResult:
+    """Return-type bundle for ``_setup_surveyor`` — surveyor, session, agent config, etc."""
+    resolved_store_dir: object
+    patches_dir: object
+    run_id: str
+    approval_mode: str
+    max_patches: int
+    _is_multi_patch: bool
+    resolved_agent_provider: str | None
+    resolved_agent_base_url: str | None
+    resolved_agent_model: str | None
+    resolved_agent_provider_options: object | None
+    resolved_agent_timeout: int | None
+    resolved_agent_max_reprompts: int | None
+    resolved_agent_api_key: str | None
+    resolved_agent_engine_prompt_context: str | None
+    resolved_agent_blueprint_prompt_context: str | None
+    resolved_agent_cascade: object | None
+    resolved_sandbox_master_url: str | None
+    surveyor: object
+    _obs_store: object
+    _patch_store: object
+    session: object
+    bundle: object
+    depot: object
+    _r: object  # click.style rule for banner
+
+
+def _setup_surveyor(
+    resolved_store_dir,
+    manifest,
+    cfg,
+    _obs_routing_base,
+    _using_default_obs_path,
+    verbose,
+    allow_multi_patch_flag,
+    _project_root,
+    blueprint_str,
+    run_id,
+    from_module,
+    to_module,
+    execution_date,
+    engine,
+    master_url,
+    resolved_webhook,
+    bundle,
+    depot,
+):
+    """Phase 3 — warnings, gates, surveyor creation, engine session → ``_SurveyorSetupResult``."""
+    import sys as _sys
+    import uuid as _uuid
+    from pathlib import Path as _P
+    import warnings as _w
+    from aqueduct.cli.style import error as _err
+
+    with _w.catch_warnings(record=True) as _setup_caught:
+        _w.simplefilter("always")
+
+        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ──
+        if resolved_store_dir is None:
+            resolved_store_dir = _P(_obs_routing_base) / manifest.blueprint_id
+            resolved_store_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── Cluster-mode store path warning ───────────────────────────────────────
+        if (
+            cfg.deployment.env in ("cluster", "cloud")
+            and cfg.stores.observability.backend == "duckdb"
+            and not resolved_store_dir.is_absolute()
+        ):
+            from aqueduct.warnings import emit as _emit_warning
+            _emit_warning(
+                "cluster_store_path_relative",
+                f"relative store dir {str(resolved_store_dir)!r} on env="
+                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
+                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
+            )
+
+        # ── Multi-patch danger gate ───────────────────────────────────────────────
+        _max_patches = manifest.agent.max_patches if manifest.agent else 1
+        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
+        _is_multi_patch = (
+            _mode in ("auto", "aggressive")
+            and (_max_patches > 1 or _mode == "aggressive")
+        )
+        if _is_multi_patch and not allow_multi_patch_flag:
+            if not cfg.danger.allow_multi_patch:
+                click.echo(
+                    f"\u2717 max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
+                    "in aqueduct.yml, or pass --allow-multi-patch for this run.",
+                    err=True,
+                )
+                _sys.exit(exit_codes.CONFIG_ERROR)
+
+        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
+        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
+            click.echo(
+                "\u2717 agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
+                "in aqueduct.yml (full-dataset sandbox replay).",
+                err=True,
+            )
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
+            click.echo(
+                "\u2717 agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
+                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
+                err=True,
+            )
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _sandbox_mode == "preflight":
+            click.echo(
+                "\u26a0 sandbox mode: preflight (full-dataset replay, no Egress) \u2014 slow but conclusive",
+                err=True,
+            )
+        elif _sandbox_mode == "off":
+            click.echo(
+                "\u26a0 DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
+                err=True,
+            )
+        if _sandbox_mode == "off" and _is_multi_patch:
+            click.echo(
+                "\u26a0 DANGER COMBO: sandbox_mode=off + max_patches > 1 \u2014 every LLM patch "
+                f"applies to real data without pre-validation, up to max_patches="
+                f"{_max_patches} times per failure. Use only when you "
+                "fully trust the model and blueprint scope is tiny.",
+                err=True,
+            )
+
+        # ── Pending patch check ────────────────────────────────────────────────────
+        patches_dir = _project_root / "patches"
+        pending_dir = patches_dir / "pending"
+        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
+        if pending_patches:
+            policy = manifest.agent.on_pending_patches
+            _np = len(pending_patches)
+            _noun = "patch" if _np == 1 else "patches"
+            if policy == "block":
+                names = ", ".join(p.stem for p in pending_patches)
+                click.echo(
+                    f"\u2717 blocked \u2014 {_np} pending {_noun} unreviewed: {names}\n"
+                    f"  Review: aqueduct patch apply <file> --blueprint {blueprint_str}\n"
+                    f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
+                    err=True,
+                )
+                _sys.exit(exit_codes.CONFIG_ERROR)
+            elif policy == "warn":
+                click.echo(
+                    click.style(f"\u26a0 {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
+                    + click.style("  \u00b7  aqueduct patch list", dim=True),
+                    err=True,
+                )
+                if verbose:
+                    for p in pending_patches:
+                        click.echo(f"  \u00b7 {p.stem}", err=True)
+
+        # ── Uncommitted applied patch warning ──────────────────────────────────────
+        from aqueduct.cli import _uncommitted_applied_patches
+        uncommitted_applied = _uncommitted_applied_patches(
+            _P(blueprint_str), patches_dir, blueprint_id=manifest.blueprint_id
+        )
+        if uncommitted_applied:
+            n_uc = len(uncommitted_applied)
+            _noun = "patch" if n_uc == 1 else "patches"
+            click.echo(
+                click.style(f"\u26a0 {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
+                + click.style(
+                    f"  \u00b7  aqueduct patch commit --blueprint {_P(blueprint_str).name}", dim=True
+                ),
+                err=True,
+            )
+
+        run_id = run_id or str(_uuid.uuid4())
+        selector_note = ""
+        if from_module or to_module:
+            parts = []
+            if from_module:
+                parts.append(f"from={from_module}")
+            if to_module:
+                parts.append(f"to={to_module}")
+            selector_note = "  [" + ", ".join(parts) + "]"
+        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
+        from aqueduct.cli import _rule
+        _r = click.style(_rule(), dim=True)
+    from aqueduct.cli.style import emit_warnings as _emit_warnings
+    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
+
+    click.echo(_r)
+    click.echo(
+        f"{click.style('\u25b6', fg='cyan', bold=True)} "
+        f"{click.style(manifest.blueprint_id, bold=True)}  \u00b7  "
+        f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {engine} {master_url}"
+        f"{selector_note}{exec_date_note}"
+    )
+    click.echo(_r)
+
+    # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
+    from aqueduct.cli import resolve_agent_connection
+    _rac = resolve_agent_connection(cfg.agent, manifest.agent)
+    resolved_agent_provider = _rac.provider
+    resolved_agent_base_url = _rac.base_url
+    resolved_agent_model = _rac.model
+    resolved_agent_provider_options = _rac.provider_options
+    resolved_agent_timeout = _rac.timeout
+    resolved_agent_max_reprompts = _rac.max_reprompts
+    resolved_agent_api_key = _rac.api_key
+    resolved_agent_engine_prompt_context = _rac.engine_prompt_context
+    resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
+    resolved_agent_cascade = _rac.cascade
+    resolved_sandbox_master_url = cfg.agent.sandbox_master_url
+
+    # ── Register agent API key for redaction ─────────────────────────────────────
+    if resolved_agent_api_key:
+        from aqueduct.redaction import register as _register_secret
+        _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
+
+    # ── Multi-patch disclaimer ────────────────────────────────────────────────────
+    approval_mode = manifest.agent.approval_mode
+    max_patches = manifest.agent.max_patches
+    if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
+        click.echo(
+            f"\u26a0  multi-patch mode \u2014 LLM will attempt up to {max_patches} patch(es). "
+            "Each patch is validated in-memory before being written to Blueprint. "
+            "Review patches/applied/ after the run.",
+            err=True,
+        )
+
+    # ── Surveyor \u2014 start ───────────────────────────────────────────────────────
+    from aqueduct.depot.depot import DepotStore as _DS
+    from aqueduct.surveyor.surveyor import Surveyor as _Surveyor
+    if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        from aqueduct.stores import StoreBundle
+        bundle = StoreBundle(
+            observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
+            depot=bundle.depot,
+        )
+        depot = _DS(backend=bundle.depot)
+    surveyor = _Surveyor(
+        manifest,
+        store_dir=resolved_store_dir,
+        webhook_config=resolved_webhook,
+        blueprint_path=_P(blueprint_str),
+        patches_dir=patches_dir,
+        stores=bundle,
+        blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
+        lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
+        if cfg.lineage.openlineage_url else None,
+    )
+    surveyor.start(run_id)
+    _obs_store = surveyor.observability
+    _patch_store = surveyor.patch_store()
+
+    # ── Engine session ────────────────────────────────────────────────────────────
+    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+    if engine == "spark":
+        from aqueduct.executor.spark.session import make_spark_session
+        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
+    else:
+        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
+
+    import atexit
+    atexit.register(session.stop)
+
+    return _SurveyorSetupResult(
+        resolved_store_dir=resolved_store_dir,
+        patches_dir=patches_dir,
+        run_id=run_id,
+        approval_mode=approval_mode,
+        max_patches=max_patches,
+        _is_multi_patch=_is_multi_patch,
+        resolved_agent_provider=resolved_agent_provider,
+        resolved_agent_base_url=resolved_agent_base_url,
+        resolved_agent_model=resolved_agent_model,
+        resolved_agent_provider_options=resolved_agent_provider_options,
+        resolved_agent_timeout=resolved_agent_timeout,
+        resolved_agent_max_reprompts=resolved_agent_max_reprompts,
+        resolved_agent_api_key=resolved_agent_api_key,
+        resolved_agent_engine_prompt_context=resolved_agent_engine_prompt_context,
+        resolved_agent_blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+        resolved_agent_cascade=resolved_agent_cascade,
+        resolved_sandbox_master_url=resolved_sandbox_master_url,
+        surveyor=surveyor,
+        _obs_store=_obs_store,
+        _patch_store=_patch_store,
+        session=session,
+        bundle=bundle,
+        depot=depot,
+        _r=_r,
+    )
+
+
 @cli.command()
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("-p", "--profile", default=None, help="Context profile to activate")
@@ -349,13 +889,9 @@ def run(
     import uuid
     from pathlib import Path
 
-    from aqueduct.compiler.compiler import CompileError
-    from aqueduct.compiler.compiler import compile as compiler_compile
-    from aqueduct.config import ConfigError, WebhookEndpointConfig, load_config
     from aqueduct.depot.depot import DepotStore
-    from aqueduct.executor import ExecuteError, get_executor
+    from aqueduct.executor import ExecuteError
     from aqueduct.executor.models import ExecutionResult, ModuleResult
-    from aqueduct.executor.spark.probe import ProbeSampling
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
     from aqueduct.cli.style import error as _error
@@ -384,113 +920,27 @@ def run(
     _original_cwd = os.getcwd()
     os.chdir(_project_root)
     try:
-        # ── .env loading (after project root, before config so vars resolve) ──
-        # Anchor on _project_root so the helper loads <project_root>/.env
-        # (config dir, else blueprint dir walked up). cwd discovery was
-        # dropped Phase 30 — this keeps the project .env working without it.
-        _resolve_and_load_env(
-            env_file, _project_root / blueprint_abs.name, cli_env=cli_env
+        _lcr = _load_engine_config(
+            blueprint_abs=blueprint_abs,
+            config_path_abs=config_path_abs,
+            store_dir_abs=store_dir_abs,
+            webhook=webhook,
+            set_items=set_items,
+            env_file=env_file,
+            cli_env=cli_env,
+            _project_root=_project_root,
         )
-        # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
-        blueprint = str(blueprint_abs)
-
-        # ── Load engine config ─────────────────────────────────────────────────────
-        try:
-            cfg = load_config(config_path_abs)
-            _apply_warnings_from_cfg(cfg)
-        except ConfigError as exc:
-            _error(f"config error: {exc}")
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
-        # Applied BEFORE engine/master/danger are read below; blueprint-targeted
-        # overrides (agent.*) are overlaid on the raw Blueprint dict at parse time.
-        blueprint_set_nested: dict = {}
-        if set_items:
-            from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
-            try:
-                _config_set_nested, blueprint_set_nested = route_overrides(
-                    set_items, allow_blueprint=True
-                )
-                cfg = apply_to_model(cfg, _config_set_nested)
-            except OverrideError as exc:
-                click.echo(f"✗ {exc}", err=True)
-                sys.exit(exit_codes.CONFIG_ERROR)
-            if _config_set_nested.get("danger"):
-                click.echo(click.style(
-                    f"⚠  --set DANGER override(s) (single-run, NOT persisted): "
-                    f"{_config_set_nested['danger']}", fg="red", bold=True,
-                ), err=True)
-
-        # CLI flags override config file; config file overrides built-in defaults
-        # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
-        # _using_default_obs_path: only the default path gets relocated to a
-        # per-pipeline .aqueduct/observability/<blueprint_id>/ dir below. A
-        # user-set observability.path / lineage.path is already honoured
-        # verbatim by get_stores() and must NOT be clobbered (ISSUE-024).
-        _using_default_obs_path = False
-        _obs_routing_base = ".aqueduct/observability"  # per-blueprint routing root
-        if store_dir_abs:
-            resolved_store_dir = store_dir_abs
-        else:
-            _observability_path = cfg.stores.observability.path
-            if _observability_path is None:
-                _using_default_obs_path = True
-            if cfg.stores.observability.backend != "duckdb":
-                # Non-DuckDB (postgres/redis): `path` is a DSN, NOT a
-                # filesystem path — never Path()/mkdir it (would create a
-                # bogus `postgresql:/user:pass@host:port` dir). The DSN store
-                # persists itself; use the default per-pipeline local scratch
-                # dir (.aqueduct/observability/<blueprint_id>) for any
-                # residual local artifacts only.
-                resolved_store_dir = None  # set below after manifest
-            elif _observability_path is None:
-                _using_default_obs_path = True
-                # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
-                resolved_store_dir = None  # set below after manifest
-            elif not Path(_observability_path).suffix:
-                # Location-only: a custom path with NO file suffix is a BASE
-                # DIRECTORY. Route per-blueprint files under it
-                # (<dir>/<blueprint_id>/observability.db) — parallel-safe, like
-                # the default — instead of one shared file. (specs §3.2)
-                _using_default_obs_path = True
-                _obs_routing_base = _observability_path
-                resolved_store_dir = None  # set below after manifest
-            else:
-                # Explicit single file (e.g. .../obs.db): ONE DuckDB file for every
-                # blueprint using this config → single-writer, so those blueprints
-                # must not run in parallel. Use a suffix-less base dir for
-                # per-blueprint routing if you need concurrency on DuckDB.
-                resolved_store_dir = Path(_observability_path).parent
-        # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
-        resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
-        engine = cfg.deployment.engine
-        master_url = cfg.deployment.master_url
-
-        # ── Danger settings startup warning ──────────────────────────────────────
-        danger_active = []
-        if cfg.danger.allow_full_probe_actions:
-            danger_active.append("allow_full_probe_actions=true")
-        if cfg.danger.allow_multi_patch:
-            danger_active.append("allow_multi_patch=true")
-        if danger_active:
-            click.echo(
-                f"⚠  DANGER settings active: {', '.join(danger_active)}",
-                err=True,
-            )
-
-        # Resolve executor early so an unsupported engine exits before any Spark work
-        try:
-            execute = get_executor(engine)
-        except (NotImplementedError, ValueError) as exc:
-            _error(f"engine error: {exc}")
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-        probes_cfg = cfg.probes
-        probe_sampling = ProbeSampling(
-            max_sample_rows=probes_cfg.max_sample_rows,
-            default_sample_fraction=probes_cfg.default_sample_fraction,
-        )
+        blueprint = _lcr.blueprint_str
+        cfg = _lcr.cfg
+        resolved_store_dir = _lcr.resolved_store_dir
+        resolved_webhook = _lcr.resolved_webhook
+        engine = _lcr.engine
+        master_url = _lcr.master_url
+        probe_sampling = _lcr.probe_sampling
+        blueprint_set_nested = _lcr.blueprint_set_nested
+        _using_default_obs_path = _lcr._using_default_obs_path
+        _obs_routing_base = _lcr._obs_routing_base
+        execute = _lcr.execute
 
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
@@ -546,78 +996,22 @@ def run(
                 click.echo(f"\n✗ remote job failed  run_id={run_id}", err=True)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-        cli_overrides: dict[str, str] = {}
-        for item in ctx:
-            if "=" not in item:
-                click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-                sys.exit(exit_codes.USAGE_ERROR)
-            k, _, v = item.partition("=")
-            cli_overrides[k.strip()] = v
-
-        # ── Parse --execution-date ─────────────────────────────────────────────────
-        execution_date = None
-        if execution_date_str:
-            from datetime import date as _date
-            try:
-                execution_date = _date.fromisoformat(execution_date_str)
-            except ValueError:
-                click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
-                sys.exit(exit_codes.USAGE_ERROR)
-
-        # ── Parse ──────────────────────────────────────────────────────────────────
-        # Parse BEFORE building stores so the depot mounts can be key-isolated by
-        # blueprint_id (per-blueprint depot isolation lives in the backend wiring,
-        # not in @aq — see specs §5.3.1 / §6).
-        try:
-            if blueprint_set_nested:
-                # Overlay blueprint-targeted --set values (e.g. agent.approval_mode)
-                # on the raw Blueprint dict, then parse so schema validation +
-                # extra="forbid" still apply to the overridden values.
-                import yaml as _yaml
-                from aqueduct.overrides import deep_merge as _deep_merge
-                from aqueduct.parser.parser import parse_dict
-                _raw_bp = _yaml.safe_load(Path(blueprint).read_text(encoding="utf-8")) or {}
-                _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
-                bp = parse_dict(
-                    _raw_bp, base_dir=Path(blueprint).parent,
-                    profile=profile, cli_overrides=cli_overrides or None,
-                )
-            else:
-                bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
-        except ParseError as exc:
-            _error(f"parse error: {exc}")
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
-        # Depot must be ready before compile() so @aq.depot.* in the Blueprint can
-        # resolve. Pass blueprint_id so default + non-shared mounts isolate their
-        # keys per blueprint.
-        from aqueduct.stores import get_stores
-        bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
-        depot = DepotStore(backend=bundle.depot)
-        # get/put-interface wrappers for @aq.depot.* resolution (keys already
-        # per-blueprint-isolated at the raw layer for non-shared mounts).
-        depots_wrapped = {n: DepotStore(backend=s) for n, s in bundle.depots.items()}
-
-        # ── Compile ────────────────────────────────────────────────────────────────
-        try:
-            manifest = _compile_with_warnings(
-                compiler_compile,
-                bp,
-                blueprint_path=Path(blueprint),
-                depot=depot,
-                depots=depots_wrapped,
-                execution_date=execution_date,
-                secrets_provider=cfg.secrets.provider,
-                secrets_region=cfg.secrets.region,
-                secrets_resolver=cfg.secrets.resolver,
-                deployment_env=getattr(cfg.deployment, "env", None),
-                deployment_target=getattr(cfg.deployment, "target", None),
-                _verbose=verbose,
-            )
-        except CompileError as exc:
-            _error(f"compile error: {exc}")
-            sys.exit(exit_codes.CONFIG_ERROR)
+        _cr = _do_compile(
+            blueprint=blueprint,
+            profile=profile,
+            ctx=ctx,
+            execution_date_str=execution_date_str,
+            store_dir_abs=store_dir_abs,
+            cfg=cfg,
+            verbose=verbose,
+            blueprint_set_nested=blueprint_set_nested,
+        )
+        manifest = _cr.manifest
+        bundle = _cr.bundle
+        depot = _cr.depot
+        depots_wrapped = _cr.depots_wrapped
+        execution_date = _cr.execution_date
+        cli_overrides = _cr.cli_overrides
 
         # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
         # Dev loop: run the compiled pipeline against sampled inputs with every
@@ -683,231 +1077,49 @@ def run(
                 )
             sys.exit(exit_codes.SUCCESS)
 
-        import warnings as _w
-        with _w.catch_warnings(record=True) as _setup_caught:
-            _w.simplefilter("always")
-
-            # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
-            if resolved_store_dir is None:
-                resolved_store_dir = Path(_obs_routing_base) / manifest.blueprint_id
-                resolved_store_dir.mkdir(parents=True, exist_ok=True)
-
-            # ── Cluster-mode store path warning ───────────────────────────────────────
-            # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
-            # doctor's `cluster-stores` check — single source of truth, one wording.
-            if (
-                cfg.deployment.env in ("cluster", "cloud")
-                and cfg.stores.observability.backend == "duckdb"
-                and not resolved_store_dir.is_absolute()
-            ):
-                from aqueduct.warnings import emit as _emit_warning
-                _emit_warning(
-                    "cluster_store_path_relative",
-                    f"relative store dir {str(resolved_store_dir)!r} on env="
-                    f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
-                    "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
-                )
-
-            # ── Multi-patch danger gate ───────────────────────────────────────────────
-            # 1.1.0 — gate now keys off `max_patches > 1`, not the legacy
-            # `approval_mode: aggressive` string. The legacy `aggressive` string
-            # is preserved on the Manifest so downstream branching that still
-            # checks for it keeps working; deprecation warning is emitted at
-            # parse time.
-            _max_patches = manifest.agent.max_patches if manifest.agent else 1
-            _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-            # Only auto / aggressive actually drive the multi-patch loop; for
-            # human / ci / disabled the `max_patches` value is inert, so don't
-            # fail closed on the danger gate just because the field is set high.
-            _is_multi_patch = (
-                _mode in ("auto", "aggressive")
-                and (_max_patches > 1 or _mode == "aggressive")
-            )
-            if _is_multi_patch and not allow_multi_patch_flag:
-                if not cfg.danger.allow_multi_patch:
-                    click.echo(
-                        f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
-                        "in aqueduct.yml, or pass --allow-multi-patch for this run.",
-                        err=True,
-                    )
-                    sys.exit(exit_codes.CONFIG_ERROR)
-
-            # ── Sandbox-mode danger gates ─────────────────────────────────────────────
-            _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-            if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
-                click.echo(
-                    "✗ agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
-                    "in aqueduct.yml (full-dataset sandbox replay).",
-                    err=True,
-                )
-                sys.exit(exit_codes.CONFIG_ERROR)
-            if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
-                click.echo(
-                    "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
-                    "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
-                    err=True,
-                )
-                sys.exit(exit_codes.CONFIG_ERROR)
-            if _sandbox_mode == "preflight":
-                click.echo(
-                    "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
-                    err=True,
-                )
-            elif _sandbox_mode == "off":
-                click.echo(
-                    "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
-                    err=True,
-                )
-            # Double-danger combo — sandbox off + auto multi-patch loop
-            if _sandbox_mode == "off" and _is_multi_patch:
-                click.echo(
-                    "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
-                    f"applies to real data without pre-validation, up to max_patches="
-                    f"{_max_patches} times per failure. Use only when you "
-                    "fully trust the model and blueprint scope is tiny.",
-                    err=True,
-                )
-
-            # ── Pending patch check ────────────────────────────────────────────────────
-            patches_dir = _project_root / "patches"
-            pending_dir = patches_dir / "pending"
-            pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
-            if pending_patches:
-                policy = manifest.agent.on_pending_patches
-                _np = len(pending_patches)
-                _noun = "patch" if _np == 1 else "patches"
-                if policy == "block":
-                    names = ", ".join(p.stem for p in pending_patches)
-                    click.echo(
-                        f"✗ blocked — {_np} pending {_noun} unreviewed: {names}\n"
-                        f"  Review: aqueduct patch apply <file> --blueprint {blueprint}\n"
-                        f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
-                        err=True,
-                    )
-                    sys.exit(exit_codes.CONFIG_ERROR)
-                elif policy == "warn":
-                    click.echo(
-                        click.style(f"⚠ {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
-                        + click.style("  ·  aqueduct patch list", dim=True),
-                        err=True,
-                    )
-                    if verbose:
-                        for p in pending_patches:
-                            click.echo(f"  · {p.stem}", err=True)
-
-            # ── Uncommitted applied patch warning ──────────────────────────────────────
-            uncommitted_applied = _uncommitted_applied_patches(
-                Path(blueprint), patches_dir, blueprint_id=manifest.blueprint_id
-            )
-            if uncommitted_applied:
-                n_uc = len(uncommitted_applied)
-                _noun = "patch" if n_uc == 1 else "patches"
-                click.echo(
-                    click.style(f"⚠ {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
-                    + click.style(
-                        f"  ·  aqueduct patch commit --blueprint {Path(blueprint).name}", dim=True
-                    ),
-                    err=True,
-                )
-
-            run_id = run_id or str(uuid.uuid4())
-            selector_note = ""
-            if from_module or to_module:
-                parts = []
-                if from_module:
-                    parts.append(f"from={from_module}")
-                if to_module:
-                    parts.append(f"to={to_module}")
-                selector_note = "  [" + ", ".join(parts) + "]"
-            exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-            _r = click.style(_rule(), dim=True)
-        from aqueduct.cli.style import emit_warnings as _emit_warnings
-        _emit_warnings(_setup_caught, verbose=verbose, label="session:")
-
-
-        click.echo(_r)
-        click.echo(
-            f"{click.style('▶', fg='cyan', bold=True)} "
-            f"{click.style(manifest.blueprint_id, bold=True)}  ·  "
-            f"{len(manifest.modules)} modules  ·  run {run_id}  ·  {engine} {master_url}"
-            f"{selector_note}{exec_date_note}"
+        _ssr = _setup_surveyor(
+            resolved_store_dir=resolved_store_dir,
+            manifest=manifest,
+            cfg=cfg,
+            _obs_routing_base=_obs_routing_base,
+            _using_default_obs_path=_using_default_obs_path,
+            verbose=verbose,
+            allow_multi_patch_flag=allow_multi_patch_flag,
+            _project_root=_project_root,
+            blueprint_str=blueprint,
+            run_id=run_id,
+            from_module=from_module,
+            to_module=to_module,
+            execution_date=execution_date,
+            engine=engine,
+            master_url=master_url,
+            resolved_webhook=resolved_webhook,
+            bundle=bundle,
+            depot=depot,
         )
-        click.echo(_r)
-
-        # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
-        from aqueduct.cli import resolve_agent_connection
-        _rac = resolve_agent_connection(cfg.agent, manifest.agent)
-        resolved_agent_provider = _rac.provider
-        resolved_agent_base_url = _rac.base_url
-        resolved_agent_model = _rac.model
-        resolved_agent_provider_options = _rac.provider_options
-        resolved_agent_timeout = _rac.timeout
-        resolved_agent_max_reprompts = _rac.max_reprompts
-        resolved_agent_api_key = _rac.api_key
-        resolved_agent_engine_prompt_context = _rac.engine_prompt_context
-        resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
-        resolved_sandbox_master_url = cfg.agent.sandbox_master_url
-
-        # ── Register agent API key for redaction ─────────────────────────────────
-        if resolved_agent_api_key:
-            from aqueduct.redaction import register as _register_secret
-            _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
-
-        # ── Multi-patch disclaimer ────────────────────────────────────────────────
-        approval_mode = manifest.agent.approval_mode
-        max_patches = manifest.agent.max_patches
-        if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
-            click.echo(
-                f"⚠  multi-patch mode — LLM will attempt up to {max_patches} patch(es). "
-                f"Each patch is validated in-memory before being written to Blueprint. "
-                f"Review patches/applied/ after the run.",
-                err=True,
-            )
-
-        # ── Surveyor — start ───────────────────────────────────────────────────────
-        # For DuckDB *defaults only* the bundle's obs store points at the shared
-        # `.aqueduct/observability.db`; rebuild it under the per-pipeline
-        # resolved_store_dir (`.aqueduct/observability/<blueprint_id>/`) like
-        # before Phase 28. A user-customised observability.path / lineage.path
-        # is already honoured verbatim by get_stores() — do NOT rebuild it,
-        # that would silently ignore the configured filename (ISSUE-024).
-        if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
-            from aqueduct.stores.duckdb_ import (
-                DuckDBObservabilityStore,
-            )
-            from aqueduct.stores import StoreBundle
-            bundle = StoreBundle(
-                observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
-                depot=bundle.depot,
-            )
-            depot = DepotStore(backend=bundle.depot)
-        surveyor = Surveyor(
-            manifest,
-            store_dir=resolved_store_dir,
-            webhook_config=resolved_webhook,
-            blueprint_path=Path(blueprint),
-            patches_dir=patches_dir,
-            stores=bundle,
-            blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
-            lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
-            if cfg.lineage.openlineage_url else None,
-        )
-        surveyor.start(run_id)
-        # Phase 53 — object-store patch lifecycle + patch_index heal cache.
-        # Built once: the obs store backs the index, the patch store the bodies.
-        _obs_store = surveyor.observability
-        _patch_store = surveyor.patch_store()
-
-        # ── Engine session ────────────────────────────────────────────────────────
-        merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-        if engine == "spark":
-            from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
-        else:
-            raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
-
-        import atexit
-        atexit.register(session.stop)
+        resolved_store_dir = _ssr.resolved_store_dir
+        patches_dir = _ssr.patches_dir
+        run_id = _ssr.run_id
+        approval_mode = _ssr.approval_mode
+        max_patches = _ssr.max_patches
+        _is_multi_patch = _ssr._is_multi_patch
+        resolved_agent_provider = _ssr.resolved_agent_provider
+        resolved_agent_base_url = _ssr.resolved_agent_base_url
+        resolved_agent_model = _ssr.resolved_agent_model
+        resolved_agent_provider_options = _ssr.resolved_agent_provider_options
+        resolved_agent_timeout = _ssr.resolved_agent_timeout
+        resolved_agent_max_reprompts = _ssr.resolved_agent_max_reprompts
+        resolved_agent_api_key = _ssr.resolved_agent_api_key
+        resolved_agent_engine_prompt_context = _ssr.resolved_agent_engine_prompt_context
+        resolved_agent_blueprint_prompt_context = _ssr.resolved_agent_blueprint_prompt_context
+        resolved_agent_cascade = _ssr.resolved_agent_cascade
+        resolved_sandbox_master_url = _ssr.resolved_sandbox_master_url
+        surveyor = _ssr.surveyor
+        _obs_store = _ssr._obs_store
+        _patch_store = _ssr._patch_store
+        session = _ssr.session
+        bundle = _ssr.bundle
+        depot = _ssr.depot
 
         # ── Self-healing run loop ─────────────────────────────────────────────────
         patch_count = 0
@@ -1240,7 +1452,7 @@ def run(
             # Cascade tiers can opt into deep_loop individually, so the
             # callback must exist whenever ANY tier (or the top level) wants it.
             _deep_loop = manifest.agent.deep_loop if manifest.agent else False
-            _cascade_tiers = _rac.cascade
+            _cascade_tiers = resolved_agent_cascade
             _any_deep_loop = _deep_loop or any(
                 bool(t.deep_loop) for t in (_cascade_tiers or [])
             )

@@ -408,9 +408,9 @@ agent:
                 runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
                 
                 assert mock_gap.called
-                kwargs = mock_gap.call_args[1]
-                assert "on_attempt" in kwargs
-                assert callable(kwargs["on_attempt"])
+                agent_cfg = mock_gap.call_args[1]["agent_cfg"]
+                assert agent_cfg.on_attempt is not None
+                assert callable(agent_cfg.on_attempt)
 
     def test_heal_command_prints_stop_reason_and_usage(self, tmp_path):
         """Phase 34: aqueduct heal prints Phase 34 budget outputs."""

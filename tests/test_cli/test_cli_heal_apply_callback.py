@@ -165,9 +165,9 @@ danger:
 
     # Verify generate_agent_patch was called with apply_callback
     assert mock_generate_patch.called
-    kwargs = mock_generate_patch.call_args[1]
-    assert "apply_callback" in kwargs
-    apply_cb = kwargs["apply_callback"]
+    agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]
+    assert agent_cfg.apply_callback is not None
+    apply_cb = agent_cfg.apply_callback
 
     # Test the apply_callback with a valid patch
     success, err_class, msg, _ = apply_cb(patch_spec)
@@ -245,9 +245,9 @@ def test_cli_heal_wires_apply_callback(
         result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
 
     assert mock_generate_patch.called
-    kwargs = mock_generate_patch.call_args[1]
-    assert "apply_callback" in kwargs
-    apply_cb = kwargs["apply_callback"]
+    agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]
+    assert agent_cfg.apply_callback is not None
+    apply_cb = agent_cfg.apply_callback
 
     # Test the apply_callback with a valid patch
     success, err_class, msg, _ = apply_cb(patch_spec)
