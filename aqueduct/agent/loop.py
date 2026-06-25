@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.budget import (
     BudgetConfig,
     BudgetTracker,
@@ -111,9 +112,9 @@ class AgentRunConfig:
     provider: str = "anthropic"
     base_url: str | None = None
     api_key: str | None = None
-    max_tokens: int = 4096
+    max_tokens: int = DEFAULT_MAX_TOKENS
     provider_options: dict[str, Any] | None = None
-    timeout: float = 120.0
+    timeout: float = DEFAULT_LLM_TIMEOUT
     max_reprompts: int = 3
     engine_prompt_context: str | None = None
     blueprint_prompt_context: str | None = None
@@ -364,9 +365,9 @@ def generate_agent_patch(
     provider: str = "anthropic",
     base_url: str | None = None,
     api_key: str | None = None,
-    max_tokens: int = 4096,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,

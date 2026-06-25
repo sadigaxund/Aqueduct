@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from aqueduct.agent.constants import DEFAULT_MAX_TOKENS
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
 
@@ -692,15 +693,15 @@ def _build_system_prompt(
     ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
 
     # Load operator-managed rules file: patches/rules.md (if present)
-    # Capped at 4096 chars to prevent context overflow from an accidentally-large file.
+    # Capped to prevent context overflow from an accidentally-large file.
     rules_file = patches_dir / "rules.md"
     if rules_file.exists():
         try:
             rules_content = rules_file.read_text(encoding="utf-8").strip()
             if rules_content:
-                if len(rules_content) > 4096:
-                    rules_content = rules_content[:4096] + "\n…(truncated at 4096 chars)"
-                    logger.warning("patches/rules.md exceeds 4096 chars — truncated")
+                if len(rules_content) > DEFAULT_MAX_TOKENS:
+                    rules_content = rules_content[:DEFAULT_MAX_TOKENS] + f"\n…(truncated at {DEFAULT_MAX_TOKENS} chars)"
+                    logger.warning(f"patches/rules.md exceeds {DEFAULT_MAX_TOKENS} chars — truncated")
                 ctx_parts.append(rules_content)
         except Exception:
             logger.debug("Could not read patches/rules.md at %s", rules_file, exc_info=True)

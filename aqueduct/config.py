@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
 from aqueduct.parser.schema import CascadeTierSchema
 
+from aqueduct.agent.constants import DEFAULT_LLM_MODEL
 from aqueduct.errors import AqueductError
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
@@ -645,7 +646,7 @@ class AgentConnectionConfig(BaseModel):
 
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
-    model: str = "claude-sonnet-4-6"
+    model: str = DEFAULT_LLM_MODEL
     api_key: str | None = Field(
         default=None,
         description=(

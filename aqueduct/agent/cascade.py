@@ -14,6 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.budget import BudgetConfig, StopReason
 from aqueduct.agent.loop import AgentPatchResult, AgentRunConfig, generate_agent_patch
 from aqueduct.parser.models import CascadeTierConfig
@@ -40,8 +41,8 @@ def generate_cascade_patch(
     base_url: str | None = None,
     api_key: str | None = None,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
-    max_tokens: int = 4096,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,

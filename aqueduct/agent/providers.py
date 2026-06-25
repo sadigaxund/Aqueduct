@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aqueduct.agent.constants import ANTHROPIC_API_VERSION, DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.prompts import _build_system_prompt
 from aqueduct.redaction import redact as _redact
 
@@ -101,12 +102,12 @@ class _ProviderConfig:
     """
 
     model: str
-    max_tokens: int = 4096
+    max_tokens: int = DEFAULT_MAX_TOKENS
     provider: str = "anthropic"
     base_url: str | None = None
     api_key: str | None = None
     provider_options: dict[str, Any] | None = None
-    timeout: float = 120.0
+    timeout: float = DEFAULT_LLM_TIMEOUT
     patches_dir: Path = Path()
     engine_prompt_context: str | None = None
     blueprint_prompt_context: str | None = None
@@ -249,7 +250,7 @@ def _call_anthropic(
     model: str,
     max_tokens: int,
     system_prompt: str,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
     api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
@@ -291,7 +292,7 @@ def _call_anthropic(
                 url,
                 headers={
                     "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
+                    "anthropic-version": ANTHROPIC_API_VERSION,
                     "content-type": "application/json",
                 },
                 json=payload,
@@ -327,7 +328,7 @@ def _call_openai_compat(
     base_url: str | None,
     system_prompt: str,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
     api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
