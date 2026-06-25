@@ -9,10 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import re
-import sys
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -262,7 +258,7 @@ def _agent_usable(provider: str, base_url: str | None, api_key: str | None = Non
     return False
 
 
-def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:
+def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:  # noqa: F811
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
         from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
@@ -292,7 +288,7 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         return None
 
 
-def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,
+def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,  # noqa: F811
                               obs_store=None, patch_store=None) -> Any:
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
@@ -330,9 +326,9 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         return None
 
 
-def _run_patch_gates_inline(
+def _run_patch_gates_inline(  # noqa: F811
     *,
-    patch,
+    patch,  # noqa: F811
     blueprint_path,
     bundle,
     surveyor,
@@ -436,7 +432,7 @@ def _run_patch_gates_inline(
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 
-def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,
+def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,  # noqa: F811
                         obs_store=None, patch_store=None) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
@@ -602,7 +598,6 @@ def _sniff_file_kind(path: "Path") -> "str | None":
 
 
 from aqueduct import __version__ as _aqueduct_version
-from aqueduct import exit_codes
 
 
 def _install_secret_redaction_hooks() -> None:
@@ -896,7 +891,7 @@ from .diagnostics import validate, lint_cmd, schema, doctor  # noqa: E402,F401
 from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401
 
 from .run import compile, run  # noqa: E402,F401
-from .patch import patch, patch_preview, patch_apply, patch_reject, patch_commit, patch_discard, patch_list, log_cmd, rollback_cmd  # noqa: E402,F401
+from .patch import patch, patch_preview, patch_apply, patch_reject, patch_commit, patch_discard, patch_list, log_cmd, rollback_cmd  # noqa: E402,F401,F811
 from .observability import report, runs, lineage, signal  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401

@@ -20,8 +20,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     _env_options,)
 from aqueduct.cli.style import error as _error
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
-from aqueduct.stores.read import _OBS_ROUTING_ROOT, open_obs_read  # Phase 69 — backend-aware reads
+from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
 
 
 # ── aqueduct report ───────────────────────────────────────────────────────────

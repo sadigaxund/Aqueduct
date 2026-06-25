@@ -106,6 +106,7 @@ def stores_migrate(
     the same keys with the same values.
     """
     from aqueduct.config import ConfigError, load_config
+    from aqueduct.cli.style import error as _error
     from aqueduct.stores import get_stores
 
     if store.lower() != "depot":

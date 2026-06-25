@@ -18,7 +18,6 @@ from aqueduct.cli import (
     _apply_warnings_from_cfg,
     _resolve_and_load_env,
     _env_options,)
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────

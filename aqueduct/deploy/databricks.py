@@ -123,7 +123,6 @@ class DatabricksSubmitter(Submitter):
         if handle is None:
             raise RuntimeError(f"DBFS create returned no handle for {dbfs_path!r}")
 
-        import math
         chunk_size = 1024 * 1024
         offset = 0
         while offset < len(content):
@@ -315,8 +314,6 @@ class DatabricksSubmitter(Submitter):
             "SKIPPED",
         })
 
-        last_log = ""
-
         while True:
             elapsed = timeout_seconds - (deadline - time.monotonic())
             logger.debug("Polling run_id=%s elapsed=%.0fs", job_id, elapsed)
@@ -347,8 +344,6 @@ class DatabricksSubmitter(Submitter):
             run_state = body.get("state", {})
             life_cycle_state = run_state.get("life_cycle_state", "UNKNOWN")
             state_message = run_state.get("state_message", "")
-            if state_message:
-                last_log = state_message
 
             if life_cycle_state in terminal_states:
                 result_state = run_state.get("result_state", "FAILED")

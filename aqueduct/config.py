@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
 from aqueduct.parser.schema import CascadeTierSchema
@@ -1201,7 +1201,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
                 from aqueduct.warnings import AqueductWarning
                 _warnings.warn(
                     f"[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
-                    f"{resolved} — prefer @aq.secret('NAME') or ${ENV_VAR}. The value is "
+                    f"{resolved} — prefer @aq.secret('NAME') or ${{ENV_VAR}}. The value is "
                     "redacted from logs and LLM payloads, but a literal in a committed config "
                     "is a credential leak risk.",
                     AqueductWarning,

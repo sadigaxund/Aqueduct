@@ -209,7 +209,7 @@ modules:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always", AqueductWarning)
                 _compile_yaml(yaml_str, tmp_path)
-                assert any("small files" in str(x.message) and "planned-future-checks" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
+                assert any("small files" in str(x.message) and "append-no-partition" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
 
     def test_egress_append_with_partition_no_warn(self, tmp_path):
         yaml_str = """

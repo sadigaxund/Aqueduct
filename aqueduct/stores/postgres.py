@@ -160,15 +160,6 @@ class PostgresObservabilityStore(_PostgresRelational, ObservabilityStore):
 class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore):
     _SCHEMA = "depot"
 
-    _DDL = """
-        CREATE TABLE IF NOT EXISTS depot_kv (
-            key        VARCHAR PRIMARY KEY,
-            value      VARCHAR NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """
-
-
 
     _DDL = """
         CREATE TABLE IF NOT EXISTS depot_kv (

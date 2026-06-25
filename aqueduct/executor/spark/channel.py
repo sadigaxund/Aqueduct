@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING
 from pyspark.sql import SparkSession
 
 if TYPE_CHECKING:
-    from pyspark.sql import DataFrame
+    from pyspark.sql import Column, DataFrame
 
 from aqueduct.parser.models import Module
 from aqueduct.errors import AqueductError

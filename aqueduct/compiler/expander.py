@@ -155,7 +155,6 @@ def _expand_single(
     # raw_module_configs has the pre-resolution config (original ${ctx.*} expressions)
     # sub_bp.modules have the resolved config (context_override applied)
     arcade_provenance: dict[str, ModuleProvenance] = {}
-    sub_bp_modules_by_orig_id = {m.id: m for m in sub_bp.modules}
     for orig_m, expanded_m in zip(sub_bp.modules, expanded_modules):
         raw_cfg = raw_module_configs.get(orig_m.id, {})
         resolved_cfg = orig_m.config or {}
