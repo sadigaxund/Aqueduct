@@ -38,13 +38,15 @@ Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlle
 
 The `target` field is validated against `master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
-Remote‑submit targets (`databricks`, `emr`, `dataproc`) are rejected — they
-require a packaging/submit layer planned for a future release.
+`databricks` is a fully wired **remote‑submit** target — the engine packages
+the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
+polls to completion. `emr` and `dataproc` are rejected — they require a
+packaging/submit layer planned for a future release.
 
 ```yaml
 deployment:
   env: cluster
-  target: standalone                   # local | standalone | yarn | kubernetes
+  target: standalone                   # local | standalone | yarn | kubernetes | databricks | emr | dataproc
   master_url: "spark://master:7077"    # consumed by SparkSession.builder.master()
 
 spark_config:
@@ -56,6 +58,8 @@ spark_config:
 `spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict.
 
 **Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `spark_config` — standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
+
+`table:` and `path:` are **mutually exclusive** on both Ingress and Egress — setting both raises a parse error.
 
 Environment variable substitution works inside config values:
 
@@ -139,6 +143,33 @@ namespace and container image are normally required.
 Credentials come from the pod's service account (no `@aq.secret()` needed when
 using in‑cluster `spark.kubernetes.authenticate.*` config). For out‑of‑cluster
 submission, add a kubeconfig path under `spark_config`.
+
+### Write-mode features
+
+**`mode: overwrite_partitions`** — two strategies for atomically replacing a subset
+of a table:
+
+| Strategy | Config | Behaviour |
+|---|---|---|
+| `replaceWhere` | `replace_where: "<predicate>"` (e.g. `"event_date = '2025-01-01'"`) | Delta `replaceWhere` — atomically replaces rows matching the predicate |
+| Dynamic partition overwrite | `partition_by: ["col"]` + `mode: overwrite_partitions` | Spark dynamic partition overwrite — replaces only partitions in the output DataFrame |
+
+When neither `replace_where` nor `partition_by` is set, falls back to plain `overwrite`.
+
+**`format: custom` + `class:`** (Spark 4.0+). User-defined Python DataSources
+(implements `DataSourceRegister`) on Ingress and Egress. The class must be
+importable on the driver; `aqueduct doctor` verifies importability. As with
+UDFs, the class body is opaque to Aqueduct.
+
+**`on_new_columns`** — schema-drift contract (`allow` | `fail` | `alert`) on
+Ingress and Egress (see the [Spark Guide](spark_guide.md) for the policy table).
+
+**Iceberg / Hudi / Delta maintenance.** The Egress `maintenance:` block runs
+format-aware post-write ops (`delta`: `OPTIMIZE` + `VACUUM`, `iceberg`:
+`rewrite_data_files` + `expire_snapshots`, `hudi`: `run_compaction` +
+`run_clean`). Timing lands in `maintenance_metrics`. `aqueduct doctor` emits an
+`iceberg_catalog` warning when a `format: iceberg` module has no catalog key in
+the blueprint `spark_config`.
 
 ---
 
@@ -413,16 +444,15 @@ Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` 
 
 ---
 
-## Remote-Submit Targets (Future)
+## Remote-Submit Targets
 
-Remote‑submit targets (`databricks`, `emr`, `dataproc`) are **rejected at
-config‑load** in the current release.  Setting `deployment.target` to any of
-these three values raises a `ConfigError`. The packaging / submit / poll layer
-is planned for a future release — use
-`local | standalone | yarn | kubernetes` for the current release.
+`emr` and `dataproc` are **rejected at config‑load** in the current
+release. Setting `deployment.target` to either of these two values raises
+a `ConfigError`. `databricks` is the sole supported remote‑submit target
+(see below).
 
 The sections below (Databricks E2E, EMR, Dataproc) are forward‑looking
-reference — none of this is wired in the current CLI.
+reference for EMR/Dataproc; the Databricks sections are fully wired.
 
 ### Databricks
 
@@ -436,6 +466,7 @@ deployment:
   databricks:
     workspace_url: "https://dbc-xxxx.cloud.databricks.com"
     cluster_id: "0123-456789-abcdefgh"          # existing cluster — mutually exclusive with new_cluster
+    max_concurrent_runs: 1                      # max parallel job runs submitted by this pipeline (default 1)
     # new_cluster:                               # one-shot cluster spec per Jobs API
     #   spark_version: "15.3.x-scala2.12"
     #   node_type_id: "i3.xlarge"
@@ -456,7 +487,7 @@ deployment:
 4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
 5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
 
-**Doctor check.** `aqueduct doctor` includes a `remote-target` check — it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Non-fatal: failures warn, never block.
+**Doctor check.** `aqueduct doctor` includes a `remote-target` check — it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking — `run_doctor` continues to subsequent checks).
 
 ### EMR / Dataproc
 

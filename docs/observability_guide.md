@@ -42,8 +42,10 @@ Per-pipeline routing is the new default. Pre-1.1.0 stores at
 `.aqueduct/observability.db` still load (the CLI's `_resolve_obs_db` helper
 falls back to the legacy shared path when no per-pipeline DB carries the
 requested `run_id`). Override paths in `aqueduct.yml`'s `stores:` block; the
-read-side commands (`runs`, `report`, `lineage`, `heal`) auto-discover the
-correct file.
+read-side commands (`report`, `lineage`, `heal`) use the canonical
+`open_obs_read` resolver. `aqueduct runs` uses its own inline store discovery
+(DuckDB: walks per‑pipeline directories; Postgres: queries the observability
+schema directly) rather than `open_obs_read`.
 
 ## Backends
 
@@ -54,7 +56,14 @@ Each store is independently pluggable in `aqueduct.yml`:
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
 | ~~`lineage`~~   | **removed** | Column lineage was merged into `observability`. `stores.lineage` is no longer a config option; a legacy block is ignored with a warning. |
 | `depots`        | name-keyed map; each mount `duckdb` (default) \| `postgres` \| `redis` | Cross-run KV (`@aq.depot.*`). `redis` allowed here only. The `default` mount always exists; keys are **per-blueprint isolated** (prefixed by blueprint_id) unless a mount sets `shared: true`. Incremental-Channel watermarks persist here (no depot ⇒ no incremental state). Legacy `depot:` mapping auto-migrates to `depots.default`. |
-| `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec). `local` keeps the on-disk layout above. |
+| `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec); missing SDK raises a hard `ConfigError` at config-load, not a warning. `local` keeps the on-disk layout above. |
+
+> **Blob integrity warning:** When `stores.observability.backend` is remote
+> (Postgres) but `stores.blob.backend` is left at its default (`local`, unset),
+> Aqueduct emits a non‑suppressible `AqueductWarning` — externalised blobs
+> (manifests, stack traces, provenance) are written to the driver's local disk
+> instead of the remote backend. Set `stores.blob.backend` explicitly to silence
+> it (to `local` to acknowledge, or to a cloud backend).
 
 With `postgres`, tables live in named schemas (`observability`, `depot`).
 With `redis`, depot keys live directly in the configured Redis DB.
@@ -575,6 +584,33 @@ SELECT source_table, source_column, channel_id, blueprint_id
 FROM column_lineage
 WHERE output_column = 'my_column';
 ```
+
+### Fleet query layer (`stores/queries.py`)
+
+Computed at read‑time from the observability store — no extra write‑side
+columns or aggregation tables:
+
+| Function | Returns | Description |
+|---|---|---|
+| `fleet_summary` | `list[BlueprintSummary]` | Per‑blueprint roll‑up (last run status, success rate, heal count) across all discovered blueprints |
+| `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
+| `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
+| `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
+
+DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
+schema‑scoped query. Both backends return the same shape.
+
+### Read‑only viewers
+
+Two local, on‑demand observability viewers — neither runs in the data path:
+
+| Viewer | Command | Extra | Description |
+|---|---|---|---|
+| Dashboard | `aqueduct dashboard` | `dashboard` (Streamlit + Plotly) | Fleet overview: cross‑blueprint runs, success/heal rates, per‑run module metrics, column‑lineage Sankey, doctor, config. Manual refresh; no background polling. |
+| Studio | `aqueduct studio` | `tui` (Textual) | Interactive TUI: run list, ad‑hoc SQL over the observability store, doctor, config, lineage. |
+
+Both are read‑only — they issue `SET read_only = true` on DuckDB and use a
+read‑only connection on Postgres.
 
 ---
 

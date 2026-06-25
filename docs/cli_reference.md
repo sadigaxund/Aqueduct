@@ -2,6 +2,8 @@
 
 All commands accept `--config <path>` to point to a non-default `aqueduct.yml`. Aqueduct also automatically walks up from the current working directory to find it.
 
+Bare `aqueduct` (no subcommand) prints a branded version banner including the engine version, Python version, and Spark version (if available).
+
 ## Global Flags
 
 | Flag | Default | Description |
@@ -148,6 +150,7 @@ aqueduct run bp.yml \
 | `aqueduct runs` | List recent runs |
 | `aqueduct runs --failed` | Show only failed runs |
 | `aqueduct runs --heal-coverage` | Zero-token heal coverage (heals resolved by the signature memory cache vs the LLM) |
+| `aqueduct runs --format text\|json` | `text\|json` only — the global `table\|json\|csv` does not apply to `runs` |
 | `aqueduct report <run_id>` | Detailed flow report for a run |
 | `aqueduct report --trend <column> --blueprint <id>` | Cross-run quality trend for one column (null-rate + type history) from probe signals; `--since <ISO_DATE>` windows it (default 30 days) |
 | `aqueduct report <run_id> --profile` | Per-module resource profile for one run (duration + I/O over `module_metrics`), heaviest module first, with each module's share of run time/bytes |
@@ -217,6 +220,9 @@ Configure per engine (`agent.sandbox_mode:` in `aqueduct.yml`) or per blueprint 
 | `--module <module_id>` | failed module from the run record | Scope healing to a specific module |
 | `--print-prompt [text\|json]` | — (bare flag = `text`) | Print the LLM prompt that would be sent and exit without calling the model |
 | `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
+| `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory |
+| `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
+| `-s` / `--set PATH=VALUE` | — | Override any config value for this heal invocation (repeatable, in-memory). See [Config overrides](#config-overrides--s--set) below. |
 
 **Key flags for `drift`:**
 
@@ -232,6 +238,7 @@ are benign and never trigger a heal.
 | `--module <module_id>` | all Ingress | Limit the check to one Ingress module |
 | `--patches-dir <path>` | `patches` | Root directory for the patch lifecycle subdirs |
 | `--store-dir <path>` | from config | Observability store directory |
+| `--config <path>` | `./aqueduct.yml` walked upward | Path to `aqueduct.yml` |
 | `--format text\|json` | `text` | Output shape |
 
 Exit codes: `0` (no drift, or a baseline was established), `3` `HEAL_PENDING`
