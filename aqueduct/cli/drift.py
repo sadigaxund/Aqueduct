@@ -182,7 +182,7 @@ def drift(
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     if staged_any:
         sys.exit(exit_codes.HEAL_PENDING)
-    sys.exit(0)
+    sys.exit(exit_codes.SUCCESS)
 
 
 def _change_dict(c: Any) -> dict[str, Any]:

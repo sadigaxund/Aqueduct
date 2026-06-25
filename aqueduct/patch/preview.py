@@ -24,6 +24,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from aqueduct.parser.models import ModuleType
+
 from aqueduct.compiler.lineage import _extract_sql_lineage
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,7 @@ def _channel_modules(bp: dict) -> list[dict]:
     for m in bp.get("modules") or []:
         if not isinstance(m, dict):
             continue
-        if m.get("type") != "Channel":
+        if m.get("type") != ModuleType.Channel.value:
             continue
         cfg = m.get("config") or {}
         if cfg.get("op") != "sql":
@@ -234,7 +236,7 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
     egress_targets: list[dict[str, Any]] = []
     sandboxed_modules = []
     for m in manifest.modules:
-        if m.type == "Egress":
+        if m.type == ModuleType.Egress:
             egress_targets.append({
                 "id": m.id,
                 "format": (m.config or {}).get("format"),
@@ -247,7 +249,7 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
     if sample_rows and sample_rows > 0:
         sandboxed_modules = [
             _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
-            if m.type == "Ingress"
+            if m.type == ModuleType.Ingress
             else m
             for m in sandboxed_modules
         ]

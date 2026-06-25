@@ -26,6 +26,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from aqueduct.parser.models import ModuleType
+
 import httpx
 
 _PRODUCER = "https://github.com/sadigaxund/aqueduct"
@@ -66,9 +68,9 @@ def extract_datasets(manifest: Any, namespace: str) -> tuple[list[dict], list[di
     inputs: list[dict] = []
     outputs: list[dict] = []
     for m in manifest.modules:
-        if m.type == "Ingress":
+        if m.type == ModuleType.Ingress:
             inputs.append({"namespace": namespace, "name": _dataset_name(m)})
-        elif m.type == "Egress":
+        elif m.type == ModuleType.Egress:
             outputs.append({"namespace": namespace, "name": _dataset_name(m)})
     return inputs, outputs
 

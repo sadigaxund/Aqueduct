@@ -58,6 +58,7 @@ def _to_ruamel(data: Any) -> Any:
 
 from aqueduct.errors import AqueductError
 from aqueduct.compiler.expander import is_arcade_expanded_id
+from aqueduct.parser.models import ModuleType
 from aqueduct.patch.grammar import (
     AddArcadeRefOp,
     AddProbeOp,
@@ -241,7 +242,7 @@ def apply_add_probe(bp: dict, op: AddProbeOp) -> dict:
     if not probe_id:
         raise PatchOperationError("add_probe: 'module.id' is required")
 
-    if op.module.get("type") != "Probe":
+    if op.module.get("type") != ModuleType.Probe.value:
         raise PatchOperationError(
             f"add_probe: module.type must be 'Probe', got {op.module.get('type')!r}"
         )
@@ -309,7 +310,7 @@ def apply_add_arcade_ref(bp: dict, op: AddArcadeRefOp) -> dict:
     if not arcade_id:
         raise PatchOperationError("add_arcade_ref: 'module.id' is required")
 
-    if op.module.get("type") != "Arcade":
+    if op.module.get("type") != ModuleType.Arcade.value:
         raise PatchOperationError(
             f"add_arcade_ref: module.type must be 'Arcade', got {op.module.get('type')!r}"
         )

@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from aqueduct.parser.models import ModuleType
+
 RULE_ID = "jar_availability"
 
 # Format name → list of substring fragments that, if ANY are present in a
@@ -55,7 +57,7 @@ def _formats_in_blueprint(manifest: Any) -> dict[str, list[str]]:
     """Return `{format: [module_ids that use it]}` for declared Ingress/Egress."""
     by_fmt: dict[str, list[str]] = {}
     for m in manifest.modules:
-        if m.type not in ("Ingress", "Egress"):
+        if m.type not in (ModuleType.Ingress, ModuleType.Egress):
             continue
         fmt = ((m.config or {}).get("format") or "").lower()
         if not fmt:
@@ -68,7 +70,7 @@ def _jdbc_driver_classes(manifest: Any) -> dict[str, list[str]]:
     """Return `{driver_class: [module_ids]}` from JDBC modules that pin one."""
     out: dict[str, list[str]] = {}
     for m in manifest.modules:
-        if m.type not in ("Ingress", "Egress"):
+        if m.type not in (ModuleType.Ingress, ModuleType.Egress):
             continue
         cfg = m.config or {}
         if (cfg.get("format") or "").lower() != "jdbc":

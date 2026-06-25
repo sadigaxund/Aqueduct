@@ -1197,7 +1197,7 @@ def studio(
     from aqueduct.tui.app import run_studio
 
     code = run_studio(config_path=config_path, store_dir=store_dir)
-    sys.exit(0 if code == 0 else exit_codes.DATA_OR_RUNTIME)
+    sys.exit(exit_codes.SUCCESS if code == 0 else exit_codes.DATA_OR_RUNTIME)
 
 
 # ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────

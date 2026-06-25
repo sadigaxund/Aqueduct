@@ -159,7 +159,7 @@ def validate(
             "files": file_results,
         }, indent=2))
 
-    sys.exit(1 if any_fail else 0)
+    sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
 
 
 @cli.command("lint")

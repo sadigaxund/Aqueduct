@@ -223,7 +223,7 @@ def patch_preview(
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
         click.echo(_json.dumps(report, indent=2))
-        sys.exit(0 if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else 2)
+        sys.exit(exit_codes.SUCCESS if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else exit_codes.DATA_OR_RUNTIME)
 
     # Text report
     click.echo(f"Patch {spec.patch_id}")
@@ -273,11 +273,11 @@ def patch_preview(
                 click.echo(f"  ⚠ {r.detail}")
         click.echo(f"  duration: {explain_res.duration_ms} ms")
 
-    exit_code = 0
+    exit_code = exit_codes.SUCCESS
     if lineage_res.status == "fail":
-        exit_code = 2
+        exit_code = exit_codes.DATA_OR_RUNTIME
     if sandbox_res is not None and sandbox_res.status == "fail":
-        exit_code = 2
+        exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
 
 
