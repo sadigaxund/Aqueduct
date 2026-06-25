@@ -135,6 +135,7 @@ Value grammar:
 aqueduct run bp.yml \
   --set agent.approval=auto \
   --set agent.budget.max_seconds=5 \
+  --set agent.budget.max_tokens_total=80000 \
   --set deployment.master_url=spark://10.0.0.39:7077 \
   --set agent.provider_options:='{"temperature":0.1}'
 ```
