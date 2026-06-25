@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.0 — Reference Document**
+**Version 2.1 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -100,9 +100,17 @@ Aqueduct has four processing layers and three persistent stores. Each layer has 
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` is ignored with a warning. |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default — transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). As of 1.2, the incremental-Channel watermark is persisted to the Depot **only** — an incremental Channel now requires a configured Depot, or each run re-scans all source data (a warning is logged). |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default — transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
 | **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
 | **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store — rows are not tied to a real `run_id`. |
+
+> **Storage-integrity warning:** When `stores.observability.backend` is remote
+> (Postgres/Redis) but `stores.blob.backend` is left at its default (`local`,
+> unset), Aqueduct emits a non-suppressible `AqueductWarning` — externalised
+> blobs (manifests, stack traces, provenance) will be written to the driver's
+> local disk instead of the remote backend. Set `stores.blob.backend` explicitly
+> to silence it (either to `local` to acknowledge, or to a cloud backend like
+> `s3`/`gcs`/`adls`).
 
 ## **3.3 Component Interaction Flow**
 
@@ -224,6 +232,8 @@ edges:
 ```
 
 The label comes from the Assert rule's `error_type` field (falling back to the rule name — `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation — zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
+
+> **⚠ `spillway_condition` without a spillway edge is dead code.** If a Channel sets `spillway_condition` but has no corresponding edge with `port: spillway`, the condition is silently ignored — all rows (including those matching the condition) flow to the main stream. The executor logs a warning at run time. This is not a compile error because the config alone is valid; it only becomes meaningful once wired.
 
 Every spillway row carries the system columns `_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts` (Assert rows additionally `_aq_error_rule`).
 
@@ -1045,15 +1055,15 @@ reachability and configuration guidance.
 | **standalone** | Supported (in-cluster) | Starts with `"spark://"` (e.g. `spark://host:7077`) | TCP probe to master host:port |
 | **yarn** | Supported (in-cluster) | Exactly `"yarn"` | Warns if `HADOOP_CONF_DIR` / `YARN_CONF_DIR` env var is unset |
 | **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `spark_config` |
-| **databricks** | Deferred | — | Rejected at config-load with a "not yet supported" error |
+| **databricks** | Supported (remote-submit) | N/A (remote-submit) | Requires `deployment.databricks` block; TCP probe to workspace URL |
 | **emr** | Deferred | — | Rejected at config-load with a "not yet supported" error |
 | **dataproc** | Deferred | — | Rejected at config-load with a "not yet supported" error |
 
-`databricks` / `emr` / `dataproc` are **remote-submit** targets — they require a
-packaging/submit/poll layer that ships the job to a managed service from a
-laptop or CI machine. That layer is planned for a future release. In the current
-release they are explicitly rejected with a "not yet supported" error, rather
-than being silently ignored.
+`databricks` is a fully wired **remote-submit** target — the engine packages the
+blueprint, uploads it to DBFS, submits via the Databricks Jobs API, polls to
+completion, and fetches logs. `emr` / `dataproc` are **remote-submit** targets
+planned for a future release; in the current release they are rejected with a
+"not yet supported" error at config-load.
 
 See the **[Production Guide](production_guide.md)** for per-target cluster setup,
 required env vars, `spark_config` keys, and the production readiness checklist.
@@ -1077,12 +1087,15 @@ Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wra
 
 ## **10.8 Remote-Submit Targets**
 
-Remote‑submit targets (`databricks`, `emr`, `dataproc`) are **rejected at
-config‑load** in the current release. Setting `deployment.target` to any of
-these three values raises a `ConfigError`. The packaging / submit / poll layer
-is planned for a future release.
+`emr` and `dataproc` are **rejected at config‑load** in the current release.
+Setting `deployment.target` to either of these values raises a `ConfigError`.
+`databricks` is the sole supported remote‑submit target (see §10.5).
 
 **Config.** Each remote target adds a nested optional block under ``deployment`` — e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
+
+Self‑healing is **disabled** on all remote‑submit targets — ``aqueduct run``
+skips the healing loop and ignores ``agent.approval_mode``. Patches must be
+authored and applied locally before the next run.
 
 ---
 
