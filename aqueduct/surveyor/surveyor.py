@@ -304,12 +304,12 @@ def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | Non
                 elif hasattr(spark_exc, "getErrorClass"):
                     out["error_class"] = spark_exc.getErrorClass()
             except Exception:
-                pass
+                pass  # structured-error enrichment is best-effort; fall back to raw trace
             try:
                 if hasattr(spark_exc, "getSqlState"):
                     out["sql_state"] = spark_exc.getSqlState()
             except Exception:
-                pass
+                pass  # sql-state inspection is diagnostic only; missing sql_state is not an error
             params: dict[str, Any] = {}
             try:
                 if hasattr(spark_exc, "getMessageParameters"):
@@ -353,7 +353,7 @@ def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | Non
                                 out["error_class"] = out["error_class"] or jclass
                                 out["root_exception"] = {"type": jclass, "message": jmsg}
                             except Exception:
-                                pass
+                                pass  # getCause() chain walk is best-effort; root cause extraction is diagnostic only
                         break
                     cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
                     if cur is None:
@@ -1074,7 +1074,7 @@ class Surveyor:
                             [bp_id, module_id, rid],
                         )
             except Exception:
-                pass
+                pass  # explain-snapshot rotation is best-effort housekeeping; never fail a run for stale cleanup
 
     def latest_explain_snapshots(
         self,

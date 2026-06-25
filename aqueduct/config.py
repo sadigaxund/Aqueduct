@@ -120,6 +120,11 @@ class DeploymentConfig(BaseModel):
         a forward pointer to Phase 64.
         """
         if self.engine != "spark":
+            if self.engine == "flink":
+                raise ConfigError(
+                    "engine: flink is not yet supported (see docs/roadmap.md). "
+                    "Use engine: spark."
+                )
             return self
 
         target = self.target
@@ -506,7 +511,7 @@ class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_sample_rows: int = Field(default=100, ge=1, description="Maximum rows to sample in probes (>= 1)")
-    default_sample_fraction: float = Field(default=0.01, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
+    default_sample_fraction: float = Field(default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
     # Note: the legacy `block_full_actions_in_prod` flag was removed in v1.0.0a3.
     # The active gate is `danger.allow_full_probe_actions` (inverted polarity).
 

@@ -527,7 +527,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
             if isinstance(_mac, dict):
                 macros_defined = [str(k) for k in _mac]
         except Exception:
-            pass
+            pass  # macro inspection is best-effort; YAML parse failures must not break prompt construction
         if macros_defined:
             blueprint_yaml_section += (
                 "\n**Macros in scope:** "

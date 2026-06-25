@@ -631,7 +631,7 @@ def _install_secret_redaction_hooks() -> None:
                 record.msg = _redact(record.getMessage())
                 record.args = ()
             except Exception:  # noqa: BLE001
-                pass
+                pass  # redaction must never break logging; best-effort sanitisation
             return True
 
     root = _logging.getLogger()

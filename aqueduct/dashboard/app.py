@@ -14,7 +14,6 @@ health, not run data — is memoised per browser session; F5 re-runs it.)
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 
@@ -23,7 +22,7 @@ import os
 try:
     import pyspark.sql  # noqa: F401
 except Exception:
-    pass
+    pass  # pyspark early-import is best-effort; circular-import workaround must not break a headless viewer
 
 from datetime import datetime
 from pathlib import Path
@@ -111,7 +110,7 @@ def _style(df: pd.DataFrame, status_cols=("status",),
         w = col_width.get(c)
         if w:
             styles.append({"selector": f"th.col_heading.col{c} , td.col{c}",
-                           "props": [(f"min-width", w), ("white-space", "nowrap")]})
+                           "props": [("min-width", w), ("white-space", "nowrap")]})
         else:
             styles.append({"selector": f"td.col{c}",
                            "props": [("white-space", "nowrap")]})
@@ -162,6 +161,21 @@ def _count_yaxis(fig, max_val: float = 0) -> None:
 
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
+
+def _blueprint_handle_map(handles):
+    """Map blueprint_id → StoreHandle across all stores.
+
+    Postgres has one handle for all blueprints; DuckDB has one per file.
+    This normalises both so the UI can select by blueprint_id.
+    """
+    bp_to_handle = {}
+    for h in handles:
+        try:
+            for r in q.list_runs(h.store, limit=500):
+                bp_to_handle.setdefault(r.blueprint_id, h)
+        except Exception:
+            continue
+    return bp_to_handle
 
 def _st_blob(handle, path_str: str, blueprint_id: str = "") -> None:
     """Read a blob via the configured object store, redact, and display."""
@@ -484,7 +498,7 @@ def _runs_tab(handles):
                 prev: dict[str, str] = {}
                 for s in sigs:
                     fields = {f["name"]: f["type"] for f in (s.payload.get("fields") or [])}
-                    changed = {c: (prev[c], fields[c]) for c in fields
+                    changed = {c: (prev[c], fields[c]) for c in fields  # noqa: F841  # TODO: surface schema-snapshot diff (incomplete feature)
                                if c in prev and prev[c] != fields[c]}
                     prev = fields
                 rows_l = []
@@ -500,24 +514,27 @@ def _lineage_tab(handles):
     if not handles:
         st.info("No observability stores found yet.")
         return
-    # Pick a blueprint from all stores that have lineage OR fingerprint data.
+    bp_to_handle = _blueprint_handle_map(handles)
+    # Discover which blueprint_ids have lineage or fingerprint data.
     scored = []
-    for h in handles:
+    for bp, h in bp_to_handle.items():
         has_col = q.lineage(h.store, limit=1) != []
-        has_fp = q.channel_fingerprints(h.store, h.label) != []
+        has_fp = q.channel_fingerprints(h.store, bp) != []
         if has_col or has_fp:
-            scored.append((h, has_col, has_fp))
+            scored.append((bp, h, has_col, has_fp))
     if not scored:
         st.info("No column-lineage or SQL fingerprint data yet (needs a SQL Channel).")
         return
-    pick = st.selectbox("Blueprint", [h.label for h, _, _ in scored])
-    handle, has_col, has_fp = next((h, c, f) for h, c, f in scored if h.label == pick)
+    pick = st.selectbox("Blueprint", [s[0] for s in scored])
+    handle, has_col, has_fp = next(
+        (h, c, f) for bp, h, c, f in scored if bp == pick
+    )
 
     import plotly.graph_objects as go
 
     if has_col:
         # Only the latest run's lineage — each run appends its own set.
-        latest = q.list_runs(handle.store, blueprint_id=handle.label, limit=1)
+        latest = q.list_runs(handle.store, blueprint_id=pick, limit=1)
         lp_run = latest[0].run_id if latest else None
         rows = q.lineage(handle.store, run_id=lp_run) if lp_run else []
 
@@ -554,7 +571,7 @@ def _lineage_tab(handles):
                status_cols=())
 
     if has_fp:
-        fps = q.channel_fingerprints(handle.store, handle.label)
+        fps = q.channel_fingerprints(handle.store, pick)
         st.divider()
         st.markdown("**SQL Changelog**")
         import difflib as _dl
@@ -589,7 +606,7 @@ def _lineage_tab(handles):
                         st.code(diff_text, language="diff")
 
     # ── Drift timeline ──────────────────────────────────────────────────
-    drift = q.drift_events(handle.store, handle.label)
+    drift = q.drift_events(handle.store, pick)
     if drift:
         st.divider()
         st.markdown("**Schema Drift**")
@@ -689,12 +706,16 @@ def _performance_tab(handles, cfg, store_dir):
         st.info("No observability stores found yet.")
         return
 
-    bps = sorted([h.label for h in handles])
+    bp_to_handle = _blueprint_handle_map(handles)
+    bps = sorted(bp_to_handle.keys())
+    if not bps:
+        st.info("No runs found.")
+        return
     c_bp, c_mod = st.columns([1, 1])
     pick = c_bp.selectbox("Blueprint", bps, key="perf_bp")
-    handle = next(h for h in handles if h.label == pick)
+    handle = bp_to_handle[pick]
 
-    runs = q.list_runs(handle.store, limit=20)
+    runs = q.list_runs(handle.store, limit=20, blueprint_id=pick)
     if not runs:
         st.info("No runs for this blueprint yet.")
         return
@@ -905,23 +926,27 @@ def _quality_tab(cfg, store_dir):
         st.caption("No spillway rows recorded yet.")
 
     st.markdown("**Probe Signals**")
-    bps = sorted({
-        h.label for h in q.discover_stores(cfg, store_dir=store_dir)
-    })
+    bp_to_handle = _blueprint_handle_map(
+        q.discover_stores(cfg, store_dir=store_dir))
+    bps = sorted(bp_to_handle.keys())
     if bps:
         c_bp, c_sig = st.columns([1, 1])
         pick = c_bp.selectbox("Blueprint", bps, key="quality_probe_bp")
-        sig_type = c_sig.selectbox(
-            "Signal type", list(q.PROBE_METRIC_LABELS),
-            format_func=lambda k: q.PROBE_METRIC_LABELS[k],
-            key="quality_probe_sig")
-        handle = next(
-            (h for h in q.discover_stores(cfg, store_dir=store_dir)
-             if h.label == pick), None)
+        handle = bp_to_handle.get(pick)
 
         if not handle:
             st.caption("Store not found.")
             return
+
+        available = q.probe_signal_types(handle.store, pick)
+        type_options = [t for t in q.PROBE_METRIC_LABELS if t in available]
+        if not type_options:
+            st.caption("No probe signals for this blueprint.")
+            return
+        sig_type = c_sig.selectbox(
+            "Signal type", type_options,
+            format_func=lambda k: q.PROBE_METRIC_LABELS[k],
+            key="quality_probe_sig")
 
         sigs = q.probe_signals(handle.store, pick, sig_type, limit=30)
         if not sigs:
@@ -1013,7 +1038,7 @@ def _quality_tab(cfg, store_dir):
             for s in sigs:
                 fields = {f["name"]: f["type"]
                           for f in (s.payload.get("fields") or [])}
-                changed = {c: (prev[c], fields[c]) for c in fields
+                changed = {c: (prev[c], fields[c]) for c in fields  # noqa: F841  # TODO: surface schema-snapshot diff (incomplete feature)
                            if c in prev and prev[c] != fields[c]}
                 prev = fields
             rows_l = []

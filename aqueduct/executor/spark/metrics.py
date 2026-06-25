@@ -76,7 +76,7 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
         try:
             result[0] = int(obs.get.get(alias, 0))
         except Exception:
-            pass
+            pass  # observation read must never hang the process; daemon thread best-effort
 
     t = threading.Thread(target=_get, daemon=True)
     t.start()

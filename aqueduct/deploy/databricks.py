@@ -60,7 +60,7 @@ try:
     with open(outcome_path, "w") as f:
         json.dump(result_json, f)
 except Exception:
-    pass
+    pass  # bootstrap outcome write is best-effort; the enclosing process is about to `sys.exit`
 
 sys.exit(result_json["returncode"])
 """
@@ -150,7 +150,7 @@ class DatabricksSubmitter(Submitter):
                         timeout=10,
                     )
                 except Exception:
-                    pass
+                    pass  # DBFS close-handle is best-effort cleanup on error; the real failure is the block upload
                 raise RuntimeError(
                     f"DBFS add-block failed for {dbfs_path!r} at offset {offset}: "
                     f"{exc.response.status_code}"
@@ -289,7 +289,7 @@ class DatabricksSubmitter(Submitter):
             try:
                 detail = f": {exc.response.text}"
             except Exception:
-                pass
+                pass  # response-body read is diagnostic best-effort; the error is surfaced regardless
             raise RuntimeError(
                 f"Job submit failed "
                 f"(status {exc.response.status_code}){detail}"
@@ -402,5 +402,5 @@ class DatabricksSubmitter(Submitter):
                     parts.append(f"── stderr ──\n{outcome['stderr']}")
                 return "\n".join(parts)
         except Exception:
-            pass
+            pass  # outcome JSON parse is best-effort log enrichment; empty-string fallback is harmless
         return ""

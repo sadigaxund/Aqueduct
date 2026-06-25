@@ -355,6 +355,7 @@ def run(
     from aqueduct.depot.depot import DepotStore
     from aqueduct.executor import ExecuteError, get_executor
     from aqueduct.executor.models import ExecutionResult, ModuleResult
+    from aqueduct.executor.spark.probe import ProbeSampling
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.surveyor.surveyor import Surveyor
     from aqueduct.cli.style import error as _error
@@ -484,6 +485,12 @@ def run(
         except (NotImplementedError, ValueError) as exc:
             _error(f"engine error: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
+
+        probes_cfg = cfg.probes
+        probe_sampling = ProbeSampling(
+            max_sample_rows=probes_cfg.max_sample_rows,
+            default_sample_fraction=probes_cfg.default_sample_fraction,
+        )
 
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
@@ -651,6 +658,7 @@ def run(
                     to_module=to_module,
                     block_full_actions=not cfg.danger.allow_full_probe_actions,
                     parallel=parallel,
+                    sampling=probe_sampling,
                 )
             except ExecuteError as exc:
                 click.echo(f"✗ sandbox run failed: {exc}", err=True)
@@ -927,7 +935,7 @@ def run(
                         run_id=iteration_run_id, parent_run_id=run_id,
                     )
                 except Exception:
-                    pass
+                    pass  # iteration registration is best-effort; never let persistence block execution
             execute_exc: ExecuteError | None = None
             try:
                 result = execute(
@@ -943,6 +951,7 @@ def run(
                     parallel=parallel,
                     use_observe=cfg.metrics.use_observe,
                     observability_store=bundle.observability,
+                    sampling=probe_sampling,
                 )
             except ExecuteError as exc:
                 execute_exc = exc
@@ -1122,7 +1131,7 @@ def run(
                                     stop_reason="replayed",
                                 )
                             except Exception:
-                                pass
+                                pass  # recording the zero-token replay is best-effort; never block for audit logging
 
             _resolution = "replayed" if _patch_source == "replay" else "llm"
 
@@ -1355,7 +1364,7 @@ def run(
                         stop_reason=agent_result.stop_reason,
                     )
                 except Exception:
-                    pass
+                    pass  # updating stop_reason is best-effort; never let persistence block the loop
             if patch is None:
                 click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
@@ -1787,7 +1796,7 @@ def run(
         try:
             depot.put("_last_run_id", run_id)
         except Exception:
-            pass
+            pass  # depot write is best-effort; prev_run_id unavailability is a soft degradation, not a failure
         depot.close()
 
         # ── Report ────────────────────────────────────────────────────────────────
@@ -1805,7 +1814,7 @@ def run(
                     for _p in _det.profile:
                         _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
         except Exception:
-            pass
+            pass  # per-module profile read is best-effort post-run reporting; never fail for a missing metric
 
         def _fmt_dur(ms):
             return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")

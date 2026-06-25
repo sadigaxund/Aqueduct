@@ -226,7 +226,7 @@ stores:
 
 probes:
   max_sample_rows: 100
-  default_sample_fraction: 0.01
+  default_sample_fraction: 0.1
 
   # Probe signals that trigger a Spark action on a sample
   # (row_count_estimate/sample, null_rates, value_distribution, distinct_count)

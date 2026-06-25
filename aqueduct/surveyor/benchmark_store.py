@@ -101,7 +101,7 @@ def _connect(store_path: Path):
         if not vg_exists:
             con.execute("ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON")
     except Exception:
-        pass
+        pass  # DDL migration must never fail the store open; pre-existing columns skip harmlessly
     # Additive ALTER for stop_reason + escalation + token totals (added
     # by the unified reprompt loop) so pre-1.0.4 benchmark stores survive
     # intact (NULL on old rows).
@@ -119,7 +119,7 @@ def _connect(store_path: Path):
             if not exists:
                 con.execute(ddl)
         except Exception:
-            pass
+            pass  # additive ALTER is best-effort; pre-existing columns skip harmlessly
     return con
 
 

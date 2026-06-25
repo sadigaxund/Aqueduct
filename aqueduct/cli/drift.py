@@ -173,7 +173,7 @@ def drift(
         try:
             session.stop()
         except Exception:
-            pass
+            pass  # session.stop() is best-effort cleanup in a finally; the process is about to exit
 
     if fmt == "json":
         click.echo(_json.dumps({"blueprint_id": manifest.blueprint_id, "checks": results}, indent=2))

@@ -751,6 +751,7 @@ def execute(
     explain_capture: dict[str, dict] | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
+    sampling: "ProbeSampling | None" = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -785,10 +786,13 @@ def execute(
                       failure.  Most module errors are caught and recorded as
                       status="error" (fail-fast).  Probe errors are always swallowed.
     """
-    from aqueduct.executor.spark.probe import execute_probe
+    from aqueduct.executor.spark.probe import ProbeSampling, execute_probe
     from aqueduct.executor.spark.udf import UDFError, register_udfs
 
     run_id = run_id or str(uuid.uuid4())
+
+    if sampling is None:
+        sampling = ProbeSampling()
 
     # Checkpoint / resume paths (None when feature disabled)
     checkpoint_dir: Path | None = None
@@ -826,7 +830,7 @@ def execute(
             for _rid, _msg in _run_session_warnings(manifest, spark, suppress=warnings_suppress):
                 _aq_emit(_rid, _msg, suppress=warnings_suppress)
         except Exception:
-            pass
+            pass  # session-startup warnings must never crash the executor
 
     # Register UDFs before any module executes so Channel SQL can reference them.
     try:
@@ -1477,7 +1481,7 @@ def execute(
                     )
                 elif store_dir is not None:
                     try:
-                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store)
+                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling)
                     except Exception as exc:
                         logger.warning("Probe %r failed: %s", module.id, exc)
 

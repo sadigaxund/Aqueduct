@@ -132,6 +132,12 @@ class TestConfigAqGuard:
         with pytest.raises(ConfigError, match=r"@aq\.run\.id"):
             load_config(p)
 
+    def test_engine_flink_rejected(self, tmp_path):
+        from aqueduct.config import ConfigError
+        p = self._write(tmp_path, 'deployment:\n  engine: flink\n')
+        with pytest.raises(ConfigError, match=r"flink is not yet supported"):
+            load_config(p)
+
     def test_env_and_plain_config_ok(self, tmp_path, monkeypatch):
         monkeypatch.setenv("AQ_CFG_ENV", "cluster")
         p = self._write(tmp_path, 'deployment:\n  env: ${AQ_CFG_ENV}\n')

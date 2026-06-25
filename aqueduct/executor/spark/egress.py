@@ -242,7 +242,7 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
         try:
             spark.catalog.dropTempView(view_name)
         except Exception:
-            pass
+            pass  # drop is best-effort cleanup in a finally; temp view may not exist (first merge)
 
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 

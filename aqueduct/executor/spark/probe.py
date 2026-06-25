@@ -112,6 +112,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -123,6 +124,13 @@ if TYPE_CHECKING:
 from aqueduct.parser.models import Module
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProbeSampling:
+    max_sample_rows: int = 100
+    default_sample_fraction: float = 0.1
+
 
 # ── DuckDB DDL ────────────────────────────────────────────────────────────────
 
@@ -186,6 +194,7 @@ def _row_count_estimate(
     store_dir: "Path | None" = None,
     block_full_actions: bool = False,
     observability_store: Any = None,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Estimate row count. sample method only triggers on a fraction.
 
@@ -229,7 +238,7 @@ def _row_count_estimate(
     if block_full_actions:
         logger.warning("Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
         return {"method": "sample", "blocked": True, "estimate": None}
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     sample_count = df.sample(fraction=fraction).count()
     estimate = int(round(sample_count / fraction)) if fraction > 0 else 0
     return {"method": "sample", "fraction": fraction, "sample_count": sample_count, "estimate": estimate}
@@ -239,12 +248,13 @@ def _null_rates(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Compute per-column null rates on a random sample."""
     from pyspark.sql import functions as F
 
     columns: list[str] = signal_cfg.get("columns") or df.columns
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions:
         logger.warning("Probe: block_full_actions=True; skipping null_rates sample.")
@@ -267,6 +277,7 @@ def _null_rates(
 def _sample_rows(
     df: DataFrame,
     signal_cfg: dict[str, Any],
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Fetch at most n rows as JSON-serialisable dicts.
 
@@ -274,6 +285,7 @@ def _sample_rows(
     partition(s) without scanning the full dataset.
     """
     n = int(signal_cfg.get("n", 10))
+    n = min(n, sampling.max_sample_rows)
     rows = df.limit(n).collect()
     serialised = [row.asDict(recursive=True) for row in rows]
     return {"n": n, "rows": serialised}
@@ -283,12 +295,13 @@ def _value_distribution(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Min/max/mean/stddev + percentiles per column on a sample."""
     from pyspark.sql import functions as F
     from pyspark.sql.types import NumericType
 
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
 
     if block_full_actions:
@@ -345,11 +358,12 @@ def _distinct_count(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Approximate distinct-value count per column via approx_count_distinct."""
     from pyspark.sql import functions as F
 
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     columns: list[str] = signal_cfg.get("columns") or df.columns
 
     if block_full_actions:
@@ -366,6 +380,7 @@ def _data_freshness(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Capture the max value of a timestamp/date column."""
     from pyspark.sql import functions as F
@@ -375,7 +390,7 @@ def _data_freshness(
         raise ValueError("data_freshness signal requires 'column'")
 
     allow_sample = bool(signal_cfg.get("allow_sample", False))
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions and not allow_sample:
         logger.warning(
@@ -478,6 +493,7 @@ def execute_probe(
     store_dir: Path,
     block_full_actions: bool = False,
     observability_store: Any = None,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> None:
     """Capture observability signals for a single Probe module.
 
@@ -497,6 +513,7 @@ def execute_probe(
         block_full_actions: Forward to per-signal helpers.
         observability_store: Optional Phase 28 obs-store backend. When None, a default
                    DuckDB store at ``store_dir/observability.db`` is constructed.
+        sampling: Probe sampling governance (max_sample_rows cap + default_sample_fraction).
 
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
@@ -530,17 +547,18 @@ def execute_probe(
                             store_dir=store_dir,
                             block_full_actions=block_full_actions,
                             observability_store=observability_store,
+                            sampling=sampling,
                         )
                     elif sig_type == "null_rates":
-                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "sample_rows":
-                        payload = _sample_rows(df, sig_cfg)
+                        payload = _sample_rows(df, sig_cfg, sampling=sampling)
                     elif sig_type == "value_distribution":
-                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "distinct_count":
-                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "data_freshness":
-                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "partition_stats":
                         payload = _partition_stats(df)
                     elif sig_type == "threshold":

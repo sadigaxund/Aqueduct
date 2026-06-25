@@ -409,6 +409,15 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
 
+**Sampling governance.** The `probes:` block in `aqueduct.yml` controls how much data sample-based signals read:
+
+| Key | Default | Role | Effect |
+|---|---|---|---|
+| `max_sample_rows` | `100` | **Cap** | Ceiling on `sample_rows` `n` — a per-probe `n:` above the cap is clamped; below the cap is honoured. |
+| `default_sample_fraction` | `0.1` | **Default** | Fleet-wide default for signals that use `fraction` (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`, `row_count_estimate: sample`). A per-probe `fraction:` in the Blueprint overrides this. |
+
+These sit alongside `danger.allow_full_probe_actions` (whether full actions are allowed at all) and `metrics.use_observe` (observe overhead) as the three-part probe-cost-governance family.
+
 **Custom signals (`type: custom`).** User-defined signals extend observability without forking the engine. Exactly one of three forms:
 
 ```yaml
