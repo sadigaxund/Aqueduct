@@ -65,7 +65,7 @@ from pyspark.sql import SparkSession
 if TYPE_CHECKING:
     pass
 
-from aqueduct.compiler.models import Manifest
+from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
 from aqueduct.config import WebhookEndpointConfig
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
@@ -75,7 +75,6 @@ from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
-from aqueduct.parser.models import Edge, Module, ModuleType, RetryPolicy
 from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_TYPE, AQ_ERROR_TS
 from aqueduct.errors import AqueductError
 

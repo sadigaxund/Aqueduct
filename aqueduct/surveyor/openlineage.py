@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from aqueduct.parser.models import ModuleType
+from aqueduct.models import ModuleType
 
 import httpx
 

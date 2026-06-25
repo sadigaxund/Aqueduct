@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from aqueduct.agent.budget import BudgetConfig, StopReason
-from aqueduct.agent.loop import AgentPatchResult, generate_agent_patch
+from aqueduct.agent.loop import AgentPatchResult, AgentRunConfig, generate_agent_patch
 from aqueduct.parser.models import CascadeTierConfig
 from aqueduct.surveyor.models import FailureContext
 
@@ -109,31 +109,33 @@ def generate_cascade_patch(
         )
 
         result = generate_agent_patch(
-            failure_ctx=failure_ctx,
-            model=tier.model,
-            patches_dir=patches_dir,
-            provider=tier.provider if tier.provider is not None else provider,
-            base_url=tier.base_url if tier.base_url is not None else base_url,
-            api_key=tier.api_key if tier.api_key is not None else api_key,
-            provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
-            timeout=tier.timeout if tier.timeout is not None else timeout,
-            max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,
-            max_reprompts=budget_cfg.max_reprompts,
-            engine_prompt_context=engine_prompt_context,
-            blueprint_prompt_context=blueprint_prompt_context,
-            last_apply_error=last_apply_error,
-            guardrails=guardrails,
-            budget=budget_cfg,
-            allow_defer=tier.allow_defer if tier.allow_defer is not None else allow_defer,
-            deep_loop=tier.deep_loop if tier.deep_loop is not None else deep_loop,
-            apply_callback=apply_callback,
-            validate_callback=validate_callback,
-            on_attempt=on_attempt,
-            model_cascade_position=idx - 1,
-            memory_coaching=memory_coaching,
-            retry_max_retries=retry_max_retries,
-            retry_backoff_seconds=retry_backoff_seconds,
-            obs_store=obs_store,
+            agent_cfg=AgentRunConfig(
+                failure_ctx=failure_ctx,
+                model=tier.model,
+                patches_dir=patches_dir,
+                provider=tier.provider if tier.provider is not None else provider,
+                base_url=tier.base_url if tier.base_url is not None else base_url,
+                api_key=tier.api_key if tier.api_key is not None else api_key,
+                provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
+                timeout=tier.timeout if tier.timeout is not None else timeout,
+                max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,
+                max_reprompts=budget_cfg.max_reprompts,
+                engine_prompt_context=engine_prompt_context,
+                blueprint_prompt_context=blueprint_prompt_context,
+                last_apply_error=last_apply_error,
+                guardrails=guardrails,
+                budget=budget_cfg,
+                allow_defer=tier.allow_defer if tier.allow_defer is not None else allow_defer,
+                deep_loop=tier.deep_loop if tier.deep_loop is not None else deep_loop,
+                apply_callback=apply_callback,
+                validate_callback=validate_callback,
+                on_attempt=on_attempt,
+                model_cascade_position=idx - 1,
+                memory_coaching=memory_coaching,
+                retry_max_retries=retry_max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                obs_store=obs_store,
+            ),
         )
 
         tokens_spent += result.tokens_in_total + result.tokens_out_total

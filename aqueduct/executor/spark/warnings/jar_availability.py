@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from aqueduct.parser.models import ModuleType
+from aqueduct.models import ModuleType
 
 RULE_ID = "jar_availability"
 

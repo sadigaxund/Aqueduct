@@ -131,6 +131,21 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 This section documents the internal module structure of key packages. Updated
 whenever a package is restructured — use it as the first filter before grepping.
 
+### `aqueduct/models.py` — Cross-layer boundary types
+
+Re-export surface for downstream layers (executor, surveyor). Imports from
+`parser.models` and `compiler.models` so executor/surveyor don't reach into
+those internals. Pure re-export — definitions still live in their original
+modules.
+
+| Symbol | Defined in | Role |
+|--------|-----------|------|
+| `Manifest` | `compiler.models` | Compiled Blueprint ready for execution |
+| `Module` | `parser.models` | Parsed module node |
+| `Edge` | `parser.models` | Data-flow edge |
+| `RetryPolicy` | `parser.models` | Per-pipeline retry config |
+| `ModuleType` | `parser.models` | Module type enum |
+
 ### `aqueduct/surveyor/` — Observability, benchmarking, webhooks
 
 | Module | What it owns |
@@ -231,7 +246,7 @@ whenever a package is restructured — use it as the first filter before greppin
 
 | Module | Public API | What it owns |
 |--------|-----------|--------------|
-| `__init__.py` | `AgentPatchResult`, `PROMPT_VERSION`, `MAX_REPROMPTS`, `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `build_prompt`, `resolve_budget` | Thin re-export facade + `resolve_budget()` |
+| `__init__.py` | `AgentPatchResult`, `PROMPT_VERSION`, `MAX_REPROMPTS`, `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `build_prompt`, `resolve_budget`, `AgentRunConfig`, `generate_cascade_patch` | Thin re-export facade + `resolve_budget()` |
 | `loop.py` | `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `AgentPatchResult`, `PROMPT_VERSION` | Main orchestration loop, patch I/O, result type |
 | `cascade.py` | `generate_cascade_patch` | Multi-model healing cascade — per-tier config inheritance, escalation on stuck/exhausted/deferred |
 | `prompts.py` | `build_prompt`, `_build_user_prompt`, `_build_system_prompt`, `_FIELD_ALIASES`, `_VALID_OPS` | Template strings, prompt construction, LLM-facing constants |

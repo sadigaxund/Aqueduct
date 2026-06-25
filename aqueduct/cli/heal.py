@@ -101,7 +101,7 @@ def heal(
     """
     from aqueduct.config import ConfigError, load_config
     from aqueduct.cli.style import error as _error
-    from aqueduct.agent import build_prompt, generate_agent_patch, stage_patch_for_human
+    from aqueduct.agent import AgentRunConfig, build_prompt, generate_agent_patch, stage_patch_for_human
 
     if not run_id:
         _error("provide a run_id argument")
@@ -275,20 +275,22 @@ def heal(
             return False, "apply_error", str(exc), None
 
     agent_result = generate_agent_patch(
-        failure_ctx,
-        model=resolved_model,
-        patches_dir=patches_path,
-        provider=resolved_provider or "anthropic",
-        base_url=resolved_base_url,
-        api_key=resolved_api_key,
-        provider_options=resolved_provider_options,
-        timeout=resolved_timeout,
-        max_reprompts=resolved_max_reprompts,
-        engine_prompt_context=resolved_engine_prompt_context,
-        guardrails=_guardrails_for_prompt,
-        budget=_budget,
-        allow_defer=_allow_defer,
-        apply_callback=_apply_cb,
+        agent_cfg=AgentRunConfig(
+            failure_ctx=failure_ctx,
+            model=resolved_model,
+            patches_dir=patches_path,
+            provider=resolved_provider or "anthropic",
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
+            provider_options=resolved_provider_options,
+            timeout=resolved_timeout,
+            max_reprompts=resolved_max_reprompts,
+            engine_prompt_context=resolved_engine_prompt_context,
+            guardrails=_guardrails_for_prompt,
+            budget=_budget,
+            allow_defer=_allow_defer,
+            apply_callback=_apply_cb,
+        ),
     )
     patch = agent_result.patch
 

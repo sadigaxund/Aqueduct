@@ -96,6 +96,42 @@ class AgentPatchResult:
     model_cascade_position: int | None = None
 
 
+@dataclass(frozen=True)
+class AgentRunConfig:
+    """All inputs for one ``generate_agent_patch`` invocation.
+
+    Collapses the ~25 keyword args into a single frozen object so CLI call
+    sites build it once and the function body reads from ``cfg.*``.
+    Defaults are byte-identical to the old ``generate_agent_patch`` signature.
+    """
+
+    failure_ctx: FailureContext
+    model: str
+    patches_dir: Path
+    provider: str = "anthropic"
+    base_url: str | None = None
+    api_key: str | None = None
+    max_tokens: int = 4096
+    provider_options: dict[str, Any] | None = None
+    timeout: float = 120.0
+    max_reprompts: int = 3
+    engine_prompt_context: str | None = None
+    blueprint_prompt_context: str | None = None
+    last_apply_error: str | None = None
+    guardrails: Any = None
+    budget: BudgetConfig | None = None
+    allow_defer: bool = False
+    deep_loop: bool = False
+    validate_callback: Callable[[Any], tuple[bool, str]] | None = None
+    apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None
+    on_attempt: Callable[[Any], None] | None = None
+    model_cascade_position: int | None = None
+    memory_coaching: bool = True
+    retry_max_retries: int = 2
+    retry_backoff_seconds: float = 2.0
+    obs_store: ObservabilityStore | None = None
+
+
 # ── Timestamp helpers ────────────────────────────────────────────────────
 
 
@@ -347,6 +383,7 @@ def generate_agent_patch(
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
     obs_store: ObservabilityStore | None = None,
+    agent_cfg: AgentRunConfig | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -366,6 +403,33 @@ def generate_agent_patch(
     ``on_attempt`` is invoked with the AttemptRecord after each turn —
     used by the Surveyor to persist into ``heal_attempts``.
     """
+    if agent_cfg is not None:
+        failure_ctx = agent_cfg.failure_ctx
+        model = agent_cfg.model
+        patches_dir = agent_cfg.patches_dir
+        provider = agent_cfg.provider
+        base_url = agent_cfg.base_url
+        api_key = agent_cfg.api_key
+        max_tokens = agent_cfg.max_tokens
+        provider_options = agent_cfg.provider_options
+        timeout = agent_cfg.timeout
+        max_reprompts = agent_cfg.max_reprompts
+        engine_prompt_context = agent_cfg.engine_prompt_context
+        blueprint_prompt_context = agent_cfg.blueprint_prompt_context
+        last_apply_error = agent_cfg.last_apply_error
+        guardrails = agent_cfg.guardrails
+        budget = agent_cfg.budget
+        allow_defer = agent_cfg.allow_defer
+        deep_loop = agent_cfg.deep_loop
+        validate_callback = agent_cfg.validate_callback
+        apply_callback = agent_cfg.apply_callback
+        on_attempt = agent_cfg.on_attempt
+        model_cascade_position = agent_cfg.model_cascade_position
+        memory_coaching = agent_cfg.memory_coaching
+        retry_max_retries = agent_cfg.retry_max_retries
+        retry_backoff_seconds = agent_cfg.retry_backoff_seconds
+        obs_store = agent_cfg.obs_store
+
     if budget is None:
         budget = BudgetConfig(max_reprompts=max(1, max_reprompts))
     tracker = BudgetTracker(budget)

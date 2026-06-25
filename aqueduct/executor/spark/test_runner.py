@@ -36,7 +36,7 @@ Skips: Ingress, Egress (no external I/O).
 from __future__ import annotations
 
 import logging
-from aqueduct.parser.models import ModuleType
+from aqueduct.models import ModuleType
 from aqueduct.errors import AqueductError
 from dataclasses import dataclass, field
 from pathlib import Path

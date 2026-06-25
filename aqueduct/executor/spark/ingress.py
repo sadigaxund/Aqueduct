@@ -18,7 +18,7 @@ from pyspark.sql import SparkSession
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
-from aqueduct.parser.models import Module
+from aqueduct.models import Module
 from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 from aqueduct.errors import AqueductError
 

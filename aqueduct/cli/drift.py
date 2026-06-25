@@ -215,7 +215,7 @@ def _heal_drift(
     blueprint_source_yaml: str | None = None,
 ) -> str | None:
     """Run the agent on a synthetic drift FailureContext; stage a patch. Returns patch_id."""
-    from aqueduct.agent import generate_agent_patch, resolve_budget, stage_patch_for_human
+    from aqueduct.agent import AgentRunConfig, generate_agent_patch, resolve_budget, stage_patch_for_human
     from aqueduct.drift.context import build_synthetic_failure_context
 
     eng = cfg.agent
@@ -230,18 +230,20 @@ def _heal_drift(
     budget = resolve_budget(getattr(eng, "budget", None), max_reprompts=eng.max_reprompts)
 
     agent_result = generate_agent_patch(
-        failure_ctx,
-        model=eng.model,
-        patches_dir=patches_path,
-        provider=eng.provider or "anthropic",
-        base_url=eng.base_url,
-        api_key=eng.api_key,
-        provider_options=eng.provider_options,
-        timeout=eng.timeout,
-        max_reprompts=eng.max_reprompts,
-        engine_prompt_context=eng.prompt_context,
-        budget=budget,
-        allow_defer=False,
+        agent_cfg=AgentRunConfig(
+            failure_ctx=failure_ctx,
+            model=eng.model,
+            patches_dir=patches_path,
+            provider=eng.provider or "anthropic",
+            base_url=eng.base_url,
+            api_key=eng.api_key,
+            provider_options=eng.provider_options,
+            timeout=eng.timeout,
+            max_reprompts=eng.max_reprompts,
+            engine_prompt_context=eng.prompt_context,
+            budget=budget,
+            allow_defer=False,
+        ),
     )
     if agent_result.patch is None:
         return None

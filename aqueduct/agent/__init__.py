@@ -30,6 +30,7 @@ from aqueduct.agent.budget import StopReason as StopReason
 from aqueduct.agent.cascade import generate_cascade_patch as generate_cascade_patch
 from aqueduct.agent.loop import (
     AgentPatchResult as AgentPatchResult,
+    AgentRunConfig as AgentRunConfig,
     PROMPT_VERSION as PROMPT_VERSION,
     archive_patch as archive_patch,
     generate_agent_patch as generate_agent_patch,

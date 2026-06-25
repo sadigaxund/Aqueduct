@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.parser.models import Module
+from aqueduct.models import Module
 from aqueduct.errors import AqueductError
 
 logger = logging.getLogger(__name__)

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 import logging
 
-from aqueduct.compiler.models import Manifest
+from aqueduct.models import Manifest
 from aqueduct.executor.models import ExecutionResult
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext

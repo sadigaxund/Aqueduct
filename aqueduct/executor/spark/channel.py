@@ -39,7 +39,7 @@ from pyspark.sql import SparkSession
 if TYPE_CHECKING:
     from pyspark.sql import Column, DataFrame
 
-from aqueduct.parser.models import Module
+from aqueduct.models import Module
 from aqueduct.errors import AqueductError
 
 _SINGLE_INPUT_ALIAS = "__input__"

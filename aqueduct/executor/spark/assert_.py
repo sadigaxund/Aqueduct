@@ -45,7 +45,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.parser.models import Module
+from aqueduct.models import Module
 from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_RULE, AQ_ERROR_TYPE, AQ_ERROR_TS
 from aqueduct.errors import AqueductError
 

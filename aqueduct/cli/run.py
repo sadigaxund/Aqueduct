@@ -1136,7 +1136,7 @@ def run(
             _resolution = "replayed" if _patch_source == "replay" else "llm"
 
             # ── Generate patch ────────────────────────────────────────────────────
-            from aqueduct.agent import generate_agent_patch, stage_patch_for_human
+            from aqueduct.agent import AgentRunConfig, generate_agent_patch, stage_patch_for_human
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}"
                 if max_patches > 1
@@ -1322,29 +1322,31 @@ def run(
                 )
             else:
                 agent_result = generate_agent_patch(
-                    failure_ctx,
-                    model=resolved_agent_model,
-                    patches_dir=patches_dir,
-                    provider=resolved_agent_provider,
-                    base_url=resolved_agent_base_url,
-                    api_key=resolved_agent_api_key,
-                    provider_options=resolved_agent_provider_options,
-                    timeout=resolved_agent_timeout,
-                    max_reprompts=resolved_agent_max_reprompts,
-                    engine_prompt_context=resolved_agent_engine_prompt_context,
-                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-                    last_apply_error=last_apply_error,
-                    guardrails=manifest.agent.guardrails if manifest.agent else None,
-                    budget=_budget,
-                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
-                    deep_loop=_deep_loop,
-                    validate_callback=_validate_cb,
-                    on_attempt=_persist_attempt,
-                    apply_callback=_apply_cb,
-                    memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
-                    retry_max_retries=cfg.agent.retry.max_retries,
-                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
-                    obs_store=_obs_store,
+                    agent_cfg=AgentRunConfig(
+                        failure_ctx=failure_ctx,
+                        model=resolved_agent_model,
+                        patches_dir=patches_dir,
+                        provider=resolved_agent_provider,
+                        base_url=resolved_agent_base_url,
+                        api_key=resolved_agent_api_key,
+                        provider_options=resolved_agent_provider_options,
+                        timeout=resolved_agent_timeout,
+                        max_reprompts=resolved_agent_max_reprompts,
+                        engine_prompt_context=resolved_agent_engine_prompt_context,
+                        blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                        last_apply_error=last_apply_error,
+                        guardrails=manifest.agent.guardrails if manifest.agent else None,
+                        budget=_budget,
+                        allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                        deep_loop=_deep_loop,
+                        validate_callback=_validate_cb,
+                        on_attempt=_persist_attempt,
+                        apply_callback=_apply_cb,
+                        memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                        retry_max_retries=cfg.agent.retry.max_retries,
+                        retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                        obs_store=_obs_store,
+                    ),
                 )
             patch = agent_result.patch
             # Phase 46 — record the model that actually produced this result
