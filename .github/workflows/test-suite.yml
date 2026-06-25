@@ -299,3 +299,20 @@ jobs:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
           AQ_REDIS_URL: "redis://localhost:6379/15"
         run: pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py -m integration
+
+  # ── Coverage — dedicated job, decoupled from Spark to avoid session flakiness ──
+  # Runs the full pure-Python suite under coverage. Spark tests are excluded
+  # because the shared-session Spark fixture destabilises under coverage
+  # tracing (~154 flaky Py4JJavaError failures vanish under --no-cov).
+  # The 80% gate covers the pure-Python layers (the bulk of the codebase).
+
+  coverage:
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis,stores]"
+      - run: pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=80 -m "not spark"

@@ -146,7 +146,7 @@ ignore = ["E501"]
 # startup — it must stay dedicated (never point it at a dir holding other files).
 # tmp_path_retention_* still trims within a session as a belt-and-braces measure.
 [tool.pytest.ini_options]
-addopts   = "--cov=aqueduct --cov-report=term-missing --basetemp=/tmp/aqueduct-pytest"
+addopts   = "--basetemp=/tmp/aqueduct-pytest"
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
 tmp_path_retention_count = 1
