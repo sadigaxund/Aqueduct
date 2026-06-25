@@ -207,6 +207,7 @@ def find_coaching(
     exact_hash: str,
     coarse_hash: str,
     error_class: str,
+    blueprint_id: str = "",
     limit: int = 3,
 ) -> list[dict]:
     """Tiered nearest-signature (failure → fix) pairs from applied patches.
@@ -214,10 +215,16 @@ def find_coaching(
     Tier 1 exact sig, 2 coarse sig, 3 same error_class, 4 chronological fill;
     deduped by patch_id, newest first within tier, capped at *limit*. Pure
     metadata — no body reads."""
+    wheres = ["status = 'applied'"]
+    params: list = []
+    if blueprint_id:
+        wheres.append("blueprint_id = ?")
+        params.append(blueprint_id)
+    params.append(100)  # safety cap — LIMIT feeds the tiered classifier in Python
     cur.execute(
-        f"SELECT {_SELECT} FROM patch_index WHERE status = 'applied' "
-        "ORDER BY created_at DESC",
-        [],
+        f"SELECT {_SELECT} FROM patch_index WHERE {' AND '.join(wheres)} "
+        "ORDER BY created_at DESC LIMIT ?",
+        params,
     )
     rows = [_row_to_dict(_SELECT_COLS, r) for r in cur.fetchall()]
     tiers: dict[int, list[dict]] = {1: [], 2: [], 3: [], 4: []}

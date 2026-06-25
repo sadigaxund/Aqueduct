@@ -580,6 +580,7 @@ def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
         sig_exact, sig_coarse = from_failure_context(failure_ctx)
         examples = find_coaching_examples(
             obs_store, sig_exact.hash, sig_coarse.hash, sig_exact.error_class,
+            blueprint_id=getattr(failure_ctx, "blueprint_id", ""),
         )
     except Exception:
         logger.debug("Coaching retrieval failed — section omitted", exc_info=True)

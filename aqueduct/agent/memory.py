@@ -141,6 +141,7 @@ def find_coaching_examples(
     exact_hash: str,
     coarse_hash: str,
     error_class: str,
+    blueprint_id: str = "",
     limit: int = _COACHING_MAX,
 ) -> list[CoachingExample]:
     """Nearest-signature (failure → validated fix) pairs from applied patches.
@@ -152,7 +153,7 @@ def find_coaching_examples(
         return []
     try:
         with obs_store.connect() as cur:
-            rows = _ix.find_coaching(cur, exact_hash, coarse_hash, error_class, limit)
+            rows = _ix.find_coaching(cur, exact_hash, coarse_hash, error_class, blueprint_id, limit)
     except Exception:
         logger.debug("find_coaching query failed", exc_info=True)
         return []

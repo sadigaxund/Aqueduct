@@ -49,10 +49,27 @@ def _stamp_applied(store, patch_id, sig_hash, error_class="E", where="m1", msg="
             " signature, signature_coarse, error_class, where_field, "
             " normalized_message, rationale, ops, created_at, updated_at) "
             "VALUES (?, ?, ?, 'applied', 'llm', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [patch_id, f"/obj/{patch_id}.json", "bp1",
+            [patch_id, f"/obj/{patch_id}.json", "b1",
              sig_hash, sig_hash[:8], error_class, where, msg,
              "fix", '["set_module_config_key"]',
              "2025-01-01T00:00:00", "2025-01-01T00:00:00"],
+        )
+
+
+def _stamp_applied_for_blueprint(store, patch_id, sig_hash, blueprint_id,
+                                 error_class="E", where="m1", msg="x",
+                                 created_at="2025-01-01T00:00:00"):
+    with store.connect() as cur:
+        cur.execute(
+            "INSERT OR REPLACE INTO patch_index "
+            "(patch_id, object_key, blueprint_id, status, source, "
+            " signature, signature_coarse, error_class, where_field, "
+            " normalized_message, rationale, ops, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'applied', 'llm', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [patch_id, f"/obj/{patch_id}.json", blueprint_id,
+             sig_hash, sig_hash[:8], error_class, where, msg,
+             "fix", '["set_module_config_key"]',
+             created_at, created_at],
         )
 
 
@@ -149,3 +166,48 @@ class TestBuildPromptCoaching:
         result = build_prompt(ctx, tmp_path, coaching=False, obs_store=None)
         assert "system" in result
         assert "user" in result
+
+
+class TestCoachingBlueprintFilter:
+    def test_blueprint_filter_prevents_cross_contamination(self, tmp_path):
+        from aqueduct.agent.memory import find_coaching_examples
+        from aqueduct.agent.signature import from_failure_context
+
+        obs_store = _make_obs_store(tmp_path / "obs.db")
+
+        bp_a = "blueprint-a"
+        bp_b = "blueprint-b"
+        sig_a = "sig-a" * 8
+        sig_b = "sig-b" * 8
+
+        _stamp_applied_for_blueprint(obs_store, "fix-a1", sig_a, bp_a)
+        _stamp_applied_for_blueprint(obs_store, "fix-a2", sig_a, bp_a, created_at="2025-01-02T00:00:00")
+        _stamp_applied_for_blueprint(obs_store, "fix-b1", sig_b, bp_b)
+
+        results_a = find_coaching_examples(
+            obs_store, sig_a, sig_a[:8], "AnalysisException", blueprint_id=bp_a,
+        )
+        patch_ids = [e.patch_id for e in results_a]
+        assert "fix-a1" in patch_ids
+        assert "fix-a2" in patch_ids
+        assert "fix-b1" not in patch_ids, "cross-blueprint contamination"
+
+        results_b = find_coaching_examples(
+            obs_store, sig_b, sig_b[:8], "AnalysisException", blueprint_id=bp_b,
+        )
+        assert len(results_b) == 1
+        assert results_b[0].patch_id == "fix-b1"
+
+    def test_no_blueprint_id_returns_all(self, tmp_path):
+        from aqueduct.agent.memory import find_coaching_examples
+
+        obs_store = _make_obs_store(tmp_path / "obs.db")
+        _stamp_applied_for_blueprint(obs_store, "fix-a1", "s1" * 8, "bp-a")
+        _stamp_applied_for_blueprint(obs_store, "fix-b1", "s2" * 8, "bp-b")
+
+        results = find_coaching_examples(
+            obs_store, "s1" * 8, "", "AnalysisException",
+        )
+        patch_ids = [e.patch_id for e in results]
+        assert "fix-a1" in patch_ids
+        assert "fix-b1" in patch_ids
