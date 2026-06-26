@@ -66,7 +66,7 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
     flag_value="text",
     default=None,
     type=click.Choice(["text", "json"]),
-    help="Print the LLM prompt that would be sent and exit without calling "
+    help="Print the Agent prompt that would be sent and exit without calling "
     "the model. Bare = text; `--print-prompt json` for JSON.",
 )
 @click.option(
@@ -89,7 +89,7 @@ def heal(
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
-    """Manually trigger LLM self-healing for a failed run.
+    """Manually trigger Agent self-healing for a failed run.
 
     \b
     aqueduct heal <run_id>
@@ -146,7 +146,7 @@ def heal(
 
     if resolved_model is None and not print_prompt:
         click.echo(
-            "✗ no LLM agent configured — set agent.model in aqueduct.yml",
+            "✗ no agent configured — set agent.model in aqueduct.yml",
             err=True,
         )
         sys.exit(exit_codes.CONFIG_ERROR)
@@ -296,7 +296,7 @@ def heal(
 
     if patch is None:
         click.echo(
-            f"✗ LLM failed to produce a valid patch after {agent_result.attempts} attempt(s) "
+            f"✗ Agent failed to produce a valid patch after {agent_result.attempts} attempt(s) "
             f"(stop_reason={agent_result.stop_reason})",
             err=True,
         )

@@ -93,7 +93,7 @@ def test_aggressive_mode_invalid_patch_stops_loop(
          patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✗ LLM patch produces invalid Blueprint, discarding" in result.output
+    assert "✗ Agent patch produces invalid Blueprint, discarding" in result.output
     # Loop should have stopped after the first invalid patch
     assert mock_gen_patch.call_count == 1
     # Blueprint should NOT have been updated (check its content)
@@ -148,10 +148,10 @@ def test_aggressive_mode_fails_then_continues(
          patch("aqueduct.cli._stage_failed_patch") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✗ LLM patch did not fix the issue (1/2)" in result.output
-    assert "✗ LLM patch did not fix the issue (2/2)" in result.output
+    assert "✗ Agent patch did not fix the issue (1/2)" in result.output
+    assert "✗ Agent patch did not fix the issue (2/2)" in result.output
     # 1.1.0 — renamed to max_patches in the log message.
-    assert "⚠  LLM: max_patches=2 reached" in result.output
+    assert "⚠  Agent: max_patches=2 reached" in result.output
     
     assert mock_gen_patch.call_count == 2
     assert mock_stage.call_count == 2
@@ -191,7 +191,7 @@ def test_aggressive_mode_succeeds_stops_loop(
          patch("aqueduct.cli._write_patch_to_blueprint") as mock_write:
         result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✓ LLM patch validated and applied (1/2)" in result.output
+    assert "✓ Agent patch validated and applied (1/2)" in result.output
     assert mock_gen_patch.call_count == 1
     assert mock_write.call_count == 1
 
@@ -228,8 +228,8 @@ def test_trigger_agent_escalation(
     with patch("aqueduct.agent.stage_patch_for_human") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint)])
     
-    assert "LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
-    assert "✎ LLM patch staged" in result.output
+    assert "Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
+    assert "✎ Agent patch staged" in result.output
     assert mock_stage.call_count == 1
 
 @patch("aqueduct.executor.get_executor")
@@ -252,7 +252,7 @@ def test_trigger_agent_false_disabled_breaks(
     
     result = runner.invoke(cli, ["run", str(base_blueprint)])
     
-    assert "LLM self-healing" not in result.output
+    assert "Agent self-healing" not in result.output
     assert mock_gen_patch.call_count == 0
 
 @patch("aqueduct.config.load_config")
@@ -323,5 +323,5 @@ def test_trigger_agent_stays_human(
     
     # Should NOT have the override message
     assert "overriding approval_mode=disabled" not in result.output
-    assert "✎ LLM patch staged" in result.output
+    assert "✎ Agent patch staged" in result.output
     assert mock_stage.call_count == 1

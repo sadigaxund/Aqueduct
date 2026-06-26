@@ -95,7 +95,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
         with patch("aqueduct.agent.memory.find_pending", return_value=hit):
             res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
-    assert "skipping LLM" in res.output
+    assert "skipping Agent" in res.output
     assert res.exit_code == HEAL_PENDING
 
 
@@ -173,7 +173,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                     )
                     res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
-    assert "falling through to LLM" in res.output
+    assert "falling through to Agent" in res.output
     assert mock_gap.called
     assert res.exit_code == 0
 

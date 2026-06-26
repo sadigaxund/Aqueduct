@@ -610,7 +610,7 @@ def _setup_surveyor(
             )
         if _sandbox_mode == "off" and _is_multi_patch:
             click.echo(
-                "\u26a0 DANGER COMBO: sandbox_mode=off + max_patches > 1 \u2014 every LLM patch "
+                "\u26a0 DANGER COMBO: sandbox_mode=off + max_patches > 1 \u2014 every Agent patch "
                 f"applies to real data without pre-validation, up to max_patches="
                 f"{_max_patches} times per failure. Use only when you "
                 "fully trust the model and blueprint scope is tiny.",
@@ -701,6 +701,23 @@ def _setup_surveyor(
     resolved_agent_cascade = _rac.cascade
     resolved_sandbox_master_url = cfg.agent.sandbox_master_url
 
+    # ── Self-healing reachability pre-check (upfront) ────────────────────────────
+    # Surface a misconfigured agent at startup rather than only at heal time. Gated
+    # on "configured but unreachable": a model is set (intent to self-heal) but no
+    # API key / base_url to actually reach it. Stays silent when no agent is
+    # configured at all (healing off by design — not a misconfiguration).
+    import aqueduct.cli as _aqcli
+    if resolved_agent_model is not None and not _aqcli._agent_usable(
+        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
+    ):
+        _warn_mark = click.style("⚠", fg="yellow", bold=True)
+        click.echo(
+            f"{_warn_mark}  self-healing configured (agent.model={resolved_agent_model}) but the "
+            f"agent is not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
+            "failures will NOT be auto-healed. Set the API key env var or agent.base_url.",
+            err=True,
+        )
+
     # ── Register agent API key for redaction ─────────────────────────────────────
     if resolved_agent_api_key:
         from aqueduct.redaction import register as _register_secret
@@ -711,7 +728,7 @@ def _setup_surveyor(
     max_patches = manifest.agent.max_patches
     if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
         click.echo(
-            f"\u26a0  multi-patch mode \u2014 LLM will attempt up to {max_patches} patch(es). "
+            f"\u26a0  multi-patch mode \u2014 Agent will attempt up to {max_patches} patch(es). "
             "Each patch is validated in-memory before being written to Blueprint. "
             "Review patches/applied/ after the run.",
             err=True,
@@ -1189,7 +1206,7 @@ def run(
                 effective_mode = "human"
                 if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
                     click.echo(
-                        "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
+                        "  ↻ Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
                     )
 
@@ -1198,7 +1215,7 @@ def run(
 
             if not _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
                 click.echo(
-                    f"  ⚠  LLM not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
+                    f"  ⚠  Agent not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
                     "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
                     err=True,
                 )
@@ -1206,7 +1223,7 @@ def run(
 
             if patch_count >= max_patches:
                 click.echo(
-                    f"⚠  LLM: max_patches={max_patches} reached, stopping self-healing loop",
+                    f"⚠  Agent: max_patches={max_patches} reached, stopping self-healing loop",
                     err=True,
                 )
                 break
@@ -1217,7 +1234,7 @@ def run(
             )
             if not _should_heal:
                 click.echo(
-                    f"  ⊘  LLM guardrail blocked healing: {_no_heal_reason}",
+                    f"  ⊘  Agent guardrail blocked healing: {_no_heal_reason}",
                     err=True,
                 )
                 break
@@ -1230,9 +1247,9 @@ def run(
                 _recent = surveyor.count_recent_heal_attempts(within_minutes=60)
                 if _recent >= _heal_cap:
                     click.echo(
-                        f"  ⊘  LLM rate-limit reached: {_recent} healing attempt(s) "
+                        f"  ⊘  Agent rate-limit reached: {_recent} healing attempt(s) "
                         f"in the last 60 minutes (max_heal_attempts_per_hour={_heal_cap}). "
-                        "Run ends without further LLM calls. Inspect healing_outcomes in observability.db.",
+                        "Run ends without further Agent calls. Inspect healing_outcomes in observability.db.",
                         err=True,
                     )
                     break
@@ -1258,7 +1275,7 @@ def run(
                     _rel_pending = f"{_patch_store.location_label}/{_pending_hit.object_key}"
                     click.echo(
                         f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
-                        f"this failure signature ({_sig_exact.hash}) — skipping LLM (0 tokens)\n"
+                        f"this failure signature ({_sig_exact.hash}) — skipping Agent (0 tokens)\n"
                         f"    Review: aqueduct patch pull {_pending_hit.patch_id}  "
                         f"(body: {_rel_pending})",
                         err=True,
@@ -1299,7 +1316,7 @@ def run(
                         _replay_patch = None
                         click.echo(
                             f"  ⚠ heal cache: archived patch {_candidate.patch_id} no longer "
-                            f"parses ({_re_exc}) — falling through to LLM",
+                            f"parses ({_re_exc}) — falling through to Agent",
                             err=True,
                         )
                     if _replay_patch is not None:
@@ -1322,7 +1339,7 @@ def run(
                                 _replay_ok = False
                                 click.echo(
                                     f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
-                                    f"sandbox replay ({_rg3.detail}) — falling through to LLM",
+                                    f"sandbox replay ({_rg3.detail}) — falling through to Agent",
                                     err=True,
                                 )
                             else:
@@ -1357,7 +1374,7 @@ def run(
                 else f"{patch_count + 1}"
             )
             click.echo(
-                f"  ↻ LLM self-healing ({_attempt_display})  "
+                f"  ↻ Agent self-healing ({_attempt_display})  "
                 f"failed_module={failure_ctx.failed_module}",
                 err=True,
             )
@@ -1582,7 +1599,7 @@ def run(
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
             if patch is None:
-                click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
+                click.echo("  ✗ Agent: failed to generate valid patch, stopping", err=True)
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
                 if on_hf == "stage":
                     click.echo(
@@ -1622,7 +1639,7 @@ def run(
             _conf_threshold = manifest.agent.confidence_threshold
             if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
                 click.echo(
-                    f"  ↑ LLM patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
+                    f"  ↑ Agent patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
                     err=True,
                 )
                 effective_mode = "human"
@@ -1637,7 +1654,7 @@ def run(
                 and effective_mode in ("auto", "aggressive")
             ):
                 click.echo(
-                    f"  ↑ LLM response needed mechanical recovery "
+                    f"  ↑ Agent response needed mechanical recovery "
                     f"({', '.join(agent_result.recovery_applied)}) — "
                     f"downgrading to human review for safety",
                     err=True,
@@ -1657,7 +1674,7 @@ def run(
                 guardrail_err = f"Unexpected guardrail error: {_gx}"
             if guardrail_err:
                 last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
-                click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
+                click.echo(f"  ✗ Agent patch blocked by guardrail: {guardrail_err}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                                       source=_patch_source,
@@ -1690,7 +1707,7 @@ def run(
                 rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
                 rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
-                    f"  ✎ LLM patch staged → {rel_patch}\n"
+                    f"  ✎ Agent patch staged → {rel_patch}\n"
                     f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
                     err=True,
                 )
@@ -1767,7 +1784,7 @@ def run(
                     # Non-interactive (auto) gate rejection → exit VALIDATION_GATE(4).
                     patch_rejected_by_gate = True
                     click.echo(
-                        f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
+                        f"  ✗ Agent patch failed sandbox replay: {_g3.detail}",
                         err=True,
                     )
                     surveyor.record_healing_outcome(
@@ -1795,7 +1812,7 @@ def run(
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ LLM patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
+                        f"  ✓ Agent patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
                         f"→ {blueprint}",
                         err=True,
                     )
@@ -1812,7 +1829,7 @@ def run(
 
                 new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
-                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
+                    click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     break
                 try:
                     result2 = execute(
@@ -1843,11 +1860,11 @@ def run(
                 if patch_success:
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
+                    click.echo(f"  ✓ Agent patch validated and applied → {blueprint}", err=True)
                     result = result2
                     failure_ctx = failure_ctx2
                 else:
-                    click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
+                    click.echo("  ✗ Agent patch did not fix the issue, Blueprint unchanged", err=True)
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
                         obs_store=_obs_store, patch_store=_patch_store,
@@ -1939,7 +1956,7 @@ def run(
 
                 new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
-                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
+                    click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
@@ -1981,7 +1998,7 @@ def run(
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                        f"  ✓ Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
                     )
                     result = result2
@@ -1993,7 +2010,7 @@ def run(
                         + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
                     )
                     click.echo(
-                        f"  ✗ LLM patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                        f"  ✗ Agent patch did not fix the issue ({patch_count}/{max_patches})", err=True,
                     )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,

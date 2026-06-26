@@ -42,7 +42,7 @@ edges: []
         
         result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
-    assert "LLM rate-limit reached" in result.output
+    assert "Agent rate-limit reached" in result.output
     assert result.exit_code == 2   # DATA_OR_RUNTIME: spend-cap doesn't stage a patch
 
 @pytest.mark.spark
@@ -83,7 +83,7 @@ edges: []
         result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     assert patch_called is True
-    assert "LLM rate-limit reached" not in result.output
+    assert "Agent rate-limit reached" not in result.output
 
 @pytest.mark.spark
 @pytest.mark.integration
@@ -128,5 +128,5 @@ danger:
         result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     # If BP wins, 2 >= 1 -> BLOCKS
-    assert "LLM rate-limit reached" in result.output
+    assert "Agent rate-limit reached" in result.output
     assert "max_heal_attempts_per_hour=1" in result.output
