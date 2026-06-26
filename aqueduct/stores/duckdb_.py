@@ -23,6 +23,7 @@ from aqueduct.stores.base import (
     RelationalCursor,
     _RelationalDepotMixin,
 )
+from aqueduct.stores.ddl import DEPOT_KV_DDL
 
 logger = logging.getLogger(__name__)
 
@@ -89,12 +90,6 @@ class DuckDBObservabilityStore(_DuckDBRelational, ObservabilityStore):
 class DuckDBDepotStore(_DuckDBRelational, _RelationalDepotMixin, DepotStore):
     """Depot KV backed by DuckDB. Same single-writer constraint as observability/lineage."""
 
-    _DDL = """
-        CREATE TABLE IF NOT EXISTS depot_kv (
-            key        VARCHAR PRIMARY KEY,
-            value      VARCHAR NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """
+    _DDL = DEPOT_KV_DDL
 
 

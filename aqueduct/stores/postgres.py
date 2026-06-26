@@ -34,7 +34,13 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
-from aqueduct.stores.base import DepotStore, ObservabilityStore, RelationalCursor, _RelationalDepotMixin
+from aqueduct.stores.base import (
+    DepotStore,
+    ObservabilityStore,
+    RelationalCursor,
+    _RelationalDepotMixin,
+)
+from aqueduct.stores.ddl import DEPOT_KV_DDL
 
 logger = logging.getLogger(__name__)
 
@@ -159,15 +165,7 @@ class PostgresObservabilityStore(_PostgresRelational, ObservabilityStore):
 
 class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore):
     _SCHEMA = "depot"
-
-
-    _DDL = """
-        CREATE TABLE IF NOT EXISTS depot_kv (
-            key        VARCHAR PRIMARY KEY,
-            value      VARCHAR NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL
-        )
-    """
+    _DDL = DEPOT_KV_DDL
 
     def kv_get(self, key: str, default: str = "") -> str:
         try:

@@ -176,6 +176,7 @@ modules.
 | Module | What it owns |
 |--------|--------------|
 | `base.py` | ABCs for `ObservabilityStore`, `LineageStore`, `DepotStore` + `RelationalCursor` (`?` → `%s`), `StoreBundle` factory |
+| `ddl.py` | Shared **cross-backend** store DDL (currently just `DEPOT_KV_DDL` — the `depot_kv` schema bound by both `DuckDBDepotStore._DDL` and `PostgresDepotStore._DDL`, single source of truth). DDL owned by one layer stays with its owner (`patch_index` in `patch/index.py`, observability tables in `surveyor/ddl.py`, `benchmark_results` in `surveyor/benchmark_store.py`) |
 | `duckdb_.py` | DuckDB implementations (single-file embeddable) |
 | `postgres.py` | Postgres implementations (connection-pool dedup, schema-per-store) |
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
