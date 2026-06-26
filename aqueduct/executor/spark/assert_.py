@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.models import _add_module_warning
 from aqueduct.executor.spark.error_columns import (
     AQ_ERROR_MODULE,
     AQ_ERROR_MSG,
@@ -253,7 +254,8 @@ def _handle_fail(
     elif action == AssertOnFailAction.TRIGGER_AGENT:
         raise AssertError(message, rule_id=rule_type, trigger_agent=True, error_type=error_type)
     elif action == AssertOnFailAction.WARN:
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
     elif action == AssertOnFailAction.WEBHOOK:
         if webhook_url:
             _fire_rule_webhook(
@@ -261,21 +263,38 @@ def _handle_fail(
             )
         else:
             logger.warning(
-                "[%s] Assert %r on_fail=webhook but no url specified.", module_id, rule_type
+                "[runtime_assert_webhook] [%s] Assert [%s] on_fail=webhook but no url specified.",
+                module_id, rule_type,
+            )
+            _add_module_warning(
+                "runtime_assert_webhook",
+                f"Assert [{rule_type}] on_fail=webhook but no url specified.",
             )
     elif action == AssertOnFailAction.QUARANTINE:
         # Row-level only — handled by _apply_row_rule; aggregate rules treat as warn
         logger.warning(
-            "[%s] Assert %r on_fail=quarantine used on aggregate rule; treated as warn.",
+            "[runtime_assert_quarantine_aggregate] [%s] Assert [%s] on_fail=quarantine used "
+            "on aggregate rule; treated as warn.",
             module_id, rule_type,
         )
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        _add_module_warning(
+            "runtime_assert_quarantine_aggregate",
+            f"Assert [{rule_type}] on_fail=quarantine used on aggregate rule; treated as warn.",
+        )
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
     else:
         logger.warning(
-            "[%s] Assert %r unknown on_fail action %r; treating as warn.",
+            "[runtime_assert_unknown_action] [%s] Assert [%s] unknown on_fail action %r; "
+            "treating as warn.",
             module_id, rule_type, action,
         )
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        _add_module_warning(
+            "runtime_assert_unknown_action",
+            f"Assert [{rule_type}] unknown on_fail action {action!r}; treating as warn.",
+        )
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
 
 
 # ── Phase 1: schema_match ─────────────────────────────────────────────────────
@@ -544,7 +563,8 @@ def _apply_row_rule(
     elif rtype == AssertRuleType.CUSTOM:
         fn_path = rule.get("fn", "")
         if not fn_path:
-            logger.warning("[%s] custom rule missing fn path; skipped.", module_id)
+            logger.warning("[runtime_assert_custom_missing_fn] [%s] custom rule missing fn path; skipped.", module_id)
+            _add_module_warning("runtime_assert_custom_missing_fn", "custom rule missing fn path; skipped.")
             return df, None
 
         try:
@@ -553,7 +573,8 @@ def _apply_row_rule(
         except AssertError:
             raise
         except Exception as exc:
-            logger.warning("[%s] custom rule %r raised: %s", module_id, fn_path, exc)
+            logger.warning("[runtime_assert_custom_error] [%s] custom rule %r raised: %s", module_id, fn_path, exc)
+            _add_module_warning("runtime_assert_custom_error", f"custom rule {fn_path!r} raised: {exc}")
             return df, None
 
         if not result.get("passed", True):
@@ -653,4 +674,5 @@ def _fire_rule_webhook(
         }
         fire_webhook(config, full_payload)
     except Exception as exc:
-        logger.warning("[%s] Assert webhook fire failed: %s", module_id, exc)
+        logger.warning("[runtime_assert_webhook_fire_failed] [%s] Assert webhook fire failed: %s", module_id, exc)
+        _add_module_warning("runtime_assert_webhook_fire_failed", f"Assert webhook fire failed: {exc}")

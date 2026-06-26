@@ -139,11 +139,12 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
         if table:
-            logger.warning(
-                "[%s] register_as_table=%r ignored — module already writes to a "
-                "catalog table via 'table:'. Use 'table:' to write directly.",
-                module.id, register_as,
-            )
+                logger.warning(
+                    "[runtime_egress_register_as_table_ignored] [%s] "
+                    "register_as_table=%r ignored — module already writes to a "
+                    "catalog table via 'table:'. Use 'table:' to write directly.",
+                    module.id, register_as,
+                )
         else:
             _register_external_table(df, module.id, register_as, fmt, path)
 
@@ -171,7 +172,8 @@ def _register_external_table(
         logger.info("Registered external table %r at %s", table_name, path)
     except Exception as exc:
         logger.warning(
-            "[%s] register_as_table %r failed (non-fatal): %s",
+            "[runtime_egress_register_table_failed] [%s] register_as_table %r "
+            "failed (non-fatal): %s",
             module_id, table_name, exc,
         )
 
@@ -390,8 +392,8 @@ def _enforce_on_new_columns(
         )
     if policy == "alert":
         logger.warning(
-            "[%s] on_new_columns=alert: schema drift — new column(s) %s added to "
-            "the target. Absorbing (mergeSchema).",
+            "[runtime_egress_new_columns] [%s] on_new_columns=alert: schema "
+            "drift — new column(s) %s added to the target. Absorbing (mergeSchema).",
             module.id, new_cols,
         )
     return True  # allow + alert both evolve the schema
@@ -482,7 +484,7 @@ def run_maintenance(
     try:
         ops = build_maintenance_ops(fmt, path, table, maintenance_cfg)
     except EgressError as exc:
-        logger.warning("[%s] maintenance skipped (non-fatal): %s", module_id, exc)
+        logger.warning("[runtime_egress_maintenance_skipped] [%s] maintenance skipped (non-fatal): %s", module_id, exc)
         return result
 
     for slot, label, sql in ops:
@@ -492,7 +494,7 @@ def run_maintenance(
             result[f"{slot}_ms"] = int((time.monotonic() - t0) * 1000)
             logger.info("[%s] %s completed in %dms", module_id, label, result[f"{slot}_ms"])
         except Exception as exc:
-            logger.warning("[%s] %s failed (non-fatal): %s", module_id, label, exc)
+            logger.warning("[runtime_egress_maintenance_failed] [%s] %s failed (non-fatal): %s", module_id, label, exc)
 
     return result
 

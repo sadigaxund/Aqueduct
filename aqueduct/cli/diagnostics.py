@@ -22,6 +22,7 @@ from aqueduct.cli import (
     _sniff_file_kind,
     cli,
 )
+from aqueduct.cli.output import emit
 
 
 @cli.command()
@@ -63,12 +64,15 @@ def validate(
             targets = [default_cfg]
         else:
             if fmt == "json":
-                click.echo(json.dumps({
-                    "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
-                    "summary": {"total": 0, "valid": 0, "invalid": 0, "passed": False},
-                    "files": [],
-                    "error": "no file given and no aqueduct.yml in CWD",
-                }, indent=2))
+                emit(
+                    {
+                        "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
+                        "summary": {"total": 0, "valid": 0, "invalid": 0, "passed": False},
+                        "files": [],
+                        "error": "no file given and no aqueduct.yml in CWD",
+                    },
+                    fmt="json",
+                )
             else:
                 click.echo("✗ no file given and no aqueduct.yml in CWD", err=True)
             sys.exit(exit_codes.CONFIG_ERROR)
@@ -111,13 +115,13 @@ def validate(
                 "spark_config": cfg.spark_config or {},
             })
             if text:
-                click.echo(f"✓ {path}  [engine config]")
-                click.echo(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}")
-                click.echo(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.depot.path}")
-                click.echo(f"  secrets: provider={cfg.secrets.provider}")
-                click.echo(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}")
+                emit(f"✓ {path}  [engine config]", fmt="text", redact=True)
+                emit(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}", fmt="text", redact=True)
+                emit(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.depot.path}", fmt="text", redact=True)
+                emit(f"  secrets: provider={cfg.secrets.provider}", fmt="text", redact=True)
+                emit(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}", fmt="text", redact=True)
                 if cfg.spark_config:
-                    click.echo(f"  spark_config: {json.dumps(cfg.spark_config)}")
+                    emit(f"  spark_config: {json.dumps(cfg.spark_config)}", fmt="text", redact=True)
 
         elif kind == "blueprint" or kind is None:
             # Unknown header → attempt blueprint parse (most common case);
@@ -150,16 +154,19 @@ def validate(
 
     if fmt == "json":
         _checked = [r for r in file_results if r["valid"] is not None]
-        click.echo(json.dumps({
-            "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
-            "summary": {
-                "total": len(file_results),
-                "valid": sum(1 for r in _checked if r["valid"]),
-                "invalid": sum(1 for r in _checked if not r["valid"]),
-                "passed": not any_fail,
+        emit(
+            {
+                "schema_version": _VALIDATE_JSON_SCHEMA_VERSION,
+                "summary": {
+                    "total": len(file_results),
+                    "valid": sum(1 for r in _checked if r["valid"]),
+                    "invalid": sum(1 for r in _checked if not r["valid"]),
+                    "passed": not any_fail,
+                },
+                "files": file_results,
             },
-            "files": file_results,
-        }, indent=2))
+            fmt="json",
+        )
 
     sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
 
@@ -213,12 +220,15 @@ def lint_cmd(
         bp = parse(blueprint, profile=profile)
     except ParseError as exc:
         if fmt == "json":
-            click.echo(json.dumps({
-                "schema_version": LINT_SCHEMA_VERSION,
-                "blueprint": str(blueprint),
-                "error": f"parse error: {exc}",
-                "findings": [],
-            }, indent=2))
+            emit(
+                {
+                    "schema_version": LINT_SCHEMA_VERSION,
+                    "blueprint": str(blueprint),
+                    "error": f"parse error: {exc}",
+                    "findings": [],
+                },
+                fmt="json",
+            )
         else:
             click.echo(f"✗ {blueprint}: parse error — {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
@@ -233,26 +243,29 @@ def lint_cmd(
     has_blocking = n_error > 0
 
     if fmt == "json":
-        click.echo(json.dumps({
-            "schema_version": LINT_SCHEMA_VERSION,
-            "blueprint": bp.id,
-            "strict": strict,
-            "summary": {
-                "total": len(findings),
-                "error": n_error,
-                "warn": n_warn,
-                "passed": not has_blocking,
+        emit(
+            {
+                "schema_version": LINT_SCHEMA_VERSION,
+                "blueprint": bp.id,
+                "strict": strict,
+                "summary": {
+                    "total": len(findings),
+                    "error": n_error,
+                    "warn": n_warn,
+                    "passed": not has_blocking,
+                },
+                "findings": [
+                    {
+                        "rule_id": f.rule_id,
+                        "severity": _sev(f),
+                        "module_id": f.module_id,
+                        "message": f.message,
+                    }
+                    for f in findings
+                ],
             },
-            "findings": [
-                {
-                    "rule_id": f.rule_id,
-                    "severity": _sev(f),
-                    "module_id": f.module_id,
-                    "message": f.message,
-                }
-                for f in findings
-            ],
-        }, indent=2))
+            fmt="json",
+        )
     else:
         if not findings:
             click.echo(click.style(f"✓ {blueprint}: no lint findings", fg="green"))
@@ -496,25 +509,26 @@ def doctor(
 
     # ── JSON output (no row collapsing — every check is emitted) ──────────────
     if fmt == "json":
-        import json as _json
-        _DOCTOR_JSON_SCHEMA_VERSION = "1.0"
         counts = {"ok": 0, "fail": 0, "warn": 0, "skip": 0}
         for r in results:
             counts[r.status] = counts.get(r.status, 0) + 1
-        click.echo(_json.dumps({
-            "schema_version": _DOCTOR_JSON_SCHEMA_VERSION,
-            "summary": {**counts, "total": len(results), "passed": not any_fail},
-            "checks": [
-                {
-                    "name": r.name,
-                    "status": r.status,
-                    "group": _group_of(r),
-                    "detail": r.detail,
-                    "elapsed_ms": r.elapsed_ms,
-                }
-                for r in results
-            ],
-        }, indent=2))
+        emit(
+            {
+                "schema_version": "1.0",
+                "summary": {**counts, "total": len(results), "passed": not any_fail},
+                "checks": [
+                    {
+                        "name": r.name,
+                        "status": r.status,
+                        "group": _group_of(r),
+                        "detail": r.detail,
+                        "elapsed_ms": r.elapsed_ms,
+                    }
+                    for r in results
+                ],
+            },
+            fmt="json",
+        )
         sys.exit(exit_codes.CONFIG_ERROR if any_fail else exit_codes.SUCCESS)
 
     # ── Framed header (text mode only, matches aqueduct run style) ─────────────

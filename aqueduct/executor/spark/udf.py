@@ -145,9 +145,10 @@ def _patch_pyspark_cloudpickle() -> None:
         import cloudpickle as system_cp  # system-installed (pip install cloudpickle)
     except ImportError:
         logger.warning(
-            "%s detected but system cloudpickle is not installed. "
-            "Python UDFs will fail with infinite recursion / segfault during "
-            "serialization. Fix: `pip install cloudpickle` (or run on Python ≤ 3.12).",
+            "[runtime_udf_cloudpickle_missing] %s detected but system "
+            "cloudpickle is not installed. Python UDFs will fail with infinite "
+            "recursion / segfault during serialization. Fix: `pip install "
+            "cloudpickle` (or run on Python ≤ 3.12).",
             py_label,
         )
         return
@@ -166,8 +167,9 @@ def _patch_pyspark_cloudpickle() -> None:
 
     if bundled_cp is None or bundled_path is None:
         logger.warning(
-            "%s detected and `pyspark.cloudpickle` is not importable under any "
-            "known path (tried: pyspark.cloudpickle, pyspark.cloudpickle_fast, "
+            "[runtime_udf_cloudpickle_not_importable] %s detected and "
+            "`pyspark.cloudpickle` is not importable under any known path "
+            "(tried: pyspark.cloudpickle, pyspark.cloudpickle_fast, "
             "pyspark._cloudpickle). Skipping the cloudpickle compatibility "
             "patch — Python UDFs may fail with cryptic recursion errors. "
             "Pin pyspark to a version that bundles cloudpickle at the expected "
@@ -183,10 +185,11 @@ def _patch_pyspark_cloudpickle() -> None:
     missing = [a for a in required_attrs if not hasattr(bundled_cp, a)]
     if missing:
         logger.warning(
-            "%s detected; `%s` was imported but lacks expected attributes %s. "
-            "Aqueduct cannot patch cloudpickle — Python UDFs may fail with "
-            "recursion errors. Likely a future PySpark restructured the "
-            "module; report this with the installed pyspark version.",
+            "[runtime_udf_cloudpickle_missing_attrs] %s detected; `%s` was "
+            "imported but lacks expected attributes %s. Aqueduct cannot patch "
+            "cloudpickle — Python UDFs may fail with recursion errors. Likely "
+            "a future PySpark restructured the module; report this with the "
+            "installed pyspark version.",
             py_label, bundled_path, missing,
         )
         return
@@ -197,8 +200,9 @@ def _patch_pyspark_cloudpickle() -> None:
         bundled_ver = tuple(int(x) for x in str(bundled_ver_str).split(".")[:2])
     except (AttributeError, ValueError) as exc:
         logger.warning(
-            "%s detected; could not compare cloudpickle versions "
-            "(system=%r, bundled=%r): %s. Skipping patch.",
+            "[runtime_udf_cloudpickle_version_mismatch] %s detected; could not "
+            "compare cloudpickle versions (system=%r, bundled=%r): %s. "
+            "Skipping patch.",
             py_label, getattr(system_cp, "__version__", "?"),
             getattr(bundled_cp, "__version__", "?"), exc,
         )

@@ -19,13 +19,14 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
 
 def _print_prompt(prompt: dict, fmt: str) -> None:
     """Print system+user prompt to stdout in the requested format."""
     if fmt == "json":
-        click.echo(json.dumps(prompt, indent=2))
+        emit(prompt, fmt="json")
     else:
         sep = "─" * 72
         click.echo(f"## SYSTEM PROMPT\n{sep}")

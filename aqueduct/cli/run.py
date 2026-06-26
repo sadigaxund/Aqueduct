@@ -394,6 +394,7 @@ class _CompileResult:
     depots_wrapped: dict
     execution_date: object
     cli_overrides: dict
+    compile_warnings: list  # captured AQ-WARN records, emitted after the run header
 
 
 def _do_compile(
@@ -466,7 +467,7 @@ def _do_compile(
 
     # ── Compile ────────────────────────────────────────────────────────────────
     try:
-        manifest = _compile_with_warnings(
+        manifest, compile_warnings = _compile_with_warnings(
             compiler_compile,
             bp,
             blueprint_path=_P(blueprint),
@@ -479,6 +480,7 @@ def _do_compile(
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
             _verbose=verbose,
+            _defer=True,  # emit after the run header (tier-2 blueprint warnings)
         )
     except CompileError as exc:
         _err(f"compile error: {exc}")
@@ -491,6 +493,7 @@ def _do_compile(
         depots_wrapped=depots_wrapped,
         execution_date=execution_date,
         cli_overrides=cli_overrides,
+        compile_warnings=compile_warnings,
     )
 
 
@@ -542,6 +545,7 @@ def _setup_surveyor(
     resolved_webhook,
     bundle,
     depot,
+    compile_warnings,
 ):
     """Phase 3 — warnings, gates, surveyor creation, engine session → ``_SurveyorSetupResult``."""
     import sys as _sys
@@ -679,8 +683,8 @@ def _setup_surveyor(
         from aqueduct.cli import _rule
         _r = click.style(_rule(), dim=True)
     from aqueduct.cli.style import emit_warnings as _emit_warnings
-    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
 
+    # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
     click.echo(_r)
     _arrow = click.style('\u25b6', fg='cyan', bold=True)
     _bp_label = click.style(manifest.blueprint_id, bold=True)
@@ -691,6 +695,12 @@ def _setup_surveyor(
         f"{selector_note}{exec_date_note}"
     )
     click.echo(_r)
+
+    # Tier 2 \u2014 blueprint + session warnings AFTER the header (the header names the
+    # blueprint they are about). Engine/config-level warnings already printed
+    # above the header; runtime probe/assert warnings come later, during execution.
+    _emit_warnings(compile_warnings, verbose=verbose, label="compile:")
+    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
 
     # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
     from aqueduct.cli import resolve_agent_connection
@@ -709,19 +719,34 @@ def _setup_surveyor(
 
     # ── Self-healing reachability pre-check (upfront) ────────────────────────────
     # Surface a misconfigured agent at startup rather than only at heal time. Gated
-    # on "configured but unreachable": a model is set (intent to self-heal) but no
-    # API key / base_url to actually reach it. Stays silent when no agent is
-    # configured at all (healing off by design — not a misconfiguration).
+    # on the blueprint actually OPTING INTO healing — `agent.approval` is set to a
+    # non-disabled mode (human/auto/ci). The default is `disabled` (healing off),
+    # so a blueprint with no `agent:` block — or one that only configures budget/
+    # memory/connection without `approval:` — never triggers this. `agent.model`
+    # always has a default value, so it is NOT a signal of intent.
+    _heal_mode = manifest.agent.approval_mode if manifest.agent else "disabled"
     import aqueduct.cli as _aqcli
-    if resolved_agent_model is not None and not _aqcli._agent_usable(
+    # Cascade connectivity counts: a cascade tier carries its own base_url/api_key
+    # (falling back to the flat agent.* defaults). If ANY tier is reachable, healing
+    # works even when the flat agent.base_url/api_key are unset (ISSUE-045).
+    _flat_usable = _aqcli._agent_usable(
         resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
-    ):
-        _warn_mark = click.style("⚠", fg="yellow", bold=True)
-        click.echo(
-            f"{_warn_mark}  self-healing configured (agent.model={resolved_agent_model}) but the "
-            f"agent is not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
-            "failures will NOT be auto-healed. Set the API key env var or agent.base_url.",
-            err=True,
+    )
+    _cascade_usable = bool(resolved_agent_cascade) and any(
+        _aqcli._agent_usable(
+            resolved_agent_provider,
+            getattr(t, "base_url", None) or resolved_agent_base_url,
+            getattr(t, "api_key", None) or resolved_agent_api_key,
+        )
+        for t in resolved_agent_cascade
+    )
+    if _heal_mode != "disabled" and not _flat_usable and not _cascade_usable:
+        from aqueduct.cli.style import warn as _style_warn
+        _style_warn(
+            f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
+            f"reachable (provider={resolved_agent_provider}, no API key / base_url, and no "
+            "usable cascade tier) — failures will NOT be auto-healed. Set the API key env "
+            "var, agent.base_url, or a cascade tier base_url.",
         )
 
     # ── Register agent API key for redaction ─────────────────────────────────────
@@ -1118,6 +1143,7 @@ def run(
             resolved_webhook=resolved_webhook,
             bundle=bundle,
             depot=depot,
+            compile_warnings=_cr.compile_warnings,
         )
         resolved_store_dir = _ssr.resolved_store_dir
         patches_dir = _ssr.patches_dir
@@ -2092,6 +2118,9 @@ def run(
                 tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
                 line = f"  {icon} {mr.module_id.ljust(_w)}   {tail}".rstrip()
             click.echo(line)
+            for rule_id, msg in mr.warnings:
+                from aqueduct.cli.output import warn as _output_warn
+                _output_warn(rule_id, msg, prefix="   ↳ ", err=False)
 
         if result.status not in ("success", "patched"):
             # Print the outer (user-visible) run_id — that's the join key for

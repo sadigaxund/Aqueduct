@@ -359,7 +359,7 @@ def run_test_file(
 
     tests: list[dict] = raw.get("tests", [])
     if not tests:
-        logger.warning("Test file %s has no test cases.", test_file)
+        logger.warning("[runtime_test_no_cases] Test file %s has no test cases.", test_file)
         return TestSuiteResult(total=0, passed=0, failed=0)
 
     results: list[TestCaseResult] = []

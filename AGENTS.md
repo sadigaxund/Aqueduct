@@ -294,6 +294,7 @@ keep working. Command families live in submodules:
 | `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
 | `diagnostics.py` | `validate`, `lint`, `schema`, `doctor` |
 | `stores.py` | `stores` group (info, migrate) |
+| `output.py` | Consolidated output funnel: `emit()` (structured ``--format``), `warn()` (diagnostic warnings) |
 | `project.py` | `init`, `completion`, `test` |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
@@ -390,6 +391,19 @@ When a string value appears in 3+ files — especially if it's also a pydantic `
 
 ### Dict dispatch over fragile dispatch
 When dispatching on a fixed set of types, prefer a `_DISPATCH` dict (add a type → one line) over a long if-elif chain where adding a type needs surgery in N parallel chains. This is a preference, not a rule — long if-elif chains are defensible when each branch does substantially different work and the type set is stable. The test: "when a new type is added, how many files need changes?" Dict dispatch → 1 file. If-elif → at least the chain file plus any parallel chains (test runner, openlineage, etc.). The existing if-elif chains in `executor.py` and `test_runner.py` are acceptable.
+
+### CLI output speaks ONE vocabulary
+All user-facing output goes through `aqueduct/cli/style.py` — never a raw `print()` and never `click.echo(click.style(...))` with hand-rolled colour/icons in a command. The single vocabulary:
+
+- **Status lines** → `style.error` (`✗` red), `style.success` (`✓` green), `style.warn` (`⚠` whole-line yellow), `style.info` (dim `·` preamble). Do **not** colour only the icon and leave the text plain — that is the bug that produced a bold-yellow `⚠` with white text next to whole-line-yellow warnings.
+- **Diagnostic warnings carry a suppressible `rule_id`.** A *known rule* is emitted as `warnings.warn(AqueductWarning, "[aqueduct:rule_id] message")` so `emit_warnings` renders the grouped `⚠ N warnings` block with `· [rule_id] msg` sub-lines and the user can `warnings.suppress: [rule_id]`. A new compile/config check **must** have a `rule_id`. (Runtime probe/assert warnings fire mid-execution via `logger.warning`, so they print inline — chronological, not grouped — but should still gain a `rule_id` as the warning-code surface is unified; the single entry point lives in `cli/output.py`.)
+- **Errors exit through `exit_codes.*`** (never a bare int — separate rule above).
+- **Logging** in text mode is rendered by `style.StyledLogFormatter` (`⚠`/`✗`/`·`, colour on a TTY only) — never reintroduce a `%(levelname)s:` format or a raw `WARNING:` `click.echo`.
+- **`--format json`** output is structured data only — no colour, no icons, no styling.
+
+Warning lifecycle / placement: **engine/config** warnings print above the `▶` run header, **blueprint/compile + session** warnings below it, **runtime** (probe/assert) warnings during execution. The header is the divider between "setup context" and "this run".
+
+Drift to watch for (grep these before a commit that touches `cli/`): raw `print(` or `click.echo(click.style(...))` with hand-rolled colour in a command, `logger.warning` carrying no `rule_id`, a reintroduced `%(levelname)s:` / raw `WARNING:` log format, bare-int `sys.exit`. The consolidated output funnel lives in `cli/output.py` — compose through `emit()` / `warn()`, not raw `click.echo` / `style.*`.
 
 ## Audit Guide
 

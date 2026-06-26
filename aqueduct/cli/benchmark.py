@@ -19,6 +19,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 from aqueduct.cli.style import error as _error
 
 # ── aqueduct benchmark ────────────────────────────────────────────────────────
@@ -316,7 +317,7 @@ def benchmark(
                         if r.patch is not None else None
                     ),
                 }
-        click.echo(json.dumps(output, indent=2))
+        emit(output, fmt="json")
     else:
         _table = format_benchmark_table(results, model_list)
         click.echo(_table)
@@ -382,19 +383,22 @@ def benchmark(
         if _gate:
             diff_entries = diff_latest(results, bench_store)
             if fmt == "json":
-                click.echo(json.dumps({
-                    "diff": [
-                        {
-                            "scenario_id": e.scenario_id,
-                            "model": e.model,
-                            "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
-                            "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
-                            "regressions": list(e.regressions),
-                            "improvements": list(e.improvements),
-                        }
-                        for e in diff_entries
-                    ],
-                }, indent=2))
+                emit(
+                    {
+                        "diff": [
+                            {
+                                "scenario_id": e.scenario_id,
+                                "model": e.model,
+                                "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                                "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                                "regressions": list(e.regressions),
+                                "improvements": list(e.improvements),
+                            }
+                            for e in diff_entries
+                        ],
+                    },
+                    fmt="json",
+                )
             else:
                 click.echo("")
                 click.echo("Regression diff vs baseline:")
@@ -519,19 +523,20 @@ def benchmark_diff_cmd(
         con.close()
 
     if fmt == "json":
-        click.echo(json.dumps({
-            "diff": [
-                {
-                    "scenario_id": e.scenario_id,
-                    "model": e.model,
-                    "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
-                    "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
-                    "regressions": list(e.regressions),
+        emit(
+            {
+                "diff": [
+                    {
+                        "scenario_id": e.scenario_id,
+                        "model": e.model,
+                        "baseline_prompt_mismatch": e.baseline_prompt_mismatch,
+                        "baseline_recorded_at": e.baseline.recorded_at if e.baseline else None,
+                        "regressions": list(e.regressions),
                     "improvements": list(e.improvements),
                 }
                 for e in entries
             ],
-        }, indent=2))
+        }, fmt="json")
     else:
         click.echo(format_diff_table(entries))
 
@@ -622,6 +627,6 @@ def benchmark_stats_cmd(
 
     stats = compute_stats(store)
     if fmt == "json":
-        click.echo(json.dumps(stats, indent=2))
+        emit(stats, fmt="json")
     else:
         click.echo(format_stats(stats))

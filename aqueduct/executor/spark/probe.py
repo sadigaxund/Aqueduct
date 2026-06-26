@@ -121,6 +121,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
+from aqueduct.executor.models import _add_module_warning
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -236,7 +237,8 @@ def _row_count_estimate(
 
     # method: sample
     if block_full_actions:
-        logger.warning("Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
+        logger.warning("[runtime_probe_blocked] Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
+        _add_module_warning("runtime_probe_blocked", f"Probe {probe_id!r}: block_full_actions=True; skipping row_count_estimate sample.")
         return {"method": "sample", "blocked": True, "estimate": None}
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     sample_count = df.sample(fraction=fraction).count()
@@ -257,7 +259,8 @@ def _null_rates(
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping null_rates sample.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample.")
         return {"fraction": fraction, "blocked": True, "null_rates": {c: None for c in columns}}
 
     sample_df = df.sample(fraction=fraction).select(columns)
@@ -305,7 +308,8 @@ def _value_distribution(
     percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping value_distribution.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping value_distribution.")
         return {"blocked": True, "fraction": fraction, "stats": {}}
 
     # Default to numeric columns only when caller didn't specify
@@ -367,7 +371,8 @@ def _distinct_count(
     columns: list[str] = signal_cfg.get("columns") or df.columns
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping distinct_count.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping distinct_count.")
         return {"blocked": True, "fraction": fraction, "distinct_counts": {c: None for c in columns}}
 
     source = df.sample(fraction=fraction).select(columns) if fraction > 0 else df.select(columns)
@@ -394,9 +399,14 @@ def _data_freshness(
 
     if block_full_actions and not allow_sample:
         logger.warning(
-            "Probe: block_full_actions=True; skipping data_freshness for column=%r. "
-            "Set allow_sample: true to use a sample instead.",
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping "
+            "data_freshness for column=%r. Set allow_sample: true to use a sample instead.",
             column,
+        )
+        _add_module_warning(
+            "runtime_probe_blocked",
+            f"block_full_actions=True; skipping data_freshness for "
+            f"column={column!r}. Set allow_sample: true to use a sample instead.",
         )
         return {"blocked": True, "column": column}
 
@@ -566,7 +576,8 @@ def execute_probe(
                     elif sig_type == "custom":
                         payload = _custom(df, sig_cfg, block_full_actions=block_full_actions)
                     else:
-                        logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
+                        logger.warning("[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
+                        _add_module_warning("runtime_probe_unknown_signal", f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.")
                         continue
 
                     cur.execute(
@@ -579,7 +590,10 @@ def execute_probe(
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Probe %r signal %r failed: %s", module.id, sig_type, exc
+                        "[runtime_probe_signal_error] Probe %r signal %r failed: %s",
+                        module.id, sig_type, exc,
                     )
+                    _add_module_warning("runtime_probe_signal_error", f"Probe {module.id!r} signal {sig_type!r} failed: {exc}")
     except Exception as exc:
-        logger.warning("execute_probe %r: unexpected error: %s", module.id, exc)
+        logger.warning("[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc)
+        _add_module_warning("runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}")

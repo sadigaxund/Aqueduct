@@ -21,6 +21,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 from aqueduct.cli.style import error as _error
 from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
 
@@ -176,15 +177,17 @@ def report(
         return
 
     if fmt == "json":
-        out = {
-            "run_id": run_id_val,
-            "blueprint_id": blueprint_id,
-            "status": status,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "module_results": module_results,
-        }
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            {
+                "run_id": run_id_val,
+                "blueprint_id": blueprint_id,
+                "status": status,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "module_results": module_results,
+            },
+            fmt="json",
+        )
         return
 
     if fmt == "csv":
@@ -322,14 +325,16 @@ def _report_trend(
         return
 
     if fmt == "json":
-        out = {
-            "column": column,
-            "blueprint_id": blueprint_id,
-            "since": since,
-            "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
-            "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
-        }
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            {
+                "column": column,
+                "blueprint_id": blueprint_id,
+                "since": since,
+                "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
+                "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
+            },
+            fmt="json",
+        )
         return
 
     click.echo(f"Quality trend — column: {column}"
@@ -521,9 +526,15 @@ def _profile_run(run_id, cfg, store_dir, fmt) -> None:
     total_bw = sum((r["bytes_written"] or 0) for r in records)
 
     if fmt == "json":
-        click.echo(json.dumps(
-            {"run_id": run_id, "total_duration_ms": total_dur,
-             "total_bytes_written": total_bw, "modules": records}, indent=2))
+        emit(
+            {
+                "run_id": run_id,
+                "total_duration_ms": total_dur,
+                "total_bytes_written": total_bw,
+                "modules": records,
+            },
+            fmt="json",
+        )
         return
     if fmt == "csv":
         import csv as _csv
@@ -600,8 +611,14 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     records.sort(key=lambda r: (r["avg_duration_ms"] or 0), reverse=True)
 
     if fmt == "json":
-        click.echo(json.dumps(
-            {"blueprint_id": blueprint_id, "runs_analyzed": len(run_ids), "modules": records}, indent=2))
+        emit(
+            {
+                "blueprint_id": blueprint_id,
+                "runs_analyzed": len(run_ids),
+                "modules": records,
+            },
+            fmt="json",
+        )
         return
     if fmt == "csv":
         import csv as _csv
@@ -740,13 +757,15 @@ def runs(
         _zero_token = _by_resolution.get("cached", 0) + _by_resolution.get("replayed", 0)
         _coverage = (_zero_token / _total) if _total else 0.0
         if out_format.lower() == "json":
-            import json as _json
-            click.echo(_json.dumps({
-                "total_heals": _total,
-                "by_resolution": _by_resolution,
-                "zero_token_heals": _zero_token,
-                "zero_token_coverage": round(_coverage, 4),
-            }, indent=2))
+            emit(
+                {
+                    "total_heals": _total,
+                    "by_resolution": _by_resolution,
+                    "zero_token_heals": _zero_token,
+                    "zero_token_coverage": round(_coverage, 4),
+                },
+                fmt="json",
+            )
         elif _total == 0:
             click.echo("No healing outcomes recorded yet.")
         else:
@@ -787,19 +806,20 @@ def runs(
     rows = rows[:limit]
 
     if out_format.lower() == "json":
-        import json as _json
-        payload = [
-            {
-                "run_id": rv,
-                "blueprint_id": bp,
-                "status": st,
-                "started_at": str(sa) if sa else None,
-                "finished_at": str(fa) if fa else None,
-                "first_failed_module": ff,
-            }
-            for rv, bp, st, sa, fa, ff in rows
-        ]
-        click.echo(_json.dumps(payload, indent=2))
+        emit(
+            [
+                {
+                    "run_id": rv,
+                    "blueprint_id": bp,
+                    "status": st,
+                    "started_at": str(sa) if sa else None,
+                    "finished_at": str(fa) if fa else None,
+                    "first_failed_module": ff,
+                }
+                for rv, bp, st, sa, fa, ff in rows
+            ],
+            fmt="json",
+        )
         return
 
     if not rows:
@@ -947,16 +967,18 @@ def lineage(
         return
 
     if fmt == "json":
-        out = [
-            {
-                "channel_id": r[0],
-                "output_column": r[1],
-                "source_table": r[2],
-                "source_column": r[3],
-            }
-            for r in rows
-        ]
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            [
+                {
+                    "channel_id": r[0],
+                    "output_column": r[1],
+                    "source_table": r[2],
+                    "source_column": r[3],
+                }
+                for r in rows
+            ],
+            fmt="json",
+        )
         return
 
     click.echo(f"Column lineage — blueprint: {blueprint_id}")
@@ -1011,18 +1033,20 @@ def _lineage_chain(
         return
 
     if fmt == "json":
-        out = [
-            {
-                "channel_id": h.channel_id,
-                "output_column": h.output_column,
-                "source_table": h.source_table,
-                "source_column": h.source_column,
-                "output_type": h.output_type,
-                "transform_op": h.transform_op,
-            }
-            for h in hops
-        ]
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            [
+                {
+                    "channel_id": h.channel_id,
+                    "output_column": h.output_column,
+                    "source_table": h.source_table,
+                    "source_column": h.source_column,
+                    "output_type": h.output_type,
+                    "transform_op": h.transform_op,
+                }
+                for h in hops
+            ],
+            fmt="json",
+        )
         return
 
     click.echo(f"Column chain — blueprint: {bp.id}  column: {column}")

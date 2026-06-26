@@ -20,6 +20,7 @@ from aqueduct.cli import (
     _uncommitted_applied_patches,
     cli,
 )
+from aqueduct.cli.output import emit
 
 
 def _patch_index_obs_store(blueprint_path: Path | None = None):
@@ -224,7 +225,7 @@ def patch_preview(
                 "baseline_run_id": explain_res.baseline_run_id,
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
-        click.echo(_json.dumps(report, indent=2))
+        emit(report, fmt="json")
         sys.exit(exit_codes.SUCCESS if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else exit_codes.DATA_OR_RUNTIME)
 
     # Text report
@@ -774,7 +775,7 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
                     "blueprint_id": meta.get("blueprint_id"),
                     "failed_module": meta.get("failed_module"),
                 })
-        click.echo(json.dumps(payload, indent=2))
+        emit(payload, fmt="json")
         return
 
     total = 0
@@ -882,7 +883,7 @@ def log_cmd(blueprint: str, fmt: str) -> None:
         })
 
     if fmt == "json":
-        click.echo(json.dumps(entries, indent=2))
+        emit(entries, fmt="json")
         return
 
     if not entries:

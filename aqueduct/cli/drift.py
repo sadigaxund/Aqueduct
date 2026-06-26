@@ -32,6 +32,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 from aqueduct.parser.models import ModuleType
 
 
@@ -176,7 +177,7 @@ def drift(
             pass  # session.stop() is best-effort cleanup in a finally; the process is about to exit
 
     if fmt == "json":
-        click.echo(_json.dumps({"blueprint_id": manifest.blueprint_id, "checks": results}, indent=2))
+        emit({"blueprint_id": manifest.blueprint_id, "checks": results}, fmt="json")
 
     if undiffable:
         sys.exit(exit_codes.DATA_OR_RUNTIME)

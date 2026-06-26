@@ -238,8 +238,9 @@ def _enforce_on_new_columns(
         baseline = {h["name"] for h in schema_hint if h.get("name")}
     else:
         logger.warning(
-            "[%s] on_new_columns set but no 'known_columns' or 'schema_hint' to "
-            "compare against; skipping.", module.id,
+            "[runtime_ingress_new_columns_no_baseline] [%s] on_new_columns set "
+            "but no 'known_columns' or 'schema_hint' to compare against; skipping.",
+            module.id,
         )
         return
 
@@ -255,7 +256,8 @@ def _enforce_on_new_columns(
         )
     if policy == "alert":
         logger.warning(
-            "[%s] on_new_columns=alert: source added undeclared column(s) %s.",
+            "[runtime_ingress_new_columns] [%s] on_new_columns=alert: source "
+            "added undeclared column(s) %s.",
             module.id, new_cols,
         )
 

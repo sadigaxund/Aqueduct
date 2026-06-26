@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 
@@ -20,6 +21,9 @@ class ModuleResult:
     Phase 35 structured fields (error_class, object_name, suggested_columns,
     sql_state, root_exception). Stringified ``error`` alone loses the chain.
     Not serialized to JSON — see ``ExecutionResult.to_dict``."""
+    warnings: tuple[tuple[str, str], ...] = ()
+    """Per-module runtime warnings collected during execution.
+    Each entry is (rule_id, message).  Engine-agnostic — no pyspark."""
 
 
 @dataclass(frozen=True)
@@ -44,7 +48,31 @@ class ExecutionResult:
                     "status": r.status,
                     "error": r.error,
                     "error_type": r.error_type,
+                    "warnings": [list(w) for w in r.warnings],
                 }
                 for r in self.module_results
             ],
         }
+
+
+# ── Thread-safe per-module warning collector ──────────────────────────────
+# probe / assert code runs inside a module execution context and appends
+# (rule_id, message) pairs here.  The executor clears this before each module
+# and gathers the accumulated warnings when constructing ModuleResult.
+# Using threading.local() keeps parallel-component threads isolated.
+
+_collector = threading.local()
+
+
+def _add_module_warning(rule_id: str, message: str) -> None:
+    """Append a runtime warning to the current module's warning list."""
+    if not hasattr(_collector, "warnings"):
+        _collector.warnings = []
+    _collector.warnings.append((rule_id, message))
+
+
+def _collect_module_warnings() -> tuple[tuple[str, str], ...]:
+    """Gather and reset the per-module warning list."""
+    ws: list[tuple[str, str]] = getattr(_collector, "warnings", []) or []
+    _collector.warnings = []
+    return tuple(ws)

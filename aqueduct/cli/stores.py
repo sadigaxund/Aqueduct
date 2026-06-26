@@ -16,6 +16,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 
 # ── aqueduct stores ──────────────────────────────────────────────────────────
 
@@ -61,10 +62,10 @@ def stores_info(
     ]
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
-    click.echo(f"  {'store'.ljust(w0)}  {'backend'.ljust(w1)}  location")
-    click.echo(f"  {'-' * w0}  {'-' * w1}  --------")
+    emit(f"  {'store'.ljust(w0)}  {'backend'.ljust(w1)}  location", fmt="text", redact=True)
+    emit(f"  {'-' * w0}  {'-' * w1}  --------", fmt="text", redact=True)
     for store, backend, loc in rows:
-        click.echo(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}")
+        emit(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}", fmt="text", redact=True)
 
 
 @stores_group.command("migrate")
