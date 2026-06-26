@@ -676,9 +676,11 @@ def _setup_surveyor(
     _emit_warnings(_setup_caught, verbose=verbose, label="session:")
 
     click.echo(_r)
+    _arrow = click.style('\u25b6', fg='cyan', bold=True)
+    _bp_label = click.style(manifest.blueprint_id, bold=True)
     click.echo(
-        f"{click.style('\u25b6', fg='cyan', bold=True)} "
-        f"{click.style(manifest.blueprint_id, bold=True)}  \u00b7  "
+        f"{_arrow} "
+        f"{_bp_label}  \u00b7  "
         f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {engine} {master_url}"
         f"{selector_note}{exec_date_note}"
     )

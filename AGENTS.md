@@ -371,6 +371,12 @@ When you change a pydantic field, its key name, its nesting level, or its allowe
 ### Import ordering
 `from __future__ import annotations` must be the first import in every file (after the module docstring). An import placed above it raises `SyntaxError` whenever bytecode cache is cold — it passes CI (warm cache) and fails in production. Ruff I002 enforces this; the pre-commit hook catches it locally, CI catches it on push.
 
+### Minimum-Python syntax (3.11) — no backslash in f-string expressions
+The supported floor is **Python 3.11** (`requires-python = ">=3.11"`). Several newer conveniences are **`SyntaxError` on 3.11** even though they run on the dev/CI default interpreter (3.12+), so a `python -c "import …"` smoke check passes locally and the break only surfaces in a user's 3.11 venv. The one that has bitten us:
+- **A backslash inside an f-string *expression* part** — `f"{click.style('▶', …)}"` or `f"{x.replace('\n',' ')}"`. 3.12 (PEP 701) allows it; **3.11 does not.** Backslashes in the *literal* portion of an f-string are fine (`f"a·b"`); only inside `{…}` they break. Fix by hoisting the sub-expression to a local: `arrow = click.style('▶', …)` then `f"{arrow} …"`.
+
+Also avoid other 3.12-only syntax (PEP 695 `type X = …` aliases / `class C[T]` generics). The guard: the `py311-syntax` pre-commit hook runs `python3.11 -m py_compile` on staged files, and the `test-suite` / `version-matrix` CI jobs run on 3.11. Never rely on the local interpreter's version — it is newer than the floor.
+
 ### Constants, not literals
 When a string value appears in 3+ files — especially if it's also a pydantic `Literal` or `StrEnum` — hoist it to a shared constant and import it. Bare strings like `"trigger_agent"`, `"abort"`, `"quarantine"` are compared against in 5+ files while the `StrEnum` that defines them sits unused in the same package. A typo in one comparison silently falls through to the wrong branch. The enum is the single source of truth; every comparison site imports it.
 
