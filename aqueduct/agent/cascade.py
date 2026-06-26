@@ -14,8 +14,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.budget import BudgetConfig, StopReason
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.loop import AgentPatchResult, AgentRunConfig, generate_agent_patch
 from aqueduct.parser.models import CascadeTierConfig
 from aqueduct.surveyor.models import FailureContext

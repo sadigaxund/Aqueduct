@@ -20,12 +20,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-from aqueduct.parser.models import Blueprint, Edge, Module
-from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
+from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 
+logger = logging.getLogger(__name__)
 
 class ExpandError(AqueductError):
     """Raised when an Arcade cannot be expanded."""
@@ -242,7 +240,8 @@ def _expand_recursive(
         # file's subdirectory. Using parse() default base_dir=path.parent
         # would anchor them to <parent>/arcades/ — breaking the path.
         import yaml  # noqa: PLC0415 — plain load, no side effects
-        from aqueduct.parser.parser import parse_dict, ParseError  # noqa: PLC0415
+
+        from aqueduct.parser.parser import ParseError, parse_dict  # noqa: PLC0415
 
         try:
             raw_sub = yaml.safe_load(sub_path.read_text(encoding="utf-8"))

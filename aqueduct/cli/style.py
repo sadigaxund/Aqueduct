@@ -47,6 +47,7 @@ def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, labe
     adjacent warning blocks from different lifecycle phases are distinguishable.
     """
     import warnings as _warnings
+
     from aqueduct.warnings import AqueductWarning
 
     _AQ_PREFIX = "[aqueduct:"

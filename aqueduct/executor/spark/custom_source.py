@@ -44,7 +44,7 @@ def import_datasource_class(class_path: str):
     return cls
 
 
-def register_custom_source(spark: "SparkSession", class_path: str) -> str:
+def register_custom_source(spark: SparkSession, class_path: str) -> str:
     """Import, validate, and register a custom DataSource. Returns its format name.
 
     Raises:

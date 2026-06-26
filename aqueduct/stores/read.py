@@ -38,7 +38,7 @@ def _is_default_obs_path(path: str | None) -> bool:
 
 
 def resolve_duckdb_obs_path(
-    cfg: "AqueductConfig",
+    cfg: AqueductConfig,
     store_dir: str | None = None,
     run_id: str | None = None,
     blueprint_id: str | None = None,
@@ -99,7 +99,7 @@ def resolve_duckdb_obs_path(
 
 
 def resolve_obs_store_dir(
-    cfg: "AqueductConfig", blueprint_id: str, store_dir: str | None = None
+    cfg: AqueductConfig, blueprint_id: str, store_dir: str | None = None
 ) -> Path:
     """The directory holding a blueprint's ``observability.db`` on WRITE.
 
@@ -121,8 +121,8 @@ def resolve_obs_store_dir(
 
 
 def open_obs_write(
-    cfg: "AqueductConfig", blueprint_id: str, store_dir: str | None = None
-) -> "ObservabilityStore":
+    cfg: AqueductConfig, blueprint_id: str, store_dir: str | None = None
+) -> ObservabilityStore:
     """Writable observability store at the per-blueprint path (mirrors ``run``).
 
     Postgres → the configured DSN store. DuckDB → a ``DuckDBObservabilityStore``
@@ -143,11 +143,11 @@ def open_obs_write(
 
 
 def open_obs_read(
-    cfg: "AqueductConfig",
+    cfg: AqueductConfig,
     store_dir: str | None = None,
     run_id: str | None = None,
     blueprint_id: str | None = None,
-) -> "ObservabilityStore | None":
+) -> ObservabilityStore | None:
     """Backend-aware observability store for reads.
 
     Postgres → the configured store (one schema, all runs). DuckDB → the resolved

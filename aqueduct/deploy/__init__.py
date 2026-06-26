@@ -29,7 +29,7 @@ def _register(target: str, cls: type[Submitter]) -> type[Submitter]:
     return cls
 
 
-def get_submitter(target: str, cfg: "AqueductConfig") -> Submitter:
+def get_submitter(target: str, cfg: AqueductConfig) -> Submitter:
     """Return a ``Submitter`` instance for *target*.
 
     Raises ``NotImplementedError`` for targets that are not yet wired.

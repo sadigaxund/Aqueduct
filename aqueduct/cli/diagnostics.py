@@ -14,14 +14,15 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
-    _apply_warnings_from_cfg,
     _DEFAULT_CONFIG_FILENAME,
+    _apply_warnings_from_cfg,
     _env_options,
     _resolve_and_load_env,
     _rule,
     _sniff_file_kind,
+    cli,
 )
+
 
 @cli.command()
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
@@ -47,8 +48,9 @@ def validate(
     in the current directory if present. Exit 0 = all valid, 1 = any invalid.
     """
     from pathlib import Path
-    from aqueduct.parser.parser import ParseError, parse
+
     from aqueduct.config import ConfigError, load_config
+    from aqueduct.parser.parser import ParseError, parse
 
     _VALIDATE_JSON_SCHEMA_VERSION = "1.0"
 
@@ -203,10 +205,9 @@ def lint_cmd(
     """
     from pathlib import Path
 
+    from aqueduct.cli import _resolve_project_root
     from aqueduct.lint import LINT_SCHEMA_VERSION, run_lint
     from aqueduct.parser.parser import ParseError, parse
-
-    from aqueduct.cli import _resolve_project_root
     _resolve_and_load_env(env_file, _resolve_project_root(blueprint_path=Path(blueprint)) / Path(blueprint).name, cli_env=cli_env)
     try:
         bp = parse(blueprint, profile=profile)
@@ -398,8 +399,14 @@ def doctor(
     Exit codes: 0 = all ok/warn/skip, 1 = any check failed.
     """
     from pathlib import Path
+
+    from aqueduct.cli.style import COLOR as _COLOR
+    from aqueduct.cli.style import ICON as _ICON
+    from aqueduct.cli.style import emit_warnings as _emit_warnings
+    from aqueduct.cli.style import error as _error
+    from aqueduct.cli.style import info as _info
+    from aqueduct.cli.style import success as _success
     from aqueduct.doctor import run_doctor
-    from aqueduct.cli.style import ICON as _ICON, COLOR as _COLOR, info as _info, error as _error, success as _success, emit_warnings as _emit_warnings
 
     config_path: Path | None = None
     blueprint_path: Path | None = None

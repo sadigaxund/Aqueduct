@@ -145,7 +145,7 @@ def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> lis
     out: list[tuple[str, Path]] = []
     seen: set[Path] = set()
 
-    def add(bp: str, p: "str | Path") -> None:
+    def add(bp: str, p: str | Path) -> None:
         path = Path(p)
         if path.is_file() and path not in seen:
             seen.add(path)
@@ -318,7 +318,7 @@ class FailureContext:
     provenance_json: str | None = None
 
 
-def failure_context(store: Any, run_id: str) -> "FailureContext | None":
+def failure_context(store: Any, run_id: str) -> FailureContext | None:
     """Full structured failure for a run (None if absent). The engine stores the
     complete error here — the Runs table only shows a preview."""
     try:
@@ -541,7 +541,7 @@ def plan_metrics(store: Any, blueprint_id: str, limit: int = 200) -> list[PlanMe
         return []
 
 
-def run_sql_readonly(duckdb_path: "str | Path", query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
+def run_sql_readonly(duckdb_path: str | Path, query: str) -> tuple[list[str], list[tuple[Any, ...]]]:
     """Ad-hoc query over a **read-only** DuckDB connection → (columns, rows)."""
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     try:

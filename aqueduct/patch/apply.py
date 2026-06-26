@@ -29,12 +29,12 @@ from typing import Any
 from pydantic import ValidationError
 from ruamel.yaml import YAML
 
-from aqueduct.parser.parser import ParseError, parse
 from aqueduct.compiler.expander import is_arcade_expanded_id
+from aqueduct.errors import AqueductError
+from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.redaction import redact as _redact
-from aqueduct.errors import AqueductError
 
 _ryaml = YAML()
 _ryaml.preserve_quotes = True

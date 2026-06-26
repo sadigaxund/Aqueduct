@@ -36,11 +36,12 @@ Skips: Ingress, Egress (no external I/O).
 from __future__ import annotations
 
 import logging
-from aqueduct.models import ModuleType
-from aqueduct.errors import AqueductError
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from aqueduct.errors import AqueductError
+from aqueduct.models import ModuleType
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
@@ -93,7 +94,7 @@ def _schema_ddl(schema: dict[str, str]) -> str:
 
 # ── DataFrame creation ────────────────────────────────────────────────────────
 
-def _create_df(spark: "SparkSession", schema_dict: dict[str, str], rows: list[list]) -> "DataFrame":
+def _create_df(spark: SparkSession, schema_dict: dict[str, str], rows: list[list]) -> DataFrame:
     from pyspark.sql.types import StructType, _parse_datatype_string
 
     fields = []
@@ -110,8 +111,8 @@ def _create_df(spark: "SparkSession", schema_dict: dict[str, str], rows: list[li
 
 def _run_assertion(
     assertion: dict[str, Any],
-    result_df: "DataFrame",
-    spark: "SparkSession",
+    result_df: DataFrame,
+    spark: SparkSession,
     view_name: str = "__output__",
 ) -> AssertionResult:
     atype = assertion.get("type", "")
@@ -188,9 +189,9 @@ _TESTABLE_TYPES = frozenset({ModuleType.Channel, ModuleType.Junction, ModuleType
 
 def _execute_module(
     module: Any,
-    input_dfs: dict[str, "DataFrame"],
-    spark: "SparkSession",
-) -> "DataFrame | dict[str, DataFrame]":
+    input_dfs: dict[str, DataFrame],
+    spark: SparkSession,
+) -> DataFrame | dict[str, DataFrame]:
     """Run a single module against inline DataFrames. Returns result DataFrame(s)."""
     if module.type == ModuleType.Channel:
         from aqueduct.executor.spark.channel import execute_sql_channel
@@ -227,7 +228,7 @@ def _execute_module(
 def _run_test_case(
     test_case: dict[str, Any],
     blueprint_modules: dict[str, Any],
-    spark: "SparkSession",
+    spark: SparkSession,
 ) -> TestCaseResult:
     test_id = test_case.get("id", "(unnamed)")
     target_id: str = test_case.get("module", "")
@@ -251,7 +252,7 @@ def _run_test_case(
     if not inputs_spec:
         return TestCaseResult(test_id=test_id, passed=False, error="test case missing 'inputs'")
 
-    input_dfs: dict[str, "DataFrame"] = {}
+    input_dfs: dict[str, DataFrame] = {}
     for src_id, src_spec in inputs_spec.items():
         schema_dict = src_spec.get("schema", {})
         rows = src_spec.get("rows", [])
@@ -320,7 +321,7 @@ def _run_test_case(
 
 def run_test_file(
     test_file: Path,
-    spark: "SparkSession",
+    spark: SparkSession,
     blueprint_path_override: Path | None = None,
 ) -> TestSuiteResult:
     """Parse a test YAML file and run all test cases.

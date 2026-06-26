@@ -29,7 +29,6 @@ avoid a circular import.
 from __future__ import annotations
 
 import os
-from aqueduct.parser.models import ModuleType
 import sys
 import time
 from pathlib import Path
@@ -48,6 +47,7 @@ from aqueduct.doctor.checks_io import (
     check_store_backend,
     check_webhook,
 )
+from aqueduct.parser.models import ModuleType
 
 __all__ = [
     "CheckResult",
@@ -238,6 +238,7 @@ def check_spark(
     t = time.monotonic()
     try:
         import pyspark
+
         from aqueduct.executor.spark.session import make_spark_session
         spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
         spark.range(1).count()
@@ -479,7 +480,7 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
     return results
 
 
-def _check_iceberg_catalog(manifest: Any) -> "list[CheckResult]":
+def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
     """Warn if a `format: iceberg` module has no `spark.sql.catalog.*` configured.
 
     Iceberg needs a catalog (`spark.sql.catalog.<name> = ...`), not just the
@@ -515,7 +516,7 @@ def _check_iceberg_catalog(manifest: Any) -> "list[CheckResult]":
     return results
 
 
-def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
+def _check_spillway_error_types(manifest: Any) -> list[CheckResult]:
     """Warn if a spillway edge's error_types filter can never match.
 
     Quarantined rows carry an ``_aq_error_type`` label: the Assert rule's
@@ -553,7 +554,7 @@ def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
     return results
 
 
-def _check_heal_guardrail_typos(manifest: Any) -> "list[CheckResult]":
+def _check_heal_guardrail_typos(manifest: Any) -> list[CheckResult]:
     """Warn if heal_on_errors / never_heal_errors entries don't match any known error_type
     in the blueprint's Assert rules and aren't a recognised exception class name pattern.
 
@@ -961,7 +962,7 @@ def run_doctor(
     preflight: bool = False,
 ) -> list[CheckResult]:
     """Run all checks and return results in order."""
-    from aqueduct.config import load_config, ConfigError
+    from aqueduct.config import ConfigError, load_config
 
     results: list[CheckResult] = []
 

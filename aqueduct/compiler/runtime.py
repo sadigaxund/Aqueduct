@@ -16,7 +16,7 @@ import ast
 import os
 import re
 import uuid
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -49,14 +49,14 @@ class AqFunctions:
         self,
         run_id: str | None = None,
         depot: Any = None,
-        depots: "dict[str, Any] | None" = None,
+        depots: dict[str, Any] | None = None,
         execution_date: date | None = None,
         secrets_provider: str = "env",
         secrets_region: str | None = None,
         secrets_resolver: str | None = None,
         blueprint_id: str | None = None,
         blueprint_name: str | None = None,
-        blueprint_path: "str | Path | None" = None,
+        blueprint_path: str | Path | None = None,
         deployment_env: str | None = None,
         deployment_target: str | None = None,
     ) -> None:
@@ -105,8 +105,8 @@ class AqFunctions:
 
     def run_timestamp(self) -> str:
         if self._execution_date is not None:
-            return datetime.combine(self._execution_date, time.min, tzinfo=timezone.utc).isoformat()
-        return datetime.now(tz=timezone.utc).isoformat()
+            return datetime.combine(self._execution_date, time.min, tzinfo=UTC).isoformat()
+        return datetime.now(tz=UTC).isoformat()
 
     def run_id(self) -> str:
         return self._run_id

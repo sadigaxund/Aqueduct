@@ -296,7 +296,7 @@ class BlueprintSchema(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_unique_module_ids(self) -> "BlueprintSchema":
+    def validate_unique_module_ids(self) -> BlueprintSchema:
         ids = [m.id for m in self.modules]
         seen: set[str] = set()
         dupes = {mid for mid in ids if mid in seen or seen.add(mid)}  # type: ignore[func-returns-value]

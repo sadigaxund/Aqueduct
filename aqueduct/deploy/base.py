@@ -40,7 +40,7 @@ class Submitter(ABC):
     """Upload, launch, and monitor a remote batch job."""
 
     @abstractmethod
-    def package(self, blueprint_path: str, cfg: "AqueductConfig") -> PackagedBlueprint:
+    def package(self, blueprint_path: str, cfg: AqueductConfig) -> PackagedBlueprint:
         """Upload blueprint + config + bootstrap artefacts to the target's
         storage layer (DBFS / S3 / GCS).
 
@@ -48,12 +48,12 @@ class Submitter(ABC):
         """
 
     @abstractmethod
-    def submit(self, packaged: PackagedBlueprint, cfg: "AqueductConfig") -> str:
+    def submit(self, packaged: PackagedBlueprint, cfg: AqueductConfig) -> str:
         """Create and start the remote job.  Returns a job identifier."""
 
     @abstractmethod
     def poll(
-        self, job_id: str, cfg: "AqueductConfig", timeout_seconds: float = 3600.0
+        self, job_id: str, cfg: AqueductConfig, timeout_seconds: float = 3600.0
     ) -> ExecutionResult:
         """Poll until the job finishes and map its outcome to an ExecutionResult.
 
@@ -62,10 +62,10 @@ class Submitter(ABC):
         """
 
     @abstractmethod
-    def fetch_logs(self, job_id: str, cfg: "AqueductConfig") -> str:
+    def fetch_logs(self, job_id: str, cfg: AqueductConfig) -> str:
         """Retrieve the remote driver / stdout logs after completion."""
 
-    def fetch_failure_context(self, job_id: str, cfg: "AqueductConfig") -> None:
+    def fetch_failure_context(self, job_id: str, cfg: AqueductConfig) -> None:
         """Stub — self-healing is not supported for remote targets in v1.
 
         Designed to accept a remote ``FailureContext`` from the cluster

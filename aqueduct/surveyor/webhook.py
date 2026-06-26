@@ -23,6 +23,7 @@ import os
 import re
 import threading
 import uuid
+from datetime import UTC
 from typing import Any
 
 from aqueduct.infra.http import deliver_with_retry, fire_and_forget, sign_body
@@ -52,7 +53,7 @@ def _render_dict(template: dict[str, Any], vars: dict[str, str]) -> dict[str, An
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def fire_webhook(
-    config: "WebhookEndpointConfig",  # type: ignore[name-defined]  # noqa: F821
+    config: WebhookEndpointConfig,  # type: ignore[name-defined]  # noqa: F821
     full_payload: dict[str, Any],
     template_vars: dict[str, str] | None = None,
     event: str | None = None,
@@ -100,10 +101,10 @@ def fire_webhook(
     if config.payload is not None:
         body = _redact(_render_dict(config.payload, vars))
     elif event is not None:
-        from datetime import datetime, timezone
+        from datetime import datetime
         body = _redact({
             "event": event,
-            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "timestamp": datetime.now(tz=UTC).isoformat(),
             "run_id": vars.get("run_id"),
             "blueprint_id": vars.get("blueprint_id"),
             "data": full_payload,

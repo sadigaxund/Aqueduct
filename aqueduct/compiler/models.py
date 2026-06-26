@@ -38,7 +38,7 @@ class Manifest:
     udf_registry: tuple[dict[str, Any], ...] = ()
     macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
-    provenance_map: "ProvenanceMap | None" = None
+    provenance_map: ProvenanceMap | None = None
     inputs_fingerprint: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

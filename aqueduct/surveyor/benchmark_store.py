@@ -29,8 +29,8 @@ if TYPE_CHECKING:
     from aqueduct.surveyor.scenario import ScenarioResult
 
 
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 _BENCHMARK_DDL = """
 CREATE TABLE IF NOT EXISTS benchmark_results (
@@ -125,7 +125,7 @@ def _connect(store_path: Path):
 
 # ── Backend abstraction (DuckDB file | Postgres schema) ─────────────────────────
 
-import contextlib as _contextlib
+import contextlib as _contextlib  # noqa: E402  (intentional mid-file import)
 
 # Postgres schema the benchmark table lives in (disjoint from the
 # observability/lineage/depot schemas the StoreBundle uses).
@@ -146,7 +146,7 @@ class BenchmarkStore:
     schema: str = _PG_BENCHMARK_SCHEMA
 
     @classmethod
-    def from_config(cls, bench_cfg: Any, scenarios_dir: Path) -> "BenchmarkStore":
+    def from_config(cls, bench_cfg: Any, scenarios_dir: Path) -> BenchmarkStore:
         """Build from a ``stores.benchmark`` config block + scenarios anchor.
 
         DuckDB with no explicit path → scenario-anchored default. Postgres
@@ -201,7 +201,7 @@ class BenchmarkStore:
             raise ValueError(f"unknown benchmark backend: {self.backend!r}")
 
 
-def _as_store(store: "Path | str | BenchmarkStore") -> BenchmarkStore:
+def _as_store(store: Path | str | BenchmarkStore) -> BenchmarkStore:
     """Normalise a path/str (legacy DuckDB API) or a BenchmarkStore to a store."""
     if isinstance(store, BenchmarkStore):
         return store
@@ -211,8 +211,8 @@ def _as_store(store: "Path | str | BenchmarkStore") -> BenchmarkStore:
 # ── Persist ───────────────────────────────────────────────────────────────────
 
 def persist_results(
-    results: dict[str, dict[str, "ScenarioResult"]],
-    store: "Path | str | BenchmarkStore",
+    results: dict[str, dict[str, ScenarioResult]],
+    store: Path | str | BenchmarkStore,
 ) -> int:
     """Insert one row per ``(scenario, model)`` ScenarioResult into the store.
 
@@ -222,7 +222,7 @@ def persist_results(
     locked file, missing driver, or unreachable DB cannot fail the command.
     """
     bs = _as_store(store)
-    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    now = _dt.datetime.now(_dt.UTC).isoformat()
     written = 0
     try:
         with bs.cursor() as con:
@@ -413,8 +413,8 @@ def _compare(baseline: BenchmarkRow, current: BenchmarkRow) -> tuple[list[str], 
 
 
 def diff_latest(
-    results: dict[str, dict[str, "ScenarioResult"]],
-    store: "Path | str | BenchmarkStore",
+    results: dict[str, dict[str, ScenarioResult]],
+    store: Path | str | BenchmarkStore,
 ) -> list[DiffEntry]:
     """Compare every ``(scenario, model)`` in ``results`` against its baseline.
 
@@ -535,7 +535,7 @@ def _f(v: Any) -> float | None:
     return float(v) if v is not None else None
 
 
-def compute_stats(store: "Path | str | BenchmarkStore", *, trend_limit: int = 14) -> dict:
+def compute_stats(store: Path | str | BenchmarkStore, *, trend_limit: int = 14) -> dict:
     """Aggregate the store into leaderboard / difficulty / trend views.
 
     Leaderboard + difficulty use the LATEST row per (scenario, model). Trend

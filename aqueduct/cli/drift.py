@@ -66,6 +66,7 @@ def drift(
     """
     import json as _json
 
+    from aqueduct.cli.style import error as _error
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.config import ConfigError, load_config
@@ -73,7 +74,6 @@ def drift(
     from aqueduct.drift.classifier import diff_schemas
     from aqueduct.parser.parser import ParseError, parse
     from aqueduct.stores.read import open_obs_write
-    from aqueduct.cli.style import error as _error
 
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
@@ -215,7 +215,12 @@ def _heal_drift(
     blueprint_source_yaml: str | None = None,
 ) -> str | None:
     """Run the agent on a synthetic drift FailureContext; stage a patch. Returns patch_id."""
-    from aqueduct.agent import AgentRunConfig, generate_agent_patch, resolve_budget, stage_patch_for_human
+    from aqueduct.agent import (
+        AgentRunConfig,
+        generate_agent_patch,
+        resolve_budget,
+        stage_patch_for_human,
+    )
     from aqueduct.drift.context import build_synthetic_failure_context
 
     eng = cfg.agent

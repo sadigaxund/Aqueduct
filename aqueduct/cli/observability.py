@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,13 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
+    cli,
+)
 from aqueduct.cli.style import error as _error
 from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
-
 
 # ── aqueduct report ───────────────────────────────────────────────────────────
 
@@ -277,8 +278,8 @@ def _report_trend(
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     if since is None:
-        from datetime import datetime, timedelta, timezone
-        since = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta
+        since = (datetime.now(tz=UTC) - timedelta(days=30)).isoformat()
 
     # Fetch the raw probe payloads (portable SQL — no `json_each`/`json_extract`,
     # which are DuckDB-only) and explode the JSON in Python so this works
@@ -349,7 +350,7 @@ def _report_trend(
             prev = ct
 
 
-def _fmt_bytes(n: "int | None") -> str:
+def _fmt_bytes(n: int | None) -> str:
     """Human-readable byte size for table output (raw ints kept in json/csv)."""
     if n is None:
         return "-"
@@ -384,7 +385,7 @@ def _render_run_html(
     blueprint_id: str,
     status: str,
     started_at: str,
-    finished_at: "str | None",
+    finished_at: str | None,
     module_results: list,
     metrics_rows: list,
 ) -> str:
@@ -1090,7 +1091,7 @@ def signal(
     Clear override (resume normal evaluation):
       aqueduct signal my_probe --value true
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
@@ -1132,7 +1133,7 @@ def signal(
     # Resolve passed value
     passed = value_str == "true"
 
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
     with bundle.observability.connect() as cur:
         cur.execute(_SIGNAL_OVERRIDES_DDL)
         if passed:

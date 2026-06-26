@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import UTC
 from typing import Any
 
 from aqueduct.parser.models import ModuleType
@@ -92,9 +93,9 @@ def write_fingerprints(
         if not rows:
             return
 
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
 
         with observability_store.connect() as cur:
             cur.executemany(

@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from aqueduct.errors import AqueductError
 from abc import ABC, abstractmethod
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Sequence
+from typing import TYPE_CHECKING, Any
+
+from aqueduct.errors import AqueductError
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig, StoreBackendConfig
@@ -57,7 +60,7 @@ class RelationalCursor:
         self._cursor = raw_cursor
         self._paramstyle = paramstyle
 
-    def execute(self, sql: str, params: Sequence[Any] | None = None) -> "RelationalCursor":
+    def execute(self, sql: str, params: Sequence[Any] | None = None) -> RelationalCursor:
         sql_out = sql if self._paramstyle == "qmark" else sql.replace("?", "%s")
         if params is None:
             self._cursor.execute(sql_out)
@@ -65,7 +68,7 @@ class RelationalCursor:
             self._cursor.execute(sql_out, tuple(params))
         return self
 
-    def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> "RelationalCursor":
+    def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> RelationalCursor:
         sql_out = sql if self._paramstyle == "qmark" else sql.replace("?", "%s")
         self._cursor.executemany(sql_out, [tuple(p) for p in seq_of_params])
         return self
@@ -175,7 +178,7 @@ class _RelationalDepotMixin:
             return default
 
     def kv_put(self, key: str, value: str) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         with self.connect() as cur:
             cur.execute(self._DDL)
@@ -187,7 +190,7 @@ class _RelationalDepotMixin:
                     SET value = excluded.value,
                         updated_at = excluded.updated_at
                 """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
+                [key, value, datetime.now(tz=UTC).isoformat()],
             )
 
     def kv_delete(self, key: str) -> None:
@@ -212,7 +215,7 @@ class _NamespacedDepot:
     passes through.
     """
 
-    def __init__(self, inner: "DepotStore", prefix: str) -> None:
+    def __init__(self, inner: DepotStore, prefix: str) -> None:
         self._inner = inner
         self._prefix = prefix
 
@@ -241,8 +244,8 @@ class StoreBundle:
 
 
 def get_stores(
-    cfg: "AqueductConfig",
-    store_dir_override: "Path | str | None" = None,
+    cfg: AqueductConfig,
+    store_dir_override: Path | str | None = None,
     blueprint_id: str | None = None,
 ) -> StoreBundle:
     """Construct the per-run store bundle from validated config.
@@ -273,10 +276,10 @@ def get_stores(
         DuckDBObservabilityStore,
     )
 
-    def _resolve_duckdb_path(store_cfg: "StoreBackendConfig") -> Path:
+    def _resolve_duckdb_path(store_cfg: StoreBackendConfig) -> Path:
         if store_cfg.path is None:
-            from aqueduct.stores.read import _OBS_ROUTING_ROOT
             from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
             _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
             _bid = blueprint_id or "default"
             return _base / _bid / DEFAULT_OBS_DB_FILENAME

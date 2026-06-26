@@ -113,7 +113,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_probe_signals_probe
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 def _json_dumps(obj: Any) -> str:
@@ -191,7 +191,7 @@ def _row_count_estimate(
     signal_cfg: dict[str, Any],
     probe_id: str = "",
     run_id: str = "",
-    store_dir: "Path | None" = None,
+    store_dir: Path | None = None,
     block_full_actions: bool = False,
     observability_store: Any = None,
     sampling: ProbeSampling = ProbeSampling(),

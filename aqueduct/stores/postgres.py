@@ -31,8 +31,9 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 from aqueduct.stores.base import (
     DepotStore,
@@ -190,7 +191,7 @@ class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore)
                     SET value = excluded.value,
                         updated_at = excluded.updated_at
                 """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
+                [key, value, datetime.now(tz=UTC).isoformat()],
             )
 
     def kv_delete(self, key: str) -> None:

@@ -17,6 +17,7 @@ Constraints (by design):
 from __future__ import annotations
 
 import re
+
 from aqueduct.errors import AqueductError
 
 

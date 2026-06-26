@@ -18,9 +18,9 @@ from pyspark.sql import SparkSession
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
-from aqueduct.models import Module
-from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
 from aqueduct.errors import AqueductError
+from aqueduct.executor.path_keys import PATHLESS_INGRESS_FORMATS
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +212,7 @@ ON_NEW_COLUMNS_POLICIES: frozenset[str] = frozenset({"allow", "fail", "alert"})
 def _enforce_on_new_columns(
     module: Module,
     df: DataFrame,
-    schema_hint: "list[dict[str, str]] | None",
+    schema_hint: list[dict[str, str]] | None,
 ) -> None:
     """Apply the Ingress ``on_new_columns`` contract against a declared baseline.
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -155,9 +156,9 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
 
 
 def _resolve_project_root(
-    blueprint_path: "Path | None" = None,
-    config_path: "Path | None" = None,
-) -> "Path":
+    blueprint_path: Path | None = None,
+    config_path: Path | None = None,
+) -> Path:
     """Walk up from blueprint or config to find the project root.
 
     Returns the directory containing ``aqueduct.yml`` (the _DEFAULT_CONFIG_FILENAME) when found (walking up
@@ -182,12 +183,12 @@ def _resolve_project_root(
 
 
 def _load_config_with_env(
-    config_path: "Path | None" = None,
+    config_path: Path | None = None,
     *,
-    env_file: "str | None" = None,
-    cli_env: "tuple[str, ...] | list[str] | None" = None,
+    env_file: str | None = None,
+    cli_env: tuple[str, ...] | list[str] | None = None,
     quiet: bool = False,
-) -> "Any":
+) -> Any:
     """Load engine config after resolving .env / CI-injected env vars.
 
     Single entry point so ``load_config()`` is never called without first
@@ -261,9 +262,10 @@ def _agent_usable(provider: str, base_url: str | None, api_key: str | None = Non
 def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:  # noqa: F811
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
-        from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse_dict
-        from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
+        from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
@@ -293,10 +295,12 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
-        from aqueduct.parser.parser import ParseError, parse
-        from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
+
         from aqueduct.agent import archive_patch
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.parser.parser import ParseError, parse
+        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
@@ -305,8 +309,8 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         backup_dir = patches_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         import shutil
-        from datetime import datetime, timezone
-        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        from datetime import datetime
+        ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(blueprint_path, backup_dir / f"{patch.patch_id}_{ts}_{blueprint_path.name}")
 
         # Write atomically
@@ -348,8 +352,8 @@ def _run_patch_gates_inline(  # noqa: F811
     `agent.block_on_explain_regression` is True).
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
-    from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
     from aqueduct.patch.explain_gate import run_explain_gate
+    from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
 
     bp_raw = _yaml_load(blueprint_path)
     try:
@@ -453,7 +457,7 @@ def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, c
     # abort: caller handles break
 
 
-def _load_env_file(env_path: "Path") -> int:
+def _load_env_file(env_path: Path) -> int:
     """Load KEY=VALUE pairs from a .env file into os.environ.
 
     Skips blank lines and comments (#). Existing env vars are NOT overwritten.
@@ -490,7 +494,7 @@ def _load_env_file(env_path: "Path") -> int:
 # stderr notice is always emitted so the implicit load is never invisible.
 
 
-def _apply_cli_env(cli_env: "tuple[str, ...] | list[str]") -> int:
+def _apply_cli_env(cli_env: tuple[str, ...] | list[str]) -> int:
     """Apply `-e KEY=VAL` overrides into os.environ. Returns count.
 
     Highest precedence: overwrites real env AND any later .env (the .env
@@ -511,9 +515,9 @@ def _apply_cli_env(cli_env: "tuple[str, ...] | list[str]") -> int:
 
 
 def _resolve_and_load_env(
-    explicit: "str | None",
-    anchor: "Path | None",
-    cli_env: "tuple[str, ...] | list[str] | None" = None,
+    explicit: str | None,
+    anchor: Path | None,
+    cli_env: tuple[str, ...] | list[str] | None = None,
 ) -> None:
     """Apply -e overrides, then load a single .env file. Emits a stderr notice.
 
@@ -569,7 +573,7 @@ def _env_options(f):
     return f
 
 
-def _sniff_file_kind(path: "Path") -> "str | None":
+def _sniff_file_kind(path: Path) -> str | None:
     """Identify an Aqueduct YAML by its version header (no full parse).
 
     Returns one of: "blueprint", "config", "aqtest", "aqscenario", or None
@@ -597,7 +601,8 @@ def _sniff_file_kind(path: "Path") -> "str | None":
     return None
 
 
-from aqueduct import __version__ as _aqueduct_version
+
+from aqueduct import __version__ as _aqueduct_version  # noqa: E402  (intentional mid-file import)
 
 
 def _install_secret_redaction_hooks() -> None:
@@ -609,8 +614,9 @@ def _install_secret_redaction_hooks() -> None:
     eagerly at top-level ``cli`` invocation; commands that never resolve a
     secret incur a tiny per-emit no-op cost (empty registry → fast path).
     """
-    from aqueduct.redaction import redact as _redact
     import logging as _logging
+
+    from aqueduct.redaction import redact as _redact
 
     if getattr(click.echo, "_aq_redaction_wrapped", False):
         return
@@ -664,10 +670,10 @@ class _AqueductJsonLogFormatter:
     def format(self, record) -> str:  # noqa: D401
         import json as _json
         import logging as _logging
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
         payload = {
-            "ts": _dt.fromtimestamp(record.created, tz=_tz.utc).isoformat(),
+            "ts": _dt.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -726,6 +732,7 @@ def cli(
 ) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
     import logging
+
     from aqueduct.warnings import install_cli_formatter, set_default_suppress
     level = logging.DEBUG if verbose else logging.WARNING
 
@@ -831,6 +838,7 @@ def _uncommitted_applied_patches(
 
     uncommitted = []
     from datetime import datetime
+
     from aqueduct.patch.grammar import PATCH_META_KEY
     for p in all_applied:
         try:
@@ -887,12 +895,21 @@ if __name__ == "__main__":
 
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
-from .diagnostics import validate, lint_cmd, schema, doctor  # noqa: E402,F401
-from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401
-
-from .run import compile, run  # noqa: E402,F401
-from .patch import patch, patch_preview, patch_apply, patch_reject, patch_commit, patch_discard, patch_list, log_cmd, rollback_cmd  # noqa: E402,F401,F811
-from .observability import report, runs, lineage, signal  # noqa: E402,F401
-from .heal import heal  # noqa: E402,F401
+from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
-from .project import completion_cmd, test_cmd, init  # noqa: E402,F401
+from .heal import heal  # noqa: E402,F401
+from .observability import lineage, report, runs, signal  # noqa: E402,F401
+from .patch import (  # noqa: E402,F401,F811
+    log_cmd,
+    patch,
+    patch_apply,
+    patch_commit,
+    patch_discard,
+    patch_list,
+    patch_preview,
+    patch_reject,
+    rollback_cmd,
+)
+from .project import completion_cmd, init, test_cmd  # noqa: E402,F401
+from .run import compile, run  # noqa: E402,F401
+from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401

@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 _PATCH_HISTORY_MAX = 3
 
 
-from aqueduct.patch.grammar import _METADATA_ALIASES, VALID_PATCH_OPS
+from aqueduct.patch.grammar import (  # noqa: E402  (intentional mid-file import)
+    _METADATA_ALIASES,
+    VALID_PATCH_OPS,
+)
 
 # ── System-level constants exposed to the reprompt / alias machinery ───────
 

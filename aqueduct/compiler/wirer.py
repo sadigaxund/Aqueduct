@@ -16,10 +16,8 @@ Regulator compile-away (P6 — Passive-by-default gates):
 
 from __future__ import annotations
 
-
-from aqueduct.parser.models import Edge, Module
-from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
+from aqueduct.parser.models import Edge, Module, ModuleType
 
 
 class WireError(AqueductError):

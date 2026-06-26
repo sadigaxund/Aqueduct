@@ -10,7 +10,7 @@ failed") — the drift audit lands in ``drift_checks`` instead.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from aqueduct.drift.classifier import DriftResult
 from aqueduct.surveyor.models import FailureContext
@@ -37,7 +37,7 @@ def build_synthetic_failure_context(
     authored literal — without it the LLM may mistake a real source change for a
     misconfigured Ingress and "fix" the format/header (ISSUE-037).
     """
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
     breaking = drift.breaking
     summary = "; ".join(c.describe() for c in breaking)
     message = (

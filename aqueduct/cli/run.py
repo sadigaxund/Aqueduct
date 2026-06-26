@@ -6,21 +6,22 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
-from aqueduct.parser.models import ModuleType
 import sys
 from typing import Any
 
 import click
 
+import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
-    _compile_with_warnings,
     _check_heal_guardrails,
+    _compile_with_warnings,
     _env_options,
-    _rule,)
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
+    _rule,
+    cli,
+)
+from aqueduct.parser.models import ModuleType
 
 
 @cli.command()
@@ -71,8 +72,8 @@ def compile(
 
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.config import load_config, ConfigError
     try:
         _cfg = load_config(None)
         _apply_warnings_from_cfg(_cfg)
@@ -238,8 +239,9 @@ def _zero_token_attempt(sig_exact):
                            gate_that_rejected=None, escalated=False)
 
 
-from dataclasses import dataclass as _dc_frozen
-from typing import TYPE_CHECKING as _t
+from dataclasses import dataclass as _dc_frozen  # noqa: E402  (intentional mid-file import)
+from typing import TYPE_CHECKING as _t  # noqa: E402  (intentional mid-file import)
+
 if _t:
     from aqueduct.config import AqueductConfig, WebhookEndpointConfig
     from aqueduct.executor.spark.probe import ProbeSampling as _PS
@@ -249,12 +251,12 @@ if _t:
 class _LoadConfigResult:
     """Return-type bundle for ``_load_engine_config`` — all values derived from
     config/env/CLI resolution, before parse/compile/execute."""
-    cfg: "AqueductConfig"
-    resolved_store_dir: "str | None"
-    resolved_webhook: "WebhookEndpointConfig | None"
+    cfg: AqueductConfig
+    resolved_store_dir: str | None
+    resolved_webhook: WebhookEndpointConfig | None
     engine: str
     master_url: str
-    probe_sampling: "_PS"
+    probe_sampling: _PS
     blueprint_set_nested: dict
     _using_default_obs_path: bool
     _obs_routing_base: str
@@ -278,6 +280,7 @@ def _load_engine_config(
     """
     import sys as _sys
     from pathlib import Path as _P
+
     from aqueduct.cli import _resolve_and_load_env as _renv
     from aqueduct.cli.style import error as _err
 
@@ -287,7 +290,8 @@ def _load_engine_config(
 
     # ── Load engine config ─────────────────────────────────────────────────────
     try:
-        from aqueduct.config import ConfigError, WebhookEndpointConfig, load_config as _load_cfg
+        from aqueduct.config import ConfigError, WebhookEndpointConfig
+        from aqueduct.config import load_config as _load_cfg
         cfg = _load_cfg(config_path_abs)
         from aqueduct.cli import _apply_warnings_from_cfg
         _apply_warnings_from_cfg(cfg)
@@ -406,13 +410,14 @@ def _do_compile(
     try:
         import sys as _sys
         from pathlib import Path as _P
-        from aqueduct.compiler.compiler import CompileError
-        from aqueduct.compiler.compiler import compile as compiler_compile
-        from aqueduct.config import load_config as _unused
-        from aqueduct.depot.depot import DepotStore as _DS
-        from aqueduct.parser.parser import ParseError, parse as _parse
+
         from aqueduct.cli import _compile_with_warnings
         from aqueduct.cli.style import error as _err
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.depot.depot import DepotStore as _DS
+        from aqueduct.parser.parser import ParseError
+        from aqueduct.parser.parser import parse as _parse
     except ImportError as exc:
         raise RuntimeError(f"compile dependencies missing: {exc}") from exc
 
@@ -438,6 +443,7 @@ def _do_compile(
     try:
         if blueprint_set_nested:
             import yaml as _yaml
+
             from aqueduct.overrides import deep_merge as _deep_merge
             from aqueduct.parser.parser import parse_dict
             _raw_bp = _yaml.safe_load(_P(blueprint).read_text(encoding="utf-8")) or {}
@@ -540,9 +546,9 @@ def _setup_surveyor(
     """Phase 3 — warnings, gates, surveyor creation, engine session → ``_SurveyorSetupResult``."""
     import sys as _sys
     import uuid as _uuid
-    from pathlib import Path as _P
     import warnings as _w
-    from aqueduct.cli.style import error as _err
+    from pathlib import Path as _P
+
 
     with _w.catch_warnings(record=True) as _setup_caught:
         _w.simplefilter("always")
@@ -738,8 +744,8 @@ def _setup_surveyor(
     from aqueduct.depot.depot import DepotStore as _DS
     from aqueduct.surveyor.surveyor import Surveyor as _Surveyor
     if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
         from aqueduct.stores import StoreBundle
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
         bundle = StoreBundle(
             observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
             depot=bundle.depot,
@@ -908,12 +914,9 @@ def run(
     import uuid
     from pathlib import Path
 
-    from aqueduct.depot.depot import DepotStore
     from aqueduct.executor import ExecuteError
     from aqueduct.executor.models import ExecutionResult, ModuleResult
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.cli.style import error as _error
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -1028,7 +1031,6 @@ def run(
         manifest = _cr.manifest
         bundle = _cr.bundle
         depot = _cr.depot
-        depots_wrapped = _cr.depots_wrapped
         execution_date = _cr.execution_date
         cli_overrides = _cr.cli_overrides
 
@@ -1039,6 +1041,7 @@ def run(
         # transform so behaviour matches Gate 3.
         if sandbox:
             import atexit
+
             from aqueduct.patch.preview import build_sandbox_manifest
 
             if engine != "spark":
@@ -1309,7 +1312,8 @@ def run(
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
                     try:
-                        from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec as _PatchSpec
+                        from aqueduct.patch.grammar import PATCH_META_KEY
+                        from aqueduct.patch.grammar import PatchSpec as _PatchSpec
                         _payload = {k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY}
                         _replay_patch = _PatchSpec.model_validate(_payload)
                     except Exception as _re_exc:
@@ -1382,8 +1386,9 @@ def run(
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
             try:
-                from aqueduct.doctor import check_blueprint_sources_from_manifest
                 from dataclasses import replace as _dc_replace
+
+                from aqueduct.doctor import check_blueprint_sources_from_manifest
                 _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
                 _hints = tuple(
                     f"{r.name} — {r.detail}"
@@ -1421,8 +1426,10 @@ def run(
             def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
                 try:
                     from aqueduct.patch.apply import (
-                        _check_guardrails, _yaml_load, apply_patch_to_dict,
                         PatchError,
+                        _check_guardrails,
+                        _yaml_load,
+                        apply_patch_to_dict,
                     )
                     bp_raw = _yaml_load(_bp)
                     # 1.1.0 — compile-sanity check. Catches patches that drop
@@ -1663,8 +1670,10 @@ def run(
 
             # ── Guardrail check (pre-staging) ─────────────────────────────────────
             try:
-                from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
                 import yaml as _yaml
+
+                from aqueduct.patch.apply import PatchError as _PatchError
+                from aqueduct.patch.apply import _check_guardrails as _apply_check_guardrails
                 _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
                 _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
                 guardrail_err = None
@@ -2048,8 +2057,8 @@ def run(
         # surveyor uses short-lived connections, so the store is free by now).
         _metrics: dict[str, tuple] = {}
         try:
-            from aqueduct.stores.read import open_obs_read
             from aqueduct.stores.queries import run_detail as _run_detail
+            from aqueduct.stores.read import open_obs_read
             _rs = open_obs_read(cfg, store_dir=store_dir, run_id=run_id,
                                 blueprint_id=manifest.blueprint_id)
             if _rs is not None:

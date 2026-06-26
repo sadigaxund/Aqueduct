@@ -13,13 +13,13 @@ from pathlib import Path
 import click
 
 from aqueduct import exit_codes
-from aqueduct.cli.style import error as _error
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
     _env_options,
     _resolve_and_load_env,
+    cli,
 )
+from aqueduct.cli.style import error as _error
 
 # ── aqueduct benchmark ────────────────────────────────────────────────────────
 
@@ -348,8 +348,11 @@ def benchmark(
     # the legacy --no-persist / --gate-on-regression / --store-path flags still
     # work but are deprecated and warn.
     from aqueduct.surveyor.benchmark_store import (
-        BenchmarkStore, diff_latest, format_diff_table,
-        has_regressions, persist_results,
+        BenchmarkStore,
+        diff_latest,
+        format_diff_table,
+        has_regressions,
+        persist_results,
     )
     bench_cfg = cfg.stores.benchmark
     _persist = bench_cfg.persist
@@ -457,8 +460,13 @@ def benchmark_diff_cmd(
     diag_score or confidence drop > 5pp).
     """
     from aqueduct.surveyor.benchmark_store import (
-        _connect, _fetch_baseline, _row_from_record, _SELECT_COLS,
-        DiffEntry, format_diff_table, has_regressions,
+        _SELECT_COLS,
+        DiffEntry,
+        _connect,
+        _fetch_baseline,
+        _row_from_record,
+        format_diff_table,
+        has_regressions,
     )
 
     store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
@@ -578,7 +586,9 @@ def benchmark_stats_cmd(
     """
     from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.benchmark_store import (
-        BenchmarkStore, compute_stats, format_stats,
+        BenchmarkStore,
+        compute_stats,
+        format_stats,
     )
 
     _resolve_and_load_env(

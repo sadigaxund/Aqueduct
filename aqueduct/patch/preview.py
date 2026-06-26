@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
-
-from aqueduct.parser.models import ModuleType
+from typing import Any
 
 from aqueduct.compiler.lineage import _extract_sql_lineage
+from aqueduct.parser.models import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -306,9 +306,10 @@ def run_sandbox_gate(
     try:
         from pathlib import Path as _Path
 
-        from aqueduct.parser.parser import ParseError, parse_dict
-        from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.executor import ExecuteError, get_executor
+        from aqueduct.parser.parser import ParseError, parse_dict
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
             status="skip",
@@ -444,6 +445,7 @@ def render_unified_diff(blueprint_before: dict, blueprint_after: dict) -> str:
     """Return a unified-diff string of the Blueprint YAML representations."""
     import difflib
     from io import StringIO
+
     from aqueduct.patch.apply import _yaml_dumps
 
     before = _yaml_dumps(blueprint_before)

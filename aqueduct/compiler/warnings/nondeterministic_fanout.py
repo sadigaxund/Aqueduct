@@ -10,8 +10,9 @@ pure cache reasons; this rule is the data-correctness variant).
 from __future__ import annotations
 
 import re
-from aqueduct.parser.models import ModuleType
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "nondeterministic_fanout"
 

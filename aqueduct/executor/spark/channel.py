@@ -39,8 +39,8 @@ from pyspark.sql import SparkSession
 if TYPE_CHECKING:
     from pyspark.sql import Column, DataFrame
 
-from aqueduct.models import Module
 from aqueduct.errors import AqueductError
+from aqueduct.models import Module
 
 _SINGLE_INPUT_ALIAS = "__input__"
 
@@ -242,7 +242,7 @@ def _execute_sort(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
 
     exprs = [order_by] if isinstance(order_by, str) else list(order_by)
 
-    def _to_col(e: str) -> "Column":
+    def _to_col(e: str) -> Column:
         # F.expr("amount DESC") misparses as `amount AS DESC` in expression context;
         # use F.col + .asc()/.desc() to preserve sort direction.
         parts = e.strip().split()
@@ -317,7 +317,7 @@ def _execute_union(
 
 # ── Metrics boundary ─────────────────────────────────────────────────────────
 
-def _apply_metrics_boundary(df: "DataFrame", cfg: dict) -> "DataFrame":
+def _apply_metrics_boundary(df: DataFrame, cfg: dict) -> DataFrame:
     """If metrics_boundary: true, insert a repartition to force a Spark stage cut.
 
     df.rdd.getNumPartitions() reads the planned partition count from the query

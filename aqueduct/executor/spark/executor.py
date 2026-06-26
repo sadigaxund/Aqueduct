@@ -57,26 +57,34 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pyspark.sql import SparkSession
 
 if TYPE_CHECKING:
-    pass
+    from aqueduct.executor.spark.probe import ProbeSampling
 
-from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
+from datetime import UTC
+
 from aqueduct.config import WebhookEndpointConfig
+from aqueduct.errors import AqueductError
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
 from aqueduct.executor.spark.egress import EgressError, run_maintenance, write_egress
+from aqueduct.executor.spark.error_columns import (
+    AQ_ERROR_MODULE,
+    AQ_ERROR_MSG,
+    AQ_ERROR_TS,
+    AQ_ERROR_TYPE,
+)
 from aqueduct.executor.spark.funnel import FunnelError, execute_funnel
 from aqueduct.executor.spark.ingress import IngressError, read_ingress
 from aqueduct.executor.spark.junction import JunctionError, execute_junction
 from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_metrics, observe_df
-from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_TYPE, AQ_ERROR_TS
-from aqueduct.errors import AqueductError
+from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +194,9 @@ def _with_retry(
 
 def _write_checkpoint(
     module: Module,
-    checkpoint_dir: "Path | None",
+    checkpoint_dir: Path | None,
     manifest: Manifest,
-    data: "dict[str, Any] | None" = None,
+    data: dict[str, Any] | None = None,
 ) -> None:
     """Write checkpoint Parquet + done marker when checkpoint is enabled."""
     if checkpoint_dir is None or not (manifest.checkpoint or module.checkpoint):
@@ -256,7 +264,7 @@ CREATE TABLE IF NOT EXISTS maintenance_metrics (
 """
 
 
-def _resolve_observability_store(store_dir: "Path | None", observability_store: Any) -> Any:
+def _resolve_observability_store(store_dir: Path | None, observability_store: Any) -> Any:
     """Return the supplied observability-store backend or build a default DuckDB one.
 
     Internal helper so probe/metric writers can stay backend-agnostic without
@@ -274,15 +282,15 @@ def _resolve_observability_store(store_dir: "Path | None", observability_store: 
 def _write_maintenance_metrics(
     module_id: str,
     run_id: str,
-    timing: "dict[str, Any]",
-    store_dir: "Path | None",
+    timing: dict[str, Any],
+    store_dir: Path | None,
     observability_store: Any = None,
 ) -> None:
     store = _resolve_observability_store(store_dir, observability_store)
     if store is None:
         return
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
         with store.connect() as cur:
             cur.execute(_MAINTENANCE_METRICS_DDL)
             cur.execute(
@@ -294,7 +302,7 @@ def _write_maintenance_metrics(
                     module_id,
                     timing.get("optimize_ms"),
                     timing.get("vacuum_ms"),
-                    datetime.now(tz=timezone.utc).isoformat(),
+                    datetime.now(tz=UTC).isoformat(),
                 ],
             )
     except Exception as exc:
@@ -304,8 +312,8 @@ def _write_maintenance_metrics(
 def _write_stage_metrics(
     module_id: str,
     run_id: str,
-    metrics: "dict[str, Any]",
-    store_dir: "Path | None",
+    metrics: dict[str, Any],
+    store_dir: Path | None,
     observability_store: Any = None,
 ) -> None:
     """Persist SparkListener stage metrics to the configured observability store (non-fatal)."""
@@ -313,7 +321,7 @@ def _write_stage_metrics(
     if store is None:
         return
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
         with store.connect() as cur:
             cur.execute(_MODULE_METRICS_DDL)
             cur.execute(
@@ -331,7 +339,7 @@ def _write_stage_metrics(
                     metrics.get("records_written"),
                     metrics.get("bytes_written"),
                     metrics.get("duration_ms"),
-                    datetime.now(tz=timezone.utc).isoformat(),
+                    datetime.now(tz=UTC).isoformat(),
                 ],
             )
     except Exception as exc:
@@ -339,11 +347,11 @@ def _write_stage_metrics(
 
 
 def _update_metric(
-    store_dir: "Path",
+    store_dir: Path,
     run_id: str,
     module_id: str,
     column: str,
-    value: "int | None",
+    value: int | None,
     observability_store: Any = None,
 ) -> None:
     """UPDATE a single column in an existing module_metrics row (non-fatal)."""
@@ -387,7 +395,7 @@ def _frame_key(from_id: str, port: str) -> str:
     return from_id if port == "main" else f"{from_id}.{port}"
 
 
-def _apply_spillway_filter(val: Any, edge: "Edge") -> Any:
+def _apply_spillway_filter(val: Any, edge: Edge) -> Any:
     """Typed catch: on a spillway edge with ``error_types``, keep only rows
     whose ``_aq_error_type`` label matches. Lazy transformation — zero Spark
     actions. An edge without ``error_types`` is a catch-all (unfiltered);
@@ -401,7 +409,7 @@ def _apply_spillway_filter(val: Any, edge: "Edge") -> Any:
     return val.filter(F.col(AQ_ERROR_TYPE).isin(list(edge.error_types)))
 
 
-def _cache_if_multi_spillway(df: Any, module_id: str, edges: tuple["Edge", ...]) -> Any:
+def _cache_if_multi_spillway(df: Any, module_id: str, edges: tuple[Edge, ...]) -> Any:
     """Cache the quarantine frame when >1 spillway consumer exists.
 
     Each spillway consumer (typed `error_types` filter or catch-all) is a
@@ -608,19 +616,19 @@ def _reachable_backward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
 
 
 def _legacy_watermark_sidecar_path(
-    store_dir: "Path | None", blueprint_id: str, channel_id: str
-) -> "Path | None":
+    store_dir: Path | None, blueprint_id: str, channel_id: str
+) -> Path | None:
     if store_dir is None:
         return None
     return store_dir / "watermarks" / f"{blueprint_id}__{channel_id}.json"
 
 
 def _migrate_legacy_watermark_sidecar(
-    store_dir: "Path | None",
+    store_dir: Path | None,
     blueprint_id: str,
     channel_id: str,
     depot_key: str,
-    depot: "Any | None",
+    depot: Any | None,
 ) -> str:
     """One-time migration of a pre-Phase-53 watermark sidecar into the Depot.
 
@@ -650,7 +658,7 @@ def _migrate_legacy_watermark_sidecar(
 
 
 def _compute_watermark_from_output(
-    spark: "SparkSession",
+    spark: SparkSession,
     path: str,
     fmt: str,
     watermark_col: str,
@@ -681,7 +689,7 @@ def _compute_watermark_from_output(
 
 def _find_downstream_egress_ids(
     channel_id: str,
-    manifest: "Manifest",
+    manifest: Manifest,
 ) -> list[str]:
     """Return IDs of all Egress modules reachable (any depth) downstream of channel_id."""
     reachable = _reachable_forward(channel_id, manifest.edges)
@@ -750,7 +758,7 @@ def execute(
     explain_capture: dict[str, dict] | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
-    sampling: "ProbeSampling | None" = None,
+    sampling: ProbeSampling | None = None,
 ) -> ExecutionResult:
     """Execute a compiled Manifest.
 
@@ -1620,12 +1628,12 @@ def _fail(
 
 def _on_retry_exhausted(
     exc: Exception,
-    policy: "RetryPolicy",
-    module: "Module",
+    policy: RetryPolicy,
+    module: Module,
     blueprint_id: str,
     run_id: str,
-    module_results: "list[ModuleResult]",
-) -> "tuple[bool, ExecutionResult | None]":
+    module_results: list[ModuleResult],
+) -> tuple[bool, ExecutionResult | None]:
     """Handle retry exhaustion per on_exhaustion policy.
 
     Returns:

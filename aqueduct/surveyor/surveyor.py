@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _iso(dt: datetime) -> str:
@@ -101,10 +101,10 @@ class Surveyor:
         manifest: Manifest,
         store_dir: Path,
         webhook_url: str | None = None,
-        webhook_config: "WebhookEndpointConfig | None" = None,  # type: ignore[name-defined]  # noqa: F821
+        webhook_config: WebhookEndpointConfig | None = None,  # type: ignore[name-defined]  # noqa: F821
         blueprint_path: Path | None = None,
         patches_dir: Path | None = None,
-        stores: "StoreBundle | None" = None,
+        stores: StoreBundle | None = None,
         blob_config: tuple[str, str] | None = None,
         lineage_config: tuple[str, str] | None = None,
     ) -> None:
@@ -131,7 +131,7 @@ class Surveyor:
         # Phase 53 — (backend, location) for the object store. None → local
         # backend rooted at store_dir, byte-identical to the historical layout.
         self._blob_config = blob_config
-        self._blob_store_cached: "BlobStore | None" = None
+        self._blob_store_cached: BlobStore | None = None
         # Phase 55 — OpenLineage emitter. Built only when a url is configured
         # (lineage.openlineage_url); otherwise emission is off, zero cost.
         self._openlineage = None
@@ -146,12 +146,12 @@ class Surveyor:
                 self._openlineage = None
         self._run_id: str | None = None
         self._started_at: datetime | None = None
-        self._stores: "StoreBundle | None" = stores
-        self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
+        self._stores: StoreBundle | None = stores
+        self._observability: ObservabilityStore | None = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
 
-    def _blob_store(self) -> "BlobStore | None":
+    def _blob_store(self) -> BlobStore | None:
         """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
         configured — programmatic callers without a store keep blobs inline."""
         if self._store_dir is None:
@@ -163,11 +163,11 @@ class Surveyor:
         return self._blob_store_cached
 
     @property
-    def observability(self) -> "ObservabilityStore | None":
+    def observability(self) -> ObservabilityStore | None:
         """The active observability store (backs the patch_index + heal cache)."""
         return self._observability
 
-    def patch_store(self) -> "PatchStore":
+    def patch_store(self) -> PatchStore:
         """Build the PatchStore from the configured object-store backend.
 
         Local default reproduces the historical ``patches/`` directory; an
@@ -502,7 +502,7 @@ class Surveyor:
                     str(_uuid.uuid4()),
                     run_id, parent_run_id, failed_module, failure_category, model, patch_id,
                     confidence, patch_applied, run_success_after_patch,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                     prompt_version,
                     failure_signature, failure_signature_coarse, resolution, model_cascade_position,
                 ],
@@ -590,7 +590,7 @@ class Surveyor:
                         bool(getattr(attempt_record, "escalated", False)),
                         stop_reason,
                         prompt_version,
-                        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                        _dt.datetime.now(_dt.UTC).isoformat(),
                     ],
                 )
         except Exception:
@@ -692,7 +692,7 @@ class Surveyor:
                     detail,
                     sample_rows,
                     duration_ms,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                 ],
             )
 
@@ -747,7 +747,7 @@ class Surveyor:
                 """,
                 [
                     bp_id, run_id, module_id,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                     exchange_count, python_udf_count, broadcast_count, plan_text,
                 ],
             )
@@ -831,7 +831,7 @@ class Surveyor:
         if self._observability is None:
             return 0
         import datetime as _dt
-        threshold = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=within_minutes)).isoformat()
+        threshold = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=within_minutes)).isoformat()
         try:
             with self._observability.connect() as cur:
                 row = cur.execute(

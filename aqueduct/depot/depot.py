@@ -50,7 +50,7 @@ class DepotStore:
         self,
         db_path: Path | None = None,
         *,
-        backend: "_DepotStoreBackend | None" = None,
+        backend: _DepotStoreBackend | None = None,
     ) -> None:
         if backend is not None:
             self._backend = backend

@@ -13,15 +13,16 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
-    _resolve_and_load_env,
     _env_options,
     _patches_root_from_blueprint,
-    _uncommitted_applied_patches,)
+    _resolve_and_load_env,
+    _uncommitted_applied_patches,
+    cli,
+)
 
 
-def _patch_index_obs_store(blueprint_path: "Path | None" = None):
+def _patch_index_obs_store(blueprint_path: Path | None = None):
     """Best-effort observability store for patch_index status updates (Phase 53).
 
     Postgres → the shared DSN. DuckDB → the per-blueprint store when a blueprint
@@ -110,6 +111,7 @@ def patch_preview(
     """
     import json as _json
     from pathlib import Path as _Path
+
     from aqueduct.config import ConfigError, load_config
     from aqueduct.patch.apply import (
         PatchError,
@@ -118,12 +120,12 @@ def patch_preview(
         apply_patch_to_dict,
         load_patch_spec,
     )
+    from aqueduct.patch.explain_gate import run_explain_gate
     from aqueduct.patch.preview import (
         render_unified_diff,
         run_lineage_gate,
         run_sandbox_gate,
     )
-    from aqueduct.patch.explain_gate import run_explain_gate
 
     bp_raw = _yaml_load(_Path(blueprint_path))
     try:

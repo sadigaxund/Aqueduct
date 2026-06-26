@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.models import Module
 from aqueduct.errors import AqueductError
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
 
 def _register_external_table(
-    df: "DataFrame",
+    df: DataFrame,
     module_id: str,
     table_name: str,
     fmt: str,
@@ -176,7 +176,7 @@ def _register_external_table(
         )
 
 
-def _write_merge(df: "DataFrame", module: Module) -> None:
+def _write_merge(df: DataFrame, module: Module) -> None:
     """Delta MERGE INTO: upsert df into an existing Delta table.
 
     Config keys:
@@ -248,7 +248,7 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
 
 
 def _write_overwrite_partitions(
-    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None = None, force_merge_schema: bool = False
+    df: DataFrame, module: Module, fmt: str, path: str, table: str | None = None, force_merge_schema: bool = False
 ) -> None:
     """Idempotent partition overwrite — replace only the touched partitions.
 
@@ -334,8 +334,8 @@ def _write_overwrite_partitions(
 
 
 def _existing_target_columns(
-    df: "DataFrame", fmt: str, path: str, table: str | None
-) -> "set[str] | None":
+    df: DataFrame, fmt: str, path: str, table: str | None
+) -> set[str] | None:
     """Return the existing target's column names, or None if it does not exist.
 
     Metadata-only: ``.schema`` on a lazy reader fires no Spark action. A missing
@@ -353,7 +353,7 @@ def _existing_target_columns(
 
 
 def _enforce_on_new_columns(
-    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None, policy: str
+    df: DataFrame, module: Module, fmt: str, path: str, table: str | None, policy: str
 ) -> bool:
     """Apply the ``on_new_columns`` write contract. Returns force_merge_schema.
 
@@ -462,7 +462,7 @@ def build_maintenance_ops(
 
 
 def run_maintenance(
-    spark: "SparkSession",
+    spark: SparkSession,
     module_id: str,
     path: str,
     maintenance_cfg: dict[str, Any],
@@ -497,7 +497,7 @@ def run_maintenance(
     return result
 
 
-def _write_custom(df: "DataFrame", module: Module) -> None:
+def _write_custom(df: DataFrame, module: Module) -> None:
     """Write via a custom Python DataSource (``format: custom`` + ``class:``).
 
     Path is optional — custom sinks may carry their target in ``options``.
@@ -530,7 +530,7 @@ def _write_custom(df: "DataFrame", module: Module) -> None:
     logger.info("[%s] custom DataSource write completed via %s", module.id, name)
 
 
-def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:
+def _write_depot(df: DataFrame, module: Module, depot: Any) -> None:
     """Write a KV entry to the Depot store. ``depot`` must not be None."""
     from pyspark.sql import functions as F
 

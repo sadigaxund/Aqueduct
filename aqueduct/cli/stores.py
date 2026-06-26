@@ -11,10 +11,10 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
     _env_options,
     _resolve_and_load_env,
+    cli,
 )
 
 # ── aqueduct stores ──────────────────────────────────────────────────────────
@@ -38,9 +38,9 @@ def stores_info(
     config_path: str | None, env_file: str | None, cli_env: tuple[str, ...]
 ) -> None:
     """Print each store's resolved backend + location label."""
+    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
-    from aqueduct.cli.style import error as _error
 
     try:
         _resolve_and_load_env(
@@ -105,8 +105,8 @@ def stores_migrate(
     without losing depot watermarks and counters. Idempotent: re-running upserts
     the same keys with the same values.
     """
-    from aqueduct.config import ConfigError, load_config
     from aqueduct.cli.style import error as _error
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
 
     if store.lower() != "depot":

@@ -82,7 +82,7 @@ def _normalize_url(url: str) -> str:
 class DatabricksSubmitter(Submitter):
     """Upload to DBFS, launch a one-shot run, poll to completion."""
 
-    def _api_url(self, cfg: "AqueductConfig", endpoint: str) -> str:
+    def _api_url(self, cfg: AqueductConfig, endpoint: str) -> str:
         databricks = cfg.deployment.databricks
         if databricks is None:
             raise ValueError(
@@ -104,7 +104,7 @@ class DatabricksSubmitter(Submitter):
             )
         return {"Authorization": f"Bearer {token}"}
 
-    def _db_put(self, dbfs_path: str, content: bytes, cfg: "AqueductConfig") -> None:
+    def _db_put(self, dbfs_path: str, content: bytes, cfg: AqueductConfig) -> None:
         handle = None
         try:
             r_create = httpx.post(
@@ -170,7 +170,7 @@ class DatabricksSubmitter(Submitter):
                 f"DBFS close failed for {dbfs_path!r}: {exc.response.status_code}"
             ) from exc
 
-    def _db_read(self, dbfs_path: str, cfg: "AqueductConfig") -> str:
+    def _db_read(self, dbfs_path: str, cfg: AqueductConfig) -> str:
         offset = 0
         chunks: list[str] = []
         while True:
@@ -203,7 +203,7 @@ class DatabricksSubmitter(Submitter):
 
     # ── Submitter ABC ──────────────────────────────────────────────────────
 
-    def package(self, blueprint_path: str, cfg: "AqueductConfig") -> PackagedBlueprint:
+    def package(self, blueprint_path: str, cfg: AqueductConfig) -> PackagedBlueprint:
         from pathlib import Path
 
         bp_path = Path(blueprint_path)
@@ -240,7 +240,7 @@ class DatabricksSubmitter(Submitter):
             run_id=run_id,
         )
 
-    def submit(self, packaged: PackagedBlueprint, cfg: "AqueductConfig") -> str:
+    def submit(self, packaged: PackagedBlueprint, cfg: AqueductConfig) -> str:
         databricks = cfg.deployment.databricks
         if databricks is None:
             raise ValueError("deployment.databricks block is required for target=databricks")
@@ -302,7 +302,7 @@ class DatabricksSubmitter(Submitter):
     def poll(
         self,
         job_id: str,
-        cfg: "AqueductConfig",
+        cfg: AqueductConfig,
         timeout_seconds: float = 3600.0,
     ) -> ExecutionResult:
         deadline = time.monotonic() + timeout_seconds
@@ -387,7 +387,7 @@ class DatabricksSubmitter(Submitter):
             time.sleep(interval)
             interval = min(interval * _BACKOFF_FACTOR, _BACKOFF_CAP)
 
-    def fetch_logs(self, job_id: str, cfg: "AqueductConfig") -> str:
+    def fetch_logs(self, job_id: str, cfg: AqueductConfig) -> str:
         """Read the outcome file written by the bootstrap script on DBFS."""
         outcome_path = f"{self._dbfs_base(job_id)}/../result.json"
         try:

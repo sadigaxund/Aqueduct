@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from aqueduct.errors import AqueductError
 from aqueduct.parser.graph import (
     detect_cycles,
     validate_edge_error_types,
@@ -31,7 +32,6 @@ from aqueduct.parser.models import (
 )
 from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
-from aqueduct.errors import AqueductError
 
 
 class ParseError(AqueductError):

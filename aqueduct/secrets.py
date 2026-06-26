@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import importlib
 import os
-from aqueduct.errors import AqueductError
 from typing import Any
+
+from aqueduct.errors import AqueductError
 
 
 class SecretsError(AqueductError):
@@ -141,8 +142,8 @@ def _fetch_aws(key: str, region: str | None) -> str | None:
 
 def _fetch_gcp(key: str, region: str | None) -> str | None:
     try:
-        from google.cloud import secretmanager
         from google.api_core.exceptions import NotFound
+        from google.cloud import secretmanager
     except ImportError:
         raise SecretsError(
             "secrets.provider=gcp requires google-cloud-secret-manager. "
@@ -172,9 +173,9 @@ def _fetch_gcp(key: str, region: str | None) -> str | None:
 
 def _fetch_azure(key: str, region: str | None) -> str | None:
     try:
-        from azure.keyvault.secrets import SecretClient
-        from azure.identity import DefaultAzureCredential
         from azure.core.exceptions import ResourceNotFoundError
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
     except ImportError:
         raise SecretsError(
             "secrets.provider=azure requires azure-keyvault-secrets and azure-identity. "

@@ -12,10 +12,11 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
+    cli,
+)
 
 
 @cli.command("completion")
@@ -111,8 +112,9 @@ def test_cmd(
     """
     from pathlib import Path
 
+    from aqueduct.cli.style import error as _error
+    from aqueduct.cli.style import success as _success
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.cli.style import error as _error, success as _success
     from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
     from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
 

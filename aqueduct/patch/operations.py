@@ -28,6 +28,26 @@ from typing import Any
 from ruamel.yaml import YAML as _YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString as _DQ
 
+from aqueduct.compiler.expander import is_arcade_expanded_id
+from aqueduct.errors import AqueductError
+from aqueduct.parser.models import ModuleType
+from aqueduct.patch.grammar import (
+    AddArcadeRefOp,
+    AddProbeOp,
+    DeferToHumanOp,
+    InsertModuleOp,
+    RemoveModuleOp,
+    ReplaceContextValueOp,
+    ReplaceEdgeOp,
+    ReplaceMacroOp,
+    ReplaceModuleConfigOp,
+    ReplaceModuleLabelOp,
+    ReplaceRetryPolicyOp,
+    SetModuleConfigKeyOp,
+    SetModuleOnFailureOp,
+    SetSparkConfigOp,
+)
+
 _ryaml = _YAML()
 _ryaml.preserve_quotes = True
 _ryaml.default_flow_style = False
@@ -56,25 +76,6 @@ def _to_ruamel(data: Any) -> Any:
     _ryaml.dump(_quote_strings(data), buf)
     return _ryaml.load(buf.getvalue())
 
-from aqueduct.errors import AqueductError
-from aqueduct.compiler.expander import is_arcade_expanded_id
-from aqueduct.parser.models import ModuleType
-from aqueduct.patch.grammar import (
-    AddArcadeRefOp,
-    AddProbeOp,
-    DeferToHumanOp,
-    InsertModuleOp,
-    RemoveModuleOp,
-    ReplaceContextValueOp,
-    ReplaceEdgeOp,
-    ReplaceMacroOp,
-    ReplaceModuleConfigOp,
-    ReplaceModuleLabelOp,
-    ReplaceRetryPolicyOp,
-    SetModuleConfigKeyOp,
-    SetModuleOnFailureOp,
-    SetSparkConfigOp,
-)
 
 
 class PatchOperationError(AqueductError):

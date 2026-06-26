@@ -38,16 +38,22 @@ from __future__ import annotations
 
 import importlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.models import Module
-from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_RULE, AQ_ERROR_TYPE, AQ_ERROR_TS
 from aqueduct.errors import AqueductError
+from aqueduct.executor.spark.error_columns import (
+    AQ_ERROR_MODULE,
+    AQ_ERROR_MSG,
+    AQ_ERROR_RULE,
+    AQ_ERROR_TS,
+    AQ_ERROR_TYPE,
+)
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +104,11 @@ class AssertError(AqueductError):
 
 def execute_assert(
     module: Module,
-    df: "DataFrame",
-    spark: "SparkSession",
+    df: DataFrame,
+    spark: SparkSession,
     run_id: str,
     blueprint_id: str,
-) -> "tuple[DataFrame, DataFrame | None]":
+) -> tuple[DataFrame, DataFrame | None]:
     """Evaluate Assert rules against df.
 
     Args:
@@ -157,7 +163,13 @@ def execute_assert(
                     )
                 max_age_hours = float(rule.get("max_age_hours", 24))
                 from pyspark.sql import functions as F
-                from pyspark.sql.types import LongType, DoubleType, FloatType, IntegerType, ShortType
+                from pyspark.sql.types import (
+                    DoubleType,
+                    FloatType,
+                    IntegerType,
+                    LongType,
+                    ShortType,
+                )
                 hours_int = int(max_age_hours)
                 minutes_int = round((max_age_hours - hours_int) * 60)
                 interval = f"INTERVAL {hours_int} HOURS {minutes_int} MINUTES" if minutes_int else f"INTERVAL {hours_int} HOURS"
@@ -268,7 +280,7 @@ def _handle_fail(
 
 # ── Phase 1: schema_match ─────────────────────────────────────────────────────
 
-def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -> None:
+def _check_schema_match(module_id: str, df: DataFrame, rule: dict[str, Any]) -> None:
     """Zero Spark action. Checks df.schema against expected field map."""
     expected: dict[str, str] = rule.get("expected", {})
     on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
@@ -295,7 +307,7 @@ def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -
 
 def _batch_aggregate_rules(
     module_id: str,
-    df: "DataFrame",
+    df: DataFrame,
     rules: list[dict[str, Any]],
     blueprint_id: str,
     run_id: str,
@@ -372,10 +384,10 @@ def _batch_aggregate_rules(
                     )
                 else:
                     if hasattr(max_ts, "timestamp"):
-                        ts_utc = max_ts.replace(tzinfo=timezone.utc) if max_ts.tzinfo is None else max_ts
+                        ts_utc = max_ts.replace(tzinfo=UTC) if max_ts.tzinfo is None else max_ts
                     else:
-                        ts_utc = datetime.fromtimestamp(float(max_ts), tz=timezone.utc)
-                    age_hours = (datetime.now(tz=timezone.utc) - ts_utc).total_seconds() / 3600
+                        ts_utc = datetime.fromtimestamp(float(max_ts), tz=UTC)
+                    age_hours = (datetime.now(tz=UTC) - ts_utc).total_seconds() / 3600
                     if age_hours > max_age_hours:
                         _handle_fail(
                             on_fail, module_id, AssertRuleType.FRESHNESS,
@@ -441,8 +453,8 @@ def _batch_aggregate_rules(
 
 def _check_spillway_rate(
     module_id: str,
-    df: "DataFrame",
-    quarantine_df: "DataFrame | None",
+    df: DataFrame,
+    quarantine_df: DataFrame | None,
     spillway_rules: list[tuple[int, dict[str, Any]]],
     blueprint_id: str,
     run_id: str,
@@ -471,10 +483,10 @@ def _check_spillway_rate(
 
 def _apply_row_rule(
     module_id: str,
-    df: "DataFrame",
+    df: DataFrame,
     rule: dict[str, Any],
-    spark: "SparkSession",
-) -> "tuple[DataFrame, DataFrame | None]":
+    spark: SparkSession,
+) -> tuple[DataFrame, DataFrame | None]:
     """Apply a row-level rule.  Returns (passing_df, quarantine_df | None).
 
     Lazy — no Spark actions triggered.
@@ -568,7 +580,7 @@ def _apply_row_rule(
 
 def _handle_fail_if_any(
     module_id: str,
-    failing_df: "DataFrame",
+    failing_df: DataFrame,
     on_fail: Any,
     rule_type: str,
     message: str,
@@ -637,7 +649,7 @@ def _fire_rule_webhook(
             "message": message,
             "blueprint_id": blueprint_id,
             "run_id": run_id,
-            "fired_at": datetime.now(tz=timezone.utc).isoformat(),
+            "fired_at": datetime.now(tz=UTC).isoformat(),
         }
         fire_webhook(config, full_payload)
     except Exception as exc:

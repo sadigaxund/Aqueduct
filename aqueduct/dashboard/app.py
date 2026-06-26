@@ -33,8 +33,8 @@ import streamlit as st
 
 _md = "\u2014"  # em-dash, pre-computed for Python 3.11 f-string compat
 
-from aqueduct.redaction import redact
-from aqueduct.stores import queries as q
+from aqueduct.redaction import redact  # noqa: E402  (intentional mid-file import)
+from aqueduct.stores import queries as q  # noqa: E402  (intentional mid-file import)
 
 # status → cell colour (real colored cells, no emoji)
 _COLOR = {

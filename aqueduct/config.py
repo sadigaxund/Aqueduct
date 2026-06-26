@@ -78,7 +78,7 @@ class DatabricksDeployConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_cluster(self) -> "DatabricksDeployConfig":
+    def _validate_cluster(self) -> DatabricksDeployConfig:
         if not self.cluster_id and not self.new_cluster:
             raise ValueError(
                 "deployment.databricks: one of cluster_id or new_cluster is required"
@@ -113,7 +113,7 @@ class DeploymentConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _validate_target_master_url(self) -> "DeploymentConfig":
+    def _validate_target_master_url(self) -> DeploymentConfig:
         """Enforce target ↔ master_url consistency for in-cluster Spark targets.
 
         Remote-submit targets (databricks / emr / dataproc) are rejected with
@@ -455,7 +455,7 @@ class StoresConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _warn_local_blob_under_remote_obs(self) -> "StoresConfig":
+    def _warn_local_blob_under_remote_obs(self) -> StoresConfig:
         """Storage-integrity guardrail: a remote observability backend with an
         IMPLICITLY-local blob store silently writes large payloads (manifests,
         stack traces, provenance) to the driver's local disk — a surprise that can
@@ -912,7 +912,7 @@ class AqueductConfig(BaseModel):
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
     lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
-    warnings: "WarningsConfig" = Field(default_factory=lambda: WarningsConfig())
+    warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
     spark_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",
@@ -947,7 +947,7 @@ _OBJECT_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
+def _validate_store_backends(stores_cfg: StoresConfig) -> None:
     """Fail fast at config-load if a store's backend SDK is missing.
 
     Mirrors `_validate_secrets_backend()`. The `RelationalBackend` /
@@ -995,7 +995,7 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
                 )
 
 
-def _validate_secrets_backend(secrets_cfg: "SecretsConfig") -> None:
+def _validate_secrets_backend(secrets_cfg: SecretsConfig) -> None:
     """Fail fast at config-load if the configured secrets provider's SDK is missing.
 
     Mirrors the check `aqueduct doctor:check_secrets()` performs, but earlier in
@@ -1051,7 +1051,7 @@ def _expand_env(text: str) -> tuple[str, list[str]]:
     return _ENV_VAR_RE.sub(_replace_env, text), missing
 
 
-def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[str]]:
+def _expand_secrets(text: str, secrets_cfg: SecretsConfig) -> tuple[str, list[str]]:
     """Second pass — resolve ``@aq.secret('KEY')`` via the configured provider.
 
     Registers every resolved value with ``aqueduct.redaction`` so it can be

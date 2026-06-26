@@ -27,7 +27,8 @@ never surfaced to the healing LLM. Only install probe plugins you trust.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 # setuptools entry-point group for distributing custom probe signals.
 AQ_PROBE_ENTRYPOINT_GROUP = "aqueduct.probe_signals"

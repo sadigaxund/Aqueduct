@@ -23,7 +23,7 @@ from __future__ import annotations
 import sys
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aqueduct.infra.http import deliver_with_retry, fire_and_forget
@@ -132,7 +132,7 @@ def build_run_event(
         }
     return {
         "eventType": event_type,
-        "eventTime": event_time or datetime.now(tz=timezone.utc).isoformat(),
+        "eventTime": event_time or datetime.now(tz=UTC).isoformat(),
         "run": {"runId": run_uuid(run_id), "facets": run_facets},
         "job": {"namespace": job_namespace, "name": job_name},
         "inputs": inputs,

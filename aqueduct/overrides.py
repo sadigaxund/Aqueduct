@@ -28,12 +28,13 @@ from __future__ import annotations
 import json
 import types
 import typing
-from aqueduct.errors import AqueductError
 from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Any
 
 from pydantic import BaseModel
+
+from aqueduct.errors import AqueductError
 
 
 class OverrideError(AqueductError):

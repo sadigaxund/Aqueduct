@@ -14,11 +14,11 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
-
+    cli,
+)
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
 
@@ -99,9 +99,14 @@ def heal(
     Scenario/aqscenario evaluation is a separate concern — use
     `aqueduct benchmark <file-or-dir>`.
     """
-    from aqueduct.config import ConfigError, load_config
+    from aqueduct.agent import (
+        AgentRunConfig,
+        build_prompt,
+        generate_agent_patch,
+        stage_patch_for_human,
+    )
     from aqueduct.cli.style import error as _error
-    from aqueduct.agent import AgentRunConfig, build_prompt, generate_agent_patch, stage_patch_for_human
+    from aqueduct.config import ConfigError, load_config
 
     if not run_id:
         _error("provide a run_id argument")
@@ -154,12 +159,12 @@ def heal(
     patches_path = Path(patches_dir)
 
     # ── Live run mode ─────────────────────────────────────────────────────────
-    from aqueduct.surveyor.models import FailureContext
     from aqueduct.stores.read import (
         open_obs_read,
         resolve_duckdb_obs_path,
         resolve_obs_store_dir,
     )
+    from aqueduct.surveyor.models import FailureContext
 
     # Backend-aware: DuckDB file (resolved) OR the configured Postgres store.
     store = open_obs_read(cfg, store_dir, run_id=run_id)
@@ -264,7 +269,7 @@ def heal(
         if not _gb:
             return True, None, None, None
         try:
-            from aqueduct.patch.apply import _check_guardrails, PatchError
+            from aqueduct.patch.apply import PatchError, _check_guardrails
             bp_raw = {"agent": {"guardrails": _gb}}
             try:
                 _check_guardrails(patch_spec, bp_raw, provenance_map=None)

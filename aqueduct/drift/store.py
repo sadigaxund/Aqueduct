@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 #: Sole owner of the drift_checks DDL — created lazily by `aqueduct drift`, not
@@ -69,7 +69,7 @@ def record_check(
 ) -> str:
     """Insert one drift-check audit row. Returns the row id."""
     check_id = uuid.uuid4().hex
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
     with observability_store.connect() as cur:
         cur.execute(
             """

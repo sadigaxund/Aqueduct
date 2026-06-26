@@ -423,8 +423,9 @@ def check_store_backend(
 
     if backend == "duckdb":
         try:
-            import duckdb as _duckdb
             from pathlib import Path as _Path
+
+            import duckdb as _duckdb
             if path_or_dsn is None:
                 return CheckResult(label, "ok", "backend=duckdb  (default per-blueprint routing)", _ms(t))
             p = _Path(path_or_dsn)

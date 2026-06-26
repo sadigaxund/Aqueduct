@@ -20,19 +20,18 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.budget import (
     BudgetConfig,
     BudgetTracker,
     StopReason,
 )
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.parse import (
     _detect_structural_error,
     _format_reprompt_error,
     _format_reprompt_for_next_turn,
     _parse_patch_spec,
 )
-from aqueduct.utils import utcnow_iso
 from aqueduct.agent.prompts import _build_user_prompt
 from aqueduct.agent.providers import (
     _ESCALATION_TEMPERATURE,
@@ -50,6 +49,7 @@ from aqueduct.agent.signature import (
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
+from aqueduct.utils import utcnow_iso
 
 if TYPE_CHECKING:
     from aqueduct.config import WebhookEndpointConfig

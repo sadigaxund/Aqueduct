@@ -37,6 +37,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -136,14 +137,15 @@ class ScenarioResult:
 
 # ── Failure context builder ───────────────────────────────────────────────────
 
-def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (FailureContext, Blueprint)
+def _build_failure_ctx(scenario: AqScenario) -> tuple[Any, Any]:  # (FailureContext, Blueprint)
     """Build a synthetic FailureContext + return parsed Blueprint.
 
     Returns the Blueprint alongside the FailureContext so callers can extract
     ``agent.guardrails`` (Phase 33 Part B Scope C step 2 — scenario guardrail
     enforcement) without re-parsing the blueprint a second time.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from aqueduct.surveyor.models import FailureContext
 
     blueprint_path = (scenario.source_path.parent / scenario.blueprint).resolve()
@@ -153,15 +155,15 @@ def _build_failure_ctx(scenario: AqScenario) -> tuple["Any", "Any"]:  # (Failure
         )
 
     # Parse + compile to get a real manifest (no Spark needed)
-    from aqueduct.parser.parser import parse
     from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.parser.parser import parse
 
     bp = parse(str(blueprint_path))
     manifest = compiler_compile(bp, blueprint_path=blueprint_path)
     manifest_json = json.dumps(manifest.to_dict())
 
     inj = scenario.inject_failure
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
 
     # Optional `structured:` block lets a scenario carry the same
     # high-fidelity error fields that production extracts from
@@ -318,7 +320,7 @@ def _check_expected_effect(
             continue
 
         # Booleans / numbers → strict equality.
-        if isinstance(expected_val, (bool, int, float)) and not isinstance(expected_val, bool) is False:
+        if isinstance(expected_val, (bool, int, float)) and isinstance(expected_val, bool) is not False:
             # `isinstance(True, int)` is True in Python; the redundant check above keeps bools as bools.
             if actual_val != expected_val:
                 failures.append(
@@ -349,7 +351,7 @@ def _check_expected_effect(
     return failures
 
 
-def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, list[str] | None, dict | None]:
+def _try_apply_patch(patch: Any, blueprint_path: Path) -> tuple[bool, str, list[str] | None, dict | None]:
     """Try applying patch to blueprint.
 
     Returns (success, error_message, violated_guardrails, patched_dict).
@@ -371,11 +373,15 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
     new effect-based grader without re-running the apply pipeline.
     """
     try:
-        from aqueduct.patch.apply import (
-            _check_guardrails, _yaml_load, apply_patch_to_dict, PatchError,
-        )
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse_dict
-        from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
+        from aqueduct.patch.apply import (
+            PatchError,
+            _check_guardrails,
+            _yaml_load,
+            apply_patch_to_dict,
+        )
 
         bp_raw = _yaml_load(blueprint_path)
 
@@ -418,7 +424,7 @@ def _try_apply_patch(patch: "Any", blueprint_path: Path) -> tuple[bool, str, lis
 
 def _check_assertions(
     assertions: list[dict[str, Any]],
-    patch: "Any",  # PatchSpec | None
+    patch: Any,  # PatchSpec | None
     blueprint_path: Path | None,
     attempts: int = 0,
 ) -> tuple[list[str], list[str], bool, bool, bool | None, bool | None, list[str] | None, dict | None]:
@@ -837,7 +843,7 @@ def format_benchmark_table(
 
     scenario_ids = list(results.keys())
 
-    def _format_cell(r: "ScenarioResult | None") -> str:
+    def _format_cell(r: ScenarioResult | None) -> str:
         if r is None:
             return "—"
         status = "PASS" if r.passed else "FAIL"

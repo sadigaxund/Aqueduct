@@ -42,7 +42,9 @@ def field_is_fs_path(metadata: tuple, annotation: type | None = None) -> FsPath 
     Handles ``Optional[Annotated[str, FsPath()]]`` where pydantic strips
     metadata from the union.
     """
-    from typing import Union, get_args as _ga, get_origin as _go
+    from typing import Union
+    from typing import get_args as _ga
+    from typing import get_origin as _go
 
     # Check metadata first (direct Annotated[...])
     for m in metadata:
