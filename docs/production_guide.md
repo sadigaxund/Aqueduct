@@ -383,6 +383,11 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
+**Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact — that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:
+
+- `secret:` — HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
+- `max_retries:` (default 1) / `backoff_seconds:` (default 2.0) — bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
+
 ### `patches/rules.md`
 
 `patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt. Use it to encode project-specific repair rules:

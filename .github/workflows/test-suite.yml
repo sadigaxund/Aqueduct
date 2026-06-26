@@ -46,9 +46,11 @@ jobs:
               - 'gallery/snippets/**'
             surveyor:
               - 'aqueduct/surveyor/**'
+              - 'aqueduct/infra/**'
               - 'tests/test_surveyor/**'
             agent:
               - 'aqueduct/agent/**'
+              - 'aqueduct/infra/**'
               - 'tests/test_agent/**'
             patch:
               - 'aqueduct/patch/**'

@@ -6,8 +6,8 @@ import threading
 from unittest.mock import MagicMock, patch
 
 import httpx
-
 import pytest
+
 pytestmark = pytest.mark.unit
 
 from aqueduct.config import WebhookEndpointConfig
@@ -208,3 +208,42 @@ def test_fire_webhook_network_error_retried(capsys):
         assert mock_req.call_count == 2
         captured = capsys.readouterr()
         assert "retrying" in captured.err
+
+
+def test_fire_webhook_hmac_signing():
+    """When config.secret is set, an X-Aqueduct-Signature header is added and the
+    body is sent as signed bytes (content=) so the digest matches what is sent."""
+    import hashlib
+    import hmac
+
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        cfg = _cfg("http://hooks.test/secure", secret="topsecret", payload={"k": "v"})
+        fire_webhook(cfg, full_payload={}, template_vars={}).join(timeout=2)
+
+        kwargs = mock_req.call_args.kwargs
+        # Signed path sends bytes via content=, NOT json=
+        assert kwargs.get("json") is None
+        content = kwargs["content"]
+        assert isinstance(content, bytes)
+        sig = kwargs["headers"]["X-Aqueduct-Signature"]
+        assert sig.startswith("sha256=")
+        expected = "sha256=" + hmac.new(b"topsecret", content, hashlib.sha256).hexdigest()
+        assert sig == expected
+
+
+def test_fire_webhook_no_signature_without_secret():
+    """No X-Aqueduct-Signature header when no secret is configured."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        fire_webhook(_cfg("http://hooks.test/plain"), {"k": "v"}).join(timeout=2)
+        assert "X-Aqueduct-Signature" not in mock_req.call_args.kwargs["headers"]
+
+
+def test_fire_webhook_configurable_retries():
+    """max_retries controls the number of delivery attempts."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=503)  # retryable
+        # 0 retries → exactly 1 attempt; backoff small so the thread finishes fast
+        fire_webhook(_cfg("http://hooks.test/x", max_retries=0, backoff_seconds=0.01), {"k": 1}).join(timeout=2)
+        assert mock_req.call_count == 1

@@ -30,11 +30,10 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from aqueduct.parser.fs_path import FsPath, field_is_fs_path
-from aqueduct.parser.schema import CascadeTierSchema
-
 from aqueduct.agent.constants import DEFAULT_LLM_MODEL
 from aqueduct.errors import AqueductError
+from aqueduct.parser.fs_path import FsPath, field_is_fs_path
+from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
@@ -794,6 +793,28 @@ class WebhookEndpointConfig(BaseModel):
         ),
     )
     timeout: int = Field(default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)")
+    secret: str | None = Field(
+        default=None,
+        description=(
+            "HMAC-SHA256 signing secret. When set, an "
+            "'X-Aqueduct-Signature: sha256=<digest>' header is added so the "
+            "receiver can verify payload authenticity and integrity. The digest "
+            "is computed over the exact request body. May contain ${ENV_VAR} tokens."
+        ),
+    )
+    max_retries: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "Retries beyond the first attempt on transient failures "
+            "(429/500/502/503/504 or network errors). 0 disables retry."
+        ),
+    )
+    backoff_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description="Base backoff between retries; exponential (base * 2**(n-1)) when max_retries > 1.",
+    )
 
 
 class WebhooksConfig(BaseModel):
@@ -1040,8 +1061,8 @@ def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[
     Returns ``(expanded_text, missing_secrets)``. ``missing_secrets`` collects
     keys the provider did not find — caller raises ``ConfigError``.
     """
-    from aqueduct.secrets import SecretsError, resolve_secret
     from aqueduct import redaction
+    from aqueduct.secrets import SecretsError, resolve_secret
 
     missing: list[str] = []
 
@@ -1129,6 +1150,7 @@ def _migrate_depot_block(data: dict, *, warn: bool) -> None:
         depots["default"] = dict(legacy)
         if warn:
             import warnings as _warnings
+
             from aqueduct import AqueductWarning
             _warnings.warn(
                 "stores.depot is deprecated — use the stores.depots: map. The block "
@@ -1204,6 +1226,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             _raw_key = _raw_agent.get("api_key") if isinstance(_raw_agent, dict) else None
             if isinstance(_raw_key, str) and _raw_key.strip() and not _raw_key.startswith("@aq.secret(") and "${" not in _raw_key:
                 import warnings as _warnings
+
                 from aqueduct.warnings import AqueductWarning
                 _warnings.warn(
                     f"[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "

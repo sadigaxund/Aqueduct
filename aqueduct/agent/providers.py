@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -21,6 +20,7 @@ from typing import Any
 
 from aqueduct.agent.constants import ANTHROPIC_API_VERSION, DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.prompts import _build_system_prompt
+from aqueduct.infra.http import RETRYABLE_PROVIDER_STATUS, backoff_delay, retry_after_seconds
 from aqueduct.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
@@ -30,22 +30,14 @@ logger = logging.getLogger(__name__)
 # doesn't keep regenerating the same wrong tree.
 _ESCALATION_TEMPERATURE = 0.8
 
-# Phase 46 — transient provider errors worth retrying. 429 rate limit,
-# 503 service unavailable, 529 Anthropic "overloaded".
-_RETRYABLE_STATUS = frozenset({429, 503, 529})
+# Phase 46 — transient provider errors worth retrying (429 rate limit, 503
+# unavailable, 529 Anthropic "overloaded"). Single source of truth in
+# infra.http; aliased here so existing patch paths keep working
+# (providers._RETRYABLE_STATUS / providers._retry_after_seconds).
+_RETRYABLE_STATUS = RETRYABLE_PROVIDER_STATUS
+_retry_after_seconds = retry_after_seconds
 
 _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
-
-
-def _retry_after_seconds(response: Any) -> float | None:
-    """Parse a Retry-After header (delta-seconds form only) — None when absent/invalid."""
-    raw = response.headers.get("retry-after")
-    if not raw:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except (TypeError, ValueError):
-        return None
 
 
 def _post_with_retry(
@@ -80,7 +72,7 @@ def _post_with_retry(
         attempt += 1
         sleep = _retry_after_seconds(response)
         if sleep is None:
-            sleep = backoff_seconds * (2 ** (attempt - 1)) * (1.0 + random.random() * 0.25)
+            sleep = backoff_delay(attempt, backoff_seconds, jitter=0.25)
         remaining = total_seconds - (time.monotonic() - t0)
         if sleep >= remaining - 1.0:
             response.raise_for_status()

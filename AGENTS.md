@@ -183,6 +183,14 @@ modules.
 | `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 | `read.py` | Canonical backend-aware READ resolver (Phase 69): `resolve_duckdb_obs_path` (single source for the duckdb obs file — `cli._resolve_obs_db` delegates here) + `open_obs_read` (returns an `ObservabilityStore` for duckdb *or* postgres). All read commands must use it instead of raw `duckdb.connect` + hardcoded `.aqueduct/...` paths |
 
+### `aqueduct/infra/` — Cross-layer infrastructure utilities (no domain logic)
+
+| Module | What it owns |
+|--------|--------------|
+| `http.py` | Single source of truth for outbound-HTTP mechanics: `RETRYABLE_DELIVERY_STATUS` / `RETRYABLE_PROVIDER_STATUS`, `retry_after_seconds`, `backoff_delay`, `sign_body` (HMAC-SHA256), `fire_and_forget` (daemon thread), `deliver_with_retry` (best-effort POST loop, stderr-logged). The webhook + OpenLineage daemon-delivery paths build on it; `agent/providers.py` aliases its retryable-status constant + helpers (so existing `providers._RETRYABLE_STATUS` / `_retry_after_seconds` patch paths keep working). Add a new outbound-HTTP caller here, do not re-implement retry/backoff inline. |
+
+When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs-API client (`deploy/databricks.py`) and doctor probes are intentionally NOT on this path (synchronous API client / one-shot reachability probe — different shapes).
+
 ### `aqueduct/depot/` — Cross-run KV state
 
 | Module | What it owns |

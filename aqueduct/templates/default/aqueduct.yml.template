@@ -446,9 +446,15 @@ webhooks:
   #   url: "https://ops.example.com/api/v1/aqueduct-failure"
   #   method: POST
   #   headers:
-  #     Authorization: "Bearer ${OPS_API_TOKEN}"
+  #     Authorization: "Bearer ${OPS_API_TOKEN}"   # endpoint auth (header is NOT redacted)
   #     X-Source: "aqueduct"
   #   timeout: 15
+  #   # Optional hardening:
+  #   secret: "${WEBHOOK_SIGNING_SECRET}"  # HMAC-SHA256-sign the body; receiver verifies
+  #                                        # the X-Aqueduct-Signature: sha256=<digest> header
+  #   max_retries: 2                       # retries on 429/5xx/network (default 1; 0 disables)
+  #   backoff_seconds: 2.0                 # base backoff; exponential when max_retries > 1
+  # Every delivery also carries an X-Aqueduct-Delivery: <uuid> header for receiver-side dedup.
 
 
 # ── OpenLineage Emission ─────────────────────────────────────────────────────

@@ -26,9 +26,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from aqueduct.infra.http import deliver_with_retry, fire_and_forget
 from aqueduct.models import ModuleType
-
-import httpx
 
 _PRODUCER = "https://github.com/sadigaxund/aqueduct"
 _RUN_EVENT_SCHEMA = (
@@ -41,10 +40,6 @@ _COLUMN_LINEAGE_FACET_SCHEMA = (
 
 # Terminal run states recognised by the OpenLineage spec.
 _VALID_EVENT_TYPES = frozenset({"START", "COMPLETE", "FAIL"})
-
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-_DELIVERY_ATTEMPTS = 2
-_DELIVERY_BACKOFF_SECONDS = 2.0
 
 
 def run_uuid(run_id: str) -> str:
@@ -206,30 +201,11 @@ class OpenLineageEmitter:
         return self._post(event)
 
     def _post(self, event: dict) -> threading.Thread:
-        url, timeout = self._url, self._timeout
-
-        def _send() -> None:
-            import time as _time
-            for attempt in range(1, _DELIVERY_ATTEMPTS + 1):
-                retryable = False
-                try:
-                    resp = httpx.post(url, json=event, timeout=timeout,
-                                      headers={"Content-Type": "application/json"})
-                    if resp.status_code < 400:
-                        return
-                    retryable = resp.status_code in _RETRYABLE_STATUS
-                    print(f"[surveyor] openlineage POST {url!r} returned HTTP {resp.status_code}",
-                          file=sys.stderr)
-                except httpx.RequestError as exc:
-                    retryable = True
-                    print(f"[surveyor] openlineage POST {url!r} failed: {exc}", file=sys.stderr)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[surveyor] openlineage POST {url!r} raised: {exc}", file=sys.stderr)
-                    return
-                if not retryable or attempt >= _DELIVERY_ATTEMPTS:
-                    return
-                _time.sleep(_DELIVERY_BACKOFF_SECONDS)
-
-        thread = threading.Thread(target=_send, daemon=True, name="surveyor-openlineage")
-        thread.start()
-        return thread
+        return fire_and_forget(
+            lambda: deliver_with_retry(
+                "POST", self._url, json=event,
+                headers={"Content-Type": "application/json"},
+                timeout=self._timeout, label="openlineage",
+            ),
+            name="surveyor-openlineage",
+        )

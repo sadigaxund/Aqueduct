@@ -1725,16 +1725,27 @@ def run(
             elif effective_mode == "ci":
                 _ci_url = resolved_agent_base_url or cfg.agent.ci_webhook_url
                 if _ci_url:
-                    try:
-                        import httpx as _httpx
-                        _httpx.post(_ci_url, json={
-                            "patch": patch.model_dump(),
-                            "run_id": iteration_run_id,
-                            "blueprint_id": manifest.blueprint_id,
-                            "failed_module": failure_ctx.failed_module,
-                        }, timeout=10)
-                    except Exception as _ce:
-                        click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
+                    # Best-effort, async, redacted, with one transient retry — same
+                    # transport as the configured webhooks. (Previously this was a
+                    # synchronous bare httpx.post with no redaction: it blocked the
+                    # heal loop on a slow CI endpoint and could leak a resolved
+                    # secret embedded in the patch config.)
+                    from aqueduct.infra.http import deliver_with_retry, fire_and_forget
+                    from aqueduct.redaction import redact as _redact
+                    _ci_body = _redact({
+                        "patch": patch.model_dump(),
+                        "run_id": iteration_run_id,
+                        "blueprint_id": manifest.blueprint_id,
+                        "failed_module": failure_ctx.failed_module,
+                    })
+                    fire_and_forget(
+                        lambda url=_ci_url, body=_ci_body: deliver_with_retry(
+                            "POST", url, json=body,
+                            headers={"Content-Type": "application/json"},
+                            timeout=10, label="ci-webhook",
+                        ),
+                        name="ci-webhook",
+                    )
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
                                       source=_patch_source,

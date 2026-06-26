@@ -133,7 +133,7 @@ def test_emitter_normalises_url():
 def test_emitter_posts_event_with_column_lineage_facet():
     m = _manifest()
     emitter = OpenLineageEmitter("http://ol.test", "ns", m)
-    with patch("httpx.post") as mock_post:
+    with patch("httpx.request") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         # COMPLETE for an unstarted run lazily emits START first, then COMPLETE.
         thread = emitter.emit("COMPLETE", run_id="run_1")
@@ -152,7 +152,7 @@ def test_emitter_lazy_start_for_unstarted_run():
     """A terminal event for a run_id that never got a START (e.g. a heal re-run)
     emits a synthetic START first, so consumers never see a START-less terminal."""
     emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
-    with patch("httpx.post") as mock_post:
+    with patch("httpx.request") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         emitter.emit("COMPLETE", run_id="heal_run_2")
         for c in mock_post.call_args_list:
@@ -168,7 +168,7 @@ def test_emitter_lazy_start_for_unstarted_run():
 
 def test_emitter_no_duplicate_start_when_already_started():
     emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
-    with patch("httpx.post") as mock_post:
+    with patch("httpx.request") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
         emitter.emit("START", run_id="r1")
         emitter.emit("COMPLETE", run_id="r1")
@@ -182,7 +182,7 @@ def test_emitter_no_duplicate_start_when_already_started():
 
 def test_emitter_server_error_logged_not_raised(capsys):
     emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
-    with patch("httpx.post") as mock_post:
+    with patch("httpx.request") as mock_post:
         mock_post.return_value = MagicMock(status_code=500)
         emitter.emit("START", run_id="run_1").join(timeout=2)
     assert "500" in capsys.readouterr().err
