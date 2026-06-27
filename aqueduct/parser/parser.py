@@ -38,18 +38,26 @@ class ParseError(AqueductError):
     """Raised for any Blueprint parse, validation, or resolution failure."""
 
 
-def _build_cascade(raw: list | None) -> tuple | None:
-    """Phase 44 — Convert Pydantic ``CascadeTierSchema`` list to frozen configs."""
+def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | None:
+    """Phase 44 — Convert Pydantic ``CascadeTierSchema`` list to frozen configs.
+
+    ``ctx_map`` resolves ``${ENV:-default}`` template literals on the tier's
+    string fields, exactly as the flat ``agent.*`` fields are resolved (ISSUE-047
+    #1 — without this a cascade ``base_url`` reaches httpx as the literal
+    ``${AQ_CASCADE_0_URL:-…}`` and fails "missing http:// protocol"). When
+    ``ctx_map`` is None the raw values pass through unchanged.
+    """
     if not raw:
         return None
+    _rv = (lambda v: resolve_value(v, ctx_map)) if ctx_map is not None else (lambda v: v)
     tiers: list[CascadeTierConfig] = []
     for t in raw:
         tiers.append(CascadeTierConfig(
-            model=t.model,
-            provider=t.provider,
-            base_url=t.base_url,
-            api_key=t.api_key,
-            provider_options=t.provider_options,
+            model=_rv(t.model),
+            provider=_rv(t.provider),
+            base_url=_rv(t.base_url),
+            api_key=_rv(t.api_key),
+            provider_options=_rv(t.provider_options),
             timeout=t.timeout,
             max_tokens=t.max_tokens,
             max_reprompts=t.max_reprompts,
@@ -304,7 +312,7 @@ def parse_dict(
             on_heal_failure=validated.agent.on_heal_failure,
             allow_defer=validated.agent.allow_defer,
             deep_loop=validated.agent.deep_loop,
-            cascade=_build_cascade(validated.agent.cascade),
+            cascade=_build_cascade(validated.agent.cascade, ctx_map),
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,

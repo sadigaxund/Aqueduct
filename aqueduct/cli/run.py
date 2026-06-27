@@ -21,6 +21,8 @@ from aqueduct.cli import (
     _rule,
     cli,
 )
+from aqueduct.cli.output import emit
+from aqueduct.executor.models import concise_error
 from aqueduct.parser.models import ModuleType
 
 
@@ -729,18 +731,13 @@ def _setup_surveyor(
     # Cascade connectivity counts: a cascade tier carries its own base_url/api_key
     # (falling back to the flat agent.* defaults). If ANY tier is reachable, healing
     # works even when the flat agent.base_url/api_key are unset (ISSUE-045).
-    _flat_usable = _aqcli._agent_usable(
+    _agent_reachable = _aqcli._agent_usable(
         resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
+    ) or _aqcli._agent_usable_with_cascade(
+        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+        resolved_agent_cascade,
     )
-    _cascade_usable = bool(resolved_agent_cascade) and any(
-        _aqcli._agent_usable(
-            resolved_agent_provider,
-            getattr(t, "base_url", None) or resolved_agent_base_url,
-            getattr(t, "api_key", None) or resolved_agent_api_key,
-        )
-        for t in resolved_agent_cascade
-    )
-    if _heal_mode != "disabled" and not _flat_usable and not _cascade_usable:
+    if _heal_mode != "disabled" and not _agent_reachable:
         from aqueduct.cli.style import warn as _style_warn
         _style_warn(
             f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
@@ -1032,7 +1029,7 @@ def run(
                     icon = "✓" if mr.status == "success" else "✗"
                     line = f"  {icon} {mr.module_id}"
                     if mr.error:
-                        line += f"  — {mr.error}"
+                        line += f"  — {concise_error(mr.error)}"
                     click.echo(line)
                 click.echo(click.style(_rule(), dim=True))
                 click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
@@ -1242,13 +1239,11 @@ def run(
             if effective_mode == "disabled" or failure_ctx is None:
                 break
 
-            if not _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
-                click.echo(
-                    f"  ⚠  Agent not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
-                    "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
-                    err=True,
-                )
-                break
+            if not _aqcli._agent_usable_with_cascade(
+                resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+                resolved_agent_cascade,
+            ):
+                break  # already warned at startup (line 730)
 
             if patch_count >= max_patches:
                 click.echo(
@@ -1398,10 +1393,19 @@ def run(
 
             # ── Generate patch ────────────────────────────────────────────────────
             from aqueduct.agent import AgentRunConfig, generate_agent_patch, stage_patch_for_human
+            from aqueduct.agent.transcript import TranscriptWriter
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}"
                 if max_patches > 1
                 else f"{patch_count + 1}"
+            )
+            # Verbose mode: render the full agent conversation.
+            # Default (terse): per-attempt one-liner after each turn.
+            _transcript = TranscriptWriter(verbose=verbose, write=emit)
+            _transcript.header(
+                patch_count + 1 if max_patches > 1 else 1,
+                resolved_agent_max_reprompts,
+                resolve=_resolution,
             )
             click.echo(
                 f"  ↻ Agent self-healing ({_attempt_display})  "
@@ -1435,11 +1439,22 @@ def run(
                 max_reprompts=resolved_agent_max_reprompts,
             )
 
-            def _persist_attempt(rec, _rid=_heal_run_id, _srv=surveyor):
+            def _on_attempt(rec):
                 try:
-                    _srv.record_heal_attempt(run_id=_rid, attempt_record=rec)
+                    surveyor.record_heal_attempt(run_id=_heal_run_id, attempt_record=rec)
                 except Exception:
                     pass  # never let persistence block the loop
+                try:
+                    _tier_model = getattr(rec, "_aq_tier_model", None) or resolved_agent_model
+                    _transcript.write(
+                        rec,
+                        None,
+                        model=_tier_model,
+                        cascade_position=rec.model_cascade_position,
+                        cache_status=_patch_source if _patch_source != "llm" else None,
+                    )
+                except Exception:
+                    pass  # transcript is best-effort
 
             # Apply-gate guardrail check wired INTO the unified reprompt loop.
             # Deterministic + fast (no Spark) — runs `_check_guardrails` on the
@@ -1578,7 +1593,7 @@ def run(
                     deep_loop=_deep_loop,
                     apply_callback=_apply_cb,
                     validate_callback=_validate_cb,
-                    on_attempt=_persist_attempt,
+                    on_attempt=_on_attempt,
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
@@ -1604,7 +1619,7 @@ def run(
                         allow_defer=manifest.agent.allow_defer if manifest.agent else False,
                         deep_loop=_deep_loop,
                         validate_callback=_validate_cb,
-                        on_attempt=_persist_attempt,
+                        on_attempt=_on_attempt,
                         apply_callback=_apply_cb,
                         memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                         retry_max_retries=cfg.agent.retry.max_retries,
@@ -1631,6 +1646,15 @@ def run(
                     )
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
+            _summary_model = (agent_result.model or agent_result.__dict__.get("model"))
+            _transcript.summary(
+                agent_result.stop_reason,
+                agent_result.attempts,
+                agent_result.tokens_in_total,
+                agent_result.tokens_out_total,
+                model=_summary_model or resolved_agent_model,
+            )
+
             if patch is None:
                 click.echo("  ✗ Agent: failed to generate valid patch, stopping", err=True)
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
@@ -2107,7 +2131,7 @@ def run(
             else:
                 icon = click.style("✗", fg="red", bold=True)
             if mr.status == "error" and mr.error:
-                line = f"  {icon} {mr.module_id}  {click.style('— ' + mr.error, fg='red')}"
+                line = f"  {icon} {mr.module_id}  {click.style('— ' + concise_error(mr.error), fg='red')}"
             else:
                 rows, dur = _metrics.get(mr.module_id, (None, None))
                 meta = []

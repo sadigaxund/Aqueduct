@@ -110,7 +110,6 @@ def patch_preview(
     explain gate (post-patch `explain()` regression
     check against the most recent baseline in `observability.explain_snapshot`).
     """
-    import json as _json
     from pathlib import Path as _Path
 
     from aqueduct.config import ConfigError, load_config

@@ -359,9 +359,9 @@ def archive_patch(
 
 
 def generate_agent_patch(
-    failure_ctx: FailureContext,
-    model: str,
-    patches_dir: Path,
+    failure_ctx: FailureContext | None = None,
+    model: str | None = None,
+    patches_dir: Path | None = None,
     provider: str = "anthropic",
     base_url: str | None = None,
     api_key: str | None = None,
@@ -430,6 +430,14 @@ def generate_agent_patch(
         retry_max_retries = agent_cfg.retry_max_retries
         retry_backoff_seconds = agent_cfg.retry_backoff_seconds
         obs_store = agent_cfg.obs_store
+
+    if agent_cfg is None:
+        if failure_ctx is None:
+            raise TypeError("generate_agent_patch: failure_ctx is required when agent_cfg is not provided")
+        if model is None:
+            raise TypeError("generate_agent_patch: model is required when agent_cfg is not provided")
+        if patches_dir is None:
+            raise TypeError("generate_agent_patch: patches_dir is required when agent_cfg is not provided")
 
     if budget is None:
         budget = BudgetConfig(max_reprompts=max(1, max_reprompts))

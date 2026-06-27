@@ -83,6 +83,14 @@ def make_spark_session(
     _patch_pyspark_cloudpickle()
     builder = SparkSession.builder.master(master_url).appName(blueprint_id)
 
+    # Spark 4.0 defaults to structured (JSON) logging: its SQLQueryContextLogger
+    # dumps the whole Catalyst plan tree as JSON to stderr on every
+    # AnalysisException (ISSUE-046), fighting Aqueduct's own --log-format. Revert
+    # to plain text unless the user explicitly opts in (their spark_config below
+    # still wins).
+    if "spark.log.structuredLogging.enabled" not in spark_config:
+        builder = builder.config("spark.log.structuredLogging.enabled", "false")
+
     if quiet:
         # Inject log4j suppress flags before JVM init so startup messages are
         # silenced. Prepend so user-supplied extraJavaOptions still take effect.
@@ -106,7 +114,33 @@ def make_spark_session(
     else:
         session = builder.getOrCreate()
 
+    _mute_query_context_logger(session)
     return session
+
+
+def _mute_query_context_logger(session: SparkSession) -> None:
+    """Best-effort: silence Spark's ``SQLQueryContextLogger``.
+
+    On every ``AnalysisException`` it dumps the full Catalyst plan tree (as JSON
+    under Spark 4.0 structured logging) straight to stderr — duplicating the root
+    cause Aqueduct already reports concisely on the module status line
+    (ISSUE-046). Set that one JVM logger to OFF; never block the run if the
+    log4j2 shape differs across Spark versions.
+    """
+    try:
+        jvm = session._jvm
+        level_off = jvm.org.apache.logging.log4j.Level.OFF
+        configurator = jvm.org.apache.logging.log4j.core.config.Configurator
+        for name in (
+            "SQLQueryContextLogger",
+            "org.apache.spark.sql.catalyst.util.SQLQueryContextLogger",
+            "org.apache.spark.sql.execution.SQLQueryContextLogger",
+            "org.apache.spark.sql.catalyst.trees.SQLQueryContextLogger",
+            "org.apache.spark.SQLQueryContextLogger",
+        ):
+            configurator.setLevel(name, level_off)
+    except Exception:
+        pass  # best-effort — log4j2 may be absent / named differently per Spark version
 
 
 def stop_spark_session(spark: SparkSession) -> None:

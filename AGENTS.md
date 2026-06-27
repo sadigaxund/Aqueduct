@@ -266,6 +266,7 @@ When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs
 | `budget.py` | `BudgetConfig`, `BudgetTracker`, `AttemptRecord`, `DEFAULT_BUDGET` | Multi-axis budget tracking for the reprompt loop (`pause_clock()` excludes gate time) |
 | `signature.py` | `ErrorSignature`, `from_*` helpers, `from_failure_context` | Error signature engine (stable dedup hash for budget + heal cache + coaching) |
 | `memory.py` | `find_pending`, `find_replay_candidate`, `find_coaching_examples` | Signature memory — zero-token heal-cache lookups (pending reuse, exact replay, coaching retrieval). Phase 53: backed by the `patch_index` SQL table (`patch/index.py`), not a `patches/` dir scan; takes an `obs_store` (+ `patch_store` for replay bodies) |
+| `transcript.py` | `TranscriptWriter` (write, header, summary) | Turn-by-turn healing conversation display — terse one-liner per attempt or full verbose block with patch details, tokens/cost, tier labels. Engine-agnostic (no pyspark, no click); returns strings so ``cli/output.py`` handles colour/redaction. Shared by ``run``, ``heal``, and benchmark via the ``on_attempt`` hook. |
 
 **When adding a feature:**
 - New LLM provider → add `_call_<provider>()` in `providers.py`, wire in `_call_agent()`

@@ -321,7 +321,7 @@ def check_storage(
 
 # ── Blueprint source checks ─────────────────────────────────────────────────
 
-def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "local") -> list[CheckResult]:
+def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "local", *, preflight: bool = False) -> list[CheckResult]:
     """Check all Ingress/Egress paths using an already-compiled Manifest.
 
     Advantages over check_blueprint_sources():
@@ -420,9 +420,9 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
 
-        # ── Cloud URIs ─────────────────────────────────────────────────────────
+        # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
             continue
 
         # ── Local / relative path (already fully resolved — no ${ctx.*} refs) ─
@@ -665,16 +665,55 @@ def check_cascade_tiers(
     return results
 
 
+def _cloud_uri_check(name: str, path_val: str, module_type: Any, t: float, *, preflight: bool) -> CheckResult:
+    """Probe a cloud-URI (s3a/gs/abfss) Ingress/Egress source.
+
+    Default (no ``--preflight``): skip — only the storage check's endpoint
+    reachability runs. With ``--preflight`` a Spark session already exists, so
+    verify the object via Spark's own Hadoop ``FileSystem`` — reusing the exact
+    s3a/gcs/adls credentials the run will use (no separate SDK/cred setup, no
+    credential translation). pyspark is imported lazily so top-level
+    ``import aqueduct.doctor`` stays pyspark-free.
+    """
+    if not preflight:
+        return CheckResult(
+            name, "skip",
+            f"cloud URI — endpoint reachability covered by storage check; "
+            f"--preflight verifies the object exists: {path_val}", _ms(t),
+        )
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        jpath = spark._jvm.org.apache.hadoop.fs.Path(path_val)
+        fs = jpath.getFileSystem(spark._jsc.hadoopConfiguration())
+        if module_type == ModuleType.Ingress:
+            if fs.exists(jpath):
+                return CheckResult(name, "ok", f"cloud object exists: {path_val}", _ms(t))
+            return CheckResult(name, "fail", f"cloud object not found: {path_val}", _ms(t))
+        # Egress — confirm the bucket/prefix resolves (credentials + container OK)
+        fs.exists(jpath.getParent())
+        return CheckResult(name, "ok", f"cloud target reachable (parent prefix resolved): {path_val}", _ms(t))
+    except ModuleNotFoundError:
+        return CheckResult(name, "skip", "pyspark not installed — cannot verify cloud object", _ms(t))
+    except Exception as exc:
+        return CheckResult(name, "warn", f"cloud URI {path_val!r}: {exc}", _ms(t))
+
+
 def check_blueprint_sources(
     blueprint_path: Path,
     _context_override: dict[str, Any] | None = None,
+    *,
+    preflight: bool = False,
 ) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
     Local paths: checked for existence (Ingress) or parent-dir writability (Egress).
     Relative paths resolve from the project root (directory containing aqueduct.yml),
     found by walking up from the blueprint — same logic as `aqueduct run`.
-    Cloud URIs (s3a://, gs://, abfss://): skipped here — covered by storage check.
+    Cloud URIs (s3a://, gs://, abfss://): without ``preflight`` only the storage
+    check's endpoint reachability runs; with ``preflight`` (a live Spark session)
+    the object's existence is verified via Spark's Hadoop FileSystem, reusing the
+    run's exact s3a/gcs/adls credentials.
     JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
                not credentials or schema).
     _context_override: caller-provided context injected when checking Arcade sub-blueprints.
@@ -770,9 +809,9 @@ def check_blueprint_sources(
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
 
-        # ── Cloud URIs — skip (covered by storage check) ───────────────────
+        # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
             continue
 
         # ── Local / relative path ──────────────────────────────────────────
@@ -825,6 +864,7 @@ def check_blueprint_sources(
         sub_results = check_blueprint_sources(
             sub_path,
             _context_override=module.context_override or {},
+            preflight=preflight,
         )
         # Prefix each result name so the user knows which arcade it came from
         for r in sub_results:
@@ -1079,7 +1119,11 @@ def run_doctor(
     results.append(storage_result)
 
     if blueprint_path is not None:
-        results.extend(check_blueprint_sources(blueprint_path))
+        # Pass preflight only when the session actually built — cloud-object
+        # verification reuses it (spark_result.status != "fail" means it's up).
+        results.extend(check_blueprint_sources(
+            blueprint_path, preflight=preflight and spark_result.status != "fail",
+        ))
     if aqtest_path is not None:
         results.extend(check_aqtest(aqtest_path))
     if aqscenario_path is not None:

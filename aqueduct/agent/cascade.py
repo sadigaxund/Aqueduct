@@ -109,6 +109,18 @@ def generate_cascade_patch(
             max_tokens_total=remaining_tokens,
         )
 
+        # Wrap on_attempt so the transcript writer can attribute each
+        # attempt to the current tier's model via the _aq_tier_model attr.
+        _tier_on_attempt = on_attempt
+        if on_attempt is not None:
+            _tier_model = tier.model
+
+            def _wrapped_on_attempt(rec, _cb=on_attempt, _m=_tier_model):
+                rec._aq_tier_model = _m  # type: ignore[attr-defined]
+                return _cb(rec)
+
+            _tier_on_attempt = _wrapped_on_attempt
+
         result = generate_agent_patch(
             agent_cfg=AgentRunConfig(
                 failure_ctx=failure_ctx,
@@ -130,7 +142,7 @@ def generate_cascade_patch(
                 deep_loop=tier.deep_loop if tier.deep_loop is not None else deep_loop,
                 apply_callback=apply_callback,
                 validate_callback=validate_callback,
-                on_attempt=on_attempt,
+                on_attempt=_tier_on_attempt,
                 model_cascade_position=idx - 1,
                 memory_coaching=memory_coaching,
                 retry_max_retries=retry_max_retries,

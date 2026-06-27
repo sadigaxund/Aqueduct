@@ -3,10 +3,45 @@ Single source of truth so error/status styling stays consistent across commands.
 """
 from __future__ import annotations
 
+import logging
+import os
+import sys
+
 import click
 
 ICON = {"ok": "\u2713", "fail": "\u2717", "warn": "\u26a0", "skip": "-", "info": "\u00b7", "header": "\u25b6"}
 COLOR = {"ok": "green", "fail": "red", "warn": "yellow", "skip": None, "info": "bright_black", "header": "cyan"}
+
+
+def _color_enabled() -> bool:
+    """Colour only when writing to a real terminal (and NO_COLOR unset)."""
+    return not os.environ.get("NO_COLOR") and sys.stderr.isatty()
+
+
+class StyledLogFormatter(logging.Formatter):
+    """Render log records to match the CLI's icon/colour vocabulary instead of the
+    default ``LEVEL: message`` \u2014 WARNING \u2192 ``\u26a0`` (yellow), ERROR/CRITICAL \u2192
+    ``\u2717`` (red), else dim ``\u00b7``. ``verbose`` prepends the logger name.
+    Colour is gated on a TTY so piped/redirected logs stay plain.
+    """
+
+    def __init__(self, *, verbose: bool = False) -> None:
+        super().__init__()
+        self._verbose = verbose
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        if record.exc_info:
+            msg = f"{msg}\n{self.formatException(record.exc_info)}"
+        if record.levelno >= logging.ERROR:
+            icon, color = ICON["fail"], "red"
+        elif record.levelno >= logging.WARNING:
+            icon, color = ICON["warn"], "yellow"
+        else:
+            icon, color = ICON["info"], "bright_black"
+        name = f"{record.name} " if self._verbose else ""
+        line = f"{icon} {name}{msg}"
+        return click.style(line, fg=color) if _color_enabled() else line
 
 
 def error(msg: str, *, err: bool = True) -> None:

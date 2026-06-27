@@ -34,18 +34,25 @@ def _apply_warnings_from_cfg(cfg) -> None:
 
 
 
-def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, **kwargs):
+def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, _defer: bool = False, **kwargs):
     """Call compile_fn, intercept warnings, reprint as clean CLI output.
 
     Aqueduct's own diagnostics (AqueductWarning category, prefix
     `[aqueduct:rule_id] `) become `AQ-WARN [rule_id] <msg>` lines so the
     rule_id is easy to copy into `warnings.suppress` in aqueduct.yml.
     Non-Aqueduct UserWarnings fall back to the legacy `WARNING:` prefix.
+
+    When ``_defer`` is True, the captured records are RETURNED as
+    ``(result, caught)`` instead of emitted here — so the caller can flush them
+    at the right point in the output progression (e.g. AFTER the run header,
+    where the blueprint these warnings are about is named).
     """
     import warnings as _w
     with _w.catch_warnings(record=True) as caught:
         _w.simplefilter("always")
         result = compile_fn(*args, **kwargs)
+    if _defer:
+        return result, list(caught)
     from aqueduct.cli.style import emit_warnings
     emit_warnings(caught, verbose=_verbose, label="compile:")
     return result
@@ -256,6 +263,31 @@ def _agent_usable(provider: str, base_url: str | None, api_key: str | None = Non
         return bool(api_key or _os.environ.get("ANTHROPIC_API_KEY"))
     if provider == "openai_compat":
         return bool(base_url or api_key or _os.environ.get("OPENAI_API_KEY"))
+    return False
+
+
+def _agent_usable_with_cascade(
+    provider: str,
+    base_url: str | None,
+    api_key: str | None = None,
+    cascade_tiers: list | None = None,
+) -> bool:
+    """Return True if the flat config OR any cascade tier is reachable.
+
+    A cascade tier carries its own base_url/api_key (falling back to the
+    flat agent.* defaults).  If ANY tier is usable, healing works even
+    when the flat agent.base_url/api_key are unset (ISSUE-045).
+    """
+    if _agent_usable(provider, base_url, api_key):
+        return True
+    if cascade_tiers:
+        for t in cascade_tiers:
+            if _agent_usable(
+                provider,
+                getattr(t, "base_url", None) or base_url,
+                getattr(t, "api_key", None) or api_key,
+            ):
+                return True
     return False
 
 
@@ -526,13 +558,15 @@ def _resolve_and_load_env(
     discovery (overrides still applied).
     """
     import os
+
+    from aqueduct.cli.style import ICON
+    from aqueduct.cli.style import info as _info
     n_over = _apply_cli_env(cli_env or ())
     over = f"; {n_over} from -e" if n_over else ""
+    _env = f"{ICON['info']} env  ·  "
 
     if os.environ.get("AQ_NO_ENV_FILE"):
-        click.echo(
-            f"(env: .env discovery disabled — AQ_NO_ENV_FILE{over})", err=True
-        )
+        _info(f"{_env}.env discovery disabled — AQ_NO_ENV_FILE{over}", err=True)
         return
 
     candidates: list[Path] = []
@@ -547,11 +581,11 @@ def _resolve_and_load_env(
             seen.add(cand)
             continue
         n = _load_env_file(cand)
-        click.echo(f"(env: loaded {n} var(s) from {cand}{over})", err=True)
+        _info(f"{_env}loaded {n} var(s) from {cand}{over}", err=True)
         return  # first existing file wins — do not stack multiple .env files
 
     if n_over:
-        click.echo(f"(env: no .env file found{over})", err=True)
+        _info(f"{_env}no .env file found{over}", err=True)
 
 
 def _env_options(f):
@@ -745,8 +779,25 @@ def cli(
         root.addHandler(handler)
         root.setLevel(level)
     else:
-        fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
-        logging.basicConfig(level=level, format=fmt)
+        from aqueduct.cli.style import StyledLogFormatter
+        handler = logging.StreamHandler()
+        handler.setFormatter(StyledLogFormatter(verbose=verbose))
+
+        class _RuntimeNestedFilter(logging.Filter):
+            """Probe/Assert runtime warnings are displayed nested under their
+            module by `run` (the `↳ [rule_id]` lines). Drop their loose console
+            line here so they aren't printed twice. They remain in the logger
+            for `--log-format json` and pytest's caplog (separate handlers)."""
+
+            def filter(self, record: logging.LogRecord) -> bool:
+                m = record.getMessage()
+                return "[runtime_probe" not in m and "[runtime_assert" not in m
+
+        handler.addFilter(_RuntimeNestedFilter())
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.addHandler(handler)
+        root.setLevel(level)
 
     # Install AQ-WARN [rule_id] format + stash CLI suppress overrides.
     # Engine-level `warnings.suppress` from aqueduct.yml is merged later, once a

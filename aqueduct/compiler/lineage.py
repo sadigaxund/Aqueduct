@@ -19,8 +19,10 @@ Limitations:
 from __future__ import annotations
 
 import logging
-from aqueduct.parser.models import ModuleType
+from datetime import UTC
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,13 @@ def _extract_sql_lineage(
     if not isinstance(stmt, exp.Select):
         # Subquery or CTE — treat as opaque
         return _opaque_row(channel_id, upstream_ids)
+
+    # Build alias → actual table name mapping so source_table shows
+    # "raw_orders" instead of "o" when the SQL uses aliases.
+    alias_to_table: dict[str, str] = {}
+    for table in stmt.find_all(exp.Table):
+        if table.alias:
+            alias_to_table[table.alias] = table.name
 
     for sel in stmt.expressions:
         alias = sel.alias if isinstance(sel, exp.Alias) else None
@@ -103,7 +112,7 @@ def _extract_sql_lineage(
             continue
 
         for col_ref in col_refs:
-            src_table = col_ref.table or (upstream_ids[0] if len(upstream_ids) == 1 else "")
+            src_table = alias_to_table.get(col_ref.table, col_ref.table) or (upstream_ids[0] if len(upstream_ids) == 1 else "")
             rows.append({
                 "channel_id": channel_id,
                 "output_column": out_col,
@@ -180,7 +189,7 @@ def write_lineage(
                              extraction is skipped (no fallback).
     """
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         all_rows = compute_lineage_rows(modules, edges)
         if not all_rows:
@@ -189,7 +198,7 @@ def write_lineage(
         if observability_store is None:
             return  # no store backend configured, skip lineage
 
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
 
         with observability_store.connect() as cur:
             cur.executemany(

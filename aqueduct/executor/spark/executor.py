@@ -70,14 +70,14 @@ from datetime import UTC
 
 from aqueduct.config import WebhookEndpointConfig
 from aqueduct.errors import AqueductError
-from aqueduct.executor.models import ExecutionResult, ModuleResult, _collect_module_warnings
+from aqueduct.executor.models import (
+    ExecutionResult,
+    ModuleResult,
+    _collect_module_warnings,
+    concise_error,
+)
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
 from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
-
-
-def _mr(**kwargs) -> ModuleResult:
-    """Construct a ModuleResult, auto-collecting per-module runtime warnings."""
-    return ModuleResult(**kwargs, warnings=_collect_module_warnings())
 from aqueduct.executor.spark.egress import EgressError, run_maintenance, write_egress
 from aqueduct.executor.spark.error_columns import (
     AQ_ERROR_MODULE,
@@ -92,6 +92,10 @@ from aqueduct.executor.spark.metrics import dir_bytes, get_observation, null_met
 from aqueduct.models import Edge, Manifest, Module, ModuleType, RetryPolicy
 
 logger = logging.getLogger(__name__)
+
+def _mr(**kwargs) -> ModuleResult:
+    """Construct a ModuleResult, auto-collecting per-module runtime warnings."""
+    return ModuleResult(**kwargs, warnings=_collect_module_warnings())
 
 _T = TypeVar("_T")
 
@@ -180,13 +184,13 @@ def _with_retry(
                     logger.warning(
                         "[runtime_retry_exhausted] Module %r: attempt %d/%d "
                         "failed (%s); giving up",
-                        module_id, attempt + 1, policy.max_attempts, exc,
+                        module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
                     )
                 else:
                     logger.warning(
                         "[runtime_retry_non_retriable] Module %r: non-retriable "
                         "error on attempt %d/%d: %s",
-                        module_id, attempt + 1, policy.max_attempts, exc,
+                        module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
                     )
                 break
 
@@ -194,7 +198,7 @@ def _with_retry(
             logger.warning(
                 "[runtime_retry_waiting] Module %r: attempt %d/%d failed (%s); "
                 "retrying in %.1fs",
-                module_id, attempt + 1, policy.max_attempts, exc, sleep,
+                module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)), sleep,
             )
             time.sleep(sleep)
 

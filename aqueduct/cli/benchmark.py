@@ -6,7 +6,6 @@ register onto `cli` when this module is imported at the bottom of __init__.
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 

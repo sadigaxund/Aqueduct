@@ -508,7 +508,14 @@ def check_remote_target(cfg: Any) -> CheckResult:
     t = time.monotonic()
     target = getattr(cfg.deployment, "target", "local")
     if target not in ("databricks", "emr", "dataproc"):
-        return CheckResult("remote-target", "skip", "target is local — no remote cluster to check", _ms(t))
+        if target in ("standalone", "yarn", "kubernetes"):
+            msg = (
+                f"target={target} — no remote-submit credentials to verify "
+                "(cluster reachability is covered by the Spark check)"
+            )
+        else:
+            msg = "target is local — no remote cluster to check"
+        return CheckResult("remote-target", "skip", msg, _ms(t))
 
     if target == "databricks":
         db_cfg = getattr(cfg.deployment, "databricks", None)

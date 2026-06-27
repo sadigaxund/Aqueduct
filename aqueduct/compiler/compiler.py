@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-logger = logging.getLogger(__name__)
 
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
@@ -42,11 +40,12 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
+from aqueduct.errors import AqueductError
+from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
-from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
-from aqueduct.errors import AqueductError
 
+logger = logging.getLogger(__name__)
 
 class CompileError(AqueductError):
     """Raised for any compilation failure."""
@@ -82,7 +81,7 @@ def compile(  # noqa: A001
     blueprint_path: Path | None = None,
     run_id: str | None = None,
     depot: Any = None,
-    depots: "dict[str, Any] | None" = None,
+    depots: dict[str, Any] | None = None,
     execution_date: Any = None,
     secrets_provider: str = "env",
     secrets_region: str | None = None,
@@ -310,7 +309,7 @@ def compile(  # noqa: A001
             inputs_fingerprint[m.id] = {
                 "path": path,
                 "size_bytes": st.st_size,
-                "last_modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                "last_modified": datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
             }
         except (OSError, ValueError):
             # OSError: file missing / permission denied.
@@ -409,7 +408,7 @@ def compile(  # noqa: A001
                     "but has no partition_by or repartition hint. "
                     "Incremental appends without partitioning accumulate small files over time, "
                     "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
-                    "See docs/spark_guide.md#planned-future-checks.",
+                    "See docs/spark_guide.md#append-no-partition.",
                 )
 
     # 8e. Multi-consumer Channel without cache — DAG re-evaluated per consumer
@@ -449,7 +448,7 @@ def compile(  # noqa: A001
                 "see them and authentication will fail. Move these to spark_config with "
                 "the 'spark.hadoop.' prefix instead: e.g. "
                 "'spark.hadoop.fs.s3a.access.key'. "
-                "See docs/spark_guide.md#jdbc-ingress-parallelism.",
+                "See docs/spark_guide.md#hadoop-fs-in-options.",
             )
 
     # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only

@@ -6,6 +6,18 @@ import threading
 from dataclasses import dataclass
 
 
+def concise_error(text: str | None, *, limit: int = 300) -> str:
+    """First line of an error string, capped — for **display** only.
+
+    Spark `AnalysisException` messages put the root cause on the first line and
+    then dump the whole Catalyst plan tree on the following lines. Logs and the
+    CLI status line want only the root cause; the full text is still stored
+    verbatim in `ModuleResult.error` (the obs store + the heal agent need it).
+    """
+    s = (text or "").strip().split("\n", 1)[0].strip()
+    return s if len(s) <= limit else s[: limit - 1] + "…"
+
+
 @dataclass(frozen=True)
 class ModuleResult:
     """Outcome of executing a single module."""

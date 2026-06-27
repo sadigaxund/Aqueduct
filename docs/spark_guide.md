@@ -41,6 +41,7 @@ warnings are **not suppressible**.
 | `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
 | `perf_probe_sample_full_scan` | Probe sample-based signal — `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
 | `perf_python_udf_row_at_a_time` | Python UDF bypasses Arrow/vectorized execution | [python-udf-performance](#python-udf-performance) |
+| `spillway_port_mismatch` | Channel `spillway_condition` with no `port: spillway` edge (spillway rows silently dropped to main), or a spillway edge with no `spillway_condition` (spillway always empty) | Spillway routing (Contributor section) |
 
 #### Runtime CLI (not suppressible)
 

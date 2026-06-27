@@ -257,10 +257,18 @@ def heal(
     )
 
     from aqueduct.agent import resolve_budget as _resolve_budget
+    from aqueduct.agent.transcript import TranscriptWriter
+    _transcript = TranscriptWriter(verbose=False, write=emit)
+
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
     )
+
+    def _on_attempt(rec):
+        _transcript.write(rec, None, model=resolved_model)
+
+    _transcript.header(1, resolved_max_reprompts, resolve="llm")
 
     # Wire deterministic apply-gate guardrail check INTO the loop so
     # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
@@ -296,9 +304,18 @@ def heal(
             budget=_budget,
             allow_defer=_allow_defer,
             apply_callback=_apply_cb,
+            on_attempt=_on_attempt,
         ),
     )
     patch = agent_result.patch
+
+    _transcript.summary(
+        agent_result.stop_reason,
+        agent_result.attempts,
+        agent_result.tokens_in_total,
+        agent_result.tokens_out_total,
+        model=resolved_model,
+    )
 
     if patch is None:
         click.echo(
