@@ -90,9 +90,13 @@ class TranscriptWriter:
         *,
         verbose: bool = False,
         write: Any = None,
+        streamed: bool = False,
     ) -> None:
         self._verbose = verbose
         self._write = write
+        # When the response was streamed live (run on a TTY), skip the post-hoc
+        # raw-response block in -v — it would just repeat what already scrolled by.
+        self._streamed = streamed
         self._attempts_seen = 0
         # Tree state: a new cascade tier opens a fresh branch; its turns nest.
         self._cur_tier: Any = " unset"
@@ -215,7 +219,7 @@ class TranscriptWriter:
         # what the model returned (especially when it would not parse) and decide
         # whether the prompt or the blueprint needs more guiding context.
         raw = getattr(rec, "_aq_raw", None)
-        if raw and raw.strip():
+        if raw and raw.strip() and not self._streamed:
             self._emit(f"{rail}     raw response:")
             shown = raw.strip().splitlines()
             for line in shown[:_MAX_RAW_LINES]:

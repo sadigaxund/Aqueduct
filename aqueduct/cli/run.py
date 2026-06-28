@@ -1467,28 +1467,29 @@ def run(
             # Verbose mode: render the full agent conversation.
             # Default (terse): per-attempt one-liner after each turn.
             from aqueduct.cli.style import style_heal_line as _style_heal_line
+            # Live SSE streaming is used only on an interactive TTY (piped/CI keep
+            # the non-streaming POST path). When streaming, the live meter is the
+            # progress indicator; otherwise emit a static "contacting…" cue so a
+            # slow synchronous call doesn't look hung.
+            _use_stream = sys.stdout.isatty()
             _transcript = TranscriptWriter(
                 verbose=verbose, write=lambda s: emit(_style_heal_line(s)),
+                streamed=_use_stream,
             )
             _transcript.header(
                 patch_count + 1 if max_patches > 1 else 1,
                 resolved_agent_max_reprompts,
                 resolve=_resolution,
             )
-            # Live SSE streaming is used only on an interactive TTY (piped/CI keep
-            # the non-streaming POST path). When streaming, the live meter is the
-            # progress indicator; otherwise emit a static "contacting…" cue so a
-            # slow synchronous call doesn't look hung.
-            _use_stream = sys.stdout.isatty()
             if _resolution != "replay":
                 # Always show an immediate cue — when streaming, the meter only
                 # appears once the FIRST token arrives, and a reasoning model can
                 # spend a long time digesting a big prompt before emitting any
                 # token, so without this the open branch looks hung.
                 _cue = (
-                    "│   ⏳ waiting for first token… (reasoning models digest the prompt before replying)"
+                    "│   · waiting for first token… (reasoning models digest the prompt before replying)"
                     if _use_stream else
-                    "│   ⏳ contacting agent… (first response can be slow — big prompt / local cold-start)"
+                    "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
                 )
                 emit(_style_heal_line(_cue))
 
@@ -1520,22 +1521,24 @@ def run(
 
             # ── Live token streaming display ──────────────────────────────────
             # _on_token(kind, text) is fired by the provider per SSE delta.
-            # default: a compact in-place meter (⏳ thinking… N chars);
+            # default: a compact in-place meter (· thinking… N chars);
             # -v: streams the actual thinking/answer text under a ┆ gutter.
+            # Markers stay in the serious geometric vocabulary: · = internal
+            # (reasoning, recedes), ▸ = output (the answer, points forward).
             _stream_state = {"chars": 0, "kind": None, "active": False}
 
             def _on_token(kind: str, text: str) -> None:
                 _stream_state["active"] = True
                 if verbose:
                     if kind != _stream_state["kind"]:
-                        head = "💭 thinking" if kind == "thinking" else "✍ answer"
+                        head = "· thinking" if kind == "thinking" else "▸ answer"
                         sys.stdout.write(f"\n│   {head}:\n│   ┆ ")
                         _stream_state["kind"] = kind
                     sys.stdout.write(text.replace("\n", "\n│   ┆ "))
                 else:
                     _stream_state["chars"] += len(text)
                     label = "thinking" if kind == "thinking" else "writing"
-                    sys.stdout.write(f"\r│   ⏳ {label}… {_stream_state['chars']} chars")
+                    sys.stdout.write(f"\r│   · {label}… {_stream_state['chars']} chars")
                 sys.stdout.flush()
 
             def _close_stream() -> None:
@@ -1851,7 +1854,7 @@ def run(
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
                 click.echo(
-                    f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ Patch staged for human review → patches/pending/{patch.patch_id}.json",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -1878,7 +1881,7 @@ def run(
                 rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
                 rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
-                    f"  ✎ Agent patch staged → {rel_patch}\n"
+                    f"  ▸ Agent patch staged → {rel_patch}\n"
                     f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
                     err=True,
                 )
@@ -1924,7 +1927,7 @@ def run(
                                       patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 click.echo(
-                    f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ CI patch staged → patches/pending/{patch.patch_id}.json",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
