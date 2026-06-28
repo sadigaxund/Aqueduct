@@ -62,6 +62,36 @@ def info(msg: str, *, err: bool = False) -> None:
     click.echo(click.style(msg, fg="bright_black"), err=err)
 
 
+_HEAL_GLYPH_COLOR = {
+    "✓": "green",        # ✓ success
+    "✗": "red",          # ✗ failure
+    "⚠": "yellow",       # ⚠ warning
+    "ⓘ": "cyan",         # ⓘ info/hint
+}
+_HEAL_RAIL_GLYPHS = ("├─", "└─", "│", "┆")  # ├─ └─ │ ┆
+
+
+def style_heal_line(line: str) -> str:
+    """Colour the heal-transcript tree to the CLI vocabulary.
+
+    The ``TranscriptWriter`` is engine-agnostic and emits plain strings; this is
+    the CLI-side colouriser the heal callers wrap their ``write`` callback with.
+    Status glyphs take their semantic colour (✓ green / ✗ red / ⚠ yellow / ⓘ
+    cyan); the tree rails (``│ ├─ └─ ┆``) dim so the structure recedes and the
+    content stands out. Plain passthrough when colour is off (non-TTY / NO_COLOR).
+    """
+    if not _color_enabled():
+        return line
+    out = line
+    for glyph, colour in _HEAL_GLYPH_COLOR.items():
+        if glyph in out:
+            out = out.replace(glyph, click.style(glyph, fg=colour))
+    for rail in _HEAL_RAIL_GLYPHS:
+        if rail in out:
+            out = out.replace(rail, click.style(rail, fg="bright_black"))
+    return out
+
+
 def _short_warning(msg: str, limit: int = 100) -> str:
     """First clause of a warning message (before ' --- ' or first sentence), capped."""
     seg = msg.split(" \u2014 ", 1)[0].split(". ", 1)[0].strip()

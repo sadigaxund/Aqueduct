@@ -1466,7 +1466,10 @@ def run(
             )
             # Verbose mode: render the full agent conversation.
             # Default (terse): per-attempt one-liner after each turn.
-            _transcript = TranscriptWriter(verbose=verbose, write=emit)
+            from aqueduct.cli.style import style_heal_line as _style_heal_line
+            _transcript = TranscriptWriter(
+                verbose=verbose, write=lambda s: emit(_style_heal_line(s)),
+            )
             _transcript.header(
                 patch_count + 1 if max_patches > 1 else 1,
                 resolved_agent_max_reprompts,

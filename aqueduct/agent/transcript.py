@@ -22,52 +22,19 @@ from typing import Any
 # -v raw-response dump is capped so a verbose model can't flood the terminal.
 _MAX_RAW_LINES = 40
 
-# ── Price table (USD per 1k tokens) ──────────────────────────────────────
-# Derived from public API pages as of mid-2026.  Used for cost estimates.
-# Keys: provider/model name or prefix.
-_TOKEN_PRICE: dict[str, tuple[float, float]] = {
-    # (input price per 1M, output price per 1M) → per-1k values below
-    "claude-sonnet-4": (3.00 / 1000, 15.00 / 1000),
-    "claude-3.5": (3.00 / 1000, 15.00 / 1000),
-    "claude-3": (3.00 / 1000, 15.00 / 1000),
-    "claude-opus-4": (15.00 / 1000, 75.00 / 1000),
-    "claude-haiku": (0.80 / 1000, 4.00 / 1000),
-    "gpt-4": (30.00 / 1000, 60.00 / 1000),
-    "gpt-4o": (2.50 / 1000, 10.00 / 1000),
-    "gpt-4o-mini": (0.15 / 1000, 0.60 / 1000),
-    "gpt-3.5": (0.50 / 1000, 1.50 / 1000),
-    "o1": (15.00 / 1000, 60.00 / 1000),
-    "o3-mini": (1.10 / 1000, 4.40 / 1000),
-    "deepseek": (0.14 / 1000, 0.28 / 1000),
-    "qwen": (0.12 / 1000, 0.24 / 1000),
-}
+def _cost_str(tokens_in: int, tokens_out: int, model: str | None = None) -> str:
+    """Token usage as ``<in>→<out> tok`` (input prompt → output patch).
 
-
-def _estimate_model(model: str) -> tuple[float, float]:
-    """Return (input_usd_per_1k, output_usd_per_1k) or (0, 0) if unknown."""
-    model_lower = model.lower()
-    for key, prices in _TOKEN_PRICE.items():
-        if model_lower.startswith(key):
-            return prices
-    return (0.0, 0.0)
-
-
-def _cost_str(tokens_in: int, tokens_out: int, model: str | None) -> str:
-    if model is None:
-        return ""
+    Dollar-cost estimates were removed deliberately: a hardcoded price table is
+    plain wrong for self-hosted models (an Ollama call is free, not the cloud
+    deepseek/qwen rate) and only approximate for cloud ones — false precision in
+    the heal transcript. Tokens are the exact signal. ``model`` is unused, kept
+    for call-site compatibility."""
     ti = tokens_in if isinstance(tokens_in, int) else 0
     to = tokens_out if isinstance(tokens_out, int) else 0
     if ti == 0 and to == 0:
         return ""  # nothing was spent (provider error / cache hit) — omit noise
-    inp, outp = _estimate_model(model)
-    if inp == 0.0 and outp == 0.0:
-        return f"{tokens_in}→{tokens_out} tokens"
-    # inp/outp are USD per 1k tokens (price-per-1M ÷ 1000 in the table), so the
-    # token counts must be scaled to thousands — earlier this multiplied raw
-    # tokens by the per-1k rate, overstating cost ~1000×.
-    cost = (ti / 1000.0) * inp + (to / 1000.0) * outp
-    approx = "\u2248"
-    return f"{tokens_in}\u2192{tokens_out} tokens \u00b7 {approx}${cost:.4f}"
+    return f"{ti}→{to} tok"
 
 
 def _cache_label(cache_status: str | None) -> str:
