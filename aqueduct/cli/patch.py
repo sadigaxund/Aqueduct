@@ -45,6 +45,43 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
         return None
 
 
+def _list_from_index(rows: list[dict], filter_status: str, out_format: str) -> None:
+    """Render ``patch_index`` rows for ``aqueduct patch list`` (backend-blind).
+
+    Shows status + metadata from the relational index; patch *bodies* may live in
+    a remote object store, so the actions point at ``patch pull`` (which is
+    backend-aware) rather than a local file path."""
+    if out_format.lower() == "json":
+        emit([
+            {
+                "status": r.get("status"),
+                "patch_id": r.get("patch_id"),
+                "rationale": r.get("rationale"),
+                "blueprint_id": r.get("blueprint_id"),
+                "run_id": r.get("run_id"),
+                "object_key": r.get("object_key"),
+                "signature": r.get("signature"),
+            }
+            for r in rows
+        ], fmt="json")
+        return
+    if not rows:
+        click.echo(f"No {filter_status} patches found in the patch index.")
+        return
+    click.echo(f"\n  {'patch_id':<34} {'status':<9} {'rationale'}")
+    click.echo(f"  {'-' * 34} {'-' * 9} {'-' * 44}")
+    has_pending = False
+    for r in rows:
+        st = r.get("status", "")
+        has_pending = has_pending or st == "pending"
+        rationale = (r.get("rationale") or "").replace("\n", " ")[:44]
+        click.echo(f"  {r.get('patch_id', ''):<34} {st:<9} {rationale}")
+    if has_pending:
+        click.echo("\n  Fetch body: aqueduct patch pull <patch_id>")
+        click.echo("  Apply:      aqueduct patch apply <pulled-file> --blueprint <blueprint.yml>")
+        click.echo("  Reject:     aqueduct patch reject <patch_id> --reason '<reason>'")
+
+
 # ── patch command group ───────────────────────────────────────────────────────
 
 @cli.group()
@@ -733,6 +770,36 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
     Defaults to showing pending patches. Use --status=applied/rejected/all for other dirs.
     """
     from pathlib import Path
+
+    # Backend-blind source of truth: the patch_index table (works whether the
+    # patch bodies live in the local patches/ dir or a remote object store). We
+    # fall back to scanning the local dir only when no observability store /
+    # index is reachable. (`--patches-dir` forces the legacy local scan.)
+    if not patches_dir:
+        _bp_path = Path(blueprint) if blueprint else None
+        _bp_id = None
+        if _bp_path is not None:
+            try:
+                from aqueduct.parser.parser import parse as _parse_bp
+                _bp_id = _parse_bp(str(_bp_path)).id
+            except Exception:
+                _bp_id = None
+        _store = _patch_index_obs_store(_bp_path)
+        if _store is not None:
+            try:
+                from aqueduct.patch import index as _ix
+                with _store.connect() as _cur:
+                    _ix.ensure_schema(_cur)
+                    _rows = _ix.list_by_status(
+                        _cur,
+                        status=None if filter_status == "all" else filter_status,
+                        blueprint_id=_bp_id,
+                    )
+            except Exception:
+                _rows = None
+            if _rows is not None:
+                _list_from_index(_rows, filter_status, out_format)
+                return
 
     if patches_dir:
         patches_root = Path(patches_dir)

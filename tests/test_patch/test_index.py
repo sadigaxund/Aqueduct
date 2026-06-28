@@ -65,6 +65,27 @@ def test_set_status_moves_out_of_pending(store):
         assert ix.get(cur, "p1")["status"] == "applied"
 
 
+def _row_bp(patch_id, status, blueprint_id, **kw):
+    import dataclasses
+    return dataclasses.replace(_row(patch_id, status, **kw), blueprint_id=blueprint_id)
+
+
+def test_list_by_status_filters_by_status_and_blueprint(store):
+    """`patch list` is backend-blind — list_by_status filters the index by
+    lifecycle status and optionally one blueprint, regardless of where bodies live."""
+    with store.connect() as cur:
+        ix.upsert(cur, _row_bp("p1", "pending", "bp.A", signature="s1"))
+        ix.upsert(cur, _row_bp("p2", "applied", "bp.A", signature="s2"))
+        ix.upsert(cur, _row_bp("p3", "pending", "bp.B", signature="s3"))
+    with store.connect() as cur:
+        assert {r["patch_id"] for r in ix.list_by_status(cur, status="pending")} == {"p1", "p3"}
+        assert {r["patch_id"] for r in ix.list_by_status(cur, blueprint_id="bp.A")} == {"p1", "p2"}
+        assert {
+            r["patch_id"] for r in ix.list_by_status(cur, status="pending", blueprint_id="bp.A")
+        } == {"p1"}
+        assert len(ix.list_by_status(cur)) == 3  # status=None → all states
+
+
 def test_upsert_is_idempotent_on_patch_id(store):
     with store.connect() as cur:
         ix.upsert(cur, _row("p1", "pending"))

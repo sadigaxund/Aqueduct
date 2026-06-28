@@ -260,3 +260,33 @@ def recent_applied(cur: RelationalCursor, limit: int = 5) -> list[dict]:
         [limit],
     )
     return [_row_to_dict(_SELECT_COLS, r) for r in cur.fetchall()]
+
+
+def list_by_status(
+    cur: RelationalCursor,
+    *,
+    status: str | None = None,
+    blueprint_id: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    """List patch_index rows by lifecycle status (optionally one blueprint).
+
+    The backend-blind truth for ``aqueduct patch list`` — it works against
+    whichever store backend holds the index (DuckDB or Postgres) regardless of
+    where the patch *bodies* live (local dir or object store). ``status=None``
+    lists every state. Newest first."""
+    where: list[str] = []
+    params: list[Any] = []
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if blueprint_id:
+        where.append("blueprint_id = ?")
+        params.append(blueprint_id)
+    clause = (" WHERE " + " AND ".join(where)) if where else ""
+    params.append(limit)
+    cur.execute(
+        f"SELECT {_SELECT} FROM patch_index{clause} ORDER BY created_at DESC LIMIT ?",
+        params,
+    )
+    return [_row_to_dict(_SELECT_COLS, r) for r in cur.fetchall()]
