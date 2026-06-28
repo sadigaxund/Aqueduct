@@ -34,7 +34,7 @@ def _cost_str(tokens_in: int, tokens_out: int, model: str | None = None) -> str:
     to = tokens_out if isinstance(tokens_out, int) else 0
     if ti == 0 and to == 0:
         return ""  # nothing was spent (provider error / cache hit) — omit noise
-    return f"{ti}→{to} tok"
+    return f"{ti:,} in → {to:,} out"
 
 
 def _cache_label(cache_status: str | None) -> str:

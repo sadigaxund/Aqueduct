@@ -34,7 +34,7 @@ class TestTranscriptWriterTerse:
         tw.write(rec, None, model="gpt-4o")
         output = " ".join(lines)
         assert "turn 2" in output
-        assert "500→800 tok" in output
+        assert "500 in → 800 out" in output
         assert "invalid patch (schema)" in output
 
     def test_terse_with_cascade_tier(self):
@@ -83,7 +83,7 @@ class TestTranscriptWriterVerbose:
         assert "turn 2" in output
         assert "rejected (guardrails)" in output
         assert "tier 1 · deepseek-v3" in output   # tier branch node
-        assert "500→800 tok" in output
+        assert "500 in → 800 out" in output
         assert "fix typo" in output
         assert "bad config" in output
         assert "guardrail_violation" in output

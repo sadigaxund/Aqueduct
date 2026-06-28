@@ -1464,6 +1464,17 @@ def run(
                 ),
                 err=True,
             )
+            # Heal "ceremony" — always surface which agent/model is on the job
+            # (solo or cascade) up front, even before the first attempt streams.
+            if resolved_agent_cascade:
+                _models = " → ".join(t.model for t in resolved_agent_cascade)
+                _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
+            else:
+                _agent_info = (
+                    f"{resolved_agent_model} · {resolved_agent_provider} "
+                    f"· ≤{resolved_agent_max_reprompts} reprompts"
+                )
+            click.echo(click.style(f"│  ◆ {_agent_info}", fg="cyan"), err=True)
             # Verbose mode: render the full agent conversation.
             # Default (terse): per-attempt one-liner after each turn.
             from aqueduct.cli.style import style_heal_line as _style_heal_line
@@ -2006,7 +2017,7 @@ def run(
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ Agent patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
+                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
                         f"→ {blueprint}",
                         err=True,
                     )
@@ -2021,7 +2032,16 @@ def run(
                     )
                     break
 
-                new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                # Suppress compile warnings on the heal re-compile: they are the
+                # SAME blueprint warnings already shown (grouped) under the run
+                # header — re-emitting leaks the raw `AQ-WARN [...]` fallback
+                # format mid-heal (the patch doesn't change them).
+                import warnings as _wsup
+
+                from aqueduct.warnings import AqueductWarning as _AqWarn
+                with _wsup.catch_warnings():
+                    _wsup.simplefilter("ignore", _AqWarn)
+                    new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
                     click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     break
@@ -2054,11 +2074,17 @@ def run(
                 if patch_success:
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(f"  ✓ Agent patch validated and applied → {blueprint}", err=True)
+                    click.echo(
+                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied → {blueprint}",
+                        err=True,
+                    )
                     result = result2
                     failure_ctx = failure_ctx2
                 else:
-                    click.echo("  ✗ Agent patch did not fix the issue, Blueprint unchanged", err=True)
+                    click.echo(
+                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue, Blueprint unchanged",
+                        err=True,
+                    )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
                         obs_store=_obs_store, patch_store=_patch_store,
@@ -2148,7 +2174,16 @@ def run(
                     )
                     break
 
-                new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                # Suppress compile warnings on the heal re-compile: they are the
+                # SAME blueprint warnings already shown (grouped) under the run
+                # header — re-emitting leaks the raw `AQ-WARN [...]` fallback
+                # format mid-heal (the patch doesn't change them).
+                import warnings as _wsup
+
+                from aqueduct.warnings import AqueductWarning as _AqWarn
+                with _wsup.catch_warnings():
+                    _wsup.simplefilter("ignore", _AqWarn)
+                    new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
                     click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
@@ -2192,7 +2227,7 @@ def run(
                     _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
                     )
                     result = result2
@@ -2204,7 +2239,7 @@ def run(
                         + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
                     )
                     click.echo(
-                        f"  ✗ Agent patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})", err=True,
                     )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
