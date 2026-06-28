@@ -657,7 +657,7 @@ class TestGenerateLlmPatch:
 
         monkeypatch.setattr("aqueduct.agent.loop._call_agent", failing_llm)
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.DEBUG):
             result = generate_agent_patch(
                 failure_ctx=_failure_ctx(),
                 model="claude-sonnet-4-6",
@@ -669,9 +669,11 @@ class TestGenerateLlmPatch:
         assert len(result.reprompt_errors) == 1
         assert "API error: API timeout or disconnect" in result.reprompt_errors[0]
 
-        # Verify the error log uses actual attempts_made (1)
-        err_messages = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.ERROR]
-        assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in err_messages)
+        # The terminal "failed to produce a valid PatchSpec" line is demoted to
+        # DEBUG (the heal transcript's └─ close node carries it at default level);
+        # verify it still reports the actual attempts_made (1).
+        debug_messages = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.DEBUG]
+        assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in debug_messages)
 
     def test_generate_agent_patch_with_guardrails_threads_to_prompt(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

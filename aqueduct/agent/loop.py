@@ -531,7 +531,10 @@ def generate_agent_patch(
                 break
 
             hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
-            logger.error(
+            # Demoted to debug: the transcript renders the failure inline on the
+            # tier's turn line (✗ provider error — <reason>) + the hint, so this
+            # full line would just duplicate it. Still available with -v / json.
+            logger.debug(
                 "LLM API call failed (attempt %d/%d): %s%s",
                 attempt_num, budget.max_reprompts, exc, hint,
             )
@@ -543,6 +546,11 @@ def generate_agent_patch(
                 gate_that_rejected="provider", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
+            # Transcript display data (transient — not persisted to heal_attempts).
+            _reason = str(exc).split(" for url")[0].replace("Client error ", "").replace(
+                "Server error ", "").strip(" '\"") or type(exc).__name__
+            rec._aq_detail = _reason
+            rec._aq_hint = hint.strip().removeprefix("hint:").strip() or None
             _fire_on_attempt(on_attempt, rec)
             tracker.mark_api_error()
             break
@@ -565,7 +573,9 @@ def generate_agent_patch(
         if parse_exc is not None:
             friendly = _format_reprompt_error(parse_exc, raw)
             reprompt_errors.append(friendly)
-            logger.warning(
+            # Demoted to debug — the transcript shows the parse failure inline
+            # (✗ invalid patch (schema) — <first line>). Full text via -v / json.
+            logger.debug(
                 "LLM patch response invalid (attempt %d/%d):\n%s",
                 attempt_num, budget.max_reprompts, friendly,
             )
@@ -582,6 +592,8 @@ def generate_agent_patch(
                 gate_that_rejected="schema", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
+            _short = friendly.strip().splitlines()[0] if friendly.strip() else ""
+            rec._aq_detail = _short[:120] or None
             _fire_on_attempt(on_attempt, rec)
 
             _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
@@ -801,7 +813,9 @@ def generate_agent_patch(
             tracker.current_attempt, tracker.stop_reason,
             tracker.tokens_in_total, tracker.tokens_out_total,
         )
-        logger.error(
+        # Demoted to debug — the transcript's └─ close node already states the
+        # outcome (✗ <reason> · N turn(s)); the caller prints the terminal line.
+        logger.debug(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r (stop_reason=%s)",
             tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,

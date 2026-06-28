@@ -54,10 +54,15 @@ def _cost_str(tokens_in: int, tokens_out: int, model: str | None) -> str:
         return ""
     ti = tokens_in if isinstance(tokens_in, int) else 0
     to = tokens_out if isinstance(tokens_out, int) else 0
+    if ti == 0 and to == 0:
+        return ""  # nothing was spent (provider error / cache hit) — omit noise
     inp, outp = _estimate_model(model)
     if inp == 0.0 and outp == 0.0:
         return f"{tokens_in}→{tokens_out} tokens"
-    cost = (ti * inp) + (to * outp)
+    # inp/outp are USD per 1k tokens (price-per-1M ÷ 1000 in the table), so the
+    # token counts must be scaled to thousands — earlier this multiplied raw
+    # tokens by the per-1k rate, overstating cost ~1000×.
+    cost = (ti / 1000.0) * inp + (to / 1000.0) * outp
     approx = "\u2248"
     return f"{tokens_in}\u2192{tokens_out} tokens \u00b7 {approx}${cost:.4f}"
 
@@ -106,6 +111,10 @@ class TranscriptWriter:
     and redaction.  Engine-agnostic — no ``pyspark``, no ``click``.
     """
 
+    _RAIL = "\u2502"      # \u2502  vertical rail down the heal branch
+    _NODE = "\u251c\u2500"  # \u251c\u2500 a tier branch node
+    _END = "\u2514\u2500"   # \u2514\u2500 the closing summary node
+
     def __init__(
         self,
         *,
@@ -115,17 +124,35 @@ class TranscriptWriter:
         self._verbose = verbose
         self._write = write
         self._attempts_seen = 0
+        # Tree state: a new cascade tier opens a fresh branch; its turns nest.
+        self._cur_tier: Any = " unset"
+        self._turn_in_tier = 0
 
     def header(self, attempt_num: int, total_attempts: int, *, resolve: str = "llm") -> None:
-        """Print the turn header (before the LLM call)."""
+        """Open the heal branch \u2014 a bare rail under the caller's section header."""
         self._attempts_seen = attempt_num
-        tag = f"{attempt_num}/{total_attempts}" if total_attempts > 1 else str(attempt_num)
-        prefix = "replay" if resolve == "replay" else "attempt"
-        self._emit(f"  \u21bb {prefix} {tag}")
+        self._total_attempts = total_attempts
+        self._cur_tier = " unset"
+        self._turn_in_tier = 0
+        self._emit(self._RAIL)
 
     def _emit(self, line: str) -> None:
         if self._write is not None:
             self._write(line)
+
+    def _open_tier_if_new(self, cascade_position: int | None, model: str | None) -> None:
+        """Emit a tier branch node the first time we see this cascade position."""
+        if cascade_position == self._cur_tier:
+            return
+        if self._cur_tier != " unset":
+            self._emit(self._RAIL)  # blank rail separating tiers
+        self._cur_tier = cascade_position
+        self._turn_in_tier = 0
+        model_short = model or "?"
+        if cascade_position is None:
+            self._emit(f"{self._NODE} {model_short}")
+        else:
+            self._emit(f"{self._NODE} tier {cascade_position + 1} \u00b7 {model_short}")
 
     def write(
         self,
@@ -147,44 +174,50 @@ class TranscriptWriter:
             cache_status: ``"replay"`` / ``"pending"`` / ``"coaching"`` or None.
             reprompt_reason: Reason fed back to the model on rejection.
         """
+        if cascade_position is None:
+            cascade_position = getattr(rec, "model_cascade_position", None)
+        self._open_tier_if_new(cascade_position, model)
+        self._turn_in_tier += 1
         if self._verbose:
             self._write_verbose(
                 rec, patch_spec, model=model, cascade_position=cascade_position,
                 cache_status=cache_status, reprompt_reason=reprompt_reason,
             )
         else:
-            self._write_terse(
-                rec, model=model, cascade_position=cascade_position,
-                cache_status=cache_status,
-            )
+            self._write_terse(rec, model=model, cache_status=cache_status)
+
+    def _verdict(self, rec: Any, cache_status: str | None) -> str:
+        """One-glyph outcome + short reason for a single turn."""
+        cache = _cache_label(cache_status)
+        if cache:
+            return f"✓ {cache}"
+        if rec.gate_that_rejected is None:
+            return "✓ patch accepted"
+        if rec.gate_that_rejected == "provider":
+            base = "✗ provider error"
+        else:
+            base = f"✗ {_gate_label(rec.gate_that_rejected)}"
+        detail = getattr(rec, "_aq_detail", None)
+        return f"{base} — {detail}" if detail else base
 
     def _write_terse(
         self,
         rec: Any,
         *,
         model: str | None = None,
-        cascade_position: int | None = None,
         cache_status: str | None = None,
     ) -> None:
-        parts: list[str] = [f"  attempt {rec.attempt_num}"]
-
-        tier = _tier_label(cascade_position, model)
-        if tier:
-            parts.append(tier)
-
-        cache = _cache_label(cache_status)
-        if cache:
-            parts.append(cache)
-        else:
-            parts.append(_cost_str(rec.tokens_in, rec.tokens_out, model))
-
-        gate = _gate_label(rec.gate_that_rejected)
-        parts.append(gate)
-
+        parts = [f"turn {rec.attempt_num}", self._verdict(rec, cache_status)]
+        if not _cache_label(cache_status):
+            cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
+            if cost:
+                parts.append(cost)
         if rec.escalated:
             parts.append("escalated")
-
-        self._emit(" · ".join(parts))
+        self._emit(f"{self._RAIL}   · " + " · ".join(parts))
+        hint = getattr(rec, "_aq_hint", None)
+        if hint:
+            self._emit(f"{self._RAIL}     ⓘ {hint.strip()}")
 
     def _write_verbose(
         self,
@@ -244,8 +277,25 @@ class TranscriptWriter:
         if rec.escalated:
             self._emit(f"{indent}     \u21b3 stuck-detection escalated (temperature=0.9)")
 
+    # Human-readable closing reasons (stop_reason → phrase).
+    _STOP_PHRASE: dict[str, str] = {
+        "solved": "patch generated",
+        "api_error": "all tiers unreachable",
+        "exhausted_attempts": "out of attempts",
+        "stuck_signature": "stuck (repeating error)",
+        "deferred": "deferred to human",
+        "budget_seconds_exceeded": "time budget exceeded",
+        "budget_tokens_exceeded": "token budget exceeded",
+    }
+
     def summary(self, stop_reason: str | None, attempts: int, tokens_in: int, tokens_out: int, model: str | None = None) -> None:
-        """Print a summary line after the loop completes."""
+        """Close the heal branch with a terminal └─ node."""
         cost = _cost_str(tokens_in, tokens_out, model)
         reason = stop_reason or "unknown"
-        self._emit(f"  heal complete: {attempts} attempt(s) · {cost} · stop={reason}")
+        ok = reason == "solved"
+        phrase = self._STOP_PHRASE.get(reason, reason)
+        icon = "✓" if ok else "✗"
+        bits = [f"{icon} {phrase}", f"{attempts} turn(s)"]
+        if cost:
+            bits.append(cost)
+        self._emit(f"{self._END} " + " · ".join(bits))

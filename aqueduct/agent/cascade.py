@@ -91,15 +91,16 @@ def generate_cascade_patch(
     tokens_spent = 0
 
     for idx, tier in enumerate(tiers, start=1):
-        logger.info("── Cascade tier %d/%d: %s ──", idx, n, tier.model)
+        # The transcript renders the tier branch node; keep this at debug.
+        logger.debug("cascade tier %d/%d: %s", idx, n, tier.model)
 
         remaining_tokens = None
         if base_budget.max_tokens_total is not None:
             remaining_tokens = base_budget.max_tokens_total - tokens_spent
             if remaining_tokens < 1:
-                logger.warning(
-                    "── Cascade stopped before tier %d/%d: cascade-wide token cap "
-                    "exhausted (%d/%d tokens spent) ──",
+                logger.debug(
+                    "cascade stopped before tier %d/%d: cascade-wide token cap "
+                    "exhausted (%d/%d tokens spent)",
                     idx, n, tokens_spent, base_budget.max_tokens_total,
                 )
                 if result is not None:
@@ -163,12 +164,15 @@ def generate_cascade_patch(
         # Escalation check runs BEFORE the patch check: a defer result carries
         # a non-None patch (the diagnosis), and on any non-final tier that
         # means "this model gave up" — try the next tier.
+        # Cascade transitions are demoted to debug: the heal transcript already
+        # renders each tier as a branch node and the terminal └─ close states the
+        # outcome, so these would double up at default level. Still in -v / json.
         if result.stop_reason in _ESCALATION_REASONS and idx < n:
-            logger.info("⚠  %s — escalating to tier %d", result.stop_reason, idx + 1)
+            logger.debug("%s — escalating to tier %d", result.stop_reason, idx + 1)
             continue
 
         if result.patch is not None:
-            logger.info("── Cascade complete: %s (tier %d/%d, stop_reason=%s) ──",
+            logger.debug("cascade complete: %s (tier %d/%d, stop_reason=%s)",
                          result.patch.patch_id, idx, n, result.stop_reason)
             return result
 
@@ -178,17 +182,16 @@ def generate_cascade_patch(
         # Provider unreachable on this tier → try the next endpoint (its own
         # base_url/api_key may be fine). Only the final tier aborts.
         if result.stop_reason in _TIER_RETRY_REASONS and idx < n:
-            logger.warning("⚠  tier %d/%d unreachable (%s) — trying tier %d",
-                           idx, n, result.stop_reason, idx + 1)
+            logger.debug("tier %d/%d unreachable (%s) — trying tier %d",
+                         idx, n, result.stop_reason, idx + 1)
             continue
 
         # Hard failure (budget_seconds_exceeded, or api_error on the last tier) —
         # nothing left to try.
-        logger.warning("── Cascade aborted: %s (tier %d/%d) ──",
-                       result.stop_reason, idx, n)
+        logger.debug("cascade aborted: %s (tier %d/%d)", result.stop_reason, idx, n)
         return result
 
     # All tiers exhausted without success.
-    logger.info("── Cascade exhausted: %d tier(s), stop_reason=%s ──",
-                n, result.stop_reason if result else "(no result)")
+    logger.debug("cascade exhausted: %d tier(s), stop_reason=%s",
+                 n, result.stop_reason if result else "(no result)")
     return result  # type: ignore[return-value]

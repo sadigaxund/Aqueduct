@@ -1716,15 +1716,13 @@ def run(
             )
 
             if patch is None:
-                click.echo(
-                    f"  {click.style('✗', fg='red', bold=True)} Agent: failed to generate valid patch, stopping",
-                    err=True,
-                )
+                # The transcript's └─ close node already states the outcome
+                # (✗ <reason> · N turn(s)); here we only note what happened next.
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
                 if on_hf == "stage":
                     click.echo(
                         click.style(
-                            "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
+                            "   ↑ no patch to stage — failure context logged in observability.db",
                             fg="bright_black",
                         ),
                         err=True,

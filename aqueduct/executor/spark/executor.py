@@ -180,18 +180,24 @@ def _with_retry(
 
             is_last = attempt == policy.max_attempts - 1
             if is_last or not _is_retriable(exc, policy):
-                if is_last:
-                    logger.warning(
-                        "[runtime_retry_exhausted] Module %r: attempt %d/%d "
-                        "failed (%s); giving up",
-                        module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
-                    )
-                else:
-                    logger.warning(
-                        "[runtime_retry_non_retriable] Module %r: non-retriable "
-                        "error on attempt %d/%d: %s",
-                        module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
-                    )
+                # Only narrate retry exhaustion when retries were actually
+                # configured (max_attempts > 1). With the default of 1 there was
+                # no retry to "give up" on — the module's ✗ summary line already
+                # reports the failure, so a separate warning here just duplicates
+                # the same error immediately above it.
+                if policy.max_attempts > 1:
+                    if is_last:
+                        logger.warning(
+                            "[runtime_retry_exhausted] Module %r: attempt %d/%d "
+                            "failed (%s); giving up",
+                            module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
+                        )
+                    else:
+                        logger.warning(
+                            "[runtime_retry_non_retriable] Module %r: non-retriable "
+                            "error on attempt %d/%d: %s",
+                            module_id, attempt + 1, policy.max_attempts, concise_error(str(exc)),
+                        )
                 break
 
             sleep = _backoff_seconds(attempt, policy)

@@ -135,26 +135,11 @@ def _format_llm_error_hint(
     # httpx.ReadTimeout / ConnectTimeout / WriteTimeout all subclass TimeoutException.
     if "timeout" in cls_name.lower() or "timed out" in msg or "timeout" in msg:
         seconds = f"{int(timeout)}s" if timeout else "unbounded"
-        suggestion = (
-            f"\n  hint: timed out after {seconds}. "
-            f"Local model cold-start (first call after Ollama restart) can take "
-            f"30–90s extra. Options:\n"
-            f"    1. Raise the timeout:  --timeout 600  "
-            f"(or set agent.timeout in aqueduct.yml)\n"
-            f"    2. Pre-warm the model before benchmarking:"
+        return (
+            f"\n  hint: timed out after {seconds} — raise it with "
+            f"`--set agent.timeout=600` (or agent.timeout in aqueduct.yml). "
+            f"Local models cold-start +30–90s on the first call."
         )
-        if base_url:
-            ollama_url = base_url.rstrip("/").removesuffix("/v1")
-            suggestion += (
-                f"\n         curl -sS {ollama_url}/api/generate "
-                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
-            )
-        else:
-            suggestion += (
-                f'\n         curl -sS <ollama_url>/api/generate '
-                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
-            )
-        return suggestion
 
     # Common connect-failure modes from httpx / OS-level networking.
     if (
