@@ -639,6 +639,28 @@ def _sniff_file_kind(path: Path) -> str | None:
 from aqueduct import __version__ as _aqueduct_version  # noqa: E402  (intentional mid-file import)
 
 
+def _install_styled_echo() -> None:
+    """Wrap ``click.echo`` so the icon vocabulary is coloured on every status line.
+
+    The systemic styler — installed once at top-level (text mode only), so each
+    call site no longer has to colour status lines by hand (the recurring
+    "uncoloured `✗ …` / raw line" class of bug). Idempotent; composes as the
+    outer wrapper over the redaction hook. JSON/prose/already-styled lines pass
+    through untouched (see ``style.colorize_line``)."""
+    if getattr(click.echo, "_aq_styled_wrapped", False):
+        return
+    from aqueduct.cli.style import colorize_line
+    _inner_echo = click.echo
+
+    def _styled_echo(message=None, file=None, nl=True, err=False, color=None):
+        if isinstance(message, str):
+            message = colorize_line(message)
+        return _inner_echo(message, file=file, nl=nl, err=err, color=color)
+
+    _styled_echo._aq_styled_wrapped = True  # type: ignore[attr-defined]
+    click.echo = _styled_echo  # type: ignore[assignment]
+
+
 def _install_secret_redaction_hooks() -> None:
     """Wrap click.echo and the logging chain so registered @aq.secret() values
     are scrubbed from every CLI emit path.
@@ -809,6 +831,11 @@ def cli(
     ctx.obj["suppress_warnings_cli"] = list(suppress_warnings)
 
     _install_secret_redaction_hooks()
+
+    # Outer wrapper over redaction — colour the icon vocabulary on every status
+    # line (text mode only; JSON output must stay un-styled).
+    if log_format.lower() != "json":
+        _install_styled_echo()
 
     # Bare `aqueduct` (no subcommand) → branded banner above the help.
     if ctx.invoked_subcommand is None:

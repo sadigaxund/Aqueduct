@@ -704,6 +704,19 @@ def _setup_surveyor(
     _emit_warnings(compile_warnings, verbose=verbose, label="compile:")
     _emit_warnings(_setup_caught, verbose=verbose, label="session:")
 
+    # The blueprint's compile warnings are now shown once (grouped). The run
+    # re-parses/re-compiles the SAME blueprint several times after this point —
+    # heal re-runs, zero-token replay, sandbox/explain gates — each of which would
+    # otherwise re-emit those identical warnings through the raw `AQ-WARN [...]`
+    # fallback formatter (they escape the initial catch_warnings block). Suppress
+    # AqueductWarning for the rest of this run so they never leak mid-execution.
+    # Runtime probe/assert warnings use logger.warning (not AqueductWarning) and
+    # are unaffected.
+    import warnings as _wmod
+
+    from aqueduct.warnings import AqueductWarning as _AqWarning
+    _wmod.simplefilter("ignore", _AqWarning)
+
     # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
     from aqueduct.cli import resolve_agent_connection
     _rac = resolve_agent_connection(cfg.agent, manifest.agent)
@@ -1454,49 +1467,49 @@ def run(
                 if max_patches > 1
                 else f"{patch_count + 1}"
             )
-            # Styled section header — the boundary between the run result above
-            # and the agent/heal block below (the old raw white line is gone).
-            click.echo(
-                click.style(
-                    f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
-                    + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
-                    fg="yellow",
-                ),
-                err=True,
-            )
-            # Heal "ceremony" — always surface which agent/model is on the job
-            # (solo or cascade) up front, even before the first attempt streams.
-            if resolved_agent_cascade:
-                _models = " → ".join(t.model for t in resolved_agent_cascade)
-                _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
-            else:
-                _agent_info = (
-                    f"{resolved_agent_model} · {resolved_agent_provider} "
-                    f"· ≤{resolved_agent_max_reprompts} reprompts"
-                )
-            click.echo(click.style(f"│  ◆ {_agent_info}", fg="cyan"), err=True)
-            # Verbose mode: render the full agent conversation.
-            # Default (terse): per-attempt one-liner after each turn.
             from aqueduct.cli.style import style_heal_line as _style_heal_line
-            # Live SSE streaming is used only on an interactive TTY (piped/CI keep
-            # the non-streaming POST path). When streaming, the live meter is the
-            # progress indicator; otherwise emit a static "contacting…" cue so a
-            # slow synchronous call doesn't look hung.
+            # Live SSE streaming is interactive-TTY-only (piped/CI keep the
+            # non-streaming POST path).
             _use_stream = sys.stdout.isatty()
             _transcript = TranscriptWriter(
                 verbose=verbose, write=lambda s: emit(_style_heal_line(s)),
                 streamed=_use_stream,
             )
-            _transcript.header(
-                patch_count + 1 if max_patches > 1 else 1,
-                resolved_agent_max_reprompts,
-                resolve=_resolution,
-            )
-            if _resolution != "replay":
-                # Always show an immediate cue — when streaming, the meter only
-                # appears once the FIRST token arrives, and a reasoning model can
-                # spend a long time digesting a big prompt before emitting any
-                # token, so without this the open branch looks hung.
+
+            # A zero-token replay (heal-cache hit) re-applies an archived patch
+            # with NO agent call — its announcement already printed above, so skip
+            # the agent-self-healing header / ceremony / streaming scaffolding and
+            # go straight to applying it. Only a real LLM heal gets the tree.
+            _is_replay = _resolution == "replayed"
+            if not _is_replay:
+                # Styled section header — boundary between the run result above
+                # and the agent/heal block below.
+                click.echo(
+                    click.style(
+                        f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
+                        + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
+                        fg="yellow",
+                    ),
+                    err=True,
+                )
+                # Ceremony — surface which agent/model is on the job (solo/cascade).
+                if resolved_agent_cascade:
+                    _models = " → ".join(t.model for t in resolved_agent_cascade)
+                    _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
+                else:
+                    _agent_info = (
+                        f"{resolved_agent_model} · {resolved_agent_provider} "
+                        f"· ≤{resolved_agent_max_reprompts} reprompts"
+                    )
+                click.echo(click.style(f"│  ◆ {_agent_info}", fg="cyan"), err=True)
+                _transcript.header(
+                    patch_count + 1 if max_patches > 1 else 1,
+                    resolved_agent_max_reprompts,
+                    resolve=_resolution,
+                )
+                # Immediate cue — the stream meter only appears once the FIRST
+                # token arrives, and a reasoning model can digest a big prompt for
+                # a while first, so without this the open branch looks hung.
                 _cue = (
                     "│   · waiting for first token… (reasoning models digest the prompt before replying)"
                     if _use_stream else
@@ -1769,13 +1782,16 @@ def run(
                 except Exception:
                     pass  # updating stop_reason is best-effort; never let persistence block the loop
             _summary_model = (agent_result.model or agent_result.__dict__.get("model"))
-            _transcript.summary(
-                agent_result.stop_reason,
-                agent_result.attempts,
-                agent_result.tokens_in_total,
-                agent_result.tokens_out_total,
-                model=_summary_model or resolved_agent_model,
-            )
+            if not _is_replay:
+                # Replay prints no tree, so it gets no └─ close node — its cache
+                # announcement + the apply result line below tell the whole story.
+                _transcript.summary(
+                    agent_result.stop_reason,
+                    agent_result.attempts,
+                    agent_result.tokens_in_total,
+                    agent_result.tokens_out_total,
+                    model=_summary_model or resolved_agent_model,
+                )
 
             if patch is None:
                 # The transcript's └─ close node already states the outcome

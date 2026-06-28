@@ -62,34 +62,44 @@ def info(msg: str, *, err: bool = False) -> None:
     click.echo(click.style(msg, fg="bright_black"), err=err)
 
 
-_HEAL_GLYPH_COLOR = {
-    "✓": "green",        # ✓ success
-    "✗": "red",          # ✗ failure
-    "⚠": "yellow",       # ⚠ warning
-    "ⓘ": "cyan",         # ⓘ info/hint
+# Semantic icon → colour. ✓ success, ✗ failure, ⚠ warning, ⓘ/◆/↻/▸/⏭ accents.
+_ICON_COLOR = {
+    "✓": "green", "✗": "red", "⚠": "yellow",
+    "ⓘ": "cyan", "◆": "cyan", "↻": "cyan", "▸": "cyan", "⏭": "cyan",
 }
-_HEAL_RAIL_GLYPHS = ("├─", "└─", "│", "┆")  # ├─ └─ │ ┆
+# Structure / sub-detail glyphs recede (dim).
+_DIM_GLYPHS = ("├─", "└─", "│", "┆", "↳", "↑")
+# A line is a "status/tree" line (eligible for colouring) only if, after leading
+# whitespace, it starts with one of these — so `--format json` (`{`/`[`) and
+# prose are never touched, and an icon embedded mid-prose is left alone.
+_LEADERS = tuple(_ICON_COLOR) + _DIM_GLYPHS
 
 
-def style_heal_line(line: str) -> str:
-    """Colour the heal-transcript tree to the CLI vocabulary.
+def colorize_line(line: str) -> str:
+    """Colour the CLI icon vocabulary on a single output line.
 
-    The ``TranscriptWriter`` is engine-agnostic and emits plain strings; this is
-    the CLI-side colouriser the heal callers wrap their ``write`` callback with.
-    Status glyphs take their semantic colour (✓ green / ✗ red / ⚠ yellow / ⓘ
-    cyan); the tree rails (``│ ├─ └─ ┆``) dim so the structure recedes and the
-    content stands out. Plain passthrough when colour is off (non-TTY / NO_COLOR).
-    """
-    if not _color_enabled():
+    The systemic styler: installed as a ``click.echo`` wrapper so *every* status
+    line is coloured without each call site styling by hand (✓ green / ✗ red /
+    ⚠ yellow / ⓘ◆↻▸ cyan; ``│ ├─ └─ ┆ ↳ ↑`` dimmed). Returns the line unchanged
+    when colour is off, when it is already styled (contains an ANSI escape), or
+    when it is not a status/tree line (doesn't start with a known glyph) — so
+    JSON output and prose stay intact."""
+    if not isinstance(line, str) or not _color_enabled():
+        return line
+    if "\x1b[" in line or not line.lstrip().startswith(_LEADERS):
         return line
     out = line
-    for glyph, colour in _HEAL_GLYPH_COLOR.items():
+    for glyph, colour in _ICON_COLOR.items():
         if glyph in out:
             out = out.replace(glyph, click.style(glyph, fg=colour))
-    for rail in _HEAL_RAIL_GLYPHS:
-        if rail in out:
-            out = out.replace(rail, click.style(rail, fg="bright_black"))
+    for glyph in _DIM_GLYPHS:
+        if glyph in out:
+            out = out.replace(glyph, click.style(glyph, fg="bright_black"))
     return out
+
+
+# Back-compat alias: the heal transcript writer wraps its callback with this.
+style_heal_line = colorize_line
 
 
 def _short_warning(msg: str, limit: int = 100) -> str:
