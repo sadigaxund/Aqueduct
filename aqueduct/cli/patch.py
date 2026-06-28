@@ -33,6 +33,15 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
         from aqueduct.config import load_config
         from aqueduct.stores.read import open_obs_read
 
+        # Load .env first so a config/blueprint that references env vars or
+        # @aq.secret() (e.g. a Postgres DSN, an s3 endpoint) resolves — without
+        # this the store silently failed to open and the index update was skipped
+        # (leaving the index stale relative to the patch store).
+        try:
+            _resolve_and_load_env(None, None, cli_env=())
+        except Exception:
+            pass  # env auto-load is best-effort; config may not need it
+
         cfg = load_config(None)
         bp_id = None
         if blueprint_path is not None:
@@ -45,41 +54,45 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
         return None
 
 
-def _list_from_index(rows: list[dict], filter_status: str, out_format: str) -> None:
-    """Render ``patch_index`` rows for ``aqueduct patch list`` (backend-blind).
+def _list_from_store(ps, filter_status: str, out_format: str) -> None:
+    """Render patches read straight from the patch store (the source of truth).
 
-    Shows status + metadata from the relational index; patch *bodies* may live in
-    a remote object store, so the actions point at ``patch pull`` (which is
-    backend-aware) rather than a local file path."""
+    Lists ``pending/`` (or applied/rejected) via ``PatchStore.iter_payloads`` —
+    works for local and object backends. ``blueprint_id``/``rationale`` come from
+    each body's metadata."""
+    from aqueduct.patch.grammar import PATCH_META_KEY
+    statuses = ("pending", "applied", "rejected") if filter_status == "all" else (filter_status,)
+    rows: list[dict] = []
+    for st in statuses:
+        for _key, _mtime, payload in ps.iter_payloads(st):
+            meta = payload.get(PATCH_META_KEY) or {}
+            rows.append({
+                "status": st,
+                "patch_id": payload.get("patch_id", ""),
+                "rationale": payload.get("rationale"),
+                "confidence": payload.get("confidence"),
+                "blueprint_id": meta.get("blueprint_id"),
+                "run_id": meta.get("run_id"),
+                "failed_module": meta.get("failed_module"),
+            })
     if out_format.lower() == "json":
-        emit([
-            {
-                "status": r.get("status"),
-                "patch_id": r.get("patch_id"),
-                "rationale": r.get("rationale"),
-                "blueprint_id": r.get("blueprint_id"),
-                "run_id": r.get("run_id"),
-                "object_key": r.get("object_key"),
-                "signature": r.get("signature"),
-            }
-            for r in rows
-        ], fmt="json")
+        emit(rows, fmt="json")
         return
     if not rows:
-        click.echo(f"No {filter_status} patches found in the patch index.")
+        click.echo(f"No {filter_status} patches found in the patch store ({ps.location_label}).")
         return
-    click.echo(f"\n  {'patch_id':<34} {'status':<9} {'rationale'}")
-    click.echo(f"  {'-' * 34} {'-' * 9} {'-' * 44}")
+    click.echo(f"\n  {'patch_id':<34} {'status':<9} {'blueprint':<24} rationale")
+    click.echo(f"  {'-' * 34} {'-' * 9} {'-' * 24} {'-' * 28}")
     has_pending = False
     for r in rows:
-        st = r.get("status", "")
+        st = r["status"]
         has_pending = has_pending or st == "pending"
-        rationale = (r.get("rationale") or "").replace("\n", " ")[:44]
-        click.echo(f"  {r.get('patch_id', ''):<34} {st:<9} {rationale}")
+        bp = (r.get("blueprint_id") or "")[:24]
+        rationale = (r.get("rationale") or "").replace("\n", " ")[:28]
+        click.echo(f"  {r['patch_id']:<34} {st:<9} {bp:<24} {rationale}")
     if has_pending:
-        click.echo("\n  Fetch body: aqueduct patch pull <patch_id>")
-        click.echo("  Apply:      aqueduct patch apply <pulled-file> --blueprint <blueprint.yml>")
-        click.echo("  Reject:     aqueduct patch reject <patch_id> --reason '<reason>'")
+        click.echo("\n  Apply:  aqueduct patch apply <patch_id> --blueprint <blueprint.yml>")
+        click.echo("  Reject: aqueduct patch reject <patch_id> --reason '<reason>'")
 
 
 # ── patch command group ───────────────────────────────────────────────────────
@@ -764,42 +777,45 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     default="text", show_default=True,
     help="Output format. `json` for machine-readable consumption (Phase 30b).",
 )
-def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str) -> None:
-    """List patches, showing metadata for each.
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the configured patch store backend (local / s3 / …).",
+)
+@_env_options
+def patch_list(
+    blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """List patches from the configured patch store (backend-blind).
 
-    Defaults to showing pending patches. Use --status=applied/rejected/all for other dirs.
+    Lists the patch store directly — local ``patches/`` **or** the configured
+    object store (s3/gcs/…) per ``stores.blob`` — which is the source of truth.
+    Defaults to pending; use ``--status`` for applied/rejected/all. Resolves the
+    store from ``aqueduct.yml`` (``--config`` / CWD) + env, so it sees remote
+    backends instead of silently scanning the local dir.
     """
     from pathlib import Path
 
-    # Backend-blind source of truth: the patch_index table (works whether the
-    # patch bodies live in the local patches/ dir or a remote object store). We
-    # fall back to scanning the local dir only when no observability store /
-    # index is reachable. (`--patches-dir` forces the legacy local scan.)
+    # Primary path: resolve the configured patch store (local OR object store)
+    # from aqueduct.yml + env and list it directly. `--patches-dir` forces the
+    # legacy local scan; any resolution failure falls back to it too.
     if not patches_dir:
-        _bp_path = Path(blueprint) if blueprint else None
-        _bp_id = None
-        if _bp_path is not None:
-            try:
-                from aqueduct.parser.parser import parse as _parse_bp
-                _bp_id = _parse_bp(str(_bp_path)).id
-            except Exception:
-                _bp_id = None
-        _store = _patch_index_obs_store(_bp_path)
-        if _store is not None:
-            try:
-                from aqueduct.patch import index as _ix
-                with _store.connect() as _cur:
-                    _ix.ensure_schema(_cur)
-                    _rows = _ix.list_by_status(
-                        _cur,
-                        status=None if filter_status == "all" else filter_status,
-                        blueprint_id=_bp_id,
-                    )
-            except Exception:
-                _rows = None
-            if _rows is not None:
-                _list_from_index(_rows, filter_status, out_format)
-                return
+        try:
+            _cfg_path = Path(config_path) if config_path else None
+            _resolve_and_load_env(env_file, _cfg_path, cli_env=cli_env)
+            from aqueduct.config import load_config
+            from aqueduct.stores.object_store import make_patch_store
+            cfg = load_config(_cfg_path)
+            _bp_path = Path(blueprint) if blueprint else None
+            _patches_root = (
+                _patches_root_from_blueprint(_bp_path) if _bp_path
+                else Path.cwd() / "patches"
+            )
+            ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, _patches_root)
+            _list_from_store(ps, filter_status, out_format)
+            return
+        except Exception:
+            pass  # fall through to the local-dir scan
 
     if patches_dir:
         patches_root = Path(patches_dir)

@@ -399,6 +399,20 @@ class _CompileResult:
     compile_warnings: list  # captured AQ-WARN records, emitted after the run header
 
 
+def _emit_explain_regressions(g4) -> None:
+    """Surface explain-gate plan regressions as rule_id'd warnings.
+
+    Standardised (``⚠ [explain_regression] …`` via the output funnel, greppable +
+    suppressible) and called on BOTH the LLM-apply and the zero-token replay
+    paths, so a replayed patch's plan regression is no longer silently dropped
+    while the LLM path printed it."""
+    if g4 is None or getattr(g4, "status", None) != "warn":
+        return
+    from aqueduct.cli.output import warn as _warn
+    for _r in getattr(g4, "regressions", ()) or ():
+        _warn("explain_regression", _r.detail)
+
+
 def _do_compile(
     blueprint,
     profile,
@@ -1437,6 +1451,9 @@ def run(
                                 )
                             else:
                                 _replay_gates_done = True
+                                # Same plan-regression warning the LLM path gets,
+                                # so a replayed patch's regression isn't silent.
+                                _emit_explain_regressions(_rg4)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
                             _replay_result = _AgentPatchResult(
@@ -1998,9 +2015,7 @@ def run(
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
                     )
-                if _g4 is not None and _g4.status == "warn":
-                    for _r in _g4.regressions:
-                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
+                _emit_explain_regressions(_g4)
                 if _g3 is not None and not _g3_passed:
                     # Non-interactive (auto) gate rejection → exit VALIDATION_GATE(4).
                     patch_rejected_by_gate = True
@@ -2134,9 +2149,7 @@ def run(
                     if manifest.agent.block_on_explain_regression is not None
                     else cfg.agent.block_on_explain_regression
                 )
-                if _g4 is not None and _g4.status == "warn":
-                    for _r in _g4.regressions:
-                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
+                _emit_explain_regressions(_g4)
                 if _block_on_g4 and _g4 is not None and _g4.status == "warn":
                     last_apply_error = (
                         f"Patch {patch.patch_id!r} rejected by the explain gate: "
