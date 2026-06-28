@@ -30,6 +30,13 @@ _ESCALATION_REASONS: frozenset[StopReason] = frozenset(
     {StopReason.STUCK_SIGNATURE, StopReason.EXHAUSTED_ATTEMPTS, StopReason.DEFERRED}
 )
 
+# A tier whose provider is simply unreachable (api_error: 404 model-not-pulled,
+# connection refused, …) should try the NEXT tier — each cascade tier has its
+# own base_url/api_key, so tier 1 being down says nothing about tier 2. Distinct
+# from _ESCALATION_REASONS ("the model gave up, try a stronger one"): this is
+# "this endpoint failed, try a different one". Only aborts on the final tier.
+_TIER_RETRY_REASONS: frozenset[StopReason] = frozenset({StopReason.API_ERROR})
+
 
 def generate_cascade_patch(
     tiers: list[CascadeTierConfig],
@@ -168,7 +175,15 @@ def generate_cascade_patch(
         if result.stop_reason in _ESCALATION_REASONS:
             continue  # final tier — fall through to the exhausted log below
 
-        # Hard failure (api_error, budget_seconds_exceeded, …) — don't escalate.
+        # Provider unreachable on this tier → try the next endpoint (its own
+        # base_url/api_key may be fine). Only the final tier aborts.
+        if result.stop_reason in _TIER_RETRY_REASONS and idx < n:
+            logger.warning("⚠  tier %d/%d unreachable (%s) — trying tier %d",
+                           idx, n, result.stop_reason, idx + 1)
+            continue
+
+        # Hard failure (budget_seconds_exceeded, or api_error on the last tier) —
+        # nothing left to try.
         logger.warning("── Cascade aborted: %s (tier %d/%d) ──",
                        result.stop_reason, idx, n)
         return result

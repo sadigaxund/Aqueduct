@@ -182,7 +182,7 @@ def heal(
         cur.execute(
             """
             SELECT run_id, blueprint_id, failed_module, error_message,
-                   stack_trace, manifest_json,
+                   stack_trace, manifest_json, provenance_json,
                    CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
             FROM failure_contexts WHERE run_id = ?
             """,
@@ -200,7 +200,7 @@ def heal(
 
     (
         fc_run_id, blueprint_id, failed_module, error_message,
-        stack_trace, manifest_json_raw, started_at, finished_at,
+        stack_trace, manifest_json_raw, provenance_json_raw, started_at, finished_at,
     ) = fc_row
 
     # Phase 39/53 — materialize blob-externalised columns transparently.
@@ -218,6 +218,9 @@ def heal(
     _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, _blob_base)
     _manifest_str = _blob.materialize(manifest_json_raw if isinstance(manifest_json_raw, str) else "")
     _stack_str = _blob.materialize(stack_trace or "")
+    # ISSUE-047 #2 — provenance is externalised to a blob marker too; without
+    # materialising it the agent prompt loses its provenance section.
+    _prov_str = _blob.materialize(provenance_json_raw if isinstance(provenance_json_raw, str) else "")
 
     target_module = module_id or failed_module
 
@@ -228,6 +231,7 @@ def heal(
         error_message=error_message,
         stack_trace=_stack_str,
         manifest_json=_manifest_str,
+        provenance_json=_prov_str or None,
         started_at=started_at,
         finished_at=finished_at,
     )

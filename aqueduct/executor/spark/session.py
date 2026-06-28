@@ -7,6 +7,7 @@ The factory is the only place in the codebase that calls SparkSession.builder.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sys
 from typing import Any
@@ -114,33 +115,39 @@ def make_spark_session(
     else:
         session = builder.getOrCreate()
 
-    _mute_query_context_logger(session)
+    _mute_query_context_loggers()
     return session
 
 
-def _mute_query_context_logger(session: SparkSession) -> None:
-    """Best-effort: silence Spark's ``SQLQueryContextLogger``.
+def _mute_query_context_loggers() -> None:
+    """Silence pyspark's per-error query-context JSON dump (ISSUE-046).
 
-    On every ``AnalysisException`` it dumps the full Catalyst plan tree (as JSON
-    under Spark 4.0 structured logging) straight to stderr — duplicating the root
-    cause Aqueduct already reports concisely on the module status line
-    (ISSUE-046). Set that one JVM logger to OFF; never block the run if the
-    log4j2 shape differs across Spark versions.
+    On every ``AnalysisException`` pyspark 4.x logs the full query context (the
+    entire Catalyst plan tree) as one JSON line to stderr. The crucial fact —
+    confirmed against a live ``local[1]`` Spark 4.1 — is that this is emitted
+    **python-side, not by the JVM**: ``pyspark/errors/exceptions/base.py`` calls
+    ``PySparkLogger.getLogger("SQLQueryContextLogger").exception(...)`` (and a
+    ``DataFrameQueryContextLogger`` sibling). That is why no JVM/log4j lever
+    touches it — ``Configurator.setLevel`` (default + Spark-classloader context),
+    per-instance ``core.Logger.setLevel``, ``setRootLevel(OFF)`` and
+    ``sparkContext.setLogLevel("OFF")`` were all verified to do nothing. The dump
+    duplicates the root cause Aqueduct already reports concisely on the module
+    status line and ignores ``--log-format``.
+
+    The fix is plain Python ``logging``: these are ``logging.Logger`` instances
+    (own ``StreamHandler``, ``propagate=False``). We create them via pyspark's
+    own ``PySparkLogger.getLogger`` (so the class/handler match) and raise the
+    level above ERROR — ``logger.exception()`` logs at ERROR, so it is filtered.
+    ``logging`` caches loggers by name, so pyspark's later ``getLogger`` at error
+    time returns this same muted instance. The ``AnalysisException`` itself still
+    propagates to Aqueduct untouched (the heal path is unaffected).
     """
     try:
-        jvm = session._jvm
-        level_off = jvm.org.apache.logging.log4j.Level.OFF
-        configurator = jvm.org.apache.logging.log4j.core.config.Configurator
-        for name in (
-            "SQLQueryContextLogger",
-            "org.apache.spark.sql.catalyst.util.SQLQueryContextLogger",
-            "org.apache.spark.sql.execution.SQLQueryContextLogger",
-            "org.apache.spark.sql.catalyst.trees.SQLQueryContextLogger",
-            "org.apache.spark.SQLQueryContextLogger",
-        ):
-            configurator.setLevel(name, level_off)
+        from pyspark.logger import PySparkLogger
+        for name in ("SQLQueryContextLogger", "DataFrameQueryContextLogger"):
+            PySparkLogger.getLogger(name).setLevel(logging.CRITICAL)
     except Exception:
-        pass  # best-effort — log4j2 may be absent / named differently per Spark version
+        pass  # best-effort — pyspark logging internals may differ across versions
 
 
 def stop_spark_session(spark: SparkSession) -> None:

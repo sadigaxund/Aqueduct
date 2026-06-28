@@ -354,14 +354,25 @@ class Surveyor:
         # Phase 39 — externalise fat columns to compressed blobs so the DB
         # row stores only a relative path (DuckDB row width drops ~10×).
         # Postgres is unaffected — TOAST handles large JSON natively.
+        #
+        # ISSUE-047 #2: externalising is a *storage* concern — it must NOT
+        # corrupt the live `ctx` handed to the inline heal agent. The agent
+        # `json.loads()` these fields (prompts.py); a blob marker string like
+        # "blobs/<run>/manifest.json.zst" parses to nothing → empty module
+        # context. So keep `ctx` on the FULL values and externalise *copies*
+        # into separate `_db_*` vars used only for the DB INSERT. The post-hoc
+        # `aqueduct heal` path re-materialises the markers back to full text.
         _manifest_json = _redact(json.dumps(self._manifest.to_dict()))
         _stack_trace_str = _redact(stack_trace) or ""
         _prov_json = _redact(provenance_json) or ""
+        _db_manifest_json = _manifest_json
+        _db_stack_trace_str = _stack_trace_str
+        _db_prov_json = _prov_json
         _blob = self._blob_store()
         if _blob is not None:
-            _manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
-            _stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
-            _prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
+            _db_manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
+            _db_stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
+            _db_prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
 
         ctx = FailureContext(
             run_id=result.run_id,
@@ -410,9 +421,11 @@ class Surveyor:
                     ctx.blueprint_id,
                     ctx.failed_module,
                     ctx.error_message,
-                    ctx.stack_trace,
-                    ctx.manifest_json,
-                    ctx.provenance_json,
+                    # ISSUE-047 #2 — DB row stores the compact blob markers;
+                    # `ctx` (above) keeps the full values for inline heal.
+                    _db_stack_trace_str,
+                    _db_manifest_json,
+                    _db_prov_json,
                     ctx.started_at,
                     ctx.finished_at,
                     ctx.error_class,
