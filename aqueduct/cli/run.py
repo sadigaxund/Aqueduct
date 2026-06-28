@@ -1722,7 +1722,7 @@ def run(
                 if on_hf == "stage":
                     click.echo(
                         click.style(
-                            "   ↑ no patch to stage — failure context logged in observability.db",
+                            "   ↑ no patch to stage — failure context saved to the observability store",
                             fg="bright_black",
                         ),
                         err=True,

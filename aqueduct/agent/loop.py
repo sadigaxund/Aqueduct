@@ -473,7 +473,18 @@ def generate_agent_patch(
     reprompt_errors: list[str] = []
     escalate_next = False
 
+    # Per-turn raw model output, surfaced to the -v transcript (verbatim view of
+    # what the model returned — the key diagnostic when a patch won't parse).
+    # Transient display data; never persisted to heal_attempts. Reset each turn,
+    # set after a successful provider call; None on a failed call.
+    _turn_raw: dict[str, str | None] = {"v": None}
+
+    def _fire_turn(rec) -> None:
+        rec._aq_raw = _turn_raw["v"]
+        _fire_on_attempt(on_attempt=on_attempt, rec=rec)
+
     while True:
+        _turn_raw["v"] = None
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
         logger.info("── Heal attempt %d/%d ──", attempt_num, budget.max_reprompts)
@@ -491,7 +502,7 @@ def generate_agent_patch(
                 gate_that_rejected="budget", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
             tracker.mark_budget_seconds_exceeded()
             break
 
@@ -526,7 +537,7 @@ def generate_agent_patch(
                     gate_that_rejected="budget", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
                 tracker.mark_budget_seconds_exceeded()
                 break
 
@@ -551,7 +562,7 @@ def generate_agent_patch(
                 "Server error ", "").strip(" '\"") or type(exc).__name__
             rec._aq_detail = _reason
             rec._aq_hint = hint.strip().removeprefix("hint:").strip() or None
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
             tracker.mark_api_error()
             break
 
@@ -561,6 +572,7 @@ def generate_agent_patch(
             tokens_in, tokens_out, latency_ms,
         )
         logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
+        _turn_raw["v"] = raw  # captured for the -v transcript
 
         # ── Parse phase ────────────────────────────────────────────────
         parse_exc: BaseException | None = None
@@ -594,7 +606,7 @@ def generate_agent_patch(
             )
             _short = friendly.strip().splitlines()[0] if friendly.strip() else ""
             rec._aq_detail = _short[:120] or None
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
 
             _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
             if _should_break:
@@ -654,7 +666,7 @@ def generate_agent_patch(
                     gate_that_rejected="defer_rejected", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
 
                 _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
                 if _should_break:
@@ -677,7 +689,7 @@ def generate_agent_patch(
                 gate_that_rejected=None, escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
             tracker.mark_deferred()
             break
 
@@ -713,7 +725,7 @@ def generate_agent_patch(
                     gate_that_rejected="validate", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
 
                 stop = tracker.check_stop()
                 if stop is not None and stop != StopReason.SOLVED:
@@ -754,7 +766,7 @@ def generate_agent_patch(
                     gate_that_rejected=None, escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
                 tracker.check_stop()  # sets 'solved'
                 logger.info("  ✓ Applied: patch accepted by guardrails + apply")
                 break
@@ -780,7 +792,7 @@ def generate_agent_patch(
                 gate_that_rejected="apply", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
 
             _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
             if _should_break:
@@ -803,7 +815,7 @@ def generate_agent_patch(
             gate_that_rejected=None, escalated=escalate_next,
             model_cascade_position=model_cascade_position,
         )
-        _fire_on_attempt(on_attempt, rec)
+        _fire_turn(rec)
         tracker.check_stop()
         break
 

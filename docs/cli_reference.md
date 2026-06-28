@@ -127,6 +127,8 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 
 One flat dotted namespace addresses whichever schema owns the field. For `aqueduct run`, an `agent.*` path that the Blueprint schema declares (e.g. `agent.approval`, `agent.timeout`) lands on the Blueprint (which already wins the merge); engine-only agent fields (`agent.budget.*`, `agent.retry.*`) and everything else (`deployment.*`, `danger.*`, `stores.*`) land on `aqueduct.yml`. A path no schema declares is an error with a nearest-sibling suggestion.
 
+> **Precedence is per-key, and a cascade tier's own fields are separate keys.** `--set` wins among the *sources* for the key it targets (`--set agent.timeout` beats the blueprint's and `aqueduct.yml`'s `agent.timeout`). But in a **cascade** (`agent.cascade:`), each tier's `timeout` / `max_reprompts` / `provider` / … are *their own keys* that only inherit the flat `agent.*` value **when the tier leaves them unset**. So `--set agent.timeout=600` raises the solo/flat default and any tier that inherits it — but it does **not** override a tier that declares its own `timeout:` (that is a different key, and the tier's explicit value is intentional). To change one tier, set that tier's field in the blueprint's `agent.cascade:` block. (A per-tier `--set agent.cascade[N].timeout` addressing form is on the roadmap; see `TODOs.md`.)
+
 Value grammar:
 - `PATH=value` — coerced: `true`/`false` → bool, `null`/`none` → None, then int, then float, else the literal string.
 - `PATH:=value` — `value` parsed as JSON, for structured values (objects/arrays/typed scalars).

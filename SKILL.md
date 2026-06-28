@@ -340,3 +340,9 @@ your OpenRouter/DeepSeek/Groq key goes in `OPENAI_API_KEY`). Keyless local serve
 the provider's model id. These env vars are the fallback; configure `agent.api_key`
 (via `@aq.secret()` or literal) in `aqueduct.yml`, the Blueprint `agent:` block, or
 per cascade tier for finer control.
+
+A single `agent.model:` heals **solo** (one model, the flat `agent.*` connection).
+Adding `agent.cascade:` (a list of tiers, cheapest-first) switches to **cascade** mode.
+A tier inherits a flat `agent.*` field only when it leaves that field unset; a field the
+tier sets is its own key (so `--set agent.timeout` raises the solo/flat default and every
+inheriting tier, but not a tier that declares its own `timeout:`).

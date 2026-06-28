@@ -82,7 +82,7 @@ class TestTranscriptWriterVerbose:
         output = "\n".join(lines)
         assert "turn 2" in output
         assert "rejected (guardrails)" in output
-        assert "tier 1 (deepseek-v3)" in output
+        assert "tier 1 · deepseek-v3" in output   # tier branch node
         assert "500→800 tokens" in output
         assert "fix typo" in output
         assert "bad config" in output

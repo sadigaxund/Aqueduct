@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from typing import Any
 
+# -v raw-response dump is capped so a verbose model can't flood the terminal.
+_MAX_RAW_LINES = 40
+
 # ── Price table (USD per 1k tokens) ──────────────────────────────────────
 # Derived from public API pages as of mid-2026.  Used for cost estimates.
 # Keys: provider/model name or prefix.
@@ -229,53 +232,56 @@ class TranscriptWriter:
         cache_status: str | None = None,
         reprompt_reason: str | None = None,
     ) -> None:
-        indent = "  "
-        tier = _tier_label(cascade_position, model)
-        seps = ("\n" + indent + "       ").join  # aligns under the label prefix
+        rail = self._RAIL
+        sub = f"{rail}     \u21b3 "
 
-        # Status line
-        gate = _gate_label(rec.gate_that_rejected)
-        status_icon = "\u2713" if rec.gate_that_rejected is None else "\u2717"
-        label = f"{indent}{status_icon} turn {rec.attempt_num}  ({gate})"
-        if tier:
-            label += f"  [{tier}]"
-        self._emit(label)
+        # Turn header \u2014 same verdict line as terse, then the deep detail below.
+        self._emit(f"{rail}   \u00b7 turn {rec.attempt_num}  {self._verdict(rec, cache_status)}")
 
-        # Use (tokens + cost)
         cache = _cache_label(cache_status)
-        if cache:
-            self._emit(f"{indent}     \u21b3 {cache}")
-        else:
+        if not cache:
             cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
             if cost:
-                self._emit(f"{indent}     \u21b3 {cost}")
+                self._emit(f"{sub}{cost}")
 
-        # Patch details (only when successfully parsed)
+        # Raw model output verbatim \u2014 the core of -v: lets the user see exactly
+        # what the model returned (especially when it would not parse) and decide
+        # whether the prompt or the blueprint needs more guiding context.
+        raw = getattr(rec, "_aq_raw", None)
+        if raw and raw.strip():
+            self._emit(f"{rail}     raw response:")
+            shown = raw.strip().splitlines()
+            for line in shown[:_MAX_RAW_LINES]:
+                self._emit(f"{rail}     \u2506 {line}")
+            if len(shown) > _MAX_RAW_LINES:
+                self._emit(f"{rail}     \u2506 \u2026 ({len(shown) - _MAX_RAW_LINES} more line(s))")
+
+        # Parsed patch details (only when parsing succeeded).
         if patch_spec is not None:
             ops = ", ".join(
                 f"{o.op}({getattr(o, 'module_id', '') or getattr(o, 'key', '') or ''})"
                 for o in patch_spec.operations
             )
-            parts = [f"ops: {ops}" if ops else "ops: (none)"]
-            if patch_spec.rationale:
-                parts.append(f"rationale: {patch_spec.rationale}")
-            if patch_spec.root_cause:
-                parts.append(f"root cause: {patch_spec.root_cause}")
             conf = (
                 f"{patch_spec.confidence:.0%}"
                 if patch_spec.confidence is not None else "n/a"
             )
-            parts.append(f"confidence: {conf}")
-            self._emit(f"{indent}     \u21b3 {seps(parts)}")
+            self._emit(f"{sub}parsed: {ops or '(none)'} \u00b7 confidence {conf}")
+            if patch_spec.rationale:
+                self._emit(f"{sub}rationale: {patch_spec.rationale}")
+            if patch_spec.root_cause:
+                self._emit(f"{sub}root cause: {patch_spec.root_cause}")
 
-        # Rejection detail
+        # What we fed back to the model after a rejection.
         if reprompt_reason:
-            reason = reprompt_reason[:200]
-            self._emit(f"{indent}     \u21b3 reprompt: {reason}")
+            self._emit(f"{sub}reprompt: {reprompt_reason[:300]}")
 
-        # Stuck/escalation
         if rec.escalated:
-            self._emit(f"{indent}     \u21b3 stuck-detection escalated (temperature=0.9)")
+            self._emit(f"{sub}stuck-detection escalated (temperature=0.9)")
+
+        hint = getattr(rec, "_aq_hint", None)
+        if hint:
+            self._emit(f"{rail}     \u24d8 {hint.strip()}")
 
     # Human-readable closing reasons (stop_reason → phrase).
     _STOP_PHRASE: dict[str, str] = {

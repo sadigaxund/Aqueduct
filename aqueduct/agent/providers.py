@@ -136,9 +136,9 @@ def _format_llm_error_hint(
     if "timeout" in cls_name.lower() or "timed out" in msg or "timeout" in msg:
         seconds = f"{int(timeout)}s" if timeout else "unbounded"
         return (
-            f"\n  hint: timed out after {seconds} — raise it with "
-            f"`--set agent.timeout=600` (or agent.timeout in aqueduct.yml). "
-            f"Local models cold-start +30–90s on the first call."
+            f"\n  hint: timed out after {seconds} — raise `agent.timeout` "
+            f"(aqueduct.yml or the blueprint's agent: block; a cascade tier's own "
+            f"`timeout:` overrides it). Local models cold-start +30–90s."
         )
 
     # Common connect-failure modes from httpx / OS-level networking.
