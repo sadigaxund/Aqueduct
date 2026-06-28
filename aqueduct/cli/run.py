@@ -1480,10 +1480,17 @@ def run(
             # progress indicator; otherwise emit a static "contacting…" cue so a
             # slow synchronous call doesn't look hung.
             _use_stream = sys.stdout.isatty()
-            if _resolution != "replay" and not _use_stream:
-                emit(_style_heal_line(
+            if _resolution != "replay":
+                # Always show an immediate cue — when streaming, the meter only
+                # appears once the FIRST token arrives, and a reasoning model can
+                # spend a long time digesting a big prompt before emitting any
+                # token, so without this the open branch looks hung.
+                _cue = (
+                    "│   ⏳ waiting for first token… (reasoning models digest the prompt before replying)"
+                    if _use_stream else
                     "│   ⏳ contacting agent… (first response can be slow — big prompt / local cold-start)"
-                ))
+                )
+                emit(_style_heal_line(_cue))
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).

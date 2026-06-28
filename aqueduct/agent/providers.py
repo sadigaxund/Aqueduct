@@ -420,6 +420,11 @@ def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tupl
     (ignored by servers that don't support it → 0 tokens)."""
     import httpx
     payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    # Drop structured-output enforcement on the streaming path: several endpoints
+    # (Ollama included) BUFFER the whole response instead of emitting incremental
+    # deltas when json_object format is requested, which defeats streaming. The
+    # parser already recovers JSON from fenced / think-wrapped output.
+    payload.pop("response_format", None)
     parts: list[str] = []
     ti = to = 0
     timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
