@@ -524,7 +524,10 @@ def generate_agent_patch(
             # instead of a generic api_error.
             import httpx
             if isinstance(exc, httpx.TimeoutException) and deadline < cfg.timeout:
-                logger.warning(
+                # Demoted to debug — the transcript renders this on the turn line
+                # (✗ budget exhausted) + the hint below; a loose warning here would
+                # also interleave above the tree.
+                logger.debug(
                     "LLM API call timed out on budget deadline %.1fs "
                     "(attempt %d/%d): %s",
                     deadline, attempt_num, budget.max_reprompts, exc,
@@ -536,6 +539,14 @@ def generate_agent_patch(
                     tokens_in=0, tokens_out=0, latency_ms=latency_ms,
                     gate_that_rejected="budget", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
+                )
+                # The total-heal budget (agent.budget.max_seconds), NOT agent.timeout,
+                # capped this call — point the user at the right knob.
+                rec._aq_detail = f"hit the {deadline:.0f}s heal budget mid-call"
+                rec._aq_hint = (
+                    f"the {budget.max_seconds:.0f}s agent.budget.max_seconds budget capped this "
+                    f"call (agent.timeout was {cfg.timeout:.0f}s) — raise agent.budget.max_seconds "
+                    f"(and agent.timeout) for slow/local models"
                 )
                 _fire_turn(rec)
                 tracker.mark_budget_seconds_exceeded()

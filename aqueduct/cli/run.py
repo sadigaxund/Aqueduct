@@ -1475,6 +1475,13 @@ def run(
                 resolved_agent_max_reprompts,
                 resolve=_resolution,
             )
+            # Progress cue before the (synchronous, possibly slow) provider call so
+            # the open branch doesn't look hung — the response renders the turn
+            # below it. (Live token streaming is a separate follow-up.)
+            if _resolution != "replay":
+                emit(_style_heal_line(
+                    "│   ⏳ contacting agent… (first response can be slow — big prompt / local cold-start)"
+                ))
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
