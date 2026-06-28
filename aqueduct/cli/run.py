@@ -1176,6 +1176,56 @@ def run(
 
         _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
 
+        def _render_module_summary(_result) -> None:
+            """Print the per-module ✓/✗ status block for one execution result.
+
+            Called once per heal iteration right after the result is recorded, so
+            module outcomes print BEFORE that iteration's agent/heal output —
+            chronological order (execute → result → heal → next attempt). Metrics
+            are a best-effort post-execute read from the obs store (short-lived
+            connections, so the store is free by now)."""
+            _metrics: dict[str, tuple] = {}
+            try:
+                from aqueduct.stores.queries import run_detail as _run_detail
+                from aqueduct.stores.read import open_obs_read
+                _rs = open_obs_read(cfg, store_dir=store_dir, run_id=_result.run_id,
+                                    blueprint_id=manifest.blueprint_id)
+                if _rs is not None:
+                    _det = _run_detail(_rs, _result.run_id)
+                    if _det:
+                        for _p in _det.profile:
+                            _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
+            except Exception:
+                pass  # per-module profile read is best-effort; never fail for a missing metric
+
+            def _fmt_dur(ms):
+                return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
+
+            click.echo()
+            _w = max((len(mr.module_id) for mr in _result.module_results), default=0)
+            for mr in _result.module_results:
+                if mr.status == "success":
+                    icon = click.style("✓", fg="green")
+                elif mr.status == "skipped":
+                    icon = click.style("⏭", fg="cyan")
+                else:
+                    icon = click.style("✗", fg="red", bold=True)
+                if mr.status == "error" and mr.error:
+                    line = f"  {icon} {mr.module_id}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                else:
+                    rows, dur = _metrics.get(mr.module_id, (None, None))
+                    meta = []
+                    if rows is not None:
+                        meta.append(f"{rows:,} rows")
+                    if _fmt_dur(dur):
+                        meta.append(_fmt_dur(dur))
+                    tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
+                    line = f"  {icon} {mr.module_id.ljust(_w)}   {tail}".rstrip()
+                click.echo(line)
+                for rule_id, msg in mr.warnings:
+                    from aqueduct.cli.output import warn as _output_warn
+                    _output_warn(rule_id, msg, prefix="   ↳ ", err=False)
+
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
             # for execute() and persisted on `run_records`. The user-visible
@@ -1222,6 +1272,11 @@ def run(
                 )
 
             failure_ctx = surveyor.record(result, exc=execute_exc)
+
+            # Chronological output: render THIS iteration's module outcomes now,
+            # before any agent/heal block below. Replaces the old single post-loop
+            # summary so a heal attempt always reads after the result it heals.
+            _render_module_summary(result)
 
             if result.status == "success":
                 break
@@ -1399,6 +1454,16 @@ def run(
                 if max_patches > 1
                 else f"{patch_count + 1}"
             )
+            # Styled section header — the boundary between the run result above
+            # and the agent/heal block below (the old raw white line is gone).
+            click.echo(
+                click.style(
+                    f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
+                    + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
+                    fg="yellow",
+                ),
+                err=True,
+            )
             # Verbose mode: render the full agent conversation.
             # Default (terse): per-attempt one-liner after each turn.
             _transcript = TranscriptWriter(verbose=verbose, write=emit)
@@ -1406,11 +1471,6 @@ def run(
                 patch_count + 1 if max_patches > 1 else 1,
                 resolved_agent_max_reprompts,
                 resolve=_resolution,
-            )
-            click.echo(
-                f"  ↻ Agent self-healing ({_attempt_display})  "
-                f"failed_module={failure_ctx.failed_module}",
-                err=True,
             )
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
@@ -1656,11 +1716,17 @@ def run(
             )
 
             if patch is None:
-                click.echo("  ✗ Agent: failed to generate valid patch, stopping", err=True)
+                click.echo(
+                    f"  {click.style('✗', fg='red', bold=True)} Agent: failed to generate valid patch, stopping",
+                    err=True,
+                )
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
                 if on_hf == "stage":
                     click.echo(
-                        "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
+                        click.style(
+                            "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
+                            fg="bright_black",
+                        ),
                         err=True,
                     )
                 # Synthesise one healing_outcomes row per rejected
@@ -2103,62 +2169,25 @@ def run(
         depot.close()
 
         # ── Report ────────────────────────────────────────────────────────────────
-        # Per-module metrics for the inline summary (best-effort post-run read;
-        # surveyor uses short-lived connections, so the store is free by now).
-        _metrics: dict[str, tuple] = {}
-        try:
-            from aqueduct.stores.queries import run_detail as _run_detail
-            from aqueduct.stores.read import open_obs_read
-            _rs = open_obs_read(cfg, store_dir=store_dir, run_id=run_id,
-                                blueprint_id=manifest.blueprint_id)
-            if _rs is not None:
-                _det = _run_detail(_rs, run_id)
-                if _det:
-                    for _p in _det.profile:
-                        _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
-        except Exception:
-            pass  # per-module profile read is best-effort post-run reporting; never fail for a missing metric
-
-        def _fmt_dur(ms):
-            return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
-
-        _w = max((len(mr.module_id) for mr in result.module_results), default=0)
-        for mr in result.module_results:
-            if mr.status == "success":
-                icon = click.style("✓", fg="green")
-            elif mr.status == "skipped":
-                icon = click.style("⏭", fg="cyan")
-            else:
-                icon = click.style("✗", fg="red", bold=True)
-            if mr.status == "error" and mr.error:
-                line = f"  {icon} {mr.module_id}  {click.style('— ' + concise_error(mr.error), fg='red')}"
-            else:
-                rows, dur = _metrics.get(mr.module_id, (None, None))
-                meta = []
-                if rows is not None:
-                    meta.append(f"{rows:,} rows")
-                if _fmt_dur(dur):
-                    meta.append(_fmt_dur(dur))
-                tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
-                line = f"  {icon} {mr.module_id.ljust(_w)}   {tail}".rstrip()
-            click.echo(line)
-            for rule_id, msg in mr.warnings:
-                from aqueduct.cli.output import warn as _output_warn
-                _output_warn(rule_id, msg, prefix="   ↳ ", err=False)
-
+        # The per-module ✓/✗ summary already printed inline (per heal iteration)
+        # via `_render_module_summary` right after each execute — so the heal
+        # block reads chronologically after the result it heals. Only the framed
+        # terminal footer remains here.
         if result.status not in ("success", "patched"):
             # Print the outer (user-visible) run_id — that's the join key for
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
+            _x = click.style("✗", fg="red", bold=True)
+            click.echo(click.style(_rule(), dim=True), err=True)
             if failure_ctx:
                 click.echo(
-                    f"\n✗ blueprint failed  run_id={run_id}"
+                    f"{_x} blueprint failed  run_id={run_id}"
                     f"  failed_module={failure_ctx.failed_module}",
                     err=True,
                 )
             else:
-                click.echo(f"\n✗ blueprint failed  run_id={run_id}", err=True)
+                click.echo(f"{_x} blueprint failed  run_id={run_id}", err=True)
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
             #   HEAL_PENDING(3)   — a patch was staged for human/ci review

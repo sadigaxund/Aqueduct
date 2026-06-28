@@ -120,8 +120,8 @@ class TranscriptWriter:
         """Print the turn header (before the LLM call)."""
         self._attempts_seen = attempt_num
         tag = f"{attempt_num}/{total_attempts}" if total_attempts > 1 else str(attempt_num)
-        prefix = "replay" if resolve == "replay" else "Agent self-healing"
-        self._emit(f"\u21bb {prefix} ({tag})")
+        prefix = "replay" if resolve == "replay" else "attempt"
+        self._emit(f"  \u21bb {prefix} {tag}")
 
     def _emit(self, line: str) -> None:
         if self._write is not None:
