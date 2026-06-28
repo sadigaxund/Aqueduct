@@ -1816,18 +1816,27 @@ def run(
                 )
                 effective_mode = "human"
 
-            # Recovered patches never silently land. If the parser had to apply
-            # any mechanical recovery (think-block strip, json_repair fallback,
-            # etc.) we downgrade auto/aggressive → human so a reviewer sees
-            # exactly what we rescued. Trust boundary stays at the human, not
-            # the regex.
-            if (
-                agent_result.recovery_applied
-                and effective_mode in ("auto", "aggressive")
-            ):
+            # Recovered patches never silently land *when the recovery
+            # reinterpreted content*. Structural locators that only find the JSON
+            # without changing it — stripping a ```json fence, a <think> block,
+            # or leading prose — are deterministic and safe to auto-apply (the
+            # parsed patch is byte-identical to what the model emitted, minus the
+            # wrapper). This matters for local/reasoning models, which fence their
+            # output by default (especially on the streaming path, where Aqueduct
+            # cannot request json_object). Content-reinterpreting recoveries
+            # (json_repair, comment stripping, wrapper unwrap) still downgrade
+            # auto/aggressive → human — the trust boundary stays at the human.
+            _BENIGN_RECOVERIES = {
+                "stripped_code_fence", "stripped_think_block",
+                "stripped_orphan_think_close", "stripped_leading_prose",
+            }
+            _risky_recovery = [
+                r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
+            ]
+            if _risky_recovery and effective_mode in ("auto", "aggressive"):
                 click.echo(
                     f"  ↑ Agent response needed mechanical recovery "
-                    f"({', '.join(agent_result.recovery_applied)}) — "
+                    f"({', '.join(_risky_recovery)}) — "
                     f"downgrading to human review for safety",
                     err=True,
                 )
