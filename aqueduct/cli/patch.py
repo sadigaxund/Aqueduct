@@ -333,8 +333,34 @@ def patch_preview(
     sys.exit(exit_code)
 
 
+def _materialize_patch_by_id(
+    patch_id: str, patches_root, config_path: str | None,
+    env_file: str | None, cli_env: tuple[str, ...],
+):
+    """Fetch a pending patch body by ``patch_id`` from the configured patch store
+    → a local ``pending/`` file, so a remote-staged patch can be applied without
+    a manual ``patch pull`` first. Returns the local Path, or None if not found."""
+    from pathlib import Path
+    try:
+        _cfg_path = Path(config_path) if config_path else None
+        _resolve_and_load_env(env_file, _cfg_path, cli_env=cli_env or ())
+        from aqueduct.config import load_config
+        from aqueduct.stores.object_store import make_patch_store
+        cfg = load_config(_cfg_path)
+        ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
+        for key, _mt, payload in ps.iter_payloads("pending"):
+            if payload.get("patch_id") == patch_id or patch_id in Path(key).name:
+                dest = Path(patches_root) / "pending" / Path(key).name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                return dest
+    except Exception:
+        return None
+    return None
+
+
 @patch.command("apply")
-@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("patch_ref")
 @click.option(
     "--blueprint",
     required=True,
@@ -346,11 +372,22 @@ def patch_preview(
     default=None,
     help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
-def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> None:
-    """Validate and apply a PatchSpec JSON file to a Blueprint YAML.
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a patch_id.",
+)
+@_env_options
+def patch_apply(
+    patch_ref: str, blueprint: str, patches_dir: str | None,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """Validate and apply a patch to a Blueprint YAML.
 
-    Backs up the original Blueprint, applies all operations atomically,
-    verifies the result parses cleanly, then archives the patch.
+    PATCH_REF is either a local PatchSpec JSON file, or a bare ``patch_id`` —
+    in which case the body is fetched from the configured patch store (local or
+    object store) automatically (no manual ``patch pull`` needed). Backs up the
+    original Blueprint, applies all operations atomically, verifies the result
+    parses cleanly, then archives the patch.
     """
     from pathlib import Path
 
@@ -359,10 +396,21 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
+    _pf = Path(patch_ref)
+    if not _pf.exists():
+        # Not a local file → treat PATCH_REF as a patch_id and fetch from the store.
+        _pf = _materialize_patch_by_id(patch_ref, patches_root, config_path, env_file, cli_env)
+        if _pf is None:
+            click.echo(
+                f"✗ no local file and no pending patch with id {patch_ref!r} in the "
+                f"configured patch store", err=True,
+            )
+            sys.exit(exit_codes.USAGE_ERROR)
+
     try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
-            patch_path=Path(patch_file),
+            patch_path=_pf,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
         )
