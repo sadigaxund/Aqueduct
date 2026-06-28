@@ -422,7 +422,7 @@ def patch_apply(
 
 
 @patch.command("import")
-@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("patch_ref")
 @click.option(
     "--blueprint",
     required=True,
@@ -440,9 +440,19 @@ def patch_apply(
     default=False,
     help="Apply only, skip the git commit (leave the change staged for review).",
 )
-def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_commit: bool) -> None:
-    """Apply a received patch JSON and commit it — the CI entry point (Phase 54).
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
+)
+@_env_options
+def patch_import(
+    patch_ref: str, blueprint: str, patches_dir: str | None, no_commit: bool,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """Apply a received patch and commit it — the CI entry point (Phase 54).
 
+    PATCH_REF is a local patch JSON file (a bare PatchSpec or a CI webhook
+    envelope), or a bare ``patch_id`` fetched from the configured store.
     `approval_mode: ci` reference flow: a cluster run heals, stages the patch,
     and fires the on_patch_pending webhook; a CI runner obtains the patch body
     and calls this to apply + commit it on a fresh checkout, then opens a PR
@@ -458,6 +468,18 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
 
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+
+    # PATCH_REF may be a local file or a patch_id to fetch from the store.
+    patch_file = patch_ref
+    if not Path(patch_ref).exists():
+        _fetched = _materialize_patch_by_id(patch_ref, patches_root, config_path, env_file, cli_env)
+        if _fetched is None:
+            click.echo(
+                f"✗ no local file and no pending patch with id {patch_ref!r} in the "
+                f"configured patch store", err=True,
+            )
+            sys.exit(exit_codes.USAGE_ERROR)
+        patch_file = str(_fetched)
 
     # Pre-flight: if we are going to commit, fail BEFORE mutating the Blueprint
     # when we are not inside a git work tree (so a non-repo checkout doesn't end
@@ -565,10 +587,20 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
     default=None,
     help="Root directory for patch lifecycle subdirs (default: derived from patch file path or CWD/patches)",
 )
-def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
+)
+@_env_options
+def patch_reject(
+    patch_ref: str, reason: str, patches_dir: str | None,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
     """Reject a pending patch and record the reason.
 
-    PATCH_REF can be a file path (patches/pending/00001_*.json) or a bare patch_id slug.
+    PATCH_REF can be a file path (patches/pending/00001_*.json) or a bare patch_id
+    slug. When the pending body lives in a remote store it is fetched locally
+    first (no manual ``patch pull`` needed).
 
     Moves patches/pending/<file> → patches/rejected/<file> with a rejection_reason annotation.
     """
@@ -589,6 +621,9 @@ def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
     else:
         resolved_patches_dir = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(Path.cwd() / "_sentinel")
         patch_id = patch_ref
+        # Remote-staged pending body? Fetch it into local pending/ so reject_patch
+        # (local move + index status) has a file to act on. Best-effort.
+        _materialize_patch_by_id(patch_id, resolved_patches_dir, config_path, env_file, cli_env)
 
     try:
         rejected_path = reject_patch(
