@@ -1475,10 +1475,12 @@ def run(
                 resolved_agent_max_reprompts,
                 resolve=_resolution,
             )
-            # Progress cue before the (synchronous, possibly slow) provider call so
-            # the open branch doesn't look hung — the response renders the turn
-            # below it. (Live token streaming is a separate follow-up.)
-            if _resolution != "replay":
+            # Live SSE streaming is used only on an interactive TTY (piped/CI keep
+            # the non-streaming POST path). When streaming, the live meter is the
+            # progress indicator; otherwise emit a static "contacting…" cue so a
+            # slow synchronous call doesn't look hung.
+            _use_stream = sys.stdout.isatty()
+            if _resolution != "replay" and not _use_stream:
                 emit(_style_heal_line(
                     "│   ⏳ contacting agent… (first response can be slow — big prompt / local cold-start)"
                 ))
@@ -1509,7 +1511,34 @@ def run(
                 max_reprompts=resolved_agent_max_reprompts,
             )
 
+            # ── Live token streaming display ──────────────────────────────────
+            # _on_token(kind, text) is fired by the provider per SSE delta.
+            # default: a compact in-place meter (⏳ thinking… N chars);
+            # -v: streams the actual thinking/answer text under a ┆ gutter.
+            _stream_state = {"chars": 0, "kind": None, "active": False}
+
+            def _on_token(kind: str, text: str) -> None:
+                _stream_state["active"] = True
+                if verbose:
+                    if kind != _stream_state["kind"]:
+                        head = "💭 thinking" if kind == "thinking" else "✍ answer"
+                        sys.stdout.write(f"\n│   {head}:\n│   ┆ ")
+                        _stream_state["kind"] = kind
+                    sys.stdout.write(text.replace("\n", "\n│   ┆ "))
+                else:
+                    _stream_state["chars"] += len(text)
+                    label = "thinking" if kind == "thinking" else "writing"
+                    sys.stdout.write(f"\r│   ⏳ {label}… {_stream_state['chars']} chars")
+                sys.stdout.flush()
+
+            def _close_stream() -> None:
+                if _stream_state["active"]:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    _stream_state.update(chars=0, kind=None, active=False)
+
             def _on_attempt(rec):
+                _close_stream()  # finish the live line before the turn renders
                 try:
                     surveyor.record_heal_attempt(run_id=_heal_run_id, attempt_record=rec)
                 except Exception:
@@ -1664,6 +1693,7 @@ def run(
                     apply_callback=_apply_cb,
                     validate_callback=_validate_cb,
                     on_attempt=_on_attempt,
+                    on_token=_on_token if _use_stream else None,
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
@@ -1690,6 +1720,7 @@ def run(
                         deep_loop=_deep_loop,
                         validate_callback=_validate_cb,
                         on_attempt=_on_attempt,
+                        on_token=_on_token if _use_stream else None,
                         apply_callback=_apply_cb,
                         memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                         retry_max_retries=cfg.agent.retry.max_retries,

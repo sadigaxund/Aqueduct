@@ -66,6 +66,7 @@ def generate_cascade_patch(
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
     on_attempt: Callable | None = None,
+    on_token: Callable | None = None,
 ) -> AgentPatchResult:
     """Try each tier in order; escalate on stuck / exhausted / deferred.
 
@@ -151,6 +152,7 @@ def generate_cascade_patch(
                 apply_callback=apply_callback,
                 validate_callback=validate_callback,
                 on_attempt=_tier_on_attempt,
+                on_token=on_token,
                 model_cascade_position=idx - 1,
                 memory_coaching=memory_coaching,
                 retry_max_retries=retry_max_retries,

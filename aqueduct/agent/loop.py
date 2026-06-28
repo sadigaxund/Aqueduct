@@ -126,6 +126,7 @@ class AgentRunConfig:
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None
     on_attempt: Callable[[Any], None] | None = None
+    on_token: Callable[[str, str], None] | None = None  # live SSE sink: (kind, text)
     model_cascade_position: int | None = None
     memory_coaching: bool = True
     retry_max_retries: int = 2
@@ -379,6 +380,7 @@ def generate_agent_patch(
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
+    on_token: Callable[[str, str], None] | None = None,
     model_cascade_position: int | None = None,
     memory_coaching: bool = True,
     retry_max_retries: int = 2,
@@ -425,6 +427,7 @@ def generate_agent_patch(
         validate_callback = agent_cfg.validate_callback
         apply_callback = agent_cfg.apply_callback
         on_attempt = agent_cfg.on_attempt
+        on_token = agent_cfg.on_token
         model_cascade_position = agent_cfg.model_cascade_position
         memory_coaching = agent_cfg.memory_coaching
         retry_max_retries = agent_cfg.retry_max_retries
@@ -513,6 +516,7 @@ def generate_agent_patch(
                 last_apply_error=last_apply_error,
                 temperature_override=temperature_override,
                 deadline=deadline,
+                on_token=on_token,
             )
         except Exception as exc:
             latency_ms = int((time.monotonic() - t_start) * 1000)

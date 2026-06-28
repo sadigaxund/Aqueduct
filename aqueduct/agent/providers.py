@@ -170,6 +170,7 @@ def _call_agent(
     last_apply_error: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     """Call the LLM provider; return (text, tokens_in, tokens_out).
 
@@ -207,6 +208,7 @@ def _call_agent(
             deadline=deadline,
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
+            on_token=on_token,
         )
     else:
         return _call_anthropic(
@@ -219,6 +221,7 @@ def _call_agent(
             provider_options=cfg.provider_options,
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
+            on_token=on_token,
         )
 
 
@@ -235,6 +238,7 @@ def _call_anthropic(
     provider_options: dict[str, Any] | None = None,
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     import httpx
 
@@ -263,15 +267,22 @@ def _call_anthropic(
     if temperature_override is not None:
         payload["temperature"] = temperature_override
     effective_timeout = float(deadline if deadline is not None else timeout)
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": ANTHROPIC_API_VERSION,
+        "content-type": "application/json",
+    }
+    # Streaming path — only when a live-token sink is supplied (the non-streaming
+    # POST below stays the default so existing callers/tests are unaffected).
+    if on_token is not None:
+        return _stream_anthropic(url, payload, headers, effective_timeout, on_token)
+
     with httpx.Client() as client:
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": ANTHROPIC_API_VERSION,
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 json=payload,
                 timeout=min(effective_timeout, read_timeout),
             )
@@ -311,6 +322,7 @@ def _call_openai_compat(
     deadline: float | None = None,
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -345,12 +357,19 @@ def _call_openai_compat(
             payload["options"]["temperature"] = temperature_override
 
     effective_read = float(deadline if deadline is not None else timeout)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    # Streaming path — only when a live-token sink is supplied (the non-streaming
+    # POST below stays the default so existing callers/tests are unaffected).
+    if on_token is not None:
+        return _stream_openai_compat(url, payload, headers, effective_read, on_token)
+
     with httpx.Client() as client:
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
                 json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=headers,
                 timeout=httpx.Timeout(
                     connect=15.0, read=min(effective_read, read_timeout),
                     write=30.0, pool=5.0,
@@ -372,3 +391,97 @@ def _call_openai_compat(
         )
     usage = data.get("usage") or {}
     return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
+
+
+def _iter_sse_data(resp: Any):
+    """Yield the JSON payload of each ``data:`` SSE line (skips blanks/comments
+    and the OpenAI ``[DONE]`` sentinel). ``resp`` is an open httpx streaming
+    response."""
+    import json as _json
+    for line in resp.iter_lines():
+        if not line or not line.startswith("data:"):
+            continue
+        chunk = line[len("data:"):].strip()
+        if not chunk or chunk == "[DONE]":
+            continue
+        try:
+            yield _json.loads(chunk)
+        except ValueError:
+            continue
+
+
+def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tuple[str, int, int]:
+    """SSE streaming for OpenAI-compatible endpoints.
+
+    Fires ``on_token('thinking'|'answer', text)`` per delta as the model
+    generates, accumulating the answer. ``reasoning_content`` (deepseek-r1 /
+    o-series via a compat gateway) streams as the thinking channel; ``content``
+    is the answer. ``stream_options.include_usage`` requests a final usage frame
+    (ignored by servers that don't support it → 0 tokens)."""
+    import httpx
+    payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    parts: list[str] = []
+    ti = to = 0
+    timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
+    with httpx.Client() as client, client.stream(
+        "POST", url, json=payload, headers=headers, timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        for obj in _iter_sse_data(resp):
+            choices = obj.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                rc = delta.get("reasoning_content")
+                if rc:
+                    on_token("thinking", rc)
+                c = delta.get("content")
+                if c:
+                    parts.append(c)
+                    on_token("answer", c)
+            usage = obj.get("usage")
+            if usage:
+                ti = int(usage.get("prompt_tokens", 0) or 0)
+                to = int(usage.get("completion_tokens", 0) or 0)
+    text = "".join(parts)
+    if not text:
+        raise ValueError(
+            "LLM returned empty content from the streaming OpenAI-compatible endpoint."
+        )
+    return text, ti, to
+
+
+def _stream_anthropic(url, payload, headers, read_timeout, on_token) -> tuple[str, int, int]:
+    """SSE streaming for the Anthropic Messages API.
+
+    ``thinking_delta`` (extended thinking) streams as the thinking channel;
+    ``text_delta`` is the answer. Usage arrives on ``message_start`` (input) and
+    ``message_delta`` (output)."""
+    import httpx
+    payload = {**payload, "stream": True}
+    parts: list[str] = []
+    ti = to = 0
+    timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
+    with httpx.Client() as client, client.stream(
+        "POST", url, json=payload, headers=headers, timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        for obj in _iter_sse_data(resp):
+            t = obj.get("type")
+            if t == "content_block_delta":
+                d = obj.get("delta") or {}
+                if d.get("type") == "thinking_delta" and d.get("thinking"):
+                    on_token("thinking", d["thinking"])
+                elif d.get("type") == "text_delta" and d.get("text"):
+                    parts.append(d["text"])
+                    on_token("answer", d["text"])
+            elif t == "message_start":
+                u = (obj.get("message") or {}).get("usage") or {}
+                ti = int(u.get("input_tokens", 0) or 0)
+            elif t == "message_delta":
+                u = obj.get("usage") or {}
+                if u.get("output_tokens"):
+                    to = int(u.get("output_tokens") or 0)
+    text = "".join(parts)
+    if not text:
+        raise ValueError("Anthropic returned empty text in the streaming response.")
+    return text, ti, to
