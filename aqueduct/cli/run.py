@@ -72,12 +72,14 @@ def compile(
     """
     from pathlib import Path
 
+    from aqueduct.cli import _load_config_with_env
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
-    from aqueduct.config import ConfigError, load_config
+    from aqueduct.config import ConfigError
     from aqueduct.parser.parser import ParseError, parse
     try:
-        _cfg = load_config(None)
+        # Auto-discover aqueduct.yml (CWD walk-up) like every other command.
+        _cfg = _load_config_with_env(None, quiet=True)
         _apply_warnings_from_cfg(_cfg)
     except ConfigError:
         _cfg = None  # missing/invalid aqueduct.yml is OK for `aqueduct compile`

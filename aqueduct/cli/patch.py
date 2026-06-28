@@ -30,19 +30,14 @@ def _patch_index_obs_store(blueprint_path: Path | None = None):
     is known, else the configured default. Returns None on any failure — the
     index update is best-effort and never blocks a local patch command."""
     try:
-        from aqueduct.config import load_config
+        from aqueduct.cli import _load_config_with_env
         from aqueduct.stores.read import open_obs_read
 
-        # Load .env first so a config/blueprint that references env vars or
-        # @aq.secret() (e.g. a Postgres DSN, an s3 endpoint) resolves — without
-        # this the store silently failed to open and the index update was skipped
-        # (leaving the index stale relative to the patch store).
-        try:
-            _resolve_and_load_env(None, None, cli_env=())
-        except Exception:
-            pass  # env auto-load is best-effort; config may not need it
-
-        cfg = load_config(None)
+        # Auto-discover aqueduct.yml (walk up from CWD) AND load .env — the same
+        # resolution every other command uses. `load_config(None)` did neither, so
+        # a config/blueprint needing env or @aq.secret() (Postgres DSN, s3
+        # endpoint) failed to open → the index update was silently skipped.
+        cfg = _load_config_with_env(None, quiet=True)
         bp_id = None
         if blueprint_path is not None:
             from aqueduct.parser.parser import parse as _parse
@@ -342,11 +337,12 @@ def _materialize_patch_by_id(
     a manual ``patch pull`` first. Returns the local Path, or None if not found."""
     from pathlib import Path
     try:
-        _cfg_path = Path(config_path) if config_path else None
-        _resolve_and_load_env(env_file, _cfg_path, cli_env=cli_env or ())
-        from aqueduct.config import load_config
+        from aqueduct.cli import _load_config_with_env
         from aqueduct.stores.object_store import make_patch_store
-        cfg = load_config(_cfg_path)
+        cfg = _load_config_with_env(
+            Path(config_path) if config_path else None,
+            env_file=env_file, cli_env=cli_env or (),
+        )
         ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
         for key, _mt, payload in ps.iter_payloads("pending"):
             if payload.get("patch_id") == patch_id or patch_id in Path(key).name:
@@ -633,13 +629,15 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
     """
     from pathlib import Path
 
-    from aqueduct.config import load_config
+    from aqueduct.cli import _load_config_with_env
     from aqueduct.patch import index as _ix
     from aqueduct.stores.object_store import make_patch_store
 
     blueprint_path = Path(blueprint)
     patches_root = _patches_root_from_blueprint(blueprint_path)
-    cfg = load_config(None)
+    # Auto-discover aqueduct.yml (CWD walk-up) + load .env so a remote store
+    # backend resolves (was load_config(None) — no discovery, no env).
+    cfg = _load_config_with_env(None, quiet=True)
 
     obs = _patch_index_obs_store(blueprint_path)
     if obs is None:
@@ -849,11 +847,13 @@ def patch_list(
     # legacy local scan; any resolution failure falls back to it too.
     if not patches_dir:
         try:
-            _cfg_path = Path(config_path) if config_path else None
-            _resolve_and_load_env(env_file, _cfg_path, cli_env=cli_env)
-            from aqueduct.config import load_config
+            from aqueduct.cli import _load_config_with_env
             from aqueduct.stores.object_store import make_patch_store
-            cfg = load_config(_cfg_path)
+            # Auto-discovers aqueduct.yml (CWD walk-up) when no --config + loads .env.
+            cfg = _load_config_with_env(
+                Path(config_path) if config_path else None,
+                env_file=env_file, cli_env=cli_env,
+            )
             _bp_path = Path(blueprint) if blueprint else None
             _patches_root = (
                 _patches_root_from_blueprint(_bp_path) if _bp_path
