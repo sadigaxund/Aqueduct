@@ -826,3 +826,62 @@ class TestJavaCheck:
         monkeypatch.setattr("shutil.which", lambda _: None)
         r = check_java()
         assert r.status == "warn" and "no java found" in r.detail
+
+
+# ── T27 Part 2: preflight checks (agent ping, UDF import) ───────────────────────
+
+from aqueduct.doctor import _check_udf_registry, check_agent as _check_agent
+
+
+class _FakeManifest:
+    def __init__(self, udf_registry):
+        self.udf_registry = udf_registry
+
+
+class TestUdfImportCheck:
+    def test_default_skips_import(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
+        assert _check_udf_registry(m, preflight=False) == []   # default: no import
+
+    def test_preflight_imports_ok(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert len(res) == 1 and res[0].status == "ok"
+
+    def test_preflight_missing_module_warns(self):
+        m = _FakeManifest(({"id": "u", "module": "no_such_mod_xyz", "entry": "f"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "warn" and "cannot import" in res[0].detail
+
+    def test_preflight_missing_entry_warns(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "not_a_func"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "warn" and "not found" in res[0].detail
+
+    def test_java_udf_skipped(self):
+        m = _FakeManifest(({"id": "u", "lang": "java", "module": "x"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "skip"
+
+
+class TestAgentPreflightPing:
+    def test_anthropic_default_no_api_call(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        r = _check_agent("anthropic", "https://api.anthropic.com", "claude-x", preflight=False)
+        assert r.status == "ok" and "API not called" in r.detail
+
+    def test_anthropic_preflight_verifies_key(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        import httpx
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=lambda: None))
+        r = _check_agent("anthropic", None, "claude-x", preflight=True)
+        assert r.status == "ok" and "key verified" in r.detail
+
+    def test_anthropic_preflight_bad_key_warns(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad")
+        import httpx
+        resp = MagicMock(status_code=401)
+        def _raise(): raise httpx.HTTPStatusError("401", request=MagicMock(), response=resp)
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=_raise, response=resp))
+        r = _check_agent("anthropic", None, "claude-x", preflight=True)
+        assert r.status == "warn" and "401" in r.detail

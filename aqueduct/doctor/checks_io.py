@@ -106,11 +106,14 @@ def check_agent(
     agent_provider: str,
     base_url: str | None,
     model: str,
+    *,
+    preflight: bool = False,
 ) -> CheckResult:
     """Probe agent (LLM) connectivity.
 
-    anthropic:     verifies ANTHROPIC_API_KEY is set; does not make an API call
-                   (avoid token cost in a health check).
+    anthropic:     default verifies ANTHROPIC_API_KEY is set (no API call, no
+                   token cost). ``--preflight`` additionally proves the key +
+                   endpoint actually work via ``GET /v1/models`` (free, no tokens).
     openai_compat: GET {base_url}/models — lists loaded models, free, no tokens.
                    Skipped if base_url is not configured.
     """
@@ -139,6 +142,36 @@ def check_agent(
                 "Self-healing only; pipeline runs fine without it.",
                 _ms(t), group="agent",
             )
+        if preflight:
+            # Prove the key + endpoint actually work — GET /v1/models lists the
+            # account's models (free, no tokens), unlike the default key-set check.
+            api = (base_url or "https://api.anthropic.com").rstrip("/")
+            if api.endswith("/v1"):
+                api = api[:-3]
+            url = api + "/v1/models"
+            try:
+                resp = httpx.get(
+                    url, headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=10,
+                )
+                resp.raise_for_status()
+                return CheckResult(
+                    "agent", "ok",
+                    f"provider=anthropic  model={model}  key verified ({url})  [preflight]",
+                    _ms(t), group="agent",
+                )
+            except httpx.HTTPStatusError as exc:
+                return CheckResult(
+                    "agent", "warn",
+                    f"provider=anthropic  ANTHROPIC_API_KEY set but {url} returned "
+                    f"{exc.response.status_code} — key may be invalid/expired",
+                    _ms(t), group="agent",
+                )
+            except Exception as exc:
+                return CheckResult(
+                    "agent", "warn",
+                    f"provider=anthropic  key set but {url} unreachable: {exc}",
+                    _ms(t), group="agent",
+                )
         return CheckResult(
             "agent", "ok",
             f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",

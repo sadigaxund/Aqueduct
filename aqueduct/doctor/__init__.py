@@ -557,7 +557,47 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
     results.extend(_check_heal_guardrail_typos(manifest))
     results.extend(_check_spillway_error_types(manifest))
     results.extend(_check_iceberg_catalog(manifest))
+    results.extend(_check_udf_registry(manifest, preflight=preflight))
     return results
+
+
+def _check_udf_registry(manifest: Any, *, preflight: bool = False) -> list[CheckResult]:
+    """Validate Python UDF registry entries by actually importing them.
+
+    Default: nothing (importing executes the module's top-level code → not free).
+    ``--preflight``: import each python ``module`` + resolve its ``entry``, so a
+    typo or missing dependency is caught at doctor time, not mid-run. Java/jar
+    UDFs are skipped (not a Python import). Non-fatal (warn/skip)."""
+    entries = getattr(manifest, "udf_registry", ()) or ()
+    if not entries or not preflight:
+        return []
+    import importlib
+    out: list[CheckResult] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        udf_id = entry.get("id") or entry.get("entry") or "?"
+        name = f"udf:{udf_id}"
+        lang = (entry.get("lang") or "python").lower()
+        if lang != "python":
+            out.append(CheckResult(name, "skip", f"lang={lang} (import check is python-only)", group="validation"))
+            continue
+        module_path = entry.get("module")
+        entry_name = entry.get("entry") or udf_id
+        t = time.monotonic()
+        if not module_path:
+            out.append(CheckResult(name, "warn", "no `module` set for python UDF", _ms(t), group="validation"))
+            continue
+        try:
+            mod = importlib.import_module(module_path)
+        except Exception as exc:
+            out.append(CheckResult(name, "warn", f"cannot import {module_path!r}: {exc}", _ms(t), group="validation"))
+            continue
+        if getattr(mod, entry_name, None) is None:
+            out.append(CheckResult(name, "warn", f"{entry_name!r} not found in {module_path!r}", _ms(t), group="validation"))
+            continue
+        out.append(CheckResult(name, "ok", f"{module_path}:{entry_name} imports", _ms(t), group="validation"))
+    return out
 
 
 def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
@@ -1156,7 +1196,7 @@ def run_doctor(
     results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))
 
     # LLM connectivity
-    results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
+    results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model, preflight=preflight))
 
     # Phase 46 — cascade tier credentials/endpoints (blueprint-level config)
     if blueprint_path is not None:
