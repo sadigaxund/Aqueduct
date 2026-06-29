@@ -716,12 +716,13 @@ def runs(
             if c.exists():
                 candidates.append(c)
         else:
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
             if blueprint_id:
-                c = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+                c = Path(_OBS_ROUTING_ROOT) / blueprint_id / "observability.db"
                 if c.exists():
                     candidates.append(c)
             if not candidates:
-                candidates = sorted(Path(".aqueduct/observability").glob("*/observability.db"))
+                candidates = sorted(Path(_OBS_ROUTING_ROOT).glob("*/observability.db"))
             legacy = Path(".aqueduct/observability.db")
             if legacy.exists():
                 candidates.append(legacy)

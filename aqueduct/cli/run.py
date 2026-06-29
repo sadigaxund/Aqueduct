@@ -1101,7 +1101,7 @@ def run(
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
             merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex[:8]}"
+            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
 
             _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"
             click.echo(

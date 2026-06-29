@@ -1179,12 +1179,27 @@ def _render_op(op: dict) -> str:
 
 
 def _find_blueprint_file(path_str: str | None, bp_id: str) -> Path | None:
-    """Locate the blueprint YAML on disk (explicit path, then blueprints/ globs)."""
+    """Locate the blueprint YAML on disk (explicit path, then blueprints/ globs).
+
+    Searches CWD plus the configured project root — derived from ``AQ_DASH_CONFIG``
+    / ``AQ_DASH_STORE_DIR`` — so a dashboard launched from a different CWD (systemd
+    service, container) still finds blueprints next to the config/store, not only
+    relative to wherever it happened to start."""
     if path_str and Path(path_str).is_file():
         return Path(path_str)
-    for base in (Path.cwd() / "blueprints", Path("blueprints")):
-        if not base.is_dir():
+    bases: list[Path] = []
+    _cfg = os.environ.get("AQ_DASH_CONFIG")
+    if _cfg:
+        bases.append(Path(_cfg).resolve().parent / "blueprints")
+    _sd = os.environ.get("AQ_DASH_STORE_DIR")
+    if _sd:
+        bases.append(Path(_sd).resolve().parent / "blueprints")
+    bases += [Path.cwd() / "blueprints", Path("blueprints")]
+    seen: set[Path] = set()
+    for base in bases:
+        if base in seen or not base.is_dir():
             continue
+        seen.add(base)
         exact = base / f"{bp_id}.yml"
         if exact.is_file():
             return exact

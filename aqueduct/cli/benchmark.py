@@ -428,8 +428,9 @@ def benchmark(
     "store_path_override",
     default=None,
     type=click.Path(exists=True, dir_okay=False),
-    help="Path to the benchmark store. Default: ./.aqueduct/benchmark.duckdb",
+    help="Path to the benchmark store. Default: resolved from stores.benchmark.",
 )
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
 @click.option(
     "--scenario",
     "scenario_filter",
@@ -449,21 +450,28 @@ def benchmark(
     default="table",
     show_default=True,
 )
+@_env_options
 def benchmark_diff_cmd(
     store_path_override: str | None,
+    config_path: str | None,
     scenario_filter: str | None,
     model_filter: str | None,
     fmt: str,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
 ) -> None:
     """Diff the two most recent benchmark runs per (scenario, model) pair.
 
-    Reads from the benchmark store written by ``aqueduct benchmark``. Does
-    not re-run any scenarios — purely a store inspection. Exits non-zero if
-    any pair shows a regression (passed True→False, patch_applies True→False,
-    diag_score or confidence drop > 5pp).
+    Reads from the benchmark store written by ``aqueduct benchmark`` (resolved
+    from ``stores.benchmark`` in aqueduct.yml, like ``benchmark``/``benchmark-stats``
+    — was a hardcoded ``./.aqueduct/benchmark.duckdb``). Does not re-run any
+    scenarios. Exits non-zero on any regression (passed True→False, patch_applies
+    True→False, diag_score or confidence drop > 5pp).
     """
+    from aqueduct.config import ConfigError, load_config
     from aqueduct.surveyor.benchmark_store import (
         _SELECT_COLS,
+        BenchmarkStore,
         DiffEntry,
         _connect,
         _fetch_baseline,
@@ -472,7 +480,24 @@ def benchmark_diff_cmd(
         has_regressions,
     )
 
-    store_path = Path(store_path_override) if store_path_override else Path(".aqueduct/benchmark.duckdb")
+    _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
+    # Resolve the store from config (honours stores.benchmark.path) unless an
+    # explicit --store-path is given. Diff reads via a raw duckdb connection, so
+    # a postgres benchmark backend isn't supported here yet.
+    if store_path_override:
+        store_path = Path(store_path_override)
+    else:
+        try:
+            cfg = load_config(Path(config_path) if config_path else None)
+            _bs = BenchmarkStore.from_config(cfg.stores.benchmark, Path("."))
+        except (ConfigError, ValueError) as exc:
+            _error(f"config error: {exc}")
+            sys.exit(exit_codes.CONFIG_ERROR)
+        if _bs.backend != "duckdb":
+            _error(f"benchmark-diff supports duckdb benchmark stores only "
+                   f"(stores.benchmark.backend={_bs.backend!r}); use --store-path for a duckdb file")
+            sys.exit(exit_codes.USAGE_ERROR)
+        store_path = Path(_bs.location)
     if not store_path.exists():
         _error(f"benchmark store not found: {store_path}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)

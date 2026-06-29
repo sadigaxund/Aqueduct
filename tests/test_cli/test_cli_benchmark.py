@@ -632,3 +632,27 @@ def test_benchmark_diff_scenario_model_filter(mock_run, tmp_path):
     assert result.exit_code == 0
     assert "s1" in result.output
     assert "s2" not in result.output
+
+
+def test_benchmark_diff_resolves_configured_store_path(tmp_path, monkeypatch):
+    """B2 regression: benchmark-diff resolves the store from stores.benchmark
+    (like benchmark/benchmark-stats), not a hardcoded .aqueduct/benchmark.duckdb."""
+    (tmp_path / "aqueduct.yml").write_text(
+        "stores:\n  benchmark:\n    backend: duckdb\n    path: /nope/custom_bench.duckdb\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
+    assert result.exit_code != 0
+    assert "custom_bench.duckdb" in result.output  # configured path, not the hardcoded default
+
+
+def test_benchmark_diff_rejects_postgres_backend(tmp_path, monkeypatch):
+    """B2: diff reads via a raw duckdb connection → a postgres benchmark backend
+    is reported as unsupported, not silently mishandled."""
+    (tmp_path / "aqueduct.yml").write_text(
+        "stores:\n  benchmark:\n    backend: postgres\n    path: postgresql://h/db\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
+    assert result.exit_code != 0
+    assert "duckdb benchmark stores only" in result.output
