@@ -283,4 +283,4 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     c = load_config(cfg_file)
     assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs.db").resolve())
     # URI passthrough — walker bails on any ``://`` value.
-    assert c.stores.depot.path == "redis://h:6379/0"
+    assert c.stores.default_depot().path == "redis://h:6379/0"

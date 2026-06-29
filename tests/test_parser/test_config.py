@@ -86,7 +86,7 @@ def test_config_defaults():
     assert config.deployment.master_url == "local[*]"
     assert config.stores.observability.path is None
     assert not hasattr(config.stores, "lineage")  # removed — merged into observability
-    assert config.stores.depot.path == ".aqueduct/depot.db"
+    assert config.stores.default_depot().path == ".aqueduct/depot.db"
     assert config.agent.model == "claude-sonnet-4-6"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"
@@ -118,7 +118,7 @@ def test_config_overrides(tmp_path):
     
     # Partial fallback
     assert config.deployment.target == "local"
-    assert config.stores.depot.backend == "duckdb"
+    assert config.stores.default_depot().backend == "duckdb"
     
     # Dict preserved
     assert config.spark_config == {"spark.driver.memory": "2g"}
@@ -474,3 +474,13 @@ def test_legacy_flat_stores_depot_block_rejected(tmp_path):
     p.write_text("stores:\n  depot: {backend: duckdb, path: .aqueduct/depot.db}\n")
     with pytest.raises(ConfigError):
         load_config(p)
+
+
+def test_stores_depot_property_removed():
+    """2.0: the `cfg.stores.depot` back-compat property is gone — use
+    `default_depot()` or `depots['default']`."""
+    from aqueduct.config import StoresConfig
+    assert not hasattr(StoresConfig, "depot")
+    s = StoresConfig()
+    assert s.default_depot().backend == "duckdb"          # explicit accessor works
+    assert s.depots["default"].backend == "duckdb"        # or index the map

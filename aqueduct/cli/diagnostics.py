@@ -108,7 +108,7 @@ def validate(
                 "master_url": cfg.deployment.master_url,
                 "stores": {
                     "observability": cfg.stores.observability.path or "(default)",
-                    "depot": cfg.stores.depot.path,
+                    "depot": cfg.stores.default_depot().path,
                 },
                 "secrets_provider": cfg.secrets.provider,
                 "webhooks": wh,
@@ -117,7 +117,7 @@ def validate(
             if text:
                 emit(f"✓ {path}  [engine config]", fmt="text", redact=True)
                 emit(f"  engine:  {cfg.deployment.engine}  target={cfg.deployment.target}  master={cfg.deployment.master_url}", fmt="text", redact=True)
-                emit(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.depot.path}", fmt="text", redact=True)
+                emit(f"  stores:  observability={cfg.stores.observability.path or '(default)'}  depot={cfg.stores.default_depot().path}", fmt="text", redact=True)
                 emit(f"  secrets: provider={cfg.secrets.provider}", fmt="text", redact=True)
                 emit(f"  webhooks: {', '.join(f'{k}={v}' for k, v in wh.items()) if wh else '(not configured)'}", fmt="text", redact=True)
                 if cfg.spark_config:

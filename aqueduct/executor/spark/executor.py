@@ -1487,7 +1487,7 @@ def execute(
                                 "Channel %r advanced watermark to %s=%s but no "
                                 "depot is configured — it cannot be persisted, "
                                 "so the next run re-scans all source data. "
-                                "Configure stores.depot.",
+                                "Configure stores.depots.",
                                 module.id, _ch_id, _wm_col, _new_wm,
                             )
                         else:

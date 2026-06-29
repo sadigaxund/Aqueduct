@@ -1228,7 +1228,7 @@ def run_doctor(
     if cfg.deployment.env in ("cluster", "cloud"):
         _store_specs = {
             "observability": (cfg.stores.observability.backend, cfg.stores.observability.path),
-            "depot":          (cfg.stores.depot.backend,         cfg.stores.depot.path),
+            "depot":          (cfg.stores.default_depot().backend,         cfg.stores.default_depot().path),
         }
         _duckdb_paths = {
             name: p for name, (backend, p) in _store_specs.items()
@@ -1260,7 +1260,7 @@ def run_doctor(
         _remote_master = bool(_master) and not _master.startswith("local")
         _rel = [
             name for name, store in (
-                ("observability", cfg.stores.observability), ("depot", cfg.stores.depot),
+                ("observability", cfg.stores.observability), ("depot", cfg.stores.default_depot()),
             )
             if store.backend == "duckdb"
             and (not store.path or str(store.path).startswith(".") or not Path(store.path).is_absolute())
@@ -1286,7 +1286,7 @@ def run_doctor(
     # file probes when a non-DuckDB backend is configured. For DuckDB
     # backends both probes still run and report the same OK signal.
     results.append(check_store_backend("observability", cfg.stores.observability, preflight=preflight))
-    results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True, preflight=preflight))
+    results.append(check_store_backend("depot",   cfg.stores.default_depot(), is_kv_only=True, preflight=preflight))
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))

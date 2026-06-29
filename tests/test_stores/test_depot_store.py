@@ -45,7 +45,7 @@ def test_redis_depot_ok():
             "depots": {"default": {"backend": "redis", "path": "redis://localhost:6379/15"}}
         }
     })
-    assert cfg.stores.depot.backend == "redis"
+    assert cfg.stores.default_depot().backend == "redis"
 
 
 def test_depot_per_blueprint_isolation_and_shared(tmp_path):

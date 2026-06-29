@@ -418,13 +418,13 @@ class StoresConfig(BaseModel):
         ),
     )
 
-    @property
-    def depot(self) -> DepotMountConfig:
-        """The effective **default** depot mount (back-compat accessor).
+    def default_depot(self) -> DepotMountConfig:
+        """The effective **default** depot mount.
 
         Returns the ``default`` entry, or an implicit DuckDB default when
-        ``depots:`` has none (e.g. ``AqueductConfig()`` built in-memory). Every
-        ``cfg.stores.depot.backend/.path`` call site keeps working unchanged.
+        ``depots:`` has none (e.g. ``AqueductConfig()`` built in-memory). The old
+        ``cfg.stores.depot`` shorthand **property** was removed in 2.0 — call this
+        explicitly, or index ``cfg.stores.depots['default']``.
         """
         d = self.depots.get("default")
         if d is not None:
@@ -961,7 +961,7 @@ def _validate_store_backends(stores_cfg: StoresConfig) -> None:
     seen: set[str] = set()
     for store_label, backend in (
         ("observability", stores_cfg.observability.backend),
-        ("depot",         stores_cfg.depot.backend),
+        ("depot",         stores_cfg.default_depot().backend),
     ):
         if backend == "duckdb":
             continue
