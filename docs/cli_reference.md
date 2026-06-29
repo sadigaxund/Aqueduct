@@ -142,7 +142,7 @@ aqueduct run bp.yml \
   --set agent.provider_options:='{"temperature":0.1}'
 ```
 
-`--set danger.*` overrides print a loud stderr warning (single-run, not persisted). Available on `run`, `benchmark`, and `heal`. `--set` replaces the deprecated one-off override flags (`--provider`, `--base-url`, `--timeout`).
+`--set danger.*` overrides print a loud stderr warning (single-run, not persisted). Available on `run`, `benchmark`, and `heal`. `--set` replaced the one-off override flags (`--provider`/`--base-url`/`--timeout`/`--no-persist`/`--store-path`/`--gate-on-regression`), which were removed in 2.0.
 
 ---
 
@@ -253,14 +253,8 @@ Exit codes: `0` (no drift, or a baseline was established), `3` `HEAL_PENDING`
 |------|---------|-------------|
 | `--model <name>` | `agent.model` | Repeatable. Each value runs the suite against that model. (Stays — multi-model runs aren't expressible as `--set`.) |
 | `-s` / `--set PATH=VALUE` | — | Override an `aqueduct.yml` value for this run (repeatable, in-memory). E.g. `--set agent.provider=openai_compat --set agent.base_url=http://h:11434/v1 --set agent.timeout=600`. |
-| `--provider anthropic\|openai_compat` | `agent.provider` | **Deprecated** → `--set agent.provider=…` (removed in 2.0) |
-| `--base-url <url>` | `agent.base_url` | **Deprecated** → `--set agent.base_url=…` (removed in 2.0) |
-| `--timeout <seconds>` | `agent.timeout` (300) | **Deprecated** → `--set agent.timeout=…` (removed in 2.0) |
 | `--workers <N>` | 1 | Parallel scenario×model pairs. Per-pair progress prints one line per completed pair (serial mode keeps the grouped multi-line view). |
 | `--format table\|json` | `table` | |
-| `--no-persist` | from `stores.benchmark.persist` (true) | **Deprecated** → `--set stores.benchmark.persist=false` (removed in 2.0) |
-| `--store-path <path>` | from `stores.benchmark.path` (else `<scenarios_dir>/.aqueduct/benchmark.duckdb`) | **Deprecated** → `--set stores.benchmark.path=…` (removed in 2.0) |
-| `--gate-on-regression` | from `stores.benchmark.gate_on_regression` (false) | **Deprecated** → `--set stores.benchmark.gate_on_regression=true` (removed in 2.0) |
 
 The benchmark store backend is configured under `stores.benchmark` in `aqueduct.yml` (`backend: duckdb\|postgres`, `path`, `persist`, `gate_on_regression`) — Postgres rows live in the `benchmark` schema. Override any of these per-run with `--set stores.benchmark.*`.
 

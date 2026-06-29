@@ -46,28 +46,6 @@ from aqueduct.cli.style import error as _error
     help="Model to benchmark (repeatable: --model A --model B). Defaults to agent.model in aqueduct.yml",
 )
 @click.option(
-    "--provider",
-    "provider_override",
-    default=None,
-    type=click.Choice(["anthropic", "openai_compat"]),
-    help="Override agent.provider for this run (e.g. openai_compat for Ollama/vLLM).",
-)
-@click.option(
-    "--base-url",
-    "base_url_override",
-    default=None,
-    help="Override agent.base_url for this run (e.g. http://host:11434/v1).",
-)
-@click.option(
-    "--timeout",
-    "timeout_override",
-    default=None,
-    type=float,
-    help="Override agent.timeout (seconds) for this run. Raise for slow/cold "
-    "local models (default 300; e.g. 600). Use 0 for no limit (unbounded "
-    "read; connect still fails fast).",
-)
-@click.option(
     "--config",
     "config_path",
     default=None,
@@ -95,56 +73,23 @@ from aqueduct.cli.style import error as _error
     help="Max concurrent LLM calls. Default 1 (serial); set >1 to parallelize scenario×model pairs.",
 )
 @click.option(
-    "--no-persist",
-    "no_persist",
-    is_flag=True,
-    default=False,
-    help="Skip writing results to the benchmark store (Phase 33 Part A). "
-    "Default is to persist each (scenario, model) row into "
-    "<scenarios_dir>/.aqueduct/benchmark.duckdb for future regression diffs.",
-)
-@click.option(
-    "--store-path",
-    "store_path_override",
-    default=None,
-    type=click.Path(dir_okay=False),
-    help="Override the benchmark store path. Default: "
-    "<scenarios_dir>/.aqueduct/benchmark.duckdb",
-)
-@click.option(
-    "--gate-on-regression",
-    "gate_on_regression",
-    is_flag=True,
-    default=False,
-    help="After persisting, diff each (scenario, model) vs the most recent "
-    "prior row in the store. Exit non-zero if any regression is detected "
-    "(passed True→False, patch_applies True→False, diag_score or confidence "
-    "drop > 5pp). Implies persistence; ignored with --no-persist.",
-)
-@click.option(
     "-s", "--set", "set_items",
     multiple=True,
     metavar="PATH=VALUE",
     help="Override an aqueduct.yml value for this run only (repeatable, "
          "in-memory). Dotted path — e.g. --set agent.provider=openai_compat "
-         "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600. "
-         "Replaces the deprecated --provider/--base-url/--timeout flags.",
+         "--set agent.base_url=http://h:11434/v1 --set agent.timeout=600, "
+         "--set stores.benchmark.persist=false / .gate_on_regression=true / .path=…",
 )
 @_env_options
 def benchmark(
     scenarios_pos: str | None,
     scenarios_dir: str | None,
     models: tuple[str, ...],
-    provider_override: str | None,
-    base_url_override: str | None,
-    timeout_override: float | None,
     config_path: str | None,
     patches_dir: str,
     fmt: str,
     workers: int,
-    no_persist: bool,
-    store_path_override: str | None,
-    gate_on_regression: bool,
     set_items: tuple[str, ...],
     env_file: str | None,
     cli_env: tuple[str, ...],
@@ -194,30 +139,13 @@ def benchmark(
             _error(f"{exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
-    # Deprecated single-purpose flags → fold into --set.
-    for _flag, _val, _path in (
-        ("--provider", provider_override, "agent.provider"),
-        ("--base-url", base_url_override, "agent.base_url"),
-        ("--timeout", timeout_override, "agent.timeout"),
-    ):
-        if _val is not None:
-            click.echo(click.style(
-                f"[deprecated] {_flag} → use --set {_path}=… (removed in 2.0)",
-                fg="yellow",
-            ), err=True)
-
     eng = cfg.agent
-    # Precedence: CLI flag > cfg.agent > built-in default. Connection identity
-    # only — provider_options / guardrails stay config (aqueduct.yml).
-    resolved_provider = provider_override or eng.provider
-    resolved_base_url = base_url_override or eng.base_url
+    # Connection identity from cfg.agent (override with `--set agent.*`).
+    resolved_provider = eng.provider
+    resolved_base_url = eng.base_url
     resolved_model = eng.model
     resolved_provider_options = eng.provider_options
-    resolved_timeout = timeout_override if timeout_override is not None else eng.timeout
-    # 0 = sentinel for "no limit" → None (httpx: unbounded read; connect
-    # still bounded so an unreachable host fails fast).
-    if resolved_timeout == 0:
-        resolved_timeout = None
+    resolved_timeout = eng.timeout  # None = unbounded read (connect still bounded)
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
@@ -344,9 +272,7 @@ def benchmark(
         )
 
     # ── Persist + optional regression gate ────────────────────────────────────
-    # Effective settings come from stores.benchmark (override with --set);
-    # the legacy --no-persist / --gate-on-regression / --store-path flags still
-    # work but are deprecated and warn.
+    # Effective settings come from stores.benchmark (override with `--set`).
     from aqueduct.surveyor.benchmark_store import (
         BenchmarkStore,
         diff_latest,
@@ -357,19 +283,9 @@ def benchmark(
     bench_cfg = cfg.stores.benchmark
     _persist = bench_cfg.persist
     _gate = bench_cfg.gate_on_regression
-    if no_persist:
-        click.echo("[deprecated] --no-persist → use --set stores.benchmark.persist=false (removed in 2.0)", err=True)
-        _persist = False
-    if gate_on_regression:
-        click.echo("[deprecated] --gate-on-regression → use --set stores.benchmark.gate_on_regression=true (removed in 2.0)", err=True)
-        _gate = True
 
     try:
-        if store_path_override:
-            click.echo("[deprecated] --store-path → use --set stores.benchmark.path=… (removed in 2.0)", err=True)
-            bench_store = BenchmarkStore(backend="duckdb", location=store_path_override)
-        else:
-            bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
+        bench_store = BenchmarkStore.from_config(bench_cfg, Path(scenarios_dir))
     except ValueError as exc:
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
