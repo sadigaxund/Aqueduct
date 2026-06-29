@@ -885,3 +885,40 @@ class TestAgentPreflightPing:
         monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=_raise, response=resp))
         r = _check_agent("anthropic", None, "claude-x", preflight=True)
         assert r.status == "warn" and "401" in r.detail
+
+
+# ── T27 Part 2: store round-trip + JDBC preflight ──────────────────────────────
+
+from types import SimpleNamespace
+from aqueduct.doctor import check_store_backend, _jdbc_preflight_auth, _jdbc_result
+
+
+class TestStoreRoundTrip:
+    def test_duckdb_preflight_write_read(self, tmp_path):
+        cfg = SimpleNamespace(backend="duckdb", path=str(tmp_path / "obs.db"))
+        r = check_store_backend("observability", cfg, preflight=True)
+        assert r.status == "ok" and "write+read ok" in r.detail
+
+    def test_duckdb_default_no_roundtrip_note(self, tmp_path):
+        cfg = SimpleNamespace(backend="duckdb", path=str(tmp_path / "obs.db"))
+        r = check_store_backend("observability", cfg, preflight=False)
+        assert r.status == "ok" and "write+read ok" not in r.detail
+
+
+class TestJdbcPreflight:
+    def test_non_postgres_returns_none(self):
+        assert _jdbc_preflight_auth("jdbc:mysql://h:3306/db", {}) is None
+
+    def test_result_default_is_tcp_reachable(self):
+        r = _jdbc_result("src", "h", 5432, "jdbc:postgresql://h:5432/db", {}, 0.0, preflight=False)
+        assert r.status == "ok" and "reachable" in r.detail and "preflight" not in r.detail
+
+    def test_result_preflight_non_postgres_tcp_only(self):
+        r = _jdbc_result("src", "h", 3306, "jdbc:mysql://h:3306/db", {}, 0.0, preflight=True)
+        assert r.status == "ok" and "TCP only" in r.detail
+
+    def test_result_preflight_postgres_attempts_auth(self):
+        # No live DB → connect fails → warn (proves the auth path runs, not TCP-only)
+        r = _jdbc_result("src", "127.0.0.1", 5432, "jdbc:postgresql://127.0.0.1:5432/nope",
+                         {"user": "u", "password": "p"}, 0.0, preflight=True)
+        assert r.status == "warn" and "connect/auth failed" in r.detail

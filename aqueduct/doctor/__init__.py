@@ -495,7 +495,7 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
             try:
                 with socket.create_connection((host, port), timeout=3):
                     pass
-                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+                results.append(_jdbc_result(name, host, port, raw, cfg, t, preflight=preflight))
             except OSError as exc:
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
@@ -924,7 +924,7 @@ def check_blueprint_sources(
             try:
                 with socket.create_connection((host, port), timeout=3):
                     pass
-                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+                results.append(_jdbc_result(name, host, port, raw, cfg, t, preflight=preflight))
             except OSError as exc:
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
@@ -1042,6 +1042,55 @@ def _jdbc_default_port(jdbc_url: str) -> int:
         if key in jdbc_url.lower():
             return port
     return 5432  # safe fallback
+
+
+def _jdbc_preflight_auth(raw: str, cfg: Any) -> tuple[str, str] | None:
+    """Real JDBC connect+auth under ``--preflight`` (vs the default TCP probe).
+
+    Python-side, so only subprotocols with an installed driver are attempted —
+    ``jdbc:postgresql:`` via psycopg2 (already a store dependency). Other
+    subprotocols (mysql/oracle/…) return ``None`` so the caller keeps the TCP
+    reachability result — the plan's "degrade to skip if the driver is absent".
+    Credentials come from the source ``user``/``password`` options. Never raises."""
+    if not raw.startswith("jdbc:postgresql:"):
+        return None
+    try:
+        import psycopg2  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    dsn = raw[len("jdbc:"):]  # jdbc:postgresql://h:p/db → postgresql://h:p/db (libpq URI)
+    user = cfg.get("user") if hasattr(cfg, "get") else None
+    pwd = cfg.get("password") if hasattr(cfg, "get") else None
+    kw = {"connect_timeout": 5}
+    if user:
+        kw["user"] = user
+    if pwd:
+        kw["password"] = pwd
+    try:
+        conn = psycopg2.connect(dsn, **kw)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        finally:
+            conn.close()
+        return "ok", "connect+auth verified [preflight]"
+    except Exception as exc:
+        return "warn", f"reachable but connect/auth failed: {exc} [preflight]"
+
+
+def _jdbc_result(name: str, host: str, port: int, raw: str, cfg: Any, t: float, *, preflight: bool) -> CheckResult:
+    """TCP reachability (default) or a real connect+auth (``--preflight``)."""
+    if preflight:
+        auth = _jdbc_preflight_auth(raw, cfg)
+        if auth is not None:
+            return CheckResult(name, auth[0], f"JDBC {host}:{port} {auth[1]}", _ms(t))
+        return CheckResult(
+            name, "ok",
+            f"JDBC {host}:{port} reachable  [preflight: TCP only — no python driver for subprotocol]",
+            _ms(t),
+        )
+    return CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t))
 
 
 # ── Cloudpickle compatibility check ──────────────────────────────────────────
@@ -1189,8 +1238,8 @@ def run_doctor(
     # Per-store backend reachability — replaces the legacy observability.db/depot.db
     # file probes when a non-DuckDB backend is configured. For DuckDB
     # backends both probes still run and report the same OK signal.
-    results.append(check_store_backend("observability", cfg.stores.observability))
-    results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True))
+    results.append(check_store_backend("observability", cfg.stores.observability, preflight=preflight))
+    results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True, preflight=preflight))
 
     # Secrets
     results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))

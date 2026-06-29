@@ -437,6 +437,7 @@ def check_store_backend(
     store_cfg: Any,
     *,
     is_kv_only: bool = False,
+    preflight: bool = False,
 ) -> CheckResult:
     """Probe a single configured store backend for reachability.
 
@@ -445,6 +446,8 @@ def check_store_backend(
         store_cfg:   Pydantic store config (`RelationalStoreConfig` or
                      `KVStoreConfig`). Has `.backend` and `.path` attributes.
         is_kv_only:  When True, treats redis as a valid backend (depot only).
+        preflight:   When True, do a throwaway **write+read** round-trip (temp
+                     table / SET-GET-DEL) — proves write perms, not just connect.
 
     Returns:
         `CheckResult` with status `ok | fail | warn`. Failures include the
@@ -472,9 +475,15 @@ def check_store_backend(
             conn = _duckdb.connect(str(p))
             try:
                 conn.execute("SELECT 1").fetchone()
+                if preflight:
+                    conn.execute("CREATE TEMPORARY TABLE _aq_doctor_rt (x INTEGER)")
+                    conn.execute("INSERT INTO _aq_doctor_rt VALUES (1)")
+                    conn.execute("SELECT x FROM _aq_doctor_rt").fetchone()
+                    conn.execute("DROP TABLE _aq_doctor_rt")
             finally:
                 conn.close()
-            return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}", _ms(t))
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}{_rt}", _ms(t))
         except Exception as exc:
             return CheckResult(label, "fail", f"backend=duckdb  path={path_or_dsn}  error={exc}", _ms(t))
 
@@ -494,6 +503,12 @@ def check_store_backend(
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     cur.fetchone()
+                    if preflight:
+                        # Temp table auto-drops on disconnect; proves write perms.
+                        cur.execute("CREATE TEMP TABLE _aq_doctor_rt (x INT)")
+                        cur.execute("INSERT INTO _aq_doctor_rt VALUES (1)")
+                        cur.execute("SELECT x FROM _aq_doctor_rt")
+                        cur.fetchone()
             finally:
                 conn.close()
             # Redact DSN for log line — password lives inside path_or_dsn
@@ -501,7 +516,8 @@ def check_store_backend(
             redacted = _PostgresRelational.__dict__["location_label"].fget(
                 type("S", (), {"_dsn": path_or_dsn})()
             )
-            return CheckResult(label, "ok", f"backend=postgres  dsn={redacted}", _ms(t))
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=postgres  dsn={redacted}{_rt}", _ms(t))
         except Exception as exc:
             return CheckResult(label, "fail", f"backend=postgres  error={exc}", _ms(t))
 
@@ -524,7 +540,13 @@ def check_store_backend(
         try:
             client = _redis.Redis.from_url(path_or_dsn, socket_connect_timeout=5)
             client.ping()
-            return CheckResult(label, "ok", f"backend=redis  url={path_or_dsn}", _ms(t))
+            if preflight:
+                _k = "_aq_doctor_rt"
+                client.set(_k, "1", ex=60)
+                client.get(_k)
+                client.delete(_k)
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=redis  url={path_or_dsn}{_rt}", _ms(t))
         except Exception as exc:
             return CheckResult(label, "fail", f"backend=redis  error={exc}", _ms(t))
 
