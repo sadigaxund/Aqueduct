@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from aqueduct.errors import AqueductError
+from aqueduct.errors import ParseError
 from aqueduct.parser.graph import (
     detect_cycles,
     validate_edge_error_types,
@@ -32,10 +32,6 @@ from aqueduct.parser.models import (
 )
 from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
-
-
-class ParseError(AqueductError):
-    """Raised for any Blueprint parse, validation, or resolution failure."""
 
 
 def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | None:
@@ -189,7 +185,7 @@ def parse_dict(
             profiles=validated.context_profiles,
             cli_overrides=cli_overrides,
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"Context resolution failed: {exc}") from exc
 
     # ── 4. Build Module dataclasses (with config substitution) ────────────────
@@ -249,7 +245,7 @@ def parse_dict(
             )
             for m in validated.modules
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"Module config resolution failed: {exc}") from exc
 
     # ── 5. Build Edge dataclasses ─────────────────────────────────────────────
@@ -318,7 +314,7 @@ def parse_dict(
             block_on_explain_regression=validated.agent.block_on_explain_regression,
             sandbox_mode=validated.agent.sandbox_mode,
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"agent config resolution failed: {exc}") from exc
 
     # Tier-0 resolution applies here too (parity with module config /
@@ -328,7 +324,7 @@ def parse_dict(
     try:
         resolved_spark_config = resolve_value(dict(validated.spark_config), ctx_map)
         resolved_macros = resolve_value(dict(validated.macros), ctx_map)
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"spark_config / macros resolution failed: {exc}") from exc
 
     return Blueprint(

@@ -16,14 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-
-# Force pyspark initialisation early so narwhals/plotly don't trigger a
-# circular import when type-checking DataFrames.
-try:
-    import pyspark.sql  # noqa: F401
-except Exception:
-    pass  # pyspark early-import is best-effort; circular-import workaround must not break a headless viewer
-
 from datetime import datetime
 from pathlib import Path
 
@@ -1423,6 +1415,12 @@ _HEADER_LOGO = _ASSETS / "header.svg"     # main content area header
 
 
 def main() -> None:
+    # Force pyspark initialisation early so narwhals/plotly don't trigger a
+    # circular import when type-checking DataFrames.
+    try:
+        import pyspark.sql  # noqa: F401
+    except Exception:
+        pass
     st.set_page_config(
         page_title="Aqueduct Dashboard",
         page_icon=str(_TAB_ICON) if _TAB_ICON.is_file() else "\U0001f30a",

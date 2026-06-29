@@ -11,3 +11,15 @@ to distinguish one failure mode from another.
 
 class AqueductError(Exception):
     """Root of the Aqueduct exception hierarchy."""
+
+
+class ParseError(AqueductError):
+    """Raised for any Blueprint parse, validation, or resolution failure."""
+
+
+class CompileError(AqueductError):
+    """Raised for any compilation failure."""
+
+
+class ConfigError(AqueductError):
+    """Raised when aqueduct.yml cannot be loaded or fails validation."""

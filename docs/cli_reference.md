@@ -117,6 +117,19 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `-e KEY=VAL` / `--env KEY=VAL` | — | Inline env override (highest precedence). Repeatable. |
 | `--env-file <path>` | anchored `<dir>/.env` | Explicit fallback `.env` (used only when no anchored project `.env` exists) |
 
+### Run output: runtime warning summary
+
+Runtime warnings raised *during* execution (Probe/Assert findings, retry notices, and other per-module diagnostics) are shown twice: inline under the module that raised them (`↳ ⚠ …`) and again as a collapsed roll-up just before the run footer:
+
+```
+⚠ runtime: 3 warnings   ·  -v for full text
+  · [runtime_assert]         clean_users: Assert [not_null]: 12 null emails
+  · [runtime_probe_signal_error]  ingest_orders: signal evaluation failed
+  · [runtime_retry_waiting]  write_warehouse: retrying egress (attempt 2/3)
+```
+
+Each line keeps its stable `rule_id` (e.g. `runtime_assert`, `runtime_probe_*`, `runtime_retry_*`) so it can be copied straight into `warnings.suppress` in `aqueduct.yml` (same mechanism as compile-time `AQ-WARN` ids). The roll-up is additive — inline per-module warnings still print. Pass `-v` / `--verbose` for the full (untruncated) warning text.
+
 ### Config overrides (`-s` / `--set`)
 
 `--set PATH=VALUE` overrides any value in `aqueduct.yml` or the Blueprint for a single invocation — repeatable, applied in memory, **never written back to disk**. It is the highest-precedence layer:

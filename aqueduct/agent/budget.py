@@ -48,6 +48,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from aqueduct.agent.signature import ErrorSignature
+from aqueduct.errors import ConfigError
 
 __all__ = [
     "BudgetConfig",
@@ -99,24 +100,24 @@ class BudgetConfig:
 
     def __post_init__(self) -> None:
         if self.max_reprompts < 1:
-            raise ValueError("BudgetConfig.max_reprompts must be >= 1")
+            raise ConfigError("BudgetConfig.max_reprompts must be >= 1")
         if self.max_seconds <= 0:
-            raise ValueError("BudgetConfig.max_seconds must be > 0")
+            raise ConfigError("BudgetConfig.max_seconds must be > 0")
         if self.max_tokens_total is not None and self.max_tokens_total < 1:
-            raise ValueError("BudgetConfig.max_tokens_total must be >= 1 or None")
+            raise ConfigError("BudgetConfig.max_tokens_total must be >= 1 or None")
         if self.same_error_consecutive < 2:
-            raise ValueError(
+            raise ConfigError(
                 "BudgetConfig.same_error_consecutive must be >= 2 — a single "
                 "occurrence is not yet evidence of being stuck."
             )
         if self.same_signature_overall < self.same_error_consecutive:
-            raise ValueError(
+            raise ConfigError(
                 "BudgetConfig.same_signature_overall must be >= "
                 "same_error_consecutive — overall ceiling cannot be stricter "
                 "than the consecutive one."
             )
         if self.progress_stalled_window < 2:
-            raise ValueError(
+            raise ConfigError(
                 "BudgetConfig.progress_stalled_window must be >= 2 — need at "
                 "least two turns to detect non-progress."
             )

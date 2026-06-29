@@ -20,6 +20,7 @@ from typing import Any
 
 from aqueduct.agent.constants import ANTHROPIC_API_VERSION, DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.prompts import _build_system_prompt
+from aqueduct.errors import AqueductError, ConfigError
 from aqueduct.infra.http import RETRYABLE_PROVIDER_STATUS, backoff_delay, retry_after_seconds
 from aqueduct.redaction import redact as _redact
 
@@ -244,7 +245,7 @@ def _call_anthropic(
 
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError(
+        raise ConfigError(
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or configure agent.provider: openai_compat in aqueduct.yml."
         )
@@ -295,13 +296,13 @@ def _call_anthropic(
         data = response.json()
     content = data.get("content") or []
     if not content:
-        raise ValueError(
+        raise AqueductError(
             "Anthropic returned empty content block. "
             "The model may have refused the request or been interrupted."
         )
     text = content[0].get("text")
     if text is None:
-        raise ValueError(
+        raise AqueductError(
             "Anthropic returned null/empty text in content block. "
             "The model may have refused the request or been interrupted."
         )
@@ -328,7 +329,7 @@ def _call_openai_compat(
     import httpx
 
     if not base_url:
-        raise RuntimeError(
+        raise ConfigError(
             "agent.base_url must be set for provider=openai_compat "
             "(e.g. http://localhost:11434/v1)"
         )
@@ -384,7 +385,7 @@ def _call_openai_compat(
         data = response.json()
     text = data["choices"][0]["message"].get("content")
     if text is None:
-        raise ValueError(
+        raise AqueductError(
             "LLM returned null/empty content from OpenAI-compatible endpoint. "
             "The model may have refused the request, hit a content filter, "
             "or been interrupted mid-generation."
@@ -449,7 +450,7 @@ def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tupl
                 to = int(usage.get("completion_tokens", 0) or 0)
     text = "".join(parts)
     if not text:
-        raise ValueError(
+        raise AqueductError(
             "LLM returned empty content from the streaming OpenAI-compatible endpoint."
         )
     return text, ti, to
@@ -488,5 +489,5 @@ def _stream_anthropic(url, payload, headers, read_timeout, on_token) -> tuple[st
                     to = int(u.get("output_tokens") or 0)
     text = "".join(parts)
     if not text:
-        raise ValueError("Anthropic returned empty text in the streaming response.")
+        raise AqueductError("Anthropic returned empty text in the streaming response.")
     return text, ti, to

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 
+from aqueduct.errors import ParseError
 from aqueduct.parser.models import Edge, Module
 
 
@@ -28,9 +29,9 @@ def _build_adjacency(
 
     def _add_edge(from_id: str, to_id: str, context: str) -> None:
         if from_id not in module_ids:
-            raise ValueError(f"{context}: references unknown module {from_id!r}")
+            raise ParseError(f"{context}: references unknown module {from_id!r}")
         if to_id not in module_ids:
-            raise ValueError(f"{context}: references unknown module {to_id!r}")
+            raise ParseError(f"{context}: references unknown module {to_id!r}")
         adj[from_id].append(to_id)
         in_degree[to_id] += 1
 
@@ -71,7 +72,7 @@ def topological_order(modules: list[Module], edges: list[Edge]) -> list[str]:
     """
     cycle_nodes = detect_cycles(modules, edges)
     if cycle_nodes:
-        raise ValueError(
+        raise ParseError(
             f"Cycle detected in module graph. Involved modules: {cycle_nodes}"
         )
 
@@ -95,7 +96,7 @@ def validate_spillway_targets(modules: list[Module]) -> None:
     module_ids = {m.id for m in modules}
     for module in modules:
         if module.spillway and module.spillway not in module_ids:
-            raise ValueError(
+            raise ParseError(
                 f"Module {module.id!r} spillway target {module.spillway!r} does not exist"
             )
 
@@ -105,7 +106,7 @@ def validate_edge_error_types(edges: list[Edge]) -> None:
     any other port, where it would be silently ignored."""
     for edge in edges:
         if edge.error_types and edge.port != "spillway":
-            raise ValueError(
+            raise ParseError(
                 f"Edge {edge.from_id!r} -> {edge.to_id!r}: error_types is only "
                 f"valid on port='spillway' (got port={edge.port!r}). It filters "
                 "quarantined rows by their _aq_error_type label."

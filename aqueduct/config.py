@@ -31,17 +31,16 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from aqueduct.agent.constants import DEFAULT_LLM_MODEL
-from aqueduct.errors import AqueductError
+from aqueduct.errors import ConfigError
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
 from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
-
-# ── Schema error ──────────────────────────────────────────────────────────────
-
-class ConfigError(AqueductError):
-    """Raised when aqueduct.yml cannot be loaded or fails validation."""
+# ``ConfigError`` lives in ``aqueduct.errors`` (imported above) to break an
+# import cycle: config → agent.constants → agent.budget → config. Imported at
+# module scope so ``from aqueduct.config import ConfigError`` keeps working with
+# a single class identity.
 
 
 # ── Sub-models ────────────────────────────────────────────────────────────────

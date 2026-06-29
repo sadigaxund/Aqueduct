@@ -21,12 +21,18 @@ from typing import TYPE_CHECKING
 import httpx
 
 from aqueduct.deploy.base import PackagedBlueprint, Submitter
+from aqueduct.errors import AqueductError, ConfigError
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
 
 logger = logging.getLogger(__name__)
+
+
+class DeployError(AqueductError):
+    """Raised for deployment/runtime failures during remote submission."""
+
 
 _BOOTSTRAP_SCRIPT = """\
 import json
@@ -74,7 +80,7 @@ def _normalize_url(url: str) -> str:
     url = url.rstrip("/")
     if not url.startswith("https://"):
         if url.startswith("http://"):
-            raise ValueError(f"Databricks workspace URL must use https: {url!r}")
+            raise ConfigError(f"Databricks workspace URL must use https: {url!r}")
         url = f"https://{url}"
     return url
 
@@ -85,11 +91,11 @@ class DatabricksSubmitter(Submitter):
     def _api_url(self, cfg: AqueductConfig, endpoint: str) -> str:
         databricks = cfg.deployment.databricks
         if databricks is None:
-            raise ValueError(
+            raise ConfigError(
                 "deployment.databricks block is required for target=databricks"
             )
         if not databricks.workspace_url:
-            raise ValueError(
+            raise ConfigError(
                 "deployment.databricks.workspace_url is required"
             )
         return f"{_normalize_url(databricks.workspace_url)}{endpoint}"
@@ -97,7 +103,7 @@ class DatabricksSubmitter(Submitter):
     def _auth_header(self) -> dict[str, str]:
         token = os.environ.get("DATABRICKS_TOKEN")
         if not token:
-            raise ValueError(
+            raise ConfigError(
                 "DATABRICKS_TOKEN environment variable is required for "
                 "Databricks remote-submit. Set it or reference it via "
                 "@aq.secret('DATABRICKS_TOKEN') in aqueduct.yml."
@@ -116,12 +122,12 @@ class DatabricksSubmitter(Submitter):
             r_create.raise_for_status()
             handle = r_create.json().get("handle")
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
+            raise DeployError(
                 f"DBFS create failed for {dbfs_path!r}: {exc.response.status_code}"
             ) from exc
 
         if handle is None:
-            raise RuntimeError(f"DBFS create returned no handle for {dbfs_path!r}")
+            raise DeployError(f"DBFS create returned no handle for {dbfs_path!r}")
 
         chunk_size = 1024 * 1024
         offset = 0
@@ -130,7 +136,7 @@ class DatabricksSubmitter(Submitter):
             try:
                 enc = base64.b64encode(chunk).decode("ascii")
             except Exception as exc:
-                raise RuntimeError(
+                raise DeployError(
                     f"Failed to encode chunk for {dbfs_path!r} at offset {offset}: {exc}"
                 ) from exc
             try:
@@ -151,7 +157,7 @@ class DatabricksSubmitter(Submitter):
                     )
                 except Exception:
                     pass  # DBFS close-handle is best-effort cleanup on error; the real failure is the block upload
-                raise RuntimeError(
+                raise DeployError(
                     f"DBFS add-block failed for {dbfs_path!r} at offset {offset}: "
                     f"{exc.response.status_code}"
                 ) from exc
@@ -166,7 +172,7 @@ class DatabricksSubmitter(Submitter):
             )
             r_close.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise RuntimeError(
+            raise DeployError(
                 f"DBFS close failed for {dbfs_path!r}: {exc.response.status_code}"
             ) from exc
 
@@ -243,7 +249,7 @@ class DatabricksSubmitter(Submitter):
     def submit(self, packaged: PackagedBlueprint, cfg: AqueductConfig) -> str:
         databricks = cfg.deployment.databricks
         if databricks is None:
-            raise ValueError("deployment.databricks block is required for target=databricks")
+            raise ConfigError("deployment.databricks block is required for target=databricks")
 
         task: dict = {
             "task_key": "aqueduct-run",
@@ -260,7 +266,7 @@ class DatabricksSubmitter(Submitter):
         elif databricks.new_cluster:
             task["new_cluster"] = databricks.new_cluster
         else:
-            raise ValueError(
+            raise ConfigError(
                 "deployment.databricks: one of cluster_id or new_cluster "
                 "is required"
             )
@@ -290,7 +296,7 @@ class DatabricksSubmitter(Submitter):
                 detail = f": {exc.response.text}"
             except Exception:
                 pass  # response-body read is diagnostic best-effort; the error is surfaced regardless
-            raise RuntimeError(
+            raise DeployError(
                 f"Job submit failed "
                 f"(status {exc.response.status_code}){detail}"
             ) from exc

@@ -15,14 +15,16 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json as _json
+import logging
 import random
-import sys
 import threading
 import time
 from collections.abc import Callable
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 # Transient statuses worth retrying. Two sets — they legitimately differ:
 #   DELIVERY: best-effort outbound POSTs (webhook / OpenLineage / CI callback).
@@ -118,7 +120,7 @@ def deliver_with_retry(
             retryable = True
             _log(label, method, url, f"failed: {exc}", retryable, attempt, attempts)
         except Exception as exc:  # noqa: BLE001 — a delivery bug must never crash the run
-            print(f"[aqueduct] {label} {method} {url!r} raised unexpected error: {exc}", file=sys.stderr)
+            logger.warning("[aqueduct] %s %s %r raised unexpected error: %s", label, method, url, exc)
             return
         if not retryable or attempt >= attempts:
             return
@@ -127,4 +129,4 @@ def deliver_with_retry(
 
 def _log(label: str, method: str, url: str, what: str, retryable: bool, attempt: int, attempts: int) -> None:
     suffix = f" — retrying ({attempt}/{attempts})" if retryable and attempt < attempts else ""
-    print(f"[aqueduct] {label} {method} {url!r} {what}{suffix}", file=sys.stderr)
+    logger.warning("[aqueduct] %s %s %r %s%s", label, method, url, what, suffix)

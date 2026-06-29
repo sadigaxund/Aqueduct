@@ -40,15 +40,12 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
-from aqueduct.errors import AqueductError
+from aqueduct.errors import CompileError
 from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
 
 logger = logging.getLogger(__name__)
-
-class CompileError(AqueductError):
-    """Raised for any compilation failure."""
 
 
 def _resolve_module_tier1(m: Module, registry: AqFunctions) -> Module:
@@ -127,7 +124,7 @@ def compile(  # noqa: A001
             k: resolve_tier1(v, registry)
             for k, v in blueprint.context.values.items()
         }
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 context resolution failed: {exc}") from exc
 
     # ── 2. Re-run ${ctx.*} substitution with the now-fully-resolved context ───
@@ -145,7 +142,7 @@ def compile(  # noqa: A001
         modules: list[Module] = [
             _resolve_module_tier1(m, registry) for m in blueprint.modules
         ]
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 module config resolution failed: {exc}") from exc
 
     # ── 3.5. Resolve SQL macros in module configs ─────────────────────────────

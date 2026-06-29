@@ -20,6 +20,8 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
+from aqueduct.errors import CompileError
+
 # Matches the innermost @aq.* call — args must not contain another @aq.
 _INNER_CALL_RE = re.compile(r"@aq\.([\w.]+)\(([^@)]*)\)")
 
@@ -125,13 +127,13 @@ class AqFunctions:
                 region=self._secrets_region,
                 resolver=self._secrets_resolver,
             )
-        except SecretsError as exc:
-            raise RuntimeError(str(exc)) from exc
+        except SecretsError:
+            raise
 
     def env(self, var: str) -> str:
         val = os.environ.get(var)
         if val is None:
-            raise RuntimeError(
+            raise CompileError(
                 f"@aq.env: variable {var!r} is not set. "
                 "Unlike ${VAR:-default}, @aq.env fails fast when the variable is absent."
             )
@@ -155,7 +157,7 @@ class AqFunctions:
         store = self._depots.get(name)
         if store is None:
             known = ", ".join(sorted(self._depots)) or "(none configured)"
-            raise RuntimeError(
+            raise CompileError(
                 f"@aq.depot.{name}.get: no depot mount named {name!r}. "
                 f"Configured mounts: {known}. Add it under stores.depots in aqueduct.yml."
             )
@@ -167,7 +169,7 @@ class AqFunctions:
 
     def _require(self, token: str, value: Any) -> str:
         if value is None or value == "":
-            raise RuntimeError(
+            raise CompileError(
                 f"@aq.{token} is not available here — it resolves only during blueprint "
                 "compilation, not in aqueduct.yml (no blueprint/run context exists at "
                 "config-load time)."
@@ -240,7 +242,7 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
             _name = nm.group(1)
             method = lambda *a, **k: registry.depot_get_named(_name, *a, **k)  # noqa: E731
         else:
-            raise ValueError(f"Unknown @aq function: {func_path!r}")
+            raise CompileError(f"Unknown @aq function: {func_path!r}")
 
     if not args_str.strip():
         return str(method())
@@ -252,7 +254,7 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
         args = [ast.literal_eval(a) for a in call_node.args]
         kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call_node.keywords}
     except (SyntaxError, ValueError) as exc:
-        raise ValueError(
+        raise CompileError(
             f"Cannot parse arguments for {func_path}({args_str!r}): {exc}"
         ) from exc
 
@@ -272,7 +274,7 @@ def resolve_tier1_str(value: str, registry: AqFunctions) -> str:
         value = value[: m.start()] + replacement + value[m.end() :]
 
     if _ANY_TIER1_RE.search(value):
-        raise ValueError(
+        raise CompileError(
             f"Unresolvable @aq.* reference after 20 passes (possible cycle): {value!r}"
         )
     return value
