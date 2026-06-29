@@ -253,5 +253,9 @@ def _heal_drift(
     )
     if agent_result.patch is None:
         return None
-    stage_patch_for_human(agent_result.patch, patches_path, failure_ctx)
+    # Stage to the configured patch store (local OR s3/gcs/adls per stores.blob),
+    # not a hardcoded local dir — so a remote backend actually receives the body.
+    from aqueduct.stores.object_store import make_patch_store
+    _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
+    stage_patch_for_human(agent_result.patch, patches_path, failure_ctx, patch_store=_patch_store)
     return agent_result.patch.patch_id

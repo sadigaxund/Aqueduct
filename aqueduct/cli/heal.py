@@ -332,7 +332,12 @@ def heal(
             click.echo(f"  · {err}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    stage_patch_for_human(patch, patches_path, failure_ctx)
-    click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
-    click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
+    # Stage to the CONFIGURED patch store (local OR s3/gcs/adls per stores.blob),
+    # not a hardcoded local dir — otherwise on a remote backend the body lands on
+    # the local FS and `patch list`/`apply` (which read the store) never see it.
+    from aqueduct.stores.object_store import make_patch_store
+    _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
+    stage_patch_for_human(patch, patches_path, failure_ctx, patch_store=_patch_store)
+    click.echo(f"✓ patch staged → {_patch_store.location_label}/pending/  (id={patch.patch_id})")
+    click.echo(f"  apply with: aqueduct patch apply {patch.patch_id} --blueprint <path>")
 

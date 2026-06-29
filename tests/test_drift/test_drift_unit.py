@@ -85,3 +85,37 @@ def test_baseline_roundtrip(tmp_path):
                     baseline_schema={"a": "int"}, live_schema={"a": "int", "b": "string"},
                     status="drift_benign")
     assert ds.get_baseline(obs, "bp.x", "load") == {"a": "int", "b": "string"}
+
+
+def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
+    """B1 regression: drift auto-heal must stage the patch to the configured
+    `stores.blob` backend (s3/gcs/…), not a hardcoded local dir — otherwise on a
+    remote backend the body lands on local FS and `patch list`/`apply` miss it."""
+    import importlib
+    from types import SimpleNamespace
+    import aqueduct.agent as A
+    import aqueduct.drift.context as DC
+    D = importlib.import_module("aqueduct.cli.drift")  # the module, not the click Command
+
+    captured = {}
+
+    def _fake_stage(patch, patches_dir, fc, *, patch_store=None, **kw):
+        captured["patch_store"] = patch_store
+
+    monkeypatch.setattr(A, "stage_patch_for_human", _fake_stage)
+    monkeypatch.setattr(A, "generate_agent_patch",
+                        lambda **k: SimpleNamespace(patch=SimpleNamespace(patch_id="p1")))
+    monkeypatch.setattr(DC, "build_synthetic_failure_context", lambda *a, **k: object())
+
+    eng = SimpleNamespace(model="m", max_reprompts=1, budget=None, provider="anthropic",
+                          base_url=None, api_key=None, provider_options=None, timeout=30,
+                          prompt_context=None)
+    cfg = SimpleNamespace(
+        agent=eng,
+        stores=SimpleNamespace(blob=SimpleNamespace(backend="s3", path="s3://bucket/prefix")),
+    )
+
+    pid = D._heal_drift(cfg, "bp", "mod", object(), "{}", tmp_path / "patches")
+    assert pid == "p1"
+    assert captured["patch_store"] is not None
+    assert "s3://bucket/prefix" in captured["patch_store"].location_label  # configured backend, not local
