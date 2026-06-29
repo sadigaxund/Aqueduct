@@ -63,6 +63,7 @@ def _list_from_store(ps, filter_status: str, out_format: str) -> None:
             meta = payload.get(PATCH_META_KEY) or {}
             rows.append({
                 "status": st,
+                "file": _key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
                 "patch_id": payload.get("patch_id", ""),
                 "rationale": payload.get("rationale"),
                 "confidence": payload.get("confidence"),
@@ -76,18 +77,22 @@ def _list_from_store(ps, filter_status: str, out_format: str) -> None:
     if not rows:
         click.echo(f"No {filter_status} patches found in the patch store ({ps.location_label}).")
         return
-    click.echo(f"\n  {'patch_id':<34} {'status':<9} {'blueprint':<24} rationale")
-    click.echo(f"  {'-' * 34} {'-' * 9} {'-' * 24} {'-' * 28}")
+    # `patch_id` is the model's semantic label and NOT unique (same fix re-staged
+    # across runs); `file` is the unique key — apply/reject by it when ids collide.
+    click.echo(f"\n  {'file':<30} {'patch_id':<26} {'status':<9} {'blueprint':<22} rationale")
+    click.echo(f"  {'-' * 30} {'-' * 26} {'-' * 9} {'-' * 22} {'-' * 20}")
     has_pending = False
     for r in rows:
         st = r["status"]
         has_pending = has_pending or st == "pending"
-        bp = (r.get("blueprint_id") or "")[:24]
-        rationale = (r.get("rationale") or "").replace("\n", " ")[:28]
-        click.echo(f"  {r['patch_id']:<34} {st:<9} {bp:<24} {rationale}")
+        fn = (r.get("file") or "")[:30]
+        pid = (r.get("patch_id") or "")[:26]
+        bp = (r.get("blueprint_id") or "")[:22]
+        rationale = (r.get("rationale") or "").replace("\n", " ")[:60]
+        click.echo(f"  {fn:<30} {pid:<26} {st:<9} {bp:<22} {rationale}")
     if has_pending:
-        click.echo("\n  Apply:  aqueduct patch apply <patch_id> --blueprint <blueprint.yml>")
-        click.echo("  Reject: aqueduct patch reject <patch_id> --reason '<reason>'")
+        click.echo("\n  Apply:  aqueduct patch apply <patch_id|file> --blueprint <blueprint.yml>")
+        click.echo("  Reject: aqueduct patch reject <patch_id|file> --reason '<reason>'")
 
 
 # ── patch command group ───────────────────────────────────────────────────────
@@ -328,13 +333,11 @@ def patch_preview(
     sys.exit(exit_code)
 
 
-def _materialize_patch_by_id(
-    patch_id: str, patches_root, config_path: str | None,
-    env_file: str | None, cli_env: tuple[str, ...],
-):
-    """Fetch a pending patch body by ``patch_id`` from the configured patch store
-    → a local ``pending/`` file, so a remote-staged patch can be applied without
-    a manual ``patch pull`` first. Returns the local Path, or None if not found."""
+def _patch_store_from(patches_root, config_path, env_file, cli_env):
+    """Build the configured PatchStore (local OR object backend), or None.
+
+    Resolves aqueduct.yml (CWD walk-up / --config) + .env, so the body lifecycle
+    (apply/reject move) acts on the same store `patch list` shows."""
     from pathlib import Path
     try:
         from aqueduct.cli import _load_config_with_env
@@ -343,16 +346,85 @@ def _materialize_patch_by_id(
             Path(config_path) if config_path else None,
             env_file=env_file, cli_env=cli_env or (),
         )
-        ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
-        for key, _mt, payload in ps.iter_payloads("pending"):
-            if payload.get("patch_id") == patch_id or patch_id in Path(key).name:
-                dest = Path(patches_root) / "pending" / Path(key).name
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-                return dest
+        return make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, Path(patches_root))
     except Exception:
         return None
-    return None
+
+
+def _resolve_pending_key(ps, ref: str):
+    """Resolve PATCH_REF to a unique pending store key.
+
+    A full filename (``00003_…_slug.json``) wins outright — that is the unique
+    surrogate key. A bare ``patch_id`` is accepted only when it matches exactly
+    one pending body; if several share the id (same fix re-staged across runs)
+    the caller must use the full filename. Returns ``(key, [])`` on success,
+    ``(None, [ambiguous keys])`` for >1 match, ``(None, [])`` for none."""
+    from pathlib import Path
+    by_id: list[str] = []
+    for key, _mt, payload in ps.iter_payloads("pending"):
+        name = key.rsplit("/", 1)[-1]
+        if name == ref or name == f"{ref}.json" or key == ref or Path(ref).name == name:
+            return key, []
+        if payload.get("patch_id") == ref:
+            by_id.append(key)
+    if len(by_id) == 1:
+        return by_id[0], []
+    return None, by_id
+
+
+def _fetch_pending_to_temp(ps, key: str):
+    """Materialise a pending body to a scratch temp file (the operations source
+    `apply_patch_file` reads; the store still owns the canonical body)."""
+    import tempfile
+    from pathlib import Path
+    fd, tmp = tempfile.mkstemp(suffix="_" + key.rsplit("/", 1)[-1])
+    import os as _os
+    _os.close(fd)
+    Path(tmp).write_text(ps.get_text(key), encoding="utf-8")
+    return Path(tmp)
+
+
+def _resolve_patch_source(ref, patches_root, config_path, env_file, cli_env, *, need_local: bool):
+    """PATCH_REF → ``(ops_path, patch_store, pending_key)``.
+
+    External local file → ``(that path, store, None)`` (applied straight to the
+    store, no pending to move). Otherwise a unique pending key in the configured
+    store → ``(temp body | None, store, key)``. Exits with a clear message on
+    ambiguous / not-found."""
+    from pathlib import Path
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    p = Path(ref)
+    if p.exists() and p.parent.name != "pending":
+        return p, ps, None  # genuinely external file (CI download) → applied copy
+    if p.exists() and p.parent.name == "pending":
+        ref = p.name  # a pending file path → resolve to its store key below (move)
+    if ps is None:
+        click.echo(
+            f"✗ {ref!r} is not a local file and no patch store could be resolved "
+            f"(need aqueduct.yml / --config + env)", err=True,
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+    key = _require_pending_key(ps, ref)
+    ops_path = _fetch_pending_to_temp(ps, key) if need_local else None
+    return ops_path, ps, key
+
+
+def _require_pending_key(ps, ref: str) -> str:
+    """Resolve PATCH_REF to a unique pending key or exit with a clear message
+    (ambiguous → list the full filenames; none → not-found)."""
+    key, ambiguous = _resolve_pending_key(ps, ref)
+    if key is None:
+        if ambiguous:
+            click.echo(
+                f"✗ {len(ambiguous)} pending patches share id {ref!r} — re-run with the "
+                f"full filename:", err=True,
+            )
+            for k in ambiguous:
+                click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
+        else:
+            click.echo(f"✗ no pending patch matching {ref!r} in the store ({ps.location_label})", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+    return key
 
 
 @patch.command("apply")
@@ -392,23 +464,17 @@ def patch_apply(
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
-    _pf = Path(patch_ref)
-    if not _pf.exists():
-        # Not a local file → treat PATCH_REF as a patch_id and fetch from the store.
-        _pf = _materialize_patch_by_id(patch_ref, patches_root, config_path, env_file, cli_env)
-        if _pf is None:
-            click.echo(
-                f"✗ no local file and no pending patch with id {patch_ref!r} in the "
-                f"configured patch store", err=True,
-            )
-            sys.exit(exit_codes.USAGE_ERROR)
-
+    ops_path, ps, pending_key = _resolve_patch_source(
+        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+    )
     try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
-            patch_path=_pf,
+            patch_path=ops_path,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
+            patch_store=ps,
+            pending_key=pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -469,17 +535,13 @@ def patch_import(
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
-    # PATCH_REF may be a local file or a patch_id to fetch from the store.
-    patch_file = patch_ref
-    if not Path(patch_ref).exists():
-        _fetched = _materialize_patch_by_id(patch_ref, patches_root, config_path, env_file, cli_env)
-        if _fetched is None:
-            click.echo(
-                f"✗ no local file and no pending patch with id {patch_ref!r} in the "
-                f"configured patch store", err=True,
-            )
-            sys.exit(exit_codes.USAGE_ERROR)
-        patch_file = str(_fetched)
+    # PATCH_REF may be a local file (CI download) or a pending patch_id/filename
+    # in the configured store. Resolve to an operations source + the store/key so
+    # the body lifecycle (move pending → applied) runs in the store.
+    _ops_path, _ps, _pending_key = _resolve_patch_source(
+        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+    )
+    patch_file = str(_ops_path)
 
     # Pre-flight: if we are going to commit, fail BEFORE mutating the Blueprint
     # when we are not inside a git work tree (so a non-repo checkout doesn't end
@@ -524,6 +586,8 @@ def patch_import(
             patch_path=_apply_path,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
+            patch_store=_ps,
+            pending_key=_pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -598,39 +662,51 @@ def patch_reject(
 ) -> None:
     """Reject a pending patch and record the reason.
 
-    PATCH_REF can be a file path (patches/pending/00001_*.json) or a bare patch_id
-    slug. When the pending body lives in a remote store it is fetched locally
-    first (no manual ``patch pull`` needed).
-
-    Moves patches/pending/<file> → patches/rejected/<file> with a rejection_reason annotation.
+    PATCH_REF is a bare ``patch_id`` (when unique) or the full pending filename
+    (``00001_…_slug.json``) when several share an id. The body is moved
+    ``pending/`` → ``rejected/`` **in the configured store** (local or object
+    backend) with a rejection_reason annotation, and the index status/object_key
+    is updated.
     """
     from pathlib import Path
 
     from aqueduct.patch.apply import PatchError, reject_patch
 
-    # Accept either a file path or a bare patch_id slug.
-    ref_path = Path(patch_ref)
-    if ref_path.suffix == ".json" and ref_path.exists():
-        # Full path given — derive patches_dir from grandparent (pending/ → patches/)
-        resolved_patches_dir = ref_path.parent.parent
-        patch_id = ref_path.stem
-    elif ref_path.suffix == ".json" and not ref_path.exists() and ref_path.parent.name == "pending":
-        # Path given but file not found via CWD — try same derivation
-        resolved_patches_dir = ref_path.parent.parent
-        patch_id = ref_path.stem
+    p = Path(patch_ref)
+    if p.parent.name == "pending":
+        patches_root = p.parent.parent  # derive from the given pending path
+    elif patches_dir:
+        patches_root = Path(patches_dir)
     else:
-        resolved_patches_dir = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(Path.cwd() / "_sentinel")
-        patch_id = patch_ref
-        # Remote-staged pending body? Fetch it into local pending/ so reject_patch
-        # (local move + index status) has a file to act on. Best-effort.
-        _materialize_patch_by_id(patch_id, resolved_patches_dir, config_path, env_file, cli_env)
+        patches_root = _patches_root_from_blueprint(Path.cwd() / "_sentinel")
+
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    pending_key, ambiguous = _resolve_pending_key(ps, patch_ref) if ps is not None else (None, [])
+    if ambiguous:
+        click.echo(
+            f"✗ {len(ambiguous)} pending patches share id {patch_ref!r} — re-run with the "
+            f"full filename:", err=True,
+        )
+        for k in ambiguous:
+            click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    if pending_key:
+        try:
+            patch_id = json.loads(ps.get_text(pending_key)).get("patch_id") or Path(pending_key).stem
+        except Exception:
+            patch_id = Path(pending_key).stem
+    else:
+        patch_id = p.stem  # not in store → legacy reject_patch raises the not-found error
 
     try:
         rejected_path = reject_patch(
             patch_id=patch_id,
             reason=reason,
-            patches_dir=resolved_patches_dir,
+            patches_dir=patches_root,
             obs_store=_patch_index_obs_store(),
+            patch_store=ps if pending_key else None,
+            pending_key=pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
@@ -890,9 +966,10 @@ def patch_list(
                 env_file=env_file, cli_env=cli_env,
             )
             _bp_path = Path(blueprint) if blueprint else None
-            _patches_root = (
-                _patches_root_from_blueprint(_bp_path) if _bp_path
-                else Path.cwd() / "patches"
+            # No blueprint → walk up from CWD to the project root (where
+            # aqueduct.yml is) for patches/, not raw CWD/patches.
+            _patches_root = _patches_root_from_blueprint(
+                _bp_path if _bp_path else (Path.cwd() / "_sentinel")
             )
             ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, _patches_root)
             _list_from_store(ps, filter_status, out_format)

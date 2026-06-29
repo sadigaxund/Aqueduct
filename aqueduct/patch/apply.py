@@ -278,15 +278,21 @@ def _check_guardrails(
             )
 
 
-def _set_index_status(obs_store: Any | None, patch_id: str, status: str) -> None:
-    """Best-effort ``patch_index`` status update (Phase 53). Never raises."""
+def _set_index_status(
+    obs_store: Any | None, patch_id: str, status: str, object_key: str | None = None,
+) -> None:
+    """Best-effort ``patch_index`` status update (Phase 53). Never raises.
+
+    ``object_key`` MUST be passed when the body moves to a new lifecycle prefix
+    (pending → applied/rejected) so the heal cache's ``find_replay`` fetches the
+    body from its new key, not the stale pending one."""
     if obs_store is None:
         return
     try:
         from aqueduct.patch import index as _ix
         with obs_store.connect() as cur:
             _ix.ensure_schema(cur)
-            _ix.set_status(cur, patch_id, status)
+            _ix.set_status(cur, patch_id, status, object_key=object_key)
     except Exception:
         logger.warning("_set_index_status failed for %s", patch_id, exc_info=True)
 
@@ -297,13 +303,23 @@ def apply_patch_file(
     patches_dir: Path = Path("patches"),
     provenance_map: Any | None = None,
     obs_store: Any | None = None,
+    patch_store: Any | None = None,
+    pending_key: str | None = None,
 ) -> ApplyResult:
     """Full apply lifecycle: validate → apply → verify → backup → write → archive.
 
     Args:
         blueprint_path: Path to the Blueprint YAML file to patch.
-        patch_path:     Path to the PatchSpec JSON file.
+        patch_path:     Path to the PatchSpec JSON file (operations source).
         patches_dir:    Root directory for patch lifecycle dirs (backups/, applied/).
+        patch_store:    When given, the patch BODY lifecycle (archive to
+                        ``applied/`` and remove the ``pending/`` source) runs in
+                        this ``PatchStore`` — local OR object backend — instead of
+                        raw local-FS writes, so a remote-staged patch is moved in
+                        the store (no drift vs ``patch list``). ``object_key`` in
+                        the index is updated to the new applied key.
+        pending_key:    Store-relative key of the pending body to delete after
+                        archiving (None for an external import with no pending entry).
 
     Returns:
         ApplyResult with paths and metadata.
@@ -356,27 +372,45 @@ def apply_patch_file(
             tmp_out.unlink()
         raise PatchError(f"Failed to write patched Blueprint: {exc}") from exc
 
-    # ── 7. Archive PatchSpec to patches/applied/ ──────────────────────────────
-    applied_dir = patches_dir / "applied"
-    applied_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = applied_dir / patch_path.name
-
+    # ── 7. Archive PatchSpec to applied/ (in the PatchStore when given) ───────
     applied_at = datetime.now(tz=UTC).isoformat()
+    filename = Path(pending_key).name if pending_key else patch_path.name
+    archive_path = (patches_dir / "applied" / filename)
+    applied_key: str | None = None
     try:
         raw_spec = json.loads(patch_path.read_text(encoding="utf-8"))
         raw_spec["applied_at"] = applied_at
         raw_spec["blueprint_path"] = str(blueprint_path)
-        archive_path.write_text(json.dumps(_redact(raw_spec), indent=2), encoding="utf-8")
-        # Remove from pending — patch has been applied and archived
-        if patch_path.exists():
-            patch_path.unlink()
+        if patch_store is not None:
+            # Backend-aware move: write applied/<file> + delete pending/<file> in
+            # the store (local rename or s3 object move). Unifies local + remote.
+            applied_key = patch_store.write_applied(filename, _redact(raw_spec))
+            if pending_key:
+                try:
+                    patch_store.delete(pending_key)
+                except Exception:
+                    logger.debug("could not delete pending body %s", pending_key, exc_info=True)
+            archive_path = Path(getattr(patch_store, "location_label", str(patches_dir))) / "applied" / filename
+            # Drop the local materialised copy (the store now owns the body).
+            if patch_path.exists():
+                try:
+                    patch_path.unlink()
+                except Exception:
+                    pass
+        else:
+            applied_dir = patches_dir / "applied"
+            applied_dir.mkdir(parents=True, exist_ok=True)
+            archive_path = applied_dir / patch_path.name
+            archive_path.write_text(json.dumps(_redact(raw_spec), indent=2), encoding="utf-8")
+            if patch_path.exists():  # remove from pending — applied + archived
+                patch_path.unlink()
     except Exception as exc:
         import sys
         print(f"[patch] warning: could not archive patch to {archive_path}: {exc}", file=sys.stderr)
 
-    # Phase 53 — mark the patch applied in the index so the heal cache can
-    # replay it (and stops surfacing it as still-pending).
-    _set_index_status(obs_store, patch_spec.patch_id, "applied")
+    # Phase 53 — mark applied in the index (+ new object_key) so the heal cache
+    # replays it from applied/ and stops surfacing it as still-pending.
+    _set_index_status(obs_store, patch_spec.patch_id, "applied", object_key=applied_key)
 
     return ApplyResult(
         patch_id=patch_spec.patch_id,
@@ -392,20 +426,43 @@ def reject_patch(
     reason: str,
     patches_dir: Path = Path("patches"),
     obs_store: Any | None = None,
+    patch_store: Any | None = None,
+    pending_key: str | None = None,
 ) -> Path:
-    """Move a pending patch to patches/rejected/ with a reason annotation.
+    """Move a pending patch to rejected/ with a reason annotation.
 
     Args:
         patch_id:    The patch_id (filename without .json extension).
         reason:      Human-readable rejection reason.
         patches_dir: Root directory for patch lifecycle dirs.
+        patch_store: When given (with ``pending_key``), the body move runs in this
+                     ``PatchStore`` (local OR object backend) — write ``rejected/``
+                     + delete ``pending/`` — so a remote-staged patch is moved in
+                     the store and the index ``object_key`` is updated.
+        pending_key: Store-relative key of the pending body.
 
     Returns:
-        Path to the rejected patch file.
+        Path (or store-key display path) to the rejected patch.
 
     Raises:
         PatchError: Patch not found in patches/pending/.
     """
+    if patch_store is not None and pending_key is not None:
+        try:
+            raw = json.loads(patch_store.get_text(pending_key))
+        except Exception as exc:
+            raise PatchError(f"Cannot read pending patch {patch_id}: {exc}") from exc
+        raw["rejected_at"] = datetime.now(tz=UTC).isoformat()
+        raw["rejection_reason"] = reason
+        filename = Path(pending_key).name
+        rejected_key = patch_store.write_rejected(filename, _redact(raw))
+        try:
+            patch_store.delete(pending_key)
+        except Exception:
+            logger.debug("could not delete pending body %s", pending_key, exc_info=True)
+        _set_index_status(obs_store, patch_id, "rejected", object_key=rejected_key)
+        return Path(getattr(patch_store, "location_label", str(patches_dir))) / "rejected" / filename
+
     pending_dir = patches_dir / "pending"
     # Try exact filename first, then glob for new-style {seq}_{ts}_{slug}.json naming
     pending_path = pending_dir / f"{patch_id}.json"
