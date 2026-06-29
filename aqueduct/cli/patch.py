@@ -77,19 +77,21 @@ def _list_from_store(ps, filter_status: str, out_format: str) -> None:
     if not rows:
         click.echo(f"No {filter_status} patches found in the patch store ({ps.location_label}).")
         return
-    # `patch_id` is the model's semantic label and NOT unique (same fix re-staged
-    # across runs); `file` is the unique key — apply/reject by it when ids collide.
-    click.echo(f"\n  {'file':<30} {'patch_id':<26} {'status':<9} {'blueprint':<22} rationale")
-    click.echo(f"  {'-' * 30} {'-' * 26} {'-' * 9} {'-' * 22} {'-' * 20}")
+    # `file` is the UNIQUE key (`<ts>_<patch_id>.json`) — shown in FULL so it can
+    # be copied verbatim into `apply`/`reject` (the embedded slug is the model's
+    # non-unique patch_id, so no separate column). Width is the longest filename;
+    # ljust never truncates, so a long name prints whole.
+    _fw = max((len(r.get("file") or "") for r in rows), default=4)
+    click.echo(f"\n  {'file':<{_fw}}  {'status':<9} {'blueprint':<22} rationale")
+    click.echo(f"  {'-' * _fw}  {'-' * 9} {'-' * 22} {'-' * 20}")
     has_pending = False
     for r in rows:
         st = r["status"]
         has_pending = has_pending or st == "pending"
-        fn = (r.get("file") or "")[:30]
-        pid = (r.get("patch_id") or "")[:26]
+        fn = r.get("file") or ""
         bp = (r.get("blueprint_id") or "")[:22]
         rationale = (r.get("rationale") or "").replace("\n", " ")[:60]
-        click.echo(f"  {fn:<30} {pid:<26} {st:<9} {bp:<22} {rationale}")
+        click.echo(f"  {fn:<{_fw}}  {st:<9} {bp:<22} {rationale}")
     if has_pending:
         click.echo("\n  Apply:  aqueduct patch apply <patch_id|file> --blueprint <blueprint.yml>")
         click.echo("  Reject: aqueduct patch reject <patch_id|file> --reason '<reason>'")
