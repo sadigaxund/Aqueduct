@@ -84,42 +84,12 @@ def default_store_path(scenarios_dir: Path) -> Path:
 def _connect(store_path: Path):
     """Open a DuckDB connection, creating the parent dir + DDL on first use.
 
-    Also runs idempotent additive migrations for pre-1.0.3 benchmark stores so
-    older rows survive (just NULL on the new columns).
-    """
+    2.0 assumes a fresh store — the CREATE TABLE declares every column, so there
+    are no additive ALTER migrations (a pre-2.0 benchmark DB must be recreated)."""
     import duckdb
     store_path.parent.mkdir(parents=True, exist_ok=True)
     con = duckdb.connect(str(store_path))
     con.execute(_BENCHMARK_DDL)
-    # Additive ALTER for pre-existing stores created before
-    # `violated_guardrails` landed — guardrail-compliance tracking column.
-    try:
-        vg_exists = con.execute(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name='benchmark_results' AND column_name='violated_guardrails'"
-        ).fetchone()
-        if not vg_exists:
-            con.execute("ALTER TABLE benchmark_results ADD COLUMN violated_guardrails JSON")
-    except Exception:
-        pass  # DDL migration must never fail the store open; pre-existing columns skip harmlessly
-    # Additive ALTER for stop_reason + escalation + token totals (added
-    # by the unified reprompt loop) so pre-1.0.4 benchmark stores survive
-    # intact (NULL on old rows).
-    for col, ddl in (
-        ("stop_reason", "ALTER TABLE benchmark_results ADD COLUMN stop_reason VARCHAR"),
-        ("escalated", "ALTER TABLE benchmark_results ADD COLUMN escalated BOOLEAN"),
-        ("tokens_in_total", "ALTER TABLE benchmark_results ADD COLUMN tokens_in_total INTEGER"),
-        ("tokens_out_total", "ALTER TABLE benchmark_results ADD COLUMN tokens_out_total INTEGER"),
-    ):
-        try:
-            exists = con.execute(
-                "SELECT 1 FROM information_schema.columns "
-                f"WHERE table_name='benchmark_results' AND column_name='{col}'"
-            ).fetchone()
-            if not exists:
-                con.execute(ddl)
-        except Exception:
-            pass  # additive ALTER is best-effort; pre-existing columns skip harmlessly
     return con
 
 
@@ -178,18 +148,7 @@ class BenchmarkStore:
         if self.backend == "postgres":
             from aqueduct.stores.postgres import _pg_relational
             with _pg_relational(self.location, self.schema) as cur:
-                cur.execute(_BENCHMARK_DDL)
-                # Additive migrations for pre-existing Postgres stores.
-                for col, col_type in (
-                    ("violated_guardrails", "JSON"),
-                    ("stop_reason",          "VARCHAR"),
-                    ("escalated",            "BOOLEAN"),
-                    ("tokens_in_total",      "INTEGER"),
-                    ("tokens_out_total",     "INTEGER"),
-                ):
-                    cur.execute(
-                        f"ALTER TABLE benchmark_results ADD COLUMN IF NOT EXISTS {col} {col_type}"
-                    )
+                cur.execute(_BENCHMARK_DDL)  # 2.0: CREATE has all columns, no ALTER migrations
                 yield cur
         elif self.backend == "duckdb":
             con = _connect(Path(self.location))

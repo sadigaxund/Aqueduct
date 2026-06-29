@@ -157,12 +157,3 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     recorded_at           VARCHAR NOT NULL
 );
 """
-
-# Phase 45/46 columns for observability DBs created before the schema change.
-# Both DuckDB and Postgres support ADD COLUMN IF NOT EXISTS.
-_PHASE45_MIGRATION_DDL = """
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS resolution VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature_coarse VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS model_cascade_position INTEGER;
-"""

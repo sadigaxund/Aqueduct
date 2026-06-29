@@ -32,7 +32,6 @@ from aqueduct.surveyor.ddl import (
     _DDL,
     _EXPLAIN_SNAPSHOT_DDL,
     _HEAL_ATTEMPTS_DDL,
-    _PHASE45_MIGRATION_DDL,
     _SIGNAL_OVERRIDES_DDL,
 )
 from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
@@ -203,7 +202,6 @@ class Surveyor:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
-            cur.execute(_PHASE45_MIGRATION_DDL)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.
