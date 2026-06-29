@@ -922,3 +922,60 @@ class TestJdbcPreflight:
         r = _jdbc_result("src", "127.0.0.1", 5432, "jdbc:postgresql://127.0.0.1:5432/nope",
                          {"user": "u", "password": "p"}, 0.0, preflight=True)
         assert r.status == "warn" and "connect/auth failed" in r.detail
+
+
+# ── Queued follow-ups: cascade-tier preflight ping + agent model count ──────────
+
+from aqueduct.doctor import check_cascade_tiers as _check_cascade
+
+
+def _fake_bp_with_tier(provider, model, base_url=None):
+    tier = SimpleNamespace(provider=provider, model=model, base_url=base_url)
+    return SimpleNamespace(agent=SimpleNamespace(cascade=[tier]))
+
+
+class TestCascadeTierPing:
+    def test_default_only_checks_base_url_present(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
+        res = _check_cascade(Path("bp.yml"), preflight=False)
+        assert res[0].status == "ok" and "base_url=http://h/v1" in res[0].detail
+        assert "models" not in res[0].detail  # no ping without preflight
+
+    def test_preflight_pings_and_confirms_model(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["deepseek", "other"], None))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "ok" and "2 models" in res[0].detail and "[preflight]" in res[0].detail
+
+    def test_preflight_model_not_loaded_warns(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "missing", "http://h/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["only-this"], None))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "warn" and "not in 1 loaded models" in res[0].detail
+
+    def test_preflight_unreachable_warns(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "x", "http://dead/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: ([], "Connection refused"))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "warn" and "unreachable" in res[0].detail
+
+
+class TestAgentModelCount:
+    def test_main_agent_reports_count(self, monkeypatch):
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["a", "b", "c"], None))
+        r = _check_agent("openai_compat", "http://h/v1", "b")
+        assert r.status == "ok" and "3 models available" in r.detail
+
+    def test_main_agent_selected_missing_warns(self, monkeypatch):
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["a", "b"], None))
+        r = _check_agent("openai_compat", "http://h/v1", "zzz")
+        assert r.status == "warn" and "not in 2 loaded models" in r.detail

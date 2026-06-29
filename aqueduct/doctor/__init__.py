@@ -726,6 +726,8 @@ def check_cascade_tiers(
     blueprint_path: Path,
     engine_provider: str = "anthropic",
     engine_base_url: str | None = None,
+    *,
+    preflight: bool = False,
 ) -> list[CheckResult]:
     """Phase 46 — per-tier credential/endpoint checks for `agent.cascade:`.
 
@@ -772,6 +774,30 @@ def check_cascade_tiers(
                     "(tier or engine agent.base_url) — escalation to this tier will fail.",
                     _ms(t), group="agent",
                 ))
+            elif preflight:
+                # Default only checks base_url is configured; --preflight proves the
+                # endpoint actually responds AND this tier's model is loaded.
+                from aqueduct.doctor.checks_io import _probe_openai_models
+                available, err = _probe_openai_models(base)
+                if err is not None:
+                    results.append(CheckResult(
+                        name, "warn",
+                        f"tier {idx} ({model})  base_url={base} unreachable: {err}",
+                        _ms(t), group="agent",
+                    ))
+                elif available and model not in available:
+                    results.append(CheckResult(
+                        name, "warn",
+                        f"tier {idx} ({model}) not in {len(available)} loaded models at {base}: "
+                        f"{', '.join(available[:5])}",
+                        _ms(t), group="agent",
+                    ))
+                else:
+                    results.append(CheckResult(
+                        name, "ok",
+                        f"tier {idx} ({model})  reachable  ({len(available)} models)  [preflight]",
+                        _ms(t), group="agent",
+                    ))
             else:
                 results.append(CheckResult(
                     name, "ok", f"tier {idx} ({model})  provider=openai_compat  base_url={base}",
@@ -1227,7 +1253,28 @@ def run_doctor(
         else:
             results.append(CheckResult("cluster-stores", "ok", "no DuckDB stores — backend-managed persistence", group="stores"))
     else:
-        results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
+        # env=local → client-mode (local driver), so DuckDB on the local FS
+        # persists fine. But a REMOTE master + relative DuckDB path is a smell:
+        # switch to --deploy-mode cluster later and it's lost. Soft nudge only.
+        _master = getattr(cfg.deployment, "master_url", None) or ""
+        _remote_master = bool(_master) and not _master.startswith("local")
+        _rel = [
+            name for name, store in (
+                ("observability", cfg.stores.observability), ("depot", cfg.stores.depot),
+            )
+            if store.backend == "duckdb"
+            and (not store.path or str(store.path).startswith(".") or not Path(store.path).is_absolute())
+        ]
+        if _remote_master and _rel:
+            results.append(CheckResult(
+                "cluster-stores", "warn",
+                f"env=local but master is remote ({_master}) with relative DuckDB paths {_rel} — "
+                "fine for client mode (local driver), but lost under --deploy-mode cluster. Use an "
+                "absolute shared-FS path or postgres/redis before switching.",
+                group="stores",
+            ))
+        else:
+            results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
@@ -1253,6 +1300,7 @@ def run_doctor(
             blueprint_path,
             engine_provider=cfg.agent.provider,
             engine_base_url=cfg.agent.base_url,
+            preflight=preflight,
         ))
 
     # Webhook (if configured)

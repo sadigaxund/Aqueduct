@@ -102,6 +102,26 @@ def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None
         return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
 
 
+def _openai_models_url(base_url: str) -> str:
+    return base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
+
+
+def _probe_openai_models(base_url: str, timeout: float = 10) -> tuple[list[str], str | None]:
+    """``GET {base_url}/v1/models`` → ``(model_ids, error)`` (free, no tokens).
+
+    Shared by the main agent check and the cascade-tier preflight ping so both
+    report the same "N models available / selected model present" signal."""
+    import httpx
+    try:
+        resp = httpx.get(_openai_models_url(base_url), timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        ids = [m.get("id", m.get("name", "?")) for m in data.get("data", data.get("models", []))]
+        return ids, None
+    except Exception as exc:
+        return [], str(exc)
+
+
 def check_agent(
     agent_provider: str,
     base_url: str | None,
@@ -186,24 +206,23 @@ def check_agent(
             _ms(t),
         )
 
-    models_url = base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
-    try:
-        resp = httpx.get(models_url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        available = [m.get("id", m.get("name", "?")) for m in data.get("data", data.get("models", []))]
-        model_note = f"  model={model}"
-        if available and model not in available:
-            model_note += f"  ⚠ not in loaded models: {', '.join(available[:5])}"
+    models_url = _openai_models_url(base_url)
+    available, err = _probe_openai_models(base_url)
+    if err is not None:
+        return CheckResult("agent", "fail", f"{models_url}: {err}", _ms(t))
+    if available and model not in available:
         return CheckResult(
-            "agent", "ok",
-            f"provider=openai_compat  endpoint={models_url}{model_note}",
+            "agent", "warn",
+            f"provider=openai_compat  endpoint={models_url}  ⚠ model={model} not in "
+            f"{len(available)} loaded models: {', '.join(available[:5])}",
             _ms(t),
         )
-    except httpx.RequestError as exc:
-        return CheckResult("agent", "fail", f"{models_url}: {exc}", _ms(t))
-    except Exception as exc:
-        return CheckResult("agent", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
+    return CheckResult(
+        "agent", "ok",
+        f"provider=openai_compat  endpoint={models_url}  model={model}  "
+        f"({len(available)} models available)",
+        _ms(t),
+    )
 
 
 def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
