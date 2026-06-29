@@ -29,6 +29,7 @@ avoid a circular import.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -58,6 +59,7 @@ __all__ = [
     "check_blueprint_sources_from_manifest",
     "check_cascade_tiers",
     "check_cloudpickle_compat",
+    "check_java",
     "check_config",
     "check_depot",
     "check_observability",
@@ -216,6 +218,85 @@ def _reachability_probe(
     return spark_res, storage_res
 
 
+def _spark_version_verdict(cluster_ver: str, client_ver: str) -> tuple[str, str]:
+    """Compare cluster Spark vs client pyspark on **major.minor** (pure, testable).
+
+    Equality → ``("ok", "")``. Any major **or** minor difference → ``("warn",
+    note)`` — the "driver pyspark X.Y ≠ cluster Spark A.B" mismatch that throws
+    cryptic serialization/RPC errors mid-job, surfaced at doctor time instead. No
+    compatibility matrix — a plain ``major.minor`` equality check."""
+    def _mm(v: str) -> tuple[str, str]:
+        parts = (v or "").split(".")
+        return (parts[0] if parts and parts[0] else "?", parts[1] if len(parts) > 1 else "0")
+    if _mm(cluster_ver) == _mm(client_ver):
+        return "ok", ""
+    return "warn", (
+        f"  ⚠ version mismatch: driver pyspark={client_ver} ≠ cluster Spark={cluster_ver} "
+        f"(differ on major.minor — align them; runtime errors likely)"
+    )
+
+
+def _parse_java_major(version_output: str) -> int | None:
+    """Major Java version from ``java -version`` text (pure, testable).
+
+    Handles legacy ``1.8.0`` → 8 and modern ``17.0.10`` → 17. None when
+    unparseable."""
+    m = re.search(r'version "(\d+)(?:\.(\d+))?', version_output or "")
+    if not m:
+        return None
+    major = int(m.group(1))
+    if major == 1 and m.group(2):  # legacy "1.8" naming → 8
+        return int(m.group(2))
+    return major
+
+
+def check_java() -> CheckResult:
+    """Report the JVM Spark will launch (``JAVA_HOME`` or PATH ``java``).
+
+    Spark runs on the JVM; a wrong JDK fails the session build with a cryptic
+    error (only under ``--preflight``, since plain ``doctor`` builds no session).
+    This surfaces the detected version + where it came from so a mismatch is
+    obvious. **No compatibility matrix** — just the version, plus a single nudge
+    (pyspark 4 dropped Java < 17). Never fatal."""
+    import shutil
+    import subprocess
+    t = time.monotonic()
+    java_home = os.environ.get("JAVA_HOME")
+    exe = None
+    if java_home:
+        cand = Path(java_home) / "bin" / "java"
+        if cand.exists():
+            exe = str(cand)
+    exe = exe or shutil.which("java")
+    if not exe:
+        return CheckResult(
+            "java", "warn",
+            "no java found (JAVA_HOME unset and `java` not on PATH) — Spark needs a JDK; "
+            "point JAVA_HOME at a Java 17 JDK", _ms(t),
+        )
+    try:
+        out = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=10)
+        text = (out.stderr or "") + (out.stdout or "")
+    except Exception as exc:
+        return CheckResult("java", "warn", f"could not run `{exe} -version`: {exc}", _ms(t))
+    major = _parse_java_major(text)
+    where = f"JAVA_HOME={java_home}" if java_home else f"PATH:{exe}"
+    if major is None:
+        return CheckResult("java", "warn", f"java found ({where}) but version unparseable", _ms(t))
+    detail = f"Java {major}  ({where})"
+    try:  # single non-matrix nudge: Spark 4 requires Java 17+
+        import pyspark
+        if int(pyspark.__version__.split(".")[0]) >= 4 and major < 17:
+            return CheckResult(
+                "java", "warn",
+                f"{detail}  ⚠ pyspark {pyspark.__version__} needs Java 17+ — "
+                f"point JAVA_HOME at a 17 JDK", _ms(t),
+            )
+    except Exception:
+        pass
+    return CheckResult("java", "ok", detail, _ms(t))
+
+
 def check_spark(
     master_url: str, spark_config: dict[str, Any],
     preflight: bool = False, target: str = "local",
@@ -244,13 +325,12 @@ def check_spark(
         spark.range(1).count()
         cluster_ver = spark.version
         client_ver = pyspark.__version__
-        ver_mismatch = cluster_ver.split(".")[0] != client_ver.split(".")[0]
-        ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
+        ver_status, ver_note = _spark_version_verdict(cluster_ver, client_ver)
         spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}  [preflight]{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
         from aqueduct.executor.spark.session import stop_spark_session
         stop_spark_session(spark)
-        return CheckResult("spark", "warn" if ver_mismatch else "ok", spark_detail, _ms(t)), storage_result
+        return CheckResult("spark", ver_status, spark_detail, _ms(t)), storage_result
     except Exception as exc:
         return (
             CheckResult("spark", "fail", f"preflight session failed: {master_url}: {exc}", _ms(t)),
@@ -1062,6 +1142,9 @@ def run_doctor(
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
+
+    # Java runtime the JVM/Spark launches (pure detection — no Spark session)
+    results.append(check_java())
 
     # Per-store backend reachability — replaces the legacy observability.db/depot.db
     # file probes when a non-DuckDB backend is configured. For DuckDB

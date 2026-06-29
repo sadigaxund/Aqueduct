@@ -780,3 +780,49 @@ class TestCheckSpillwayErrorTypes:
             )
             results = _check_spillway_error_types(m)
             assert results == [], f"builtin label {label!r} falsely flagged as unknown"
+
+
+# ── T27 Part 1: Spark version handshake (major.minor, no matrix) ────────────────
+
+from aqueduct.doctor import _spark_version_verdict, _parse_java_major, check_java
+
+
+class TestSparkVersionVerdict:
+    def test_exact_match_ok(self):
+        assert _spark_version_verdict("3.5.0", "3.5.0")[0] == "ok"
+        assert _spark_version_verdict("3.5.1", "3.5.0")[0] == "ok"   # patch differs → still ok
+
+    def test_minor_mismatch_warns(self):
+        status, note = _spark_version_verdict("3.4.1", "3.5.0")
+        assert status == "warn"
+        assert "pyspark=3.5.0" in note and "Spark=3.4.1" in note
+
+    def test_major_mismatch_warns(self):
+        assert _spark_version_verdict("3.5.0", "4.0.0")[0] == "warn"
+
+
+class TestJavaCheck:
+    @pytest.mark.parametrize("text,expected", [
+        ('openjdk version "17.0.10" 2024-01-16', 17),
+        ('java version "1.8.0_292"', 8),
+        ('openjdk version "11.0.21"', 11),
+        ('not a version line', None),
+        ("", None),
+    ])
+    def test_parse_java_major(self, text, expected):
+        assert _parse_java_major(text) == expected
+
+    def test_check_java_reports_version(self, monkeypatch):
+        import subprocess
+        monkeypatch.delenv("JAVA_HOME", raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/java")
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MagicMock(
+            stderr='openjdk version "17.0.1"', stdout=""))
+        r = check_java()
+        assert r.status == "ok" and "Java 17" in r.detail
+
+    def test_check_java_missing_warns(self, monkeypatch):
+        monkeypatch.delenv("JAVA_HOME", raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: None)
+        r = check_java()
+        assert r.status == "warn" and "no java found" in r.detail

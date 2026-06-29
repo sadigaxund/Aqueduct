@@ -469,7 +469,7 @@ def doctor(
         "secrets": "secrets",
         "agent": "agent",
         "webhook": "network",
-        "spark": "spark", "storage": "spark", "cloudpickle": "spark",
+        "spark": "spark", "storage": "spark", "cloudpickle": "spark", "java": "spark",
         "aqtest": "validation", "aqscenario": "validation", "blueprint": "validation",
     }
     _GROUP_ORDER = ["config", "stores", "spark", "io", "agent", "secrets", "network", "validation", "general"]
