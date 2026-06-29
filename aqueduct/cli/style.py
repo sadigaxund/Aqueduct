@@ -110,6 +110,30 @@ def _short_warning(msg: str, limit: int = 100) -> str:
     return seg
 
 
+def emit_warning_pairs(
+    pairs: list, *, label: str = "", verbose: bool = False, err: bool = True,
+) -> None:
+    """Render ``(rule_id, message)`` pairs as one collapsed ``⚠ N warnings`` block.
+
+    The shared renderer behind the compile/session blocks (``emit_warnings``) and
+    the end-of-run runtime roll-up — so all three look identical (yellow bold
+    header + ``·  -v for full text`` hint; ``· [rule_id] message`` lines, short
+    unless ``verbose``). Empty ``pairs`` prints nothing."""
+    if not pairs:
+        return
+    n = len(pairs)
+    prefix = f"{label} " if label else ""
+    hint = "" if verbose else click.style("  ·  -v for full text", dim=True)
+    click.echo(
+        click.style(f"{ICON['warn']} {prefix}{n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
+        err=err,
+    )
+    for rid, rest in pairs:
+        tag = click.style(f"[{rid}]", fg="yellow") if rid else ""
+        body = rest if verbose else _short_warning(rest)
+        click.echo(f"  · {tag} {body}", err=err)
+
+
 def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, label: str = "") -> None:
     """Render a list of ``warnings.catch_warnings(record=True)`` records as one
     collapsed ``\u26a0 N warnings`` block.  AqueductWarning bodies of the form
@@ -141,15 +165,4 @@ def emit_warnings(caught: list, *, verbose: bool = False, err: bool = True, labe
         else:
             _warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
 
-    if aq:
-        n = len(aq)
-        prefix = f"{label} " if label else ""
-        hint = "" if verbose else click.style("  \u00b7  -v for full text", dim=True)
-        click.echo(
-            click.style(f"{ICON['warn']} {prefix}{n} warning{'' if n == 1 else 's'}", fg="yellow", bold=True) + hint,
-            err=err,
-        )
-        for rid, rest in aq:
-            tag = click.style(f"[{rid}]", fg="yellow") if rid else ""
-            body = rest if verbose else _short_warning(rest)
-            click.echo(f"  \u00b7 {tag} {body}", err=err)
+    emit_warning_pairs(aq, label=label, verbose=verbose, err=err)

@@ -2297,6 +2297,20 @@ def run(
         # via `_render_module_summary` right after each execute — so the heal
         # block reads chronologically after the result it heals. Only the framed
         # terminal footer remains here.
+
+        # T26 — end-of-run runtime-warning roll-up: a single collapsed tally of
+        # everything that warned this run (additive to the inline `↳ ⚠` lines
+        # under each module — locality there, "don't miss it" tally here). Reuses
+        # the compile-block shape; empty → nothing.
+        _runtime_pairs = [
+            (rid, f"{mr.module_id}: {msg}")
+            for mr in result.module_results
+            for rid, msg in mr.warnings
+        ]
+        if _runtime_pairs:
+            from aqueduct.cli.style import emit_warning_pairs
+            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
+
         if result.status not in ("success", "patched"):
             # Print the outer (user-visible) run_id — that's the join key for
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
