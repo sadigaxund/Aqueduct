@@ -25,6 +25,7 @@ stores:
   observability:
     backend: postgres
     path: "postgresql://aqueduct:aqueduct@${HOST_IP}:5432/aqueduct_db"
-  depot:
-    backend: postgres
-    path: "postgresql://aqueduct:aqueduct@${HOST_IP}:5432/aqueduct_db"
+  depots:
+    default:
+      backend: postgres
+      path: "postgresql://aqueduct:aqueduct@${HOST_IP}:5432/aqueduct_db"

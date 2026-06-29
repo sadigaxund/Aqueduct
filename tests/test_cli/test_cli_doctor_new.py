@@ -394,8 +394,7 @@ deployment:
   env: cluster
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs.db"}
-  lineage: {backend: duckdb, path: ".aqueduct/lin.db"}
-  depot: {backend: duckdb, path: ".aqueduct/depot.db"}
+  depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
     from aqueduct.config import (
@@ -564,8 +563,7 @@ deployment:
   env: cluster
 stores:
   observability: {backend: duckdb, path: ".aqueduct/obs.db"}
-  lineage: {backend: duckdb, path: ".aqueduct/lin.db"}
-  depot: {backend: duckdb, path: ".aqueduct/depot.db"}
+  depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
     bp_file = tmp_path / "blueprint.yml"

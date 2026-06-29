@@ -187,9 +187,10 @@ def test_signal_cli_postgres_roundtrip(tmp_path):
         "  observability:\n"
         "    backend: postgres\n"
         f"    path: {dsn}\n"
-        "  depot:\n"
-        "    backend: postgres\n"
-        f"    path: {dsn}\n"
+        "  depots:\n"
+        "    default:\n"
+        "      backend: postgres\n"
+        f"      path: {dsn}\n"
     )
 
     sig_id = f"probe:cli_test_{uuid.uuid4().hex[:8]}"

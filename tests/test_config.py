@@ -122,7 +122,7 @@ class TestConfigAqGuard:
     def test_non_secret_aq_in_config_rejected(self, tmp_path):
         from aqueduct.config import ConfigError
         p = self._write(tmp_path,
-            'stores:\n  depot:\n    path: ".aqueduct/@aq.blueprint.id().db"\n')
+            'stores:\n  depots:\n    default:\n      path: ".aqueduct/@aq.blueprint.id().db"\n')
         with pytest.raises(ConfigError, match=r"@aq\.blueprint\.id cannot be used in aqueduct\.yml"):
             load_config(p)
 

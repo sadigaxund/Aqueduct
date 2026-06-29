@@ -35,7 +35,7 @@ edges: []
 """)
     (project / "aqueduct.yml").write_text(f"""
 stores:
-  depot: {{path: "{project}/depot.db"}}
+  depots: {{default: {{path: "{project}/depot.db"}}}}
   obs: {{path: "{project}/obs.db"}}
 """)
 

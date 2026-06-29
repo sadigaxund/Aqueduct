@@ -54,8 +54,9 @@ edges: []
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text(f"""
 stores:
-  depot:
-    path: "{tmp_path}/depot.db"
+  depots:
+    default:
+      path: "{tmp_path}/depot.db"
 """)
     
     # Run once
@@ -309,12 +310,10 @@ stores:
   observability:
     backend: postgres
     path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
-  lineage:
-    backend: postgres
-    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
-  depot:
-    backend: postgres
-    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
+  depots:
+    default:
+      backend: postgres
+      path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
 """)
     
     from unittest.mock import patch, MagicMock

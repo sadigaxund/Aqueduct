@@ -230,8 +230,9 @@ Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephe
 stores:
   observability:
     path: "/mnt/aqueduct-state/observability.db"
-  depot:
-    path: "/mnt/aqueduct-state/depot.db"
+  depots:
+    default:
+      path: "/mnt/aqueduct-state/depot.db"
 ```
 
 ### Pod-native: external stores, zero local artefacts
@@ -241,13 +242,13 @@ Instead of a PVC, point every store at an external backend so the pod writes **n
 ```yaml
 stores:
   observability: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
-  depot:         { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  depots: { default: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" } }
   blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
 ```
 
 The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
-> The `stores.lineage` config option has been **removed** — `column_lineage` lives in `observability.db`. A legacy `stores.lineage` block in `aqueduct.yml` is ignored with a warning.
+> The `stores.lineage` config option has been **removed** — `column_lineage` lives in `observability.db`. As of 2.0 a legacy `stores.lineage` block (or a flat `stores.depot:` mapping) in `aqueduct.yml` raises a `ConfigError` — use `stores.depots:` for depot mounts.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
@@ -267,9 +268,10 @@ stores:
   observability:
     backend: postgres
     path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
-  depot:
-    backend: postgres
-    path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
+  depots:
+    default:
+      backend: postgres
+      path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
 ```
 
 Tables are created on the first run — no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:

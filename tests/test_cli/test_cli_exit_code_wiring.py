@@ -86,12 +86,10 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  lineage:
-    backend: duckdb
-    path: "{lin}"
-  depot:
-    backend: duckdb
-    path: "{dep}"
+  depots:
+    default:
+      backend: duckdb
+      path: "{dep}"
 """
 
 

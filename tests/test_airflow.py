@@ -547,9 +547,10 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  depot:
-    backend: duckdb
-    path: "{dep}"
+  depots:
+    default:
+      backend: duckdb
+      path: "{dep}"
 """.format(
         obs=str(tmp_path / "obs.duckdb"),
         dep=str(tmp_path / "dep.duckdb"),
@@ -718,9 +719,10 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  depot:
-    backend: duckdb
-    path: "{dep}"
+  depots:
+    default:
+      backend: duckdb
+      path: "{dep}"
 """.format(
         obs=str(tmp_path / "obs.duckdb"),
         dep=str(tmp_path / "dep.duckdb"),

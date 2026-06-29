@@ -277,7 +277,7 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     cfg_file.write_text(
         "stores:\n"
         "  observability: { backend: duckdb, path: .aqueduct/obs.db }\n"
-        "  depot:         { backend: redis,  path: 'redis://h:6379/0' }\n"
+        "  depots: { default: { backend: redis,  path: 'redis://h:6379/0' } }\n"
     )
     from aqueduct.config import load_config
     c = load_config(cfg_file)

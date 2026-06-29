@@ -412,9 +412,9 @@ class StoresConfig(BaseModel):
             "`default` mount (per-blueprint isolated, DuckDB) always exists even "
             "when omitted; add a `default:` entry to re-back it, and other keys as "
             "extra mounts (`@aq.depot.<name>.get()`). Set `shared: true` on a mount "
-            "for cross-blueprint (raw-key) sharing. A legacy `depot:` mapping is "
-            "auto-migrated to the `default` mount. Override a mount with "
-            "`--set stores.depots.<name>.backend=…`."
+            "for cross-blueprint (raw-key) sharing. Override a mount with "
+            "`--set stores.depots.<name>.backend=…`. (A legacy flat `stores.depot:` "
+            "mapping is no longer accepted — use `depots.default:`.)"
         ),
     )
 
@@ -1097,73 +1097,6 @@ def _format_config_error(resolved: Path, exc: ValidationError) -> str:
     return "\n".join(lines)
 
 
-def _strip_removed_lineage_block(data: dict, *, warn: bool) -> None:
-    """Tolerate (and ignore) a legacy ``stores.lineage`` block.
-
-    ``stores.lineage`` was removed — column lineage lives entirely in the
-    observability store (Phase 38). ``StoresConfig`` is ``extra="forbid"``, so an
-    old ``aqueduct.yml`` carrying the block would hard-fail; strip it before
-    validation and warn instead, so existing projects keep loading.
-    """
-    stores = data.get("stores")
-    if isinstance(stores, dict) and "lineage" in stores:
-        stores.pop("lineage", None)
-        if warn:
-            import warnings as _warnings
-
-            from aqueduct import AqueductWarning
-
-            _warnings.warn(
-                "stores.lineage is no longer a config option — column lineage now "
-                "lives entirely in the observability store. The block is ignored; "
-                "remove it from aqueduct.yml.",
-                AqueductWarning,
-                stacklevel=2,
-            )
-
-
-def _migrate_depot_block(data: dict, *, warn: bool) -> None:
-    """Normalise depot config to the ``stores.depots:`` list.
-
-    - A legacy single ``stores.depot:`` mapping is migrated to a ``depots:``
-      entry named ``default`` (``StoresConfig`` is ``extra="forbid"``, so the old
-      key would otherwise hard-fail) — with a deprecation warning.
-    - Ensures a ``default`` entry exists so it is path-anchored like any other and
-      ``stores.depot`` (the back-compat property) always resolves it.
-
-    Only runs when a ``stores:`` block is present; a config with no ``stores:``
-    keeps the in-memory implicit default (cwd-relative), unchanged.
-    """
-    stores = data.get("stores")
-    if not isinstance(stores, dict):
-        return
-
-    legacy = stores.pop("depot", None)
-    depots = stores.get("depots")
-    if depots is None:
-        depots = {}
-        stores["depots"] = depots
-    if not isinstance(depots, dict):
-        return  # let model validation surface the type error
-
-    if isinstance(legacy, dict) and "default" not in depots:
-        depots["default"] = dict(legacy)
-        if warn:
-            import warnings as _warnings
-
-            from aqueduct import AqueductWarning
-            _warnings.warn(
-                "stores.depot is deprecated — use the stores.depots: map. The block "
-                "was migrated to the `default` mount; move it under depots.default to "
-                "remove this warning.",
-                AqueductWarning,
-                stacklevel=2,
-            )
-
-    if "default" not in depots:
-        depots["default"] = {"backend": "duckdb", "path": ".aqueduct/depot.db"}
-
-
 def load_config(path: Path | None = None) -> AqueductConfig:
     """Load and validate engine configuration.
 
@@ -1211,8 +1144,6 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
-    _strip_removed_lineage_block(data, warn=True)
-    _migrate_depot_block(data, warn=True)
 
     # ── Agent API key insecure-literal check ──────────────────────────────────
     # Inspect the raw pre-expansion text so we can distinguish
@@ -1303,7 +1234,6 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             raise ConfigError(
                 f"Config file {resolved} must be a YAML mapping, not {type(data2).__name__}"
             )
-        _strip_removed_lineage_block(data2, warn=False)  # already warned in pass 1
         try:
             cfg = AqueductConfig.model_validate(data2)
         except ValidationError as exc:

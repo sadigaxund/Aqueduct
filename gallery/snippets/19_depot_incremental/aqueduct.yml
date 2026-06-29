@@ -11,6 +11,7 @@ stores:
     backend: duckdb
     path: .aqueduct/observability.db
   # The Depot store persists watermarks for incremental processing
-  depot:
-    backend: duckdb
-    path: .aqueduct/depot.db
+  depots:
+    default:
+      backend: duckdb
+      path: .aqueduct/depot.db

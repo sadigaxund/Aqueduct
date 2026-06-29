@@ -35,8 +35,7 @@ edges: []
     config_path.write_text("""
 stores:
   observability: { path: .aqueduct/obs.db }
-  lineage: { path: .aqueduct/lineage.db }
-  depot: { path: .aqueduct/depot.db }
+  depots: {default: { path: .aqueduct/depot.db }}
 deployment: { engine: spark, target: local }
 """)
     

@@ -159,7 +159,7 @@ def test_load_config_redis_missing_driver(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "redis", None)
     
     path = tmp_path / "aq_redis.yml"
-    path.write_text("stores:\n  depot: {backend: redis, path: redis://localhost}")
+    path.write_text("stores:\n  depots: {default: {backend: redis, path: redis://localhost}}")
     
     from aqueduct.config import ConfigError
     with pytest.raises(ConfigError, match="redis"):
@@ -318,12 +318,12 @@ def test_target_default_master_url_passes(tmp_path):
     assert cfg.deployment.master_url == "local[*]"
 
 
-def test_target_validation_skips_flink_engine(tmp_path):
-    """target↔master_url validation only fires for engine=spark"""
+def test_target_validation_rejects_flink_engine(tmp_path):
+    """engine: flink is rejected at config-load regardless of target↔master_url."""
     path = tmp_path / "cfg.yml"
     path.write_text("deployment:\n  engine: flink\n  target: databricks\n  master_url: local[*]")
-    cfg = load_config(path)
-    assert cfg.deployment.target == "databricks"  # no error — engine != spark
+    with pytest.raises(ConfigError, match=r"flink is not yet supported"):
+        load_config(path)
 
 
 # ── Two-pass Secrets Loading tests ───────────────────────────────────────────
@@ -454,3 +454,23 @@ def test_load_config_pass2_registers_redaction(monkeypatch, tmp_path):
     load_config(path)
     assert redaction.is_registered("reg-secret-999999")
 
+
+
+def test_legacy_stores_lineage_block_rejected(tmp_path):
+    """2.0: a removed `stores.lineage:` block is no longer tolerated — it raises
+    ConfigError (extra=forbid) instead of being silently stripped with a warning."""
+    from aqueduct.config import ConfigError
+    p = tmp_path / "aqueduct.yml"
+    p.write_text("stores:\n  lineage: {backend: duckdb, path: .aqueduct/lin.db}\n")
+    with pytest.raises(ConfigError):
+        load_config(p)
+
+
+def test_legacy_flat_stores_depot_block_rejected(tmp_path):
+    """2.0: a legacy flat `stores.depot:` mapping is no longer auto-migrated — it
+    raises ConfigError. Use `stores.depots.default:`."""
+    from aqueduct.config import ConfigError
+    p = tmp_path / "aqueduct.yml"
+    p.write_text("stores:\n  depot: {backend: duckdb, path: .aqueduct/depot.db}\n")
+    with pytest.raises(ConfigError):
+        load_config(p)
