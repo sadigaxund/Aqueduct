@@ -10,7 +10,7 @@ Execution model:
      Regulator evaluation sees fresh signals.
   3. Walk sorted order:
      - Ingress    → read_ingress()                    → frame_store[module.id]
-     - Channel    → execute_sql_channel(…)            → frame_store[module.id]
+     - Channel    → execute_channel(…)            → frame_store[module.id]
                     If spillway_condition set and a spillway edge exists:
                       frame_store[module.id]              = good rows
                       frame_store["module.id.spillway"]   = error rows (+_aq_error_*)
@@ -77,7 +77,7 @@ from aqueduct.executor.models import (
     concise_error,
 )
 from aqueduct.executor.spark.assert_ import AssertError, execute_assert
-from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
+from aqueduct.executor.spark.channel import ChannelError, execute_channel
 from aqueduct.executor.spark.egress import EgressError, run_maintenance, write_egress
 from aqueduct.executor.spark.error_columns import (
     AQ_ERROR_MODULE,
@@ -1068,7 +1068,7 @@ def execute(
 
                     try:
                         df = _with_retry(
-                            lambda: execute_sql_channel(_channel_module, upstream_dfs, spark),
+                            lambda: execute_channel(_channel_module, upstream_dfs, spark),
                             mod_policy,
                             module.id,
                         )

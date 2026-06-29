@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from aqueduct.patch.grammar import PatchSpec
 
 
-from aqueduct.agent import MAX_REPROMPTS, PROMPT_VERSION
+from aqueduct.agent import PROMPT_VERSION
 from aqueduct.agent.budget import StopReason
 from aqueduct.agent.loop import archive_patch, generate_agent_patch, stage_patch_for_human
 from aqueduct.agent.parse import _parse_patch_spec
@@ -841,7 +841,6 @@ class TestLlmHelpers:
         assert extract_failure_context("ghost", tmp_path / "obs") is None
 
     def test_reprompt_limit_exceeded(self, monkeypatch, tmp_path):
-        from aqueduct.agent import MAX_REPROMPTS
         from aqueduct.agent.loop import generate_agent_patch 
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -857,8 +856,8 @@ class TestLlmHelpers:
         result = generate_agent_patch(_failure_ctx(), "model", tmp_path)
 
         assert result.patch is None
-        # Should have tried exactly max_reprompts (defaults to MAX_REPROMPTS=3)
-        assert call_count == MAX_REPROMPTS
+        # Should have tried exactly max_reprompts (defaults to 3)
+        assert call_count == 3
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
         from aqueduct.agent.prompts import _build_guardrails_section

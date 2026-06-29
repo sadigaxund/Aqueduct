@@ -6,7 +6,7 @@ import pytest
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from pyspark.sql import SparkSession
 
-from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
+from aqueduct.executor.spark.channel import ChannelError, execute_channel
 from aqueduct.parser.models import Module
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -18,28 +18,28 @@ class TestJoinOperation:
             "op": "join", "right": "source_b", "condition": "a.id = b.id"
         })
         with pytest.raises(ChannelError, match="requires 'left'"):
-            execute_sql_channel(module, {"source_a": spark.range(1)}, spark)
+            execute_channel(module, {"source_a": spark.range(1)}, spark)
 
     def test_join_missing_right(self, spark: SparkSession):
         module = Module(id="chan", type="Channel", label="C", config={
             "op": "join", "left": "source_a", "condition": "a.id = b.id"
         })
         with pytest.raises(ChannelError, match="requires 'right'"):
-            execute_sql_channel(module, {"source_a": spark.range(1)}, spark)
+            execute_channel(module, {"source_a": spark.range(1)}, spark)
 
     def test_join_invalid_type(self, spark: SparkSession):
         module = Module(id="chan", type="Channel", label="C", config={
             "op": "join", "left": "source_a", "right": "source_b", "join_type": "invalid"
         })
         with pytest.raises(ChannelError, match="invalid join_type 'invalid'"):
-            execute_sql_channel(module, {"source_a": spark.range(1)}, spark)
+            execute_channel(module, {"source_a": spark.range(1)}, spark)
 
     def test_join_missing_condition(self, spark: SparkSession):
         module = Module(id="chan", type="Channel", label="C", config={
             "op": "join", "left": "source_a", "right": "source_b", "join_type": "inner"
         })
         with pytest.raises(ChannelError, match="requires 'condition'"):
-            execute_sql_channel(module, {"source_a": spark.range(1)}, spark)
+            execute_channel(module, {"source_a": spark.range(1)}, spark)
 
     def test_join_cross_no_condition(self, spark: SparkSession):
         df1 = spark.range(1)
@@ -47,7 +47,7 @@ class TestJoinOperation:
         module = Module(id="chan", type="Channel", label="C", config={
             "op": "join", "left": "a", "right": "b", "join_type": "cross"
         })
-        res = execute_sql_channel(module, {"a": df1, "b": df2}, spark)
+        res = execute_channel(module, {"a": df1, "b": df2}, spark)
         assert res.count() == 1
 
     def test_join_broadcast_hint(self, spark: SparkSession):
@@ -56,7 +56,7 @@ class TestJoinOperation:
         module = Module(id="chan", type="Channel", label="C", config={
             "op": "join", "left": "a", "right": "b", "condition": "a.id = b.id", "broadcast_side": "right"
         })
-        res = execute_sql_channel(module, {"a": df1, "b": df2}, spark)
+        res = execute_channel(module, {"a": df1, "b": df2}, spark)
         assert res.count() == 1
 
     @pytest.mark.usefixtures("spark")
@@ -169,9 +169,9 @@ class TestChannelJoinQuery:
             _build_join_query("m", {"left": "a", "right": "b", "join_type": "inner"})
 
     def test_unsupported_op_raises(self):
-        from aqueduct.executor.spark.channel import ChannelError, execute_sql_channel
+        from aqueduct.executor.spark.channel import ChannelError, execute_channel
         from unittest.mock import MagicMock
         from aqueduct.parser.models import Module
         mod = Module(id="m", type="Channel", label="M", config={"op": "merge"})
         with pytest.raises(ChannelError, match="unsupported"):
-            execute_sql_channel(mod, {"a": MagicMock()}, MagicMock())
+            execute_channel(mod, {"a": MagicMock()}, MagicMock())

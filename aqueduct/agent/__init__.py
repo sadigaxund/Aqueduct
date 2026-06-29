@@ -48,11 +48,6 @@ from aqueduct.agent.loop import (
 )
 from aqueduct.agent.prompts import build_prompt as build_prompt
 
-# Backward-compatible alias for the legacy single-axis knob.
-# External callers can pass max_reprompts=... or configure the full
-# BudgetConfig via agent.budget: in aqueduct.yml.
-MAX_REPROMPTS = 3
-
 
 def resolve_budget(
     pydantic_budget: Any = None,

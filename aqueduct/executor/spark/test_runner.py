@@ -194,8 +194,8 @@ def _execute_module(
 ) -> DataFrame | dict[str, DataFrame]:
     """Run a single module against inline DataFrames. Returns result DataFrame(s)."""
     if module.type == ModuleType.Channel:
-        from aqueduct.executor.spark.channel import execute_sql_channel
-        return execute_sql_channel(module, input_dfs, spark)
+        from aqueduct.executor.spark.channel import execute_channel
+        return execute_channel(module, input_dfs, spark)
 
     elif module.type == ModuleType.Junction:
         from aqueduct.executor.spark.junction import execute_junction

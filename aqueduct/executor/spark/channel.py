@@ -418,5 +418,3 @@ def execute_channel(
     return _apply_metrics_boundary(result, cfg)
 
 
-# Backwards-compatible alias — executor.py imports this name
-execute_sql_channel = execute_channel

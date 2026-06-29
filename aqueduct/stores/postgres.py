@@ -15,7 +15,7 @@ unqualified (`SELECT … FROM run_records` works the same as on DuckDB).
 
 DSN handling
 ------------
-`StoreBackendConfig.path` carries a libpq DSN
+`RelationalStoreConfig.path` carries a libpq DSN
 (`postgresql://user:pass@host:5432/aqueduct_db`). Identical DSNs across
 `observability` / `lineage` / `depot` are connection-pool-deduplicated so a typical
 3-line config opens one logical pool, not three.

@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 from aqueduct.errors import AqueductError
 
 if TYPE_CHECKING:
-    from aqueduct.config import AqueductConfig, StoreBackendConfig
+    from aqueduct.config import AqueductConfig, RelationalStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -260,7 +260,7 @@ def get_stores(
     - `redis`    → `aqueduct.stores.redis_.RedisDepotStore` (depot only).
 
     Backends are validated at config-load time
-    (`StoreBackendConfig` + `StoresConfig` validators in `aqueduct.config`),
+    (`RelationalStoreConfig` + `StoresConfig` validators in `aqueduct.config`),
     so an observability/lineage backend of `redis` cannot reach this function.
 
     Args:
@@ -276,7 +276,7 @@ def get_stores(
         DuckDBObservabilityStore,
     )
 
-    def _resolve_duckdb_path(store_cfg: StoreBackendConfig) -> Path:
+    def _resolve_duckdb_path(store_cfg: RelationalStoreConfig) -> Path:
         if store_cfg.path is None:
             from aqueduct.config import DEFAULT_OBS_DB_FILENAME
             from aqueduct.stores.read import _OBS_ROUTING_ROOT

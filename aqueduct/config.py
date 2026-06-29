@@ -337,10 +337,6 @@ class BenchmarkStoreConfig(BaseModel):
     )
 
 
-# Backwards-compatible alias for code that still imports the old name.
-# The two new classes have identical shapes for the relational path; the
-# alias maps to `RelationalStoreConfig` so static typing keeps working.
-StoreBackendConfig = RelationalStoreConfig
 
 
 def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:

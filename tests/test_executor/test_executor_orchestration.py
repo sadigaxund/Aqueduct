@@ -843,12 +843,10 @@ def test_execute_spillway_condition_no_edge(spark: SparkSession, tmp_path, caplo
     result = execute(manifest, spark)
     assert result.status == "success"
     
-    # All rows in main stream because no spillway edge
+    # All rows in main stream because no spillway edge (the static mismatch is
+    # warned at compile time — compiler/warnings/spillway_port_mismatch — not here).
     df_out = spark.read.parquet(out_path)
     assert df_out.count() == 5
-    
-    # check log
-    assert "was discarded because no downstream" in caplog.text or "has spillway_condition but no spillway edge;" in caplog.text
 
 def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplog):
     in_path = str(tmp_path / "in.parquet")
@@ -879,7 +877,8 @@ def test_execute_spillway_edge_no_condition(spark: SparkSession, tmp_path, caplo
     
     assert spark.read.parquet(main_out).count() == 5
     assert spark.read.parquet(spill_out).count() == 0
-    assert "spillway edge found but no spillway_condition" in caplog.text.lower() or "missing spillway_condition" in caplog.text.lower() or "has a spillway edge but no spillway_condition" in caplog.text
+    # The static "edge but no spillway_condition" mismatch is warned at compile
+    # time (compiler/warnings/spillway_port_mismatch), not from the executor.
 
 
 # ── Retry Integration ─────────────────────────────────────────────────────────
@@ -1491,7 +1490,7 @@ class TestExecuteModuleDispatch:
         from unittest.mock import MagicMock, patch
         mod = Module(id="ch", type="Channel", label="C", config={})
         fake_df = MagicMock()
-        with patch("aqueduct.executor.spark.channel.execute_sql_channel", return_value=fake_df):
+        with patch("aqueduct.executor.spark.channel.execute_channel", return_value=fake_df):
             result = _execute_module(mod, {"src": MagicMock()}, MagicMock())
         assert result is not None
 
