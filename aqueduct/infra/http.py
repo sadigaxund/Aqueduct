@@ -5,9 +5,9 @@ and OpenLineage daemon-delivery paths build on `deliver_with_retry` +
 `fire_and_forget`; the LLM-provider path reuses `retry_after_seconds` /
 `backoff_delay` / the retryable-status constants for its budget-aware loop.
 
-Best-effort delivery prints to **stderr** (not `logging`) on purpose — these run
-in daemon threads where the run result is authoritative and operators tail
-stderr; the format is stable (`[aqueduct] <label> …`).
+Best-effort delivery logs via ``logger.warning`` — ``_RedactingFilter`` covers the
+output, and the format is stable (``[aqueduct] <label> …``). These run in daemon
+threads where the run result is authoritative.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ import logging
 import random
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -130,3 +131,48 @@ def deliver_with_retry(
 def _log(label: str, method: str, url: str, what: str, retryable: bool, attempt: int, attempts: int) -> None:
     suffix = f" — retrying ({attempt}/{attempts})" if retryable and attempt < attempts else ""
     logger.warning("[aqueduct] %s %s %r %s%s", label, method, url, what, suffix)
+
+
+# ── Webhook delivery pipeline ─────────────────────────────────────────────────
+
+def _deliver_webhook_payload(
+    url: str,
+    body: dict[str, Any],
+    *,
+    method: str = "POST",
+    headers: dict[str, str] | None = None,
+    timeout: float = 10,
+    attempts: int = DEFAULT_DELIVERY_ATTEMPTS,
+    backoff_seconds: float = DEFAULT_DELIVERY_BACKOFF_SECONDS,
+    secret: str | None = None,
+) -> threading.Thread:
+    """Deliver a pre-built payload to a webhook endpoint in a daemon thread.
+
+    Redacts registered secrets, HMAC-signs if a secret is given, and dispatches
+    via ``fire_and_forget`` → ``deliver_with_retry``.  Never raises.
+    """
+    from aqueduct.redaction import redact as _redact
+
+    rendered_headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "X-Aqueduct-Delivery": str(uuid.uuid4()),
+        **(headers or {}),
+    }
+
+    body = _redact(body)
+
+    signed_content: bytes | None = None
+    if secret:
+        signed_content, signature = sign_body(body, secret)
+        rendered_headers["X-Aqueduct-Signature"] = signature
+
+    return fire_and_forget(
+        lambda: deliver_with_retry(
+            method, url,
+            json=None if signed_content is not None else body,
+            content=signed_content,
+            headers=rendered_headers, timeout=timeout, label="webhook",
+            attempts=attempts, backoff_seconds=backoff_seconds,
+        ),
+        name="surveyor-webhook",
+    )

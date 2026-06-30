@@ -151,7 +151,8 @@ class TestDatabricksSubmitterPackage:
 
         from aqueduct.deploy.databricks import DatabricksSubmitter
         sub = DatabricksSubmitter()
-        with pytest.raises(ValueError, match="DATABRICKS_TOKEN"):
+        from aqueduct.errors import ConfigError
+        with pytest.raises(ConfigError, match="DATABRICKS_TOKEN"):
             sub.package(str(blueprint), cfg)
 
 
@@ -289,5 +290,5 @@ class TestCheckRemoteTarget:
         )
         from aqueduct.doctor.checks_io import check_remote_target
         result = check_remote_target(cfg)
-        assert result.status == "warn"
-        assert "not a remote target" in result.detail
+        assert result.status == "skip"
+        assert "no remote cluster" in result.detail

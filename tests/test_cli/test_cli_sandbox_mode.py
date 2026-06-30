@@ -110,7 +110,7 @@ def test_danger_combo_warning(mock_get_exec, mock_surveyor_cls, tmp_path):
         "id: test_bp\n"
         "name: Test BP\n"
         "agent:\n"
-        "  approval: aggressive\n"
+        "  approval: auto\n"
         "  sandbox_mode: 'off'\n"
         "  max_patches: 2\n"
         "modules:\n"

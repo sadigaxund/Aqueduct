@@ -850,7 +850,7 @@ Only after every gate passes does the patch run against the real pipeline. The o
 
 Low-confidence patches and any guardrail violation auto-escalate to human review.
 
-**Config key.** `agent.approval` is the config key. The former `agent.approval_mode` key, `aggressive_max_patches`, `danger.allow_aggressive_patching`, and `--allow-aggressive` were removed in 2.0 — use `agent.approval`, `agent.max_patches`, `danger.allow_multi_patch`, and `--allow-multi-patch`. (`approval: aggressive` remains a valid value — it selects the multi-patch heal path.)
+**Config key.** `agent.approval` is the config key. Values: `disabled`, `human`, `auto`, `ci`.
 
 **`ci` mode — the CI kit (1.2).** In `ci` mode the patch is staged and the `on_patch_pending` webhook fires a POST to `agent.ci_webhook_url`. The engine ships **no** long-running receiver and **no** versioned GitHub Action — a CI runner you own receives the payload, obtains the patch body (a run artefact, or `aqueduct patch pull`), and applies + commits it in one step:
 
@@ -1105,7 +1105,7 @@ Setting `deployment.target` to either of these values raises a `ConfigError`.
 **Config.** Each remote target adds a nested optional block under ``deployment`` — e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
 
 Self‑healing is **disabled** on all remote‑submit targets — ``aqueduct run``
-skips the healing loop and ignores ``agent.approval_mode``. Patches must be
+skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
 ---

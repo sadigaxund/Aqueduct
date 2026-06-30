@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 import aqueduct.agent.providers as providers
+from aqueduct.errors import AqueductError
 
 pytestmark = pytest.mark.unit
 
@@ -86,5 +87,5 @@ def test_stream_anthropic_parses_thinking_and_text():
 
 def test_stream_empty_response_raises():
     """A stream that yields no answer content is an error (caught by the loop)."""
-    with pytest.raises(ValueError, match="empty"):
+    with pytest.raises(AqueductError, match="empty"):
         _collect(providers._stream_openai_compat, ["data: [DONE]"])

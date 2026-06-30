@@ -442,7 +442,7 @@ class TestStageForHuman:
         assert payload["diagnosis"] == "UDF bug"
         assert payload["suggestions"] == ["check python"]
 
-    def test_stage_patch_webhook_error_swallowed(self, tmp_path, capsys):
+    def test_stage_patch_webhook_error_swallowed(self, tmp_path):
         """Webhook fire failure is swallowed — staging never blocks."""
         from aqueduct.config import WebhookEndpointConfig
 

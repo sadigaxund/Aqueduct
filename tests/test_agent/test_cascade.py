@@ -97,12 +97,12 @@ class TestGenerateCascadePatch:
         assert mock_gen.call_count == 2
 
     def test_tier1_api_error_aborts_no_escalation(self, fctx, patches_dir):
-        """When tier1 returns api_error, cascade aborts without calling tier2."""
+        """When final tier (no fallback) returns api_error, cascade aborts."""
         with patch("aqueduct.agent.cascade.generate_agent_patch") as mock_gen:
             mock_gen.return_value = self._api_error_result()
 
             result = generate_cascade_patch(
-                tiers=[_tier("model-a"), _tier("model-b")],
+                tiers=[_tier("model-a")],  # single tier — no fallback
                 failure_ctx=fctx,
                 patches_dir=patches_dir,
             )
@@ -126,8 +126,8 @@ class TestGenerateCascadePatch:
             )
 
         # First call: model_cascade_position=0; second call: model_cascade_position=1
-        assert mock_gen.call_args_list[0][1]["model_cascade_position"] == 0
-        assert mock_gen.call_args_list[1][1]["model_cascade_position"] == 1
+        assert mock_gen.call_args_list[0][1]["agent_cfg"].model_cascade_position == 0
+        assert mock_gen.call_args_list[1][1]["agent_cfg"].model_cascade_position == 1
 
     def test_budget_per_tier_overrides_default(self, fctx, patches_dir):
         """tier.max_reprompts overrides cascade default; missing fields inherit."""
@@ -146,9 +146,9 @@ class TestGenerateCascadePatch:
 
         calls = mock_gen.call_args_list
         # Tier 1 uses its own max_reprompts=2
-        assert calls[0][1]["max_reprompts"] == 2
+        assert calls[0][1]["agent_cfg"].max_reprompts == 2
         # Tier 2 falls back to cascade default max_reprompts=5
-        assert calls[1][1]["max_reprompts"] == 5
+        assert calls[1][1]["agent_cfg"].max_reprompts == 5
 
 
     def test_tier1_deferred_escalates_to_tier2(self, fctx, patches_dir):
@@ -207,10 +207,10 @@ class TestGenerateCascadePatch:
             )
 
         calls = mock_gen.call_args_list
-        assert calls[0][1]["allow_defer"] is True
-        assert calls[0][1]["deep_loop"] is True
-        assert calls[1][1]["allow_defer"] is True
-        assert calls[1][1]["deep_loop"] is True
+        assert calls[0][1]["agent_cfg"].allow_defer is True
+        assert calls[0][1]["agent_cfg"].deep_loop is True
+        assert calls[1][1]["agent_cfg"].allow_defer is True
+        assert calls[1][1]["agent_cfg"].deep_loop is True
 
     def test_tier_allow_defer_overrides_default(self, fctx, patches_dir):
         """Tier's own allow_defer=False overrides top-level True."""
@@ -228,8 +228,8 @@ class TestGenerateCascadePatch:
             )
 
         calls = mock_gen.call_args_list
-        assert calls[0][1]["allow_defer"] is False
-        assert calls[1][1]["allow_defer"] is True
+        assert calls[0][1]["agent_cfg"].allow_defer is False
+        assert calls[1][1]["agent_cfg"].allow_defer is True
 
     def test_budget_passed_to_cascade_preserves_non_overridden_axes(self, fctx, patches_dir):
         """budget=BudgetConfig(max_tokens_total=N) passed to cascade — every tier budget keeps max_tokens_total=N."""
@@ -251,10 +251,10 @@ class TestGenerateCascadePatch:
             )
 
         calls = mock_gen.call_args_list
-        assert calls[0][1]["budget"].max_tokens_total == 9999
-        assert calls[0][1]["budget"].max_reprompts == 2  # tier override
-        assert calls[1][1]["budget"].max_tokens_total == 9999
-        assert calls[1][1]["budget"].max_reprompts == 5  # fallback
+        assert calls[0][1]["agent_cfg"].budget.max_tokens_total == 9999
+        assert calls[0][1]["agent_cfg"].budget.max_reprompts == 2  # tier override
+        assert calls[1][1]["agent_cfg"].budget.max_tokens_total == 9999
+        assert calls[1][1]["agent_cfg"].budget.max_reprompts == 5  # fallback
 
     def test_last_apply_error_forwarded_to_tiers(self, fctx, patches_dir):
         """last_apply_error forwarded to every tier's generate_agent_patch."""
@@ -272,8 +272,8 @@ class TestGenerateCascadePatch:
             )
 
         calls = mock_gen.call_args_list
-        assert calls[0][1]["last_apply_error"] == "previous patch failed: UNRESOLVED_COLUMN"
-        assert calls[1][1]["last_apply_error"] == "previous patch failed: UNRESOLVED_COLUMN"
+        assert calls[0][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
+        assert calls[1][1]["agent_cfg"].last_apply_error == "previous patch failed: UNRESOLVED_COLUMN"
 
 
 # ── Phase 46 — cascade-wide token cap ──────────────────────────────────────────
@@ -306,8 +306,8 @@ class TestCascadeSpanningBudget:
                 budget=BudgetConfig(max_tokens_total=1000),
             )
         calls = mock_gen.call_args_list
-        assert calls[0][1]["budget"].max_tokens_total == 1000
-        assert calls[1][1]["budget"].max_tokens_total == 700
+        assert calls[0][1]["agent_cfg"].budget.max_tokens_total == 1000
+        assert calls[1][1]["agent_cfg"].budget.max_tokens_total == 700
         assert result.patch is not None
 
     def test_cascade_stops_when_token_cap_exhausted(self, tmp_path):
@@ -340,8 +340,8 @@ class TestCascadeSpanningBudget:
                 budget=BudgetConfig(max_tokens_total=None),
             )
         calls = mock_gen.call_args_list
-        assert calls[0][1]["budget"].max_tokens_total is None
-        assert calls[1][1]["budget"].max_tokens_total is None
+        assert calls[0][1]["agent_cfg"].budget.max_tokens_total is None
+        assert calls[1][1]["agent_cfg"].budget.max_tokens_total is None
         assert result.patch is not None
 
 

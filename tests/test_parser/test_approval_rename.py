@@ -2,9 +2,7 @@
 
 The former `approval_mode` YAML key was removed (no populate_by_name on
 AgentSchema → the field name is not accepted as a key). The Python attribute is
-still `approval_mode`, keyed from YAML via the `approval` alias. `aggressive` is
-still a live value (drives the multi-patch heal branch in cli/run.py), but no
-longer emits a deprecation warning.
+still `approval_mode`, keyed from YAML via the `approval` alias.
 """
 
 from __future__ import annotations
@@ -49,7 +47,7 @@ def _parse_capture_stderr(raw: dict[str, Any]) -> tuple[Any, str]:
 
 
 class TestApprovalCanonicalKey:
-    @pytest.mark.parametrize("value", ["auto", "human", "disabled", "ci", "aggressive"])
+    @pytest.mark.parametrize("value", ["auto", "human", "disabled", "ci"])
     def test_approval_value_parses_no_warning(self, value):
         bp, stderr = _parse_capture_stderr(_make_raw(agent={"approval": value}))
         assert bp.agent.approval_mode == value

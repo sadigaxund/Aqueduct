@@ -15,8 +15,8 @@ aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
 agent:
-  approval: aggressive
-  max_patches: 1
+  approval: auto
+  max_patches: 2
 modules:
   - id: in
     type: Ingress

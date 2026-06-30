@@ -1,9 +1,9 @@
-# Aqueduct engine + Spark extra (pulls pyspark==4.0.x, delta-spark, py4j).
-aqueduct-core[spark]==1.0.0
+# Aqueduct engine + Spark extra (pulls pyspark, delta-spark, py4j).
+aqueduct-core[spark]
 
-# Pin pyspark to match the cluster image (4.0.0 — see docker-compose.yml).
-# Mismatched major.minor.patch breaks RPC with serialVersionUID errors.
-pyspark==4.0.0
+# Pin pyspark to match the cluster LTS image (Spark 4.1.2 — see docker-compose.yml).
+# Mismatched major.minor breaks RPC with serialVersionUID errors.
+pyspark==4.1.1
 
 # Used only by seed.py to upload synthetic parquet to MinIO.
 boto3

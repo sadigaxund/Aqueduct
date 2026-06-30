@@ -408,8 +408,7 @@ class StoresConfig(BaseModel):
             "when omitted; add a `default:` entry to re-back it, and other keys as "
             "extra mounts (`@aq.depot.<name>.get()`). Set `shared: true` on a mount "
             "for cross-blueprint (raw-key) sharing. Override a mount with "
-            "`--set stores.depots.<name>.backend=…`. (A legacy flat `stores.depot:` "
-            "mapping is no longer accepted — use `depots.default:`.)"
+            "`--set stores.depots.<name>.backend=…`."
         ),
     )
 
@@ -417,9 +416,8 @@ class StoresConfig(BaseModel):
         """The effective **default** depot mount.
 
         Returns the ``default`` entry, or an implicit DuckDB default when
-        ``depots:`` has none (e.g. ``AqueductConfig()`` built in-memory). The old
-        ``cfg.stores.depot`` shorthand **property** was removed in 2.0 — call this
-        explicitly, or index ``cfg.stores.depots['default']``.
+        ``depots:`` has none (e.g. ``AqueductConfig()`` built in-memory). Call
+        this explicitly, or index ``cfg.stores.depots['default']``.
         """
         d = self.depots.get("default")
         if d is not None:
@@ -507,8 +505,7 @@ class ProbesConfig(BaseModel):
 
     max_sample_rows: int = Field(default=100, ge=1, description="Maximum rows to sample in probes (>= 1)")
     default_sample_fraction: float = Field(default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
-    # Note: the legacy `block_full_actions_in_prod` flag was removed in v1.0.0a3.
-    # The active gate is `danger.allow_full_probe_actions` (inverted polarity).
+    # Full probe actions are gated by `danger.allow_full_probe_actions` (inverted polarity).
 
 
 class DangerConfig(BaseModel):
@@ -518,8 +515,7 @@ class DangerConfig(BaseModel):
         default=False,
         description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
     )
-    # `allow_multi_patch` gates the multi-patch loop (max_patches > 1). The former
-    # `allow_aggressive_patching` alias was removed in 2.0.
+    # `allow_multi_patch` gates the multi-patch loop (max_patches > 1).
     allow_multi_patch: bool = Field(
         default=False,
         description=(

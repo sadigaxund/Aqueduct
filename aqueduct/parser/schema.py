@@ -106,12 +106,8 @@ class AgentSchema(BaseModel):
         return data
 
     # `approval` is the YAML key; the Python attribute name stays `approval_mode`
-    # (internal — keyed in via the alias). The former `approval_mode` YAML key was
-    # removed in 2.0 (no populate_by_name → the field name is not accepted as a
-    # key). NOTE: `aggressive` is still a live value — it drives the multi-patch
-    # heal-loop branch in cli/run.py; collapsing it into `auto`+`max_patches>1` is
-    # a separate heal-loop refactor, not an alias removal.
-    approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = Field(
+    # (internal — keyed in via the alias).
+    approval_mode: Literal["disabled", "human", "auto", "ci"] = Field(
         default="disabled",
         validation_alias=AliasChoices("approval"),
     )

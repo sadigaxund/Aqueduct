@@ -121,6 +121,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
+from aqueduct.errors import ConfigError
 from aqueduct.executor.models import _add_module_warning
 from aqueduct.models import Module
 
@@ -392,7 +393,7 @@ def _data_freshness(
 
     column: str | None = signal_cfg.get("column")
     if not column:
-        raise ValueError("data_freshness signal requires 'column'")
+        raise ConfigError("data_freshness signal requires 'column'")
 
     allow_sample = bool(signal_cfg.get("allow_sample", False))
     fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
@@ -467,7 +468,7 @@ def _custom(
     call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
     result = fn(df, call_cfg)
     if not isinstance(result, dict):
-        raise ValueError(
+        raise ConfigError(
             f"custom probe callable must return a dict, got {type(result).__name__}"
         )
     return {"custom": True, **result}
@@ -486,7 +487,7 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
 
     expr_str = sig_cfg.get("expr", "")
     if not expr_str:
-        raise ValueError("threshold signal requires an 'expr' field")
+        raise ConfigError("threshold signal requires an 'expr' field")
 
     result = df.selectExpr(expr_str).collect()[0][0]
     passed = bool(result) if result is not None else False

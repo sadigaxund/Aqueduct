@@ -436,14 +436,14 @@ def _runs_tab(handles):
 
     with mt2:
         avail_sigs = [s for s in q.PROBE_METRIC_LABELS
-                      if q.probe_signals(owner.store, run.blueprint_id, s, limit=1)]
+                      if q.probe_signals(owner.store, run.blueprint_id, s, limit=1, run_id=run.run_id)]
         if not avail_sigs:
-            st.caption("No probe signals for this blueprint.")
+            st.caption("No probe signals for this run.")
         else:
             sig_type = st.selectbox("Signal type", avail_sigs,
                                     format_func=lambda k: q.PROBE_METRIC_LABELS[k],
                                     key="cq_sig")
-            sigs = q.probe_signals(owner.store, run.blueprint_id, sig_type)
+            sigs = q.probe_signals(owner.store, run.blueprint_id, sig_type, run_id=run.run_id)
             if sig_type == "null_rates":
                 cols = sorted({c for s in sigs for c in (s.payload.get("null_rates") or {})})
                 col = st.selectbox("Column", cols, key="cq_col")
@@ -500,6 +500,78 @@ def _runs_tab(handles):
                                    **{f["name"]: f["type"] for f in fields}})
                 df = pd.DataFrame(rows_l)
                 st.dataframe(df, width="stretch", hide_index=True)
+            elif sig_type == "row_count_estimate":
+                rows_l = []
+                for s in reversed(sigs):
+                    p = s.payload
+                    rows_l.append({
+                        "run": s.started_at[:19],
+                        "method": p.get("method", "?"),
+                        "estimate": p.get("estimate"),
+                        "sample_count": p.get("sample_count", ""),
+                    })
+                df = pd.DataFrame(rows_l)
+                st.dataframe(df, width="stretch", hide_index=True)
+                if len(rows_l) >= 2:
+                    fig = px.line(df, x="run", y="estimate", markers=True,
+                                  title="Row count estimate across runs")
+                    _count_yaxis(fig, 0)
+                    fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            elif sig_type == "sample_rows":
+                for s in sigs:
+                    p = s.payload
+                    rows = p.get("rows") or []
+                    if rows:
+                        st.markdown(f"**{s.started_at[:19]}** — {len(rows)} rows")
+                        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+            elif sig_type == "data_freshness":
+                rows_l = []
+                for s in reversed(sigs):
+                    p = s.payload
+                    max_val = p.get("max_value")
+                    rows_l.append({
+                        "run": s.started_at[:19],
+                        "column": p.get("column", ""),
+                        "max_value": str(max_val) if max_val is not None else "",
+                        "sampled": p.get("sampled", False),
+                    })
+                st.dataframe(pd.DataFrame(rows_l), width="stretch", hide_index=True)
+                if len(rows_l) >= 2 and rows_l[0].get("max_value"):
+                    df = pd.DataFrame(rows_l)
+                    st.line_chart(df.set_index("run")["max_value"])
+            elif sig_type == "partition_stats":
+                rows_l = []
+                for s in reversed(sigs):
+                    p = s.payload
+                    rows_l.append({
+                        "run": s.started_at[:19],
+                        "num_partitions": p.get("num_partitions", ""),
+                    })
+                df = pd.DataFrame(rows_l)
+                st.dataframe(df, width="stretch", hide_index=True)
+                if len(rows_l) >= 2:
+                    fig = px.line(df, x="run", y="num_partitions", markers=True,
+                                  title="Partition count across runs")
+                    _count_yaxis(fig, 0)
+                    fig.update_layout(height=240, margin=dict(l=8, r=8, t=32, b=8))
+                    st.plotly_chart(fig, width="stretch")
+            elif sig_type == "threshold":
+                rows_l = []
+                for s in reversed(sigs):
+                    p = s.payload
+                    rows_l.append({
+                        "run": s.started_at[:19],
+                        "passed": p.get("passed", ""),
+                        "value": p.get("value", ""),
+                        "expr": p.get("expr", ""),
+                    })
+                _table(rows_l, status_cols=("passed",))
+            elif sig_type == "custom":
+                for s in reversed(sigs):
+                    p = s.payload
+                    st.markdown(f"**{s.started_at[:19]}**")
+                    st.json(p)
 
 
 def _lineage_tab(handles):
@@ -1040,6 +1112,83 @@ def _quality_tab(cfg, store_dir):
                                **{f["name"]: f["type"] for f in fields}})
             df = pd.DataFrame(rows_l)
             st.dataframe(df, width="stretch", hide_index=True)
+
+        elif sig_type == "row_count_estimate":
+            rows_l = []
+            for s in reversed(sigs):
+                p = s.payload
+                rows_l.append({
+                    "run": s.run_id[:8], "started": s.started_at[:19],
+                    "method": p.get("method", "?"),
+                    "estimate": p.get("estimate"),
+                })
+            df = pd.DataFrame(rows_l)
+            st.dataframe(df, width="stretch", hide_index=True)
+            if len(rows_l) >= 2:
+                fig = px.line(df, x="run", y="estimate", markers=True,
+                              title="Row count estimate across runs",
+                              hover_name="run", hover_data={"started": True})
+                _count_yaxis(fig, 0)
+                fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                st.plotly_chart(fig, width="stretch")
+
+        elif sig_type == "sample_rows":
+            for s in sigs:
+                p = s.payload
+                rows = p.get("rows") or []
+                if rows:
+                    st.markdown(f"**{s.started_at[:19]}** — {len(rows)} rows")
+                    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+        elif sig_type == "data_freshness":
+            rows_l = []
+            for s in reversed(sigs):
+                p = s.payload
+                max_val = p.get("max_value")
+                rows_l.append({
+                    "run": s.run_id[:8], "started": s.started_at[:19],
+                    "column": p.get("column", ""),
+                    "max_value": str(max_val) if max_val is not None else "",
+                    "sampled": p.get("sampled", False),
+                })
+            st.dataframe(pd.DataFrame(rows_l), width="stretch", hide_index=True)
+
+        elif sig_type == "partition_stats":
+            rows_l = []
+            for s in reversed(sigs):
+                p = s.payload
+                rows_l.append({
+                    "run": s.run_id[:8], "started": s.started_at[:19],
+                    "num_partitions": p.get("num_partitions", ""),
+                })
+            df = pd.DataFrame(rows_l)
+            st.dataframe(df, width="stretch", hide_index=True)
+            if len(rows_l) >= 2:
+                fig = px.line(df, x="run", y="num_partitions", markers=True,
+                              title="Partition count across runs",
+                              hover_name="run", hover_data={"started": True})
+                _count_yaxis(fig, 0)
+                fig.update_layout(height=260, margin=dict(l=8, r=8, t=32, b=8))
+                st.plotly_chart(fig, width="stretch")
+
+        elif sig_type == "threshold":
+            rows_l = []
+            for s in reversed(sigs):
+                p = s.payload
+                rows_l.append({
+                    "run": s.run_id[:8], "started": s.started_at[:19],
+                    "passed": p.get("passed", ""),
+                    "value": p.get("value", ""),
+                    "expr": p.get("expr", ""),
+                })
+            _table(rows_l, status_cols=("passed",))
+
+        elif sig_type == "custom":
+            for s in reversed(sigs):
+                p = s.payload
+                st.markdown(f"**{s.started_at[:19]}**")
+                st.json(p)
+
     else:
         st.caption("No blueprints found.")
 

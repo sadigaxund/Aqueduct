@@ -154,14 +154,14 @@ def test_stderr_notices(tmp_path, clean_env):
     # Both .env and -e
     result = runner.invoke(cli, ["validate", str(bp_path), "-e", "C=3"])
     assert result.exit_code == 0, result.output
-    assert "(env: loaded 2 var(s)" in result.output
+    assert "env  ·  loaded 2 var(s)" in result.output
     assert "; 1 from -e" in result.output
     
     # Only -e, no .env
     (project_dir / ".env").unlink()
     result = runner.invoke(cli, ["validate", str(bp_path), "-e", "D=4"])
     assert result.exit_code == 0, result.output
-    assert "(env: no .env file found; 1 from -e)" in result.output
+    assert "env  ·  no .env file found; 1 from -e" in result.output
 
 def test_env_options_decorator_presence():
     """Verify @_env_options decorator present on config commands."""

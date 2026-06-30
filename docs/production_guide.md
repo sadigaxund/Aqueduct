@@ -248,7 +248,9 @@ stores:
 
 The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
-> The `stores.lineage` config option has been **removed** — `column_lineage` lives in `observability.db`. As of 2.0 a legacy `stores.lineage` block (or a flat `stores.depot:` mapping) in `aqueduct.yml` raises a `ConfigError` — use `stores.depots:` for depot mounts.
+> **Storage-integrity guardrail.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset, Aqueduct warns at startup that externalised blobs (manifests, stack traces, provenance) will land on the driver's local disk. Set `stores.blob.backend: local` explicitly to silence the warning — you've made an informed choice about where blobs live. Unrelated configurations never trigger it.
+
+> `stores.lineage` was **removed** in 2.0 — `column_lineage` lives in the `observability` store. Use `stores.depots:` for depot mounts.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
@@ -256,7 +258,7 @@ The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory fo
 
 Per-pipeline DuckDB files are the right default: zero setup, single-writer is fine because one pipeline runs at a time, and the file sits next to the project. You have outgrown them when any of these become true:
 
-- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `lineage` / `depot` schemas per store automatically).
+- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
 - **Many pipelines** — dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
 - **Ephemeral drivers** — Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
 - **Concurrent access** — a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
@@ -319,7 +321,7 @@ Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets o
 
 ## Danger Settings
 
-Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning.
+Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning — these warnings cannot be suppressed via `warnings.suppress`.
 
 ```yaml
 danger:

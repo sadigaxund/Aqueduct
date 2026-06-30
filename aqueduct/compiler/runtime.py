@@ -63,8 +63,8 @@ class AqFunctions:
         deployment_target: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
-        # Depot mounts (name → store). `depot=` (single) is the legacy form → the
-        # default mount. `@aq.depot.get` uses default; `@aq.depot.<name>.get` a mount.
+        # Depot mounts (name → store). `depot=` (single kwarg) → the default mount.
+        # `@aq.depot.get` uses default; `@aq.depot.<name>.get` a named mount.
         if depots:
             self._depots = dict(depots)
         elif depot is not None:

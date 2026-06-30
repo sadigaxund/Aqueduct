@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import pytest
 
+from aqueduct.errors import ConfigError
 from aqueduct.executor.probe_plugins import (
     AQ_PROBE_ENTRYPOINT_GROUP,
     custom_signal_source,
@@ -32,17 +33,17 @@ def test_source_plugin():
 
 
 def test_source_none_raises():
-    with pytest.raises(ValueError, match="exactly one source"):
+    with pytest.raises(ConfigError, match="exactly one source"):
         custom_signal_source({})
 
 
 def test_source_conflict_raises():
-    with pytest.raises(ValueError, match="conflicting sources"):
+    with pytest.raises(ConfigError, match="conflicting sources"):
         custom_signal_source({"sql": "MAX(x)", "plugin": "p"})
 
 
 def test_source_partial_pointer_raises():
-    with pytest.raises(ValueError, match="BOTH 'module' and 'entry'"):
+    with pytest.raises(ConfigError, match="BOTH 'module' and 'entry'"):
         custom_signal_source({"module": "m"})
 
 
@@ -56,19 +57,19 @@ def test_resolve_pointer_imports_callable():
 
 
 def test_resolve_pointer_not_callable_raises():
-    with pytest.raises(ValueError, match="is not a callable"):
+    with pytest.raises(ConfigError, match="is not a callable"):
         resolve_callable(
             {"module": "tests.test_executor.test_probe_plugins", "entry": "AQ_PROBE_ENTRYPOINT_GROUP"}
         )
 
 
 def test_resolve_missing_plugin_raises():
-    with pytest.raises(ValueError, match="not found in entry-point group"):
+    with pytest.raises(ConfigError, match="not found in entry-point group"):
         resolve_callable({"plugin": "definitely_not_registered_xyz"})
 
 
 def test_resolve_sql_form_raises():
-    with pytest.raises(ValueError, match="inline-SQL"):
+    with pytest.raises(ConfigError, match="inline-SQL"):
         resolve_callable({"sql": "MAX(x)"})
 
 

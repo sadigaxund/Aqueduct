@@ -59,8 +59,8 @@ def seeded_store_dir(tmp_path, monkeypatch):
 def test_app_renders_without_exception(seeded_store_dir):
     at = AppTest.from_file(_APP, default_timeout=30).run()
     assert not at.exception
-    assert at.title  # the "Aqueduct" title rendered
-    # Fleet tab KPIs present
+    # Logo renders as image (the title is only a fallback)
+    assert at.metric  # Fleet tab KPIs present
     assert any("Blueprint" in m.label for m in at.metric)
 
 

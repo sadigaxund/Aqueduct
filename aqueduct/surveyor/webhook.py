@@ -22,12 +22,10 @@ from __future__ import annotations
 import os
 import re
 import threading
-import uuid
 from datetime import UTC
 from typing import Any
 
-from aqueduct.infra.http import deliver_with_retry, fire_and_forget, sign_body
-from aqueduct.redaction import redact as _redact
+from aqueduct.infra.http import _deliver_webhook_payload
 
 # ── Template rendering ────────────────────────────────────────────────────────
 
@@ -87,9 +85,6 @@ def fire_webhook(
 
     # Render headers (e.g. Authorization: "Bearer ${SLACK_TOKEN}")
     rendered_headers: dict[str, str] = {
-        "Content-Type": "application/json",
-        # Idempotency / delivery id — lets a receiver dedup retried deliveries.
-        "X-Aqueduct-Delivery": str(uuid.uuid4()),
         **_render_dict(config.headers, vars),
     }
 
@@ -99,41 +94,31 @@ def fire_webhook(
     # @aq.secret('SLACK_TOKEN')`) and represent the intended transmission of a
     # credential to the destination.
     if config.payload is not None:
-        body = _redact(_render_dict(config.payload, vars))
+        body = _render_dict(config.payload, vars)
     elif event is not None:
         from datetime import datetime
-        body = _redact({
+        body = {
             "event": event,
             "timestamp": datetime.now(tz=UTC).isoformat(),
             "run_id": vars.get("run_id"),
             "blueprint_id": vars.get("blueprint_id"),
             "data": full_payload,
-        })
+        }
     else:
-        body = _redact(full_payload)
+        body = full_payload
 
-    url = config.url
-    method = config.method
-    timeout = config.timeout
-    attempts = config.max_retries + 1
-    backoff = config.backoff_seconds
-
-    # HMAC payload signing (opt-in). Sign the exact bytes we send so the receiver
-    # can verify them — pass content= (not json=) so httpx does not re-serialise
-    # to different bytes than were signed.
-    signed_content: bytes | None = None
+    # HMAC payload signing secret rendered from template vars (may contain ${ENV_VAR}).
+    rendered_secret: str | None = None
     if config.secret:
-        secret = _render_value(config.secret, vars)
-        signed_content, signature = sign_body(body, secret)
-        rendered_headers["X-Aqueduct-Signature"] = signature
+        rendered_secret = _render_value(config.secret, vars)
 
-    return fire_and_forget(
-        lambda: deliver_with_retry(
-            method, url,
-            json=None if signed_content is not None else body,
-            content=signed_content,
-            headers=rendered_headers, timeout=timeout, label="webhook",
-            attempts=attempts, backoff_seconds=backoff,
-        ),
-        name="surveyor-webhook",
+    return _deliver_webhook_payload(
+        config.url,
+        body,
+        method=config.method,
+        headers=rendered_headers,
+        timeout=config.timeout,
+        attempts=config.max_retries + 1,
+        backoff_seconds=config.backoff_seconds,
+        secret=rendered_secret,
     )

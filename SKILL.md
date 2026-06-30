@@ -221,7 +221,7 @@ Ports: `main` (default DataFrame), `spillway` (error rows — from Channel/Asser
 
 ## Context Registry (3 tiers)
 - **Tier 0 static** `${ctx.ns.key}` — substituted at parse time. Define under `context:`. Override order: CLI `--ctx k=v` > `AQUEDUCT_CTX_*` env > `context_profiles` (`--profile`) > `context:` defaults. Env interpolation: `${ENV_VAR:-default}`.
-- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/blueprint_name()/blueprint_dir()/blueprint_path()/env()/target()/version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
+- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/name()/dir()/path()`, `@aq.deployment.env()/target()`, `@aq.version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
 - **Tier 2 UDFs** — distributed column functions (below).
 
 `context_profiles:` promote envs: `dev: { tables.orders_raw: "s3://dev/..." }`.
@@ -270,10 +270,10 @@ agent:
   model: "anthropic/claude-3.5-sonnet"
   api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated single patch) · `ci` (stage + webhook) · `aggressive` (multi-patch loop; legacy-named, equals `auto`+`max_patches>1`). Engine-level defaults for provider/model/base_url/api_key live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
-Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depot/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
+Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
 
 ## Path resolution
 Relative paths in a Blueprint anchor to **the Blueprint file's directory**, never the cwd (portable across run locations). `s3://`, `postgresql://`, absolute paths pass through unchanged. Same rule for `aqueduct.yml` (anchors to the config file dir).

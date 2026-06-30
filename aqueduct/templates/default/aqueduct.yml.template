@@ -466,7 +466,7 @@ webhooks:
 # serialized from the same compile-time lineage as the `column_lineage` table.
 #
 # NAMING COLLISION: this top-level `lineage:` block is NOT `stores.lineage`.
-# `stores.lineage` is an inert store-backend config (lineage merged into the
+# `stores.lineage` was removed in 2.0 (lineage merged into the
 # observability store); THIS block configures OpenLineage *emission*.
 #
 # Disabled by default — leave openlineage_url unset for zero cost.
@@ -501,7 +501,7 @@ agent:
   #   backoff_seconds: 2.0      # base backoff; attempt N sleeps ~2^N * base (+ jitter),
   #                             # honors server Retry-After, always capped by the remaining
   #                             # agent.budget.max_seconds deadline. Shared with `aqueduct benchmark`.
-  # max_reprompts: 5            # Legacy single-axis cap; the unified loop also catches
+  # max_reprompts: 5            # single-axis cap; the unified loop also catches
   #                             # apply-gate rejections (guardrail / compile error) and
   #                             # feeds them back as reprompts. Use agent.budget below for
   #                             # finer-grained, multi-axis control.

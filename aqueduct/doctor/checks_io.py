@@ -102,6 +102,18 @@ def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None
         return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
 
 
+def _redact_dsn(dsn: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(dsn)
+        if parts.password:
+            netloc = parts.netloc.replace(f":{parts.password}@", ":***@")
+            return urlunsplit(parts._replace(netloc=netloc))
+    except Exception:
+        return dsn
+    return dsn
+
+
 def _openai_models_url(base_url: str) -> str:
     return base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
 
@@ -565,9 +577,9 @@ def check_store_backend(
                 client.get(_k)
                 client.delete(_k)
             _rt = "  [preflight: write+read ok]" if preflight else ""
-            return CheckResult(label, "ok", f"backend=redis  url={path_or_dsn}{_rt}", _ms(t))
+            return CheckResult(label, "ok", f"backend=redis  url={_redact_dsn(path_or_dsn)}{_rt}", _ms(t))
         except Exception as exc:
-            return CheckResult(label, "fail", f"backend=redis  error={exc}", _ms(t))
+            return CheckResult(label, "fail", f"backend=redis  error={_redact_dsn(str(exc))}", _ms(t))
 
     return CheckResult(label, "warn", f"backend={backend!r} unknown", _ms(t))
 

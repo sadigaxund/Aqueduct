@@ -20,7 +20,7 @@ aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
 agent:
-  approval: aggressive
+  approval: auto
   max_patches: 2
 modules:
   - id: in
@@ -214,7 +214,7 @@ def test_trigger_agent_escalation(
     mock_surveyor_cls.return_value.patch_store.return_value = None
     
     # Update blueprint to disabled
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: disabled"))
     
     # 1. First run fails but triggers agent
     mock_exec.side_effect = [
@@ -229,7 +229,7 @@ def test_trigger_agent_escalation(
         result = runner.invoke(cli, ["run", str(base_blueprint)])
     
     assert "Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
-    assert "✎ Agent patch staged" in result.output
+    assert "▸ Agent patch staged →" in result.output
     assert mock_stage.call_count == 1
 
 @patch("aqueduct.executor.get_executor")
@@ -246,7 +246,7 @@ def test_trigger_agent_false_disabled_breaks(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: disabled"))
     
     mock_exec.return_value = ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", module_results=(), trigger_agent=False)
     
@@ -306,7 +306,7 @@ def test_trigger_agent_stays_human(
     mock_get_executor.return_value = mock_exec
     
     # Set to human
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval: aggressive", "approval: human"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: human"))
     
     mock_exec.side_effect = [
         ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", 
@@ -323,5 +323,5 @@ def test_trigger_agent_stays_human(
     
     # Should NOT have the override message
     assert "overriding approval_mode=disabled" not in result.output
-    assert "✎ Agent patch staged" in result.output
+    assert "▸ Agent patch staged →" in result.output
     assert mock_stage.call_count == 1

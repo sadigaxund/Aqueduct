@@ -93,5 +93,6 @@ def test_aq_depot_named_dispatch(tmp_path):
     reg = AqFunctions(depots={n: DepotStore(backend=s) for n, s in b.depots.items()},
                       blueprint_id="bp1")
     assert resolve_tier1_str("@aq.depot.fleet.get('g')", reg) == "5"
-    with pytest.raises(RuntimeError, match="no depot mount named 'nope'"):
+    from aqueduct.errors import CompileError
+    with pytest.raises(CompileError, match="no depot mount named 'nope'"):
         resolve_tier1_str("@aq.depot.nope.get('x')", reg)

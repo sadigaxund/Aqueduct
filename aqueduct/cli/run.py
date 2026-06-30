@@ -347,16 +347,30 @@ def _load_engine_config(
     master_url = cfg.deployment.master_url
 
     # ── Danger settings startup warning ──────────────────────────────────────
-    danger_active = []
+    danger_pairs = []
     if cfg.danger.allow_full_probe_actions:
-        danger_active.append("allow_full_probe_actions=true")
+        danger_pairs.append((
+            "danger-full-probe-actions",
+            "allow_full_probe_actions=true — full Spark actions in Probes enabled",
+        ))
     if cfg.danger.allow_multi_patch:
-        danger_active.append("allow_multi_patch=true")
-    if danger_active:
-        click.echo(
-            f"\u26a0  DANGER settings active: {', '.join(danger_active)}",
-            err=True,
-        )
+        danger_pairs.append((
+            "danger-multi-patch",
+            "allow_multi_patch=true — successive LLM patches without human review",
+        ))
+    if cfg.danger.allow_full_preflight:
+        danger_pairs.append((
+            "danger-full-preflight",
+            "allow_full_preflight=true — full-dataset sandbox replay (no Egress writes)",
+        ))
+    if cfg.danger.allow_skip_sandbox:
+        danger_pairs.append((
+            "danger-skip-sandbox",
+            "allow_skip_sandbox=true — patches go straight to production, no sandbox",
+        ))
+    if danger_pairs:
+        from aqueduct.cli.style import emit_warning_pairs
+        emit_warning_pairs(danger_pairs, label="danger:", err=True)
 
     # ── Executor resolve ──────────────────────────────────────────────────────
     try:
@@ -598,8 +612,8 @@ def _setup_surveyor(
         _max_patches = manifest.agent.max_patches if manifest.agent else 1
         _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
         _is_multi_patch = (
-            _mode in ("auto", "aggressive")
-            and (_max_patches > 1 or _mode == "aggressive")
+            _mode == "auto"
+            and _max_patches > 1
         )
         if _is_multi_patch and not allow_multi_patch_flag:
             if not cfg.danger.allow_multi_patch:
@@ -783,7 +797,7 @@ def _setup_surveyor(
     # ── Multi-patch disclaimer ────────────────────────────────────────────────────
     approval_mode = manifest.agent.approval_mode
     max_patches = manifest.agent.max_patches
-    if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
+    if approval_mode == "auto" and max_patches > 1:
         click.echo(
             f"\u26a0  multi-patch mode \u2014 Agent will attempt up to {max_patches} patch(es). "
             "Each patch is validated in-memory before being written to Blueprint. "
@@ -1262,6 +1276,7 @@ def run(
             # `healing_outcomes` so cross-iteration aggregations remain
             # joinable to the original heal call.
             iteration_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
+            patch_rejected_by_gate = False  # reset per iteration — only the terminal reason drives the exit code
             if iteration_run_id != run_id:
                 # 1.1.0 fix — register parent linkage so record() stamps the
                 # outer run_id into run_records.parent_run_id for this
@@ -1430,7 +1445,7 @@ def run(
                         )
                     if _replay_patch is not None:
                         _replay_ok = True
-                        if effective_mode in ("auto", "aggressive"):
+                        if effective_mode == "auto":
                             # Run the gate pyramid on the candidate NOW so a stale
                             # patch costs one sandbox pass, not a production write.
                             _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
@@ -1871,7 +1886,7 @@ def run(
             # output by default (especially on the streaming path, where Aqueduct
             # cannot request json_object). Content-reinterpreting recoveries
             # (json_repair, comment stripping, wrapper unwrap) still downgrade
-            # auto/aggressive → human — the trust boundary stays at the human.
+            # auto → human — the trust boundary stays at the human.
             _BENIGN_RECOVERIES = {
                 "stripped_code_fence", "stripped_think_block",
                 "stripped_orphan_think_close", "stripped_leading_prose",
@@ -1879,7 +1894,7 @@ def run(
             _risky_recovery = [
                 r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
             ]
-            if _risky_recovery and effective_mode in ("auto", "aggressive"):
+            if _risky_recovery and effective_mode == "auto":
                 click.echo(
                     f"  ↑ Agent response needed mechanical recovery "
                     f"({', '.join(_risky_recovery)}) — "
@@ -1997,138 +2012,8 @@ def run(
                 break
 
             elif effective_mode == "auto":
-                # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
-                # Phase 43: when deep_loop is enabled, these gates already ran
-                # inside the LLM conversation — skip the redundant post-hoc run.
-                # Phase 45: same skip when the gates already validated a replay
-                # candidate at the heal-cache check.
-                if _deep_loop or _replay_gates_done:
-                    _g3_passed = True
-                    _g2, _g3, _g4 = None, None, None
-                else:
-                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                        patch=patch,
-                        blueprint_path=Path(blueprint),
-                        bundle=bundle,
-                        surveyor=surveyor,
-                        failed_module=failure_ctx.failed_module,
-                        iteration_run_id=iteration_run_id,
-                        blueprint_id=manifest.blueprint_id,
-                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                        sandbox_master_url=resolved_sandbox_master_url,
-                    )
-                _emit_explain_regressions(_g4)
-                if _g3 is not None and not _g3_passed:
-                    # Non-interactive (auto) gate rejection → exit VALIDATION_GATE(4).
-                    patch_rejected_by_gate = True
-                    click.echo(
-                        f"  ✗ Agent patch failed sandbox replay: {_g3.detail}",
-                        err=True,
-                    )
-                    surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                        parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                        model_cascade_position=_cascade_pos,
-                    )
-                    _aqcli._stage_failed_patch(
-                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                        obs_store=_obs_store, patch_store=_patch_store,
-                    )
-                    break
-
-                # Resolve patch_validation (blueprint override → engine default)
-                _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
-
-                if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    # Sandbox-only validation: write the patched Blueprint without
-                    # running the full pipeline. The next regular `aqueduct run`
-                    # will execute it against real data and real Egress sinks.
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(
-                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
-                        f"→ {blueprint}",
-                        err=True,
-                    )
-                    surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                        parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                        model_cascade_position=_cascade_pos,
-                    )
-                    break
-
-                # Suppress compile warnings on the heal re-compile: they are the
-                # SAME blueprint warnings already shown (grouped) under the run
-                # header — re-emitting leaks the raw `AQ-WARN [...]` fallback
-                # format mid-heal (the patch doesn't change them).
-                import warnings as _wsup
-
-                from aqueduct.warnings import AqueductWarning as _AqWarn
-                with _wsup.catch_warnings():
-                    _wsup.simplefilter("ignore", _AqWarn)
-                    new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
-                if new_manifest is None:
-                    click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
-                    break
-                try:
-                    result2 = execute(
-                        new_manifest, session,
-                        run_id=str(uuid.uuid4()),
-                        store_dir=resolved_store_dir,
-                        surveyor=surveyor,
-                        depot=depot,
-                    )
-                except ExecuteError as exc:
-                    result2 = ExecutionResult(
-                        blueprint_id=manifest.blueprint_id,
-                        run_id=str(uuid.uuid4()),
-                        status="error",
-                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
-                    )
-                patch_success = result2.status == "success"
-                failure_ctx2 = surveyor.record(result2, patched=patch_success)
-                surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                    parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=True, run_success_after_patch=patch_success,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                    model_cascade_position=_cascade_pos,
-                )
-                if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(
-                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied → {blueprint}",
-                        err=True,
-                    )
-                    result = result2
-                    failure_ctx = failure_ctx2
-                else:
-                    click.echo(
-                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue, Blueprint unchanged",
-                        err=True,
-                    )
-                    _aqcli._stage_failed_patch(
-                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                        obs_store=_obs_store, patch_store=_patch_store,
-                    )
-                    result = result2
-                    failure_ctx = failure_ctx2
-                break
-
-            elif effective_mode == "aggressive":
-                # Patch validation pyramid Gates 2, 3, 4 pre-filter for the legacy
-                # `aggressive` mode (deprecated alias for `auto` + `max_patches > 1`).
+                # Multi-patch gate validation: sandbox replay + explain gate check
+                # before writing to the blueprint.
                 # Phase 45: gates already ran on a replay candidate at the
                 # heal-cache check — skip the redundant rerun.
                 if _replay_gates_done:
@@ -2167,6 +2052,9 @@ def run(
                         failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
+                    # A validation gate rejected this patch — if the multi-patch loop
+                    # exhausts with no success, this drives the VALIDATION_GATE(4) exit.
+                    patch_rejected_by_gate = True
                     continue
                 if _g3 is not None and not _g3_passed:
                     click.echo(
@@ -2183,15 +2071,16 @@ def run(
                         failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
+                    patch_rejected_by_gate = True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
                     continue  # try next patch iteration
 
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
 
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ multi-patch: sandbox-only validated → {blueprint}",
+                        f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
                         err=True,
                     )
                     surveyor.record_healing_outcome(
@@ -2255,7 +2144,7 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
                         f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",

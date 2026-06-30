@@ -445,24 +445,37 @@ PROBE_METRIC_LABELS: dict[str, str] = {
     "value_distribution": "Value Distribution",
     "distinct_count": "Distinct Count",
     "schema_snapshot": "Schema Snapshot",
+    "row_count_estimate": "Row Count Estimate",
+    "sample_rows": "Sample Rows",
+    "data_freshness": "Data Freshness",
+    "partition_stats": "Partition Stats",
+    "threshold": "Threshold Check",
+    "custom": "Custom Signal",
 }
 
 
 def probe_signals(store: Any, blueprint_id: str,
-                   signal_type: str, limit: int = 20) -> list[ProbeSignalRow]:
-    """Probe signal payloads across recent runs of *blueprint_id*."""
+                   signal_type: str, limit: int = 20,
+                   run_id: str | None = None) -> list[ProbeSignalRow]:
+    """Probe signal payloads across recent runs of *blueprint_id*.
+    Pass *run_id* to filter to a specific run only."""
     try:
         with store.connect() as cur:
+            params: list[Any] = [blueprint_id, signal_type]
+            run_filter = ""
+            if run_id:
+                params.append(run_id)
+                run_filter = " AND p.run_id = ?"
             cur.execute(
-                """
+                f"""
                 SELECT p.run_id, CAST(r.started_at AS VARCHAR), p.signal_type, p.payload
                 FROM probe_signals p
                 JOIN run_records r ON r.run_id = p.run_id
-                WHERE r.blueprint_id = ? AND p.signal_type = ?
+                WHERE r.blueprint_id = ? AND p.signal_type = ?{run_filter}
                 ORDER BY r.started_at DESC
                 LIMIT ?
                 """,
-                [blueprint_id, signal_type, limit],
+                [*params, limit],
             )
             rows = cur.fetchall()
         # payload is a JSON column: DuckDB returns a str, psycopg2 returns a

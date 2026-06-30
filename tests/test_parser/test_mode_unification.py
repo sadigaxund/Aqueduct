@@ -1,9 +1,7 @@
 """2.0 mode config: canonical keys only (deprecated aliases removed).
 
 Removed in 2.0: the `approval_mode` YAML key, `aggressive_max_patches`,
-`danger.allow_aggressive_patching`, and the `--allow-aggressive` CLI flag. The
-`aggressive` *value* of `approval` is still live (drives the multi-patch heal
-branch) but no longer emits a deprecation warning.
+`danger.allow_aggressive_patching`, and the `--allow-aggressive` CLI flag. 
 """
 from __future__ import annotations
 
@@ -33,14 +31,13 @@ def _write_bp(tmp_path, agent_block: str = "", extra: str = ""):
     return bp
 
 
-def test_approval_aggressive_value_parses_no_warning(tmp_path, capsys):
-    """`approval: aggressive` still parses (live heal-loop value); no deprecation warning."""
-    from aqueduct.parser.parser import parse
+def test_approval_aggressive_value_rejected(tmp_path):
+    """`approval: aggressive` no longer parses (removed in 2.0) → ParseError."""
+    from aqueduct.parser.parser import parse, ParseError
 
     bp = _write_bp(tmp_path, agent_block="agent:\n  approval: aggressive\n")
-    blueprint = parse(bp)
-    assert blueprint.agent.approval_mode == "aggressive"
-    assert "[deprecated]" not in capsys.readouterr().err
+    with pytest.raises(ParseError):
+        parse(bp)
 
 
 def test_approval_mode_key_rejected(tmp_path):

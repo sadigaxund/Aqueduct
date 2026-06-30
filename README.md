@@ -51,6 +51,7 @@ A Spark job fails at 3 a.m. on a column rename upstream. Today that means a page
 - [Core Concepts](#core-concepts)
 - [The Healing Flow](#the-healing-flow)
 - [Architecture](#architecture)
+- [Observability Dashboard](#observability-dashboard)
 - [Getting Started](#getting-started)
 - [How It Compares](#how-it-compares)
 - [References](#references)
@@ -70,6 +71,7 @@ A Spark job fails at 3 a.m. on a column rename upstream. Today that means a page
 | **Module tests** | `aqueduct test` runs transforms against inline fixtures — no I/O, no cluster | [CLI Reference](docs/cli_reference.md) |
 | **LLM benchmark** | `aqueduct benchmark` scores models against simulated failures — pick the cheapest model that heals your pipelines | [CLI Reference](docs/cli_reference.md) |
 | **Safety rails** | Guardrails, multi-axis budgets, hourly heal caps, sandbox replay before any live write | [Spec §8.3](docs/specs.md) |
+| **Observability dashboard** | `aqueduct dashboard` — local, read-only Streamlit viewer: fleet, runs, lineage, healing patches + before/after diff, performance, quality | [Observability Guide](docs/observability_guide.md) |
 
 ## Core Concepts
 
@@ -94,10 +96,14 @@ Full details in the [References](#references).
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline, and the model works inside a constrained grammar — it cannot write code, mutate files, or run shell commands.
 
 <!--
-  TODO(demo): terminal GIF / asciinema cast goes HERE — proof next to the claim.
-  Ideal clip (~20s): `aqueduct run` hits a schema-drift failure, the agent
-  generates a patch, gates pass, the re-run goes green.
+  TODO(demo): drop the terminal GIF at docs/media/heal-loop.gif, then DELETE the
+  "coming soon" <p> below and uncomment the <img>.
+  Recipe (sharp text, tiny file — better than screen-recording a terminal):
+    asciinema rec heal-loop.cast      # aqueduct run → schema-drift ✗ → agent patch → gates → re-run ✓
+    agg heal-loop.cast docs/media/heal-loop.gif
+  Keep it ~20s and looping; let the colored ✓/✗ output carry it (no narration).
 -->
+<!-- <p align="center"><img src="docs/media/heal-loop.gif" alt="Aqueduct self-heal loop — run to green in ~20s" width="760" /></p> -->
 <p align="center">
   <em>📽️ Demo coming soon — a live heal, start to green, in under 20 seconds.</em>
 </p>
@@ -168,6 +174,33 @@ Aqueduct is a single CLI that runs on the Spark driver — no servers, no daemon
 - **Compiler** resolves context, expands Arcades and macros, extracts column lineage, and assembles a fully-resolved Manifest.
 - **Executor** runs the Manifest on Spark; all PySpark code is isolated under `executor/spark/`.
 - **Surveyor** records runs, failures, and lineage to pluggable stores and triggers the Agent on failure.
+
+## Observability Dashboard
+
+`aqueduct dashboard` launches a **local, read-only** Streamlit viewer over the same observability store the engine writes to — on-demand, like the Spark UI, never a production server and never required by a pipeline. One place for fleet health, per-run module metrics, column lineage, the self-heal patch stream **with before/after diffs**, performance trends, and data-quality signals — across every blueprint. Backend-agnostic (DuckDB or Postgres); every view re-reads with short-lived connections so it can't block a running pipeline's writer.
+
+```bash
+pip install "aqueduct-core[dashboard]"
+aqueduct dashboard            # opens http://localhost:8501
+```
+
+<!--
+  TODO(gallery): drop screenshots at docs/media/dashboard/*.png, then DELETE the
+  "coming soon" <p> below and uncomment the table.
+  Use static PNGs, NOT a GIF — the dashboard is dense (tables/charts); stills read
+  sharper and load faster than a blurry tab-cycling GIF. Suggested four below.
+-->
+<!--
+| | |
+|---|---|
+| <img src="docs/media/dashboard/runs.png"        alt="Runs → run detail (module metrics)" />   | <img src="docs/media/dashboard/lineage.png"     alt="Column-lineage Sankey + SQL changelog" /> |
+| <img src="docs/media/dashboard/healing.png"     alt="Healing → patch before/after diff" />     | <img src="docs/media/dashboard/performance.png" alt="Performance → cost-vs-data trends" />      |
+-->
+<p align="center">
+  <em>🖼️ Screenshot gallery coming soon — Fleet · Runs · Lineage · Healing (patch diff) · Performance · Quality.</em>
+</p>
+
+> 🎬 **Full walkthrough:** [video tour](TODO-VIDEO-URL) *(coming soon — host on YouTube / asciinema and link here; don't embed)*.
 
 ## Getting Started
 

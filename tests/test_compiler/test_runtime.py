@@ -7,6 +7,7 @@ import pytest
 pytestmark = pytest.mark.unit
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.compiler.compiler import compile
+from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -71,7 +72,7 @@ class TestTier1Resolution:
 
     def test_env_missing_raises(self, monkeypatch):
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        with pytest.raises(RuntimeError, match="not set"):
+        with pytest.raises(CompileError, match="not set"):
             resolve_tier1_str("@aq.env('MISSING_VAR')", self.reg)
 
     def test_depot_get_default_when_no_depot(self):
@@ -94,7 +95,7 @@ class TestTier1Resolution:
         assert result == f"s3://bucket/{date.today().isoformat()}/data"
 
     def test_unknown_function_raises(self):
-        with pytest.raises(ValueError, match="Unknown @aq function"):
+        with pytest.raises(CompileError, match="Unknown @aq function"):
             resolve_tier1_str("@aq.does.not.exist()", self.reg)
 
     def test_tier1_resolved_in_manifest_context(self, tmp_path):
@@ -202,7 +203,7 @@ class TestAqMeta:
 
     def test_meta_unavailable_raises(self):
         reg = AqFunctions()  # no metadata threaded
-        with pytest.raises(RuntimeError, match="not available here"):
+        with pytest.raises(CompileError, match="not available here"):
             resolve_tier1_str("@aq.deployment.env()", reg)
 
     def test_meta_resolves_through_compile(self, tmp_path):

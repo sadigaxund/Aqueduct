@@ -18,6 +18,7 @@ from aqueduct.agent.budget import (
     STOP_REASONS,
     StopReason,
 )
+from aqueduct.errors import ConfigError
 from aqueduct.agent.signature import make_signature
 
 
@@ -43,31 +44,31 @@ class TestBudgetConfig:
         assert b.max_tokens_total is None
 
     def test_max_tokens_total_zero_rejected(self):
-        with pytest.raises(ValueError, match="must be >= 1 or None"):
+        with pytest.raises(ConfigError, match="must be >= 1 or None"):
             BudgetConfig(max_tokens_total=0)
 
     def test_max_reprompts_zero_rejected(self):
-        with pytest.raises(ValueError, match="must be >= 1"):
+        with pytest.raises(ConfigError, match="must be >= 1"):
             BudgetConfig(max_reprompts=0)
 
     def test_max_seconds_zero_rejected(self):
-        with pytest.raises(ValueError, match="must be > 0"):
+        with pytest.raises(ConfigError, match="must be > 0"):
             BudgetConfig(max_seconds=0)
 
     def test_max_seconds_negative_rejected(self):
-        with pytest.raises(ValueError, match="must be > 0"):
+        with pytest.raises(ConfigError, match="must be > 0"):
             BudgetConfig(max_seconds=-1)
 
     def test_same_error_consecutive_one_rejected(self):
-        with pytest.raises(ValueError, match="single occurrence is not yet evidence of being stuck"):
+        with pytest.raises(ConfigError, match="single occurrence is not yet evidence of being stuck"):
             BudgetConfig(same_error_consecutive=1)
 
     def test_same_signature_overall_lt_consecutive_rejected(self):
-        with pytest.raises(ValueError, match="overall"):
+        with pytest.raises(ConfigError, match="overall"):
             BudgetConfig(same_signature_overall=2, same_error_consecutive=3)
 
     def test_progress_stalled_window_one_rejected(self):
-        with pytest.raises(ValueError, match="must be >= 2"):
+        with pytest.raises(ConfigError, match="must be >= 2"):
             BudgetConfig(progress_stalled_window=1)
 
     def test_to_dict_has_six_keys(self):

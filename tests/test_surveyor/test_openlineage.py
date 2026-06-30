@@ -4,6 +4,7 @@ Pure/unit only (no live OpenLineage server — httpx is mocked).
 """
 from __future__ import annotations
 
+import logging
 import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -180,9 +181,10 @@ def test_emitter_no_duplicate_start_when_already_started():
         assert types == ["START", "COMPLETE"]  # no second START
 
 
-def test_emitter_server_error_logged_not_raised(capsys):
+def test_emitter_server_error_logged_not_raised(caplog):
+    caplog.set_level(logging.WARNING)
     emitter = OpenLineageEmitter("http://ol.test", "ns", _manifest())
     with patch("httpx.request") as mock_post:
         mock_post.return_value = MagicMock(status_code=500)
         emitter.emit("START", run_id="run_1").join(timeout=2)
-    assert "500" in capsys.readouterr().err
+    assert "500" in caplog.text

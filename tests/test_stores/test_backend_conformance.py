@@ -17,8 +17,8 @@ import pytest
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
-from aqueduct.stores.base import get_stores
 from aqueduct.config import load_config
+from aqueduct.stores.base import get_stores
 from tests.conftest import _pg_dsn, _pg_is_reachable
 
 # Portable DDL (valid on both DuckDB and Postgres).
@@ -43,6 +43,9 @@ _DDL = [
         run_id VARCHAR, probe_id VARCHAR, signal_type VARCHAR,
         payload JSON, captured_at TIMESTAMPTZ)""",
 ]
+
+_CONF_TABLES = ("run_records", "module_metrics", "column_lineage",
+                 "healing_outcomes", "probe_signals")
 
 _TS = "2026-06-20T00:00:00+00:00"
 
@@ -83,6 +86,12 @@ def seeded_cfg(request, tmp_path):
     with store.connect() as cur:
         for ddl in _DDL:
             cur.execute(ddl)
+        if backend == "postgres":
+            for tbl in _CONF_TABLES:
+                try:
+                    cur.execute(f"TRUNCATE TABLE {tbl} CASCADE")
+                except Exception:
+                    pass
         cur.execute(
             "INSERT INTO run_records (run_id, blueprint_id, status, started_at, finished_at, module_results) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -114,10 +123,9 @@ def seeded_cfg(request, tmp_path):
 
     if backend == "postgres":
         with get_stores(cfg).observability.connect() as cur:
-            for tbl in ("run_records", "module_metrics", "column_lineage",
-                        "healing_outcomes", "probe_signals"):
+            for tbl in _CONF_TABLES:
                 try:
-                    cur.execute(f"DELETE FROM {tbl} WHERE run_id = ?", ["rc1"])  # run_id in all 4
+                    cur.execute(f"TRUNCATE TABLE {tbl} CASCADE")
                 except Exception:
                     pass
 

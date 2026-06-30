@@ -54,8 +54,7 @@ Each store is independently pluggable in `aqueduct.yml`:
 | Store           | Backends                       | Notes |
 |-----------------|--------------------------------|-------|
 | `observability` | `duckdb` (default) \| `postgres` | Relational; needs joins/aggregates. `redis` is rejected at config-load. `column_lineage` lives in this store. |
-| ~~`lineage`~~   | **removed** | Column lineage was merged into `observability`. `stores.lineage` is no longer a config option; a legacy block raises a `ConfigError` (2.0). |
-| `depots`        | name-keyed map; each mount `duckdb` (default) \| `postgres` \| `redis` | Cross-run KV (`@aq.depot.*`). `redis` allowed here only. The `default` mount always exists; keys are **per-blueprint isolated** (prefixed by blueprint_id) unless a mount sets `shared: true`. Incremental-Channel watermarks persist here (no depot ⇒ no incremental state). A legacy flat `depot:` mapping is no longer accepted — use `depots.default` (2.0). |
+| `depots`        | name-keyed map; each mount `duckdb` (default) \| `postgres` \| `redis` | Cross-run KV (`@aq.depot.*`). `redis` allowed here only. The `default` mount always exists; keys are **per-blueprint isolated** (prefixed by blueprint_id) unless a mount sets `shared: true`. Incremental-Channel watermarks persist here (no depot ⇒ no incremental state). |
 | `blob`          | `local` (default) \| `s3` \| `gcs` \| `adls` | Object store for observability blobs + the patch lifecycle. `s3`/`gcs`/`adls` need the `[object-store]` extra (fsspec); missing SDK raises a hard `ConfigError` at config-load, not a warning. `local` keeps the on-disk layout above. |
 
 > **Blob integrity warning:** When `stores.observability.backend` is remote

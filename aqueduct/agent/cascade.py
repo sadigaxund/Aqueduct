@@ -1,4 +1,4 @@
-"""Phase 44 — Multi-model healing cascade.
+"""Multi-model healing cascade.
 
 Try cheap models first, escalate to expensive ones only when cheap
 models get stuck.  ~70% of heals are path typos / column renames a 7B

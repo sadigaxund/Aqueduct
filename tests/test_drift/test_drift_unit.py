@@ -91,6 +91,7 @@ def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
     """B1 regression: drift auto-heal must stage the patch to the configured
     `stores.blob` backend (s3/gcs/…), not a hardcoded local dir — otherwise on a
     remote backend the body lands on local FS and `patch list`/`apply` miss it."""
+    pytest.importorskip("fsspec")
     import importlib
     from types import SimpleNamespace
     import aqueduct.agent as A

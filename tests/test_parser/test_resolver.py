@@ -116,7 +116,8 @@ class TestContextResolution:
     def test_sub_ctx_unknown_non_reserved_still_raises(self):
         """Non-reserved unknown ${ctx.foo} still raises (carve-out is exact-set)."""
         from aqueduct.parser.resolver import _sub_ctx
-        with pytest.raises(ValueError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
+        from aqueduct.errors import ParseError
+        with pytest.raises(ParseError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
             _sub_ctx("${ctx.foo}", {})
 
     def test_sub_ctx_preserves_watermark_resolves_others_same_string(self):

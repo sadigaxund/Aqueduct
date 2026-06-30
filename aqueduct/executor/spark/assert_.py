@@ -660,9 +660,7 @@ def _fire_rule_webhook(
 ) -> None:
     """Fire assertion failure webhook asynchronously (best-effort)."""
     try:
-        from aqueduct.config import WebhookEndpointConfig
-        from aqueduct.surveyor.webhook import fire_webhook
-        config = WebhookEndpointConfig(url=url)
+        from aqueduct.infra.http import _deliver_webhook_payload
         full_payload = {
             "event": "assert_rule_failed",
             "module_id": module_id,
@@ -672,7 +670,7 @@ def _fire_rule_webhook(
             "run_id": run_id,
             "fired_at": datetime.now(tz=UTC).isoformat(),
         }
-        fire_webhook(config, full_payload)
+        _deliver_webhook_payload(url, full_payload)
     except Exception as exc:
         logger.warning("[runtime_assert_webhook_fire_failed] [%s] Assert webhook fire failed: %s", module_id, exc)
         _add_module_warning("runtime_assert_webhook_fire_failed", f"Assert webhook fire failed: {exc}")

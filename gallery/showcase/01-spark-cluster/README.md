@@ -69,13 +69,13 @@ export HOST_IP=192.168.1.20
 
 ## Concept 2 — the S3A jar story (why a custom Spark image)
 
-Spark 4.0 bundles Hadoop 3.4 but **not** the S3A connector — out of the
+Spark bundles Hadoop 3.4 but **not** the S3A connector — out of the
 box it cannot read `s3a://`. S3A needs two jars on the classpath:
 
-- `hadoop-aws-3.4.0.jar` — the `S3AFileSystem` itself; **must** match
-  Spark's bundled Hadoop (3.4.x for Spark 4.0; a 3.3.x jar throws the
+- `hadoop-aws-3.4.1.jar` — the `S3AFileSystem` itself; **must** match
+  Spark's bundled Hadoop (3.4.x; a 3.3.x jar throws the
   infamous `NumberFormatException: For input string: "60s"`).
-- `bundle-2.26.25.jar` — AWS SDK **v2**, what `hadoop-aws` 3.4 calls into.
+- `bundle-2.29.0.jar` — AWS SDK **v2**, what `hadoop-aws` 3.4 calls into.
 
 
 Here's the part people miss: **both sides need the jars, by different
@@ -84,9 +84,9 @@ mechanisms**, because they do different work:
 | Side         | Does                                | How it gets the jars                                                                 |
 | ------------ | ----------------------------------- | ------------------------------------------------------------------------------------ |
 | **Driver**   | plans the job, resolves `s3a://`    | `aqueduct.yml` → `spark.driver.extraClassPath: ${PWD}/jars/*` — i.e. **local `./jars/`** |
-| **Executors**| do the actual S3A read/write I/O    | **baked into the cluster image** `sakhund/aqueduct-spark:4.0.0-python3.12-showcase01` |
+| **Executors**| do the actual S3A read/write I/O    | **baked into the cluster image** `sakhund/aqueduct-spark:lts` |
 
-> So this example uses a **custom image** — an official Spark 4.0 build
+> So this example uses a **custom image** — an official Spark 4.1.2 build
 > with the S3A jars pre-installed on the Spark classpath.
 > The driver side is the only thing you provision locally.
 > If you point `aqueduct.yml` at a *vanilla* `apache/spark` image instead,
@@ -97,8 +97,8 @@ Provision the **driver-side** jars now:
 
 ```bash
 mkdir -p jars && cd jars
-wget https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.0/hadoop-aws-3.4.0.jar
-wget https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.26.25/bundle-2.26.25.jar
+wget https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.1/hadoop-aws-3.4.1.jar
+wget https://repo1.maven.org/maven2/software/amazon/awssdk/bundle/2.29.0/bundle-2.29.0.jar
 cd ..
 ```
 
@@ -118,10 +118,9 @@ cd ..
 pip install -r requirements.txt
 ```
 
-> **Why the pin:** `requirements.txt` forces `pyspark==4.0.0` to match
-> the cluster image exactly. A driver/cluster Spark mismatch fails with
-> an opaque `serialVersionUID` RPC error — same major.minor.patch on
-> both sides is non-negotiable.
+> **Why the pin:** `requirements.txt` forces `pyspark==4.1.1` to match
+> the cluster LTS image (Spark 4.1.2). A major.minor mismatch fails with
+> an opaque `serialVersionUID` RPC error — same major.minor is required.
 
 ---
 
@@ -284,9 +283,9 @@ docker compose exec -T postgres psql -U aqueduct -d aqueduct_db -c \
 | Ingress: path / object not found                     | You skipped Step 3. Run `python seed.py` — the input object isn't created until then.                |
 | Run hangs on *"has not accepted any resources"*      | `DRIVER_HOST`/`HOST_IP` is loopback, or 0 workers. Use a real LAN IP; confirm 2 ALIVE in Spark UI.   |
 | `Cannot assign requested address` on driver bind     | `DRIVER_HOST` is not a local interface on the driver machine. Check `ip -4 addr`.                     |
-| `serialVersionUID` RPC error                         | Driver pyspark ≠ cluster Spark. Both must be `4.0.0` (the `requirements.txt` pin handles the driver). |
-| `ClassNotFoundException: ...S3AFileSystem`           | Driver side: `./jars/` missing the two jars (Concept 2). Executor side: not the `-showcase01` image.  |
-| `NumberFormatException: For input string: "60s"`     | Wrong `hadoop-aws` — Spark 4.0 needs `hadoop-aws-3.4.x`, not 3.3.x.                                   |
+| `serialVersionUID` RPC error                         | Driver pyspark ≠ cluster Spark. Pin `pyspark==4.1.1` in `requirements.txt` to match the LTS image. |
+| `ClassNotFoundException: ...S3AFileSystem`           | Driver side: `./jars/` missing the two jars (Concept 2). Executor side: not the `lts` image.  |
+| `NumberFormatException: For input string: "60s"`     | Wrong `hadoop-aws` — need `hadoop-aws-3.4.x`, not 3.3.x.                                   |
 | MinIO 403 / auth on doctor's storage probe           | Expected if the probe bucket is absent — not your creds. A real run is the true S3 auth test.        |
 | `psycopg2 ... could not connect`                     | Postgres not up/healthy yet. `docker compose ps`; wait for the `postgres` healthcheck.               |
 

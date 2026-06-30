@@ -84,7 +84,7 @@ class TestArcadeExpansion:
             f"edges: []\n"
         )
         bp = parse(parent_file)
-        with pytest.raises((CompileError, ValueError, RuntimeError)):
+        with pytest.raises(CompileError):
             compile(bp, blueprint_path=parent_file)
 
 

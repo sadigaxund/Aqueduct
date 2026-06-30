@@ -68,7 +68,6 @@ if TYPE_CHECKING:
 
 from datetime import UTC
 
-from aqueduct.config import WebhookEndpointConfig
 from aqueduct.errors import AqueductError
 from aqueduct.executor.models import (
     ExecutionResult,
@@ -1682,7 +1681,9 @@ def _on_retry_exhausted(
     on_exhaustion = policy.on_exhaustion
     fire_webhook_for_module: bool = on_exhaustion != "alert_only"
     if fire_webhook_for_module and module.on_failure_webhook is not None:
-        from aqueduct.surveyor.webhook import fire_webhook
+        import os as _os
+
+        from aqueduct.infra.http import _deliver_webhook_payload
         raw = module.on_failure_webhook
         full_payload = {
             "run_id": run_id,
@@ -1691,10 +1692,39 @@ def _on_retry_exhausted(
             "error_message": str(exc),
             "error_type": type(exc).__name__,
         }
-        fire_webhook(
-            WebhookEndpointConfig(**({"url": raw} if isinstance(raw, str) else raw)),
-            full_payload=full_payload,
-            template_vars={k: str(v) for k, v in full_payload.items()},
+        if isinstance(raw, str):
+            url = raw
+            method = "POST"
+            headers = {}
+            timeout = 10
+            attempts = 2
+            backoff = 2.0
+            secret = None
+        else:
+            url = raw["url"]
+            method = raw.get("method", "POST")
+            headers = dict(raw.get("headers") or {})
+            timeout = raw.get("timeout", 10)
+            attempts = raw.get("max_retries", 1) + 1
+            backoff = raw.get("backoff_seconds", 2.0)
+            secret = raw.get("secret")
+            # Render ${VAR} tokens in headers and secret (mirrors fire_webhook).
+            import re as _re
+            _token_re = _re.compile(r"\$\{([^}]+)\}")
+            def _render_val(val):
+                if not isinstance(val, str):
+                    return val
+                return _token_re.sub(
+                    lambda m: str(full_payload.get(m.group(1), _os.environ.get(m.group(1), m.group(0)))),
+                    val,
+                )
+            headers = {k: _render_val(v) for k, v in headers.items()}
+            if secret:
+                secret = _render_val(secret)
+        _deliver_webhook_payload(
+            url, full_payload,
+            method=method, headers=headers, timeout=timeout,
+            attempts=attempts, backoff_seconds=backoff, secret=secret,
         )
 
     if on_exhaustion == "alert_only":

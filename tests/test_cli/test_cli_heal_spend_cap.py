@@ -19,8 +19,9 @@ aqueduct: '1.0'
 id: fail_bp
 name: Fail BP
 agent:
-  approval: aggressive
+  approval: auto
   max_heal_attempts_per_hour: 1
+  max_patches: 2
 modules:
   - id: m1
     type: Ingress
@@ -56,8 +57,9 @@ aqueduct: '1.0'
 id: ok_bp
 name: OK BP
 agent:
-  approval: aggressive
+  approval: auto
   max_heal_attempts_per_hour: null
+  max_patches: 2
 modules:
   - id: m1
     type: Ingress
@@ -97,8 +99,9 @@ aqueduct: '1.0'
 id: override_bp
 name: Override BP
 agent:
-  approval: aggressive
+  approval: auto
   max_heal_attempts_per_hour: 1
+  max_patches: 2
 modules:
   - id: m1
     type: Ingress

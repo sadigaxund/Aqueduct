@@ -211,7 +211,7 @@ The sandbox gate replays a generated patch BEFORE applying it, to catch broken p
 | `ci` | Patch staged for CI | Replay still runs |
 | `auto` | Auto-apply. `max_patches: 1` = single shot. `max_patches > 1` = multi-patch reprompt loop (requires `danger.allow_multi_patch: true`). | Replay gates apply every iteration |
 
-`agent.approval` is the config key (values: `disabled` | `human` | `auto` | `aggressive` | `ci`). The former `agent.approval_mode` key, the `aggressive_max_patches` alias, the `danger.allow_aggressive_patching` alias, and the `--allow-aggressive` flag were removed in 2.0 — use `agent.approval`, `agent.max_patches`, `danger.allow_multi_patch`, and `--allow-multi-patch`.
+`agent.approval` is the config key. Values: `disabled`, `human`, `auto`, `ci`.
 
 **Double-danger combo** — `sandbox_mode: off` + `max_patches > 1` means every LLM patch hits production data without pre-validation, in a loop. Engine prints a `⚠ DANGER COMBO` line at startup when both are set; use only on tiny scopes you fully trust.
 
@@ -310,7 +310,7 @@ caps than production.
 
 | Command | Description |
 |---------|-------------|
-| `aqueduct stores info` | Print each store's (observability / lineage / depot) resolved backend and location label |
+| `aqueduct stores info` | Print each store's (observability / depots) resolved backend and location label |
 | `aqueduct stores migrate --from-duckdb <file> [--store depot]` | Copy depot KV rows from a source DuckDB file into the configured target backend (Postgres/Redis). Idempotent. v1 migrates `depot` only. |
 
 The target backend is read from `aqueduct.yml` (`stores.*`) — set it to `postgres`/`redis` **before** running `migrate`. See [Production Guide](production_guide.md) for promoting a DuckDB project to a server backend.

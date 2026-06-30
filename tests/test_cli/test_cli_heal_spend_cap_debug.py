@@ -18,8 +18,9 @@ aqueduct: '1.0'
 id: fail_bp
 name: Fail BP
 agent:
-  approval: aggressive
+  approval: auto
   max_heal_attempts_per_hour: 1
+  max_patches: 2
 modules:
   - id: m1
     type: Ingress

@@ -1,5 +1,6 @@
 import sys
 import pytest
+pytestmark = pytest.mark.spark
 import logging
 from unittest.mock import MagicMock, patch
 from collections import namedtuple

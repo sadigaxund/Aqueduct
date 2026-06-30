@@ -107,8 +107,6 @@ agent:
   #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   #
-  # `approval:` is a deprecated alias for `approval:` (parses with a warning until 2.0).
-  # Legacy: `approval: aggressive` still parses but is deprecated → use `auto` + max_patches.
   approval: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
@@ -239,7 +237,7 @@ agent:
   # timeout: 300.0               # seconds; increase for slow local models
   # provider_options: {}         # extra payload keys for openai_compat endpoints
   #                              # (ollama_* keys land in Ollama's options block)
-  # max_reprompts: 5             # legacy single-axis cap — prefer `budget:` below
+  # max_reprompts: 5             # single-axis cap — prefer `budget:` below for multi-axis control
   #                              
   # Multi-axis budget (available at both engine and blueprint level):
   # budget:

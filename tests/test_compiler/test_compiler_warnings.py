@@ -1,9 +1,11 @@
-import pytest
 import warnings
 from pathlib import Path
+
+import pytest
+
 from aqueduct import AqueductWarning
-from aqueduct.parser.parser import parse
 from aqueduct.compiler.compiler import compile as compiler_compile
+from aqueduct.parser.parser import parse
 
 pytestmark = pytest.mark.unit
 
@@ -98,6 +100,81 @@ edges:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 _compile_yaml(yaml_str, tmp_path)
+
+    def test_spillway_condition_no_edge_warns(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    config:
+      op: sql
+      query: SELECT * FROM in
+      spillway_condition: "id < 0"
+  - id: out
+    type: Egress
+    label: OUT
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: out
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert any(
+                "spillway_port_mismatch" in str(x.message)
+                and "no spillway edge" in str(x.message)
+                for x in w
+            )
+
+    def test_spillway_both_present_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    config:
+      op: sql
+      query: SELECT * FROM in
+      spillway_condition: "id < 0"
+  - id: main
+    type: Egress
+    label: MAIN
+    config: {format: parquet, path: main, mode: overwrite}
+  - id: spill
+    type: Egress
+    label: SPILL
+    config: {format: parquet, path: spill, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: main
+  - from: ch
+    to: spill
+    port: spillway
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("spillway_port_mismatch" in str(x.message) for x in w)
 
     def test_incremental_channel_no_checkpoint_warns(self, tmp_path):
         yaml_str = """

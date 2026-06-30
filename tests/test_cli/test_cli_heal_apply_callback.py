@@ -97,8 +97,9 @@ aqueduct: "1.0"
 id: test_bp
 name: Test BP
 agent:
-  approval: aggressive
+  approval: auto
   sandbox_mode: "off"
+  max_patches: 2
   guardrails:
     forbidden_ops: ["remove_module"]
 modules:
@@ -202,7 +203,7 @@ def test_cli_heal_wires_apply_callback(
     mock_open.return_value = mock_store
 
     # row_records mock query results
-    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, started_at, finished_at
+    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, provenance_json, started_at, finished_at
     fc_row = (
         "run-123",
         "test_bp",
@@ -211,6 +212,7 @@ def test_cli_heal_wires_apply_callback(
         "Traceback test",
         # manifest_json carries the guardrails config under agent
         '{"id": "test_bp", "modules": [{"id": "m1", "type": "Ingress"}], "agent": {"guardrails": {"forbidden_ops": ["remove_module"]}}}',
+        None,  # provenance_json
         "2023-01-01T00:00:00Z",
         "2023-01-01T00:01:00Z"
     )
