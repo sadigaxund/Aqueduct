@@ -1449,6 +1449,35 @@ def test_execute_assert_end_to_end_abort(spark: SparkSession, tmp_path):
     assert "got 5, expected >= 10" in result.module_results[1].error
 
 
+def test_execute_assert_non_assert_error_fails_cleanly(spark: SparkSession, tmp_path):
+    """Regression for ASSERT_FRESHNESS_CRASH (executor.py generic catch): any
+    non-AssertError exception raised inside execute_assert (here, a Spark
+    AnalysisException from a malformed `sql` rule referencing a missing
+    column) must be recorded as a clean module error, not an unhandled
+    exception that propagates past `execute()`."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+
+    manifest = Manifest(
+        blueprint_id="test.assert_non_assert_error",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="ast", type="Assert", label="Ast", config={
+                "rules": [{"type": "sql", "expr": "sum(no_such_column) > 0", "on_fail": "abort"}]
+            }),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="ast", port="main"),
+        ),
+        context={}, spark_config={}
+    )
+    result = execute(manifest, spark)
+    assert result.status == "error"
+    assert result.module_results[1].module_id == "ast"
+    assert result.module_results[1].status == "error"
+    assert result.module_results[1].exception is not None
+
+
 def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
     in_path = str(tmp_path / "in.parquet")
     spark.range(5).write.parquet(in_path)

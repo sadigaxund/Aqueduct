@@ -139,6 +139,42 @@ def test_freshness_all_nulls(spark: SparkSession):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
 
 
+def test_freshness_numeric_unix_timestamp_passes(spark: SparkSession):
+    """A long-typed column holding Unix seconds (not a datetime) still works."""
+    df = spark.range(10).withColumn("ts", F.unix_timestamp(F.current_timestamp()))
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24}]}
+    )
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert quarantine is None
+
+
+def test_freshness_non_numeric_string_fails_cleanly(spark: SparkSession):
+    """Regression for ASSERT_FRESHNESS_CRASH: a non-numeric string in the
+    freshness column must raise a clean AssertError, not a raw ValueError
+    from `float(max_ts)`."""
+    df = spark.range(10).withColumn("ts", F.lit("{{ yesterday }}"))
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}]}
+    )
+    with pytest.raises(AssertError, match=r"freshness: column 'ts' has non-numeric value"):
+        execute_assert(module, df, spark, "run-1", "blueprint-1")
+
+
+def test_freshness_non_numeric_string_warns_no_crash(spark: SparkSession, caplog):
+    """Same bad-data scenario, but on_fail=warn must complete without raising."""
+    df = spark.range(10).withColumn("ts", F.lit("not-a-timestamp"))
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "warn"}]}
+    )
+    passing, quarantine = execute_assert(module, df, spark, "run-1", "blueprint-1")
+    assert quarantine is None
+    assert "freshness: column 'ts' has non-numeric value" in caplog.text
+
+
 def test_sql_rule_passes(spark: SparkSession):
     df = spark.range(10).withColumn("amt", F.col("id") * 10)
     module = Module(

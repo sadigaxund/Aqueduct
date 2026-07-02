@@ -405,7 +405,16 @@ def _batch_aggregate_rules(
                     if hasattr(max_ts, "timestamp"):
                         ts_utc = max_ts.replace(tzinfo=UTC) if max_ts.tzinfo is None else max_ts
                     else:
-                        ts_utc = datetime.fromtimestamp(float(max_ts), tz=UTC)
+                        try:
+                            ts_utc = datetime.fromtimestamp(float(max_ts), tz=UTC)
+                        except (ValueError, TypeError):
+                            col = rule.get("column", "?")
+                            _handle_fail(
+                                on_fail, module_id, AssertRuleType.FRESHNESS,
+                                f"freshness: column '{col}' has non-numeric value {max_ts!r}",
+                                blueprint_id, run_id, error_type=rule.get("error_type"),
+                            )
+                            continue
                     age_hours = (datetime.now(tz=UTC) - ts_utc).total_seconds() / 3600
                     if age_hours > max_age_hours:
                         _handle_fail(

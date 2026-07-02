@@ -1292,6 +1292,12 @@ def execute(
                     )
                     _signal_fail(trigger_agent=exc.trigger_agent)
                     return
+                except Exception as exc:  # noqa: BLE001 — assert dispatch must fail cleanly, not leak a raw traceback
+                    local_results.append(
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc)
+                    )
+                    _signal_fail()
+                    return
 
                 frame_store[module.id] = passing_df
                 if quarantine_df is not None and has_spillway_edge:
