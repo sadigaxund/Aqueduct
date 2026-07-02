@@ -30,6 +30,18 @@ When a patch is applied, Aqueduct currently re-runs the entire pipeline from the
 
 ---
 
+## Remote-Filesystem Checkpoint Root (s3a / hdfs)
+
+Checkpoints (`checkpoint: true` on a module or manifest) are written to a local-filesystem path derived from the observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`). On a distributed cluster where workers don't share the driver's filesystem (Docker-based Spark Standalone, k8s), the write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning — the run succeeds but the recompute-avoidance benefit is lost.
+
+**What it takes:** the Parquet read/write already accepts `s3a://` URIs natively; the work is the surrounding bookkeeping. Six pathlib-only call sites in `executor/spark/executor.py` (`mkdir`, the `_aq_done` done-marker `write_text`, the `_manifest_hash` write/read, and three `exists()` checks in the `--resume` reload loop) need Hadoop-FS-API equivalents (py4j, same pattern as `metrics.py`), best wrapped in a small local/remote checkpoint-IO abstraction. Plus a new `checkpoint_root:` engine-config key (specs §10 + template + production guide).
+
+**Why deferred:** the `_aq_done` marker semantics on object stores (no atomic rename, eventual consistency) is a real resume-correctness design question, and the degraded mode is safe — only an optimisation is lost, with a volume-mount workaround for Docker setups.
+
+**Status:** Deferred.
+
+---
+
 ## MCP (Model Context Protocol) Readiness
 
 Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools.
