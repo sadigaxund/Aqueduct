@@ -4,6 +4,19 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
+from enum import StrEnum
+
+
+class ExecutionStatus(StrEnum):
+    """Module/blueprint execution outcome. Subclasses ``str`` so stored/serialized
+    values (manifests, DDL rows, JSON output) are unchanged — ``ExecutionStatus.SUCCESS
+    == "success"`` and ``str(ExecutionStatus.SUCCESS) == "success"``. Comparison sites
+    should use the enum members; ``ModuleResult.status`` / ``ExecutionResult.status``
+    stay typed ``str`` since callers may still hand in plain strings."""
+
+    SUCCESS = "success"
+    ERROR = "error"
+    SKIPPED = "skipped"
 
 
 def concise_error(text: str | None, *, limit: int = 300) -> str:

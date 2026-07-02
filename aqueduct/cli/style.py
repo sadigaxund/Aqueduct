@@ -62,6 +62,13 @@ def info(msg: str, *, err: bool = False) -> None:
     click.echo(click.style(msg, fg="bright_black"), err=err)
 
 
+def dim(text: str) -> str:
+    """Dim-style a box-drawing separator (e.g. the ``_rule()`` header divider) or
+    other structural text that isn't a ✓/✗/⚠ status line. Returns the styled
+    string rather than echoing it — callers still control ``err=``."""
+    return click.style(text, dim=True)
+
+
 # Semantic icon → colour. ✓ success, ✗ failure, ⚠ warning, ⓘ/◆/↻/▸/⏭ accents.
 _ICON_COLOR = {
     "✓": "green", "✗": "red", "⚠": "yellow",

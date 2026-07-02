@@ -23,6 +23,7 @@ from aqueduct.cli import (
 )
 from aqueduct.cli.output import emit
 from aqueduct.cli.style import error as _error
+from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
 
 # ── aqueduct report ───────────────────────────────────────────────────────────
@@ -205,7 +206,7 @@ def report(
         return
 
     # table format
-    status_icon = "✓" if status == "success" else "✗"
+    status_icon = "✓" if status == ExecutionStatus.SUCCESS else "✗"
     click.echo(f"{status_icon} run_id={run_id_val}  blueprint={blueprint_id}  status={status}")
     click.echo(f"  started:  {started_at}")
     click.echo(f"  finished: {finished_at or '(running)'}")
@@ -213,7 +214,7 @@ def report(
     click.echo(f"  {'Module':<30} {'Status':<10} Error")
     click.echo(f"  {'-'*30} {'-'*10} {'-'*40}")
     for mr in module_results:
-        icon = "✓" if mr.get("status") == "success" else ("⏭" if mr.get("status") == "skipped" else "✗")
+        icon = "✓" if mr.get("status") == ExecutionStatus.SUCCESS else ("⏭" if mr.get("status") == ExecutionStatus.SKIPPED else "✗")
         err = mr.get("error") or ""
         if len(err) > 60:
             err = err[:57] + "..."
@@ -404,13 +405,13 @@ def _render_run_html(
     def e(v: object) -> str:
         return escape("" if v is None else str(v))
 
-    status_cls = "ok" if status == "success" else "err"
+    status_cls = "ok" if status == ExecutionStatus.SUCCESS else "err"
 
     # Module results table
     res_rows = []
     for mr in module_results:
         st = mr.get("status", "")
-        cls = "ok" if st == "success" else ("skip" if st == "skipped" else "err")
+        cls = "ok" if st == ExecutionStatus.SUCCESS else ("skip" if st == ExecutionStatus.SKIPPED else "err")
         res_rows.append(
             f"<tr><td>{e(mr.get('module_id'))}</td>"
             f"<td><span class='badge {cls}'>{e(st)}</span></td>"
@@ -830,8 +831,8 @@ def runs(
     click.echo(f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}")
     click.echo(f"  {'-'*38} {'-'*30} {'-'*10} {'-'*22} {'-'*20}")
     for run_id_val, bp_id, status, started_at, finished_at, first_failed in rows:
-        icon = "✓" if status == "success" else ("↻" if status == "running" else "✗")
-        failed_col = (first_failed or "") if status == "error" else ""
+        icon = "✓" if status == ExecutionStatus.SUCCESS else ("↻" if status == "running" else "✗")
+        failed_col = (first_failed or "") if status == ExecutionStatus.ERROR else ""
         click.echo(f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}")
 
 

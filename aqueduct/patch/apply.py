@@ -405,8 +405,7 @@ def apply_patch_file(
             if patch_path.exists():  # remove from pending — applied + archived
                 patch_path.unlink()
     except Exception as exc:
-        import sys
-        print(f"[patch] warning: could not archive patch to {archive_path}: {exc}", file=sys.stderr)
+        logger.warning("could not archive patch to %s: %s", archive_path, exc)
 
     # Phase 53 — mark applied in the index (+ new object_key) so the heal cache
     # replays it from applied/ and stops surfacing it as still-pending.

@@ -27,6 +27,7 @@ from aqueduct.agent.budget import (
 )
 from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.parse import (
+    AgentParseError,
     _detect_structural_error,
     _format_reprompt_error,
     _format_reprompt_for_next_turn,
@@ -594,7 +595,7 @@ def generate_agent_patch(
         recovery_applied: list[str] = []
         try:
             patch_spec, recovery_applied = _parse_patch_spec(raw)
-        except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+        except (ValidationError, json.JSONDecodeError, ValueError, AgentParseError) as exc:
             parse_exc = exc
 
         if parse_exc is not None:

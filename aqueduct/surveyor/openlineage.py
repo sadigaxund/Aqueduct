@@ -4,7 +4,8 @@ Emits OpenLineage RunEvents — START on run begin, COMPLETE / FAIL on end — t
 OpenLineage-compatible backend (Marquez, DataHub, Atlan) over ``httpx`` in a
 daemon thread. Async, non-blocking, best-effort: delivery never blocks the run
 and never raises (mirrors ``surveyor/webhook.py``). The blueprint result is
-authoritative; a dropped lineage event is logged to stderr and swallowed.
+authoritative; a dropped lineage event is logged via ``logger.warning``
+(``_RedactingFilter`` covers the output) and swallowed.
 
 The output datasets carry the column-level **``columnLineage``** facet, built
 from the same compile-time lineage rows that populate the ``column_lineage``
@@ -19,7 +20,7 @@ emitted (zero cost).
 """
 from __future__ import annotations
 
-import sys
+import logging
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -27,6 +28,8 @@ from typing import Any
 
 from aqueduct.infra.http import deliver_with_retry, fire_and_forget
 from aqueduct.models import ModuleType
+
+logger = logging.getLogger(__name__)
 
 _PRODUCER = "https://github.com/sadigaxund/aqueduct"
 _RUN_EVENT_SCHEMA = (
@@ -193,7 +196,7 @@ class OpenLineageEmitter:
                 error_message=error_message,
             )
         except Exception as exc:  # noqa: BLE001 — building an event must never break a run
-            print(f"[surveyor] openlineage event build failed: {exc}", file=sys.stderr)
+            logger.warning("openlineage event build failed: %s", exc)
             return None
         if event_type == "START":
             self._started_runs.add(run_id)

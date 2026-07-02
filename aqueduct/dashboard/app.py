@@ -488,10 +488,16 @@ def _runs_tab(handles):
                     st.plotly_chart(fig, width="stretch")
             elif sig_type == "schema_snapshot":
                 prev: dict[str, str] = {}
+                schema_changes: list[dict] = []
                 for s in sigs:
                     fields = {f["name"]: f["type"] for f in (s.payload.get("fields") or [])}
-                    changed = {c: (prev[c], fields[c]) for c in fields  # noqa: F841  # TODO: surface schema-snapshot diff (incomplete feature)
+                    changed = {c: (prev[c], fields[c]) for c in fields
                                if c in prev and prev[c] != fields[c]}
+                    for c, (before, after) in changed.items():
+                        schema_changes.append({
+                            "run": s.started_at[:19], "column": c,
+                            "before": before, "after": after,
+                        })
                     prev = fields
                 rows_l = []
                 for s in reversed(sigs):
@@ -500,6 +506,11 @@ def _runs_tab(handles):
                                    **{f["name"]: f["type"] for f in fields}})
                 df = pd.DataFrame(rows_l)
                 st.dataframe(df, width="stretch", hide_index=True)
+                if schema_changes:
+                    st.caption(f"⚠ {len(schema_changes)} column type change(s) across these runs")
+                    st.dataframe(pd.DataFrame(reversed(schema_changes)), width="stretch", hide_index=True)
+                elif len(sigs) >= 2:
+                    st.caption("No column type changes across these runs.")
             elif sig_type == "row_count_estimate":
                 rows_l = []
                 for s in reversed(sigs):
@@ -1099,11 +1110,17 @@ def _quality_tab(cfg, store_dir):
 
         elif sig_type == "schema_snapshot":
             prev: dict[str, str] = {}
+            schema_changes: list[dict] = []
             for s in sigs:
                 fields = {f["name"]: f["type"]
                           for f in (s.payload.get("fields") or [])}
-                changed = {c: (prev[c], fields[c]) for c in fields  # noqa: F841  # TODO: surface schema-snapshot diff (incomplete feature)
+                changed = {c: (prev[c], fields[c]) for c in fields
                            if c in prev and prev[c] != fields[c]}
+                for c, (before, after) in changed.items():
+                    schema_changes.append({
+                        "run": s.run_id[:8], "started": s.started_at[:19],
+                        "column": c, "before": before, "after": after,
+                    })
                 prev = fields
             rows_l = []
             for s in reversed(sigs):
@@ -1112,6 +1129,11 @@ def _quality_tab(cfg, store_dir):
                                **{f["name"]: f["type"] for f in fields}})
             df = pd.DataFrame(rows_l)
             st.dataframe(df, width="stretch", hide_index=True)
+            if schema_changes:
+                st.caption(f"⚠ {len(schema_changes)} column type change(s) across these runs")
+                st.dataframe(pd.DataFrame(reversed(schema_changes)), width="stretch", hide_index=True)
+            elif len(sigs) >= 2:
+                st.caption("No column type changes across these runs.")
 
         elif sig_type == "row_count_estimate":
             rows_l = []

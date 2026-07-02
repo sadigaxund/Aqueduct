@@ -287,6 +287,7 @@ def _load_engine_config(
 
     from aqueduct.cli import _resolve_and_load_env as _renv
     from aqueduct.cli.style import error as _err
+    from aqueduct.cli.style import warn as _warn
 
     # ── .env loading ───────────────────────────────────────────────────────────
     _renv(env_file, _project_root / blueprint_abs.name, cli_env=cli_env)
@@ -316,10 +317,10 @@ def _load_engine_config(
             click.echo(f"✗ {exc}", err=True)
             _sys.exit(exit_codes.CONFIG_ERROR)
         if _config_set_nested.get("danger"):
-            click.echo(click.style(
-                f"\u26a0  --set DANGER override(s) (single-run, NOT persisted): "
-                f"{_config_set_nested['danger']}", fg="red", bold=True,
-            ), err=True)
+            _warn(
+                f"--set DANGER override(s) (single-run, NOT persisted): "
+                f"{_config_set_nested['danger']}"
+            )
 
     # ── Store dir resolution ───────────────────────────────────────────────────
     _using_default_obs_path = False
@@ -980,7 +981,7 @@ def run(
     from pathlib import Path
 
     from aqueduct.executor import ExecuteError
-    from aqueduct.executor.models import ExecutionResult, ModuleResult
+    from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
     from aqueduct.parser.parser import ParseError, parse
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
@@ -1065,16 +1066,17 @@ def run(
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
             _remote_result = _submitter.poll(_job_id, cfg)
-            _logs = _submitter.fetch_logs(_job_id, cfg) if _remote_result.status == "error" else ""
+            _logs = _submitter.fetch_logs(_job_id, cfg) if _remote_result.status == ExecutionStatus.ERROR else ""
 
-            if _remote_result.status == "success":
+            if _remote_result.status == ExecutionStatus.SUCCESS:
                 for mr in _remote_result.module_results:
-                    icon = "✓" if mr.status == "success" else "✗"
+                    icon = "✓" if mr.status == ExecutionStatus.SUCCESS else "✗"
                     line = f"  {icon} {mr.module_id}"
                     if mr.error:
                         line += f"  — {concise_error(mr.error)}"
                     click.echo(line)
-                click.echo(click.style(_rule(), dim=True))
+                from aqueduct.cli.style import dim as _dim
+                click.echo(_dim(_rule()))
                 click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
                 sys.exit(exit_codes.SUCCESS)
             else:
@@ -1145,17 +1147,19 @@ def run(
                 click.echo(f"✗ sandbox run failed: {exc}", err=True)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-            if result.status != "success":
-                failing = next((r for r in result.module_results if r.status == "error"), None)
+            if result.status != ExecutionStatus.SUCCESS:
+                failing = next((r for r in result.module_results if r.status == ExecutionStatus.ERROR), None)
                 detail = f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
-                click.echo(click.style(f"✗ sandbox run status={result.status}{detail}", fg="red"), err=True)
+                from aqueduct.cli.style import error as _style_error
+                _style_error(f"sandbox run status={result.status}{detail}")
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-            _ran = sum(1 for r in result.module_results if r.status == "success")
-            click.echo(click.style(
-                f"✓ sandbox run succeeded — {_ran} module(s) executed, "
-                f"{len(egress_targets)} Egress skipped", fg="green",
-            ))
+            _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
+            from aqueduct.cli.style import success as _style_success
+            _style_success(
+                f"sandbox run succeeded — {_ran} module(s) executed, "
+                f"{len(egress_targets)} Egress skipped"
+            )
             for tgt in egress_targets:
                 click.echo(
                     f"    · skipped Egress {tgt['id']!r} → "
@@ -1247,13 +1251,13 @@ def run(
             click.echo()
             _w = max((len(mr.module_id) for mr in _result.module_results), default=0)
             for mr in _result.module_results:
-                if mr.status == "success":
+                if mr.status == ExecutionStatus.SUCCESS:
                     icon = click.style("✓", fg="green")
-                elif mr.status == "skipped":
+                elif mr.status == ExecutionStatus.SKIPPED:
                     icon = click.style("⏭", fg="cyan")
                 else:
                     icon = click.style("✗", fg="red", bold=True)
-                if mr.status == "error" and mr.error:
+                if mr.status == ExecutionStatus.ERROR and mr.error:
                     line = f"  {icon} {mr.module_id}  {click.style('— ' + concise_error(mr.error), fg='red')}"
                 else:
                     rows, dur = _metrics.get(mr.module_id, (None, None))
@@ -1309,9 +1313,9 @@ def run(
                 result = ExecutionResult(
                     blueprint_id=manifest.blueprint_id,
                     run_id=iteration_run_id,
-                    status="error",
+                    status=ExecutionStatus.ERROR,
                     module_results=(
-                        ModuleResult(module_id="_executor", status="error", error=str(exc)),
+                        ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
                     ),
                 )
 
@@ -1322,7 +1326,7 @@ def run(
             # summary so a heal attempt always reads after the result it heals.
             _render_module_summary(result)
 
-            if result.status == "success":
+            if result.status == ExecutionStatus.SUCCESS:
                 break
 
             # trigger_agent flag overrides approval_mode=disabled — escalate to human staging at minimum
@@ -1535,7 +1539,7 @@ def run(
                         f"{resolved_agent_model} · {resolved_agent_provider} "
                         f"· ≤{resolved_agent_max_reprompts} reprompts"
                     )
-                click.echo(click.style(f"│  ◆ {_agent_info}", fg="cyan"), err=True)
+                click.echo(_style_heal_line(f"│  ◆ {_agent_info}"), err=True)
                 _transcript.header(
                     patch_count + 1 if max_patches > 1 else 1,
                     resolved_agent_max_reprompts,
@@ -2129,10 +2133,10 @@ def run(
                     result2 = ExecutionResult(
                         blueprint_id=manifest.blueprint_id,
                         run_id=str(uuid.uuid4()),
-                        status="error",
-                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                        status=ExecutionStatus.ERROR,
+                        module_results=(ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),),
                     )
-                patch_success = result2.status == "success"
+                patch_success = result2.status == ExecutionStatus.SUCCESS
                 failure_ctx2 = surveyor.record(result2, patched=patch_success)
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
@@ -2205,16 +2209,16 @@ def run(
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
-            _x = click.style("✗", fg="red", bold=True)
-            click.echo(click.style(_rule(), dim=True), err=True)
+            from aqueduct.cli.style import dim as _dim
+            from aqueduct.cli.style import error as _style_error
+            click.echo(_dim(_rule()), err=True)
             if failure_ctx:
-                click.echo(
-                    f"{_x} blueprint failed  run_id={run_id}"
-                    f"  failed_module={failure_ctx.failed_module}",
-                    err=True,
+                _style_error(
+                    f"blueprint failed  run_id={run_id}"
+                    f"  failed_module={failure_ctx.failed_module}"
                 )
             else:
-                click.echo(f"{_x} blueprint failed  run_id={run_id}", err=True)
+                _style_error(f"blueprint failed  run_id={run_id}")
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
             #   HEAL_PENDING(3)   — a patch was staged for human/ci review
@@ -2243,8 +2247,10 @@ def run(
             )
 
         status_label = "patched" if result.status == "patched" else "complete"
-        click.echo(click.style(_rule(), dim=True))
-        click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint {status_label}")
+        from aqueduct.cli.style import dim as _dim
+        from aqueduct.cli.style import success as _style_success
+        click.echo(_dim(_rule()))
+        _style_success(f"blueprint {status_label}")
     finally:
         os.chdir(_original_cwd)
 

@@ -25,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from aqueduct.executor.models import ExecutionResult
+from aqueduct.executor.models import ExecutionResult, ExecutionStatus
 from aqueduct.models import Manifest
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.ddl import (
@@ -63,14 +63,14 @@ def _iso(dt: datetime) -> str:
 def _first_failed_module(result: ExecutionResult) -> str:
     """Return the module_id of the first failing module, or '_executor'."""
     for mr in result.module_results:
-        if mr.status == "error":
+        if mr.status == ExecutionStatus.ERROR:
             return mr.module_id
     return "_executor"
 
 
 def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
     for mr in result.module_results:
-        if mr.status == "error" and mr.error:
+        if mr.status == ExecutionStatus.ERROR and mr.error:
             return mr.error
     if exc is not None:
         return str(exc)
@@ -80,7 +80,7 @@ def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
 def _first_error_type(result: ExecutionResult) -> str | None:
     """Return the error_type of the first failing module, or None for infra errors."""
     for mr in result.module_results:
-        if mr.status == "error":
+        if mr.status == ExecutionStatus.ERROR:
             return getattr(mr, "error_type", None)
     return None
 
@@ -273,7 +273,7 @@ class Surveyor:
              for r in result.module_results]
         ))
 
-        effective_status = "patched" if (patched and result.status == "success") else result.status
+        effective_status = "patched" if (patched and result.status == ExecutionStatus.SUCCESS) else result.status
         # 1.1.0 fix — multi-patch heal mints a new run_id per iteration. The
         # outer run_id is INSERTed by start(); iteration 1+ never had a row
         # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,
@@ -304,7 +304,7 @@ class Surveyor:
                 ],
             )
 
-        if result.status == "success":
+        if result.status == ExecutionStatus.SUCCESS:
             # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).
             if self._openlineage is not None:
                 self._openlineage.emit("COMPLETE", run_id=result.run_id, event_time=_iso(finished_at))
@@ -320,7 +320,7 @@ class Surveyor:
         live_exc: BaseException | None = exc
         if live_exc is None:
             for _mr in result.module_results:
-                if _mr.status == "error" and getattr(_mr, "exception", None) is not None:
+                if _mr.status == ExecutionStatus.ERROR and getattr(_mr, "exception", None) is not None:
                     live_exc = _mr.exception
                     break
         stack_trace: str | None = None
@@ -435,7 +435,7 @@ class Surveyor:
             )
 
         if self._webhook_config:
-            attempt = sum(1 for mr in result.module_results if mr.status == "error")
+            attempt = sum(1 for mr in result.module_results if mr.status == ExecutionStatus.ERROR)
             template_vars = {
                 "run_id": ctx.run_id,
                 "blueprint_id": ctx.blueprint_id,

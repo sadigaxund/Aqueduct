@@ -268,15 +268,19 @@ def lint_cmd(
         )
     else:
         if not findings:
-            click.echo(click.style(f"✓ {blueprint}: no lint findings", fg="green"))
+            from aqueduct.cli.style import success as _style_success
+            _style_success(f"{blueprint}: no lint findings")
         else:
+            from aqueduct.cli.style import error as _style_error
+            from aqueduct.cli.style import warn as _style_warn
             for f in findings:
                 sev = _sev(f)
-                color = "red" if sev == "error" else "yellow"
                 loc = f" [{f.module_id}]" if f.module_id else ""
-                click.echo(click.style(
-                    f"  {sev.upper():<5} {f.rule_id}{loc}: {f.message}", fg=color,
-                ))
+                msg = f"{sev.upper():<5} {f.rule_id}{loc}: {f.message}"
+                if sev == "error":
+                    _style_error(msg, err=False)
+                else:
+                    _style_warn(msg, err=False)
             click.echo()
             click.echo(f"{len(findings)} finding(s): {n_error} error, {n_warn} warn")
 
@@ -415,6 +419,7 @@ def doctor(
 
     from aqueduct.cli.style import COLOR as _COLOR
     from aqueduct.cli.style import ICON as _ICON
+    from aqueduct.cli.style import dim as _dim
     from aqueduct.cli.style import emit_warnings as _emit_warnings
     from aqueduct.cli.style import error as _error
     from aqueduct.cli.style import info as _info
@@ -455,9 +460,6 @@ def doctor(
     from aqueduct.cli import _resolve_project_root
     _anchor = _resolve_project_root(blueprint_path=blueprint_path, config_path=config_path)
     _resolve_and_load_env(env_file, _anchor / (blueprint_path or config_path or Path(_DEFAULT_CONFIG_FILENAME)).name, cli_env=cli_env)
-
-    _STATUS_ICON = _ICON
-    _STATUS_COLOR = _COLOR
 
     # Group assignment for sectioned display + JSON. Most checks already carry
     # a `group`; leaf checks default to "general" — stamp those by name here so
@@ -570,8 +572,8 @@ def doctor(
             continue
         click.echo(click.style(f"  {_GROUP_LABEL.get(grp, grp.title())}", fg=_COLOR['header'], bold=True))
         for r in rows:
-            icon = _STATUS_ICON[r.status]
-            color = _STATUS_COLOR[r.status]
+            icon = _ICON[r.status]
+            color = _COLOR[r.status]
             label = r.name.ljust(col_w)
             elapsed = f"  [{r.elapsed_ms}ms]" if r.elapsed_ms > 0 else ""
             line = f"    {icon} {label}{r.detail}{elapsed}"
@@ -580,12 +582,9 @@ def doctor(
     if hidden:
         names = ", ".join(r.name for r in hidden)
         # Same aligned `{glyph} {name.ljust(col_w)}{detail}` shape as the rows above.
-        click.echo(click.style(
-            f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)",
-            fg="bright_black",
-        ))
+        _info(f"  · {'more'.ljust(col_w)}{names}  (ok / not applicable / not configured — --verbose)")
 
-    click.echo(click.style(_rule(), dim=True))
+    click.echo(_dim(_rule()))
     if any_fail:
         _error("one or more checks failed")
         sys.exit(exit_codes.CONFIG_ERROR)

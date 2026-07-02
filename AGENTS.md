@@ -11,7 +11,7 @@ Aqueduct is a declarative Spark blueprint engine with LLM-driven self-healing.
 |---|---|---|
 | `docs/specs.md` | Blueprint format, architecture (4-layer) §3, Modules §4, Context Registry §5, Lineage §7, Self-Healing & Agent §8, Type System §9, Deployment & Spark Integration §10, Engine Scope §11 | Domain semantics, anything user-facing about the engine itself |
 | `docs/cli_reference.md` | Every CLI command and flag with defaults | Touching `@click.option` / new subcommand in `aqueduct/cli/`, or answering "what flag does X" |
-| `docs/observability_guide.md` | Store schemas (run_records, heal_attempts, healing_outcomes, failure_contexts, column_lineage, benchmark_results, patch_simulation, signal_overrides, explain_snapshot, probe_signals, module_metrics, maintenance_metrics, depot_kv) + diagnostic SQL cookbook | DDL / `ALTER TABLE` changes in `aqueduct/surveyor/` or `aqueduct/executor/`, or writing post-mortem queries |
+| `docs/observability_guide.md` | Store schemas (run_records, heal_attempts, healing_outcomes, failure_contexts, column_lineage, benchmark_results, patch_simulation, signal_overrides, explain_snapshot, probe_signals, module_metrics, maintenance_metrics, depot_kv, patch_index, drift_checks, channel_fingerprints) + diagnostic SQL cookbook | DDL / `ALTER TABLE` changes in `aqueduct/surveyor/` or `aqueduct/executor/`, or writing post-mortem queries |
 | `docs/spark_guide.md` | Compiler warnings, performance, tuning, Spark behavior gotchas | Modifying Executor modules, adding Channel ops, debugging Spark perf |
 | `docs/production_guide.md` | Cluster deployment, env config, Spark cluster config, path conventions, danger settings, Delta operational notes, production patch lifecycle, security, readiness checklist | Anything related to running Aqueduct on a cluster (k8s, YARN, Databricks, …) |
 | `docs/compatibility.md` | Python × Spark support matrix, cloudpickle constraint, production pinning | Changing version pins in `pyproject.toml`, or answering "does X version combo work" |
@@ -83,6 +83,8 @@ When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `
 
 **Documented exception (dashboard):** `aqueduct/dashboard/app.py::main()` lazily imports `pyspark.sql` inside the function body as a narwhals/plotly circular-import workaround. It is already lazy and does not violate the top-level-purity rule. Do not promote it to module-level or remove the workaround comment.
 
+**Documented exception (executor→patch):** `aqueduct/executor/spark/executor.py::execute()` lazily imports `capture_plan_snapshot` from `aqueduct.patch.explain_gate` inside a function-body `try/except` to capture Phase 29b explain-plan snapshots for Gate 4 (plan-regression detection). This crosses the 4-layer boundary (Executor depending on Patch, which normally sits downstream of Surveyor) but is accepted because: the import is lazy (module-level `import aqueduct.executor.spark.executor` never pulls in `patch/`), it only fires when a `surveyor` or `explain_capture` sink is supplied, and the surrounding `except Exception` is broad-but-justified — plan-snapshot capture is a best-effort diagnostic that must never abort a run. Do not invert the dependency or hoist the import to module level.
+
 When adding an LLM provider: add `_call_<provider>()` in `aqueduct/agent/providers.py` using `httpx`. Wire dispatch in `_call_agent()`. No new dep needed.
 
 **`PROMPT_VERSION` bump policy** (`aqueduct/agent/loop.py`): bump **only** when `_SYSTEM_PROMPT_TEMPLATE` body, persona text, op table, schema-derived rules, or the worked example changes — anything the LLM sees on a *successful* turn. Do NOT bump for reprompt-loop tooling, `_format_validation_error` text, `_detect_structural_error` cases, the escalated-reprompt template, mechanical recovery passes (`_THINK_BLOCK_RE`, `_FENCE_BLOCK_RE`, `_LINE_COMMENT_RE`, `json_repair`), or `_parse_patch_spec` cleanups. Those are failure-path tooling — bumping for them pollutes `healing_outcomes.prompt_version` / `benchmark_results.prompt_version` correlation, making a parser tweak look like a prompt regression on the leaderboard.
@@ -153,11 +155,12 @@ modules.
 | Module | What it owns |
 |--------|--------------|
 | `surveyor.py` | Main Surveyor class: start/record/stop lifecycle. Re-imports the DDL constants and `_extract_structured_error` (kept under `aqueduct.surveyor.surveyor.*` for callers/tests) |
-| `ddl.py` | Observability-store `CREATE TABLE`/`ALTER TABLE` string constants (`_DDL`, `_SIGNAL_OVERRIDES_DDL`, `_EXPLAIN_SNAPSHOT_DDL`, `_HEAL_ATTEMPTS_DDL`, `_PHASE45_MIGRATION_DDL`). Pure SQL, no imports — re-exported by `surveyor.py` |
+| `ddl.py` | Observability-store `CREATE TABLE`/`ALTER TABLE` string constants (`_DDL`, `_SIGNAL_OVERRIDES_DDL`, `_EXPLAIN_SNAPSHOT_DDL`, `_HEAL_ATTEMPTS_DDL`). Pure SQL, no imports — re-exported by `surveyor.py` |
 | `error_extraction.py` | Structured Spark/Py4J error extraction (`_extract_structured_error`, `_parse_suggested_columns`). Lazily imports `pyspark.errors`/`py4j` INSIDE the function — top-level `import aqueduct.surveyor` stays `pyspark`-free. Re-exported by `surveyor.py` |
 | `models.py` | Frozen dataclasses: `RunRecord`, `FailureContext` (the LLM agent's input) |
 | `scenario.py` | Scenario benchmark framework: `load_scenario`, `_build_failure_ctx`, effect-based grader |
 | `webhook.py` | HTTP dispatch in daemon thread, `${VAR}` template rendering, redaction |
+| `openlineage.py` | OpenLineage RunEvent emission (START/COMPLETE/FAIL) to Marquez/DataHub/Atlan via `infra/http.py` daemon delivery — async, best-effort, never blocks the run; carries the column-level `columnLineage` facet. Configured by the top-level `lineage:` block; no `openlineage_url` → no emitter, zero cost |
 | `benchmark_store.py` | DuckDB persistence + regression detection for benchmark results |
 | `blob_store.py` | Back-compat shim (Phase 53) — `externalise`/`materialize` delegate to `stores/object_store.BlobStore`; new code uses `make_blob_store` directly |
 
@@ -171,6 +174,7 @@ modules.
 | `index.py` | `patch_index` relational table (Phase 53): the truth for the object-store patch lifecycle — status + signature metadata for backend-blind heal-cache lookups (pending/replay/coaching/history) without scanning `patches/` |
 | `preview.py` | Lineage gate (Gate 2) + sandbox gate (Gate 3): diff column impact, sandbox replay |
 | `explain_gate.py` | Plan regression gate (Gate 4): compare Exchange/Broadcast counts before vs after |
+| `ci.py` | CI kit for `approval: ci` — `on_patch_pending` webhook payload schema (`CI_WEBHOOK_REQUIRED_KEYS`) + payload validation. Serverless: a user-owned CI workflow receives the webhook and calls `aqueduct patch import` (see `docs/templates/ci-heal-workflow.yml`) |
 | `__init__.py` | Module description only |
 
 ### `aqueduct/stores/` — Pluggable store backends
@@ -184,6 +188,7 @@ modules.
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
 | `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 | `read.py` | Canonical backend-aware READ resolver (Phase 69): `resolve_duckdb_obs_path` (single source for the duckdb obs file — `cli._resolve_obs_db` delegates here) + `open_obs_read` (returns an `ObservabilityStore` for duckdb *or* postgres). All read commands must use it instead of raw `duckdb.connect` + hardcoded `.aqueduct/...` paths |
+| `queries.py` | The ONE read-time observability query layer (Phase 68) behind every viewer — `aqueduct studio` (via the `tui/data.py` re-export shim), the Streamlit dashboard, and `report --json`. Row dataclasses (`RunRow`, `RunDetail`, `LineageRow`, …) + `discover_stores`/`list_runs`/`run_detail`/`lineage`/`run_sql_readonly`. Backend-agnostic (`RelationalCursor`), no `textual`, no `pyspark`. New viewer query → add here, never inline SQL in a rendering surface |
 
 ### `aqueduct/infra/` — Cross-layer infrastructure utilities (no domain logic)
 
@@ -199,6 +204,16 @@ When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs
 |--------|--------------|
 | `depot.py` | `DepotStore` façade — delegates to whichever store backend is configured |
 | `__init__.py` | Empty |
+
+### `aqueduct/drift/` — Proactive schema-drift detection (`aqueduct drift`)
+
+| Module | What it owns |
+|--------|--------------|
+| `classifier.py` | Pure baseline-vs-live schema diff: *dropped/type-changed* = breaking (triggers a predicted heal), *added* = benign (audit only). No pyspark |
+| `context.py` | Synthetic in-memory `FailureContext` for a predicted failure — reuses the normal agent + apply-gate machinery unchanged; NOT persisted to `failure_contexts` (that table means "a real run failed") |
+| `store.py` | `drift_checks` audit table + self-owned baseline (latest row's `live_schema` is the next check's baseline — no Probe required) |
+
+The CLI command lives in `aqueduct/cli/drift.py`.
 
 ### `aqueduct/doctor/` — Pre-flight health checks
 
@@ -259,8 +274,9 @@ When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs
 
 | Module | Public API | What it owns |
 |--------|-----------|--------------|
-| `__init__.py` | `AgentPatchResult`, `PROMPT_VERSION`, `MAX_REPROMPTS`, `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `build_prompt`, `resolve_budget`, `AgentRunConfig`, `generate_cascade_patch` | Thin re-export facade + `resolve_budget()` |
+| `__init__.py` | `AgentPatchResult`, `PROMPT_VERSION`, `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `build_prompt`, `resolve_budget`, `AgentRunConfig`, `generate_cascade_patch` | Thin re-export facade + `resolve_budget()` |
 | `loop.py` | `generate_agent_patch`, `stage_patch_for_human`, `archive_patch`, `AgentPatchResult`, `PROMPT_VERSION` | Main orchestration loop, patch I/O, result type |
+| `constants.py` | `DEFAULT_MAX_TOKENS`, `DEFAULT_LLM_TIMEOUT`, `DEFAULT_LLM_MODEL`, `ANTHROPIC_API_VERSION` | Leaf-level shared defaults (no intra-package imports — circular-dep safe) |
 | `cascade.py` | `generate_cascade_patch` | Multi-model healing cascade — per-tier config inheritance, escalation on stuck/exhausted/deferred |
 | `prompts.py` | `build_prompt`, `_build_user_prompt`, `_build_system_prompt`, `_FIELD_ALIASES`, `_VALID_OPS` | Template strings, prompt construction, LLM-facing constants |
 | `providers.py` | `_call_agent`, `_call_anthropic`, `_call_openai_compat`, `_ProviderConfig` | HTTP dispatch to Anthropic / OpenAI-compatible endpoints |
@@ -292,12 +308,14 @@ keep working. Command families live in submodules:
 | `__init__.py` | `cli` group + group options; all shared `_*` helpers; command registration/re-export |
 | `run.py` | `run` (+ `--sandbox`), `compile` |
 | `heal.py` | `heal` |
+| `drift.py` | `drift` — proactive schema-drift check + pre-emptive heal (the reactive arm's counterpart); domain logic lives in `aqueduct/drift/` |
 | `patch.py` | `patch` group: preview/apply/reject/commit/discard/list/log/rollback |
 | `observability.py` | `report`, `runs`, `lineage`, `signal` |
 | `benchmark.py` | `benchmark`, `benchmark-diff`, `benchmark-stats` |
 | `diagnostics.py` | `validate`, `lint`, `schema`, `doctor` |
 | `stores.py` | `stores` group (info, migrate) |
 | `output.py` | Consolidated output funnel: `emit()` (structured ``--format``), `warn()` (diagnostic warnings) |
+| `style.py` | The single user-facing output vocabulary: `error`/`success`/`warn`/`info` + `StyledLogFormatter` (see "CLI output speaks ONE vocabulary" rule) |
 | `project.py` | `init`, `completion`, `test` |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
@@ -312,7 +330,7 @@ helpers go in `__init__`.
 
 | Module | What it owns |
 |--------|--------------|
-| `data.py` | Read-only DuckDB query helpers (`discover_stores`, `list_runs`, `run_detail`, `run_sql`, `lineage`). **No `textual`, no `pyspark`** — unit-tested directly. Every connection is `read_only=True`. |
+| `data.py` | Re-export shim over `aqueduct/stores/queries.py` (the shared read layer, Phase 68) — keeps the frozen TUI's import paths working. **No `textual`, no `pyspark`.** New queries go in `stores/queries.py`, not here. |
 | `app.py` | The `textual` application (`StudioApp`, `run_studio`). Imports `textual` (the `tui` extra); only loaded after the CLI confirms the dep is installed. Rendering + event wiring only — all data via `data.py`. |
 
 The `studio` command lives in `cli/observability.py` and guards on
@@ -342,7 +360,7 @@ Run once per clone: `pre-commit install --hook-type commit-msg`
 When building a phase from a sequence of changes:
 
 1. Create branch: `git checkout -b phase/NNN-NNN-name main`
-2. For each logical change in sequence: apply files, `git add -A`, `git commit -m "type(scope): message"`
+2. For each logical change in sequence: apply files, stage **by explicit path** (`git add <files>` — never `git add -A`/`-u`; the working tree may carry unrelated in-flight changes), `git commit -m "type(scope): message"`
 3. When phase is complete: `git checkout main && git merge phase/NNN-NNN-name --ff-only`
 4. Preserve branch: `git branch phase/NNN-NNN-name HEAD`
 
@@ -393,7 +411,7 @@ Also avoid other 3.12-only syntax (PEP 695 `type X = …` aliases / `class C[T]`
 When a string value appears in 3+ files — especially if it's also a pydantic `Literal` or `StrEnum` — hoist it to a shared constant and import it. Bare strings like `"trigger_agent"`, `"abort"`, `"quarantine"` are compared against in 5+ files while the `StrEnum` that defines them sits unused in the same package. A typo in one comparison silently falls through to the wrong branch. The enum is the single source of truth; every comparison site imports it.
 
 ### Dict dispatch over fragile dispatch
-When dispatching on a fixed set of types, prefer a `_DISPATCH` dict (add a type → one line) over a long if-elif chain where adding a type needs surgery in N parallel chains. This is a preference, not a rule — long if-elif chains are defensible when each branch does substantially different work and the type set is stable. The test: "when a new type is added, how many files need changes?" Dict dispatch → 1 file. If-elif → at least the chain file plus any parallel chains (test runner, openlineage, etc.). The existing if-elif chains in `executor.py` and `test_runner.py` are acceptable.
+When dispatching on a fixed set of types, prefer a `_DISPATCH` dict (add a type → one line) over a long if-elif chain where adding a type needs surgery in N parallel chains. This is a preference, not a rule — long if-elif chains are defensible when each branch does substantially different work and the type set is stable. The test: "when a new type is added, how many files need changes?" Dict dispatch → 1 file. If-elif → at least the chain file plus any parallel chains (test runner, openlineage, etc.). The existing if-elif chains in `executor.py`, `funnel.py` (mode dispatch), and `test_runner.py` are acceptable.
 
 ### CLI output speaks ONE vocabulary
 All user-facing output goes through `aqueduct/cli/style.py` — never a raw `print()` and never `click.echo(click.style(...))` with hand-rolled colour/icons in a command. The single vocabulary:
@@ -410,7 +428,10 @@ Drift to watch for (grep these before a commit that touches `cli/`): raw `print(
 
 ## Audit Guide
 
-The audit skill at `.claude/skills/code-audit/SKILL.md` provides 17 systematic detection patterns that check for violations of every prevention rule above. Run it after a phase completes or before a release. Its detection→prevention cross-reference table maps each pattern to the AGENTS.md rule it checks, so gaps found in audits feed back into this document.
+Two audit surfaces exist; both check for violations of the prevention rules above. Run one after a phase completes or before a release. Gaps found in audits feed back into this document.
+
+- **`skills/aqskill-audit*.md`** (repo root) — the Aqueduct-specific audit family. `aqskill-audit.md` orchestrates five domain skills (`-health`, `-tests`, `-code`, `-config`, `-style`) with ready-made `rg` detection commands, repo-specific false-positive neutralizers, and a mandatory verify-before-report gate. `aqskill-audit-health.md` carries the 17 detection patterns and a detection→prevention cross-reference table mapping each pattern to the AGENTS.md rule it checks. These are flat reference docs meant to be handed to (sub)agents — not auto-discovered Claude Code skills.
+- **`.claude/skills/code-audit/`** — the generic intent-driven audit skill (`/code-audit`): reconstruct intent → diff against implementation → judge design choices. Its `references/` hold the generic detection cookbook and design-judgment library; `aqskill-audit-health.md` embeds the same corpus plus the Aqueduct-specific patterns — if you edit the shared prose, update both.
 
 ## Testing
 
@@ -457,8 +478,11 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `agent-tests` | `aqueduct/agent/**` or `tests/test_agent/**` | `pytest tests/test_agent/` |
 | `patch-tests` | `aqueduct/patch/**` or `tests/test_patch/**` | `pytest tests/test_patch/` |
 | `cli-tests` | `aqueduct/cli/**` or `tests/test_cli/**` | `pytest tests/test_cli/` |
+| `drift-tests` | `aqueduct/drift/**` or `tests/test_drift/**` | `pytest tests/test_drift/ -m "not spark"` |
+| `tui-tests` | `aqueduct/tui/**` or `tests/test_tui/**` | `pytest tests/test_tui/ -m "not spark"` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
+| `coverage` | `main` pushes + all PRs | `pytest --cov=aqueduct --cov-fail-under=80 -m "not spark"` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
 `agent-tests` fires (~30s).  Merge to `main` → every job runs (full gate).

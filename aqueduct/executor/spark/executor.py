@@ -71,6 +71,7 @@ from datetime import UTC
 from aqueduct.errors import AqueductError
 from aqueduct.executor.models import (
     ExecutionResult,
+    ExecutionStatus,
     ModuleResult,
     _collect_module_warnings,
     concise_error,
@@ -918,7 +919,7 @@ def execute(
 
             # ── Cancellation check ─────────────────────────────────────────────
             if _cancel_event.is_set():
-                local_results.append(_mr(module_id=module.id, status="skipped"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                 continue
 
             if module.type not in _SUPPORTED_TYPES:
@@ -930,7 +931,7 @@ def execute(
 
             # ── Selector skip ──────────────────────────────────────────────────
             if included_ids is not None and module.id not in included_ids:
-                local_results.append(_mr(module_id=module.id, status="skipped"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                 continue
 
             # ── Resume: reload from checkpoint if available ────────────────────
@@ -951,7 +952,7 @@ def execute(
                                     str(branch_ckpt)
                                 )
                     local_results.append(
-                        _mr(module_id=module.id, status="success")
+                        _mr(module_id=module.id, status=ExecutionStatus.SUCCESS)
                     )
                     logger.info("Module %r: resumed from checkpoint, skipping execution", module.id)
                     continue
@@ -987,7 +988,7 @@ def execute(
                 )
                 frame_store[module.id] = _obs_df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Channel ───────────────────────────────────────────────────────
             elif module.type == ModuleType.Channel:
@@ -995,7 +996,7 @@ def execute(
                 if not main_edges:
                     err = f"[{module.id}] Channel has no main-port incoming edges"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1006,7 +1007,7 @@ def execute(
                     if _is_gate_closed(val):
                         frame_store[module.id] = _GATE_CLOSED
                         local_results.append(
-                            _mr(module_id=module.id, status="skipped")
+                            _mr(module_id=module.id, status=ExecutionStatus.SKIPPED)
                         )
                         break
                     if val is None:
@@ -1014,7 +1015,7 @@ def execute(
                             f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
                         )
                         local_results.append(
-                            _mr(module_id=module.id, status="error", error=err)
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
                         _signal_fail()
                         return
@@ -1128,7 +1129,7 @@ def execute(
                         observability_store=observability_store,
                     )
                     _write_checkpoint(module, checkpoint_dir, manifest, data={"data": frame_store[module.id]})
-                    local_results.append(_mr(module_id=module.id, status="success"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Junction ──────────────────────────────────────────────────────
             elif module.type == ModuleType.Junction:
@@ -1136,7 +1137,7 @@ def execute(
                 if not main_edges:
                     err = f"[{module.id}] Junction has no main-port incoming edges"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1147,14 +1148,14 @@ def execute(
                     branches = module.config.get("branches", [])
                     for branch in branches:
                         frame_store[f"{module.id}.{branch.get('id', '')}"] = _GATE_CLOSED
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
                     err = (
                         f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
                     )
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1188,7 +1189,7 @@ def execute(
                 for branch_id, branch_df in branch_dfs.items():
                     frame_store[f"{module.id}.{branch_id}"] = branch_df
                 _write_checkpoint(module, checkpoint_dir, manifest, data=branch_dfs)
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Funnel ────────────────────────────────────────────────────────
             elif module.type == ModuleType.Funnel:
@@ -1196,7 +1197,7 @@ def execute(
                 if not data_edges:
                     err = f"[{module.id}] Funnel has no incoming data edges"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1214,7 +1215,7 @@ def execute(
                             f"[{module.id}] upstream {store_key!r} produced no DataFrame."
                         )
                         local_results.append(
-                            _mr(module_id=module.id, status="error", error=err)
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
                         _signal_fail()
                         return
@@ -1222,7 +1223,7 @@ def execute(
 
                 if skipped:
                     frame_store[module.id] = _GATE_CLOSED
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
 
                 mod_policy = _module_retry_policy(module, manifest.retry_policy)
@@ -1250,7 +1251,7 @@ def execute(
                 )
                 frame_store[module.id] = df
                 _write_checkpoint(module, checkpoint_dir, manifest, data={"data": df})
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Assert ────────────────────────────────────────────────────────
             elif module.type == ModuleType.Assert:
@@ -1258,7 +1259,7 @@ def execute(
                 if not main_edges:
                     err = f"[{module.id}] Assert has no main-port incoming edges"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1267,12 +1268,12 @@ def execute(
                 val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     frame_store[module.id] = _GATE_CLOSED
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
                     err = f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1287,7 +1288,7 @@ def execute(
                     )
                 except AssertError as exc:
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=str(exc), error_type=exc.error_type, exception=exc)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), error_type=exc.error_type, exception=exc)
                     )
                     _signal_fail(trigger_agent=exc.trigger_agent)
                     return
@@ -1303,7 +1304,7 @@ def execute(
                         "quarantine rows produced but no spillway edge; discarded.",
                         module.id,
                     )
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Regulator ─────────────────────────────────────────────────────
             elif module.type == ModuleType.Regulator:
@@ -1311,7 +1312,7 @@ def execute(
                 if not main_edges:
                     err = f"[{module.id}] Regulator has no main-port incoming edges"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1320,14 +1321,14 @@ def execute(
                 val = frame_store.get(upstream_id)
                 if _is_gate_closed(val):
                     frame_store[module.id] = _GATE_CLOSED
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
                     err = (
                         f"[{module.id}] upstream {upstream_id!r} produced no DataFrame."
                     )
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1364,13 +1365,13 @@ def execute(
 
                 if gate_open:
                     frame_store[module.id] = val
-                    local_results.append(_mr(module_id=module.id, status="success"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
                 else:
                     on_block = module.config.get("on_block", "skip")
                     if on_block == "abort":
                         err = f"[{module.id}] Regulator gate closed; on_block=abort"
                         local_results.append(
-                            _mr(module_id=module.id, status="error", error=err)
+                            _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                         )
                         _signal_fail()
                         return
@@ -1383,7 +1384,7 @@ def execute(
                         local_results.append(
                             _mr(
                                 module_id=module.id,
-                                status="error",
+                                status=ExecutionStatus.ERROR,
                                 error=f"[{module.id}] Regulator gate closed; on_block=trigger_agent",
                             )
                         )
@@ -1391,7 +1392,7 @@ def execute(
                         return
                     # skip (default): propagate sentinel
                     frame_store[module.id] = _GATE_CLOSED
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
 
             # ── Egress ────────────────────────────────────────────────────────
             elif module.type == ModuleType.Egress:
@@ -1399,7 +1400,7 @@ def execute(
                 if not data_edges:
                     err = f"[{module.id}] no main-port edge arriving at this Egress module"
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1408,14 +1409,14 @@ def execute(
                 key = _frame_key(edge.from_id, edge.port)
                 val = frame_store.get(key)
                 if _is_gate_closed(val):
-                    local_results.append(_mr(module_id=module.id, status="skipped"))
+                    local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                     continue
                 if val is None:
                     err = (
                         f"[{module.id}] upstream {edge.from_id!r} produced no DataFrame."
                     )
                     local_results.append(
-                        _mr(module_id=module.id, status="error", error=err)
+                        _mr(module_id=module.id, status=ExecutionStatus.ERROR, error=err)
                     )
                     _signal_fail()
                     return
@@ -1496,7 +1497,7 @@ def execute(
                                 module.id, _wm_col, _new_wm,
                             )
 
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Probe ─────────────────────────────────────────────────────────
             elif module.type == ModuleType.Probe:
@@ -1514,7 +1515,7 @@ def execute(
                     except Exception as exc:
                         logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
 
-                local_results.append(_mr(module_id=module.id, status="success"))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
         # Component completed — merge local results into shared collections
         _merge()
@@ -1560,7 +1561,7 @@ def execute(
 
     # ── Collect deferred Ingress observations (fire after all Egress writes) ───
     if store_dir is not None and _ingress_obs:
-        _succeeded = {r.module_id for r in module_results if r.status == "success"}
+        _succeeded = {r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS}
         for _mod_id, _obs in _ingress_obs.items():
             if _mod_id not in _succeeded or _obs is None:
                 continue
@@ -1599,7 +1600,7 @@ def execute(
     if surveyor is not None or explain_capture is not None:
         try:
             from aqueduct.patch.explain_gate import capture_plan_snapshot
-            _succeeded = {r.module_id for r in module_results if r.status == "success"}
+            _succeeded = {r.module_id for r in module_results if r.status == ExecutionStatus.SUCCESS}
             for _mod in manifest.modules:
                 if _mod.id not in _succeeded or _mod.type == ModuleType.Egress:
                     continue
@@ -1621,13 +1622,18 @@ def execute(
                         )
                 except Exception as _exc:
                     logger.debug("explain snapshot failed for %r: %s", _mod.id, _exc)
+        # Broad by design: plan-snapshot capture (including the lazy `patch.explain_gate`
+        # import above — an accepted executor→patch exception, see AGENTS.md "Executor
+        # Architecture") is a best-effort Gate 4 diagnostic. It must never abort or fail
+        # a run — a missing/broken import, an unsupported Catalyst plan shape, or any
+        # other capture failure just means Gate 4 has no baseline for this run.
         except Exception as exc:
             logger.debug("Phase 29b explain capture skipped: %s", exc)
 
     return ExecutionResult(
         blueprint_id=manifest.blueprint_id,
         run_id=run_id,
-        status="success",
+        status=ExecutionStatus.SUCCESS,
         module_results=tuple(module_results),
     )
 
@@ -1642,7 +1648,7 @@ def _fail(
     return ExecutionResult(
         blueprint_id=blueprint_id,
         run_id=run_id,
-        status="error",
+        status=ExecutionStatus.ERROR,
         module_results=tuple(module_results),
         trigger_agent=trigger_agent,
     )
@@ -1670,7 +1676,7 @@ def _on_retry_exhausted(
     # PySparkException via `raise ... from exc`, so the extractor's __cause__
     # walk finds it from here.
     module_results.append(_mr(
-        module_id=module.id, status="error", error=str(exc), exception=exc,
+        module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc,
     ))
 
     # Per-module failure webhook — fires for terminal on_exhaustion actions
