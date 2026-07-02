@@ -1030,6 +1030,23 @@ def run(
         _obs_routing_base = _lcr._obs_routing_base
         execute = _lcr.execute
 
+        # ── Resolution preamble — surface the non-default inputs shaping this run
+        # (dim info lines next to the `· env ·` notice). Keys only for --set:
+        # values may embed secrets that were never registered for redaction.
+        from aqueduct.cli.style import info as _preamble_info
+        _over_parts = []
+        if set_items:
+            _set_keys = ", ".join(i.partition("=")[0].strip() for i in set_items)
+            _over_parts.append(f"--set {_set_keys}")
+        if ctx:
+            _over_parts.append(f"--ctx {len(ctx)} key(s)")
+        if profile:
+            _over_parts.append(f"profile: {profile}")
+        if _over_parts:
+            _preamble_info("· overrides  ·  " + "  ·  ".join(_over_parts), err=True)
+        if cfg.secrets.provider != "env":
+            _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
+
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
         if cfg.deployment.target in _REMOTE_TARGETS:
@@ -2192,7 +2209,7 @@ def run(
         # terminal footer remains here.
 
         # T26 — end-of-run runtime-warning roll-up: a single collapsed tally of
-        # everything that warned this run (additive to the inline `↳ ⚠` lines
+        # everything that warned this run (additive to the inline `↳` lines
         # under each module — locality there, "don't miss it" tally here). Reuses
         # the compile-block shape; empty → nothing.
         _runtime_pairs = [

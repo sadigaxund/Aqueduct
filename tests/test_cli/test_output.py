@@ -130,6 +130,15 @@ class TestWarn:
         assert "[test_rule]" in captured.err
         assert "something happened" in captured.err
 
+    def test_warn_with_prefix_drops_icon(self, capsys):
+        """Nested per-module lines render `{prefix}[rule_id] msg` — no ⚠
+        (the end-of-run roll-up header already carries the icon)."""
+        warn("runtime_probe_unknown_signal", "unknown signal type", prefix="   ↳ ")
+        captured = capsys.readouterr()
+        assert "⚠" not in captured.err
+        assert captured.err.startswith("   ↳ [runtime_probe_unknown_signal]")
+        assert "unknown signal type" in captured.err
+
 
 class TestRuntimeWarningRollup:
     """T26 — the end-of-run runtime-warning roll-up renderer (emit_warning_pairs),

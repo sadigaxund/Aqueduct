@@ -61,10 +61,18 @@ def warn(
 ) -> None:
     """Render a diagnostic warning with a stable ``rule_id``.
 
-    Output: ``{prefix}⚠ [rule_id] message`` via ``style.warn``.
+    Output: ``⚠ [rule_id] message`` via ``style.warn``. With a ``prefix``
+    (e.g. ``"   ↳ "`` for warnings nested under a module summary line) the
+    icon is dropped — ``{prefix}[rule_id] message``, dim prefix + yellow
+    body — so nested lines don't repeat the ⚠ the roll-up header carries.
 
     ``module`` is reserved for future per-module routing (Phase 3 extension).
-    ``prefix`` is prepended before the icon (e.g. ``"  ↳ "`` for indented
-    per-module warnings).
     """
-    _style_warn(f"{prefix}[{rule_id}] {message}", err=err)
+    if prefix:
+        click.echo(
+            click.style(prefix, fg="bright_black")
+            + click.style(f"[{rule_id}] {message}", fg="yellow"),
+            err=err,
+        )
+    else:
+        _style_warn(f"[{rule_id}] {message}", err=err)

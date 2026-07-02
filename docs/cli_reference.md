@@ -119,7 +119,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 
 ### Run output: runtime warning summary
 
-Runtime warnings raised *during* execution (Probe/Assert findings, retry notices, and other per-module diagnostics) are shown twice: inline under the module that raised them (`↳ ⚠ …`) and again as a collapsed roll-up just before the run footer:
+Runtime warnings raised *during* execution (Probe/Assert findings, retry notices, and other per-module diagnostics) are shown twice: inline under the module that raised them (`↳ [rule_id] …` — no `⚠` icon; the roll-up header carries it) and again as a collapsed roll-up just before the run footer:
 
 ```
 ⚠ runtime: 3 warnings   ·  -v for full text
