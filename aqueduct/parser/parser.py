@@ -225,6 +225,22 @@ def parse_dict(
                 out[k] = _anchor_path_value(out[k])
         return out
 
+    def _coerce_enabled(raw: Any, module_id: str) -> bool:
+        """`enabled:` — resolve ${ctx.*}/${ENV} then coerce to bool."""
+        v = resolve_value(raw, ctx_map) if isinstance(raw, str) else raw
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("true", "1", "yes", "on"):
+                return True
+            if s in ("false", "0", "no", "off"):
+                return False
+        raise ParseError(
+            f"Module {module_id!r}: `enabled` must resolve to a boolean "
+            f"(true/false/1/0/yes/no/on/off), got {v!r}"
+        )
+
     try:
         modules = tuple(
             Module(
@@ -237,6 +253,7 @@ def parse_dict(
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
                 checkpoint=m.checkpoint,
+                enabled=_coerce_enabled(m.enabled, m.id),
                 spillway=m.spillway,
                 depends_on=tuple(m.depends_on),
                 attach_to=m.attach_to,

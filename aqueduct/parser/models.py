@@ -158,6 +158,11 @@ class Module:
     on_failure: dict[str, Any] | None = None
     on_failure_webhook: str | dict[str, Any] | None = None
     checkpoint: bool = False
+    # Conditional execution (`enabled:` in YAML, resolved from ${ctx.*} at
+    # parse time). The compiler cascade-disables downstream consumers and
+    # stamps `disabled_reason`; the executor marks disabled modules SKIPPED.
+    enabled: bool = True
+    disabled_reason: str | None = None
     # Probe-specific: module this Probe taps
     attach_to: str | None = None
     # Arcade-specific: sub-Blueprint path and context overrides

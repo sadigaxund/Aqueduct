@@ -60,6 +60,8 @@ class Manifest:
                     "attach_to": m.attach_to,
                     "spillway": m.spillway,
                     "depends_on": list(m.depends_on),
+                    "enabled": m.enabled,
+                    "disabled_reason": m.disabled_reason,
                 }
                 for m in self.modules
             ],

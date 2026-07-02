@@ -315,6 +315,54 @@ def compile(  # noqa: A001
             # fingerprint is "not collected" rather than a hard failure.
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
 
+    # ── 6.7. Conditional execution — cascade-disable (`enabled: false`) ──────
+    # Any consumer of a disabled module's output is disabled too, transitively
+    # and uniformly (incl. joins/unions — a silently partial union is a data
+    # change nobody asked for). Propagation follows edges, depends_on, and
+    # Probe attach_to. Disabled modules stay in the Manifest (the executor
+    # marks them SKIPPED, the summary shows ⏭ + reason).
+    _disabled: dict[str, str] = {m.id: "disabled" for m in modules if not m.enabled}
+    for m in modules:
+        # Reasons stamped by the Arcade expander survive as-is.
+        if not m.enabled and m.disabled_reason:
+            _disabled[m.id] = m.disabled_reason
+    if _disabled:
+        _changed = True
+        while _changed:
+            _changed = False
+            for e in edges:
+                if e.from_id in _disabled and e.to_id not in _disabled:
+                    _disabled[e.to_id] = f"upstream '{e.from_id}' disabled"
+                    _changed = True
+            for m in modules:
+                if m.id in _disabled:
+                    continue
+                _src = next((d for d in m.depends_on if d in _disabled), None)
+                if _src is None and m.attach_to and m.attach_to in _disabled:
+                    _src = m.attach_to
+                if _src is not None:
+                    _disabled[m.id] = f"upstream '{_src}' disabled"
+                    _changed = True
+        if len(_disabled) == len(modules):
+            raise CompileError(
+                "All modules are disabled — `enabled: false` cascades to every "
+                "downstream consumer, and nothing is left to execute. Enable at "
+                "least one root module (check the active context profile)."
+            )
+        import dataclasses as _dc
+        modules = [
+            _dc.replace(m, enabled=False, disabled_reason=_disabled[m.id])
+            if m.id in _disabled else m
+            for m in modules
+        ]
+
+    # Sections 7–8 (and the modular registry pass at the bottom) diagnose
+    # modules that will RUN — disabled modules are pruned from the warnings
+    # view only; `_all_modules` carries them into the Manifest so the
+    # executor can mark them ⏭.
+    _all_modules = list(modules)
+    modules = [m for m in modules if m.enabled]
+
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
     from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
@@ -486,7 +534,7 @@ def compile(  # noqa: A001
         description=blueprint.description,
         aqueduct_version=blueprint.aqueduct_version,
         context=resolved_ctx,
-        modules=tuple(modules),
+        modules=tuple(_all_modules),
         edges=tuple(edges),
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,
@@ -504,7 +552,14 @@ def compile(  # noqa: A001
         try:
             from aqueduct.compiler.warnings import run_all as _run_compile_warnings
             from aqueduct.warnings import emit as _emit
-            for _rid, _msg in _run_compile_warnings(manifest, suppress=_supp):
+            _warn_manifest = manifest
+            if any(not m.enabled for m in manifest.modules):
+                import dataclasses as _dc3
+                _warn_manifest = _dc3.replace(
+                    manifest,
+                    modules=tuple(m for m in manifest.modules if m.enabled),
+                )
+            for _rid, _msg in _run_compile_warnings(_warn_manifest, suppress=_supp):
                 _emit(_rid, _msg, suppress=_supp)
         except Exception:
             pass  # warnings must never block compilation

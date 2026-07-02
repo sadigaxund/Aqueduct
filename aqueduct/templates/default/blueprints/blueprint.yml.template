@@ -282,6 +282,11 @@ agent:
 #   depends_on: [other_module]   # ordering-only dependency — adds a DAG edge
 #                                # without passing data (e.g. run after an Egress)
 #   checkpoint: true             # per-module checkpoint (see blueprint-level note above)
+#   enabled: ${ctx.run_exports}  # conditional execution (default true). Accepts a
+#                                # bool or ${ctx.*}/${ENV} — flip per context profile.
+#                                # Disabled modules are skipped (⏭) and the disable
+#                                # cascades to every downstream consumer (a join/union
+#                                # never runs with a missing input).
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────

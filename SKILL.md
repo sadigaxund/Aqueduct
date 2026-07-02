@@ -82,7 +82,9 @@ ambiguous in a flat chain). A single-module Blueprint needs no edges.
 Every module: `id` (required, unique, fs-safe, **no `__`** — reserved for Arcade
 expansion), `label` (REQUIRED — human name), `type` (required), `config`
 (type-specific). Optional: `description`, `tags`, `spillway` (downstream id for
-error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`).
+error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`),
+`enabled` (bool, default true; takes `${ctx.*}` so profiles can toggle it — a disabled
+module is skipped ⏭ at run time and the disable cascades to every downstream consumer).
 
 > The single most common authoring error: **forgetting `label:`**. It is required on every module.
 

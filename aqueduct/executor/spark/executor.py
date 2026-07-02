@@ -922,6 +922,13 @@ def execute(
                 local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
                 continue
 
+            # ── Conditional execution — `enabled: false` (compiler already
+            # cascade-disabled every downstream consumer, so no live module
+            # reads a frame this skip never produces) ──────────────────────────
+            if not getattr(module, "enabled", True):
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SKIPPED))
+                continue
+
             if module.type not in _SUPPORTED_TYPES:
                 _signal_fail()
                 raise ExecuteError(

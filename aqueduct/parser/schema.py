@@ -181,6 +181,12 @@ class ModuleSchema(BaseModel):
     spillway: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     checkpoint: bool = False
+    # Conditional execution — bool, or an unresolved "${ctx.*}" string at
+    # validation time (Tier 0 resolution runs after schema validation); the
+    # parser coerces true/false/1/0/yes/no/on/off. A disabled module compiles
+    # but is skipped (⏭) at run time, and the disable cascades to every module
+    # consuming its output (edges, depends_on, Probe attach_to).
+    enabled: bool | str = True
     # Probe-specific
     attach_to: str | None = None
     # Arcade-specific

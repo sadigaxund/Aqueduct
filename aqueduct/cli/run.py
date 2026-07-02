@@ -1265,6 +1265,13 @@ def run(
             def _fmt_dur(ms):
                 return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
 
+            # ⏭ reason column for `enabled: false` modules (compiler-stamped).
+            _disabled_reason = {
+                m.id: m.disabled_reason
+                for m in manifest.modules
+                if getattr(m, "disabled_reason", None)
+            }
+
             click.echo()
 
             def _icon(mr):
@@ -1306,6 +1313,8 @@ def run(
                 else:
                     rows, dur = _metrics.get(mr.module_id, (None, None))
                     meta = []
+                    if mr.status == ExecutionStatus.SKIPPED and mr.module_id in _disabled_reason:
+                        meta.append(_disabled_reason[mr.module_id])
                     if rows is not None:
                         meta.append(f"{rows:,} rows")
                     if _fmt_dur(dur):

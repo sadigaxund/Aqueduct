@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.2 — Reference Document**
+**Version 2.3 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -213,6 +213,7 @@ Every Module regardless of type shares these fields:
 | **spillway** | Optional downstream Module ID to receive error-port output. |
 | **depends_on** | Optional explicit upstream dependency list. |
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
+| **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output — via edges, `depends_on`, or Probe `attach_to` — is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
 
 ### Ports
 

@@ -107,6 +107,13 @@ def _expand_single(
                 attach_to=id_map.get(m.attach_to) if m.attach_to else None,
                 spillway=id_map.get(m.spillway) if m.spillway else None,
                 depends_on=tuple(id_map.get(d, d) for d in m.depends_on),
+                # A disabled Arcade disables every expanded child; a child's
+                # own `enabled: false` (from the sub-Blueprint) is preserved.
+                enabled=m.enabled and arcade.enabled,
+                disabled_reason=(
+                    f"arcade '{arcade.id}' disabled"
+                    if not arcade.enabled else m.disabled_reason
+                ),
             )
         )
 
