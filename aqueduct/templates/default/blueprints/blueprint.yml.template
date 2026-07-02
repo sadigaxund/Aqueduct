@@ -439,6 +439,9 @@ modules: []
   #   label: "Capture quality signals after cleaning"
   #   attach_to: clean_orders
   #   config:
+  #     report: stdout                  # optional — also print signal results under this
+  #                                     # module in the run summary (dim ↳ lines, capped
+  #                                     # at 10 unless -v). Persistence is unchanged.
   #     signals:
   #       - type: schema_snapshot         # zero Spark action — metadata only
 

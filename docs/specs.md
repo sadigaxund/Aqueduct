@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.3 — Reference Document**
+**Version 2.4 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -410,11 +410,14 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
   type: Probe
   attach_to: dedup_orders          # module-level field, NOT inside config
   config:
+    report: stdout                 # optional — also print signal results in the run summary
     signals:
       - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom
 ```
 
 Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`.
+
+**`report: stdout` (2.4).** Per-Probe opt-in terminal output: each signal's result also prints under the Probe's row in the post-run summary — dim `↳` lines, single-value payloads on one line, dict/tabular payloads one line per entry, the block capped at 10 lines unless `-v`. Purely additive: every signal is still persisted to `probe_signals` exactly as without it, and the printed lines are informational notes, never counted in the runtime warning roll-up. Sampling governance and `danger.allow_full_probe_actions` gating apply unchanged — `report` changes where results are shown, not what is collected.
 
 **Sampling governance.** The `probes:` block in `aqueduct.yml` controls how much data sample-based signals read:
 

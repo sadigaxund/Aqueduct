@@ -18,7 +18,8 @@ Execution model:
      - Funnel     → execute_funnel(…)                 → frame_store[module.id]
      - Regulator  → evaluate gate; open → pass-through; closed → on_block action
      - Egress     → write_egress(frame_store[key], …)
-     - Probe      → execute_probe(…) side-effect only; never halts blueprint
+     - Probe      → execute_probe(…) persists signals (+ returns `report: stdout`
+                    note lines); never halts blueprint
      - Other      → ExecuteError (unsupported)
   4. Return ExecutionResult (frozen).
 
@@ -1516,6 +1517,7 @@ def execute(
             elif module.type == ModuleType.Probe:
                 source_id = module.attach_to
                 source_val = frame_store.get(source_id) if source_id else None
+                _probe_notes: tuple[str, ...] = ()
 
                 if source_val is None or _is_gate_closed(source_val):
                     logger.debug(
@@ -1524,11 +1526,11 @@ def execute(
                     )
                 elif store_dir is not None:
                     try:
-                        execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling)
+                        _probe_notes = execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling) or ()
                     except Exception as exc:
                         logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
 
-                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
+                local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS, notes=_probe_notes))
 
         # Component completed — merge local results into shared collections
         _merge()

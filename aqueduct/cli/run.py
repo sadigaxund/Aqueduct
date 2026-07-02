@@ -1325,6 +1325,16 @@ def run(
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.output import warn as _output_warn
                     _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                # Probe `report: stdout` lines — informational, dim, never in
+                # the warning roll-up. Capped unless -v.
+                _notes = tuple(getattr(mr, "notes", ()) or ())
+                _cap = len(_notes) if verbose else 10
+                for note in _notes[:_cap]:
+                    click.echo(click.style(f"{warn_prefix}{note}", dim=True))
+                if len(_notes) > _cap:
+                    click.echo(click.style(
+                        f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output", dim=True,
+                    ))
 
             for kind, item in _rows:
                 if kind == "module":

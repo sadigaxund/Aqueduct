@@ -496,6 +496,28 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _stdout_report_lines(sig_type: str, payload: Any) -> list[str]:
+    """Human-readable lines for `report: stdout` (per signal).
+
+    Scalar payload fields collapse onto one header line
+    (``sig_type: k=v  ·  k=v``); dict/list-valued fields expand to one
+    indented line per entry. The CLI renderer caps the block (unless -v),
+    so this never bounds itself.
+    """
+    if not isinstance(payload, dict):
+        return [f"{sig_type}: {payload}"]
+    scalars = {k: v for k, v in payload.items() if not isinstance(v, (dict, list))}
+    nested = {k: v for k, v in payload.items() if isinstance(v, (dict, list))}
+    head = "  ·  ".join(f"{k}={v}" for k, v in scalars.items())
+    lines = [f"{sig_type}: {head}" if head else f"{sig_type}:"]
+    for k, v in nested.items():
+        if isinstance(v, dict):
+            lines.extend(f"  {k}.{kk}: {vv}" for kk, vv in v.items())
+        else:
+            lines.extend(f"  {k}[{i}]: {vv}" for i, vv in enumerate(v))
+    return lines
+
+
 def execute_probe(
     module: Module,
     df: DataFrame,
@@ -505,7 +527,7 @@ def execute_probe(
     block_full_actions: bool = False,
     observability_store: Any = None,
     sampling: ProbeSampling = ProbeSampling(),
-) -> None:
+) -> tuple[str, ...]:
     """Capture observability signals for a single Probe module.
 
     Writes one row per signal to the configured observability store
@@ -526,15 +548,23 @@ def execute_probe(
                    DuckDB store at ``store_dir/observability.db`` is constructed.
         sampling: Probe sampling governance (max_sample_rows cap + default_sample_fraction).
 
+    Returns:
+        Report lines for the CLI when the Probe declares ``report: stdout``
+        (one entry per line, printed dim under the module summary row);
+        empty tuple otherwise. Persistence to ``probe_signals`` is unchanged
+        and always happens — ``report: stdout`` is additive.
+
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
         never halt the blueprint.
     """
+    _report_stdout = str(module.config.get("report", "")).lower() == "stdout"
+    _notes: list[str] = []
     try:
         signals: list[dict[str, Any]] = module.config.get("signals", [])
         if not signals:
             logger.debug("Probe %r has no signals configured; skipping.", module.id)
-            return
+            return ()
 
         store_dir.mkdir(parents=True, exist_ok=True)
 
@@ -589,6 +619,11 @@ def execute_probe(
                         """,
                         [run_id, module.id, sig_type, _json_dumps(payload), _utcnow_iso()],
                     )
+                    if _report_stdout:
+                        try:
+                            _notes.extend(_stdout_report_lines(sig_type, payload))
+                        except Exception:  # noqa: BLE001 — report formatting must never fail the probe
+                            pass
                 except Exception as exc:
                     logger.warning(
                         "[runtime_probe_signal_error] Probe %r signal %r failed: %s",
@@ -598,3 +633,4 @@ def execute_probe(
     except Exception as exc:
         logger.warning("[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc)
         _add_module_warning("runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}")
+    return tuple(_notes)

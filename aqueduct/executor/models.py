@@ -49,6 +49,10 @@ class ModuleResult:
     warnings: tuple[tuple[str, str], ...] = ()
     """Per-module runtime warnings collected during execution.
     Each entry is (rule_id, message).  Engine-agnostic — no pyspark."""
+    notes: tuple[str, ...] = ()
+    """Informational output lines (NOT warnings — never counted in the
+    runtime warning roll-up). Today: Probe `report: stdout` signal results,
+    printed dim under the module's summary row (capped unless -v)."""
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,7 @@ class ExecutionResult:
                     "error": r.error,
                     "error_type": r.error_type,
                     "warnings": [list(w) for w in r.warnings],
+                    "notes": list(r.notes),
                 }
                 for r in self.module_results
             ],

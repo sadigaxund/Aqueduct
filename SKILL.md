@@ -196,6 +196,7 @@ Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshne
   type: Probe
   attach_to: dedup          # MODULE-LEVEL field, NOT inside config
   config:
+    report: stdout          # optional — also print results under the module in the run summary
     signals:
       - { type: schema_snapshot }   # zero-cost (SparkListener)
       - { type: row_count_estimate }
