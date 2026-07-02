@@ -128,7 +128,12 @@ def _expand_single(
         raise ExpandError(
             f"Arcade {arcade.id!r}: sub-Blueprint has no entry modules (cycle?)"
         )
-    if not exit_ids:
+    # Exit modules are only required when the parent actually consumes data
+    # FROM the arcade. A self-contained arcade (e.g. Junction -> 2x Egress,
+    # writing internally with nothing returned to the parent) is valid even
+    # though `_exit_modules()` excludes Egress/Probe from the exit set.
+    needs_exit = any(e.from_id == arcade.id for e in parent_edges)
+    if needs_exit and not exit_ids:
         raise ExpandError(
             f"Arcade {arcade.id!r}: sub-Blueprint has no exit modules (cycle?)"
         )

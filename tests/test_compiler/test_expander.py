@@ -87,6 +87,61 @@ class TestArcadeExpansion:
         with pytest.raises(CompileError):
             compile(bp, blueprint_path=parent_file)
 
+    def test_self_contained_arcade_compiles(self, tmp_path):
+        """Regression for ARCADES_EXIT_MODULE_REQUIRED: an Arcade whose only
+        terminal modules are Egress (data written internally, nothing returned
+        to the parent) is valid as long as no parent edge consumes FROM it."""
+        arcade_file = tmp_path / "selfcontained.yml"
+        arcade_file.write_text(
+            "aqueduct: '1.0'\nid: arcade.selfcontained\nname: SelfContained\n"
+            "modules:\n"
+            "  - id: ch\n    type: Channel\n    label: C\n    config: {}\n"
+            "  - id: out\n    type: Egress\n    label: O\n"
+            "    config:\n      format: parquet\n      path: out.parquet\n      mode: overwrite\n"
+            "edges:\n  - from: ch\n    to: out\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: test\nname: Test\ncontext: {{}}\n"
+            f"modules:\n"
+            f"  - id: source\n    type: Ingress\n    label: S\n"
+            f"    config:\n      format: parquet\n      path: in.parquet\n"
+            f"  - id: arc\n    type: Arcade\n    label: A\n    ref: '{arcade_file.name}'\n"
+            f"edges:\n  - from: source\n    to: arc\n"
+        )
+        bp = parse(parent_file)
+        manifest = compile(bp, blueprint_path=parent_file)
+        module_ids = {m.id for m in manifest.modules}
+        assert "arc__ch" in module_ids
+        assert "arc__out" in module_ids
+
+    def test_arcade_consumed_by_parent_still_requires_exit(self, tmp_path):
+        """The exit-modules check must still fire when a parent edge consumes
+        FROM an Arcade that has no non-Egress exit module."""
+        arcade_file = tmp_path / "selfcontained.yml"
+        arcade_file.write_text(
+            "aqueduct: '1.0'\nid: arcade.selfcontained\nname: SelfContained\n"
+            "modules:\n"
+            "  - id: ch\n    type: Channel\n    label: C\n    config: {}\n"
+            "  - id: out\n    type: Egress\n    label: O\n"
+            "    config:\n      format: parquet\n      path: out.parquet\n      mode: overwrite\n"
+            "edges:\n  - from: ch\n    to: out\n"
+        )
+        parent_file = tmp_path / "parent.yml"
+        parent_file.write_text(
+            f"aqueduct: '1.0'\nid: test\nname: Test\ncontext: {{}}\n"
+            f"modules:\n"
+            f"  - id: source\n    type: Ingress\n    label: S\n"
+            f"    config:\n      format: parquet\n      path: in.parquet\n"
+            f"  - id: arc\n    type: Arcade\n    label: A\n    ref: '{arcade_file.name}'\n"
+            f"  - id: sink\n    type: Egress\n    label: K\n"
+            f"    config:\n      format: parquet\n      path: sink.parquet\n      mode: overwrite\n"
+            f"edges:\n  - from: source\n    to: arc\n  - from: arc\n    to: sink\n"
+        )
+        bp = parse(parent_file)
+        with pytest.raises(CompileError, match="no exit modules"):
+            compile(bp, blueprint_path=parent_file)
+
 
 class TestProbeWiring:
     def test_valid_probe_compiles(self):
