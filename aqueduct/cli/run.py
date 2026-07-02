@@ -1266,16 +1266,43 @@ def run(
                 return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
 
             click.echo()
-            _w = max((len(mr.module_id) for mr in _result.module_results), default=0)
-            for mr in _result.module_results:
+
+            def _icon(mr):
                 if mr.status == ExecutionStatus.SUCCESS:
-                    icon = click.style("✓", fg="green")
-                elif mr.status == ExecutionStatus.SKIPPED:
-                    icon = click.style("⏭", fg="cyan")
+                    return click.style("✓", fg="green")
+                if mr.status == ExecutionStatus.SKIPPED:
+                    return click.style("⏭", fg="cyan")
+                return click.style("✗", fg="red", bold=True)
+
+            # Tree view — Arcade-expanded children (`{arcade}__{child}`, the
+            # expander's namespacing convention; `__` is rejected in user ids)
+            # nest under a synthetic parent row. Only THIS summary block nests:
+            # runtime logs, observability rows, and the failed_module footer
+            # keep the full flattened id so error correlation stays joinable.
+            _rows: list[tuple[str, object]] = []
+            _arc_children: dict[str, list] = {}
+            for mr in _result.module_results:
+                if "__" in mr.module_id:
+                    _arc = mr.module_id.split("__", 1)[0]
+                    if _arc not in _arc_children:
+                        _arc_children[_arc] = []
+                        _rows.append(("arcade", _arc))
+                    _arc_children[_arc].append(mr)
                 else:
-                    icon = click.style("✗", fg="red", bold=True)
+                    _rows.append(("module", mr))
+
+            _CHILD_PAD = 5  # child names start 5 columns deeper than top-level names
+            _w = max(
+                [len(mr.module_id) for kind, mr in _rows if kind == "module"]
+                + [len(a) for kind, a in _rows if kind == "arcade"]
+                + [len(c.module_id.split("__", 1)[1]) + _CHILD_PAD
+                   for cs in _arc_children.values() for c in cs],
+                default=0,
+            )
+
+            def _mr_line(mr, name, pad, lead, warn_prefix):
                 if mr.status == ExecutionStatus.ERROR and mr.error:
-                    line = f"  {icon} {mr.module_id}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                    line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
                 else:
                     rows, dur = _metrics.get(mr.module_id, (None, None))
                     meta = []
@@ -1284,11 +1311,30 @@ def run(
                     if _fmt_dur(dur):
                         meta.append(_fmt_dur(dur))
                     tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
-                    line = f"  {icon} {mr.module_id.ljust(_w)}   {tail}".rstrip()
+                    line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
                     from aqueduct.cli.output import warn as _output_warn
-                    _output_warn(rule_id, msg, prefix="   ↳ ", err=False)
+                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+
+            for kind, item in _rows:
+                if kind == "module":
+                    _mr_line(item, item.module_id, _w, "  ", "   ↳ ")
+                    continue
+                _kids = _arc_children[item]
+                # Parent row = worst child: any ✗ → ✗, else any ✓ → ✓, else ⏭.
+                if any(m.status == ExecutionStatus.ERROR for m in _kids):
+                    _p_icon = click.style("✗", fg="red", bold=True)
+                elif any(m.status == ExecutionStatus.SUCCESS for m in _kids):
+                    _p_icon = click.style("✓", fg="green")
+                else:
+                    _p_icon = click.style("⏭", fg="cyan")
+                click.echo(f"  {_p_icon} {item}")
+                for _i, _kid in enumerate(_kids):
+                    _glyph = "└─" if _i == len(_kids) - 1 else "├─"
+                    _lead = "    " + click.style(_glyph, fg="bright_black") + " "
+                    _mr_line(_kid, _kid.module_id.split("__", 1)[1],
+                             _w - _CHILD_PAD, _lead, "       ↳ ")
 
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`

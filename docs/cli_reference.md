@@ -130,6 +130,20 @@ Runtime warnings raised *during* execution (Probe/Assert findings, retry notices
 
 Each line keeps its stable `rule_id` (e.g. `runtime_assert`, `runtime_probe_*`, `runtime_retry_*`) so it can be copied straight into `warnings.suppress` in `aqueduct.yml` (same mechanism as compile-time `AQ-WARN` ids). The roll-up is additive — inline per-module warnings still print. Pass `-v` / `--verbose` for the full (untruncated) warning text.
 
+### Run output: Arcade tree view
+
+Arcade-expanded modules nest under their Arcade in the summary block — the parent row shows the worst child status (any ✗ → ✗, else any ✓ → ✓, else ⏭):
+
+```
+  ✓ raw_tickets              1.8 s
+  ✗ arcade_conditional
+    ├─ ✓ save_active         4 rows  ·  626 ms
+    ├─ ✗ save_other          — source not found at 'data/other'
+    └─ ⏭ notify_export
+```
+
+The nesting is display-only. Logs, the observability store, and the `failed_module=` footer keep the full flattened id (`arcade_conditional__save_other`), so copy-pasting ids into `--from`/`--to`, `report`, or SQL against `run_records` works unchanged.
+
 ### Config overrides (`-s` / `--set`)
 
 `--set PATH=VALUE` overrides any value in `aqueduct.yml` or the Blueprint for a single invocation — repeatable, applied in memory, **never written back to disk**. It is the highest-precedence layer:
