@@ -660,6 +660,11 @@ agent:
 # CLI: `aqueduct --suppress-warning <id> run bp.yml` (or '*'); goes BEFORE the
 # subcommand. Merged on top of this list.
 #
+# Per-blueprint scoping: a Blueprint YAML may also declare its own
+# `warnings.suppress` (compile-time rules only — see blueprint.yml.template)
+# — it is unioned with this engine-wide list for that blueprint's compile
+# pass, without silencing the rule elsewhere.
+#
 # Available compile-time rule IDs (registry: aqueduct/compiler/warnings/):
 #   kafka_checkpoint_stale, nondeterministic_fanout,
 #   count_col_likely_count_star, file_format_no_repartition,

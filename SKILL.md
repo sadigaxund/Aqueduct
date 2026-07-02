@@ -57,7 +57,19 @@ spark_config:                         # optional — merged with engine defaults
   spark.sql.shuffle.partitions: 200
 
 retry_policy: { max_attempts: 3 }     # optional
+
+warnings:                             # optional — per-blueprint compile-warning suppression
+  suppress: [perf_python_udf_row_at_a_time]   # rule_ids from AQ-WARN output, or "*" for all
 ```
+
+**`warnings:` (1.2)** silences compile-time warnings (e.g.
+`file_format_no_repartition`, `perf_python_udf_row_at_a_time`) for THIS
+blueprint only — unioned with the engine-level `warnings.suppress` in
+`aqueduct.yml`.
+Compile-time only: never touches session/runtime warnings or other
+blueprints. On an Arcade sub-blueprint, its own `warnings:` block parses fine
+but is ignored — only the parent blueprint's suppress list applies to the
+expanded compilation unit.
 
 **Linear-edge sugar:** omit `edges:` entirely and the compiler chains modules in
 declaration order — BUT only if every module is single-in/single-out (Ingress,
@@ -267,7 +279,7 @@ agent:
   # connection (overrides engine aqueduct.yml defaults):
   provider: openai_compat     # anthropic | openai_compat
   base_url: "https://openrouter.ai/api/v1"
-  model: "anthropic/claude-3.5-sonnet"
+  model: "anthropic/claude-sonnet-4-6"
   api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
 `approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file.

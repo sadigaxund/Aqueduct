@@ -257,6 +257,31 @@ class UdfSchema(BaseModel):
         return v
 
 
+class WarningsSchema(BaseModel):
+    """Per-Blueprint compile-warning suppression (see `docs/specs.md` §4.2).
+
+    Mirrors the shape of the engine-level ``warnings:`` block in
+    ``aqueduct.yml`` (`aqueduct/config.py::WarningsConfig`) but is a distinct
+    model — the parser layer does not import `config.py`'s engine models.
+    Scope is intentionally narrow: this only affects the compiler's modular
+    `aqueduct/compiler/warnings/run_all` rule pass for THIS Blueprint. It does
+    NOT touch engine/session warnings, runtime (probe/assert) warnings, or the
+    process-global `set_default_suppress` default — those stay engine-wide.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    suppress: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of compile-warning `rule_id` strings to silence for this "
+            "Blueprint only. Merged (union) with the engine-level "
+            "`warnings.suppress` from aqueduct.yml / `--suppress-warning`. "
+            "The single entry `\"*\"` silences every compile warning for "
+            "this Blueprint."
+        ),
+    )
+
+
 class BlueprintSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -275,6 +300,7 @@ class BlueprintSchema(BaseModel):
     macros: dict[str, str] = Field(default_factory=dict)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False
+    warnings: WarningsSchema = Field(default_factory=WarningsSchema)
 
     @field_validator("aqueduct")
     @classmethod

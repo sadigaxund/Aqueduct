@@ -82,6 +82,24 @@ spark_config:
 #     - "AnalysisException"
 
 
+# ── Compile-warning suppression (per-blueprint) ─────────────────────────────────
+#
+# Silences compile-time warnings (rule_ids printed as
+# `AQ-WARN [rule_id] ...`) for THIS blueprint only — merged (union) with the
+# engine-level warnings.suppress in aqueduct.yml. Compile-time only: does not
+# touch session-startup or runtime (Probe/Assert) warnings, and never affects
+# other blueprints. On an Arcade sub-blueprint, this block is ignored — only
+# the parent blueprint's suppress list covers the expanded compilation unit.
+
+# warnings:
+#   suppress:
+#     - file_format_no_repartition
+#     - jdbc_missing_partition
+# # nuclear option — silence every compile warning for this blueprint:
+# warnings:
+#   suppress: ["*"]
+
+
 # ── Checkpointing ──────────────────────────────────────────────────────────────
 #
 # When true, every module's output is materialized to Parquet under

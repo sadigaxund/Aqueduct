@@ -204,6 +204,72 @@ class TestCheckpointField:
         assert manifest.to_dict()["checkpoint"] is True
 
 
+class TestWarningsField:
+    """Per-Blueprint compile-warning suppression (`warnings.suppress`).
+
+    Compile-only scope — verified end-to-end (rule actually suppressed) in
+    `tests/test_compiler/test_compiler_warnings.py::TestBlueprintWarningSuppress`.
+    These tests cover parser-layer parsing/defaults/rejection only.
+    """
+
+    def test_blueprint_warning_suppress_default_empty(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ()
+
+    def test_blueprint_warning_suppress_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: [file_format_no_repartition, jdbc_missing_partition]\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("file_format_no_repartition", "jdbc_missing_partition")
+
+    def test_blueprint_warning_suppress_star_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: ['*']\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("*",)
+
+    def test_warnings_block_unknown_key_raises(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: []\n  bogus_key: true\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        with pytest.raises(ParseError, match="validation error"):
+            parse(bp_file)
+
+    def test_sub_blueprint_own_warnings_block_parses_standalone(self, tmp_path):
+        """A sub-Blueprint's `warnings:` block must be valid Blueprint input on
+        its own — arcade inheritance ignoring it (compiler-level) is a
+        separate concern from "does it parse"."""
+        bp_file = tmp_path / "sub.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: sub.pipeline\nname: Sub\n"
+            "warnings:\n  suppress: [kafka_checkpoint_stale]\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("kafka_checkpoint_stale",)
+
+
 class TestPromptContext:
     def test_agent_config_prompt_context_round_trips(self, tmp_path):
         """AgentConfig.prompt_context round-trips through Parser -> Blueprint.agent.prompt_context"""

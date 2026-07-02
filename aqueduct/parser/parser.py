@@ -348,4 +348,5 @@ def parse_dict(
         macros=resolved_macros,
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
+        warning_suppress=tuple(validated.warnings.suppress),
     )

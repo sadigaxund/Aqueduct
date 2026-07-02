@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.1 — Reference Document**
+**Version 2.2 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -188,7 +188,13 @@ spark_config:                          # merged with Aqueduct defaults
 
 retry_policy:                          # per-pipeline retry config
   max_attempts: 3
+
+warnings:                              # optional — per-Blueprint compile-warning suppression
+  suppress:
+    - perf_python_udf_row_at_a_time
 ```
+
+**Per-Blueprint compile-warning suppression (`warnings:`, 1.2).** `warnings.suppress` is a list of compiler-warning `rule_id`s (or the sentinel `"*"`) to silence for THIS Blueprint only — it covers all **compile-time** diagnostics: the modular rule registry (e.g. `file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) and the inline compiler checks (e.g. `perf_python_udf_row_at_a_time`, `perf_multi_consumer_no_cache`, `delivery_append_retry_dupes`). It is unioned with the engine-level `warnings.suppress` from `aqueduct.yml` (+ `--suppress-warning` flags) — either side suppressing a rule silences it. It does **not** affect engine/session-startup warnings, runtime (Probe/Assert) warnings, or the process-global default used by other Blueprints — a rule suppressed here stays visible everywhere else. For an **Arcade** sub-Blueprint, the parent Blueprint's `warnings.suppress` covers the whole expanded compilation unit (including the sub-Blueprint's modules); the sub-Blueprint's own `warnings:` block is valid YAML (it parses standalone) but is not consulted during expansion.
 
 **Linear-edge sugar.** `edges:` may be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
 

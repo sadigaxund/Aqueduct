@@ -193,3 +193,11 @@ class Blueprint:
     macros: dict[str, str] = field(default_factory=dict)
     required_context: tuple[str, ...] = ()  # Arcade sub-Blueprint: keys the caller must provide
     checkpoint: bool = False
+    # Per-Blueprint compile-warning suppress list (`warnings.suppress` in the
+    # Blueprint YAML). Compile-time only — unioned with the engine-level
+    # suppress set at the `aqueduct/compiler/warnings/run_all` call site in
+    # compiler.py. Never touches session/runtime warnings or the
+    # process-global `set_default_suppress` default. For an Arcade sub-
+    # Blueprint, this field is parsed but ignored — only the top-level
+    # (parent) Blueprint's value applies to the whole compilation unit.
+    warning_suppress: tuple[str, ...] = ()

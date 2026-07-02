@@ -316,8 +316,19 @@ def compile(  # noqa: A001
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
 
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
+    from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
-    _supp = warnings_suppress
+    # Per-Blueprint suppression (`blueprint.warning_suppress`, from the
+    # Blueprint's own `warnings:` block) is unioned with the engine-level
+    # suppress set HERE, scoped to this one compile pass only — it never
+    # mutates the process-global `set_default_suppress` default, so it can't
+    # leak into other blueprints, session warnings, or runtime warnings.
+    # Covers BOTH the inline section-7/8 warnings below and the modular
+    # registry pass (Phase 30a tier 1) further down.
+    _supp = (
+        set(warnings_suppress) if warnings_suppress is not None
+        else set(_DEFAULT_SUPPRESS)
+    ) | set(blueprint.warning_suppress)
     if warnings_silence_all:
         _supp = {"*"}  # universal suppress sentinel — emit() short-circuits on "*"
 
@@ -488,12 +499,13 @@ def compile(  # noqa: A001
     )
 
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
+    # `_supp` (section 7) already carries engine-level ∪ per-Blueprint suppress.
     if not warnings_silence_all:
         try:
             from aqueduct.compiler.warnings import run_all as _run_compile_warnings
             from aqueduct.warnings import emit as _emit
-            for _rid, _msg in _run_compile_warnings(manifest, suppress=warnings_suppress):
-                _emit(_rid, _msg, suppress=warnings_suppress)
+            for _rid, _msg in _run_compile_warnings(manifest, suppress=_supp):
+                _emit(_rid, _msg, suppress=_supp)
         except Exception:
             pass  # warnings must never block compilation
 
