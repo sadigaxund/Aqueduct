@@ -108,7 +108,7 @@ aqueduct completion fish > ~/.config/fish/completions/aqueduct.fish
 | `--sandbox` | off | Dev dry-run: execute against sampled inputs with every Egress skipped (no writes, no self-healing, no observability persistence). Fast feedback loop for iterating on transforms. Requires `engine: spark`. |
 | `--sample <N>` | `1000` | Row cap per Ingress in `--sandbox` mode (`0` = no limit). Ignored without `--sandbox`. |
 | `-s` / `--set PATH=VALUE` | — | Override any config or blueprint value for this run only (repeatable, in-memory, never persisted). See [Config overrides](#config-overrides--s--set) below. |
-| `--ctx KEY=VALUE` | — | Override a Tier 0 context variable. Repeatable. |
+| `--ctx KEY=VALUE` | — | Override a Tier 0 context variable. Repeatable. Environments that can't pass CLI args (CI, Airflow) can set `AQUEDUCT_CTX_<KEY>` env vars instead — top-level keys only, one priority step below `--ctx` (see specs.md §5.2). |
 | `--profile <name>` | — | Activate a `context_profiles:` block |
 | `--store-dir <path>` | from `aqueduct.yml` (else `.aqueduct/`) | Override store directory for this run |
 | `--webhook <url>` | from `aqueduct.yml` | Override failure webhook |

@@ -567,6 +567,33 @@ Resolution order (highest priority wins):
 3. `context_profiles` block for the active profile (`--profile` flag)
 4. `context:` block static defaults
 
+### Env-var overrides (`AQUEDUCT_CTX_*`)
+
+Any environment variable prefixed `AQUEDUCT_CTX_` overrides the context key
+obtained by stripping the prefix and **lowercasing the rest** — so
+`AQUEDUCT_CTX_ENV=prod aqueduct run blueprint.yml` is equivalent to
+`--ctx env=prod`, and `AQUEDUCT_CTX_BATCH_SIZE=500` overrides a top-level
+`batch_size` key. This is the override hook for CI pipelines, Airflow, and
+schedulers that can set environment variables but cannot manipulate CLI
+arguments.
+
+Two rules to keep in mind:
+
+- **Only top-level (dot-free) keys are addressable.** Nested context keys
+  flatten to dot-notation (`params.batch_size`), and environment-variable
+  names cannot contain dots — underscores are *not* translated to dots, so
+  `AQUEDUCT_CTX_PARAMS_BATCH_SIZE` defines a new `params_batch_size` key
+  rather than overriding `params.batch_size`. Keys you want overridable from
+  the environment should live at the top level of `context:` (underscores in
+  the key name itself are fine). Nested keys remain overridable via `--ctx
+  params.batch_size=500`.
+- **This is override, not substitution.** `${AQUEDUCT_ENV:-dev}` *inside* the
+  `context:` block is env-var *substitution* (the value is read into a
+  context key you named); `AQUEDUCT_CTX_*` is env-var *override* (the
+  variable name selects which context key to replace). The two are
+  independent mechanisms and compose: a substituted default is still
+  replaceable by an `AQUEDUCT_CTX_*` override or `--ctx`.
+
 ## **5.3 Tier 1 — Runtime Functions (`@aq.*`)**
 
 | Function | Description |
