@@ -29,6 +29,8 @@ from typing import Any
 import duckdb
 
 from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+from aqueduct.executor.models import ExecutionStatus
+from aqueduct.stores.object_store import PatchStore
 
 _DEFAULT_OBS_FILE = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"
 _DEFAULT_OBS_ROOT = ".aqueduct/observability"
@@ -614,9 +616,9 @@ def fleet_summary(cfg: Any, store_dir: str | None = None) -> list[BlueprintSumma
                 bp, {"runs": 0, "successes": 0, "errors": 0, "last": None, "heals": 0}
             )
             a["runs"] += n
-            if status == "success":
+            if status == ExecutionStatus.SUCCESS:
                 a["successes"] += n
-            elif status == "error":
+            elif status == ExecutionStatus.ERROR:
                 a["errors"] += n
             if last and (a["last"] is None or last > a["last"]):
                 a["last"] = last
@@ -930,7 +932,9 @@ def maintenance_metrics(cfg: Any, store_dir: str | None = None,
 
 def patch_lifecycle_counts(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     """Aggregate patch_index status counts (pending, applied, rejected) across fleet."""
-    counts: dict[str, int] = {"pending": 0, "applied": 0, "rejected": 0}
+    counts: dict[str, int] = {
+        PatchStore.PENDING: 0, PatchStore.APPLIED: 0, PatchStore.REJECTED: 0,
+    }
     for h in discover_stores(cfg, store_dir=store_dir):
         try:
             with h.store.connect() as cur:

@@ -273,7 +273,7 @@ class Surveyor:
              for r in result.module_results]
         ))
 
-        effective_status = "patched" if (patched and result.status == ExecutionStatus.SUCCESS) else result.status
+        effective_status = ExecutionStatus.PATCHED if (patched and result.status == ExecutionStatus.SUCCESS) else result.status
         # 1.1.0 fix — multi-patch heal mints a new run_id per iteration. The
         # outer run_id is INSERTed by start(); iteration 1+ never had a row
         # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,

@@ -1591,7 +1591,7 @@ def main() -> None:
     try:
         import pyspark.sql  # noqa: F401
     except Exception:
-        pass
+        pass  # best-effort: pyspark is only a narwhals/plotly circular-import workaround — dashboard renders fine without it
     st.set_page_config(
         page_title="Aqueduct Dashboard",
         page_icon=str(_TAB_ICON) if _TAB_ICON.is_file() else "\U0001f30a",

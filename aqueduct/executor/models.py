@@ -17,6 +17,7 @@ class ExecutionStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"
     SKIPPED = "skipped"
+    PATCHED = "patched"  # run-level effective status (succeeded after an applied patch); never set on a ModuleResult
 
 
 def concise_error(text: str | None, *, limit: int = 300) -> str:

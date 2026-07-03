@@ -538,7 +538,7 @@ def doctor(
         str(blueprint_path or config_path or _DEFAULT_CONFIG_FILENAME)
         if target else _DEFAULT_CONFIG_FILENAME
     )
-    _r = click.style(_rule(), dim=True)
+    _r = _dim(_rule())
     click.echo(_r)
     click.echo(
         f"{click.style(_ICON['header'], fg=_COLOR['header'], bold=True)} "
@@ -566,6 +566,10 @@ def doctor(
     for r in shown:
         by_group.setdefault(_group_of(r), []).append(r)
 
+    # Hand-rendered, not migrated to style.* line helpers: this is a grouped,
+    # column-aligned layout (icon + name.ljust(col_w) + detail across many rows),
+    # which error/success/warn/info (single flat lines) don't fit. `_ICON`/`_COLOR`
+    # alias `style.ICON`/`style.COLOR` (imported above) so the palette can't diverge.
     for grp in _GROUP_ORDER:
         rows = by_group.get(grp)
         if not rows:

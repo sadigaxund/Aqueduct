@@ -214,19 +214,20 @@ def run_studio(
     store_dir: str | None = None,
 ) -> int:
     """Entry point used by the CLI. Returns a process exit code."""
+    from aqueduct.cli.style import error as _style_error
     from aqueduct.config import ConfigError, load_config
 
     try:
         cfg = load_config(Path(config_path) if config_path else None)
     except ConfigError as exc:
-        print(f"config error: {exc}")
+        _style_error(f"config error: {exc}")
         return 1
 
     # Backend-aware (Phase 69): duckdb → one handle per file; postgres → one store
     # (all runs). The ad-hoc SQL pane self-disables for postgres (read-only-only).
     handles = d.discover_stores(cfg, store_dir=store_dir)
     if not handles:
-        print("No observability stores found. Run a blueprint first.")
+        _style_error("No observability stores found. Run a blueprint first.")
         return 1
 
     StudioApp(handles, cfg, config_path).run()

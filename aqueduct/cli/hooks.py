@@ -202,6 +202,8 @@ def static_hook_check(blueprint_path: Path) -> list[str]:
 
     def _refs(path: Path) -> list[str]:
         try:
+            # Raw structural pre-scan only (hooks.blueprint refs) — full parse()/path-anchoring
+            # deliberately skipped here, resolution happens at run time.
             raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception as exc:  # noqa: BLE001 — unreadable YAML is reported, not raised
             problems.append(f"{path}: unreadable ({exc})")

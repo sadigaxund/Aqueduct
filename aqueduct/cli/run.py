@@ -719,7 +719,8 @@ def _setup_surveyor(
             selector_note = "  [" + ", ".join(parts) + "]"
         exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
         from aqueduct.cli import _rule
-        _r = click.style(_rule(), dim=True)
+        from aqueduct.cli.style import dim as _dim
+        _r = _dim(_rule())
     from aqueduct.cli.style import emit_warnings as _emit_warnings
 
     # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
@@ -1324,7 +1325,7 @@ def run(
                         meta.append(f"{rows:,} rows")
                     if _fmt_dur(dur):
                         meta.append(_fmt_dur(dur))
-                    tail = click.style("  ·  ".join(meta), dim=True) if meta else ""
+                    tail = _dim("  ·  ".join(meta)) if meta else ""
                     line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
                 click.echo(line)
                 for rule_id, msg in mr.warnings:
@@ -1335,10 +1336,10 @@ def run(
                 _notes = tuple(getattr(mr, "notes", ()) or ())
                 _cap = len(_notes) if verbose else 10
                 for note in _notes[:_cap]:
-                    click.echo(click.style(f"{warn_prefix}{note}", dim=True))
+                    click.echo(_dim(f"{warn_prefix}{note}"))
                 if len(_notes) > _cap:
-                    click.echo(click.style(
-                        f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output", dim=True,
+                    click.echo(_dim(
+                        f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
                     ))
 
             for kind, item in _rows:
@@ -2291,7 +2292,7 @@ def run(
             from aqueduct.cli.style import emit_warning_pairs
             emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
 
-        if result.status not in ("success", "patched"):
+        if result.status not in (ExecutionStatus.SUCCESS, ExecutionStatus.PATCHED):
             # Print the outer (user-visible) run_id — that's the join key for
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
@@ -2342,7 +2343,7 @@ def run(
                 event="on_success",
             )
 
-        status_label = "patched" if result.status == "patched" else "complete"
+        status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
         from aqueduct.cli.style import dim as _dim
         from aqueduct.cli.style import success as _style_success
         click.echo(_dim(_rule()))

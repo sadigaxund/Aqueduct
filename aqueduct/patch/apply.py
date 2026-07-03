@@ -35,6 +35,7 @@ from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
 from aqueduct.redaction import redact as _redact
+from aqueduct.stores.object_store import PatchStore
 
 _ryaml = YAML()
 _ryaml.preserve_quotes = True
@@ -409,7 +410,7 @@ def apply_patch_file(
 
     # Phase 53 — mark applied in the index (+ new object_key) so the heal cache
     # replays it from applied/ and stops surfacing it as still-pending.
-    _set_index_status(obs_store, patch_spec.patch_id, "applied", object_key=applied_key)
+    _set_index_status(obs_store, patch_spec.patch_id, PatchStore.APPLIED, object_key=applied_key)
 
     return ApplyResult(
         patch_id=patch_spec.patch_id,
@@ -459,7 +460,7 @@ def reject_patch(
             patch_store.delete(pending_key)
         except Exception:
             logger.debug("could not delete pending body %s", pending_key, exc_info=True)
-        _set_index_status(obs_store, patch_id, "rejected", object_key=rejected_key)
+        _set_index_status(obs_store, patch_id, PatchStore.REJECTED, object_key=rejected_key)
         return Path(getattr(patch_store, "location_label", str(patches_dir))) / "rejected" / filename
 
     pending_dir = patches_dir / "pending"
@@ -488,6 +489,6 @@ def reject_patch(
     rejected_path.write_text(json.dumps(_redact(raw), indent=2), encoding="utf-8")
     pending_path.unlink()
 
-    _set_index_status(obs_store, patch_id, "rejected")
+    _set_index_status(obs_store, patch_id, PatchStore.REJECTED)
 
     return rejected_path
