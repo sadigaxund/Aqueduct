@@ -202,7 +202,7 @@ aqueduct run bp.yml \
 | `aqueduct report <run_id> --format html > run.html` | Self-contained single-file HTML run report (status, module results, resource profile); no server, renders offline |
 | `aqueduct lineage <blueprint>` | Column-level lineage graph |
 | `aqueduct lineage <blueprint.yml> --chain <column> [--types]` | Vertical source→output trace for one column; `--types` annotates each hop with the sqlglot-inferred SQL type and marks type changes (computed on demand from the blueprint; needs a file path, not an id) |
-| `aqueduct signal <signal_id>` | View or override Probe gates |
+| `aqueduct signal <signal_id> --blueprint <id>` | View or override Probe gates. `--blueprint` is required with the duckdb backend (unless `--store-dir` is given) — the override lives in that blueprint's routed store, `<base>/<blueprint_id>/observability.db`; ignored for postgres (one shared schema) |
 | `aqueduct studio [--config <f>] [--store-dir <d>]` | Launch the interactive read-only TUI (runs, ad-hoc SQL over the observability store, doctor, config, lineage). Requires the optional `tui` extra: `pip install aqueduct-core[tui]` |
 | `aqueduct dashboard [--config <f>] [--store-dir <d>] [--port 8501] [--no-browser]` | Launch the local, read-only **Streamlit** observability dashboard: fleet view (cross-blueprint runs / success-rate / heal-rate, trends), per-run module metrics, column-lineage Sankey, doctor, config. On-demand local viewer (like the Spark UI) — never a production server. Requires the optional `dashboard` extra: `pip install aqueduct-core[dashboard]`. A 🔄 Refresh button re-reads the store (manual; no background polling). |
 
