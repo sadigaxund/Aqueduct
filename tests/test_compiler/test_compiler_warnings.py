@@ -5,6 +5,7 @@ import pytest
 
 from aqueduct import AqueductWarning
 from aqueduct.compiler.compiler import compile as compiler_compile
+from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
 
 pytestmark = pytest.mark.unit
@@ -481,7 +482,7 @@ modules:
       maintenance:
         optimize: true
         """
-        with pytest.warns(AqueductWarning, match="OPTIMIZE is a Delta Lake operation"):
+        with pytest.raises(CompileError, match="OPTIMIZE is a Delta Lake operation"):
             _compile_yaml(yaml_str, tmp_path)
 
     def test_optimize_true_delta_no_warn(self, tmp_path):

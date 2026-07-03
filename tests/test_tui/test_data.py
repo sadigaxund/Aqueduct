@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS column_lineage (
 """
 
 
-def _cfg(path=".aqueduct/observability.db", backend="duckdb"):
+def _cfg(path=None, backend="duckdb"):
     return SimpleNamespace(
         stores=SimpleNamespace(observability=SimpleNamespace(path=path, backend=backend))
     )
@@ -64,8 +64,10 @@ def test_discover_scans_root(tmp_path, monkeypatch):
 
 def test_discover_flat_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    (tmp_path / ".aqueduct").mkdir()
-    duckdb.connect(str(tmp_path / ".aqueduct" / "observability.db")).close()
+    obs_root = tmp_path / ".aqueduct" / "observability"
+    obs_root.mkdir(parents=True)
+    (obs_root / "default_bp").mkdir()
+    duckdb.connect(str(obs_root / "default_bp" / "observability.db")).close()
     handles = d.discover_stores(_cfg())
     assert len(handles) == 1 and handles[0].duckdb_path.name == "observability.db"
 

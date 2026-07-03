@@ -1308,6 +1308,7 @@ def run(
             )
 
             def _mr_line(mr, name, pad, lead, warn_prefix):
+                from aqueduct.cli.style import dim as _dim
                 if mr.status == ExecutionStatus.ERROR and mr.error:
                     line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
                 else:

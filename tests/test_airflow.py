@@ -724,7 +724,7 @@ stores:
       backend: duckdb
       path: "{dep}"
 """.format(
-        obs=str(tmp_path / "obs.duckdb"),
+        obs=str(tmp_path / "obs"),
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 

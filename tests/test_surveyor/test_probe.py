@@ -199,9 +199,9 @@ def test_execute_probe_global_exception(spark: SparkSession, tmp_path: Path):
     store_dir = tmp_path / "store"
     (tmp_path / "store").touch()  # a file obstructs store-dir creation → inner failure
 
-    # The top-level guard swallows the error: execute_probe returns None and
+    # The top-level guard swallows the error: execute_probe returns () and
     # never raises, so a probe failure can't abort the pipeline.
-    assert execute_probe(module, df, spark, "run-1", store_dir) is None
+    assert execute_probe(module, df, spark, "run-1", store_dir) == ()
 
 
 def test_execute_probe_value_distribution(spark: SparkSession, tmp_path: Path):

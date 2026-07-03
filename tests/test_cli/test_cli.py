@@ -127,10 +127,8 @@ stores:
     result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
     assert result.exit_code == 0, result.output
     
-    # Check DuckDB directly
     import duckdb
-    # CLI preserves custom filenames when configured (ISSUE-024)
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "obs" / "test_obs" / "observability.db"
     assert db_path.exists(), f"Obs DB not found at {db_path}. Files in tmp_path: {list(tmp_path.glob('*'))}"
 
     conn = duckdb.connect(str(db_path))
@@ -369,7 +367,7 @@ agent:
 aqueduct_config: "1.0"
 stores:
   observability:
-    path: {tmp_path / 'obs.db'}
+    path: {tmp_path / 'obs'}
 agent:
   provider: anthropic
   model: claude-3
