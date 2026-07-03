@@ -26,6 +26,40 @@ from aqueduct.cli.style import error as _error
 from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
 
+
+def _store_not_found(
+    cfg: Any = None,
+    *,
+    run_id: str | None = None,
+    blueprint_id: str | None = None,
+    store_dir: str | None = None,
+) -> None:
+    """Actionable store-miss error + exit (2.0 routed layout).
+
+    Says WHERE the read looked and WHAT to check — a store miss is usually
+    "wrong cwd / hasn't run yet", not corruption.
+    """
+    from aqueduct.stores.read import _OBS_ROUTING_ROOT
+    if store_dir:
+        searched = f"{store_dir}/observability.db"
+    else:
+        _base = None
+        if cfg is not None:
+            _base = cfg.stores.observability.path
+        searched = f"{_base or _OBS_ROUTING_ROOT}/*/observability.db"
+    scope = ""
+    if run_id:
+        scope = f" for run_id={run_id!r}"
+    elif blueprint_id:
+        scope = f" for blueprint {blueprint_id!r}"
+    _error(
+        f"no observability store found{scope} — searched {searched}. "
+        "has this pipeline run yet? (--store-dir overrides; "
+        "config: stores.observability.path)"
+    )
+    sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+
 # ── aqueduct report ───────────────────────────────────────────────────────────
 
 @cli.command()
@@ -108,7 +142,7 @@ def report(
         return
     from aqueduct.cli.style import error as _error
     if not run_id:
-        _error("RUN_ID is required (or pass --trend COLUMN --blueprint ID)")
+        _error("RUN_ID is required — or pass --trend COLUMN --blueprint ID")
         sys.exit(exit_codes.USAGE_ERROR)
     import csv as _csv
     import io
@@ -127,13 +161,7 @@ def report(
 
     store = open_obs_read(cfg, store_dir, run_id=run_id)
     if store is None:
-        click.echo(
-            f"✗ observability store not found for run_id={run_id!r} "
-            f"(searched: --store-dir, cfg.stores.observability.path, "
-            f"and .aqueduct/observability/*/observability.db)",
-            err=True,
-        )
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
     metrics_rows: list = []
     with store.connect() as cur:
@@ -164,7 +192,7 @@ def report(
                 metrics_rows = []  # module_metrics table may not exist yet
 
     if row is None:
-        _error(f"run {run_id!r} not found in the observability store")
+        _error(f"run {run_id!r} not found in the observability store — `aqueduct runs` lists known run ids")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
@@ -278,8 +306,7 @@ def _report_trend(
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        _error("observability store not found")
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
     if since is None:
         from datetime import datetime, timedelta
@@ -495,15 +522,14 @@ def _report_profile(
     elif blueprint_arg:
         _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt)
     else:
-        _error("--profile needs RUN_ID (one run) or --blueprint ID (trend)")
+        _error("RUN_ID (one run) or --blueprint ID (trend) is required with --profile")
         sys.exit(exit_codes.USAGE_ERROR)
 
 
 def _profile_run(run_id, cfg, store_dir, fmt) -> None:
     store = open_obs_read(cfg, store_dir, run_id=run_id)
     if store is None:
-        _error(f"observability store not found for run_id={run_id!r}")
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
     with store.connect() as cur:
         cur.execute(
@@ -569,8 +595,7 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
 
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        _error("observability store not found")
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
     with store.connect() as cur:
         cur.execute(
@@ -935,8 +960,7 @@ def lineage(
     # observability store alongside all other observability tables.
     store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
     if store is None:
-        _error("observability store not found")
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
     params: list[Any] = [blueprint_id]
     where_parts = ["blueprint_id = ?"]

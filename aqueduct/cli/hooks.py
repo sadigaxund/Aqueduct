@@ -117,7 +117,7 @@ def run_hooks(
             label = _interpolate(str(h.value), run_vars)
             if not allow_command_hooks:
                 _warn(
-                    f"[hooks_command_disabled] command hook skipped — set "
+                    f"[hook_command_disabled] command hook skipped — set "
                     f"danger.allow_command_hooks: true in aqueduct.yml: {label}"
                 )
                 continue  # gating skips the entry, not the event
@@ -162,7 +162,7 @@ def run_hooks(
             except Exception as exc:  # noqa: BLE001 — webhooks are best-effort by contract
                 _warn(f"[hook_failed] {label} — {exc}")
                 if i + 1 < len(entries):
-                    _warn(f"[hooks_aborted] {len(entries) - i - 1} remaining hook(s) skipped")
+                    _warn(f"[hook_aborted] {len(entries) - i - 1} remaining hook(s) skipped")
                 break
             continue
 
@@ -183,7 +183,7 @@ def run_hooks(
             if rc > 0:
                 _warn(f"[hook_failed] {label} — exit {rc}  ·  {_fmt_dur(dur)}")
             if i + 1 < len(entries):
-                _warn(f"[hooks_aborted] {len(entries) - i - 1} remaining hook(s) skipped")
+                _warn(f"[hook_aborted] {len(entries) - i - 1} remaining hook(s) skipped")
             break
     return True
 

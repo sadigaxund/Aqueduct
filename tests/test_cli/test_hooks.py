@@ -84,7 +84,7 @@ class TestRunHooks:
     def test_command_gated_without_danger_flag(self, capsys):
         assert self._run([HookEntry("command", "echo nope")]) is True
         err = capsys.readouterr().err
-        assert "hooks_command_disabled" in err
+        assert "hook_command_disabled" in err
         assert "danger.allow_command_hooks" in err
 
     def test_command_runs_with_interpolation(self, capsys):

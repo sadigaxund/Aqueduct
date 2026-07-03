@@ -156,7 +156,7 @@ When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's 
 ✓ run complete
 ```
 
-Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hooks_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically).
+Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hook_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically).
 
 ### Config overrides (`-s` / `--set`)
 

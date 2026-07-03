@@ -110,7 +110,7 @@ def heal(
     from aqueduct.config import ConfigError, load_config
 
     if not run_id:
-        _error("provide a run_id argument")
+        _error("RUN_ID is required — `aqueduct heal <run_id>` (find ids via `aqueduct runs`)")
         sys.exit(exit_codes.USAGE_ERROR)
 
     try:
@@ -170,13 +170,8 @@ def heal(
     # Backend-aware: DuckDB file (resolved) OR the configured Postgres store.
     store = open_obs_read(cfg, store_dir, run_id=run_id)
     if store is None:
-        click.echo(
-            f"✗ observability store not found for run_id={run_id!r} "
-            f"(searched: --store-dir, cfg.stores.observability.path, "
-            f"and .aqueduct/observability/*/observability.db)",
-            err=True,
-        )
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+        from aqueduct.cli.observability import _store_not_found
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
     with store.connect() as cur:
         cur.execute(

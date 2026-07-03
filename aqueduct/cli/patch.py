@@ -191,7 +191,7 @@ def patch_preview(
     try:
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
-        click.echo(f"✗ Guardrails gate blocked: {exc}", err=True)
+        click.echo(f"✗ guardrails gate blocked: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
@@ -763,7 +763,7 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
         click.echo(f"✗ index query failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     if row is None:
-        click.echo(f"✗ patch {patch_id!r} not found in the index", err=True)
+        click.echo(f"✗ patch {patch_id!r} not found in the index — `aqueduct patch list --blueprint <bp>` shows known patches", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)

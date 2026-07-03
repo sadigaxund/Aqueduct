@@ -227,7 +227,7 @@ def run_studio(
     # (all runs). The ad-hoc SQL pane self-disables for postgres (read-only-only).
     handles = d.discover_stores(cfg, store_dir=store_dir)
     if not handles:
-        _style_error("No observability stores found. Run a blueprint first.")
+        _style_error("no observability stores found — run a blueprint first")
         return 1
 
     StudioApp(handles, cfg, config_path).run()
