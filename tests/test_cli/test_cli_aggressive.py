@@ -277,7 +277,7 @@ def test_block_full_actions_propagation(
         ),
         deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
         stores={
-            "observability": {"path": ".aqueduct/obs.db"},
+            "observability": {"path": ".aqueduct/obs"},
             "depots": {"default": {"path": ".aqueduct/depot.db"}}
         },
         spark_config={}

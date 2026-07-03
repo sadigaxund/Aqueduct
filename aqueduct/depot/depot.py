@@ -37,13 +37,13 @@ class DepotStore:
     Historically `DepotStore` opened a DuckDB connection per call. Phase 28
     moved that logic behind `aqueduct.stores.DepotStore` (the ABC) so the
     depot can be backed by DuckDB, Postgres, or Redis without touching
-    call sites. This class keeps the legacy `.get()` / `.put()` /
-    `.close()` API and delegates to whichever backend is configured.
+    call sites. This façade IS the supported `.get()` / `.put()` / `.close()`
+    API (not a deprecation shim) and delegates to whichever backend is
+    configured.
 
-    Construct either with a backend object (`DepotStore(backend=...)`,
-    the path used by the CLI Phase 28 wiring) or with a legacy file path
-    (`DepotStore(db_path=...)`, which preserves the pre-Phase-28 DuckDB
-    behaviour for direct programmatic callers).
+    Construct with a backend object (`DepotStore(backend=...)` — the CLI's
+    Phase 28 wiring) or, as a convenience for direct programmatic callers
+    and tests, with a DuckDB file path (`DepotStore(db_path=...)`).
     """
 
     def __init__(

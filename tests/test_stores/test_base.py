@@ -17,7 +17,7 @@ def test_get_stores_factory_duckdb():
 def test_get_stores_factory_mixed():
     cfg = AqueductConfig(**{
         "stores": {
-            "observability": {"backend": "duckdb", "path": "observability.db"},
+            "observability": {"backend": "duckdb", "path": "obs_base"},
             "depots": {"default": {"backend": "redis", "path": "redis://localhost:6379/0"}}
         }
     })

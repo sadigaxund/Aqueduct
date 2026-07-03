@@ -34,7 +34,7 @@ edges: []
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("""
 stores:
-  observability: { path: .aqueduct/obs.db }
+  observability: { path: .aqueduct/obs }
   depots: {default: { path: .aqueduct/depot.db }}
 deployment: { engine: spark, target: local }
 """)

@@ -99,7 +99,7 @@ def _write_project(tmp_path: Path, approval: str) -> tuple[Path, Path]:
     cfg = tmp_path / "aqueduct.yml"
     cfg.write_text(
         _MINIMAL_CFG.format(
-            obs=str(tmp_path / "obs.duckdb"),
+            obs=str(tmp_path / "obs"),
             lin=str(tmp_path / "lin.duckdb"),
             dep=str(tmp_path / "dep.duckdb"),
         ),

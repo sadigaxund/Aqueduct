@@ -44,12 +44,6 @@ def test_resolve_store_dir_missing(tmp_path):
     assert resolve_duckdb_obs_path(_cfg(), store_dir=str(tmp_path)) is None
 
 
-def test_resolve_nondefault_file(tmp_path):
-    f = tmp_path / "custom.db"
-    _make_db(f)
-    assert resolve_duckdb_obs_path(_cfg(path=str(f))) == f
-
-
 def test_resolve_nondefault_dir(tmp_path):
     _make_db(tmp_path / "observability.db")
     assert resolve_duckdb_obs_path(_cfg(path=str(tmp_path))) == tmp_path / "observability.db"
@@ -92,20 +86,16 @@ def test_resolve_location_only_dir_by_run_id(tmp_path):
     assert got == base / "alpha" / "observability.db"
 
 
-def test_resolve_explicit_db_file_ignores_blueprint_routing(tmp_path):
-    """A custom path ending in .db is a single file — no per-blueprint routing."""
-    f = tmp_path / "shared.db"
-    _make_db(f)
-    # even with a blueprint_id, the explicit single file wins
-    assert resolve_duckdb_obs_path(_cfg(path=str(f)), blueprint_id="beta") == f
+# (2.0: the explicit-single-file mode was removed — a `.db` duckdb path is
+# rejected at config load; see tests/test_parser/test_config.py.)
 
 
 # ── open_obs_read ────────────────────────────────────────────────────────────
 
 def test_open_duckdb_returns_store(tmp_path):
-    f = tmp_path / "custom.db"
-    _make_db(f)
-    store = open_obs_read(_cfg(path=str(f)))
+    base = tmp_path / "obs"
+    _make_db(base / "beta" / "observability.db")
+    store = open_obs_read(_cfg(path=str(base)), blueprint_id="beta")
     assert store is not None and store.backend == "duckdb"
     with store.connect() as cur:
         cur.execute("SELECT count(*) FROM run_records")
@@ -134,11 +124,6 @@ def test_write_dir_default_routes_per_blueprint():
 def test_write_dir_location_only_dir(tmp_path):
     base = tmp_path / "obs"
     assert resolve_obs_store_dir(_cfg(path=str(base)), "beta") == base / "beta"
-
-
-def test_write_dir_explicit_file_is_parent(tmp_path):
-    f = tmp_path / "x" / "shared.db"
-    assert resolve_obs_store_dir(_cfg(path=str(f)), "beta") == f.parent
 
 
 def test_write_dir_cli_store_dir_wins(tmp_path):

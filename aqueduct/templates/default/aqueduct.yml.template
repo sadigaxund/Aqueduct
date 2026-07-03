@@ -125,14 +125,15 @@ stores:
 
   observability:
     backend: duckdb
-    # DuckDB path layouts (see specs §10.4.1):
-    #   default ".aqueduct/observability.db" → per-blueprint routing under
-    #     .aqueduct/observability/<blueprint_id>/ (parallel-safe).
-    #   a DIRECTORY (no .db suffix), e.g. "/mnt/aqueduct/obs" → same per-blueprint
-    #     split under your dir (parallel-safe, custom location).
-    #   a FILE (.db suffix), e.g. "/mnt/aqueduct/obs.db" → ONE shared file for all
-    #     blueprints → NOT parallel-safe (DuckDB is single-writer).
-    path: ".aqueduct/observability.db"
+    # DuckDB path = a routing base DIRECTORY (see specs §10.4.1):
+    #   unset (default) → per-blueprint routing under
+    #     .aqueduct/observability/<blueprint_id>/observability.db (parallel-safe).
+    #   a DIRECTORY, e.g. "/mnt/aqueduct/obs" → same per-blueprint split under
+    #     your dir (parallel-safe, custom location).
+    #   a FILE path (.db suffix) is a CONFIG ERROR — the single-shared-file
+    #   layout was removed in 2.0 (never parallel-safe); for one shared
+    #   concurrent store use backend: postgres below.
+    # path: ".aqueduct/observability"
     # Postgres example (uncomment + install `aqueduct-core[postgres]`) — MVCC,
     # fully concurrent, the right choice for parallel runs + live dashboards:
     # backend: postgres
@@ -202,7 +203,7 @@ stores:
 # stores:
 #   observability:
 #     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/observability.db"
+#     path: "/mnt/nfs/aqueduct/observability"   # directory — per-blueprint files underneath
 #   depots:
 #     default:
 #       backend: duckdb

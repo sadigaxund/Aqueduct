@@ -48,13 +48,12 @@ def resolve_duckdb_obs_path(
     Resolution order (the single source of truth — `cli._resolve_obs_db`
     delegates here):
       1. ``--store-dir`` → ``<store_dir>/observability.db``.
-      2. A non-default ``stores.observability.path`` **ending in a file suffix**
-         (e.g. ``.../obs.db``) → that single file (one store for all blueprints).
-      3. Otherwise the path is a **base directory** (default ``.aqueduct/
-         observability`` OR a suffix-less custom path = location-only routing):
-         route ``<base>/<blueprint_id>/observability.db``, else the routed file
-         whose ``run_records`` contains ``run_id``, else the flat file directly
-         under the base.
+      2. The configured path (default ``.aqueduct/observability`` when unset)
+         is a **routing base directory** — 2.0 removed the explicit-single-
+         file mode (config load rejects ``.db``-suffixed duckdb paths):
+         route ``<base>/<blueprint_id>/observability.db``, else the routed
+         file whose ``run_records`` contains ``run_id``, else the flat file
+         directly under the base.
     """
     if store_dir:
         candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
@@ -62,15 +61,9 @@ def resolve_duckdb_obs_path(
 
     obs_path = cfg.stores.observability.path
     routing_root = _OBS_ROUTING_ROOT
-    flat_default = Path(_OBS_ROUTING_ROOT) / DEFAULT_OBS_DB_FILENAME
     if not _is_default_obs_path(obs_path):
-        explicit = Path(obs_path)
-        if explicit.suffix and not explicit.is_dir():
-            # Explicit single file — one store for every blueprint (no parallel).
-            return explicit if explicit.exists() else None
-        # Location-only base directory → route per-blueprint files under it.
-        routing_root = str(explicit)
-        flat_default = explicit / DEFAULT_OBS_DB_FILENAME
+        routing_root = str(obs_path)
+    flat_default = Path(routing_root) / DEFAULT_OBS_DB_FILENAME
 
     if blueprint_id:
         routed = Path(routing_root) / blueprint_id / DEFAULT_OBS_DB_FILENAME
@@ -103,21 +96,17 @@ def resolve_obs_store_dir(
 ) -> Path:
     """The directory holding a blueprint's ``observability.db`` on WRITE.
 
-    The single source of truth for per-blueprint write routing (mirrors the inline
-    logic in ``cli/run.py``): ``--store-dir`` wins; else the configured DuckDB path
-    decides — the default sentinel OR a suffix-less directory → per-blueprint
-    ``<base>/<blueprint_id>``; an explicit ``.db`` file → its parent (one shared
-    file). DuckDB-only (Postgres self-manages its DSN).
+    The single source of truth for per-blueprint write routing (mirrors the
+    inline logic in ``cli/run.py``): ``--store-dir`` wins; else the configured
+    DuckDB path (a routing base directory; 2.0 removed the explicit-file mode)
+    → per-blueprint ``<base>/<blueprint_id>``. DuckDB-only (Postgres
+    self-manages its DSN).
     """
     if store_dir:
         return Path(store_dir)
     path = cfg.stores.observability.path
-    if _is_default_obs_path(path):
-        return Path(_OBS_ROUTING_ROOT) / blueprint_id
-    p = Path(path)
-    if not p.suffix:  # location-only base directory
-        return p / blueprint_id
-    return p.parent  # explicit single .db file
+    base = Path(_OBS_ROUTING_ROOT) if _is_default_obs_path(path) else Path(path)
+    return base / blueprint_id
 
 
 def open_obs_write(

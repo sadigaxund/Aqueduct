@@ -262,7 +262,7 @@ def heal(
 
     from aqueduct.agent import resolve_budget as _resolve_budget
     from aqueduct.agent.transcript import TranscriptWriter
-    from aqueduct.cli.style import style_heal_line as _style_heal_line
+    from aqueduct.cli.style import colorize_line as _style_heal_line
     _transcript = TranscriptWriter(verbose=False, write=lambda s: emit(_style_heal_line(s)))
 
     _budget = _resolve_budget(

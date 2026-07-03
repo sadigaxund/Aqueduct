@@ -187,7 +187,7 @@ def test_stores_info_resolves_env(tmp_path, clean_env):
     """stores info resolves ${VAR} from anchored .env"""
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
-    (project_dir / ".env").write_text("DB_PATH=my_obs.db", encoding="utf-8")
+    (project_dir / ".env").write_text("DB_PATH=my_obs", encoding="utf-8")
     
     cfg_path = project_dir / "aqueduct.yml"
     cfg_path.write_text("""
@@ -201,7 +201,7 @@ stores:
     result = runner.invoke(cli, ["stores", "info", "--config", str(cfg_path)])
     assert result.exit_code == 0, result.output
     # The output should show the resolved path
-    assert "my_obs.db" in result.output
+    assert "my_obs" in result.output
     assert "loaded 1 var(s) from" in result.output
 
 

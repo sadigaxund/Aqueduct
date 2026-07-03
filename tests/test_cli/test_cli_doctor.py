@@ -66,7 +66,10 @@ class TestDoctorStoreBackends:
     def test_check_store_backend_duckdb_reachable(self, tmp_path):
         from aqueduct.doctor import check_store_backend
         from aqueduct.config import RelationalStoreConfig
-        store_cfg = RelationalStoreConfig(backend="duckdb", path=str(tmp_path / "obs.db"))
+        obs_dir = tmp_path / "obs"
+        obs_dir.mkdir()
+        # 2.0: the duckdb path is a routing base DIRECTORY (file paths rejected).
+        store_cfg = RelationalStoreConfig(backend="duckdb", path=str(obs_dir))
         result = check_store_backend("observability", store_cfg)
         assert result.status == "ok"
 

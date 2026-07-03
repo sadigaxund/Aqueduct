@@ -625,55 +625,9 @@ def _reachable_backward(start_id: str, edges: tuple[Edge, ...]) -> set[str]:
 
 # ── Watermark persistence (Depot-only, Phase 53) ──────────────────────────────
 #
-# The incremental-Channel watermark is persisted to the Depot exclusively. The
-# legacy local-FS sidecar (``store_dir/watermarks/<bp>__<channel>.json``) was
-# dropped in Phase 53 so a driver pod on an ephemeral filesystem leaves no
-# artefacts. ``_migrate_legacy_watermark_sidecar`` performs a one-time read of
-# any sidecar left by an older release, writes it to the Depot, deletes the
-# file, and returns the value — so an in-flight incremental pipeline does not
-# lose its position across the upgrade.
-
-
-def _legacy_watermark_sidecar_path(
-    store_dir: Path | None, blueprint_id: str, channel_id: str
-) -> Path | None:
-    if store_dir is None:
-        return None
-    return store_dir / "watermarks" / f"{blueprint_id}__{channel_id}.json"
-
-
-def _migrate_legacy_watermark_sidecar(
-    store_dir: Path | None,
-    blueprint_id: str,
-    channel_id: str,
-    depot_key: str,
-    depot: Any | None,
-) -> str:
-    """One-time migration of a pre-Phase-53 watermark sidecar into the Depot.
-
-    Returns the migrated watermark value (``""`` when no sidecar exists or it is
-    unreadable). When a Depot is configured the value is written through and the
-    sidecar file deleted, so the migration runs at most once.
-    """
-    path = _legacy_watermark_sidecar_path(store_dir, blueprint_id, channel_id)
-    if path is None or not path.exists():
-        return ""
-    try:
-        import json as _json
-        value = _json.loads(path.read_text(encoding="utf-8")).get("watermark") or ""
-    except Exception:
-        return ""
-    if value and depot is not None:
-        try:
-            depot.put(depot_key, value)
-            path.unlink()
-            logger.info(
-                "[%s] Migrated legacy watermark sidecar to depot (%s); sidecar removed.",
-                channel_id, depot_key,
-            )
-        except Exception:
-            logger.debug("[%s] Watermark sidecar migration failed", channel_id, exc_info=True)
-    return value
+# The incremental-Channel watermark is persisted to the Depot exclusively — a
+# driver pod on an ephemeral filesystem leaves no artefacts. (The 1.x local-FS
+# sidecar and its one-time migration shim were removed in 2.0.)
 
 
 def _compute_watermark_from_output(
@@ -1038,14 +992,9 @@ def execute(
                     if _incremental:
                         _watermark_col = module.config.get("watermark_column", "")
                         _depot_key = f"{manifest.blueprint_id}:{module.id}:_watermark"
-                        # Phase 53 — Depot is the sole watermark store. A legacy
-                        # local sidecar (older release) is migrated into the Depot
-                        # once, then deleted.
+                        # Phase 53 — Depot is the sole watermark store.
                         _watermark_val = (
                             (depot.get(_depot_key, "") if depot else "")
-                            or _migrate_legacy_watermark_sidecar(
-                                store_dir, manifest.blueprint_id, module.id, _depot_key, depot
-                            )
                             or "1900-01-01 00:00:00"
                         )
                         _query = module.config.get("query", "")

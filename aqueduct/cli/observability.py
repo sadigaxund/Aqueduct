@@ -705,28 +705,23 @@ def runs(
         from aqueduct.stores.base import get_stores
         stores = [get_stores(cfg).observability]
     else:
+        # 2.0: duckdb path = routing base directory; per-blueprint files at
+        # <base>/<blueprint_id>/observability.db. Explicit-file mode and the
+        # pre-routing flat `.aqueduct/observability.db` fallback are gone.
         candidates: list[Path] = []
         if store_dir:
             c = Path(store_dir) / "observability.db"
             if c.exists():
                 candidates.append(c)
-        elif cfg.stores.observability.path is not None:
-            c = Path(cfg.stores.observability.path)
-            if c.is_dir():
-                c = c / "observability.db"
-            if c.exists():
-                candidates.append(c)
         else:
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
+            _base = Path(cfg.stores.observability.path or _OBS_ROUTING_ROOT)
             if blueprint_id:
-                c = Path(_OBS_ROUTING_ROOT) / blueprint_id / "observability.db"
+                c = _base / blueprint_id / "observability.db"
                 if c.exists():
                     candidates.append(c)
             if not candidates:
-                candidates = sorted(Path(_OBS_ROUTING_ROOT).glob("*/observability.db"))
-            legacy = Path(".aqueduct/observability.db")
-            if legacy.exists():
-                candidates.append(legacy)
+                candidates = sorted(_base.glob("*/observability.db"))
         if not candidates:
             click.echo("No runs found (no observability.db files discovered)")
             return
@@ -1092,6 +1087,16 @@ def _lineage_chain(
     help="Observability store directory",
 )
 @click.option(
+    "--blueprint",
+    "blueprint_id",
+    default=None,
+    help=(
+        "Blueprint id whose observability store holds the override (DuckDB "
+        "routes per blueprint: <base>/<blueprint_id>/observability.db). "
+        "Required for duckdb unless --store-dir is given; ignored for postgres."
+    ),
+)
+@click.option(
     "--config",
     "config_path",
     default=None,
@@ -1103,6 +1108,7 @@ def signal(
     value_str: str | None,
     error_msg: str | None,
     store_dir: str | None,
+    blueprint_id: str | None,
     config_path: str | None,
     env_file: str | None,
     cli_env: tuple[str, ...],
@@ -1133,7 +1139,24 @@ def signal(
         _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
+    # DuckDB routes per blueprint — without an id the override would land in
+    # the `default/` store no run ever reads. (Postgres: one schema, no routing.)
+    if (
+        cfg.stores.observability.backend == "duckdb"
+        and not blueprint_id
+        and not store_dir
+    ):
+        _error(
+            "signal: --blueprint <id> is required with the duckdb backend "
+            "(overrides live in the blueprint's routed store)"
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    bundle = get_stores(
+        cfg,
+        store_dir_override=Path(store_dir) if store_dir else None,
+        blueprint_id=blueprint_id,
+    )
 
     if value_str is None and error_msg is None:
         # Show current override status

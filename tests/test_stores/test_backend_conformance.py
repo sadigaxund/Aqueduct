@@ -68,7 +68,7 @@ def seeded_cfg(request, tmp_path):
     yield the config path. Cleans up Postgres rows afterward."""
     backend = request.param
     if backend == "duckdb":
-        obs_path = str(tmp_path / "observability.db")
+        obs_path = str(tmp_path / "obs")  # 2.0: routing base DIRECTORY
     else:
         obs_path = _pg_dsn()
 
@@ -82,7 +82,9 @@ def seeded_cfg(request, tmp_path):
     )
 
     cfg = load_config(cfg_file)
-    store = get_stores(cfg).observability
+    # Seed at the blueprint-routed location (2.0: <base>/<blueprint_id>/…) so
+    # the CLI's blueprint-scoped reads resolve the same file.
+    store = get_stores(cfg, blueprint_id="conf_bp").observability
     with store.connect() as cur:
         for ddl in _DDL:
             cur.execute(ddl)

@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.5 — Reference Document**
+**Version 2.6 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1094,18 +1094,19 @@ Every relative path inside a YAML file resolves to **that YAML file's parent dir
 
 ### **10.4.1 Observability store routing (DuckDB)**
 
-`stores.observability.path` (DuckDB backend) selects one of three layouts. The
-distinction is **whether the path names a file or a directory**:
+`stores.observability.path` (DuckDB backend) is always a **routing base
+directory** (2.0 — the earlier single-shared-file layout was removed; a
+`.db`-suffixed path is now a config-load error):
 
 | `path` value | Layout | Parallelism |
 | :- | :- | :- |
-| *(default)* `.aqueduct/observability.db` | **Per-blueprint routing** — each blueprint writes its own file at `.aqueduct/observability/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel — separate files |
-| A directory (no file suffix), e.g. `/mnt/aqueduct/obs` | **Location-only routing** — same per-blueprint split, but under your directory: `<dir>/<blueprint_id>/observability.db` | ✅ Safe — separate files, custom location |
-| A file (ends in a suffix), e.g. `/mnt/aqueduct/obs.db` | **Single shared file** — every blueprint using this config writes the same DuckDB file | ⚠️ **Not parallel-safe** — DuckDB is single-writer; do not run blueprints concurrently against one file |
+| *(unset — default)* | **Per-blueprint routing** — each blueprint writes its own file at `.aqueduct/observability/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel — separate files |
+| A directory, e.g. `/mnt/aqueduct/obs` | **Location-only routing** — same per-blueprint split, but under your directory: `<dir>/<blueprint_id>/observability.db` | ✅ Safe — separate files, custom location |
+| ~~A file, e.g. `/mnt/aqueduct/obs.db`~~ | **Removed in 2.0** — DuckDB is single-writer, so one shared file was never parallel-safe, and a custom basename split reads from writes. Config load fails with a pointer here. | Use **Postgres** for one shared concurrent store |
 
 **Caveats:**
-- DuckDB takes an **exclusive lock** per file. Two writers on one file (the single-file layout, or the *same* blueprint launched twice concurrently) will block/fail — rare, but real.
-- Want a **custom location AND parallel runs AND DuckDB**? Use the *directory* form (location-only routing), not a `.db` file. For full concurrent access (dashboards reading while many pipelines write), use the **Postgres** backend (MVCC).
+- DuckDB takes an **exclusive lock** per file. Launching the *same* blueprint twice concurrently (one routed file) will block/fail — rare, but real.
+- Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work — the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
 - **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect — but for conflict-free continuous monitoring, use Postgres.
 - *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores) — see `docs/roadmap.md`.
 

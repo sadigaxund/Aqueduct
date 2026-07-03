@@ -17,7 +17,7 @@ deployment:
   master_url: local[*]
 stores:
   observability:
-    path: .aqueduct/obs.db
+    path: .aqueduct/obs
   depots:
     default:
       path: .aqueduct/depot.db

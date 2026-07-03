@@ -38,7 +38,7 @@ def _write_config(path: Path, extra: str = ""):
 aqueduct_config: "1.0"
 stores:
   observability:
-    path: %s/obs.db
+    path: %s/obs
 agent:
   provider: anthropic
   model: claude-3
@@ -133,7 +133,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
 
     # Verify that the replayed healing outcome recorded a NULL model column.
     import duckdb
-    obs_db = tmp_path / "obs.db"
+    obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     conn = duckdb.connect(str(obs_db))
     row = conn.execute("SELECT model FROM healing_outcomes WHERE patch_id = 'replay-1'").fetchone()
     conn.close()
@@ -361,7 +361,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
 
     # Check healing_outcomes in observability DB
     import duckdb
-    obs_db = tmp_path / "obs.db"
+    obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     if obs_db.exists():
         conn = duckdb.connect(str(obs_db))
         row = conn.execute(

@@ -283,7 +283,6 @@ def _load_engine_config(
     Extracted from the ``run()`` god-function (T18).  No behaviour change.
     """
     import sys as _sys
-    from pathlib import Path as _P
 
     from aqueduct.cli import _resolve_and_load_env as _renv
     from aqueduct.cli.style import error as _err
@@ -323,25 +322,20 @@ def _load_engine_config(
             )
 
     # ── Store dir resolution ───────────────────────────────────────────────────
+    # 2.0: the duckdb observability path is a routing DIRECTORY only (config
+    # load rejects `.db`-suffixed paths) — per-blueprint files always live at
+    # `<base>/<blueprint_id>/observability.db`. `--store-dir` bypasses routing.
     _using_default_obs_path = False
     _obs_routing_base = ".aqueduct/observability"
     if store_dir_abs:
         resolved_store_dir = store_dir_abs
     else:
+        resolved_store_dir = None
         _observability_path = cfg.stores.observability.path
-        if _observability_path is None:
+        if cfg.stores.observability.backend == "duckdb":
             _using_default_obs_path = True
-        if cfg.stores.observability.backend != "duckdb":
-            resolved_store_dir = None
-        elif _observability_path is None:
-            _using_default_obs_path = True
-            resolved_store_dir = None
-        elif not _P(_observability_path).suffix:
-            _using_default_obs_path = True
-            _obs_routing_base = _observability_path
-            resolved_store_dir = None
-        else:
-            resolved_store_dir = _P(_observability_path).parent
+            if _observability_path is not None:
+                _obs_routing_base = _observability_path
 
     resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
     engine = cfg.deployment.engine
@@ -1593,7 +1587,7 @@ def run(
                 if max_patches > 1
                 else f"{patch_count + 1}"
             )
-            from aqueduct.cli.style import style_heal_line as _style_heal_line
+            from aqueduct.cli.style import colorize_line as _style_heal_line
             # Live SSE streaming is interactive-TTY-only (piped/CI keep the
             # non-streaming POST path).
             _use_stream = sys.stdout.isatty()

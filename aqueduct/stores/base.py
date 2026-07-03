@@ -276,14 +276,30 @@ def get_stores(
         DuckDBObservabilityStore,
     )
 
-    def _resolve_duckdb_path(store_cfg: RelationalStoreConfig) -> Path:
-        if store_cfg.path is None:
+    def _resolve_obs_duckdb_path(store_cfg: RelationalStoreConfig) -> Path:
+        # 2.0 — the duckdb OBSERVABILITY path is always a routing BASE
+        # directory (config load rejects file paths): the store file lives at
+        # <base>/<blueprint_id>/observability.db. `store_dir_override`
+        # (--store-dir) replaces the base entirely. Depot mounts are different
+        # — their `path` IS the db file — see `_resolve_depot_duckdb_path`.
+        from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+        from aqueduct.stores.read import _OBS_ROUTING_ROOT
+        if store_dir_override:
+            _base = Path(store_dir_override)
+        elif store_cfg.path is not None:
+            _base = Path(store_cfg.path)
+        else:
+            _base = Path(_OBS_ROUTING_ROOT)
+        return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+
+    def _resolve_depot_duckdb_path(mount: Any) -> Path:
+        # Depot mounts: `path` names the db FILE (e.g. .aqueduct/depot.db).
+        if mount.path is None:
             from aqueduct.config import DEFAULT_OBS_DB_FILENAME
             from aqueduct.stores.read import _OBS_ROUTING_ROOT
             _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
-            _bid = blueprint_id or "default"
-            return _base / _bid / DEFAULT_OBS_DB_FILENAME
-        p = Path(store_cfg.path)
+            return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+        p = Path(mount.path)
         if store_dir_override is not None and not p.is_absolute():
             return Path(store_dir_override) / p.name
         return p
@@ -293,7 +309,7 @@ def get_stores(
 
     # ── observability (includes column lineage — merged in Phase 38) ──────────
     if cfg.stores.observability.backend == "duckdb":
-        obs = DuckDBObservabilityStore(_resolve_duckdb_path(cfg.stores.observability))
+        obs = DuckDBObservabilityStore(_resolve_obs_duckdb_path(cfg.stores.observability))
     elif cfg.stores.observability.backend == "postgres":
         from aqueduct.stores.postgres import PostgresObservabilityStore
         obs = PostgresObservabilityStore(cfg.stores.observability.path or "")
@@ -308,7 +324,7 @@ def get_stores(
     # blueprint_id (some non-run contexts) keys are raw — same as pre-isolation.
     def _build_depot(mount: Any) -> DepotStore:
         if mount.backend == "duckdb":
-            return DuckDBDepotStore(_resolve_duckdb_path(mount))
+            return DuckDBDepotStore(_resolve_depot_duckdb_path(mount))
         if mount.backend == "postgres":
             from aqueduct.stores.postgres import PostgresDepotStore
             return PostgresDepotStore(mount.path)

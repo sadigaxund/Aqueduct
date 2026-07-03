@@ -32,7 +32,6 @@ from aqueduct.config import DEFAULT_OBS_DB_FILENAME
 from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.object_store import PatchStore
 
-_DEFAULT_OBS_FILE = f".aqueduct/{DEFAULT_OBS_DB_FILENAME}"
 _DEFAULT_OBS_ROOT = ".aqueduct/observability"
 
 
@@ -140,9 +139,10 @@ class PlanMetricRow:
 def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> list[tuple[str, Path]]:
     """All DuckDB observability files → (blueprint_id, path).
 
-    Covers: ``--store-dir`` override; a non-default configured ``path`` that is a
-    file (single store) OR a directory (location-only routing → per-blueprint
-    files under it); the flat default + per-blueprint routing root.
+    Covers: ``--store-dir`` override, else the routing base directory (the
+    configured ``path`` when set, the default root otherwise) — per-blueprint
+    files at ``<base>/<blueprint_id>/observability.db``. 2.0 removed the
+    explicit-single-file mode and the pre-routing flat-file fallback.
     """
     out: list[tuple[str, Path]] = []
     seen: set[Path] = set()
@@ -156,17 +156,7 @@ def _duckdb_files(obs_path: str | None, store_dir: str | None, root: str) -> lis
     if store_dir:
         add("", Path(store_dir) / DEFAULT_OBS_DB_FILENAME)
         return out
-    if obs_path and obs_path != _DEFAULT_OBS_FILE:
-        ep = Path(obs_path)
-        if ep.is_dir():
-            add("", ep / DEFAULT_OBS_DB_FILENAME)
-            for sub in sorted(ep.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
-                add(sub.parent.name, sub)
-        else:
-            add("", ep)
-        return out
-    add("", Path(_DEFAULT_OBS_FILE))
-    base = Path(root)
+    base = Path(obs_path) if obs_path else Path(root)
     if base.is_dir():
         for sub in sorted(base.glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
             add(sub.parent.name, sub)

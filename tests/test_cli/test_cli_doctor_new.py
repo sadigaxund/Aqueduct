@@ -393,7 +393,7 @@ deployment:
   master_url: "local[*]"
   env: cluster
 stores:
-  observability: {backend: duckdb, path: ".aqueduct/obs.db"}
+  observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
@@ -410,7 +410,7 @@ stores:
         # StoresConfig is a frozen Pydantic model — rebuild it with unresolved paths.
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
-            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
             depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})
@@ -430,10 +430,12 @@ stores:
 
     # Check that check_store_backend runs real duckdb open / usability check
     from aqueduct.doctor import check_store_backend
-    store_cfg = RelationalStoreConfig(backend="duckdb", path=str(tmp_path / "obs.db"))
+    obs_dir = tmp_path / "obs"
+    obs_dir.mkdir()
+    store_cfg = RelationalStoreConfig(backend="duckdb", path=str(obs_dir))
     res = check_store_backend("observability", store_cfg)
     assert res.status == "ok"
-    assert "backend=duckdb" in res.detail
+    assert "backend=duckdb" in res.detail  # routing-base write probe
 
 
 # ── 20. Additive Flags scenario test ──────────────────────────────────────────
@@ -562,7 +564,7 @@ deployment:
   master_url: "local[*]"
   env: cluster
 stores:
-  observability: {backend: duckdb, path: ".aqueduct/obs.db"}
+  observability: {backend: duckdb, path: ".aqueduct/obs"}
   depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
@@ -587,7 +589,7 @@ edges: []
         cfg = _real_load_config(path)
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
-            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
             depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})

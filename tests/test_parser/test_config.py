@@ -171,10 +171,25 @@ def test_load_config_duckdb_lazy_imports(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "redis", None)
     
     path = tmp_path / "aq_duck.yml"
-    path.write_text("stores:\n  observability: {backend: duckdb, path: obs.db}")
-    
+    path.write_text("stores:\n  observability: {backend: duckdb, path: obs}")
+
     cfg = load_config(path)
     assert cfg.stores.observability.backend == "duckdb"
+
+def test_duckdb_obs_file_path_rejected(tmp_path):
+    """2.0 — the duckdb observability path is a routing DIRECTORY; a `.db` file
+    path (the removed single-shared-file mode) fails config load with guidance."""
+    path = tmp_path / "aq_file.yml"
+    path.write_text("stores:\n  observability: {backend: duckdb, path: .aqueduct/observability.db}")
+    with pytest.raises(ConfigError, match="DIRECTORY"):
+        load_config(path)
+
+def test_postgres_dsn_not_rejected_by_dir_rule(tmp_path):
+    """The directory rule is duckdb-only — a Postgres DSN passes."""
+    path = tmp_path / "aq_pg.yml"
+    path.write_text("stores:\n  observability: {backend: postgres, path: 'postgresql://aq@h:5432/aq'}")
+    cfg = load_config(path)
+    assert cfg.stores.observability.backend == "postgres"
 
 def test_metrics_config_parsing(tmp_path):
     """MetricsConfig parses use_observe: true and use_observe: false without error"""

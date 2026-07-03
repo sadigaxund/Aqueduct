@@ -32,17 +32,21 @@ def test_resolve_obs_db_store_dir(tmp_path):
     db_file.touch()
     assert _resolve_obs_db(mock_cfg, str(tmp_path), "run-1") == db_file
 
-def test_resolve_obs_db_explicit_path(tmp_path):
-    """_resolve_obs_db honours explicit config path."""
-    explicit_db = tmp_path / "custom" / "my_obs.db"
-    explicit_db.parent.mkdir(parents=True)
-    explicit_db.touch()
-    
+def test_resolve_obs_db_custom_directory_routes(tmp_path):
+    """A custom path is a routing BASE directory (2.0 — explicit-file mode
+    removed): the routed <base>/<blueprint_id>/observability.db is found."""
+    base = tmp_path / "custom"
+    routed = base / "my_pipeline" / "observability.db"
+    routed.parent.mkdir(parents=True)
+    conn = duckdb.connect(str(routed))
+    conn.execute("CREATE TABLE run_records (run_id VARCHAR PRIMARY KEY)")
+    conn.execute("INSERT INTO run_records VALUES ('run-1')")
+    conn.close()
+
     mock_cfg = MagicMock()
-    mock_cfg.stores.observability.path = str(explicit_db)
-    
-    # Without store_dir, should use explicit path from config
-    assert _resolve_obs_db(mock_cfg, None, "run-1") == explicit_db
+    mock_cfg.stores.observability.path = str(base)
+
+    assert _resolve_obs_db(mock_cfg, None, "run-1") == routed
 
 def test_resolve_obs_db_per_pipeline_glob(tmp_path):
     """_resolve_obs_db globs per-pipeline dirs when using default obs path and run_id is supplied."""

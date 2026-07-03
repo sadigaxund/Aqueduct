@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
 """
 
 
-def _cfg(path=".aqueduct/observability.db", backend="duckdb"):
+def _cfg(path=None, backend="duckdb"):  # None = default routing root (2.0)
     return SimpleNamespace(
         stores=SimpleNamespace(observability=SimpleNamespace(path=path, backend=backend))
     )

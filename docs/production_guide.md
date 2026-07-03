@@ -231,7 +231,8 @@ Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephe
 ```yaml
 stores:
   observability:
-    path: "/mnt/aqueduct-state/observability.db"
+    path: "/mnt/aqueduct-state/observability"   # a DIRECTORY — per-blueprint
+                                                # files are created underneath
   depots:
     default:
       path: "/mnt/aqueduct-state/depot.db"

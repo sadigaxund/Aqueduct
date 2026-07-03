@@ -203,11 +203,33 @@ class RelationalStoreConfig(BaseModel):
     path: Annotated[str, FsPath()] | None = Field(
         default=None,
         description=(
-            "DuckDB: local file path. Postgres: libpq DSN such as "
-            "`postgresql://user:pass@host/aqueduct_db`. "
-            "None (default) → per-blueprint routing under .aqueduct/observability/."
+            "DuckDB: a DIRECTORY (routing base) — per-blueprint files are "
+            "created underneath as `<path>/<blueprint_id>/observability.db`; "
+            "None (default) routes under `.aqueduct/observability/`. A file "
+            "path (`.db` suffix) is a config error (2.0: the single-shared-"
+            "file mode was removed — DuckDB is single-writer, so it was never "
+            "parallel-safe; use `backend: postgres` for one shared concurrent "
+            "store). Postgres: libpq DSN such as "
+            "`postgresql://user:pass@host/aqueduct_db`."
         ),
     )
+
+    @model_validator(mode="after")
+    def _duckdb_path_is_directory(self) -> RelationalStoreConfig:
+        # 2.0 BREAKING — duckdb observability path is a routing DIRECTORY only.
+        # The old explicit-.db-file mode wrote to `<parent>/observability.db`
+        # while reads honoured the configured basename (silent read/write
+        # split-brain for any name but the default), and a single shared file
+        # is not parallel-safe anyway. Fail loud at load with the migration.
+        if self.backend == "duckdb" and self.path and Path(self.path).suffix:
+            raise ValueError(
+                f"stores.observability.path {self.path!r} looks like a file. "
+                "Point it at a DIRECTORY — per-blueprint files are created "
+                "underneath (<path>/<blueprint_id>/observability.db). For one "
+                "shared concurrent store use backend: postgres. (The DuckDB "
+                "single-file mode was removed in 2.x.)"
+            )
+        return self
 
 
 class KVStoreConfig(BaseModel):

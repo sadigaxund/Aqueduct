@@ -119,7 +119,7 @@ edges:
 metrics:
   use_observe: false
 stores:
-  observability: {{path: {tmp_path / "obs.db"}}}
+  observability: {{path: {tmp_path / "obs"}}}
 """)
     
     # We need to ensure the CLI uses this config file.
@@ -246,7 +246,7 @@ aqueduct_config: "1.0"
 stores:
   observability:
     backend: duckdb
-    path: "{tmp_path / '.aqueduct' / 'observability' / bp_id / 'observability.db'}"
+    path: "{tmp_path / '.aqueduct' / 'observability'}"
 """)
 
     # Create observability.db with column_lineage data
@@ -422,12 +422,13 @@ name: heal_cli
 modules: []
 edges: []
 """)
-        # Surveyor writes to <store_dir>/observability.db. Config must point
-        # at the SAME file (not a sibling) so `_resolve_obs_db` finds it.
+        # 2.0: config path is a routing BASE dir; the Surveyor below writes
+        # into the routed <base>/heal_cli/ dir so `_resolve_obs_db` (run_id
+        # glob over <base>/*/observability.db) finds the same file.
         config_path = tmp_path / "aq.yml"
         config_path.write_text(
             f"agent: {{model: claude-3}}\n"
-            f"stores: {{observability: {{path: {tmp_path / 'observability.db'}}}}}\n"
+            f"stores: {{observability: {{path: {tmp_path}}}}}\n"
         )
 
         from aqueduct.surveyor.surveyor import Surveyor
@@ -437,7 +438,7 @@ edges: []
                 blueprint_id="heal_cli", name="heal_cli",
                 context={}, modules=(), edges=(), spark_config={},
             ),
-            tmp_path,
+            tmp_path / "heal_cli",
         )
         s.start("run1")
 

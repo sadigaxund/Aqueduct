@@ -105,10 +105,6 @@ def colorize_line(line: str) -> str:
     return out
 
 
-# Back-compat alias: the heal transcript writer wraps its callback with this.
-style_heal_line = colorize_line
-
-
 def _short_warning(msg: str, limit: int = 100) -> str:
     """First clause of a warning message (before ' --- ' or first sentence), capped."""
     seg = msg.split(" \u2014 ", 1)[0].split(". ", 1)[0].strip()
