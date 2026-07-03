@@ -5,7 +5,7 @@ description: Audit Aqueduct tests for stale assertions, missing markers, hardcod
 
 # Aqueduct Test Audit
 
-Extends `codebase-audit.md` with Aqueduct-specific test patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
+Extends `aqskill-audit-health.md` with Aqueduct-specific test patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
 
 ## ⚠️ Verify before you report (precision gate — read first)
 

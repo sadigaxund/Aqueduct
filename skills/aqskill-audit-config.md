@@ -5,7 +5,7 @@ description: Audit Aqueduct schema/template sync, path anchoring, silent no-ops,
 
 # Aqueduct Config/Schema Audit
 
-Extends `codebase-audit.md` with Aqueduct-specific config patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
+Extends `aqskill-audit-health.md` with Aqueduct-specific config patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
 
 ## ⚠️ Verify before you report (precision gate — read first)
 
@@ -46,7 +46,7 @@ rg -n ': .* = Field\(' aqueduct/parser/schema.py
 ```bash
 # Also check: template shows wrong key name (singular/plural mismatch, old alias)
 rg -n 'depot:' aqueduct/templates/ | rg -v 'depots'
-rg -n 'approval_mode' aqueduct/templates/ aqueduct/docs/ SKILL.md
+rg -n 'approval_mode' aqueduct/templates/ docs/ SKILL.md
 rg -n 'stores\.lineage' aqueduct/templates/ | rg -v 'test_'
 ```
 

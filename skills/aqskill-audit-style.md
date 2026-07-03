@@ -5,7 +5,7 @@ description: Audit Aqueduct for over-broad except clauses, string-in-context saf
 
 # Aqueduct Style & Syntax Audit
 
-Extends `codebase-audit.md` with Aqueduct-specific style patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
+Extends `aqskill-audit-health.md` with Aqueduct-specific style patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
 
 ## ⚠️ Verify before you report (precision gate — read first)
 

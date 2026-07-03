@@ -5,7 +5,7 @@ description: Audit Aqueduct source for exit-code consistency, cross-layer import
 
 # Aqueduct Code-Layer Audit
 
-Extends `codebase-audit.md` with Aqueduct-specific code patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
+Extends `aqskill-audit-health.md` with Aqueduct-specific code patterns. All prevention rules live in AGENTS.md — this skill provides detection, not rules.
 
 ## ⚠️ Verify before you report (precision gate — read first)
 

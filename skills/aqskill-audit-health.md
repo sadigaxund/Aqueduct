@@ -7,6 +7,8 @@ description: General code-health audit — secrets, stubs, debt markers, dead co
 
 General-purpose detection patterns — secrets, stubs, debt markers, dead code, hardcoded values, resource leaks, and language-agnostic patterns. Runs first as a baseline; Aqueduct-specific patterns are covered by the domain skills (`aqskill-audit-tests`, `aqskill-audit-code`, `aqskill-audit-config`, `aqskill-audit-style`). See `aqskill-audit.md` for the full workflow.
 
+> **Sync note:** the workflow, report format, design-judgment library, and detection patterns §1–§10 here embed the generic corpus from `.claude/skills/code-audit/` (SKILL.md + `references/`); §11–§17 are the Aqueduct-specific extensions. If you edit the shared prose in either place, update the other in the same commit.
+
 You already know clean-code principles. The hard, high-value work an audit needs from you is three things you do *not* do reliably on your own:
 
 1. **Reason top-down from intent.** Form an expectation of how the system *should* behave before judging the code, so you catch what's *missing*, not just what's present-and-ugly.
