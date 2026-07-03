@@ -288,6 +288,51 @@ class WarningsSchema(BaseModel):
     )
 
 
+class HookEntrySchema(BaseModel):
+    """One lifecycle-hook action — exactly one of `blueprint:` / `webhook:` /
+    `command:` (see `docs/specs.md` §Hooks).
+
+    - `blueprint:` chains another Blueprint as a fresh `aqueduct run`
+      subprocess (own session/run_id/report — loose coupling by design).
+    - `webhook:` fires the same endpoint model as the engine-level
+      `webhooks:` block in aqueduct.yml — a bare URL string, or a map with
+      url/method/headers/payload (full payload templating included).
+    - `command:` runs an arbitrary subprocess (shlex argv, NO shell) —
+      requires `danger.allow_command_hooks: true` in aqueduct.yml; entries
+      are skipped with a warning otherwise.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    blueprint: str | None = None
+    webhook: str | dict[str, Any] | None = None
+    command: str | None = None
+    timeout: int = 300  # seconds — blueprint/command subprocesses
+
+    @model_validator(mode="after")
+    def _exactly_one_action(self) -> HookEntrySchema:
+        set_keys = [k for k in ("blueprint", "webhook", "command") if getattr(self, k) is not None]
+        if len(set_keys) != 1:
+            raise ValueError(
+                "hook entry must set exactly one of blueprint/webhook/command"
+                f" — got {set_keys or 'none'}"
+            )
+        return self
+
+
+class HooksSchema(BaseModel):
+    """Blueprint lifecycle hooks — run AFTER the pipeline's terminal state.
+
+    Hooks never change the run's exit code; a failing hook is a warning and
+    stops the remaining hooks of that event. Distinct from the engine-level
+    `webhooks:` block in aqueduct.yml (ops-owned alerting that fires
+    regardless of what the Blueprint declares).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    on_success: list[HookEntrySchema] = Field(default_factory=list)
+    on_failure: list[HookEntrySchema] = Field(default_factory=list)
+
+
 class BlueprintSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -307,6 +352,7 @@ class BlueprintSchema(BaseModel):
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False
     warnings: WarningsSchema = Field(default_factory=WarningsSchema)
+    hooks: HooksSchema = Field(default_factory=HooksSchema)
 
     @field_validator("aqueduct")
     @classmethod

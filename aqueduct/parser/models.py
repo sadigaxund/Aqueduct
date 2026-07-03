@@ -183,6 +183,29 @@ class Edge:
 
 
 @dataclass(frozen=True)
+class HookEntry:
+    """One lifecycle-hook action. `kind` ∈ {"blueprint", "webhook", "command"};
+    `value` is the path / url-or-endpoint-map / command string verbatim from
+    YAML — runtime variables (${run.id}, ${run.status}, ${blueprint.id}) are
+    interpolated by the CLI hook runner at fire time, NOT at parse time."""
+    kind: str
+    value: Any
+    timeout: int = 300
+
+
+@dataclass(frozen=True)
+class Hooks:
+    """Blueprint lifecycle hooks (`hooks:` block). Run after the pipeline's
+    terminal state; never change the run's exit code. Distinct from the
+    engine-level `webhooks:` block in aqueduct.yml (ops-owned alerting)."""
+    on_success: tuple[HookEntry, ...] = ()
+    on_failure: tuple[HookEntry, ...] = ()
+
+    def __bool__(self) -> bool:
+        return bool(self.on_success or self.on_failure)
+
+
+@dataclass(frozen=True)
 class Blueprint:
     aqueduct_version: str
     id: str
@@ -206,3 +229,6 @@ class Blueprint:
     # Blueprint, this field is parsed but ignored — only the top-level
     # (parent) Blueprint's value applies to the whole compilation unit.
     warning_suppress: tuple[str, ...] = ()
+    # Lifecycle hooks (`hooks:` block). For an Arcade sub-Blueprint this is
+    # parsed but ignored — only the top-level Blueprint's hooks fire.
+    hooks: Hooks = field(default_factory=Hooks)

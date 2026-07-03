@@ -100,6 +100,29 @@ spark_config:
 #   suppress: ["*"]
 
 
+# ── Lifecycle hooks ─────────────────────────────────────────────────────────────
+#
+# Run sequentially AFTER the pipeline's terminal state; hook outcomes never
+# change the run's exit code (a failing hook warns and skips the event's
+# remaining hooks). Exactly one action per entry:
+#   blueprint: <path>   chain another blueprint (fresh `aqueduct run` subprocess,
+#                       own run_id/report) — cycle-guarded, ungated
+#   webhook: <url|map>  same endpoint model as aqueduct.yml `webhooks:`
+#                       (url shorthand, or url/method/headers/payload) — ungated
+#   command: "<argv>"   subprocess (shlex, no shell); interpolates ${run.id},
+#                       ${run.status}, ${blueprint.id} only. REQUIRES
+#                       danger.allow_command_hooks: true in aqueduct.yml.
+
+# hooks:
+#   on_success:
+#     - blueprint: blueprints/downstream.yml
+#     - command: "scripts/commit_outputs.sh ${run.id}"
+#       timeout: 120                  # seconds, default 300
+#   on_failure:
+#     - webhook: https://hooks.example/alert
+#     - command: "scripts/cleanup_partial.sh ${run.id}"
+
+
 # ── Checkpointing ──────────────────────────────────────────────────────────────
 #
 # When true, every module's output is materialized to Parquet under

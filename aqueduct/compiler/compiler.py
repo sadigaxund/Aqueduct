@@ -535,6 +535,7 @@ def compile(  # noqa: A001
         aqueduct_version=blueprint.aqueduct_version,
         context=resolved_ctx,
         modules=tuple(_all_modules),
+        hooks=blueprint.hooks,
         edges=tuple(edges),
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,

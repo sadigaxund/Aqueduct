@@ -845,6 +845,28 @@ def _cloud_uri_check(name: str, path_val: str, module_type: Any, t: float, *, pr
         return CheckResult(name, "warn", f"cloud URI {path_val!r}: {exc}", _ms(t))
 
 
+def check_hooks(blueprint_path: Path) -> CheckResult:
+    """Static `hooks:` health — walks `blueprint:` hook references without
+    executing anything; reports cycles, chain-depth overflow, and missing
+    target files. Skips when the Blueprint declares no hooks."""
+    t = time.monotonic()
+    try:
+        import yaml
+        raw = yaml.safe_load(Path(blueprint_path).read_text(encoding="utf-8")) or {}
+    except Exception:
+        raw = {}
+    if not raw.get("hooks"):
+        return CheckResult("hooks", "skip", "not configured", _ms(t))
+    try:
+        from aqueduct.cli.hooks import static_hook_check
+        problems = static_hook_check(Path(blueprint_path))
+    except Exception as exc:  # noqa: BLE001 — doctor checks never raise
+        return CheckResult("hooks", "warn", f"hook check failed: {exc}", _ms(t))
+    if problems:
+        return CheckResult("hooks", "warn", "; ".join(problems), _ms(t))
+    return CheckResult("hooks", "ok", "no cycles; all blueprint targets exist", _ms(t))
+
+
 def check_blueprint_sources(
     blueprint_path: Path,
     _context_override: dict[str, Any] | None = None,
@@ -1302,6 +1324,12 @@ def run_doctor(
             engine_base_url=cfg.agent.base_url,
             preflight=preflight,
         ))
+
+    # Hooks — static walk of the `hooks.blueprint:` chain (cycles, depth,
+    # missing targets) without running anything. Mirrors the runtime
+    # AQUEDUCT_HOOK_CHAIN guard in cli/hooks.py.
+    if blueprint_path is not None:
+        results.append(check_hooks(blueprint_path))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure

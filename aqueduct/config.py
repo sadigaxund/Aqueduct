@@ -539,6 +539,17 @@ class DangerConfig(BaseModel):
             "only when you fully trust the model and blueprint scope is tiny."
         ),
     )
+    allow_command_hooks: bool = Field(
+        default=False,
+        description=(
+            "Allow `command:` entries in a Blueprint's `hooks:` block (arbitrary "
+            "subprocess after on_success/on_failure). The gate lives HERE — in "
+            "the operator-owned engine config — so a Blueprint cannot "
+            "self-authorize shell execution. `blueprint:` and `webhook:` hook "
+            "entries are declarative and never gated. Default false = command "
+            "hooks are skipped with a warning."
+        ),
+    )
 
 
 class SecretsConfig(BaseModel):

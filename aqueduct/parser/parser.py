@@ -27,11 +27,22 @@ from aqueduct.parser.models import (
     ContextRegistry,
     Edge,
     GuardrailsConfig,
+    HookEntry,
+    Hooks,
     Module,
     RetryPolicy,
 )
 from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
+
+
+def _hook_entry(h) -> HookEntry:
+    """HookEntrySchema → HookEntry (kind + verbatim value)."""
+    for kind in ("blueprint", "webhook", "command"):
+        v = getattr(h, kind)
+        if v is not None:
+            return HookEntry(kind=kind, value=v, timeout=h.timeout)
+    raise ParseError("hook entry has no action")  # unreachable — schema enforces exactly-one
 
 
 def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | None:
@@ -366,4 +377,11 @@ def parse_dict(
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
         warning_suppress=tuple(validated.warnings.suppress),
+        # Hook values pass through VERBATIM — ${run.id}/${run.status}/
+        # ${blueprint.id} are runtime variables the CLI hook runner
+        # interpolates at fire time (resolve_value here would reject them).
+        hooks=Hooks(
+            on_success=tuple(_hook_entry(h) for h in validated.hooks.on_success),
+            on_failure=tuple(_hook_entry(h) for h in validated.hooks.on_failure),
+        ),
     )

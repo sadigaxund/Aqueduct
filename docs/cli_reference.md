@@ -144,6 +144,20 @@ Arcade-expanded modules nest under their Arcade in the summary block — the par
 
 The nesting is display-only. Logs, the observability store, and the `failed_module=` footer keep the full flattened id (`arcade_conditional__save_other`), so copy-pasting ids into `--from`/`--to`, `report`, or SQL against `run_records` works unchanged.
 
+### Run output: lifecycle hooks
+
+When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's entries run after the terminal footer, each with a `✓/⚠` line; a chained `blueprint:` hook streams its own full run output inline (it is a fresh `aqueduct run` subprocess). The section closes with a final `✓ run complete`:
+
+```
+✓ blueprint complete
+· hooks  ·  on_success (2)
+  ✓ scripts/commit_outputs.sh r-1234    1.2 s
+  ✓ aqueduct run downstream.yml    4m 02s
+✓ run complete
+```
+
+Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hooks_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically).
+
 ### Config overrides (`-s` / `--set`)
 
 `--set PATH=VALUE` overrides any value in `aqueduct.yml` or the Blueprint for a single invocation — repeatable, applied in memory, **never written back to disk**. It is the highest-precedence layer:

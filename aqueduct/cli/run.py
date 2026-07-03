@@ -369,6 +369,11 @@ def _load_engine_config(
             "danger-skip-sandbox",
             "allow_skip_sandbox=true — patches go straight to production, no sandbox",
         ))
+    if cfg.danger.allow_command_hooks:
+        danger_pairs.append((
+            "danger-command-hooks",
+            "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
+        ))
     if danger_pairs:
         from aqueduct.cli.style import emit_warning_pairs
         emit_warning_pairs(danger_pairs, label="danger:", err=True)
@@ -2301,6 +2306,15 @@ def run(
                 )
             else:
                 _style_error(f"blueprint failed  run_id={run_id}")
+            # on_failure hooks — after the verdict line, before the exit code.
+            # Hook outcomes never alter the exit code below.
+            from aqueduct.cli.hooks import run_hooks as _run_hooks
+            _run_hooks(
+                manifest.hooks.on_failure, "on_failure",
+                run_id=run_id, status="failure",
+                blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+                allow_command_hooks=cfg.danger.allow_command_hooks,
+            )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
             #   HEAL_PENDING(3)   — a patch was staged for human/ci review
@@ -2333,6 +2347,17 @@ def run(
         from aqueduct.cli.style import success as _style_success
         click.echo(_dim(_rule()))
         _style_success(f"blueprint {status_label}")
+
+        # on_success hooks — chained blueprints / webhooks / gated commands.
+        # A hooks section closes with its own `run complete` footer.
+        from aqueduct.cli.hooks import run_hooks as _run_hooks
+        if _run_hooks(
+            manifest.hooks.on_success, "on_success",
+            run_id=run_id, status=result.status,
+            blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+            allow_command_hooks=cfg.danger.allow_command_hooks,
+        ):
+            _style_success("run complete")
     finally:
         os.chdir(_original_cwd)
 

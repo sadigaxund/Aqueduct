@@ -60,6 +60,15 @@ retry_policy: { max_attempts: 3 }     # optional
 
 warnings:                             # optional — per-blueprint compile-warning suppression
   suppress: [perf_python_udf_row_at_a_time]   # rule_ids from AQ-WARN output, or "*" for all
+
+hooks:                                # optional — lifecycle actions after the run ends
+  on_success:
+    - blueprint: blueprints/next.yml  # chain another blueprint (fresh subprocess) — ungated
+    - webhook: https://hooks.example  # url shorthand or {url, method, headers, payload} — ungated
+    - command: "scripts/commit.sh ${run.id}"  # subprocess — NEEDS danger.allow_command_hooks
+      timeout: 120                    # per-entry seconds (default 300)
+  on_failure:
+    - command: "scripts/cleanup.sh ${run.id}"
 ```
 
 **`warnings:` (1.2)** silences compile-time warnings (e.g.
@@ -70,6 +79,17 @@ Compile-time only: never touches session/runtime warnings or other
 blueprints. On an Arcade sub-blueprint, its own `warnings:` block parses fine
 but is ignored — only the parent blueprint's suppress list applies to the
 expanded compilation unit.
+
+**`hooks:` (2.5)** run sequentially after the run's terminal state and NEVER
+change the exit code (a failing hook warns + skips the event's remaining
+hooks). Exactly one of `blueprint:`/`webhook:`/`command:` per entry.
+`command:` interpolates only `${run.id}`/`${run.status}`/`${blueprint.id}`
+(shlex argv, no shell) and requires `danger.allow_command_hooks: true` in
+aqueduct.yml — the blueprint cannot self-authorize it. Chained `blueprint:`
+hooks are cycle-guarded (`AQUEDUCT_HOOK_CHAIN`, depth cap 8; `aqueduct doctor`
+checks the chain statically). Engine-level `webhooks:` in aqueduct.yml stays
+separate — ops-owned alerting that fires regardless of blueprint hooks. On an
+Arcade sub-blueprint, `hooks:` is ignored — only the top-level blueprint's fire.
 
 **Linear-edge sugar:** omit `edges:` entirely and the compiler chains modules in
 declaration order — BUT only if every module is single-in/single-out (Ingress,
