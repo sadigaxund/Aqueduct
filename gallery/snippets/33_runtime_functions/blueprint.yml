@@ -1,0 +1,56 @@
+# blueprint.yml
+# @aq.run.* and @aq.blueprint.* runtime functions
+
+aqueduct: "1.0"
+id: runtime_funcs_demo
+name: "Runtime Functions Snippet"
+
+modules:
+  - id: raw_items
+    label: "Raw Items"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/items.csv
+      options: {header: "true", inferSchema: "true"}
+
+  # Each @aq.* call is resolved at compile time into a literal value.
+  # The SQL below shows the resolved values as columns.
+  - id: enriched
+    label: "Enriched with Metadata"
+    type: Channel
+    config:
+      op: sql
+      # @aq.* calls are resolved at compile time — the returned value replaces
+      # the function call directly in the SQL string before Spark sees it.
+      query: >
+        SELECT *,
+               '@aq.run.id()' AS run_uuid,
+               '@aq.run.timestamp()' AS run_timestamp,
+               '@aq.blueprint.name()' AS blueprint_name,
+               '@aq.blueprint.id()' AS blueprint_id,
+               '@aq.version()' AS engine_version
+        FROM raw_items
+
+  - id: provenance_probe
+    label: "Provenance Probe"
+    type: Probe
+    attach_to: enriched
+    config:
+      signals:
+        - type: sample_rows
+          num_rows: 3
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/items.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_items
+    to: enriched
+  - from: enriched
+    to: output

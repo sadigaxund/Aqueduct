@@ -46,6 +46,11 @@ aqueduct doctor blueprint.yml     # doctor checks table existence
 aqueduct run blueprint.yml
 ```
 
-> This snippet uses the local Spark session catalog — no external metastore needed.
-> To test against a real catalog (Unity, Hive, Iceberg REST), configure
-> `spark.sql.catalog.*` in `spark_config` and use the full three-level identifier.
+> The blueprint's `spark_config` enables **Hive catalog** (`spark.sql.catalogImplementation: hive`)
+> so the managed table created by `populate.py` persists across Spark sessions via
+> a Derby metastore (`metastore_db/`). Without this the catalog is in-memory only
+> and `table: demo_table` would fail with `TABLE_OR_VIEW_NOT_FOUND`.
+>
+> To test against a real catalog (Unity, Iceberg REST, Glue), replace
+> `spark.sql.catalogImplementation` with `spark.sql.catalog.*` properties and use
+> the full three-level identifier (`catalog.schema.table`) in the `table:` value.

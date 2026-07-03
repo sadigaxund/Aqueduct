@@ -1,0 +1,48 @@
+# arcades/conditional_junction.yml
+# Reusable Arcade: routes rows by predicate — one row goes to exactly one port.
+
+aqueduct: "1.0"
+id: conditional_junction
+name: "Conditional Junction Arcade"
+
+modules:
+  - id: route
+    label: "Conditional Route"
+    type: Junction
+    description: "Routes NEW/PENDING to active port, everything else to other port"
+    tags: ["mode:conditional", "branching"]
+    config:
+      mode: conditional
+      branches:
+        - id: active
+          condition: "status IN ('NEW', 'PENDING')"
+        - id: other
+          condition: "_else_"
+
+  - id: save_active
+    label: "Active Tickets"
+    type: Egress
+    description: "Tickets with status NEW or PENDING (from Arcade instance)"
+    tags: ["conditional", "output"]
+    config:
+      format: parquet
+      path: data/output/active_tickets.parquet
+      mode: overwrite
+
+  - id: save_other
+    label: "Other Tickets"
+    type: Egress
+    description: "Tickets with status other than NEW or PENDING (from Arcade instance)"
+    tags: ["conditional", "output"]
+    config:
+      format: parquet
+      path: data/output/other_tickets.parquet
+      mode: overwrite
+
+edges:
+  - from: route
+    to: save_active
+    port: active
+  - from: route
+    to: save_other
+    port: other

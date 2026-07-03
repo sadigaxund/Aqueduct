@@ -1,0 +1,42 @@
+# blueprint.yml
+# @aq.secret() / ${VAR:-default} — resolve secrets at compile time.
+
+aqueduct: "1.0"
+id: secret_injection_demo
+name: "Secret Injection Snippet"
+
+modules:
+  - id: raw_users
+    label: "Raw Users"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/users.csv
+      options: {header: "true", inferSchema: "true"}
+
+  # The salt is resolved at YAML-parse time via ${PIPELINE_SALT:-demo_salt},
+  # so the snippet works out of the box.  For real secret injection use
+  # @aq.secret('PIPELINE_SALT') — see the 'secrets:' block in aqueduct.yml.
+  - id: masked_output
+    label: "Masked Output"
+    type: Channel
+    config:
+      op: sql
+      query: >
+        SELECT user_id, name,
+               md5(CONCAT(email, '${PIPELINE_SALT:-demo_salt}')) AS email_hash
+        FROM raw_users
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/users.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_users
+    to: masked_output
+  - from: masked_output
+    to: output

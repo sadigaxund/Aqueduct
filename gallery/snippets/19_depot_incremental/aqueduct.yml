@@ -1,5 +1,9 @@
 aqueduct_config: "1.0"
 
+warnings:
+  suppress:
+    - "*"
+
 # aqueduct.yml
 deployment:
   engine: spark

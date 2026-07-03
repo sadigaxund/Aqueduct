@@ -1,0 +1,96 @@
+# blueprint.yml
+# Typed spillway — error_types on edges + description/tags on modules
+
+aqueduct: "1.0"
+id: error_types_demo
+name: "Typed Spillway Quality Gates"
+
+description: |
+  Demonstrates error_types on spillway edges, where each Assert rule
+  stamps quarantined rows with a custom error_type label and a typed
+  spillway edge routes only matching rows to its downstream handler.
+  Also shows description and tags on every module.
+
+modules:
+
+  - id: raw_data
+    label: "Raw Records"
+    type: Ingress
+    description: "Sample records with various quality issues"
+    tags: ["ingress", "sample-data"]
+    config:
+      format: csv
+      path: data/input/sample.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: quality_gate
+    label: "Quality Gate"
+    type: Assert
+    description: |
+      Two sql_row rules, each stamping failing rows with a different
+      error_type. Downstream spillway edges filter by that type.
+    tags: ["assert", "quality", "spillway"]
+    config:
+      rules:
+        # sql_row: rows where expr is FALSE are quarantined (default on_fail)
+        - id: missing_amount
+          type: sql_row
+          expr: "amount IS NOT NULL"
+          error_type: MissingValue
+        - id: extreme_amount
+          type: sql_row
+          expr: "amount >= 0 AND amount <= 10000"
+          error_type: DataQualityViolation
+
+  - id: clean_data
+    label: "Clean Records"
+    type: Egress
+    description: "Rows that passed all quality checks"
+    tags: ["output", "clean"]
+    config:
+      format: parquet
+      path: data/output/clean.parquet
+      mode: overwrite
+
+  - id: missing_values
+    label: "Missing Values"
+    type: Egress
+    description: "Rows quarantined with error_type = MissingValue (null amounts)"
+    tags: ["output", "quarantine", "missing"]
+    config:
+      format: csv
+      path: data/output/missing_values.csv
+      mode: overwrite
+      options: {header: "true"}
+
+  - id: quality_violations
+    label: "Quality Violations"
+    type: Egress
+    description: "Rows quarantined with error_type = DataQualityViolation (extreme amounts)"
+    tags: ["output", "quarantine", "violation"]
+    config:
+      format: csv
+      path: data/output/quality_violations.csv
+      mode: overwrite
+      options: {header: "true"}
+
+edges:
+  - from: raw_data
+    to: quality_gate
+
+  # Main port — clean rows
+  - from: quality_gate
+    to: clean_data
+    port: main
+
+  # Spillway with typed catch — only MissingValue rows
+  - from: quality_gate
+    to: missing_values
+    port: spillway
+    error_types: [MissingValue]
+
+  # Spillway with typed catch — only DataQualityViolation rows
+  - from: quality_gate
+    to: quality_violations
+    port: spillway
+    error_types: [DataQualityViolation]

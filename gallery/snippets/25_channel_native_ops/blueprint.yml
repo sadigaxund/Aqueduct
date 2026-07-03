@@ -1,0 +1,65 @@
+# blueprint.yml
+# Native Channel ops: select, rename, cast, sort.
+
+aqueduct: "1.0"
+id: channel_native_ops
+name: "Native Channel Ops"
+
+modules:
+  - id: raw_people
+    label: "Raw People CSV"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/people.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: selected_columns
+    label: "Select columns"
+    type: Channel
+    config:
+      op: select
+      columns: [id, name, city, age, salary]
+
+  - id: rename_cols
+    label: "Rename columns"
+    type: Channel
+    config:
+      op: rename
+      columns:
+        salary: annual_comp
+
+  - id: cast_salary
+    label: "Cast salary to double"
+    type: Channel
+    config:
+      op: cast
+      columns:
+        annual_comp: double
+
+  - id: sorted_output
+    label: "Sort by age desc"
+    type: Channel
+    config:
+      op: sort
+      order_by: "age DESC"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/people.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_people
+    to: selected_columns
+  - from: selected_columns
+    to: rename_cols
+  - from: rename_cols
+    to: cast_salary
+  - from: cast_salary
+    to: sorted_output
+  - from: sorted_output
+    to: output

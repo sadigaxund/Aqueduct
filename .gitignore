@@ -156,8 +156,7 @@ __pypackages__/
 .aqueduct/
 tmp/
 patches/
-**/data/output/**
-!**/data/input/**
-
+gallery/**/data/
+**/metastore_db/**
 .snippet_runs/
 .dev/

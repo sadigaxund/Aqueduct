@@ -42,3 +42,7 @@ FROM raw_users
 
 > [!NOTE]
 > When using Python UDFs, Aqueduct automatically issues a performance warning if the UDF is not vectorized. For high-volume production pipelines, consider using `pandas_udf` (Arrow-optimized).
+
+> **Parameterized UDF factories:** Set `params:` on a UDF registration to
+> create reusable UDF instances (e.g. `mask_email(params.suffix)` with
+> different suffixes per call site). See `docs/specs.md` §4.4.2.

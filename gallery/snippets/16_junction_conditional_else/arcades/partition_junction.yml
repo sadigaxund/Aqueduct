@@ -1,0 +1,49 @@
+# arcades/partition_junction.yml
+# Reusable Arcade: routes rows by matching partition_key column value.
+
+aqueduct: "1.0"
+id: partition_junction
+name: "Partition Junction Arcade"
+
+modules:
+  - id: route
+    label: "Partition Route"
+    type: Junction
+    description: "Routes rows by matching partition_key column value — NEW to A, PENDING to B"
+    tags: ["mode:partition", "distribution"]
+    config:
+      mode: partition
+      partition_key: status
+      branches:
+        - id: "0"
+          value: NEW
+        - id: "1"
+          value: PENDING
+
+  - id: save_partition_A
+    label: "Partition Output A"
+    type: Egress
+    description: "Rows with status=NEW via partition by status (from Arcade instance)"
+    tags: ["partition", "output"]
+    config:
+      format: parquet
+      path: data/output/partition_A.parquet
+      mode: overwrite
+
+  - id: save_partition_B
+    label: "Partition Output B"
+    type: Egress
+    description: "Rows with status=PENDING via partition by status (from Arcade instance)"
+    tags: ["partition", "output"]
+    config:
+      format: parquet
+      path: data/output/partition_B.parquet
+      mode: overwrite
+
+edges:
+  - from: route
+    to: save_partition_A
+    port: "0"
+  - from: route
+    to: save_partition_B
+    port: "1"

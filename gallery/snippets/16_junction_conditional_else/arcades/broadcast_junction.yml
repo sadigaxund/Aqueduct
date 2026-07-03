@@ -1,0 +1,46 @@
+# arcades/broadcast_junction.yml
+# Reusable Arcade: copies every row to every downstream port.
+
+aqueduct: "1.0"
+id: broadcast_junction
+name: "Broadcast Junction Arcade"
+
+modules:
+  - id: route
+    label: "Broadcast Route"
+    type: Junction
+    description: "Sends every row to every downstream port — both outputs are identical"
+    tags: ["mode:broadcast", "fan-out"]
+    config:
+      mode: broadcast
+      branches:
+        - id: "0"
+        - id: "1"
+
+  - id: save_broadcast_A
+    label: "Broadcast Output A"
+    type: Egress
+    description: "All rows via broadcast — same as Output B (from Arcade instance)"
+    tags: ["broadcast", "output"]
+    config:
+      format: parquet
+      path: data/output/broadcast_A.parquet
+      mode: overwrite
+
+  - id: save_broadcast_B
+    label: "Broadcast Output B"
+    type: Egress
+    description: "All rows via broadcast — same as Output A (from Arcade instance)"
+    tags: ["broadcast", "output"]
+    config:
+      format: parquet
+      path: data/output/broadcast_B.parquet
+      mode: overwrite
+
+edges:
+  - from: route
+    to: save_broadcast_A
+    port: "0"
+  - from: route
+    to: save_broadcast_B
+    port: "1"

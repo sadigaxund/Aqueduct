@@ -1,45 +1,17 @@
-# Junction with Else Branch
+# Junction Modes Comparison
 
-Demonstrates how to split a data stream into multiple branches using conditional logic, including a "catch-all" branch.
+Compares all three Junction modes — **conditional**, **broadcast**, and
+**partition** — from the same input data.
 
-## Key Concept: Junction
-A **Junction** is a fan-out module that takes one input and produces multiple named outputs (ports). 
-
-### The `_else_` keyword
-In `conditional` mode, the `_else_` keyword is a special constant that matches all rows that were **not** captured by any other branch. 
-- It prevents data loss by ensuring every row has a destination.
-- It simplifies logic by removing the need to manually write the complement of all other filters.
-
+| Mode | Behavior | Output |
+|---|---|---|
+| **conditional** | Each row goes to exactly one port based on a predicate — `active` (NEW/PENDING) or `other` (else). | `active_tickets.parquet` (4 rows), `other_tickets.parquet` (2 rows) |
+| **broadcast** | Every row is copied to every port. | `broadcast_A.parquet`, `broadcast_B.parquet` (6 rows each, identical) |
+| **partition** | Rows are routed by matching `partition_key` column value — `status=NEW` to port 0, `status=PENDING` to port 1. Unmatched rows are dropped. | `partition_A.parquet` (2 rows, NEW), `partition_B.parquet` (2 rows, PENDING) |
 
 ## How to Run
 
-1. **Execute the Pipeline**:
-   ```bash
-   aqueduct run blueprint.yml
-   ```
-
-2. **Inspect Results**:
-   ```bash
-   python inspect_results.py
-   ```
-
-## Configuration
-In `blueprint.yml`:
-```yaml
-- id: route_tickets
-  type: Junction
-  config:
-    mode: conditional
-    branches:
-      - id: active
-        condition: "status IN ('NEW', 'PENDING')"
-      - id: other
-        condition: "_else_"
-```
-
-The `edges` must specify the `port` corresponding to the branch `id`:
-```yaml
-- from: route_tickets
-  to: save_other
-  port: other
+```bash
+aqueduct run blueprint.yml
+python inspect_results.py
 ```

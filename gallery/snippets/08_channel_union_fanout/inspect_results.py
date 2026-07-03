@@ -6,20 +6,27 @@ import os
 console = Console()
 
 def main():
-    output_path = "data/output/output.parquet"
-    if not os.path.exists(output_path):
-        console.print(f"[bold red]Error:[/bold red] {output_path} not found. Did you run 'aqueduct run blueprint.yml'?")
-        return
+    outputs = [
+        ("High (val>15)", "data/output/high.parquet", "bold green"),
+        ("Low (val<=15)", "data/output/low.parquet", "bold yellow"),
+    ]
+    for _, path, _ in outputs:
+        if not os.path.exists(path):
+            console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
+            return
 
-    console.print(f"[bold green]✓[/bold green] Found results in {output_path}. Reading...")
-    df = pd.read_parquet(output_path)
-    table = Table(title="Union & Filter Results (val > 15)", header_style="bold green")
-    for col in df.columns:
-        table.add_column(col)
-    for _, row in df.head(10).iterrows():
-        table.add_row(*[str(val) for val in row])
-    console.print(table)
-    console.print(f"\n[dim]Note: Only record from source_b (val=20) survived the filter.[/dim]")
+    for title, path, style in outputs:
+        df = pd.read_parquet(path)
+        t = Table(title=title, header_style=style)
+        for c in df.columns:
+            t.add_column(c, no_wrap=True)
+        for _, r in df.head(10).iterrows():
+            t.add_row(*[str(v) for v in r])
+        console.print(t)
+        console.print(f"[dim]  Row count: {len(df)}[/dim]\n")
+
+    console.print("[dim]Fan-out: a single Channel feeds two downstream consumers. "
+                  "Each consumer gets the same data, processed independently.[/dim]")
 
 if __name__ == "__main__":
     main()

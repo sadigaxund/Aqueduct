@@ -18,7 +18,12 @@ By adding `timeout_seconds`, you transform the Regulator into a **polling gate**
 
 ## How to Run
 
-1. **Execute the Pipeline and Monitor Timing**:
+1. **Execute the Pipeline**:
+   ```bash
+   aqueduct run blueprint.yml
+   ```
+
+2. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```
@@ -34,3 +39,6 @@ In `blueprint.yml`:
 ```
 
 The `timeout_seconds` property triggers a polling loop in the Aqueduct executor.
+
+> **Other `on_block` modes:** Use `on_block: webhook` to fire a webhook when
+> the gate blocks (for external approval workflows). See `docs/specs.md` §4.7.

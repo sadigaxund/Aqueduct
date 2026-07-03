@@ -12,13 +12,17 @@ This removes the need for manual SQL expressions to clean up "stale" records.
 
 ## How to Run
 
+1. **Generate test data with relative timestamps**:
+   ```bash
+   python populate_events.py
+   ```
 
-1. **Execute the Pipeline**:
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

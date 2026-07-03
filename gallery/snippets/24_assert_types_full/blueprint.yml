@@ -1,0 +1,64 @@
+# blueprint.yml
+# All Assert rule types in one pipeline.
+
+aqueduct: "1.0"
+id: assert_types_full
+name: "Assert Types Demo"
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: enriched
+    label: "Enrich with tax"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT *, amount * 0.2 AS tax FROM raw_orders"
+
+  - id: quality_gate
+    label: "Quality Gate"
+    type: Assert
+    config:
+      rules:
+        - id: min_order_count
+          type: min_rows
+          min_count: 5
+        - id: max_amount
+          type: sql
+          query: "SELECT MAX(amount) AS max_amt FROM __input__"
+          expect:
+            max_amt: {max: 2000}
+        - id: zero_spillway
+          type: spillway_rate
+          max_rate: 0.0
+        - id: schema_check
+          type: schema_match
+          columns:
+            order_id: integer
+            customer: string
+            amount: double
+            status: string
+            region: string
+            tax: double
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: enriched
+  - from: enriched
+    to: quality_gate
+  - from: quality_gate
+    to: output

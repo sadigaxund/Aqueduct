@@ -15,9 +15,9 @@ modules:
       
       options:
         url: "${JDBC_URL}"
-        user: "${JDBC_USER}"
-        password: "${JDBC_PASSWORD}"
-        driver: "org.postgresql.Driver"
+        user: "${JDBC_USER:-}"
+        password: "${JDBC_PASSWORD:-}"
+        driver: "${JDBC_DRIVER:-org.postgresql.Driver}"
         # Spark JDBC uses 'dbtable'
         dbtable: "inventory"
         fetchsize: "1000"

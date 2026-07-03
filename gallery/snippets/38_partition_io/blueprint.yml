@@ -1,0 +1,61 @@
+# blueprint.yml
+# Partition filters + partition_by
+
+aqueduct: "1.0"
+id: partition_io
+name: "Partition IO"
+
+modules:
+
+  # First pass: write the data partitioned by month
+  - id: raw_txns
+    label: "Raw Transactions"
+    type: Ingress
+    config:
+      format: csv
+      path: "data/input/transactions.csv"
+      options: {header: "true", inferSchema: "true"}
+
+  - id: add_month
+    label: "Add Month Column"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT *, SUBSTRING(date, 1, 7) AS month FROM __input__
+
+  - id: partitioned_write
+    label: "Partitioned Write"
+    type: Egress
+    config:
+      format: parquet
+      path: "data/output/partitioned_txns"
+      mode: overwrite
+      partition_by: ["month"]
+
+  # Second pass: read only a subset of partitions
+  - id: read_us_only
+    label: "Read US Only"
+    type: Ingress
+    config:
+      format: parquet
+      path: "data/output/partitioned_txns"
+      partition_filters: "region = 'US'"
+
+  - id: result
+    label: "Result"
+    type: Egress
+    config:
+      format: parquet
+      path: "data/output/us_txns.parquet"
+      mode: overwrite
+
+edges:
+  - from: raw_txns
+    to: add_month
+  - from: add_month
+    to: partitioned_write
+  - from: partitioned_write
+    to: read_us_only
+  - from: read_us_only
+    to: result

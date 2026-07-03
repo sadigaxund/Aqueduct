@@ -1,0 +1,47 @@
+# blueprint.yml
+# All 8 built-in probe signal types.
+
+aqueduct: "1.0"
+id: probe_signals_all
+name: "All Probe Signals"
+
+modules:
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: full_probe
+    label: "Full Probe"
+    type: Probe
+    attach_to: raw_products
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+        - type: null_rates
+        - type: sample_rows
+          num_rows: 3
+        - type: value_distribution
+          columns: [price]
+        - type: distinct_count
+          columns: [category, name]
+        - type: data_freshness
+          column: created_at
+        - type: partition_stats
+          partition_column: category
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/products.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_products
+    to: output

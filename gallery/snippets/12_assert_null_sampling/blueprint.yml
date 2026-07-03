@@ -29,8 +29,8 @@ modules:
           # Allow max 6% NULLs. We generated ~5%.
           max: 0.06
           # max: 0.01 # Fails
-          # Evaluate on a 10% sample of the data for performance.
-          fraction: 0.1
+          # Evaluate on a 50% sample for stable null-rate estimation.
+          fraction: 0.5
           on_fail: abort
 
   - id: output_save

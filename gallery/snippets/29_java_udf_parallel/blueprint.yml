@@ -1,0 +1,72 @@
+# blueprint.yml
+# Java UDF reference + parallel execution mode.
+#
+# The Java/Scala UDF is referenced but not provided — this snippet shows the
+# contract for wiring a JVM UDF. Replace the jar_path with your compiled JAR.
+
+aqueduct: "1.0"
+id: java_udf_parallel
+name: "Java UDF & Parallel Mode"
+
+modules:
+  # Parallel component A: Product processing
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: jvm_enrich
+    label: "Java UDF Enrichment"
+    type: Channel
+    config:
+      op: sql
+      # Without the JAR, use a simple alias.  To use the Java UDF, uncomment
+      # the udfs block below and change the query to:
+      #   category_label(category) AS label
+      query: >
+        SELECT id, name, category,
+               category AS label
+        FROM raw_products
+      # udfs:
+      #   - name: category_label
+      #     lang: java
+      #     class_name: com.aqueduct.udfs.CategoryLabel
+      #     jar_path: udf/jars/aqueduct-udfs.jar
+      #     # Provide your compiled JAR implementing
+      #     # org.apache.spark.sql.api.java.UDF1[String, String].
+
+  - id: product_output
+    label: "Product Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/products.parquet
+      mode: overwrite
+
+  # Parallel component B: Customer processing (runs concurrently with A)
+  - id: raw_customers
+    label: "Raw Customers"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/customers.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: customer_output
+    label: "Customer Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/customers.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_products
+    to: jvm_enrich
+  - from: jvm_enrich
+    to: product_output
+  - from: raw_customers
+    to: customer_output

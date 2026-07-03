@@ -1,0 +1,17 @@
+aqueduct_config: "1.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct/observability.db
+
+# Parallel execution is a CLI flag: aqueduct run --parallel blueprint.yml

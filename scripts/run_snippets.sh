@@ -3,7 +3,10 @@
 # Skipped (require live external services): 02_ingress_parquet_s3, 04_ingress_jdbc_postgres
 #
 # Usage:
-#   ./scripts/run_snippets.sh [SNIPPETS_DIR]
+#   ./scripts/run_snippets.sh [-v] [-vv] [SNIPPETS_DIR]
+#
+#   -v    Show populate/generate, aqueduct-run, and inspect output inline
+#   -vv   Show everything inline including pip-install
 #
 # SNIPPETS_DIR defaults to gallery/snippets/ relative to the repo root.
 # The script resolves the repo root from its own location, so it works from any cwd.
@@ -11,11 +14,32 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Arg parse
+# ---------------------------------------------------------------------------
+VERBOSE=0
+SNIPPETS_DIR=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -v) VERBOSE=1; shift ;;
+        -vv) VERBOSE=2; shift ;;
+        -vvv) VERBOSE=3; shift ;;
+        --) shift; SNIPPETS_DIR="${1:-}"; break ;;
+        -*)
+            echo "Unknown flag: $1"
+            echo "Usage: $0 [-v] [-vv] [SNIPPETS_DIR]"
+            exit 1
+            ;;
+        *) SNIPPETS_DIR="$1"; shift ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SNIPPETS_DIR="${1:-$REPO_ROOT/gallery/snippets}"
+SNIPPETS_DIR="${SNIPPETS_DIR:-$REPO_ROOT/gallery/snippets}"
 
 # Workspace lives under the repo by default (not /tmp) to avoid filling the
 # /tmp quota. pyspark alone is ~500 MB; 20 runs × fresh venv would exhaust
@@ -24,18 +48,7 @@ WORK_BASE="${AQ_SNIPPET_WORKDIR:-$REPO_ROOT/.snippet_runs}"
 
 # Snippets that require live external services — skip entirely
 SKIP_PATTERNS=(
-    "02_ingress_parquet_s3"
-    "04_ingress_jdbc_postgres"
-    "12_assert_null_sampling"
-    "22_custom_datasource"   # requires Spark 4.0+ (Python DataSource API)
-    "23_table_first"         # requires a real catalog (local session catalog ok, but populate step first)
 )
-
-# ---------------------------------------------------------------------------
-# Spark memory tuning — keep each local JVM small so 20 sequential runs
-# don't OOM the host. Each snippet gets its own JVM (aqueduct run exits fully
-# between snippets), but the JVM heap defaults are too large for a dev machine.
-# ---------------------------------------------------------------------------
 
 # Colours
 RED='\033[0;31m'
@@ -55,6 +68,7 @@ mkdir -p "$WORK_DIR"
 echo -e "${CYAN}${BOLD}Aqueduct snippet runner${RESET}"
 echo -e "  Workspace : $WORK_DIR"
 echo -e "  Snippets  : $SNIPPETS_DIR"
+echo -e "  Verbose   : $VERBOSE  (0=quiet 1=run-output 2=all-output)"
 echo ""
 
 # Copy snippets into workspace
@@ -108,16 +122,38 @@ is_skipped() {
 }
 
 run_step() {
-    # run_step LABEL CMD [ARGS...]
-    local label="$1"; shift
+    # run_step [--capture|--display] LABEL CMD [ARGS...]
+    # --capture (default): redirect to log, show only status
+    # --display:            show output inline + log
+    local mode="capture"
+    local label
+    if [[ "$1" == "--display" ]]; then
+        mode="display"
+        shift
+    fi
+    label="$1"; shift
+
     local log="$WORK_DIR/logs/${SNIPPET_NAME}_${label}.log"
     mkdir -p "$(dirname "$log")"
-    if "$@" >"$log" 2>&1; then
-        echo -e "    ${GREEN}✓${RESET} $label"
-        return 0
+
+    if [[ "$mode" == "display" && "$VERBOSE" -ge 1 ]]; then
+        # Display inline + log simultaneously
+        if "$@" 2>&1 | tee "$log"; then
+            echo -e "    ${GREEN}✓${RESET} $label"
+            return 0
+        else
+            echo -e "    ${RED}✗${RESET} $label  (see $log)"
+            return 1
+        fi
     else
-        echo -e "    ${RED}✗${RESET} $label  (see $log)"
-        return 1
+        # Quiet: log only
+        if "$@" >"$log" 2>&1; then
+            echo -e "    ${GREEN}✓${RESET} $label"
+            return 0
+        else
+            echo -e "    ${RED}✗${RESET} $label  (see $log)"
+            return 1
+        fi
     fi
 }
 
@@ -140,17 +176,22 @@ for snippet_path in "$WORK_DIR/snippets"/*/; do
 
     SNIPPET_OK=true
 
+    # Populate, run, and inspect display inline at -v; pip noise only at -vv
+    _disp=""
+    [[ "$VERBOSE" -ge 1 ]] && _disp="--display"
+    _disp_pip=""
+    [[ "$VERBOSE" -ge 2 ]] && _disp_pip="--display"
+
     # Step 1 — requirements.txt
     if [[ -f requirements.txt ]]; then
-        run_step "pip-install" pip install --quiet --disable-pip-version-check -r requirements.txt || SNIPPET_OK=false
+        run_step $_disp_pip "pip-install" pip install --quiet --disable-pip-version-check -r requirements.txt || SNIPPET_OK=false
     fi
 
-    # Step 2 — populate script (populate*.py)
+    # Step 2 — populate / generate scripts (run ALL found)
     if $SNIPPET_OK; then
-        populate_script="$(find . -maxdepth 1 -name 'populate*.py' | head -1)"
-        if [[ -n "$populate_script" ]]; then
-            run_step "populate" python3 "$populate_script" || SNIPPET_OK=false
-        fi
+        for populate_script in $(find . -maxdepth 1 -name 'populate*.py' | sort); do
+            run_step $_disp "populate-$(basename "$populate_script" .py)" python3 "$populate_script" || SNIPPET_OK=false
+        done
     fi
 
     # Step 3 — aqueduct run
@@ -158,12 +199,12 @@ for snippet_path in "$WORK_DIR/snippets"/*/; do
         aq_config_flag=""
         if [[ -f aqueduct.yml ]]; then aq_config_flag="--config aqueduct.yml"; fi
         # shellcheck disable=SC2086
-        run_step "aqueduct-run" aqueduct run blueprint.yml $aq_config_flag || SNIPPET_OK=false
+        run_step $_disp "aqueduct-run" aqueduct run blueprint.yml $aq_config_flag || SNIPPET_OK=false
     fi
 
     # Step 4 — inspect_results.py
     if $SNIPPET_OK && [[ -f inspect_results.py ]]; then
-        run_step "inspect" python3 inspect_results.py || SNIPPET_OK=false
+        run_step $_disp "inspect" python3 inspect_results.py || SNIPPET_OK=false
     fi
 
     popd > /dev/null

@@ -23,35 +23,69 @@ isolation.
 
 **Ingress**
 - `01_ingress_csv_options` — CSV read with reader options
-- `02_ingress_parquet_s3` — Parquet from S3-style object storage
 - `03_ingress_delta_incremental` — Delta source, incremental read
-- `04_ingress_jdbc_postgres` — JDBC source (Postgres)
+- `04_ingress_jdbc_postgres` — JDBC source (Postgres/SQLite via env var)
+- `30_ingress_schema_hints` — override Spark's inferred column types
+
+**Pipeline identity & context**
+- `02_blueprint_variables` — Context Registry `${ctx.*}` with profiles, CLI overrides, and env-var resolution
 
 **Channel (transform)**
 - `05_channel_sql_udf` — SQL op with a registered UDF
 - `06_channel_deduplicate` — native `deduplicate` op
 - `07_channel_join_variants` — join types (inner / left / semi / anti)
-- `08_channel_union_fanout` — union plus multi-consumer fan-out
+- `08_channel_union_fanout` — union plus fan-out to multiple consumers
 - `09_channel_repartition_cache` — `repartition` / `coalesce` / `cache`
 - `10_sql_macros` — reusable SQL via `{{ macros.* }}`
+- `25_channel_native_ops` — native ops: `select`, `rename`, `cast`, `sort`
 
 **Quality, gates, error routing**
-- `11_passive_regulator_spillway` — passive Regulator + spillway routing
+- `11_spillway_channel` — Channel `spillway_condition` row-level routing
 - `12_assert_null_sampling` — `Assert` null-rate with sampling
 - `13_assert_freshness` — `Assert` freshness window
 - `14_assert_row_quarantine` — failing rows quarantined, pipeline continues
 - `15_regulator_timeout` — Regulator gate driven by a Probe signal
+- `24_assert_types_full` — all assert types: `min_rows`, `sql`, `spillway_rate`, `schema_match`
+- `40_error_types_quality` — typed spillway: `error_types` on edges + `description` and `tags` on modules
 
 **Routing**
-- `16_junction_conditional_else` — `Junction` conditional split + else branch
+- `16_junction_conditional_else` — all 3 Junction modes: conditional (branching), broadcast (same-to-all), partition (round-robin)
 - `17_funnel_coalesce_fallback` — `Funnel` coalesce as a fallback merge
+- `36_funnel_modes` — all 3 Funnel merge modes: union_all, union (dedup), zip (interleave)
 
 **Observability & state**
 - `18_probe_value_dist` — `Probe` value-distribution signal
 - `19_depot_incremental` — Depot watermark powering `materialize: incremental`
+- `26_probe_signals_all` — all 8 probe signal types on one blueprint
+
+**Agent & self-healing**
+- `27_self_healing` — LLM-driven self-healing with `@aq.*` runtime functions and Probe diagnostics
 
 **Reuse**
 - `20_arcade_reusable` — an Arcade (reusable sub-Blueprint) used twice
+- `23_table_first` — read/write by catalog identifier (catalog.schema.table)
+
+**Advanced I/O**
+- `21_probe_custom` — custom probe signal via inline SQL, module pointer, or entry-point plugin
+- `22_custom_datasource` — Spark 4.0 Python DataSource (`format: custom`)
+- `28_delta_merge_retry` — Delta `MERGE INTO` Egress with RetryPolicy (exponential backoff)
+- `34_time_travel` — Delta/Parquet time-travel read at a specific version or timestamp
+- `35_register_as_table` — Egress catalog registration (`register_as_table`) for cross-module table access
+- `37_egress_modes` — 5 Egress write modes side-by-side: append, error, ignore, overwrite_partitions, replace_where
+- `38_partition_io` — Ingress `partition_filters` + Egress `partition_by` for partitioned data lakes
+
+**JVM & execution**
+- `29_java_udf_parallel` — Java/Scala UDF reference contract + parallel execution mode
+
+**Runtime & context**
+- `33_runtime_functions` — `@aq.run.id()`, `@aq.blueprint.name()`, `@aq.version()`, and all built-in runtime functions
+
+**Secrets & depot (cross-run state)**
+- `31_depot_kv` — `@aq.depot.get('key')` cross-run KV store for watermarks and state
+- `32_secret_injection` — `@aq.secret('KEY')` env-var secret injection without hardcoding
+
+**Execution control**
+- `39_checkpoint_resume` — `checkpoint: true` + retry policy for resume after failure
 
 ## Aqtests
 
@@ -84,3 +118,9 @@ deterministically across models. No Spark needed. See
 
 **Next:** Scenarios for JDBC connection errors, partition discovery failure, and UDF serialization are ideal candidates to add — see
 [`aqscenarios/CONTRIBUTING.md`](aqscenarios/CONTRIBUTING.md).
+
+> **OpenLineage integration:** Aqueduct emits lineage events to any
+> OpenLineage-compatible backend (Marquez, Atlan, etc.) via
+> `openlineage:` config in `aqueduct.yml`. This is configured per
+> deployment, not per Blueprint — see `docs/specs.md` §7 and
+> `docs/production_guide.md`.

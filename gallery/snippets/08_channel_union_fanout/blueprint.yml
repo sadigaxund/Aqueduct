@@ -1,5 +1,5 @@
 # blueprint.yml
-# Combining sources (Union) and splitting logic (Fan-out).
+# Combining sources (Union) and fan-out to multiple consumers.
 
 aqueduct: "1.0"
 id: union_fanout_demo
@@ -36,12 +36,27 @@ modules:
       op: filter
       condition: "val > 15"
 
-  - id: output_save
-    label: "Save Result"
+  - id: low_values
+    label: "Low Values Filter"
+    type: Channel
+    config:
+      op: filter
+      condition: "val <= 15"
+
+  - id: output_high
+    label: "Save High"
     type: Egress
     config:
       format: parquet
-      path: data/output/output.parquet
+      path: data/output/high.parquet
+      mode: overwrite
+
+  - id: output_low
+    label: "Save Low"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/low.parquet
       mode: overwrite
 
 edges:
@@ -51,5 +66,9 @@ edges:
     to: combined_data
   - from: combined_data
     to: high_values
+  - from: combined_data
+    to: low_values
   - from: high_values
-    to: output_save
+    to: output_high
+  - from: low_values
+    to: output_low

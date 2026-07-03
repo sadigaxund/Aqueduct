@@ -1,0 +1,34 @@
+# blueprint.yml
+# Delta MERGE Egress with RetryPolicy.
+
+aqueduct: "1.0"
+id: delta_merge_retry
+name: "Delta MERGE + Retry"
+
+modules:
+  - id: updates
+    label: "Incremental Updates"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/updates.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: merged_output
+    label: "Delta MERGE Target"
+    type: Egress
+    config:
+      format: delta
+      path: data/output/delta_orders
+      mode: merge
+      merge_key: [order_id]
+      options:
+        mergeSchema: "true"
+    on_failure:
+      max_attempts: 4
+      backoff_strategy: exponential
+      backoff_base_seconds: 1
+
+edges:
+  - from: updates
+    to: merged_output
