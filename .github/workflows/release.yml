@@ -162,6 +162,53 @@ jobs:
           body = (m.group(1).strip() if m else "")
           print(body or f"Release {tag}. See CHANGELOG.md for details.")
           PY
+      # OPT-IN LLM polish — rewrites the raw CHANGELOG section into
+      # highlights-first release notes. Enable with repo variable
+      # LLM_RELEASE_NOTES=true + an ANTHROPIC_API_KEY secret. NO hard
+      # dependency: if the variable is unset, the key is missing, the API is
+      # unreachable, or the call fails in any way (continue-on-error), the
+      # raw CHANGELOG section above is published unchanged.
+      - name: LLM-polish the release notes (opt-in, falls back to raw CHANGELOG)
+        if: ${{ vars.LLM_RELEASE_NOTES == 'true' }}
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, urllib.request
+          key = os.environ.get("ANTHROPIC_API_KEY", "")
+          path = pathlib.Path("release_notes.md")
+          raw = path.read_text(encoding="utf-8")
+          if not key or not raw.strip():
+              raise SystemExit(0)  # raw notes stand
+          prompt = (
+              "Rewrite this CHANGELOG section as user-facing GitHub release "
+              "notes in Markdown. Start with a short 'Highlights' block "
+              "(2-4 bullets), flag any breaking changes prominently, then "
+              "keep the detailed sections (condensed is fine). Never invent "
+              "features; never drop a breaking change.\n\n" + raw
+          )
+          req = urllib.request.Request(
+              "https://api.anthropic.com/v1/messages",
+              data=json.dumps({
+                  "model": "claude-haiku-4-5-20251001",
+                  "max_tokens": 4096,
+                  "messages": [{"role": "user", "content": prompt}],
+              }).encode(),
+              headers={
+                  "x-api-key": key,
+                  "anthropic-version": "2023-06-01",
+                  "content-type": "application/json",
+              },
+          )
+          out = json.loads(urllib.request.urlopen(req, timeout=120).read())
+          text = "".join(b.get("text", "") for b in out.get("content", []))
+          if text.strip():  # empty/garbled response → keep raw notes
+              path.write_text(
+                  text.strip() + "\n\n---\n*Generated from CHANGELOG.md — "
+                  "full details there.*\n", encoding="utf-8",
+              )
+          PY
       - name: Create the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
