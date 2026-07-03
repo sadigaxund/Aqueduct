@@ -34,13 +34,13 @@ warnings are **not suppressible**.
 | Rule id | Flags | Detail |
 |---|---|---|
 | `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1` — retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
-| `maintenance_optimize_non_delta` | `maintenance.optimize` on non-Delta format — OPTIMIZE is Delta-only | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
+| ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure — OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
 | `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
 | `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration — use `spark_config:` | [hadoop-fs-in-options](#hadoop-fs-in-options) |
-| `perf_incremental_watermark_scan` | `materialize: incremental` re-scans output for `MAX(watermark_column)` | [incremental-watermark-scan](#incremental-watermark-scan) |
+| `perf_incremental_watermark_scan` | `materialize: incremental` re-reads the WRITTEN output for `MAX(watermark_column)` (all-Delta outputs exempt) | [incremental-watermark-scan](#incremental-watermark-scan) |
 | `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
 | `perf_probe_sample_full_scan` | Probe sample-based signal — `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
-| `perf_python_udf_row_at_a_time` | Python UDF bypasses Arrow/vectorized execution | [python-udf-performance](#python-udf-performance) |
+| `perf_python_udf_row_at_a_time` | Python UDF row-at-a-time (skipped when `spark.sql.execution.pythonUDF.arrow.enabled: true`) | [python-udf-performance](#python-udf-performance) |
 | `spillway_port_mismatch` | Channel `spillway_condition` with no `port: spillway` edge (spillway rows silently dropped to main), or a spillway edge with no `spillway_condition` (spillway always empty) | Spillway routing (Contributor section) |
 
 #### Runtime CLI (not suppressible)
@@ -91,40 +91,53 @@ statistics) would make these signals genuinely cheap. Not yet implemented.
 
 #### `incremental-watermark-scan`
 
-**Triggered when:** A Channel has `materialize: incremental` and no `Checkpoint`
-upstream.
+**Triggered when:** A Channel has `materialize: incremental` and at least one
+reachable downstream Egress writes a non-Delta format. (All-Delta outputs are
+exempt — see below.)
 
-After each incremental run Aqueduct advances the watermark via:
+After each incremental run Aqueduct advances the watermark by **re-reading the
+WRITTEN Egress output** (`_compute_watermark_from_output`), not by re-executing
+the upstream DAG:
 
 ```python
-df.agg(F.max(watermark_column)).collect()
+# delta: often satisfied from transaction-log statistics — near metadata-only
+spark.sql("SELECT MAX(`wm_col`) FROM delta.`<output path>`")
+# other formats: one extra read of the materialized output files
+spark.read.format(fmt).load(path).agg(F.max(wm_col)).collect()
 ```
 
-This is an extra Spark action. If the DataFrame is not cached, Spark re-executes
-the full DAG — a second scan of the output data. On large outputs (hundreds of GB)
-this doubles the incremental step's reading cost.
+So the cost is one extra read **scaling with output size** — upstream caching or
+checkpointing does NOT change it (the scan targets the written files).
 
 **Mitigations:**
-1. Add a `Checkpoint` upstream — materializes the DataFrame so subsequent actions
-   read from checkpoint, not recompute the DAG.
-2. Cache the Channel output upstream of the egress.
-3. Accept the cost for small/medium datasets.
+1. Prefer `format: delta` on the downstream Egress — `MAX()` is answered from
+   Delta transaction-log statistics, near metadata-only (and the warning is
+   suppressed automatically when every reachable Egress is Delta).
+2. Accept the extra read for small/medium outputs.
 
-**Future:** Track watermark max as a side-effect of the write phase to eliminate
-the extra action entirely.
+*(Historical note: earlier versions computed the watermark from the in-memory
+DataFrame, where a second full DAG evaluation was possible — the "add a
+Checkpoint upstream" advice from that era no longer applies.)*
 
 ---
 
 #### `python-udf-performance`
 
-**Triggered when:** A UDF in `udf_registry` has `lang: python` (the default).
+**Triggered when:** A UDF in `udf_registry` has `lang: python` (the default) AND
+the Blueprint's `spark_config` does not enable Arrow-optimized Python UDFs.
 
-Python UDFs execute **row-at-a-time** in the Python interpreter and bypass
-Arrow-optimized (vectorized) execution entirely:
+Without Arrow-optimized UDF execution, Python UDFs execute **row-at-a-time** in
+the Python interpreter:
 
 - Each row crosses the JVM↔Python serialization boundary
 - No Arrow batch transfer, no SIMD/columnar processing
 - For billions of rows: **10–100× slower** than a native Spark SQL expression
+
+Since Spark 3.5, `spark.sql.execution.pythonUDF.arrow.enabled: true` (or
+`useArrow=True` per UDF) switches plain Python UDFs to Arrow-batched execution —
+setting that flag in the Blueprint's `spark_config` silences this warning
+automatically. Semantics caveat: Arrow-optimized UDFs can differ on edge-case
+type coercions, so validate before flipping it on an existing pipeline.
 
 **The spillway is unaffected.** Spillway routing uses SQL `filter()` — fully
 vectorized. The concern is the UDF body, not the error-routing mechanism.
@@ -134,6 +147,7 @@ vectorized. The concern is the UDF body, not the error-routing mechanism.
 | Option | When to use |
 |---|---|
 | Native Spark SQL (`try_cast`, `try_divide`, `coalesce`, etc.) | Preferred — vectorized, zero overhead |
+| `spark.sql.execution.pythonUDF.arrow.enabled: true` (Spark 3.5+) | Keep plain UDF syntax, get Arrow batching |
 | `pandas_udf` with Arrow | Complex Python logic; batched via Arrow, much faster |
 | `lang: java` | Maximum performance required |
 
@@ -212,8 +226,10 @@ See the [S3A committer](#s3a-committer) section for committer-specific options
 
 #### `maintenance-optimize-non-delta`
 
-**Triggered when:** An Egress has `maintenance.optimize: true` but uses a format
-other than `delta` (e.g. `parquet`, `csv`, `json`).
+**Now a compile ERROR** (was warning `maintenance_optimize_non_delta`): an Egress
+with `maintenance.optimize: true` and a format other than `delta` (e.g. `parquet`,
+`csv`, `json`) fails compilation — the runtime failure is deterministic, so the
+run is never allowed to start.
 
 `OPTIMIZE` is a Delta Lake-only SQL command. Iceberg and Hudi have their own
 compaction operations (`rewrite_data_files`, `run_compaction`) configured through

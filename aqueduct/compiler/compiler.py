@@ -393,7 +393,11 @@ def compile(  # noqa: A001
                     f"Egress '{m.id}' uses mode=append with "
                     f"max_attempts={blueprint.retry_policy.max_attempts} — "
                     "retries may produce duplicate rows. "
-                    "Use mode=overwrite for idempotent writes, or set max_attempts=1.",
+                    "For Delta, make appends idempotent with the "
+                    "txnAppId/txnVersion writer options; otherwise dedup on a "
+                    "key downstream or set max_attempts=1. (mode=overwrite is "
+                    "only safe for full-refresh outputs — on an incremental "
+                    "sink it destroys history.)",
                 )
 
     # ── 8. Performance diagnostics ────────────────────────────────────────────
@@ -419,37 +423,68 @@ def compile(  # noqa: A001
                 "See docs/spark_guide.md#probe-sample-cost.",
             )
 
-    # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
+    # 8b. Incremental channel — MAX() watermark re-reads the WRITTEN output.
+    # (The executor's `_compute_watermark_from_output` reads the materialized
+    # Egress files, NOT the upstream DAG — so upstream checkpoints are
+    # irrelevant here. For Delta outputs Spark can often satisfy MAX() from
+    # transaction-log statistics, near metadata-only — those are exempt when
+    # every reachable downstream Egress is Delta.)
+    _fwd: dict[str, list[str]] = {}
+    for e in edges:
+        _fwd.setdefault(e.from_id, []).append(e.to_id)
+
+    def _reachable_egress_formats(start_id: str) -> list[str]:
+        seen, stack, fmts = {start_id}, [start_id], []
+        by_id = {m.id: m for m in modules}
+        while stack:
+            for nxt in _fwd.get(stack.pop(), []):
+                if nxt in seen:
+                    continue
+                seen.add(nxt)
+                stack.append(nxt)
+                nm = by_id.get(nxt)
+                if nm is not None and nm.type == ModuleType.Egress:
+                    fmts.append(str(nm.config.get("format", "")).lower())
+        return fmts
+
     for m in modules:
         if m.type != ModuleType.Channel or m.config.get("materialize") != "incremental":
             continue
-        # Check if any upstream module in the edge list is a cache/checkpoint
-        upstream_ids = {e.from_id for e in edges if e.to_id == m.id}
-        upstream_checkpointed = any(
-            um.checkpoint for um in modules if um.id in upstream_ids
+        _egress_fmts = _reachable_egress_formats(m.id)
+        if _egress_fmts and all(f == "delta" for f in _egress_fmts):
+            continue  # Delta MAX() ≈ metadata-only via txn-log stats
+        _w(
+            "perf_incremental_watermark_scan",
+            f"Channel '{m.id}' uses materialize=incremental. After each run, "
+            "Aqueduct computes MAX(watermark_column) by re-reading the WRITTEN "
+            "output files (not the upstream DAG) — one extra read scaling with "
+            "output size. Delta outputs satisfy this from transaction-log "
+            "statistics (near metadata-only): prefer format: delta on the "
+            "downstream Egress, or accept the extra read. "
+            "See docs/spark_guide.md#incremental-watermark-scan.",
         )
-        if not upstream_checkpointed:
-            _w(
-                "perf_incremental_watermark_scan",
-                f"Channel '{m.id}' uses materialize=incremental. "
-                "After each run, Aqueduct computes MAX(watermark_column) on the output — "
-                "a second full scan if the DataFrame is not cached. "
-                "Add a Checkpoint upstream or accept the extra Spark action. "
-                "See docs/spark_guide.md#incremental-watermark-scan.",
-            )
 
-    # 8c. Python UDF registered — row-at-a-time execution warning
-    for udf_entry in blueprint.udf_registry:
-        if udf_entry.get("lang", "python") == "python":
-            _w(
-                "perf_python_udf_row_at_a_time",
-                f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
-                "Python UDFs execute row-at-a-time and bypass Arrow/vectorized execution. "
-                "For high-volume channels, prefer native Spark SQL expressions or "
-                "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
-                "and unaffected, but the UDF body will not be vectorized. "
-                "See docs/spark_guide.md#python-udf-performance.",
-            )
+    # 8c. Python UDF registered — row-at-a-time execution warning.
+    # Skipped when the Blueprint enables Arrow-optimized Python UDFs
+    # (spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+) — then the
+    # claim simply isn't true and the warning would be noise.
+    _arrow_udf_enabled = str(
+        blueprint.spark_config.get("spark.sql.execution.pythonUDF.arrow.enabled", "")
+    ).lower() == "true"
+    if not _arrow_udf_enabled:
+        for udf_entry in blueprint.udf_registry:
+            if udf_entry.get("lang", "python") == "python":
+                _w(
+                    "perf_python_udf_row_at_a_time",
+                    f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
+                    "without Arrow-optimized UDF execution "
+                    "(spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+), "
+                    "Python UDFs run row-at-a-time with per-row serialization. "
+                    "For high-volume channels, enable that flag, or prefer native "
+                    "Spark SQL expressions / pandas_udf. Spillway routing itself is "
+                    "SQL-native and unaffected. "
+                    "See docs/spark_guide.md#python-udf-performance.",
+                )
 
     # 8d. Delta append without partition hint — small-file accumulation risk
     for m in modules:
@@ -457,13 +492,17 @@ def compile(  # noqa: A001
             continue
         if m.config.get("format") in ("delta", "parquet") and m.config.get("mode") == "append":
             has_partition = bool(m.config.get("partition_by") or m.config.get("repartition"))
-            if not has_partition:
+            # maintenance.optimize on the same Egress already compacts small
+            # files — warning would double-signal a handled concern.
+            has_optimize = bool(m.config.get("maintenance", {}).get("optimize"))
+            if not has_partition and not has_optimize:
                 _w(
                     "perf_delta_append_no_partition",
                     f"Egress '{m.id}' uses format={m.config.get('format')!r} with mode=append "
                     "but has no partition_by or repartition hint. "
                     "Incremental appends without partitioning accumulate small files over time, "
-                    "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
+                    "degrading read performance. Add partition_by, a maintenance.optimize "
+                    "block, or schedule external OPTIMIZE. "
                     "See docs/spark_guide.md#append-no-partition.",
                 )
 
@@ -480,9 +519,11 @@ def compile(  # noqa: A001
             _w(
                 "perf_multi_consumer_no_cache",
                 f"Channel '{m.id}' has {consumer_counts[m.id]} downstream consumers "
-                "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "
-                "consumer branch — consider adding a Checkpoint or cache() boundary to "
-                "avoid redundant computation. "
+                "but is not checkpointed. Spark will re-evaluate the full DAG for each "
+                "consumer branch — consider `checkpoint: true` on this Channel or a "
+                "cache() boundary. Trade-off: caching materializes the FULL frame; if "
+                "the branches each read narrow column slices, recompute with column "
+                "pruning can be cheaper — measure before caching. "
                 "See docs/spark_guide.md#caching-strategy.",
             )
 
@@ -507,18 +548,21 @@ def compile(  # noqa: A001
                 "See docs/spark_guide.md#hadoop-fs-in-options.",
             )
 
-    # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only
+    # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only.
+    # Escalated from a warning (rule_id maintenance_optimize_non_delta) to a
+    # hard error: the failure is deterministic at runtime — format is known at
+    # compile time and OPTIMIZE cannot succeed on a non-Delta table, so
+    # letting the run start only moves the same error later.
     for m in modules:
         if m.type != ModuleType.Egress:
             continue
         maint = m.config.get("maintenance", {})
         if maint and maint.get("optimize") and m.config.get("format", "").lower() != "delta":
-            _w(
-                "maintenance_optimize_non_delta",
+            raise CompileError(
                 f"Egress '{m.id}' has maintenance.optimize=true but format="
                 f"{m.config.get('format')!r}. OPTIMIZE is a Delta Lake operation and "
                 "will fail at runtime on non-Delta tables. Set format: delta or remove "
-                "the maintenance block.",
+                "the maintenance block."
             )
 
     prov_map = ProvenanceMap(

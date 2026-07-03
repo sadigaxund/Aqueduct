@@ -673,7 +673,9 @@ agent:
 #   delivery_append_retry_dupes, perf_probe_sample_full_scan,
 #   perf_incremental_watermark_scan, perf_python_udf_row_at_a_time,
 #   perf_delta_append_no_partition, perf_multi_consumer_no_cache,
-#   perf_hadoop_fs_in_options, maintenance_optimize_non_delta
+#   perf_hadoop_fs_in_options
+# (maintenance_optimize_non_delta was escalated to a compile ERROR —
+#  deterministic runtime failure; not suppressible.)
 # Session-startup rules (registry: aqueduct/executor/spark/warnings/):
 #   jar_availability
 #
