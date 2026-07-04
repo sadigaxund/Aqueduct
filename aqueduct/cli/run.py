@@ -266,6 +266,8 @@ class _LoadConfigResult:
     _obs_routing_base: str
     execute: object  # get_executor callable — deferred type
     blueprint_str: str  # = str(blueprint_abs)
+    danger_pairs: tuple = ()  # (rule_id, message) — emitted by the caller after
+    # the `· env/overrides/secrets ·` preamble so info lines stay grouped
 
 
 def _load_engine_config(
@@ -368,9 +370,8 @@ def _load_engine_config(
             "danger-command-hooks",
             "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
         ))
-    if danger_pairs:
-        from aqueduct.cli.style import emit_warning_pairs
-        emit_warning_pairs(danger_pairs, label="danger:", err=True)
+    # Emission deferred to the caller (after the info-line preamble) so the
+    # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
 
     # ── Executor resolve ──────────────────────────────────────────────────────
     try:
@@ -400,6 +401,7 @@ def _load_engine_config(
         _obs_routing_base=_obs_routing_base,
         execute=execute,
         blueprint_str=blueprint_str,
+        danger_pairs=tuple(danger_pairs),
     )
 
 
@@ -1046,6 +1048,9 @@ def run(
             _preamble_info("· overrides  ·  " + "  ·  ".join(_over_parts), err=True)
         if cfg.secrets.provider != "env":
             _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
+        if _lcr.danger_pairs:
+            from aqueduct.cli.style import emit_warning_pairs
+            emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
 
         # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
         _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
