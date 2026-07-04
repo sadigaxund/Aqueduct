@@ -108,5 +108,5 @@ def test_heal_no_args_exit_5():
     runner = CliRunner()
     result = runner.invoke(cli, ["heal"])
     assert result.exit_code == USAGE_ERROR
-    assert "✗ provide a run_id argument" in result.output
+    assert "✗ RUN_ID is required" in result.output
 

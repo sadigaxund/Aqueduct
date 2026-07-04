@@ -97,7 +97,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_parser/ -m "not spark"
 
   compiler-tests:

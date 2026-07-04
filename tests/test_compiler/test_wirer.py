@@ -36,7 +36,7 @@ def test_probe_signal_port_edge_is_allowed():
         Edge(from_id="session_metrics", to_id="probe_signal_gate"),
         Edge(from_id="probe_signal_gate", to_id="quality_gate", port="signal"),
     ]
-    validate_probe_source_edges(modules, edges)  # must not raise
+    assert validate_probe_source_edges(modules, edges) is None
 
 
 def test_no_probe_edges_is_a_no_op():
@@ -45,4 +45,4 @@ def test_no_probe_edges_is_a_no_op():
         Module(id="b", type=ModuleType.Egress, label="B", config={}),
     ]
     edges = [Edge(from_id="a", to_id="b")]
-    validate_probe_source_edges(modules, edges)  # must not raise
+    assert validate_probe_source_edges(modules, edges) is None

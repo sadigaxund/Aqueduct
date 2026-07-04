@@ -150,5 +150,5 @@ def test_patch_preview_gate1_blocked(mock_guard, setup):
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
     
     assert result.exit_code == 2
-    assert "✗ Guardrails gate blocked: Guardrail violation" in result.output
+    assert "✗ guardrails gate blocked: Guardrail violation" in result.output
 

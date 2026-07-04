@@ -476,13 +476,9 @@ def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, c
         stage_patch_for_human(patch, patches_dir, failure_ctx,
                               on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                               patch_store=patch_store, obs_store=obs_store)
-        # Reflect the actual on-disk filename (timestamp prefix added by
-        # `_patch_filename`) instead of the bare patch_id.
-        pending = patches_dir / "pending"
-        _file = next(pending.glob(f"*_{patch.patch_id}.json"), None)
-        _shown = _file.name if _file else f"{patch.patch_id}.json"
+        _label = patch_store.location_label if patch_store is not None else patches_dir
         click_mod.echo(
-            f"  ✎ Failed patch staged for review → patches/pending/{_shown}",
+            f"  ✎ Failed patch staged for review → {_label}/pending/  (id={patch.patch_id})",
             err=True,
         )
     # discard: do nothing
