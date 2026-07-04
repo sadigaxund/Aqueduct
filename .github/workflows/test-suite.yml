@@ -219,7 +219,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm,redis]"
+      # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
+      # derived from the installed pyspark version); tests self-skip for any
+      # datasource with no build for this Spark line (e.g. Iceberg on 4.1).
       - run: pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark
+        env:
+          AQ_LAKEHOUSE: "1"
 
   # (The slow full-run `snippets` job moved to version-matrix.yml — snippets
   # are end-to-end compat checks, not per-push unit checks. They run there on

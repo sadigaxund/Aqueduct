@@ -21,6 +21,129 @@ _SPARK_WAREHOUSE = tempfile.mkdtemp(prefix="aq_test_warehouse_")
 os.environ.setdefault("AQ_TESTING", "1")
 
 
+# ── Lakehouse (Hudi / Iceberg) datasource provisioning ───────────────────────
+# Hudi & Iceberg ship as separate Maven artifacts, NOT bundled with pyspark
+# (neither is Delta). Their DataSource is resolved by a ServiceLoader on the
+# driver classloader at *planning* time, so the jars must be on the classpath
+# before the FIRST SparkSession (the health probe below) is created. We set
+# PYSPARK_SUBMIT_ARGS here — at import, before any getOrCreate — so Ivy pulls
+# the jars when the JVM gateway launches.
+#
+# Coordinates are DERIVED from the running pyspark version, never hardcoded, so
+# the same code works across the compat matrix: pyspark 3.5 → *-spark3.5_2.12,
+# pyspark 4.1 → *-spark4.1_2.13. Each coord is HEAD-checked against Maven
+# Central first; a build that does not exist for the running Spark line (e.g.
+# Iceberg publishes no Spark 4.1 runtime) is dropped, so its test SKIPs cleanly
+# instead of the whole shared session dying on an unresolvable --packages
+# coordinate. Overrides: AQ_HUDI_COORD / AQ_ICEBERG_COORD (exact Maven coord),
+# AQ_SPARK_SCALA (scala suffix).
+#
+# Opt-in: only runs when AQ_LAKEHOUSE is truthy (CI sets it on the executor /
+# compat jobs). Keeps ordinary local spark runs free of the Ivy download.
+
+def _truthy(v: "str | None") -> bool:
+    return bool(v) and v.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _spark_line() -> "str | None":
+    try:
+        import pyspark
+        p = pyspark.__version__.split(".")
+        return f"{p[0]}.{p[1]}"
+    except Exception:
+        return None
+
+
+def _scala_suffix() -> str:
+    ovr = os.environ.get("AQ_SPARK_SCALA")
+    if ovr:
+        return ovr
+    line = _spark_line() or "4.0"
+    return "2.13" if int(line.split(".")[0]) >= 4 else "2.12"
+
+
+# Default library version per Spark minor line (HEAD-checked before use). A
+# missing entry / failed check just drops that datasource → clean skip.
+_HUDI_VER = {"3.4": "0.15.0", "3.5": "1.0.2", "4.0": "1.2.0", "4.1": "1.2.0"}
+_ICEBERG_VER = {"3.3": "1.11.0", "3.4": "1.11.0", "3.5": "1.11.0", "4.0": "1.11.0"}
+
+
+def _coord_resolvable(coord: str) -> bool:
+    """True if `group:artifact:version` has a .pom on Maven Central."""
+    try:
+        g, a, v = coord.split(":")
+    except ValueError:
+        return False
+    url = f"https://repo1.maven.org/maven2/{g.replace('.', '/')}/{a}/{v}/{a}-{v}.pom"
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, method="HEAD"), timeout=6
+        ) as r:
+            return 200 <= r.status < 300
+    except Exception:
+        return False
+
+
+def _lakehouse_coords() -> list[str]:
+    """Resolvable Hudi/Iceberg Maven coords for the running Spark line."""
+    line, scala = _spark_line(), _scala_suffix()
+    coords: list[str] = []
+    hudi = os.environ.get("AQ_HUDI_COORD")
+    if not hudi and line and line in _HUDI_VER:
+        hudi = f"org.apache.hudi:hudi-spark{line}-bundle_{scala}:{_HUDI_VER[line]}"
+    if hudi and _coord_resolvable(hudi):
+        coords.append(hudi)
+    ice = os.environ.get("AQ_ICEBERG_COORD")
+    if not ice and line and line in _ICEBERG_VER:
+        ice = f"org.apache.iceberg:iceberg-spark-runtime-{line}_{scala}:{_ICEBERG_VER[line]}"
+    if ice and _coord_resolvable(ice):
+        coords.append(ice)
+    return coords
+
+
+_LAKEHOUSE_ON = _truthy(os.environ.get("AQ_LAKEHOUSE")) and SparkSession is not None
+_LAKEHOUSE_COORDS = _lakehouse_coords() if _LAKEHOUSE_ON else []
+_ICEBERG_ON = any("iceberg" in c for c in _LAKEHOUSE_COORDS)
+# Iceberg's `local` catalog needs a warehouse dir; only allocate when Iceberg
+# actually resolved (else the extension class below would be a fatal
+# ClassNotFound at session init).
+_LAKEHOUSE_WAREHOUSE = tempfile.mkdtemp(prefix="aq_iceberg_wh_") if _ICEBERG_ON else None
+
+if _LAKEHOUSE_COORDS and "PYSPARK_SUBMIT_ARGS" not in os.environ:
+    os.environ["PYSPARK_SUBMIT_ARGS"] = (
+        f"--packages {','.join(_LAKEHOUSE_COORDS)} pyspark-shell"
+    )
+
+
+def _lakehouse_session_conf() -> dict:
+    """STATIC confs the FIRST session needs for the provisioned datasources.
+
+    Empty unless a lakehouse jar actually resolved. These bind only at session
+    creation (no-op on later getOrCreate), and the referenced classes exist
+    only when the jar is on the classpath — so gating them on real resolution
+    is what keeps an un-provisioned run from aborting at startup.
+
+      * Hudi mandates the Kryo serializer (writer hard-fails otherwise).
+      * Iceberg needs its SQL extensions + a `local` hadoop catalog so the
+        `local.db.tbl` identifier and maintenance procedures resolve.
+    """
+    conf: dict = {}
+    if not _LAKEHOUSE_COORDS:
+        return conf
+    # Required by Hudi; harmless for Iceberg — safe whenever anything resolved.
+    conf["spark.serializer"] = "org.apache.spark.serializer.KryoSerializer"
+    if _ICEBERG_ON and _LAKEHOUSE_WAREHOUSE:
+        conf.update({
+            "spark.sql.extensions":
+                "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+            "spark.sql.catalog.local": "org.apache.iceberg.spark.SparkCatalog",
+            "spark.sql.catalog.local.type": "hadoop",
+            "spark.sql.catalog.local.warehouse": _LAKEHOUSE_WAREHOUSE,
+        })
+    return conf
+
+
 # ── Test backlog (pytest-native, replaces TEST_MANIFEST.md) ───────────────────
 # `@pytest.mark.todo("why")` marks a planned-but-unwritten test. It is
 # auto-skipped here (never a failure), and its reason is surfaced by
@@ -139,11 +262,15 @@ def _spark_is_healthy():
     if SparkSession is None:
         return False
     try:
-        spark = (
+        builder = (
             SparkSession.builder.master(_spark_master())
             .config("spark.sql.warehouse.dir", _SPARK_WAREHOUSE)
-            .getOrCreate()
         )
+        # Lakehouse confs (Kryo for Hudi, Iceberg catalog/extensions) are
+        # STATIC — bind them on this first session (no-op on later getOrCreate).
+        for k, v in _lakehouse_session_conf().items():
+            builder = builder.config(k, v)
+        spark = builder.getOrCreate()
         spark.range(1).count()
         return True
     except Exception:
@@ -184,6 +311,7 @@ def spark(tmp_path_factory) -> SparkSession:
             "spark.local.dir": str(scratch / "local"),
             "javax.jdo.option.ConnectionURL": "jdbc:derby:memory:aqueduct_test_metastore;create=true",
             "derby.stream.error.file": str(scratch / "derby.log"),
+            **_lakehouse_session_conf(),  # Kryo + Iceberg catalog (empty unless provisioned)
         },
         master_url=_spark_master(),
         quiet=True

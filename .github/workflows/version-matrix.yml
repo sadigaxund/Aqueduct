@@ -106,6 +106,10 @@ jobs:
         env:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
           AQ_SPARK_MASTER: "local[1]"
+          # Provision Hudi/Iceberg jars from Maven coords derived off the
+          # matrix pyspark version; per-datasource self-skip when no build
+          # exists for that Spark line (Iceberg has no Spark 4.1 runtime).
+          AQ_LAKEHOUSE: "1"
         run: |
           mkdir -p ${{ env.RESULTS_DIR }}
           LOGFILE=$(mktemp)
