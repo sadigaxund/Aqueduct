@@ -97,7 +97,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_parser/ -m "not spark"
 
   compiler-tests:
@@ -197,7 +197,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark"
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────

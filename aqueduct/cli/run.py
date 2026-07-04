@@ -2016,7 +2016,9 @@ def run(
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
                 click.echo(
-                    f"  ▸ Patch staged for human review → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ Patch staged for human review → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -2038,13 +2040,12 @@ def run(
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
-                pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
-                    or patches_dir / "pending" / f"{patch.patch_id}.json"
-                rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
                 rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
-                    f"  ▸ Agent patch staged → {rel_patch}\n"
-                    f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
+                    f"  ▸ Agent patch staged → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})\n"
+                    f"    Review: aqueduct patch apply {patch.patch_id} --blueprint {rel_bp}",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -2089,7 +2090,9 @@ def run(
                                       patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 click.echo(
-                    f"  ▸ CI patch staged → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ CI patch staged → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
