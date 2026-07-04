@@ -285,8 +285,15 @@ def _register_java_udf(
     if not Path(jar_abs).exists():
         raise UDFError(f"UDF {udf_id!r}: JAR not found at {jar_abs!r}")
 
+    # Session-level `ADD JAR` rather than SparkContext.addJar: PySpark's Python
+    # SparkContext has no addJar() (JVM-only method), and the JVM call alone
+    # ships the JAR to executors but does NOT add it to the driver's session
+    # classloader — which registerJavaFunction needs to resolve the class.
+    # `ADD JAR` does both (SessionResourceLoader.addJar → sparkContext.addJar
+    # + jarClassLoader.addURL) and is stable SQL across Spark 3.x/4.x.
+    escaped = jar_abs.replace("\\", "\\\\").replace('"', '\\"')
     try:
-        spark.sparkContext.addJar(jar_abs)
+        spark.sql(f'ADD JAR "{escaped}"')
     except Exception as exc:
         raise UDFError(f"UDF {udf_id!r}: failed to add JAR {jar_abs!r}: {exc}") from exc
 
