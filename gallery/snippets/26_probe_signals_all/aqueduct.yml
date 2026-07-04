@@ -12,7 +12,7 @@ deployment:
 stores:
   observability:
     backend: duckdb
-    path: .aqueduct/observability.db
+    path: .aqueduct
 
 danger:
   allow_full_probe_actions: true

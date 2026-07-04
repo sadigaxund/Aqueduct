@@ -13,7 +13,7 @@ deployment:
 stores:
   observability:
     backend: duckdb
-    path: .aqueduct/observability.db
+    path: .aqueduct
   # The Depot store persists watermarks for incremental processing
   depots:
     default:

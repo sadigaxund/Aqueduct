@@ -12,6 +12,6 @@ deployment:
 stores:
   observability:
     backend: duckdb
-    path: .aqueduct/observability.db
+    path: .aqueduct
 
 # Parallel execution is a CLI flag: aqueduct run --parallel blueprint.yml
