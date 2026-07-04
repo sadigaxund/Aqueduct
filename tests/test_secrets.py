@@ -231,3 +231,48 @@ def test_custom_provider_no_resolver_raises(monkeypatch):
     monkeypatch.delenv("NO_RESOLVER_KEY", raising=False)
     with pytest.raises(SecretsError, match=r"resolver"):
         resolve_secret("NO_RESOLVER_KEY", provider="custom", resolver=None)
+
+
+def test_custom_provider_base_dir_makes_sibling_package_importable(monkeypatch, tmp_path):
+    monkeypatch.delenv("BASE_DIR_KEY", raising=False)
+    pkg_dir = tmp_path / "myresolverpkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "fetch.py").write_text("def get(key):\n    return f'resolved-{key}'\n")
+
+    assert str(tmp_path) not in sys.path
+    try:
+        val = resolve_secret(
+            "BASE_DIR_KEY",
+            provider="custom",
+            resolver="myresolverpkg.fetch.get",
+            base_dir=str(tmp_path),
+        )
+        assert val == "resolved-BASE_DIR_KEY"
+    finally:
+        sys.modules.pop("myresolverpkg", None)
+        sys.modules.pop("myresolverpkg.fetch", None)
+
+    # base_dir is only inserted for the duration of the import call
+    assert str(tmp_path) not in sys.path
+
+
+def test_custom_provider_base_dir_not_duplicated_if_already_on_path(monkeypatch, tmp_path):
+    monkeypatch.delenv("BASE_DIR_KEY2", raising=False)
+    resolver_mod = types.ModuleType("_test_already_on_path_mod")
+    resolver_mod.fetch = lambda key: f"custom-{key}"
+    sys.modules["_test_already_on_path_mod"] = resolver_mod
+    sys.path.insert(0, str(tmp_path))
+    try:
+        resolve_secret(
+            "BASE_DIR_KEY2",
+            provider="custom",
+            resolver="_test_already_on_path_mod.fetch",
+            base_dir=str(tmp_path),
+        )
+        # still present exactly once — resolve_secret must not have removed
+        # a base_dir entry it did not insert itself
+        assert sys.path.count(str(tmp_path)) == 1
+    finally:
+        sys.path.remove(str(tmp_path))
+        del sys.modules["_test_already_on_path_mod"]

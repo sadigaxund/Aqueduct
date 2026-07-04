@@ -1075,7 +1075,9 @@ def _expand_env(text: str) -> tuple[str, list[str]]:
     return _ENV_VAR_RE.sub(_replace_env, text), missing
 
 
-def _expand_secrets(text: str, secrets_cfg: SecretsConfig) -> tuple[str, list[str]]:
+def _expand_secrets(
+    text: str, secrets_cfg: SecretsConfig, base_dir: str | None = None
+) -> tuple[str, list[str]]:
     """Second pass — resolve ``@aq.secret('KEY')`` via the configured provider.
 
     Registers every resolved value with ``aqueduct.redaction`` so it can be
@@ -1098,6 +1100,7 @@ def _expand_secrets(text: str, secrets_cfg: SecretsConfig) -> tuple[str, list[st
                 provider=secrets_cfg.provider,
                 region=secrets_cfg.region,
                 resolver=secrets_cfg.resolver,
+                base_dir=base_dir,
             )
         except SecretsError:
             missing.append(f"@aq.secret('{key}')")
@@ -1238,7 +1241,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         _validate_store_backends(cfg_pass1.stores)
         return cfg_pass1
 
-    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets)
+    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
     if missing_secrets:
         unique_missing = list(dict.fromkeys(missing_secrets))
         raise ConfigError(

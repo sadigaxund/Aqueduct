@@ -61,6 +61,7 @@ class AqFunctions:
         blueprint_path: str | Path | None = None,
         deployment_env: str | None = None,
         deployment_target: str | None = None,
+        base_dir: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
         # Depot mounts (name → store). `depot=` (single kwarg) → the default mount.
@@ -76,6 +77,7 @@ class AqFunctions:
         self._secrets_provider = secrets_provider
         self._secrets_region = secrets_region
         self._secrets_resolver = secrets_resolver
+        self._base_dir = base_dir
         # @aq.blueprint.* / @aq.deployment.* / @aq.version — identity & deploy context.
         self._blueprint_id = blueprint_id
         self._blueprint_name = blueprint_name
@@ -126,6 +128,7 @@ class AqFunctions:
                 provider=self._secrets_provider,
                 region=self._secrets_region,
                 resolver=self._secrets_resolver,
+                base_dir=self._base_dir,
             )
         except SecretsError:
             raise

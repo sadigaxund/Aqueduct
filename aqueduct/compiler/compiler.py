@@ -116,6 +116,7 @@ def compile(  # noqa: A001
         blueprint_path=blueprint_path,
         deployment_env=deployment_env,
         deployment_target=deployment_target,
+        base_dir=str(blueprint_path.parent) if blueprint_path else None,
     )
 
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────

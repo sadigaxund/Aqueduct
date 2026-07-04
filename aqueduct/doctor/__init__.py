@@ -1311,7 +1311,8 @@ def run_doctor(
     results.append(check_store_backend("depot",   cfg.stores.default_depot(), is_kv_only=True, preflight=preflight))
 
     # Secrets
-    results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))
+    _secrets_base_dir = str((config_path.parent if config_path else Path.cwd()).resolve())
+    results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver, base_dir=_secrets_base_dir))
 
     # LLM connectivity
     results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model, preflight=preflight))
