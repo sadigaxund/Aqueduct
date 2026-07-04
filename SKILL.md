@@ -221,7 +221,7 @@ Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshne
       - { type: schema_snapshot }   # zero-cost (SparkListener)
       - { type: row_count_estimate }
 ```
-Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom`. Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` (they add Spark actions). Probes attach by `attach_to`, not edges.
+Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom`. Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` (they add Spark actions). Probes attach by `attach_to`, not edges — a `from:` edge off a Probe on any port but `signal` is a `CompileError`.
 
 ### Regulator — gate driven by a Probe `signal` edge
 ```yaml

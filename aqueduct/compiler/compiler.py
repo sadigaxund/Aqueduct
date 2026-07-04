@@ -37,6 +37,7 @@ from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.wirer import (
     WireError,
     compile_away_regulators,
+    validate_probe_source_edges,
     validate_probes,
     validate_spillway_edges,
 )
@@ -237,6 +238,7 @@ def compile(  # noqa: A001
     # ── 5. Validate Probes and Spillways ──────────────────────────────────────
     try:
         validate_probes(modules)
+        validate_probe_source_edges(modules, edges)
         validate_spillway_edges(modules, edges)
     except WireError as exc:
         raise CompileError(f"Wiring validation failed: {exc}") from exc

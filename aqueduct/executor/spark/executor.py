@@ -461,7 +461,7 @@ def _topo_sort(modules: tuple[Module, ...], edges: tuple[Edge, ...]) -> list[Mod
     successors: dict[str, list[str]] = {m.id: [] for m in modules}
 
     for edge in edges:
-        if _is_data_edge(edge) and edge.to_id in module_map:
+        if _is_data_edge(edge) and edge.to_id in module_map and edge.from_id in module_map:
             in_degree[edge.to_id] += 1
             successors[edge.from_id].append(edge.to_id)
 
