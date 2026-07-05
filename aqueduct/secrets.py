@@ -16,15 +16,56 @@ is intentionally deferred (see TODOs.md, Phase 32 deferred items).
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
-import sys
-from typing import Any
+from pathlib import Path
+from typing import Any, Callable
 
 from aqueduct.errors import AqueductError
 
 
 class SecretsError(AqueductError):
     """Raised when a secret cannot be resolved."""
+
+
+def load_resolver_fn(resolver: str, base_dir: str | None = None) -> Callable[[str], Any]:
+    """Load the callable named by a ``secrets.resolver`` dotted path.
+
+    When ``base_dir`` is given, the module is loaded directly from
+    ``<base_dir>/<module/path>.py`` via ``importlib.util.spec_from_file_location``
+    and is never registered in ``sys.modules`` — this makes it immune to
+    colliding with an unrelated module of the same name already loaded
+    elsewhere in the process (e.g. a resolver package named ``secrets``
+    colliding with the stdlib ``secrets`` module). The module is re-loaded
+    on every call (no caching), matching this file's "no cache, provider
+    rotation takes effect immediately" design — a nice side effect is that
+    editing the resolver file takes effect on the next call with no restart.
+
+    Caveat: this only covers a single flat file. If the resolver module
+    itself does a relative (``from . import x``) or sibling-package import,
+    that inner import still goes through the normal ``sys.path``-based
+    import system and is not covered by this collision-proofing — keep a
+    custom resolver self-contained in one file.
+
+    When ``base_dir`` is ``None``, or no file exists at the derived path
+    (e.g. ``resolver`` names an installed package, or a module already
+    registered in ``sys.modules``/reachable via ``sys.path``), falls back
+    to the normal ``importlib.import_module`` — ``base_dir`` is passed
+    unconditionally by callers (config/blueprint directory), so this must
+    stay a fallback, not a hard requirement, for resolvers that aren't a
+    file sitting next to the config.
+    """
+    module_path, fn_name = resolver.rsplit(".", 1)
+    file_path = Path(base_dir) / (module_path.replace(".", "/") + ".py") if base_dir is not None else None
+    if file_path is not None and file_path.is_file():
+        spec = importlib.util.spec_from_file_location(module_path, file_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"could not load spec for {file_path}")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    else:
+        mod = importlib.import_module(module_path)
+    return getattr(mod, fn_name)
 
 
 def resolve_secret(
@@ -46,11 +87,18 @@ def resolve_secret(
         key:      Secret name / environment variable name.
         provider: Backend: env | aws | gcp | azure | custom.
         region:   Cloud region (aws/gcp/azure only).
-        resolver: Dotted import path (custom only).
-        base_dir: Directory to add to sys.path before importing a custom
-                  resolver module (custom only) — lets a resolver package
-                  that lives next to the config/blueprint file be imported
-                  by dotted path without requiring install or PYTHONPATH.
+        resolver: Dotted import path (custom only). Must name a single flat
+                  file relative to base_dir (or an installed module when
+                  base_dir is None) — a resolver that itself does a relative
+                  or sibling-package import is not supported, see
+                  load_resolver_fn.
+        base_dir: Directory the custom resolver module is loaded from
+                  (custom only) — lets a resolver file that lives next to
+                  the config/blueprint file be found without requiring
+                  install or PYTHONPATH. Loaded directly from its file path
+                  (see load_resolver_fn), not via sys.path, so it can't
+                  collide with an unrelated module of the same name (e.g.
+                  a resolver file named "secrets.py").
 
     Returns:
         Secret value as string.
@@ -209,22 +257,12 @@ def _fetch_custom(key: str, resolver: str | None, base_dir: str | None = None) -
             "secrets.provider=custom requires secrets.resolver to be set "
             "(dotted import path, e.g. 'mypackage.secrets.fetch')"
         )
-    # Let a resolver package that lives next to aqueduct.yml / the blueprint
-    # (not installed, not on PYTHONPATH) be found by dotted import path.
-    inserted = base_dir is not None and base_dir not in sys.path
-    if inserted:
-        sys.path.insert(0, base_dir)
     try:
-        module_path, fn_name = resolver.rsplit(".", 1)
-        mod = importlib.import_module(module_path)
-        fn = getattr(mod, fn_name)
+        fn = load_resolver_fn(resolver, base_dir)
     except (ImportError, AttributeError, ValueError) as exc:
         raise SecretsError(
             f"secrets.resolver {resolver!r} could not be loaded: {exc}"
         ) from exc
-    finally:
-        if inserted:
-            sys.path.remove(base_dir)
     try:
         result = fn(key)
     except Exception as exc:

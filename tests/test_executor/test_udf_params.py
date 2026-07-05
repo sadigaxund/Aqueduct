@@ -10,7 +10,7 @@ import pytest
 
 from aqueduct.executor.spark.udf import UDFError, _apply_udf_params
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.spark]
 
 
 def _make_masker(char="#", keep_last=2):

@@ -172,3 +172,10 @@ markers = [
 
 [tool.coverage.run]
 data_file = "/tmp/.aqueduct_coverage"
+omit = [
+    # UI-rendering entrypoints — covered by their own headless test harness
+    # (tui-tests job / tests/test_dashboard) with dedicated extras, not by
+    # the plain `coverage` job's `-m "not spark"` run.
+    "aqueduct/tui/app.py",
+    "aqueduct/dashboard/app.py",
+]

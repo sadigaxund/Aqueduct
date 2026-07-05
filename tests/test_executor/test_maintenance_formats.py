@@ -13,7 +13,7 @@ import pytest
 from aqueduct.executor.spark.egress import EgressError, build_maintenance_ops
 from aqueduct.parser.models import ModuleType
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.spark]
 
 
 # ── maintenance ops builder ─────────────────────────────────────────────────

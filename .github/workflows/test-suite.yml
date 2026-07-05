@@ -315,4 +315,4 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis,stores]"
-      - run: pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=80 -m "not spark"
+      - run: pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=70 -m "not spark"

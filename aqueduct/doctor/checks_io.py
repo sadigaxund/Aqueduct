@@ -271,21 +271,12 @@ def check_secrets(
                 "provider=custom requires secrets.resolver to be set in aqueduct.yml",
                 _ms(t),
             )
-        import importlib as _il
-        import sys as _sys
-        inserted = base_dir is not None and base_dir not in _sys.path
-        if inserted:
-            _sys.path.insert(0, base_dir)
+        from aqueduct.secrets import load_resolver_fn
         try:
-            module_path, fn_name = resolver.rsplit(".", 1)
-            mod = _il.import_module(module_path)
-            getattr(mod, fn_name)
+            load_resolver_fn(resolver, base_dir)
             return CheckResult("secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t))
         except Exception as exc:
             return CheckResult("secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
-        finally:
-            if inserted:
-                _sys.path.remove(base_dir)
 
     return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
 

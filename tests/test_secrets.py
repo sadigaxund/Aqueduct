@@ -11,7 +11,7 @@ import pytest
 
 pytestmark = pytest.mark.unit
 
-from aqueduct.secrets import SecretsError, resolve_secret
+from aqueduct.secrets import SecretsError, load_resolver_fn, resolve_secret
 
 
 # ── provider: env ────────────────────────────────────────────────────────────
@@ -276,3 +276,48 @@ def test_custom_provider_base_dir_not_duplicated_if_already_on_path(monkeypatch,
     finally:
         sys.path.remove(str(tmp_path))
         del sys.modules["_test_already_on_path_mod"]
+
+
+def test_load_resolver_fn_survives_stdlib_name_collision(tmp_path):
+    """A resolver package that shares a name with an already-imported module
+    (e.g. named ``secrets``, colliding with the stdlib ``secrets`` module —
+    the exact bug this function exists to fix) must still load correctly,
+    and must never touch the colliding sys.modules entry."""
+    pkg_dir = tmp_path / "secrets"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "resolver.py").write_text(
+        "def vault_resolver(key):\n    return f'resolved-{key}'\n"
+    )
+
+    sentinel = sys.modules["secrets"]  # the real stdlib module, already imported
+    try:
+        fn = load_resolver_fn("secrets.resolver.vault_resolver", str(tmp_path))
+        assert fn("MY_KEY") == "resolved-MY_KEY"
+        # the real stdlib secrets module must be completely untouched
+        assert sys.modules["secrets"] is sentinel
+        assert sys.modules["secrets"].token_hex(4)  # stdlib API still works
+    finally:
+        sys.modules.pop("secrets.resolver", None)
+
+
+def test_load_resolver_fn_falls_back_to_import_module_when_no_file(tmp_path):
+    """base_dir is passed unconditionally by callers (config/blueprint dir);
+    when no file exists there for the dotted path, fall back to a normal
+    import (covers an installed resolver package with base_dir set but
+    irrelevant)."""
+    resolver_mod = types.ModuleType("_test_fallback_mod")
+    resolver_mod.fetch = lambda key: f"fallback-{key}"
+    sys.modules["_test_fallback_mod"] = resolver_mod
+    try:
+        fn = load_resolver_fn("_test_fallback_mod.fetch", str(tmp_path))
+        assert fn("K") == "fallback-K"
+    finally:
+        del sys.modules["_test_fallback_mod"]
+
+
+def test_load_resolver_fn_missing_file_raises(tmp_path):
+    """No file at base_dir AND not an importable module → the normal
+    import_module fallback surfaces its own ModuleNotFoundError."""
+    with pytest.raises(ImportError, match="nope"):
+        load_resolver_fn("nope.resolver.fn", str(tmp_path))

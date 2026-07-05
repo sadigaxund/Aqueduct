@@ -17,7 +17,7 @@ from aqueduct.executor.spark.error_columns import (
 )
 from aqueduct.patch.grammar import PATCH_META_KEY
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.spark]
 
 
 def test_aq_error_columns_match_expected():

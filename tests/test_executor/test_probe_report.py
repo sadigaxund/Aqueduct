@@ -9,7 +9,7 @@ import pytest
 from aqueduct.executor.models import ExecutionResult, ModuleResult
 from aqueduct.executor.spark.probe import _stdout_report_lines
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.spark]
 
 
 class TestStdoutReportLines:

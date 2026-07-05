@@ -11,7 +11,7 @@ from aqueduct.cli import cli
 from aqueduct.executor.spark.probe import _DDL as _PROBE_DDL
 from aqueduct.surveyor.surveyor import _DDL as _OBS_DDL
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.spark]
 
 
 def _seed(store_dir):

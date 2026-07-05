@@ -30,14 +30,26 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from pyspark.sql.functions import UserDefinedFunction
-
 from aqueduct.errors import AqueductError
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 logger = logging.getLogger(__name__)
+
+
+def _is_spark_udf(obj: Any) -> bool:
+    """Duck-type check for a Spark UDF object without requiring pyspark to be
+    importable at module load — most callers pass a plain callable and never
+    hit the pyspark import at all (used by _apply_udf_params, which is pure
+    Python otherwise)."""
+    if hasattr(obj, "returnType"):
+        return True
+    try:
+        from pyspark.sql.functions import UserDefinedFunction
+    except ImportError:
+        return False
+    return isinstance(obj, UserDefinedFunction)
 
 
 def _ensure_project_root_on_path() -> None:
@@ -336,7 +348,7 @@ def _apply_udf_params(
         raise UDFError(
             f"UDF {udf_id!r}: factory {entry_name}(**params) raised: {exc}"
         ) from exc
-    if not (callable(produced) or isinstance(produced, UserDefinedFunction) or hasattr(produced, "returnType")):
+    if not (callable(produced) or _is_spark_udf(produced)):
         raise UDFError(
             f"UDF {udf_id!r}: factory {entry_name!r} must return a callable "
             f"or a Spark UDF object, got {type(produced).__name__}."
@@ -379,7 +391,7 @@ def _register_python_udf(
     try:
         # If fn is already a Spark UDF object (class-based or duck-typed with returnType),
         # don't pass the redundant return_type string.
-        if isinstance(fn, UserDefinedFunction) or hasattr(fn, "returnType"):
+        if _is_spark_udf(fn):
             spark.udf.register(udf_id, fn)
         else:
             spark.udf.register(udf_id, fn, return_type)

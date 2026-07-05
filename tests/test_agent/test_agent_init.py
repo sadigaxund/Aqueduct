@@ -20,6 +20,7 @@ from aqueduct.agent import (
 )
 from aqueduct.agent.parse import (
     _detect_structural_error,
+    _format_reprompt_error,
     _format_reprompt_for_next_turn,
 )
 from aqueduct.agent.prompts import (
@@ -100,6 +101,98 @@ class TestFormatReprompt:
         # Evidence echoed under the DO-NOT-edit label (see comment above).
         assert '{"x": 1}' in res
         assert "DO NOT edit" in res
+
+
+# ── _format_reprompt_error ───────────────────────────────────────────────────
+# Untested until now — _detect_structural_error and _format_reprompt_for_next_turn
+# (above) had coverage, but the per-field-error formatter itself did not,
+# anywhere in the suite (the only other file exercising agent/parse.py,
+# tests/test_surveyor/test_agent.py, is spark-marked and only drives
+# _parse_patch_spec, never this function).
+
+class TestFormatReprompError:
+    def _base_op(self, **overrides):
+        op = {"op": "set_module_config_key", "module_id": "m", "key": "path", "value": "v"}
+        op.update(overrides)
+        return op
+
+    def _validate(self, op: dict):
+        from aqueduct.patch.grammar import PatchSpec
+        payload = {
+            "patch_id": "p1", "rationale": "r", "confidence": 0.9,
+            "root_cause": "c", "operations": [op],
+        }
+        raw = json.dumps(payload)
+        try:
+            PatchSpec.model_validate_json(raw)
+        except ValidationError as e:
+            return e, raw
+        pytest.fail("Expected ValidationError")
+
+    def test_json_decode_error_shows_context_lines(self):
+        raw = '{\n  "patch_id": "p",\n  "rationale": "r"\n  "operations": []\n}'
+        try:
+            json.loads(raw)
+        except json.JSONDecodeError as exc:
+            result = _format_reprompt_error(exc, raw)
+        else:
+            pytest.fail("Expected JSONDecodeError")
+        assert "JSON parse error at line" in result
+        assert "-->" in result
+        assert "Common causes" in result
+
+    def test_missing_field(self):
+        op = self._base_op()
+        del op["value"]
+        exc, raw = self._validate(op)
+        result = _format_reprompt_error(exc, raw)
+        assert "required field missing" in result
+        assert "value" in result
+
+    # NOTE: the "missing field, alias hint" branch (loc 175-177 in parse.py —
+    # `for wrong, correct in _FIELD_ALIASES.items(): if ... wrong in parsed`)
+    # has no test here — traced it and every key in _FIELD_ALIASES (prompts.py)
+    # is ALSO handled by grammar.py's _normalize_op_aliases pre-validator
+    # (mode="before"), which silently renames the wrong key to the correct one
+    # before pydantic ever validates. So pydantic can never actually report
+    # one of these fields "missing" due to a wrong alias key — the branch
+    # looks unreachable via the real PatchSpec pipeline. Flagging as a
+    # dead-code lead, not fixing (out of scope here).
+
+    def test_extra_forbidden_unknown_field(self):
+        op = self._base_op(bogus_field=1)
+        exc, raw = self._validate(op)
+        result = _format_reprompt_error(exc, raw)
+        assert '"bogus_field" is not a recognized field — remove it' in result
+
+    def test_union_tag_not_found_missing_op_key(self):
+        op = self._base_op()
+        del op["op"]
+        exc, raw = self._validate(op)
+        result = _format_reprompt_error(exc, raw)
+        assert 'invalid operation' in result
+        assert '"op" field is missing entirely' in result
+        assert "Valid ops:" in result
+
+    def test_type_mismatch(self):
+        op = self._base_op(module_id=999)
+        exc, raw = self._validate(op)
+        result = _format_reprompt_error(exc, raw)
+        assert "expected string, got int 999" in result
+
+    def test_unhandled_error_type_falls_back_to_generic_message(self):
+        # A bogus (but non-empty) op value hits pydantic's union_tag_invalid,
+        # which _format_reprompt_error has no dedicated branch for — falls to
+        # the generic `else` branch using the raw pydantic message.
+        op = self._base_op(op="not_a_real_op")
+        exc, raw = self._validate(op)
+        result = _format_reprompt_error(exc, raw)
+        assert result  # non-empty — some line was emitted for every error
+        assert "•" in result
+
+    def test_non_validation_non_jsondecode_error_returns_str(self):
+        exc = ValueError("plain error")
+        assert _format_reprompt_error(exc, "{}") == "plain error"
 
 
 # ── resolve_budget ────────────────────────────────────────────────────────────

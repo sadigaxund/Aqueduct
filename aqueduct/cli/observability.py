@@ -1318,7 +1318,12 @@ def dashboard(
         env["AQ_DASH_STORE_DIR"] = store_dir
 
     args = [
-        sys.executable, "-m", "streamlit", "run", app_path,
+        # -P (PEP 706): don't prepend CWD to sys.path. `-m` normally does,
+        # which lets a project-local `secrets/` package (a common custom
+        # secrets-resolver layout) shadow the stdlib `secrets` module for
+        # every downstream import in the subprocess — including starlette's
+        # `from secrets import token_hex` in recent streamlit releases.
+        sys.executable, "-P", "-m", "streamlit", "run", app_path,
         "--server.port", str(port),
         "--server.headless", "true" if no_browser else "false",
     ]

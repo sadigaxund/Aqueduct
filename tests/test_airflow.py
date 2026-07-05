@@ -552,7 +552,7 @@ stores:
       backend: duckdb
       path: "{dep}"
 """.format(
-        obs=str(tmp_path / "obs.duckdb"),
+        obs=str(tmp_path / "obs_store"),  # 2.0: duckdb observability path must be a directory
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 
