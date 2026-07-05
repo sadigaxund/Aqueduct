@@ -1,0 +1,75 @@
+# blueprint.yml
+# Conditional module execution via `enabled:` — toggle whole pipeline
+# sections with a context profile or env var.
+
+aqueduct: "1.0"
+id: enabled_demo
+name: "Conditional Module Execution"
+
+description: |
+  Demonstrates the `enabled:` module attribute. Every module accepts
+  `enabled:` (default true) — a bool or a `${ctx.*}`/`${ENV}` expression.
+  A disabled module compiles but is skipped at run time, and the disable
+  cascades transitively to every consumer of its output (edges, depends_on,
+  Probe attach_to, Arcade expansion).
+
+context:
+  premium: "${AQ_PREMIUM:-false}"
+
+modules:
+
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: basic_enrich
+    label: "Basic Enrich"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT *, 'basic' AS tier, amount * 0.08 AS tax, 'standard' AS segment
+        FROM __input__
+
+  - id: premium_enrich
+    label: "Premium Enrich"
+    type: Channel
+    enabled: "${ctx.premium}"
+    config:
+      op: sql
+      query: |
+        SELECT *, 'premium' AS tier, amount * 0.05 AS tax, region || '-gold' AS segment
+        FROM __input__
+
+  - id: merged_output
+    label: "Merged Output"
+    type: Funnel
+    config:
+      mode: union_all
+      inputs:
+        - basic_enrich
+        - premium_enrich
+
+  - id: output
+    label: "Enriched Orders"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/enriched.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: basic_enrich
+  - from: raw_orders
+    to: premium_enrich
+  - from: basic_enrich
+    to: merged_output
+  - from: premium_enrich
+    to: merged_output
+  - from: merged_output
+    to: output

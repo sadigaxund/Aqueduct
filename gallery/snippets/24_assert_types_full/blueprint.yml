@@ -37,6 +37,13 @@ modules:
         - id: zero_spillway
           type: spillway_rate
           max_rate: 0.0
+        - id: non_null_id
+          type: not_null
+          column: order_id
+          on_fail: abort
+        - id: max_order_count
+          type: max_rows
+          max_count: 100
         - id: schema_check
           type: schema_match
           columns:
@@ -46,6 +53,10 @@ modules:
             status: string
             region: string
             tax: double
+        - id: completed_max_check
+          type: custom
+          fn: rules.check_completed_max
+          on_fail: quarantine
 
   - id: output
     label: "Save Result"
@@ -55,6 +66,14 @@ modules:
       path: data/output/orders.parquet
       mode: overwrite
 
+  - id: quarantine_output
+    label: "Quarantine Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/quarantine_output.parquet
+      mode: overwrite
+
 edges:
   - from: raw_orders
     to: enriched
@@ -62,3 +81,6 @@ edges:
     to: quality_gate
   - from: quality_gate
     to: output
+  - from: quality_gate
+    to: quarantine_output
+    port: spillway

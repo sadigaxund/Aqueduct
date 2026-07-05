@@ -1,4 +1,4 @@
-# Row-Level Quarantine Assertion
+  # Row-Level Quarantine Assertion
 
 Demonstrates how to use the `Assert` module's built-in quarantine feature to safely route "bad" records away from your main pipeline.
 

@@ -6,12 +6,26 @@ id: udf_demo
 name: "SQL UDF Snippet"
 
 udf_registry:
+  # Static UDF — entry points at an importable function directly.
   - id: mask_sensitive
     label: "Email Masking UDF"
     lang: python
     module: logic
     entry: mask_email
     return_type: string
+
+  # Parameterized UDF — entry is a *factory* called with `params:` to
+  # produce the actual callable. The factory receives concrete values
+  # (${ctx.*} / @aq.* tokens resolved at compile time).
+  - id: mask_phone
+    label: "Phone Masker (Parameterized)"
+    lang: python
+    module: logic
+    entry: make_phone_masker
+    return_type: string
+    params:
+      visible_digits: 4
+      prefix: "+1-***-***-"
 
 modules:
   - id: raw_users
@@ -42,8 +56,33 @@ modules:
       path: data/output/output.parquet
       mode: overwrite
 
+  # ── Parameterized UDF demo (parallel path) ──────────────────────
+  - id: phone_masked
+    label: "Phone Masked Channel"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT
+          name,
+          email,
+          mask_phone(phone) AS phone_masked
+        FROM raw_users
+
+  - id: phone_output
+    label: "Save Phone Masked"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/phone_masked.parquet
+      mode: overwrite
+
 edges:
   - from: raw_users
     to: masked_users
   - from: masked_users
     to: output_save
+  - from: raw_users
+    to: phone_masked
+  - from: phone_masked
+    to: phone_output

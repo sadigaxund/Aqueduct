@@ -18,6 +18,7 @@ Demonstrates Aqueduct's built-in runtime functions — resolved at compile time.
 | `@aq.version()` | Engine version string |
 | `@aq.date.today()` | Today's date (`YYYY-MM-DD`) |
 | `@aq.date.now()` | Current timestamp (`YYYY-MM-DD HH:MM:SS`) |
+| `@aq.env('KEY')` | Read an env var. **Fails fast** if absent — unlike `${VAR:-default}` which supports a fallback. |
 
 **Resolution scope:** These functions resolve **only during Blueprint
 compilation** (not in `aqueduct.yml`). They work in any string config position

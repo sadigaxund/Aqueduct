@@ -26,10 +26,19 @@ modules:
       query: >
         SELECT *,
                '@aq.run.id()' AS run_uuid,
+               '@aq.run.prev_id()' AS prev_run_uuid,
                '@aq.run.timestamp()' AS run_timestamp,
                '@aq.blueprint.name()' AS blueprint_name,
                '@aq.blueprint.id()' AS blueprint_id,
-               '@aq.version()' AS engine_version
+               '@aq.blueprint.dir()' AS blueprint_dir,
+               '@aq.blueprint.path()' AS blueprint_path,
+               '@aq.version()' AS engine_version,
+               '@aq.date.today()' AS today_date,
+               '@aq.date.yesterday()' AS yesterday_date,
+               '@aq.date.month_start()' AS month_start,
+               '@aq.deployment.env()' AS deploy_env,
+               '@aq.deployment.target()' AS deploy_target,
+               '@aq.env('HOME')' AS user_home
         FROM raw_items
 
   - id: provenance_probe

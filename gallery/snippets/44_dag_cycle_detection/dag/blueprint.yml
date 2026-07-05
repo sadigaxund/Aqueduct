@@ -1,0 +1,53 @@
+# blueprint.yml
+# DAG cycle detection — edges that form a cycle are caught at compile time.
+
+aqueduct: "1.0"
+id: cycle_demo
+name: "DAG Cycle Detection"
+
+description: |
+  This blueprint has a deliberate cycle (A → B → C → A). The compiler
+  catches it via Kahn's algorithm and raises a CycleError before any
+  module executes — no Spark session is started.
+
+modules:
+
+  - id: source_a
+    label: "Source A"
+    type: Ingress
+    config:
+      format: csv
+      path: ../data/nodes.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: transform_b
+    label: "Transform B"
+    type: Channel
+    config:
+      op: sql
+      query: SELECT *, 'B' AS step FROM __input__
+
+  - id: transform_c
+    label: "Transform C"
+    type: Channel
+    config:
+      op: sql
+      query: SELECT *, 'C' AS stage FROM __input__
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/result.parquet
+      mode: overwrite
+
+edges:
+  - from: source_a
+    to: transform_b
+  - from: transform_b
+    to: transform_c
+  - from: transform_c
+    to: source_a  # ← deliberate cycle: A → B → C → A
+  - from: source_a
+    to: output

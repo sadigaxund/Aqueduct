@@ -5,6 +5,13 @@ aqueduct: "1.0"
 id: performance_tuning_demo
 name: "Repartition & Cache Snippet"
 
+# Per-blueprint warning suppression — unioned with the engine-level
+# warnings.suppress in aqueduct.yml. A rule suppressed here stays
+# visible to other blueprints.
+warnings:
+  suppress:
+    - perf_multi_consumer_no_cache
+
 modules:
   - id: raw_data
     label: "Raw CSV Ingress"

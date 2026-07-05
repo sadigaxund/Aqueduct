@@ -81,6 +81,7 @@ modules:
       path: "data/output/modes_partitioned/"
       mode: overwrite_partitions
       partition_by: ["category"]
+      merge_schema: true                 # Delta: absorb new columns
 
   # ── mode: overwrite_partitions + replace_where ────────────────────
   - id: save_replace
@@ -93,6 +94,7 @@ modules:
       path: "data/output/modes_replace/"
       mode: overwrite_partitions
       replace_where: "event = 'page_view'"
+      merge_schema: true                 # Delta: absorb new columns
 
 edges:
   - from: events

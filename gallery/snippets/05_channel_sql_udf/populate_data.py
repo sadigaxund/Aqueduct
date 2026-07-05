@@ -12,12 +12,12 @@ def write_csv(filename, rows):
 
 def main():
     write_csv('users.csv', [
-        ['name', 'email'],
-        ['John Doe', 'john.doe@example.com'],
-        ['Jane Smith', 'jane.smith@gmail.com'],
-        ['Alice Wong', 'alice.w@outlook.com'],
-        ['Bob Builder', 'bob@builder.com'],
-        ['Charlie Brown', 'cb@peanuts.org'],
+        ['name', 'email', 'phone'],
+        ['John Doe', 'john.doe@example.com', '555-123-4567'],
+        ['Jane Smith', 'jane.smith@gmail.com', '555-234-5678'],
+        ['Alice Wong', 'alice.w@outlook.com', '555-345-6789'],
+        ['Bob Builder', 'bob@builder.com', '555-456-7890'],
+        ['Charlie Brown', 'cb@peanuts.org', '555-567-8901'],
     ])
 
 if __name__ == '__main__':

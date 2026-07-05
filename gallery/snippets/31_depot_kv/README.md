@@ -25,6 +25,23 @@ WHERE created_at > '{{ @aq.depot.get('watermark', '2025-06-01') }}'
 
 Add new rows to `events.csv` between runs and only the new records will appear.
 
+## Depot write side — `format: depot` Egress
+
+The pipeline also writes a KV entry (`last_watermark → run_id`) to the depot
+using an Egress with `format: depot`:
+
+```yaml
+- id: save_watermark
+  type: Egress
+  config:
+    format: depot
+    key: last_watermark
+    value: "@aq.run.id()"
+```
+
+This is how you programmatically persist state between runs — later runs
+read it with `@aq.depot.get('last_watermark')`.
+
 ## Additional depot functions
 
 | Call | Purpose |

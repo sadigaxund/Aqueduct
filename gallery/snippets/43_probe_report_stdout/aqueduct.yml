@@ -1,0 +1,18 @@
+aqueduct_config: "1.0"
+
+danger:
+  allow_full_probe_actions: true
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct

@@ -1,0 +1,59 @@
+# blueprint.yml
+# Blueprint lifecycle hooks — on_success / on_fire actions triggered
+# after the run's terminal state.
+
+aqueduct: "1.0"
+id: hooks_demo
+name: "Blueprint Lifecycle Hooks"
+
+description: |
+  Demonstrates hooks.on_success and hooks.on_failure. Each hook entry
+  is exactly one of: blueprint: (chain another Blueprint), webhook:
+  (HTTP POST), or command: (subprocess). Hooks never change the run's
+  exit code — a failing hook warns and stops the remaining hooks of
+  that event.
+
+modules:
+
+  - id: raw_data
+    label: "Data"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: enriched
+    label: "Enriched"
+    type: Channel
+    config:
+      op: sql
+      query: |
+        SELECT *, amount * 0.08 AS tax
+        FROM __input__
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/result.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_data
+    to: enriched
+  - from: enriched
+    to: output
+
+hooks:
+  on_success:
+    - command: mkdir -p data/output
+    - command: touch data/output/hook_signal_ok.txt
+    - blueprint: chained/chain_target.yml
+      timeout: 60
+    - webhook: "http://localhost:9999/hooks/success"
+  on_failure:
+    - command: mkdir -p data/output
+    - command: touch data/output/hook_signal_failed.txt
+    - webhook: "http://localhost:9999/hooks/failure"

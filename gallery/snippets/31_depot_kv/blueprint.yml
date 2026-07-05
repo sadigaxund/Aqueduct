@@ -38,8 +38,21 @@ modules:
       path: data/output/events.parquet
       mode: overwrite
 
+  # Depot Egress — writes a KV entry to the depot instead of data.
+  # The key/value pair persists across runs and can be read by
+  # @aq.depot.get() in a future run.
+  - id: save_watermark
+    label: "Save Watermark to Depot"
+    type: Egress
+    config:
+      format: depot
+      key: last_watermark
+      value: "@aq.run.id()"
+
 edges:
   - from: raw_events
     to: incremental_filter
   - from: incremental_filter
     to: output
+  - from: incremental_filter
+    to: save_watermark

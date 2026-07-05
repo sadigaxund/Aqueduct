@@ -1,5 +1,5 @@
 # blueprint.yml
-# All 8 built-in probe signal types.
+# All 9 built-in probe signal types.
 
 aqueduct: "1.0"
 id: probe_signals_all
@@ -33,6 +33,10 @@ modules:
           column: created_at
         - type: partition_stats
           partition_column: category
+        - type: threshold
+          column: price
+          min: 0.0
+          max: 500.0
 
   - id: output
     label: "Save Result"

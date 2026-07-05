@@ -1,6 +1,6 @@
 # All Probe Signals
 
-Demonstrates all 8 built-in probe signal types.
+Demonstrates all 9 built-in probe signal types.
 
 ## Signals
 
@@ -14,6 +14,7 @@ Demonstrates all 8 built-in probe signal types.
 | `distinct_count` | Distinct value counts |
 | `data_freshness` | MAX(timestamp) and age |
 | `partition_stats` | Row counts per partition column value |
+| `threshold` | Numeric column range check (min/max) — emits `passed` for Regulator gating |
 
 Results are stored in the `probe_signals` table in the observability store.
 

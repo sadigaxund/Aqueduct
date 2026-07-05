@@ -1,0 +1,33 @@
+# hook_cycle_a.yml
+# Chains to hook_cycle_b.yml on success. If B chains back, the cycle
+# guard catches it — see hook_cycle_b.yml for the other end.
+
+aqueduct: "1.0"
+id: hook_cycle_a
+name: "Hook Cycle — A"
+
+modules:
+  - id: source
+    label: "Source"
+    type: Ingress
+    config:
+      format: csv
+      path: ../data/nodes.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/a_result.parquet
+      mode: overwrite
+
+edges:
+  - from: source
+    to: output
+
+hooks:
+  on_success:
+    - blueprint: hook_cycle_b.yml
+      timeout: 60

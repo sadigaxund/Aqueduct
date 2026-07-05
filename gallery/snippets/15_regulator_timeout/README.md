@@ -40,5 +40,30 @@ In `blueprint.yml`:
 
 The `timeout_seconds` property triggers a polling loop in the Aqueduct executor.
 
-> **Other `on_block` modes:** Use `on_block: webhook` to fire a webhook when
-> the gate blocks (for external approval workflows). See `docs/specs.md` §4.7.
+## Other `on_block` modes
+
+| Mode | Behaviour |
+|------|-----------|
+| `skip` | If the gate blocks, skip the downstream module and proceed |
+| `abort` | Immediately fail the pipeline with a clear error |
+| `trigger_agent` | Invoke the LLM agent to diagnose and patch the blocking condition |
+| `webhook` | Fire a webhook for external approval workflows |
+
+Example abort gate — pipeline fails immediately if the signal check fails:
+```yaml
+- id: strict_gate
+  type: Regulator
+  config:
+    on_block: abort        # no timeout — fail fast on bad signal
+```
+
+Example agent-trigger gate — signal failure invokes self-healing:
+```yaml
+- id: healing_gate
+  type: Regulator
+  config:
+    on_block: trigger_agent
+    timeout_seconds: 300   # wait 5 min for an override before healing
+```
+
+> See `docs/specs.md` §4.7 for the full Regulator reference.

@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import pytest
 
-from aqueduct.executor.spark.error_columns import (
+# aqueduct.executor.spark.* pulls in pyspark at package-import time
+# (aqueduct/executor/spark/__init__.py) regardless of which submodule you
+# want — a hard ModuleNotFoundError here is a fatal collection error, so
+# this must be an explicit importorskip before the import, not just a marker.
+pytest.importorskip("pyspark", reason="pyspark not installed — install aqueduct-core[spark]")
+from aqueduct.executor.spark.error_columns import (  # noqa: E402
     AQ_ERROR_MODULE,
     AQ_ERROR_MSG,
     AQ_ERROR_RULE,
     AQ_ERROR_TS,
     AQ_ERROR_TYPE,
 )
-from aqueduct.patch.grammar import PATCH_META_KEY
+from aqueduct.patch.grammar import PATCH_META_KEY  # noqa: E402
 
 pytestmark = [pytest.mark.unit, pytest.mark.spark]
 

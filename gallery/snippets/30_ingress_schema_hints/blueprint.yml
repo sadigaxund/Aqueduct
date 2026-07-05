@@ -26,6 +26,10 @@ modules:
         price: double
         quantity: integer
         listed_at: date
+      # Schema drift guard: abort if the source has columns outside the
+      # known set. To test: add a column to products.csv and re-run.
+      on_new_columns: fail
+      known_columns: [id, name, price, quantity, listed_at]
 
   - id: schema_probe
     label: "Verify schema"
@@ -44,6 +48,7 @@ modules:
       format: parquet
       path: data/output/products.parquet
       mode: overwrite
+      on_new_columns: allow            # write-side drift contract
 
 edges:
   - from: hinted_ingress

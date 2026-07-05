@@ -1,0 +1,95 @@
+# blueprint.yml
+# Probe report: stdout — signal results printed in the terminal summary.
+
+aqueduct: "1.0"
+id: probe_stdout_demo
+name: "Probe report: stdout"
+
+description: |
+  Demonstrates the Probe `report: stdout` config option. When set, each
+  signal's result also prints as dim note lines under the Probe's row in
+  the post-run summary — no data store needed to inspect results.
+
+modules:
+
+  - id: raw_data
+    label: "Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: probe_count
+    label: "Row Count"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: row_count_estimate
+          method: exact
+
+  - id: probe_schema
+    label: "Schema"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: schema_snapshot
+
+  - id: probe_nulls
+    label: "Null Rates"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: null_rates
+          columns: [amount, score]
+          fraction: 1.0
+
+  - id: probe_sample
+    label: "Sample Rows"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: sample_rows
+          n: 3
+
+  - id: probe_distinct
+    label: "Distinct Count"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: distinct_count
+          columns: [region, status]
+
+  - id: probe_vdist
+    label: "Value Distribution"
+    type: Probe
+    attach_to: raw_data
+    config:
+      report: stdout
+      signals:
+        - type: value_distribution
+          columns: [amount]
+          fraction: 1.0
+          percentiles: [0.25, 0.5, 0.75]
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/result.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_data
+    to: output

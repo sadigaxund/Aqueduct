@@ -1,0 +1,34 @@
+# hook_cycle_b.yml
+# Chains back to hook_cycle_a.yml on success, creating a hook-level
+# cycle. The cycle guard (AQUEDUCT_HOOK_CHAIN depth cap + dup check)
+# catches this at runtime — no infinite loop.
+
+aqueduct: "1.0"
+id: hook_cycle_b
+name: "Hook Cycle — B"
+
+modules:
+  - id: source
+    label: "Source"
+    type: Ingress
+    config:
+      format: csv
+      path: ../data/nodes.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/b_result.parquet
+      mode: overwrite
+
+edges:
+  - from: source
+    to: output
+
+hooks:
+  on_success:
+    - blueprint: hook_cycle_a.yml
+      timeout: 60

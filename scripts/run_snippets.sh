@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Run all self-contained gallery snippets in an isolated tmp dir + Python 3.12 venv.
-# Skipped (require live external services): 02_ingress_parquet_s3, 04_ingress_jdbc_postgres
+# Skipped: 44_dag_cycle_detection (no root blueprint.yml by design — it's a
+# multi-file manual walkthrough: dag/blueprint.yml is an intentional compile
+# error, dag/blueprint_fixed.yml and hook/*.yml are separate standalone demos —
+# incompatible with this script's one-blueprint-per-snippet assumption).
 #
 # Usage:
 #   ./scripts/run_snippets.sh [-v] [-vv] [SNIPPETS_DIR]
@@ -46,8 +49,10 @@ SNIPPETS_DIR="${SNIPPETS_DIR:-$REPO_ROOT/gallery/snippets}"
 # most /tmp quotas. Override with AQ_SNIPPET_WORKDIR env var.
 WORK_BASE="${AQ_SNIPPET_WORKDIR:-$REPO_ROOT/.snippet_runs}"
 
-# Snippets that require live external services — skip entirely
+# Snippets that require live external services, or aren't compatible with the
+# one-blueprint-per-snippet assumption below — skip entirely
 SKIP_PATTERNS=(
+    "44_dag_cycle_detection"
 )
 
 # Colours

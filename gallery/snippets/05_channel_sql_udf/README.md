@@ -5,8 +5,7 @@ Demonstrates how to extend Spark SQL with custom Python logic using **User Defin
 ## Key Features
 - **SQL Channel**: Uses standard SQL syntax to transform data.
 - **Python UDF**: Registers a native Python function (`logic.py`) that can be called directly within the SQL query.
-- **Hybrid Execution**: Combines the performance of SQL with the flexibility of Python.
-
+- **Parameterized UDF**: A **factory pattern** — `entry` points to a factory, `params:` provides keyword arguments resolved at compile time (including `${ctx.*}` and `@aq.*` tokens).
 
 ## How to Run
 
@@ -22,7 +21,8 @@ Demonstrates how to extend Spark SQL with custom Python logic using **User Defin
 
 ## Anatomy of a UDF
 
-In `blueprint.yml`, the UDF is registered in the `udf_registry`:
+### Static UDF
+The UDF is registered in the `udf_registry`:
 ```yaml
 udf_registry:
   - id: mask_sensitive
@@ -34,15 +34,29 @@ udf_registry:
 
 It is then called like a built-in function in the SQL query:
 ```sql
-SELECT 
-  name,
-  mask_sensitive(email) as email_masked
-FROM raw_users
+SELECT name, mask_sensitive(email) as email_masked FROM raw_users
 ```
+
+### Parameterized UDF (Factory Pattern)
+```yaml
+udf_registry:
+  - id: mask_phone
+    lang: python
+    module: logic
+    entry: make_phone_masker    # factory function
+    return_type: string
+    params:                     # resolved at compile time, passed to the factory
+      visible_digits: 4
+      prefix: "+1-***-***-"
+```
+
+The factory `make_phone_masker(visible_digits=4, prefix="+1-***-***-")` returns a closure that masks phone numbers to show only the last 4 digits.
+
+### Benefits of Parameterized UDFs
+
+- **Reuse**: One factory powers multiple blueprints with different settings.
+- **Secrets support**: `params:` values support `@aq.secret()`, so API keys, salts, and other config values never appear in the Blueprint as plain text.
+- **Zero runtime overhead**: The factory is called once at compile time; the returned closure is the registered UDF.
 
 > [!NOTE]
 > When using Python UDFs, Aqueduct automatically issues a performance warning if the UDF is not vectorized. For high-volume production pipelines, consider using `pandas_udf` (Arrow-optimized).
-
-> **Parameterized UDF factories:** Set `params:` on a UDF registration to
-> create reusable UDF instances (e.g. `mask_email(params.suffix)` with
-> different suffixes per call site). See `docs/specs.md` §4.4.2.

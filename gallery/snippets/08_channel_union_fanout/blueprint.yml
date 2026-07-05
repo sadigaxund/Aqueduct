@@ -25,6 +25,7 @@ modules:
   - id: combined_data
     label: "Union All Sources"
     type: Channel
+    depends_on: [source_a, source_b]   # explicit alternative to edge wiring
     config:
       op: union
       allow_missing_columns: true

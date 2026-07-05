@@ -8,8 +8,15 @@ import pytest
 from click.testing import CliRunner
 
 from aqueduct.cli import cli
-from aqueduct.executor.spark.probe import _DDL as _PROBE_DDL
-from aqueduct.surveyor.surveyor import _DDL as _OBS_DDL
+
+# aqueduct.executor.spark.* pulls in pyspark at package-import time
+# (aqueduct/executor/spark/__init__.py) regardless of which submodule you
+# want — a hard ModuleNotFoundError here is a fatal collection error that
+# aborts the WHOLE pytest run (not a graceful per-file skip), so this must
+# be an explicit importorskip before the import, not just a marker.
+pytest.importorskip("pyspark", reason="pyspark not installed — install aqueduct-core[spark]")
+from aqueduct.executor.spark.probe import _DDL as _PROBE_DDL  # noqa: E402
+from aqueduct.surveyor.surveyor import _DDL as _OBS_DDL  # noqa: E402
 
 pytestmark = [pytest.mark.unit, pytest.mark.spark]
 

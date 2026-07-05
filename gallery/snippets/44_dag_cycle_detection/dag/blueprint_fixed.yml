@@ -1,0 +1,50 @@
+# blueprint_fixed.yml
+# Same DAG with the cycle removed — runs normally.
+
+aqueduct: "1.0"
+id: cycle_demo_fixed
+name: "DAG Cycle Detection (Fixed)"
+
+description: |
+  Same as blueprint.yml but with the C → A edge removed. The DAG is now
+  acyclic: A → B → C (linear), with A also feeding the output.
+
+modules:
+
+  - id: source_a
+    label: "Source A"
+    type: Ingress
+    config:
+      format: csv
+      path: ../data/nodes.csv
+      options: {header: "true", inferSchema: "true"}
+
+  - id: transform_b
+    label: "Transform B"
+    type: Channel
+    config:
+      op: sql
+      query: SELECT *, 'B' AS step FROM __input__
+
+  - id: transform_c
+    label: "Transform C"
+    type: Channel
+    config:
+      op: sql
+      query: SELECT *, 'C' AS stage FROM __input__
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/result.parquet
+      mode: overwrite
+
+edges:
+  - from: source_a
+    to: transform_b
+  - from: transform_b
+    to: transform_c
+  - from: transform_c
+    to: output  # ← was: to: source_a (cycle fixed)
