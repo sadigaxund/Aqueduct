@@ -29,7 +29,7 @@ Public surface:
 from __future__ import annotations
 
 import warnings as _w
-from typing import Iterable
+from collections.abc import Iterable
 
 
 class AqueductWarning(UserWarning):

@@ -54,8 +54,9 @@ edges: []
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text(f"""
 stores:
-  depot:
-    path: "{tmp_path}/depot.db"
+  depots:
+    default:
+      path: "{tmp_path}/depot.db"
 """)
     
     # Run once
@@ -63,7 +64,7 @@ stores:
     assert res1.exit_code == 0, res1.output
     from aqueduct.depot.depot import DepotStore
     store = DepotStore(tmp_path / "depot.db")
-    run_1_id = store.get("_last_run_id")
+    run_1_id = store.get("t1:_last_run_id")  # per-blueprint isolated key
     assert run_1_id != ""
     store.close()
     
@@ -72,7 +73,7 @@ stores:
     assert res2.exit_code == 0
     
     store = DepotStore(tmp_path / "depot.db")
-    run_2_id = store.get("_last_run_id")
+    run_2_id = store.get("t1:_last_run_id")
     assert run_2_id != ""
     assert run_2_id != run_1_id
     store.close()
@@ -118,7 +119,7 @@ edges:
 metrics:
   use_observe: false
 stores:
-  observability: {{path: {tmp_path / "obs.db"}}}
+  observability: {{path: {tmp_path / "obs"}}}
 """)
     
     # We need to ensure the CLI uses this config file.
@@ -126,10 +127,8 @@ stores:
     result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
     assert result.exit_code == 0, result.output
     
-    # Check DuckDB directly
     import duckdb
-    # CLI preserves custom filenames when configured (ISSUE-024)
-    db_path = tmp_path / "obs.db"
+    db_path = tmp_path / "obs" / "test_obs" / "observability.db"
     assert db_path.exists(), f"Obs DB not found at {db_path}. Files in tmp_path: {list(tmp_path.glob('*'))}"
 
     conn = duckdb.connect(str(db_path))
@@ -245,7 +244,7 @@ aqueduct_config: "1.0"
 stores:
   observability:
     backend: duckdb
-    path: "{tmp_path / '.aqueduct' / 'observability' / bp_id / 'observability.db'}"
+    path: "{tmp_path / '.aqueduct' / 'observability'}"
 """)
 
     # Create observability.db with column_lineage data
@@ -309,12 +308,10 @@ stores:
   observability:
     backend: postgres
     path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
-  lineage:
-    backend: postgres
-    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
-  depot:
-    backend: postgres
-    path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
+  depots:
+    default:
+      backend: postgres
+      path: "postgresql://aqueduct:aqueduct@127.0.0.1:5432/aqueduct_db"
 """)
     
     from unittest.mock import patch, MagicMock
@@ -363,14 +360,14 @@ modules:
     config: {{format: csv, path: /missing.csv}}
 edges: []
 agent:
-  approval_mode: human
+  approval: human
 """)
         config_path = tmp_path / "aq.yml"
         config_path.write_text(f"""
 aqueduct_config: "1.0"
 stores:
   observability:
-    path: {tmp_path / 'obs.db'}
+    path: {tmp_path / 'obs'}
 agent:
   provider: anthropic
   model: claude-3
@@ -408,9 +405,9 @@ agent:
                 runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path)])
                 
                 assert mock_gap.called
-                kwargs = mock_gap.call_args[1]
-                assert "on_attempt" in kwargs
-                assert callable(kwargs["on_attempt"])
+                agent_cfg = mock_gap.call_args[1]["agent_cfg"]
+                assert agent_cfg.on_attempt is not None
+                assert callable(agent_cfg.on_attempt)
 
     def test_heal_command_prints_stop_reason_and_usage(self, tmp_path):
         """Phase 34: aqueduct heal prints Phase 34 budget outputs."""
@@ -423,12 +420,13 @@ name: heal_cli
 modules: []
 edges: []
 """)
-        # Surveyor writes to <store_dir>/observability.db. Config must point
-        # at the SAME file (not a sibling) so `_resolve_obs_db` finds it.
+        # 2.0: config path is a routing BASE dir; the Surveyor below writes
+        # into the routed <base>/heal_cli/ dir so `_resolve_obs_db` (run_id
+        # glob over <base>/*/observability.db) finds the same file.
         config_path = tmp_path / "aq.yml"
         config_path.write_text(
             f"agent: {{model: claude-3}}\n"
-            f"stores: {{observability: {{path: {tmp_path / 'observability.db'}}}}}\n"
+            f"stores: {{observability: {{path: {tmp_path}}}}}\n"
         )
 
         from aqueduct.surveyor.surveyor import Surveyor
@@ -438,7 +436,7 @@ edges: []
                 blueprint_id="heal_cli", name="heal_cli",
                 context={}, modules=(), edges=(), spark_config={},
             ),
-            tmp_path,
+            tmp_path / "heal_cli",
         )
         s.start("run1")
 

@@ -6,22 +6,24 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
-from aqueduct.parser.models import ModuleType
 import sys
 from typing import Any
 
 import click
 
+import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
-    _compile_with_warnings,
     _check_heal_guardrails,
-    _resolve_and_load_env,
+    _compile_with_warnings,
     _env_options,
-    _uncommitted_applied_patches,)
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
+    _rule,
+    cli,
+)
+from aqueduct.cli.output import emit
+from aqueduct.executor.models import concise_error
+from aqueduct.parser.models import ModuleType
 
 
 @cli.command()
@@ -70,15 +72,17 @@ def compile(
     """
     from pathlib import Path
 
+    from aqueduct.cli import _load_config_with_env
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
+    from aqueduct.config import ConfigError
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.config import load_config, ConfigError
     try:
-        _cfg = load_config(None)
+        # Auto-discover aqueduct.yml (CWD walk-up) like every other command.
+        _cfg = _load_config_with_env(None, quiet=True)
         _apply_warnings_from_cfg(_cfg)
     except ConfigError:
-        pass  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
+        _cfg = None  # missing/invalid aqueduct.yml is OK for `aqueduct compile`
 
     cli_overrides: dict[str, str] = {}
     for item in ctx:
@@ -104,8 +108,11 @@ def compile(
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
+        _dep = getattr(_cfg, "deployment", None) if _cfg is not None else None
         manifest = _compile_with_warnings(
-            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date
+            compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date,
+            deployment_env=getattr(_dep, "env", None),
+            deployment_target=getattr(_dep, "target", None),
         )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)
@@ -236,6 +243,636 @@ def _zero_token_attempt(sig_exact):
                            gate_that_rejected=None, escalated=False)
 
 
+from dataclasses import dataclass as _dc_frozen  # noqa: E402  (intentional mid-file import)
+from typing import TYPE_CHECKING as _t  # noqa: E402  (intentional mid-file import)
+
+if _t:
+    from aqueduct.config import AqueductConfig, WebhookEndpointConfig
+    from aqueduct.executor.spark.probe import ProbeSampling as _PS
+
+
+@_dc_frozen(frozen=True)
+class _LoadConfigResult:
+    """Return-type bundle for ``_load_engine_config`` — all values derived from
+    config/env/CLI resolution, before parse/compile/execute."""
+    cfg: AqueductConfig
+    resolved_store_dir: str | None
+    resolved_webhook: WebhookEndpointConfig | None
+    engine: str
+    master_url: str
+    probe_sampling: _PS
+    blueprint_set_nested: dict
+    _using_default_obs_path: bool
+    _obs_routing_base: str
+    execute: object  # get_executor callable — deferred type
+    blueprint_str: str  # = str(blueprint_abs)
+    danger_pairs: tuple = ()  # (rule_id, message) — emitted by the caller after
+    # the `· env/overrides/secrets ·` preamble so info lines stay grouped
+
+
+def _load_engine_config(
+    blueprint_abs,
+    config_path_abs,
+    store_dir_abs,
+    webhook,
+    set_items,
+    env_file,
+    cli_env,
+    _project_root,
+):
+    """Phase 1 — config load + env + --set overrides → ``_LoadConfigResult``.
+
+    Extracted from the ``run()`` god-function (T18).  No behaviour change.
+    """
+    import sys as _sys
+
+    from aqueduct.cli import _resolve_and_load_env as _renv
+    from aqueduct.cli.style import error as _err
+    from aqueduct.cli.style import warn as _warn
+
+    # ── .env loading ───────────────────────────────────────────────────────────
+    _renv(env_file, _project_root / blueprint_abs.name, cli_env=cli_env)
+    blueprint_str = str(blueprint_abs)
+
+    # ── Load engine config ─────────────────────────────────────────────────────
+    try:
+        from aqueduct.config import ConfigError, WebhookEndpointConfig
+        from aqueduct.config import load_config as _load_cfg
+        cfg = _load_cfg(config_path_abs)
+        from aqueduct.cli import _apply_warnings_from_cfg
+        _apply_warnings_from_cfg(cfg)
+    except ConfigError as exc:
+        _err(f"config error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
+    blueprint_set_nested: dict = {}
+    if set_items:
+        from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
+        try:
+            _config_set_nested, blueprint_set_nested = route_overrides(
+                set_items, allow_blueprint=True
+            )
+            cfg = apply_to_model(cfg, _config_set_nested)
+        except OverrideError as exc:
+            click.echo(f"✗ {exc}", err=True)
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _config_set_nested.get("danger"):
+            _warn(
+                f"--set DANGER override(s) (single-run, NOT persisted): "
+                f"{_config_set_nested['danger']}"
+            )
+
+    # ── Store dir resolution ───────────────────────────────────────────────────
+    # 2.0: the duckdb observability path is a routing DIRECTORY only (config
+    # load rejects `.db`-suffixed paths) — per-blueprint files always live at
+    # `<base>/<blueprint_id>/observability.db`. `--store-dir` bypasses routing.
+    _using_default_obs_path = False
+    _obs_routing_base = ".aqueduct/observability"
+    if store_dir_abs:
+        resolved_store_dir = store_dir_abs
+    else:
+        resolved_store_dir = None
+        _observability_path = cfg.stores.observability.path
+        if cfg.stores.observability.backend == "duckdb":
+            _using_default_obs_path = True
+            if _observability_path is not None:
+                _obs_routing_base = _observability_path
+
+    resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
+    engine = cfg.deployment.engine
+    master_url = cfg.deployment.master_url
+
+    # ── Danger settings startup warning ──────────────────────────────────────
+    danger_pairs = []
+    if cfg.danger.allow_full_probe_actions:
+        danger_pairs.append((
+            "danger-full-probe-actions",
+            "allow_full_probe_actions=true — full Spark actions in Probes enabled",
+        ))
+    if cfg.danger.allow_multi_patch:
+        danger_pairs.append((
+            "danger-multi-patch",
+            "allow_multi_patch=true — successive LLM patches without human review",
+        ))
+    if cfg.danger.allow_full_preflight:
+        danger_pairs.append((
+            "danger-full-preflight",
+            "allow_full_preflight=true — full-dataset sandbox replay (no Egress writes)",
+        ))
+    if cfg.danger.allow_skip_sandbox:
+        danger_pairs.append((
+            "danger-skip-sandbox",
+            "allow_skip_sandbox=true — patches go straight to production, no sandbox",
+        ))
+    if cfg.danger.allow_command_hooks:
+        danger_pairs.append((
+            "danger-command-hooks",
+            "allow_command_hooks=true — blueprint `command:` hooks run arbitrary subprocesses",
+        ))
+    # Emission deferred to the caller (after the info-line preamble) so the
+    # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
+
+    # ── Executor resolve ──────────────────────────────────────────────────────
+    try:
+        from aqueduct.executor import get_executor
+        execute = get_executor(engine)
+    except (NotImplementedError, ValueError) as exc:
+        _err(f"engine error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── Probe sampling ────────────────────────────────────────────────────────
+    from aqueduct.executor.spark.probe import ProbeSampling
+    probes_cfg = cfg.probes
+    probe_sampling = ProbeSampling(
+        max_sample_rows=probes_cfg.max_sample_rows,
+        default_sample_fraction=probes_cfg.default_sample_fraction,
+    )
+
+    return _LoadConfigResult(
+        cfg=cfg,
+        resolved_store_dir=resolved_store_dir,
+        resolved_webhook=resolved_webhook,
+        engine=engine,
+        master_url=master_url,
+        probe_sampling=probe_sampling,
+        blueprint_set_nested=blueprint_set_nested,
+        _using_default_obs_path=_using_default_obs_path,
+        _obs_routing_base=_obs_routing_base,
+        execute=execute,
+        blueprint_str=blueprint_str,
+        danger_pairs=tuple(danger_pairs),
+    )
+
+
+@_dc_frozen(frozen=True)
+class _CompileResult:
+    """Return-type bundle for ``_do_compile`` — parse + compile → manifest + store wiring."""
+    manifest: object  # Manifest
+    bundle: object     # StoreBundle
+    depot: object      # DepotStore
+    depots_wrapped: dict
+    execution_date: object
+    cli_overrides: dict
+    compile_warnings: list  # captured AQ-WARN records, emitted after the run header
+
+
+def _emit_explain_regressions(g4) -> None:
+    """Surface explain-gate plan regressions as rule_id'd warnings.
+
+    Standardised (``⚠ [explain_regression] …`` via the output funnel, greppable +
+    suppressible) and called on BOTH the LLM-apply and the zero-token replay
+    paths, so a replayed patch's plan regression is no longer silently dropped
+    while the LLM path printed it."""
+    if g4 is None or getattr(g4, "status", None) != "warn":
+        return
+    from aqueduct.cli.output import warn as _warn
+    for _r in getattr(g4, "regressions", ()) or ():
+        _warn("explain_regression", _r.detail)
+
+
+def _do_compile(
+    blueprint,
+    profile,
+    ctx,
+    execution_date_str,
+    store_dir_abs,
+    cfg,
+    verbose,
+    blueprint_set_nested,
+):
+    """Phase 2 — parse blueprint + build stores + compile → ``_CompileResult``."""
+    try:
+        import sys as _sys
+        from pathlib import Path as _P
+
+        from aqueduct.cli import _compile_with_warnings
+        from aqueduct.cli.style import error as _err
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.depot.depot import DepotStore as _DS
+        from aqueduct.parser.parser import ParseError
+        from aqueduct.parser.parser import parse as _parse
+    except ImportError as exc:
+        raise RuntimeError(f"compile dependencies missing: {exc}") from exc
+
+    cli_overrides: dict[str, str] = {}
+    for item in ctx:
+        if "=" not in item:
+            click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
+            _sys.exit(exit_codes.USAGE_ERROR)
+        k, _, v = item.partition("=")
+        cli_overrides[k.strip()] = v
+
+    # ── Parse --execution-date ─────────────────────────────────────────────────
+    execution_date = None
+    if execution_date_str:
+        from datetime import date as _date
+        try:
+            execution_date = _date.fromisoformat(execution_date_str)
+        except ValueError:
+            click.echo(f"\u2717 --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
+            _sys.exit(exit_codes.USAGE_ERROR)
+
+    # ── Parse ──────────────────────────────────────────────────────────────────
+    try:
+        if blueprint_set_nested:
+            import yaml as _yaml
+
+            from aqueduct.overrides import deep_merge as _deep_merge
+            from aqueduct.parser.parser import parse_dict
+            _raw_bp = _yaml.safe_load(_P(blueprint).read_text(encoding="utf-8")) or {}
+            _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
+            bp = parse_dict(
+                _raw_bp, base_dir=_P(blueprint).parent,
+                profile=profile, cli_overrides=cli_overrides or None,
+            )
+        else:
+            bp = _parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
+    except ParseError as exc:
+        _err(f"parse error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    # ── Build per-run store bundle ─────────────────────────────────────────────
+    from aqueduct.stores import get_stores
+    bundle = get_stores(cfg, store_dir_override=store_dir_abs, blueprint_id=bp.id)
+    depot = _DS(backend=bundle.depot)
+    depots_wrapped = {n: _DS(backend=s) for n, s in bundle.depots.items()}
+
+    # ── Compile ────────────────────────────────────────────────────────────────
+    try:
+        manifest, compile_warnings = _compile_with_warnings(
+            compiler_compile,
+            bp,
+            blueprint_path=_P(blueprint),
+            depot=depot,
+            depots=depots_wrapped,
+            execution_date=execution_date,
+            secrets_provider=cfg.secrets.provider,
+            secrets_region=cfg.secrets.region,
+            secrets_resolver=cfg.secrets.resolver,
+            deployment_env=getattr(cfg.deployment, "env", None),
+            deployment_target=getattr(cfg.deployment, "target", None),
+            _verbose=verbose,
+            _defer=True,  # emit after the run header (tier-2 blueprint warnings)
+        )
+    except CompileError as exc:
+        _err(f"compile error: {exc}")
+        _sys.exit(exit_codes.CONFIG_ERROR)
+
+    return _CompileResult(
+        manifest=manifest,
+        bundle=bundle,
+        depot=depot,
+        depots_wrapped=depots_wrapped,
+        execution_date=execution_date,
+        cli_overrides=cli_overrides,
+        compile_warnings=compile_warnings,
+    )
+
+
+@_dc_frozen(frozen=True)
+class _SurveyorSetupResult:
+    """Return-type bundle for ``_setup_surveyor`` — surveyor, session, agent config, etc."""
+    resolved_store_dir: object
+    patches_dir: object
+    run_id: str
+    approval_mode: str
+    max_patches: int
+    _is_multi_patch: bool
+    resolved_agent_provider: str | None
+    resolved_agent_base_url: str | None
+    resolved_agent_model: str | None
+    resolved_agent_provider_options: object | None
+    resolved_agent_timeout: int | None
+    resolved_agent_max_reprompts: int | None
+    resolved_agent_api_key: str | None
+    resolved_agent_engine_prompt_context: str | None
+    resolved_agent_blueprint_prompt_context: str | None
+    resolved_agent_cascade: object | None
+    resolved_sandbox_master_url: str | None
+    surveyor: object
+    _obs_store: object
+    _patch_store: object
+    session: object
+    bundle: object
+    depot: object
+    _r: object  # click.style rule for banner
+
+
+def _setup_surveyor(
+    resolved_store_dir,
+    manifest,
+    cfg,
+    _obs_routing_base,
+    _using_default_obs_path,
+    verbose,
+    allow_multi_patch_flag,
+    _project_root,
+    blueprint_str,
+    run_id,
+    from_module,
+    to_module,
+    execution_date,
+    engine,
+    master_url,
+    resolved_webhook,
+    bundle,
+    depot,
+    compile_warnings,
+):
+    """Phase 3 — warnings, gates, surveyor creation, engine session → ``_SurveyorSetupResult``."""
+    import sys as _sys
+    import uuid as _uuid
+    import warnings as _w
+    from pathlib import Path as _P
+
+
+    with _w.catch_warnings(record=True) as _setup_caught:
+        _w.simplefilter("always")
+
+        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ──
+        if resolved_store_dir is None:
+            resolved_store_dir = _P(_obs_routing_base) / manifest.blueprint_id
+            resolved_store_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── Cluster-mode store path warning ───────────────────────────────────────
+        if (
+            cfg.deployment.env in ("cluster", "cloud")
+            and cfg.stores.observability.backend == "duckdb"
+            and not resolved_store_dir.is_absolute()
+        ):
+            from aqueduct.warnings import emit as _emit_warning
+            _emit_warning(
+                "cluster_store_path_relative",
+                f"relative store dir {str(resolved_store_dir)!r} on env="
+                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
+                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
+            )
+
+        # ── Multi-patch danger gate ───────────────────────────────────────────────
+        _max_patches = manifest.agent.max_patches if manifest.agent else 1
+        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
+        _is_multi_patch = (
+            _mode == "auto"
+            and _max_patches > 1
+        )
+        if _is_multi_patch and not allow_multi_patch_flag:
+            if not cfg.danger.allow_multi_patch:
+                click.echo(
+                    f"\u2717 max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
+                    "in aqueduct.yml, or pass --allow-multi-patch for this run.",
+                    err=True,
+                )
+                _sys.exit(exit_codes.CONFIG_ERROR)
+
+        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
+        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
+            click.echo(
+                "\u2717 agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
+                "in aqueduct.yml (full-dataset sandbox replay).",
+                err=True,
+            )
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
+            click.echo(
+                "\u2717 agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
+                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
+                err=True,
+            )
+            _sys.exit(exit_codes.CONFIG_ERROR)
+        if _sandbox_mode == "preflight":
+            click.echo(
+                "\u26a0 sandbox mode: preflight (full-dataset replay, no Egress) \u2014 slow but conclusive",
+                err=True,
+            )
+        elif _sandbox_mode == "off":
+            click.echo(
+                "\u26a0 DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
+                err=True,
+            )
+        if _sandbox_mode == "off" and _is_multi_patch:
+            click.echo(
+                "\u26a0 DANGER COMBO: sandbox_mode=off + max_patches > 1 \u2014 every Agent patch "
+                f"applies to real data without pre-validation, up to max_patches="
+                f"{_max_patches} times per failure. Use only when you "
+                "fully trust the model and blueprint scope is tiny.",
+                err=True,
+            )
+
+        # ── Pending patch check ────────────────────────────────────────────────────
+        patches_dir = _project_root / "patches"
+        pending_dir = patches_dir / "pending"
+        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
+        if pending_patches:
+            policy = manifest.agent.on_pending_patches
+            _np = len(pending_patches)
+            _noun = "patch" if _np == 1 else "patches"
+            if policy == "block":
+                names = ", ".join(p.stem for p in pending_patches)
+                click.echo(
+                    f"\u2717 blocked \u2014 {_np} pending {_noun} unreviewed: {names}\n"
+                    f"  Review: aqueduct patch apply <file> --blueprint {blueprint_str}\n"
+                    f"  Reject: aqueduct patch reject <patch_id> --reason '...'",
+                    err=True,
+                )
+                _sys.exit(exit_codes.CONFIG_ERROR)
+            elif policy == "warn":
+                click.echo(
+                    click.style(f"\u26a0 {_np} pending {_noun} unreviewed", fg="yellow", bold=True)
+                    + click.style("  \u00b7  aqueduct patch list", dim=True),
+                    err=True,
+                )
+                if verbose:
+                    for p in pending_patches:
+                        click.echo(f"  \u00b7 {p.stem}", err=True)
+
+        # ── Uncommitted applied patch warning ──────────────────────────────────────
+        from aqueduct.cli import _uncommitted_applied_patches
+        uncommitted_applied = _uncommitted_applied_patches(
+            _P(blueprint_str), patches_dir, blueprint_id=manifest.blueprint_id
+        )
+        if uncommitted_applied:
+            n_uc = len(uncommitted_applied)
+            _noun = "patch" if n_uc == 1 else "patches"
+            click.echo(
+                click.style(f"\u26a0 {n_uc} applied {_noun} uncommitted", fg="yellow", bold=True)
+                + click.style(
+                    f"  \u00b7  aqueduct patch commit --blueprint {_P(blueprint_str).name}", dim=True
+                ),
+                err=True,
+            )
+
+        run_id = run_id or str(_uuid.uuid4())
+        selector_note = ""
+        if from_module or to_module:
+            parts = []
+            if from_module:
+                parts.append(f"from={from_module}")
+            if to_module:
+                parts.append(f"to={to_module}")
+            selector_note = "  [" + ", ".join(parts) + "]"
+        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
+        from aqueduct.cli import _rule
+        from aqueduct.cli.style import dim as _dim
+        _r = _dim(_rule())
+    from aqueduct.cli.style import emit_warnings as _emit_warnings
+
+    # \u2500\u2500 Header \u2014 the divider between engine/setup context (above) and this run \u2500\u2500
+    click.echo(_r)
+    _arrow = click.style('\u25b6', fg='cyan', bold=True)
+    _bp_label = click.style(manifest.blueprint_id, bold=True)
+    click.echo(
+        f"{_arrow} "
+        f"{_bp_label}  \u00b7  "
+        f"{len(manifest.modules)} modules  \u00b7  run {run_id}  \u00b7  {engine} {master_url}"
+        f"{selector_note}{exec_date_note}"
+    )
+    click.echo(_r)
+
+    # Tier 2 \u2014 blueprint + session warnings AFTER the header (the header names the
+    # blueprint they are about). Engine/config-level warnings already printed
+    # above the header; runtime probe/assert warnings come later, during execution.
+    _emit_warnings(compile_warnings, verbose=verbose, label="compile:")
+    _emit_warnings(_setup_caught, verbose=verbose, label="session:")
+
+    # The blueprint's compile warnings are now shown once (grouped). The run
+    # re-parses/re-compiles the SAME blueprint several times after this point —
+    # heal re-runs, zero-token replay, sandbox/explain gates — each of which would
+    # otherwise re-emit those identical warnings through the raw `AQ-WARN [...]`
+    # fallback formatter (they escape the initial catch_warnings block). Suppress
+    # AqueductWarning for the rest of this run so they never leak mid-execution.
+    # Runtime probe/assert warnings use logger.warning (not AqueductWarning) and
+    # are unaffected.
+    import warnings as _wmod
+
+    from aqueduct.warnings import AqueductWarning as _AqWarning
+    _wmod.simplefilter("ignore", _AqWarning)
+
+    # ── Resolve agent connection (engine defaults \u2190 blueprint overrides) ────
+    from aqueduct.cli import resolve_agent_connection
+    _rac = resolve_agent_connection(cfg.agent, manifest.agent)
+    resolved_agent_provider = _rac.provider
+    resolved_agent_base_url = _rac.base_url
+    resolved_agent_model = _rac.model
+    resolved_agent_provider_options = _rac.provider_options
+    resolved_agent_timeout = _rac.timeout
+    resolved_agent_max_reprompts = _rac.max_reprompts
+    resolved_agent_api_key = _rac.api_key
+    resolved_agent_engine_prompt_context = _rac.engine_prompt_context
+    resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
+    resolved_agent_cascade = _rac.cascade
+    resolved_sandbox_master_url = cfg.agent.sandbox_master_url
+
+    # ── Self-healing reachability pre-check (upfront) ────────────────────────────
+    # Surface a misconfigured agent at startup rather than only at heal time. Gated
+    # on the blueprint actually OPTING INTO healing — `agent.approval` is set to a
+    # non-disabled mode (human/auto/ci). The default is `disabled` (healing off),
+    # so a blueprint with no `agent:` block — or one that only configures budget/
+    # memory/connection without `approval:` — never triggers this. `agent.model`
+    # always has a default value, so it is NOT a signal of intent.
+    _heal_mode = manifest.agent.approval_mode if manifest.agent else "disabled"
+    import aqueduct.cli as _aqcli
+    # Cascade connectivity counts: a cascade tier carries its own base_url/api_key
+    # (falling back to the flat agent.* defaults). If ANY tier is reachable, healing
+    # works even when the flat agent.base_url/api_key are unset (ISSUE-045).
+    _agent_reachable = _aqcli._agent_usable(
+        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key
+    ) or _aqcli._agent_usable_with_cascade(
+        resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+        resolved_agent_cascade,
+    )
+    if _heal_mode != "disabled" and not _agent_reachable:
+        from aqueduct.cli.style import warn as _style_warn
+        _style_warn(
+            f"self-healing is enabled (agent.approval={_heal_mode}) but the agent is not "
+            f"reachable (provider={resolved_agent_provider}, no API key / base_url, and no "
+            "usable cascade tier) — failures will NOT be auto-healed. Set the API key env "
+            "var, agent.base_url, or a cascade tier base_url.",
+        )
+
+    # ── Register agent API key for redaction ─────────────────────────────────────
+    if resolved_agent_api_key:
+        from aqueduct.redaction import register as _register_secret
+        _register_secret(resolved_agent_api_key, key_hint="agent.api_key")
+
+    # ── Multi-patch disclaimer ────────────────────────────────────────────────────
+    approval_mode = manifest.agent.approval_mode
+    max_patches = manifest.agent.max_patches
+    if approval_mode == "auto" and max_patches > 1:
+        click.echo(
+            f"\u26a0  multi-patch mode \u2014 Agent will attempt up to {max_patches} patch(es). "
+            "Each patch is validated in-memory before being written to Blueprint. "
+            "Review patches/applied/ after the run.",
+            err=True,
+        )
+
+    # ── Surveyor \u2014 start ───────────────────────────────────────────────────────
+    from aqueduct.depot.depot import DepotStore as _DS
+    from aqueduct.surveyor.surveyor import Surveyor as _Surveyor
+    if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
+        from aqueduct.stores import StoreBundle
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        bundle = StoreBundle(
+            observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
+            depot=bundle.depot,
+        )
+        depot = _DS(backend=bundle.depot)
+    surveyor = _Surveyor(
+        manifest,
+        store_dir=resolved_store_dir,
+        webhook_config=resolved_webhook,
+        blueprint_path=_P(blueprint_str),
+        patches_dir=patches_dir,
+        stores=bundle,
+        blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
+        lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
+        if cfg.lineage.openlineage_url else None,
+    )
+    surveyor.start(run_id)
+    _obs_store = surveyor.observability
+    _patch_store = surveyor.patch_store()
+
+    # ── Engine session ────────────────────────────────────────────────────────────
+    merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
+    if engine == "spark":
+        from aqueduct.executor.spark.session import make_spark_session
+        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
+    else:
+        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
+
+    import atexit
+    atexit.register(session.stop)
+
+    return _SurveyorSetupResult(
+        resolved_store_dir=resolved_store_dir,
+        patches_dir=patches_dir,
+        run_id=run_id,
+        approval_mode=approval_mode,
+        max_patches=max_patches,
+        _is_multi_patch=_is_multi_patch,
+        resolved_agent_provider=resolved_agent_provider,
+        resolved_agent_base_url=resolved_agent_base_url,
+        resolved_agent_model=resolved_agent_model,
+        resolved_agent_provider_options=resolved_agent_provider_options,
+        resolved_agent_timeout=resolved_agent_timeout,
+        resolved_agent_max_reprompts=resolved_agent_max_reprompts,
+        resolved_agent_api_key=resolved_agent_api_key,
+        resolved_agent_engine_prompt_context=resolved_agent_engine_prompt_context,
+        resolved_agent_blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+        resolved_agent_cascade=resolved_agent_cascade,
+        resolved_sandbox_master_url=resolved_sandbox_master_url,
+        surveyor=surveyor,
+        _obs_store=_obs_store,
+        _patch_store=_patch_store,
+        session=session,
+        bundle=bundle,
+        depot=depot,
+        _r=_r,
+    )
+
+
 @cli.command()
 @click.argument("blueprint", type=click.Path(exists=True, dir_okay=False))
 @click.option("-p", "--profile", default=None, help="Context profile to activate")
@@ -272,11 +909,11 @@ def _zero_token_attempt(sig_exact):
     help="Logical execution date for @aq.date.* functions — enables idempotent backfills",
 )
 @click.option(
-    "--allow-multi-patch", "--allow-aggressive",
-    "allow_aggressive",
+    "--allow-multi-patch",
+    "allow_multi_patch_flag",
     is_flag=True,
     default=False,
-    help="Allow `max_patches > 1` for this run (overrides danger.allow_multi_patch=false). `--allow-aggressive` is a deprecated alias.",
+    help="Allow `max_patches > 1` for this run (overrides danger.allow_multi_patch=false).",
 )
 @_env_options
 @click.option(
@@ -285,6 +922,14 @@ def _zero_token_attempt(sig_exact):
     default=False,
     help="Execute independent DAG branches concurrently (one thread per connected component). "
          "Only beneficial when the Blueprint has multiple fully-independent source trees.",
+)
+@click.option(
+    "-v", "--verbose",
+    is_flag=True,
+    default=False,
+    help="Show the full Spark/JVM startup banner (incubator notice, log4j init, "
+         "NativeCodeLoader). Suppressed by default for cleaner output; runtime Spark "
+         "warnings always print.",
 )
 @click.option(
     "--sandbox",
@@ -323,7 +968,8 @@ def run(
     from_module: str | None,
     to_module: str | None,
     execution_date_str: str | None,
-    allow_aggressive: bool = False,
+    verbose: bool = False,
+    allow_multi_patch_flag: bool = False,
     env_file: str | None = None,
     cli_env: tuple[str, ...] = (),
     parallel: bool = False,
@@ -336,14 +982,9 @@ def run(
     import uuid
     from pathlib import Path
 
-    from aqueduct.compiler.compiler import CompileError
-    from aqueduct.compiler.compiler import compile as compiler_compile
-    from aqueduct.config import ConfigError, WebhookEndpointConfig, load_config
-    from aqueduct.depot.depot import DepotStore
-    from aqueduct.executor import ExecuteError, get_executor
-    from aqueduct.executor.models import ExecutionResult, ModuleResult
+    from aqueduct.executor import ExecuteError
+    from aqueduct.executor.models import ExecutionResult, ExecutionStatus, ModuleResult
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.surveyor.surveyor import Surveyor
 
     # ── Anchor CWD to project root ────────────────────────────────────────────
     # Resolve all CLI-supplied paths to absolute BEFORE chdir so that relative
@@ -363,168 +1004,124 @@ def run(
     if config_path_abs:
         _project_root = config_path_abs.parent
     else:
-        _project_root = blueprint_abs.parent
-        _search = blueprint_abs.parent
-        for _ in range(8):
-            if (_search / "aqueduct.yml").exists():
-                _project_root = _search
-                break
-            if _search.parent == _search:
-                break
-            _search = _search.parent
+        from aqueduct.cli import _resolve_project_root
+        _project_root = _resolve_project_root(blueprint_path=blueprint_abs)
 
     _original_cwd = os.getcwd()
     os.chdir(_project_root)
     try:
-        # ── .env loading (after project root, before config so vars resolve) ──
-        # Anchor on _project_root so the helper loads <project_root>/.env
-        # (config dir, else blueprint dir walked up). cwd discovery was
-        # dropped Phase 30 — this keeps the project .env working without it.
-        _resolve_and_load_env(
-            env_file, _project_root / blueprint_abs.name, cli_env=cli_env
+        _lcr = _load_engine_config(
+            blueprint_abs=blueprint_abs,
+            config_path_abs=config_path_abs,
+            store_dir_abs=store_dir_abs,
+            webhook=webhook,
+            set_items=set_items,
+            env_file=env_file,
+            cli_env=cli_env,
+            _project_root=_project_root,
         )
-        # Rebind blueprint to absolute so all downstream code is CWD-agnostic.
-        blueprint = str(blueprint_abs)
+        blueprint = _lcr.blueprint_str
+        cfg = _lcr.cfg
+        resolved_store_dir = _lcr.resolved_store_dir
+        resolved_webhook = _lcr.resolved_webhook
+        engine = _lcr.engine
+        master_url = _lcr.master_url
+        probe_sampling = _lcr.probe_sampling
+        blueprint_set_nested = _lcr.blueprint_set_nested
+        _using_default_obs_path = _lcr._using_default_obs_path
+        _obs_routing_base = _lcr._obs_routing_base
+        execute = _lcr.execute
 
-        # ── Load engine config ─────────────────────────────────────────────────────
-        try:
-            cfg = load_config(config_path_abs)
-            _apply_warnings_from_cfg(cfg)
-        except ConfigError as exc:
-            click.echo(f"✗ config error: {exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── -s/--set overrides (top precedence, in-memory) ──────────────────────────
-        # Applied BEFORE engine/master/danger are read below; blueprint-targeted
-        # overrides (agent.*) are overlaid on the raw Blueprint dict at parse time.
-        blueprint_set_nested: dict = {}
+        # ── Resolution preamble — surface the non-default inputs shaping this run
+        # (dim info lines next to the `· env ·` notice). Keys only for --set:
+        # values may embed secrets that were never registered for redaction.
+        from aqueduct.cli.style import info as _preamble_info
+        _over_parts = []
         if set_items:
-            from aqueduct.overrides import OverrideError, apply_to_model, route_overrides
-            try:
-                _config_set_nested, blueprint_set_nested = route_overrides(
-                    set_items, allow_blueprint=True
-                )
-                cfg = apply_to_model(cfg, _config_set_nested)
-            except OverrideError as exc:
-                click.echo(f"✗ {exc}", err=True)
-                sys.exit(exit_codes.CONFIG_ERROR)
-            if _config_set_nested.get("danger"):
-                click.echo(click.style(
-                    f"⚠  --set DANGER override(s) (single-run, NOT persisted): "
-                    f"{_config_set_nested['danger']}", fg="red", bold=True,
-                ), err=True)
+            _set_keys = ", ".join(i.partition("=")[0].strip() for i in set_items)
+            _over_parts.append(f"--set {_set_keys}")
+        if ctx:
+            _over_parts.append(f"--ctx {len(ctx)} key(s)")
+        if profile:
+            _over_parts.append(f"profile: {profile}")
+        if _over_parts:
+            _preamble_info("· overrides  ·  " + "  ·  ".join(_over_parts), err=True)
+        if cfg.secrets.provider != "env":
+            _preamble_info(f"· secrets  ·  provider: {cfg.secrets.provider}", err=True)
+        if _lcr.danger_pairs:
+            from aqueduct.cli.style import emit_warning_pairs
+            emit_warning_pairs(list(_lcr.danger_pairs), label="danger:", err=True)
 
-        # CLI flags override config file; config file overrides built-in defaults
-        # Per-pipeline store paths: default .aqueduct/observability/<blueprint_id>.db instead of shared observability.db
-        # _using_default_obs_path: only the default path gets relocated to a
-        # per-pipeline .aqueduct/observability/<blueprint_id>/ dir below. A
-        # user-set observability.path / lineage.path is already honoured
-        # verbatim by get_stores() and must NOT be clobbered (ISSUE-024).
-        _using_default_obs_path = False
-        if store_dir_abs:
-            resolved_store_dir = store_dir_abs
-        else:
-            _observability_path = cfg.stores.observability.path
-            _default_obs = ".aqueduct/observability.db"
-            if cfg.stores.observability.backend != "duckdb":
-                # Non-DuckDB (postgres/redis): `path` is a DSN, NOT a
-                # filesystem path — never Path()/mkdir it (would create a
-                # bogus `postgresql:/user:pass@host:port` dir). The DSN store
-                # persists itself; use the default per-pipeline local scratch
-                # dir (.aqueduct/observability/<blueprint_id>) for any
-                # residual local artifacts only.
-                resolved_store_dir = None  # set below after manifest
-            elif _observability_path == _default_obs:
-                _using_default_obs_path = True
-                # Defer to after manifest is parsed (need blueprint_id) — placeholder for now
-                resolved_store_dir = None  # set below after manifest
-            else:
-                resolved_store_dir = Path(_observability_path).parent
-        # --webhook CLI flag (plain URL) overrides aqueduct.yml; config may be full WebhookEndpointConfig
-        resolved_webhook = WebhookEndpointConfig(url=webhook) if webhook else cfg.webhooks.on_failure
-        engine = cfg.deployment.engine
-        master_url = cfg.deployment.master_url
-
-        # ── Danger settings startup warning ──────────────────────────────────────
-        danger_active = []
-        if cfg.danger.allow_full_probe_actions:
-            danger_active.append("allow_full_probe_actions=true")
-        if cfg.danger.allow_multi_patch:
-            danger_active.append("allow_multi_patch=true")
-        if danger_active:
+        # ── Phase 63 / 64 — remote-submit targets branch ──────────────────────────
+        _REMOTE_TARGETS = frozenset({"databricks", "emr", "dataproc"})
+        if cfg.deployment.target in _REMOTE_TARGETS:
+            from aqueduct.deploy import get_submitter
+            _submitter = get_submitter(cfg.deployment.target, cfg)
             click.echo(
-                f"⚠  DANGER settings active: {', '.join(danger_active)}",
+                "⚠ self-healing is disabled for remote targets — "
+                "failures must be handled by the orchestrator",
                 err=True,
             )
-
-        # Resolve executor early so an unsupported engine exits before any Spark work
-        try:
-            execute = get_executor(engine)
-        except (NotImplementedError, ValueError) as exc:
-            click.echo(f"✗ engine error: {exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
-
-        cli_overrides: dict[str, str] = {}
-        for item in ctx:
-            if "=" not in item:
-                click.echo(f"--ctx flag must be KEY=VALUE, got: {item!r}", err=True)
-                sys.exit(exit_codes.USAGE_ERROR)
-            k, _, v = item.partition("=")
-            cli_overrides[k.strip()] = v
-
-        # ── Parse --execution-date ─────────────────────────────────────────────────
-        execution_date = None
-        if execution_date_str:
-            from datetime import date as _date
             try:
-                execution_date = _date.fromisoformat(execution_date_str)
-            except ValueError:
-                click.echo(f"✗ --execution-date must be YYYY-MM-DD, got: {execution_date_str!r}", err=True)
-                sys.exit(exit_codes.USAGE_ERROR)
+                _bp_raw = parse(blueprint, profile=profile)
+                _bp_agent = getattr(_bp_raw, "agent", None)
+                _approval_mode = getattr(_bp_agent, "approval_mode", None) if _bp_agent else None
+                if _approval_mode and _approval_mode not in ("disabled", None):
+                    click.echo(
+                        f"  ⊘ agent.approval_mode={_approval_mode!r} is ignored for "
+                        "remote-submit targets",
+                        err=True,
+                    )
+            except ParseError:
+                pass
+            try:
+                _packaged = _submitter.package(blueprint, cfg)
+            except Exception as exc:
+                click.echo(f"✗ remote package failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-        # ── Build per-run store bundle (Phase 28 — DuckDB / Postgres / Redis dispatch) ─
-        # Depot must be ready before compile() so @aq.depot.get() in the
-        # Blueprint can resolve.
-        from aqueduct.stores import get_stores
-        bundle = get_stores(cfg, store_dir_override=store_dir_abs)
-        depot = DepotStore(backend=bundle.depot)
+            try:
+                _job_id = _submitter.submit(_packaged, cfg)
+                click.echo(f"  → submitted remote job  id={_job_id}", err=True)
+            except Exception as exc:
+                click.echo(f"✗ remote submit failed: {exc}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-        # ── Parse ──────────────────────────────────────────────────────────────────
-        try:
-            if blueprint_set_nested:
-                # Overlay blueprint-targeted --set values (e.g. agent.approval_mode)
-                # on the raw Blueprint dict, then parse so schema validation +
-                # extra="forbid" still apply to the overridden values.
-                import yaml as _yaml
-                from aqueduct.overrides import deep_merge as _deep_merge
-                from aqueduct.parser.parser import parse_dict
-                _raw_bp = _yaml.safe_load(Path(blueprint).read_text(encoding="utf-8")) or {}
-                _raw_bp = _deep_merge(_raw_bp, blueprint_set_nested)
-                bp = parse_dict(
-                    _raw_bp, base_dir=Path(blueprint).parent,
-                    profile=profile, cli_overrides=cli_overrides or None,
-                )
+            _remote_result = _submitter.poll(_job_id, cfg)
+            _logs = _submitter.fetch_logs(_job_id, cfg) if _remote_result.status == ExecutionStatus.ERROR else ""
+
+            if _remote_result.status == ExecutionStatus.SUCCESS:
+                for mr in _remote_result.module_results:
+                    icon = "✓" if mr.status == ExecutionStatus.SUCCESS else "✗"
+                    line = f"  {icon} {mr.module_id}"
+                    if mr.error:
+                        line += f"  — {concise_error(mr.error)}"
+                    click.echo(line)
+                from aqueduct.cli.style import dim as _dim
+                click.echo(_dim(_rule()))
+                click.echo(f"{click.style('✓', fg='green', bold=True)} blueprint complete")
+                sys.exit(exit_codes.SUCCESS)
             else:
-                bp = parse(blueprint, profile=profile, cli_overrides=cli_overrides or None)
-        except ParseError as exc:
-            click.echo(f"✗ parse error: {exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
+                if _logs:
+                    click.echo(f"\n── remote logs ──\n{_logs}\n──", err=True)
+                click.echo(f"\n✗ remote job failed  run_id={run_id}", err=True)
+                sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-        # ── Compile ────────────────────────────────────────────────────────────────
-        try:
-            manifest = _compile_with_warnings(
-                compiler_compile,
-                bp,
-                blueprint_path=Path(blueprint),
-                depot=depot,
-                execution_date=execution_date,
-                secrets_provider=cfg.secrets.provider,
-                secrets_region=cfg.secrets.region,
-                secrets_resolver=cfg.secrets.resolver,
-            )
-        except CompileError as exc:
-            click.echo(f"✗ compile error: {exc}", err=True)
-            sys.exit(exit_codes.CONFIG_ERROR)
+        _cr = _do_compile(
+            blueprint=blueprint,
+            profile=profile,
+            ctx=ctx,
+            execution_date_str=execution_date_str,
+            store_dir_abs=store_dir_abs,
+            cfg=cfg,
+            verbose=verbose,
+            blueprint_set_nested=blueprint_set_nested,
+        )
+        manifest = _cr.manifest
+        bundle = _cr.bundle
+        depot = _cr.depot
+        execution_date = _cr.execution_date
+        cli_overrides = _cr.cli_overrides
 
         # ── Sandbox dry-run (short-circuit) ──────────────────────────────────────
         # Dev loop: run the compiled pipeline against sampled inputs with every
@@ -533,6 +1130,7 @@ def run(
         # transform so behaviour matches Gate 3.
         if sandbox:
             import atexit
+
             from aqueduct.patch.preview import build_sandbox_manifest
 
             if engine != "spark":
@@ -541,7 +1139,7 @@ def run(
 
             sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample)
             merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex[:8]}"
+            sandbox_run_id = f"sandbox-{run_id or uuid.uuid4().hex}"  # full uuid — queryable, no collisions
 
             _limit_desc = f"≤{sample} row(s)/Ingress" if sample and sample > 0 else "no row limit"
             click.echo(
@@ -551,7 +1149,7 @@ def run(
             )
 
             from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
+            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
             atexit.register(session.stop)
 
             try:
@@ -565,22 +1163,25 @@ def run(
                     to_module=to_module,
                     block_full_actions=not cfg.danger.allow_full_probe_actions,
                     parallel=parallel,
+                    sampling=probe_sampling,
                 )
             except ExecuteError as exc:
                 click.echo(f"✗ sandbox run failed: {exc}", err=True)
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-            if result.status != "success":
-                failing = next((r for r in result.module_results if r.status == "error"), None)
+            if result.status != ExecutionStatus.SUCCESS:
+                failing = next((r for r in result.module_results if r.status == ExecutionStatus.ERROR), None)
                 detail = f" — first error in {failing.module_id!r}: {failing.error}" if failing else ""
-                click.echo(click.style(f"✗ sandbox run status={result.status}{detail}", fg="red"), err=True)
+                from aqueduct.cli.style import error as _style_error
+                _style_error(f"sandbox run status={result.status}{detail}")
                 sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-            _ran = sum(1 for r in result.module_results if r.status == "success")
-            click.echo(click.style(
-                f"✓ sandbox run succeeded — {_ran} module(s) executed, "
-                f"{len(egress_targets)} Egress skipped", fg="green",
-            ))
+            _ran = sum(1 for r in result.module_results if r.status == ExecutionStatus.SUCCESS)
+            from aqueduct.cli.style import success as _style_success
+            _style_success(
+                f"sandbox run succeeded — {_ran} module(s) executed, "
+                f"{len(egress_targets)} Egress skipped"
+            )
             for tgt in egress_targets:
                 click.echo(
                     f"    · skipped Egress {tgt['id']!r} → "
@@ -589,197 +1190,50 @@ def run(
                 )
             sys.exit(exit_codes.SUCCESS)
 
-        # ── Resolve per-pipeline store dir (needs blueprint_id from manifest) ────────
-        if resolved_store_dir is None:
-            resolved_store_dir = Path(f".aqueduct/observability/{manifest.blueprint_id}")
-            resolved_store_dir.mkdir(parents=True, exist_ok=True)
-
-        # ── Cluster-mode store path warning ───────────────────────────────────────
-        # Standardized AQ-WARN rule (suppressible). Same rule_id + condition as
-        # doctor's `cluster-stores` check — single source of truth, one wording.
-        if cfg.deployment.env in ("cluster", "cloud") and not resolved_store_dir.is_absolute():
-            from aqueduct.warnings import emit as _emit_warning
-            _emit_warning(
-                "cluster_store_path_relative",
-                f"relative store dir {str(resolved_store_dir)!r} on env="
-                f"{cfg.deployment.env!r} — lost on driver restart (ephemeral CWD on "
-                "YARN/K8s). Set stores.observability.path to an absolute shared-FS path.",
-            )
-
-        # ── Multi-patch danger gate ───────────────────────────────────────────────
-        # 1.1.0 — gate now keys off `max_patches > 1`, not the legacy
-        # `approval_mode: aggressive` string. The legacy `aggressive` string
-        # is preserved on the Manifest so downstream branching that still
-        # checks for it keeps working; deprecation warning is emitted at
-        # parse time.
-        _max_patches = manifest.agent.max_patches if manifest.agent else 1
-        _mode = manifest.agent.approval_mode if manifest.agent else "disabled"
-        # Only auto / aggressive actually drive the multi-patch loop; for
-        # human / ci / disabled the `max_patches` value is inert, so don't
-        # fail closed on the danger gate just because the field is set high.
-        _is_multi_patch = (
-            _mode in ("auto", "aggressive")
-            and (_max_patches > 1 or _mode == "aggressive")
+        _ssr = _setup_surveyor(
+            resolved_store_dir=resolved_store_dir,
+            manifest=manifest,
+            cfg=cfg,
+            _obs_routing_base=_obs_routing_base,
+            _using_default_obs_path=_using_default_obs_path,
+            verbose=verbose,
+            allow_multi_patch_flag=allow_multi_patch_flag,
+            _project_root=_project_root,
+            blueprint_str=blueprint,
+            run_id=run_id,
+            from_module=from_module,
+            to_module=to_module,
+            execution_date=execution_date,
+            engine=engine,
+            master_url=master_url,
+            resolved_webhook=resolved_webhook,
+            bundle=bundle,
+            depot=depot,
+            compile_warnings=_cr.compile_warnings,
         )
-        if _is_multi_patch and not allow_aggressive:
-            if not cfg.danger.allow_multi_patch:
-                click.echo(
-                    f"✗ max_patches={_max_patches} (>1) requires danger.allow_multi_patch: true "
-                    "in aqueduct.yml, or pass --allow-multi-patch for this run "
-                    "(legacy alias: --allow-aggressive).",
-                    err=True,
-                )
-                sys.exit(exit_codes.CONFIG_ERROR)
-
-        # ── Sandbox-mode danger gates ─────────────────────────────────────────────
-        _sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
-        if _sandbox_mode == "preflight" and not cfg.danger.allow_full_preflight:
-            click.echo(
-                "✗ agent.sandbox_mode: preflight requires danger.allow_full_preflight: true "
-                "in aqueduct.yml (full-dataset sandbox replay).",
-                err=True,
-            )
-            sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "off" and not cfg.danger.allow_skip_sandbox:
-            click.echo(
-                "✗ agent.sandbox_mode: off requires danger.allow_skip_sandbox: true "
-                "in aqueduct.yml (skips pre-apply validation; patches hit real data).",
-                err=True,
-            )
-            sys.exit(exit_codes.CONFIG_ERROR)
-        if _sandbox_mode == "preflight":
-            click.echo(
-                "⚠ sandbox mode: preflight (full-dataset replay, no Egress) — slow but conclusive",
-                err=True,
-            )
-        elif _sandbox_mode == "off":
-            click.echo(
-                "⚠ DANGER: sandbox mode = off (skipping pre-apply replay; patches apply to real data)",
-                err=True,
-            )
-        # Double-danger combo — sandbox off + auto multi-patch loop
-        if _sandbox_mode == "off" and _is_multi_patch:
-            click.echo(
-                "⚠ DANGER COMBO: sandbox_mode=off + max_patches > 1 — every LLM patch "
-                f"applies to real data without pre-validation, up to max_patches="
-                f"{_max_patches} times per failure. Use only when you "
-                "fully trust the model and blueprint scope is tiny.",
-                err=True,
-            )
-
-        # ── Pending patch check ────────────────────────────────────────────────────
-        patches_dir = _project_root / "patches"
-        pending_dir = patches_dir / "pending"
-        pending_patches = list(pending_dir.glob("*.json")) if pending_dir.exists() else []
-        if pending_patches:
-            policy = manifest.agent.on_pending_patches
-            names = ", ".join(p.stem for p in pending_patches)
-            msg = (
-                f"⚠ {len(pending_patches)} pending patch(es) unreviewed: {names}\n"
-                f"  Review with: aqueduct patch apply <file> --blueprint {blueprint}\n"
-                f"  Reject with: aqueduct patch reject <patch_id> --reason '...'"
-            )
-            if policy == "block":
-                click.echo(f"✗ blocked — {msg}", err=True)
-                sys.exit(exit_codes.CONFIG_ERROR)
-            elif policy == "warn":
-                click.echo(msg, err=True)
-
-        # ── Uncommitted applied patch warning ──────────────────────────────────────
-        uncommitted_applied = _uncommitted_applied_patches(Path(blueprint), patches_dir)
-        if uncommitted_applied:
-            n_uc = len(uncommitted_applied)
-            click.echo(
-                f"⚠ {n_uc} applied patch(es) not yet committed to git — "
-                f"run 'aqueduct patch commit --blueprint {blueprint}'",
-                err=True,
-            )
-
-        run_id = run_id or str(uuid.uuid4())
-        selector_note = ""
-        if from_module or to_module:
-            parts = []
-            if from_module:
-                parts.append(f"from={from_module}")
-            if to_module:
-                parts.append(f"to={to_module}")
-            selector_note = "  [" + ", ".join(parts) + "]"
-        exec_date_note = f"  exec_date={execution_date}" if execution_date else ""
-        click.echo(
-            f"▶ {manifest.blueprint_id}  ({len(manifest.modules)} modules)"
-            f"  run={run_id}  engine={engine}  master={master_url}"
-            f"{selector_note}{exec_date_note}"
-        )
-
-        # ── Resolve agent connection (engine defaults ← blueprint overrides) ─────
-        from aqueduct.cli import resolve_agent_connection
-        _rac = resolve_agent_connection(cfg.agent, manifest.agent)
-        resolved_agent_provider = _rac.provider
-        resolved_agent_base_url = _rac.base_url
-        resolved_agent_model = _rac.model
-        resolved_agent_provider_options = _rac.provider_options
-        resolved_agent_timeout = _rac.timeout
-        resolved_agent_max_reprompts = _rac.max_reprompts
-        resolved_agent_engine_prompt_context = _rac.engine_prompt_context
-        resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
-        resolved_sandbox_master_url = cfg.agent.sandbox_master_url
-
-        # ── Multi-patch disclaimer ────────────────────────────────────────────────
-        approval_mode = manifest.agent.approval_mode
-        max_patches = manifest.agent.max_patches
-        if (approval_mode == "auto" and max_patches > 1) or approval_mode == "aggressive":
-            click.echo(
-                f"⚠  multi-patch mode — LLM will attempt up to {max_patches} patch(es). "
-                f"Each patch is validated in-memory before being written to Blueprint. "
-                f"Review patches/applied/ after the run.",
-                err=True,
-            )
-
-        # ── Surveyor — start ───────────────────────────────────────────────────────
-        # For DuckDB *defaults only* the bundle's obs store points at the shared
-        # `.aqueduct/observability.db`; rebuild it under the per-pipeline
-        # resolved_store_dir (`.aqueduct/observability/<blueprint_id>/`) like
-        # before Phase 28. A user-customised observability.path / lineage.path
-        # is already honoured verbatim by get_stores() — do NOT rebuild it,
-        # that would silently ignore the configured filename (ISSUE-024).
-        if _using_default_obs_path and cfg.stores.observability.backend == "duckdb":
-            from aqueduct.stores.duckdb_ import (
-                DuckDBObservabilityStore,
-            )
-            from aqueduct.stores import StoreBundle
-            bundle = StoreBundle(
-                observability=DuckDBObservabilityStore(resolved_store_dir / "observability.db"),
-                lineage=None,  # Phase 38: lineage merged into observability
-                depot=bundle.depot,
-            )
-            depot = DepotStore(backend=bundle.depot)
-        surveyor = Surveyor(
-            manifest,
-            store_dir=resolved_store_dir,
-            webhook_config=resolved_webhook,
-            blueprint_path=Path(blueprint),
-            patches_dir=patches_dir,
-            stores=bundle,
-            blob_config=(cfg.stores.blob.backend, cfg.stores.blob.path),
-            lineage_config=(cfg.lineage.openlineage_url, cfg.lineage.openlineage_namespace)
-            if cfg.lineage.openlineage_url else None,
-        )
-        surveyor.start(run_id)
-        # Phase 53 — object-store patch lifecycle + patch_index heal cache.
-        # Built once: the obs store backs the index, the patch store the bodies.
-        _obs_store = surveyor.observability
-        _patch_store = surveyor.patch_store()
-
-        # ── Engine session ────────────────────────────────────────────────────────
-        merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-        if engine == "spark":
-            from aqueduct.executor.spark.session import make_spark_session
-            session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url)
-        else:
-            raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
-
-        import atexit
-        atexit.register(session.stop)
+        resolved_store_dir = _ssr.resolved_store_dir
+        patches_dir = _ssr.patches_dir
+        run_id = _ssr.run_id
+        approval_mode = _ssr.approval_mode
+        max_patches = _ssr.max_patches
+        _is_multi_patch = _ssr._is_multi_patch
+        resolved_agent_provider = _ssr.resolved_agent_provider
+        resolved_agent_base_url = _ssr.resolved_agent_base_url
+        resolved_agent_model = _ssr.resolved_agent_model
+        resolved_agent_provider_options = _ssr.resolved_agent_provider_options
+        resolved_agent_timeout = _ssr.resolved_agent_timeout
+        resolved_agent_max_reprompts = _ssr.resolved_agent_max_reprompts
+        resolved_agent_api_key = _ssr.resolved_agent_api_key
+        resolved_agent_engine_prompt_context = _ssr.resolved_agent_engine_prompt_context
+        resolved_agent_blueprint_prompt_context = _ssr.resolved_agent_blueprint_prompt_context
+        resolved_agent_cascade = _ssr.resolved_agent_cascade
+        resolved_sandbox_master_url = _ssr.resolved_sandbox_master_url
+        surveyor = _ssr.surveyor
+        _obs_store = _ssr._obs_store
+        _patch_store = _ssr._patch_store
+        session = _ssr.session
+        bundle = _ssr.bundle
+        depot = _ssr.depot
 
         # ── Self-healing run loop ─────────────────────────────────────────────────
         patch_count = 0
@@ -791,6 +1245,122 @@ def run(
 
         _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
 
+        def _render_module_summary(_result) -> None:
+            """Print the per-module ✓/✗ status block for one execution result.
+
+            Called once per heal iteration right after the result is recorded, so
+            module outcomes print BEFORE that iteration's agent/heal output —
+            chronological order (execute → result → heal → next attempt). Metrics
+            are a best-effort post-execute read from the obs store (short-lived
+            connections, so the store is free by now)."""
+            _metrics: dict[str, tuple] = {}
+            try:
+                from aqueduct.stores.queries import run_detail as _run_detail
+                from aqueduct.stores.read import open_obs_read
+                _rs = open_obs_read(cfg, store_dir=store_dir, run_id=_result.run_id,
+                                    blueprint_id=manifest.blueprint_id)
+                if _rs is not None:
+                    _det = _run_detail(_rs, _result.run_id)
+                    if _det:
+                        for _p in _det.profile:
+                            _metrics[_p.module_id] = (_p.records_written, _p.duration_ms)
+            except Exception:
+                pass  # per-module profile read is best-effort; never fail for a missing metric
+
+            def _fmt_dur(ms):
+                return None if ms is None else (f"{ms} ms" if ms < 1000 else f"{ms / 1000:.1f} s")
+
+            # ⏭ reason column for `enabled: false` modules (compiler-stamped).
+            _disabled_reason = {
+                m.id: m.disabled_reason
+                for m in manifest.modules
+                if getattr(m, "disabled_reason", None)
+            }
+
+            click.echo()
+
+            def _icon(mr):
+                if mr.status == ExecutionStatus.SUCCESS:
+                    return click.style("✓", fg="green")
+                if mr.status == ExecutionStatus.SKIPPED:
+                    return click.style("⏭", fg="cyan")
+                return click.style("✗", fg="red", bold=True)
+
+            # Tree view — Arcade-expanded children (`{arcade}__{child}`, the
+            # expander's namespacing convention; `__` is rejected in user ids)
+            # nest under a synthetic parent row. Only THIS summary block nests:
+            # runtime logs, observability rows, and the failed_module footer
+            # keep the full flattened id so error correlation stays joinable.
+            _rows: list[tuple[str, object]] = []
+            _arc_children: dict[str, list] = {}
+            for mr in _result.module_results:
+                if "__" in mr.module_id:
+                    _arc = mr.module_id.split("__", 1)[0]
+                    if _arc not in _arc_children:
+                        _arc_children[_arc] = []
+                        _rows.append(("arcade", _arc))
+                    _arc_children[_arc].append(mr)
+                else:
+                    _rows.append(("module", mr))
+
+            _CHILD_PAD = 5  # child names start 5 columns deeper than top-level names
+            _w = max(
+                [len(mr.module_id) for kind, mr in _rows if kind == "module"]
+                + [len(a) for kind, a in _rows if kind == "arcade"]
+                + [len(c.module_id.split("__", 1)[1]) + _CHILD_PAD
+                   for cs in _arc_children.values() for c in cs],
+                default=0,
+            )
+
+            def _mr_line(mr, name, pad, lead, warn_prefix):
+                from aqueduct.cli.style import dim as _dim
+                if mr.status == ExecutionStatus.ERROR and mr.error:
+                    line = f"{lead}{_icon(mr)} {name}  {click.style('— ' + concise_error(mr.error), fg='red')}"
+                else:
+                    rows, dur = _metrics.get(mr.module_id, (None, None))
+                    meta = []
+                    if mr.status == ExecutionStatus.SKIPPED and mr.module_id in _disabled_reason:
+                        meta.append(_disabled_reason[mr.module_id])
+                    if rows is not None:
+                        meta.append(f"{rows:,} rows")
+                    if _fmt_dur(dur):
+                        meta.append(_fmt_dur(dur))
+                    tail = _dim("  ·  ".join(meta)) if meta else ""
+                    line = f"{lead}{_icon(mr)} {name.ljust(pad)}   {tail}".rstrip()
+                click.echo(line)
+                for rule_id, msg in mr.warnings:
+                    from aqueduct.cli.output import warn as _output_warn
+                    _output_warn(rule_id, msg, prefix=warn_prefix, err=False)
+                # Probe `report: stdout` lines — informational, dim, never in
+                # the warning roll-up. Capped unless -v.
+                _notes = tuple(getattr(mr, "notes", ()) or ())
+                _cap = len(_notes) if verbose else 10
+                for note in _notes[:_cap]:
+                    click.echo(_dim(f"{warn_prefix}{note}"))
+                if len(_notes) > _cap:
+                    click.echo(_dim(
+                        f"{warn_prefix}· {len(_notes) - _cap} more  ·  -v for full output"
+                    ))
+
+            for kind, item in _rows:
+                if kind == "module":
+                    _mr_line(item, item.module_id, _w, "  ", "   ↳ ")
+                    continue
+                _kids = _arc_children[item]
+                # Parent row = worst child: any ✗ → ✗, else any ✓ → ✓, else ⏭.
+                if any(m.status == ExecutionStatus.ERROR for m in _kids):
+                    _p_icon = click.style("✗", fg="red", bold=True)
+                elif any(m.status == ExecutionStatus.SUCCESS for m in _kids):
+                    _p_icon = click.style("✓", fg="green")
+                else:
+                    _p_icon = click.style("⏭", fg="cyan")
+                click.echo(f"  {_p_icon} {item}")
+                for _i, _kid in enumerate(_kids):
+                    _glyph = "└─" if _i == len(_kids) - 1 else "├─"
+                    _lead = "    " + click.style(_glyph, fg="bright_black") + " "
+                    _mr_line(_kid, _kid.module_id.split("__", 1)[1],
+                             _w - _CHILD_PAD, _lead, "       ↳ ")
+
         while True:
             # `iteration_run_id` is the per-iteration uuid used as `run_id`
             # for execute() and persisted on `run_records`. The user-visible
@@ -798,6 +1368,7 @@ def run(
             # `healing_outcomes` so cross-iteration aggregations remain
             # joinable to the original heal call.
             iteration_run_id = run_id if patch_count == 0 else str(uuid.uuid4())
+            patch_rejected_by_gate = False  # reset per iteration — only the terminal reason drives the exit code
             if iteration_run_id != run_id:
                 # 1.1.0 fix — register parent linkage so record() stamps the
                 # outer run_id into run_records.parent_run_id for this
@@ -807,7 +1378,7 @@ def run(
                         run_id=iteration_run_id, parent_run_id=run_id,
                     )
                 except Exception:
-                    pass
+                    pass  # iteration registration is best-effort; never let persistence block execution
             execute_exc: ExecuteError | None = None
             try:
                 result = execute(
@@ -823,47 +1394,51 @@ def run(
                     parallel=parallel,
                     use_observe=cfg.metrics.use_observe,
                     observability_store=bundle.observability,
+                    sampling=probe_sampling,
                 )
             except ExecuteError as exc:
                 execute_exc = exc
                 result = ExecutionResult(
                     blueprint_id=manifest.blueprint_id,
                     run_id=iteration_run_id,
-                    status="error",
+                    status=ExecutionStatus.ERROR,
                     module_results=(
-                        ModuleResult(module_id="_executor", status="error", error=str(exc)),
+                        ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),
                     ),
                 )
 
             failure_ctx = surveyor.record(result, exc=execute_exc)
 
-            if result.status == "success":
+            # Chronological output: render THIS iteration's module outcomes now,
+            # before any agent/heal block below. Replaces the old single post-loop
+            # summary so a heal attempt always reads after the result it heals.
+            _render_module_summary(result)
+
+            if result.status == ExecutionStatus.SUCCESS:
                 break
 
             # trigger_agent flag overrides approval_mode=disabled — escalate to human staging at minimum
             effective_mode = approval_mode
             if result.trigger_agent and effective_mode == "disabled":
                 effective_mode = "human"
-                if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url):
+                if _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key):
                     click.echo(
-                        "  ↻ LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
+                        "  ↻ Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)",
                         err=True,
                     )
 
             if effective_mode == "disabled" or failure_ctx is None:
                 break
 
-            if not _aqcli._agent_usable(resolved_agent_provider, resolved_agent_base_url):
-                click.echo(
-                    f"  ⚠  LLM not reachable (provider={resolved_agent_provider}, no API key or base_url) — "
-                    "skipping self-healing. Configure agent in aqueduct.yml or set the API key env var.",
-                    err=True,
-                )
-                break
+            if not _aqcli._agent_usable_with_cascade(
+                resolved_agent_provider, resolved_agent_base_url, resolved_agent_api_key,
+                resolved_agent_cascade,
+            ):
+                break  # already warned at startup (line 730)
 
             if patch_count >= max_patches:
                 click.echo(
-                    f"⚠  LLM: max_patches={max_patches} reached, stopping self-healing loop",
+                    f"⚠  Agent: max_patches={max_patches} reached, stopping self-healing loop",
                     err=True,
                 )
                 break
@@ -874,7 +1449,7 @@ def run(
             )
             if not _should_heal:
                 click.echo(
-                    f"  ⊘  LLM guardrail blocked healing: {_no_heal_reason}",
+                    f"  ⊘  Agent guardrail blocked healing: {_no_heal_reason}",
                     err=True,
                 )
                 break
@@ -887,9 +1462,9 @@ def run(
                 _recent = surveyor.count_recent_heal_attempts(within_minutes=60)
                 if _recent >= _heal_cap:
                     click.echo(
-                        f"  ⊘  LLM rate-limit reached: {_recent} healing attempt(s) "
+                        f"  ⊘  Agent rate-limit reached: {_recent} healing attempt(s) "
                         f"in the last 60 minutes (max_heal_attempts_per_hour={_heal_cap}). "
-                        "Run ends without further LLM calls. Inspect healing_outcomes in observability.db.",
+                        "Run ends without further Agent calls. Inspect healing_outcomes in observability.db.",
                         err=True,
                     )
                     break
@@ -915,7 +1490,7 @@ def run(
                     _rel_pending = f"{_patch_store.location_label}/{_pending_hit.object_key}"
                     click.echo(
                         f"  ✓ heal cache: pending patch {_pending_hit.patch_id} already covers "
-                        f"this failure signature ({_sig_exact.hash}) — skipping LLM (0 tokens)\n"
+                        f"this failure signature ({_sig_exact.hash}) — skipping Agent (0 tokens)\n"
                         f"    Review: aqueduct patch pull {_pending_hit.patch_id}  "
                         f"(body: {_rel_pending})",
                         err=True,
@@ -949,19 +1524,20 @@ def run(
                 if _candidate is not None and _candidate.patch_id not in _replay_tried:
                     _replay_tried.add(_candidate.patch_id)
                     try:
-                        from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec as _PatchSpec
+                        from aqueduct.patch.grammar import PATCH_META_KEY
+                        from aqueduct.patch.grammar import PatchSpec as _PatchSpec
                         _payload = {k: v for k, v in _candidate.payload.items() if k != PATCH_META_KEY}
                         _replay_patch = _PatchSpec.model_validate(_payload)
                     except Exception as _re_exc:
                         _replay_patch = None
                         click.echo(
                             f"  ⚠ heal cache: archived patch {_candidate.patch_id} no longer "
-                            f"parses ({_re_exc}) — falling through to LLM",
+                            f"parses ({_re_exc}) — falling through to Agent",
                             err=True,
                         )
                     if _replay_patch is not None:
                         _replay_ok = True
-                        if effective_mode in ("auto", "aggressive"):
+                        if effective_mode == "auto":
                             # Run the gate pyramid on the candidate NOW so a stale
                             # patch costs one sandbox pass, not a production write.
                             _rg2, _rg3, _rg4, _rg3_passed = _aqcli._run_patch_gates_inline(
@@ -979,11 +1555,14 @@ def run(
                                 _replay_ok = False
                                 click.echo(
                                     f"  ⚠ heal cache: replay candidate {_candidate.patch_id} failed "
-                                    f"sandbox replay ({_rg3.detail}) — falling through to LLM",
+                                    f"sandbox replay ({_rg3.detail}) — falling through to Agent",
                                     err=True,
                                 )
                             else:
                                 _replay_gates_done = True
+                                # Same plan-regression warning the LLM path gets,
+                                # so a replayed patch's regression isn't silent.
+                                _emit_explain_regressions(_rg4)
                         if _replay_ok:
                             from aqueduct.agent import AgentPatchResult as _AgentPatchResult
                             _replay_result = _AgentPatchResult(
@@ -1002,28 +1581,74 @@ def run(
                                     stop_reason="replayed",
                                 )
                             except Exception:
-                                pass
+                                pass  # recording the zero-token replay is best-effort; never block for audit logging
 
             _resolution = "replayed" if _patch_source == "replay" else "llm"
 
             # ── Generate patch ────────────────────────────────────────────────────
-            from aqueduct.agent import generate_agent_patch, stage_patch_for_human
+            from aqueduct.agent import AgentRunConfig, generate_agent_patch, stage_patch_for_human
+            from aqueduct.agent.transcript import TranscriptWriter
             _attempt_display = (
                 f"{patch_count + 1}/{max_patches}"
                 if max_patches > 1
                 else f"{patch_count + 1}"
             )
-            click.echo(
-                f"  ↻ LLM self-healing ({_attempt_display})  "
-                f"failed_module={failure_ctx.failed_module}",
-                err=True,
+            from aqueduct.cli.style import colorize_line as _style_heal_line
+            # Live SSE streaming is interactive-TTY-only (piped/CI keep the
+            # non-streaming POST path).
+            _use_stream = sys.stdout.isatty()
+            _transcript = TranscriptWriter(
+                verbose=verbose, write=lambda s: emit(_style_heal_line(s)),
+                streamed=_use_stream,
             )
+
+            # A zero-token replay (heal-cache hit) re-applies an archived patch
+            # with NO agent call — its announcement already printed above, so skip
+            # the agent-self-healing header / ceremony / streaming scaffolding and
+            # go straight to applying it. Only a real LLM heal gets the tree.
+            _is_replay = _resolution == "replayed"
+            if not _is_replay:
+                # Styled section header — boundary between the run result above
+                # and the agent/heal block below.
+                click.echo(
+                    click.style(
+                        f"⚠ {failure_ctx.failed_module} failed → agent self-healing"
+                        + (f" (patch {_attempt_display})" if max_patches > 1 else ""),
+                        fg="yellow",
+                    ),
+                    err=True,
+                )
+                # Ceremony — surface which agent/model is on the job (solo/cascade).
+                if resolved_agent_cascade:
+                    _models = " → ".join(t.model for t in resolved_agent_cascade)
+                    _agent_info = f"cascade · {len(resolved_agent_cascade)} tier(s) · {_models}"
+                else:
+                    _agent_info = (
+                        f"{resolved_agent_model} · {resolved_agent_provider} "
+                        f"· ≤{resolved_agent_max_reprompts} reprompts"
+                    )
+                click.echo(_style_heal_line(f"│  ◆ {_agent_info}"), err=True)
+                _transcript.header(
+                    patch_count + 1 if max_patches > 1 else 1,
+                    resolved_agent_max_reprompts,
+                    resolve=_resolution,
+                )
+                # Immediate cue — the stream meter only appears once the FIRST
+                # token arrives, and a reasoning model can digest a big prompt for
+                # a while first, so without this the open branch looks hung.
+                _cue = (
+                    "│   · waiting for first token… (reasoning models digest the prompt before replying)"
+                    if _use_stream else
+                    "│   · contacting agent… (first response can be slow — big prompt / local cold-start)"
+                )
+                emit(_style_heal_line(_cue))
 
             # Run blueprint doctor checks against the compiled Manifest (all modules resolved,
             # arcades expanded — no need to re-parse or recurse into sub-blueprints).
             try:
-                from aqueduct.doctor import check_blueprint_sources_from_manifest
                 from dataclasses import replace as _dc_replace
+
+                from aqueduct.doctor import check_blueprint_sources_from_manifest
                 _dr = check_blueprint_sources_from_manifest(manifest, deployment_env=cfg.deployment.env)
                 _hints = tuple(
                     f"{r.name} — {r.detail}"
@@ -1044,11 +1669,51 @@ def run(
                 max_reprompts=resolved_agent_max_reprompts,
             )
 
-            def _persist_attempt(rec, _rid=_heal_run_id, _srv=surveyor):
+            # ── Live token streaming display ──────────────────────────────────
+            # _on_token(kind, text) is fired by the provider per SSE delta.
+            # default: a compact in-place meter (· thinking… N chars);
+            # -v: streams the actual thinking/answer text under a ┆ gutter.
+            # Markers stay in the serious geometric vocabulary: · = internal
+            # (reasoning, recedes), ▸ = output (the answer, points forward).
+            _stream_state = {"chars": 0, "kind": None, "active": False}
+
+            def _on_token(kind: str, text: str) -> None:
+                _stream_state["active"] = True
+                if verbose:
+                    if kind != _stream_state["kind"]:
+                        head = "· thinking" if kind == "thinking" else "▸ answer"
+                        sys.stdout.write(f"\n│   {head}:\n│   ┆ ")
+                        _stream_state["kind"] = kind
+                    sys.stdout.write(text.replace("\n", "\n│   ┆ "))
+                else:
+                    _stream_state["chars"] += len(text)
+                    label = "thinking" if kind == "thinking" else "writing"
+                    sys.stdout.write(f"\r│   · {label}… {_stream_state['chars']} chars")
+                sys.stdout.flush()
+
+            def _close_stream() -> None:
+                if _stream_state["active"]:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    _stream_state.update(chars=0, kind=None, active=False)
+
+            def _on_attempt(rec):
+                _close_stream()  # finish the live line before the turn renders
                 try:
-                    _srv.record_heal_attempt(run_id=_rid, attempt_record=rec)
+                    surveyor.record_heal_attempt(run_id=_heal_run_id, attempt_record=rec)
                 except Exception:
                     pass  # never let persistence block the loop
+                try:
+                    _tier_model = getattr(rec, "_aq_tier_model", None) or resolved_agent_model
+                    _transcript.write(
+                        rec,
+                        None,
+                        model=_tier_model,
+                        cascade_position=rec.model_cascade_position,
+                        cache_status=_patch_source if _patch_source != "llm" else None,
+                    )
+                except Exception:
+                    pass  # transcript is best-effort
 
             # Apply-gate guardrail check wired INTO the unified reprompt loop.
             # Deterministic + fast (no Spark) — runs `_check_guardrails` on the
@@ -1061,8 +1726,10 @@ def run(
             def _apply_cb(patch_spec: Any, _bp=_bp_path_for_cb) -> tuple:
                 try:
                     from aqueduct.patch.apply import (
-                        _check_guardrails, _yaml_load, apply_patch_to_dict,
                         PatchError,
+                        _check_guardrails,
+                        _yaml_load,
+                        apply_patch_to_dict,
                     )
                     bp_raw = _yaml_load(_bp)
                     # 1.1.0 — compile-sanity check. Catches patches that drop
@@ -1111,7 +1778,7 @@ def run(
             # Cascade tiers can opt into deep_loop individually, so the
             # callback must exist whenever ANY tier (or the top level) wants it.
             _deep_loop = manifest.agent.deep_loop if manifest.agent else False
-            _cascade_tiers = manifest.agent.cascade if manifest.agent else None
+            _cascade_tiers = resolved_agent_cascade
             _any_deep_loop = _deep_loop or any(
                 bool(t.deep_loop) for t in (_cascade_tiers or [])
             )
@@ -1171,6 +1838,7 @@ def run(
                     patches_dir=patches_dir,
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
+                    api_key=resolved_agent_api_key,
                     provider_options=resolved_agent_provider_options,
                     timeout=resolved_agent_timeout,
                     max_tokens=4096,
@@ -1184,7 +1852,8 @@ def run(
                     deep_loop=_deep_loop,
                     apply_callback=_apply_cb,
                     validate_callback=_validate_cb,
-                    on_attempt=_persist_attempt,
+                    on_attempt=_on_attempt,
+                    on_token=_on_token if _use_stream else None,
                     memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
@@ -1192,28 +1861,32 @@ def run(
                 )
             else:
                 agent_result = generate_agent_patch(
-                    failure_ctx,
-                    model=resolved_agent_model,
-                    patches_dir=patches_dir,
-                    provider=resolved_agent_provider,
-                    base_url=resolved_agent_base_url,
-                    provider_options=resolved_agent_provider_options,
-                    timeout=resolved_agent_timeout,
-                    max_reprompts=resolved_agent_max_reprompts,
-                    engine_prompt_context=resolved_agent_engine_prompt_context,
-                    blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
-                    last_apply_error=last_apply_error,
-                    guardrails=manifest.agent.guardrails if manifest.agent else None,
-                    budget=_budget,
-                    allow_defer=manifest.agent.allow_defer if manifest.agent else False,
-                    deep_loop=_deep_loop,
-                    validate_callback=_validate_cb,
-                    on_attempt=_persist_attempt,
-                    apply_callback=_apply_cb,
-                    memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
-                    retry_max_retries=cfg.agent.retry.max_retries,
-                    retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
-                    obs_store=_obs_store,
+                    agent_cfg=AgentRunConfig(
+                        failure_ctx=failure_ctx,
+                        model=resolved_agent_model,
+                        patches_dir=patches_dir,
+                        provider=resolved_agent_provider,
+                        base_url=resolved_agent_base_url,
+                        api_key=resolved_agent_api_key,
+                        provider_options=resolved_agent_provider_options,
+                        timeout=resolved_agent_timeout,
+                        max_reprompts=resolved_agent_max_reprompts,
+                        engine_prompt_context=resolved_agent_engine_prompt_context,
+                        blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                        last_apply_error=last_apply_error,
+                        guardrails=manifest.agent.guardrails if manifest.agent else None,
+                        budget=_budget,
+                        allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                        deep_loop=_deep_loop,
+                        validate_callback=_validate_cb,
+                        on_attempt=_on_attempt,
+                        on_token=_on_token if _use_stream else None,
+                        apply_callback=_apply_cb,
+                        memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                        retry_max_retries=cfg.agent.retry.max_retries,
+                        retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                        obs_store=_obs_store,
+                    ),
                 )
             patch = agent_result.patch
             # Phase 46 — record the model that actually produced this result
@@ -1233,13 +1906,29 @@ def run(
                         stop_reason=agent_result.stop_reason,
                     )
                 except Exception:
-                    pass
+                    pass  # updating stop_reason is best-effort; never let persistence block the loop
+            _summary_model = (agent_result.model or agent_result.__dict__.get("model"))
+            if not _is_replay:
+                # Replay prints no tree, so it gets no └─ close node — its cache
+                # announcement + the apply result line below tell the whole story.
+                _transcript.summary(
+                    agent_result.stop_reason,
+                    agent_result.attempts,
+                    agent_result.tokens_in_total,
+                    agent_result.tokens_out_total,
+                    model=_summary_model or resolved_agent_model,
+                )
+
             if patch is None:
-                click.echo("  ✗ LLM: failed to generate valid patch, stopping", err=True)
+                # The transcript's └─ close node already states the outcome
+                # (✗ <reason> · N turn(s)); here we only note what happened next.
                 on_hf = manifest.agent.on_heal_failure if manifest.agent else "stage"
                 if on_hf == "stage":
                     click.echo(
-                        "  ↑ on_heal_failure=stage: no valid patch to stage — failure context logged in observability.db.",
+                        click.style(
+                            "   ↑ no patch to stage — failure context saved to the observability store",
+                            fg="bright_black",
+                        ),
                         err=True,
                     )
                 # Synthesise one healing_outcomes row per rejected
@@ -1275,23 +1964,32 @@ def run(
             _conf_threshold = manifest.agent.confidence_threshold
             if patch.confidence is not None and patch.confidence < _conf_threshold and effective_mode not in ("human", "disabled"):
                 click.echo(
-                    f"  ↑ LLM patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
+                    f"  ↑ Agent patch confidence {patch.confidence:.0%} < {_conf_threshold:.0%} — escalating to human review",
                     err=True,
                 )
                 effective_mode = "human"
 
-            # Recovered patches never silently land. If the parser had to apply
-            # any mechanical recovery (think-block strip, json_repair fallback,
-            # etc.) we downgrade auto/aggressive → human so a reviewer sees
-            # exactly what we rescued. Trust boundary stays at the human, not
-            # the regex.
-            if (
-                agent_result.recovery_applied
-                and effective_mode in ("auto", "aggressive")
-            ):
+            # Recovered patches never silently land *when the recovery
+            # reinterpreted content*. Structural locators that only find the JSON
+            # without changing it — stripping a ```json fence, a <think> block,
+            # or leading prose — are deterministic and safe to auto-apply (the
+            # parsed patch is byte-identical to what the model emitted, minus the
+            # wrapper). This matters for local/reasoning models, which fence their
+            # output by default (especially on the streaming path, where Aqueduct
+            # cannot request json_object). Content-reinterpreting recoveries
+            # (json_repair, comment stripping, wrapper unwrap) still downgrade
+            # auto → human — the trust boundary stays at the human.
+            _BENIGN_RECOVERIES = {
+                "stripped_code_fence", "stripped_think_block",
+                "stripped_orphan_think_close", "stripped_leading_prose",
+            }
+            _risky_recovery = [
+                r for r in agent_result.recovery_applied if r not in _BENIGN_RECOVERIES
+            ]
+            if _risky_recovery and effective_mode == "auto":
                 click.echo(
-                    f"  ↑ LLM response needed mechanical recovery "
-                    f"({', '.join(agent_result.recovery_applied)}) — "
+                    f"  ↑ Agent response needed mechanical recovery "
+                    f"({', '.join(_risky_recovery)}) — "
                     f"downgrading to human review for safety",
                     err=True,
                 )
@@ -1299,8 +1997,10 @@ def run(
 
             # ── Guardrail check (pre-staging) ─────────────────────────────────────
             try:
-                from aqueduct.patch.apply import PatchError as _PatchError, _check_guardrails as _apply_check_guardrails
                 import yaml as _yaml
+
+                from aqueduct.patch.apply import PatchError as _PatchError
+                from aqueduct.patch.apply import _check_guardrails as _apply_check_guardrails
                 _bp_raw = _yaml.safe_load(blueprint_abs.read_text(encoding="utf-8")) or {}
                 _apply_check_guardrails(patch, _bp_raw, provenance_map=manifest.provenance_map)
                 guardrail_err = None
@@ -1310,13 +2010,15 @@ def run(
                 guardrail_err = f"Unexpected guardrail error: {_gx}"
             if guardrail_err:
                 last_apply_error = f"Patch {patch.patch_id!r} was blocked by agent guardrail: {guardrail_err}"
-                click.echo(f"  ✗ LLM patch blocked by guardrail: {guardrail_err}", err=True)
+                click.echo(f"  ✗ Agent patch blocked by guardrail: {guardrail_err}", err=True)
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
                 click.echo(
-                    f"  ✎ Patch staged for human review → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ Patch staged for human review → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -1338,13 +2040,12 @@ def run(
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
-                pending_file = next(patches_dir.glob(f"pending/*_{patch.patch_id}.json"), None) \
-                    or patches_dir / "pending" / f"{patch.patch_id}.json"
-                rel_patch = pending_file.relative_to(_project_root) if pending_file.is_relative_to(_project_root) else pending_file
                 rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
-                    f"  ✎ LLM patch staged → {rel_patch}\n"
-                    f"    Review: aqueduct patch apply {rel_patch} --blueprint {rel_bp}",
+                    f"  ▸ Agent patch staged → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})\n"
+                    f"    Review: aqueduct patch apply {patch.patch_id} --blueprint {rel_bp}",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -1361,16 +2062,27 @@ def run(
             elif effective_mode == "ci":
                 _ci_url = resolved_agent_base_url or cfg.agent.ci_webhook_url
                 if _ci_url:
-                    try:
-                        import httpx as _httpx
-                        _httpx.post(_ci_url, json={
-                            "patch": patch.model_dump(),
-                            "run_id": iteration_run_id,
-                            "blueprint_id": manifest.blueprint_id,
-                            "failed_module": failure_ctx.failed_module,
-                        }, timeout=10)
-                    except Exception as _ce:
-                        click.echo(f"  ⚠ ci webhook failed: {_ce}", err=True)
+                    # Best-effort, async, redacted, with one transient retry — same
+                    # transport as the configured webhooks. (Previously this was a
+                    # synchronous bare httpx.post with no redaction: it blocked the
+                    # heal loop on a slow CI endpoint and could leak a resolved
+                    # secret embedded in the patch config.)
+                    from aqueduct.infra.http import deliver_with_retry, fire_and_forget
+                    from aqueduct.redaction import redact as _redact
+                    _ci_body = _redact({
+                        "patch": patch.model_dump(),
+                        "run_id": iteration_run_id,
+                        "blueprint_id": manifest.blueprint_id,
+                        "failed_module": failure_ctx.failed_module,
+                    })
+                    fire_and_forget(
+                        lambda url=_ci_url, body=_ci_body: deliver_with_retry(
+                            "POST", url, json=body,
+                            headers={"Content-Type": "application/json"},
+                            timeout=10, label="ci-webhook",
+                        ),
+                        name="ci-webhook",
+                    )
                 stage_patch_for_human(patch, patches_dir, failure_ctx,
                                       on_patch_pending_webhook=cfg.webhooks.on_ci_patch,
                                       source=_patch_source,
@@ -1378,7 +2090,9 @@ def run(
                                       patch_store=_patch_store, obs_store=_obs_store)
                 patch_staged_for_review = True
                 click.echo(
-                    f"  ✎ CI patch staged → patches/pending/{patch.patch_id}.json",
+                    f"  ▸ CI patch staged → "
+                    f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
+                    f"(id={patch.patch_id})",
                     err=True,
                 )
                 surveyor.record_healing_outcome(
@@ -1393,125 +2107,8 @@ def run(
                 break
 
             elif effective_mode == "auto":
-                # Patch validation pyramid Gates 2 (lineage), 3 (sandbox), 4 (explain) pre-filter.
-                # Phase 43: when deep_loop is enabled, these gates already ran
-                # inside the LLM conversation — skip the redundant post-hoc run.
-                # Phase 45: same skip when the gates already validated a replay
-                # candidate at the heal-cache check.
-                if _deep_loop or _replay_gates_done:
-                    _g3_passed = True
-                    _g2, _g3, _g4 = None, None, None
-                else:
-                    _g2, _g3, _g4, _g3_passed = _aqcli._run_patch_gates_inline(
-                        patch=patch,
-                        blueprint_path=Path(blueprint),
-                        bundle=bundle,
-                        surveyor=surveyor,
-                        failed_module=failure_ctx.failed_module,
-                        iteration_run_id=iteration_run_id,
-                        blueprint_id=manifest.blueprint_id,
-                        sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
-                        sandbox_master_url=resolved_sandbox_master_url,
-                    )
-                if _g4 is not None and _g4.status == "warn":
-                    for _r in _g4.regressions:
-                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
-                if _g3 is not None and not _g3_passed:
-                    # Non-interactive (auto) gate rejection → exit VALIDATION_GATE(4).
-                    patch_rejected_by_gate = True
-                    click.echo(
-                        f"  ✗ LLM patch failed sandbox replay: {_g3.detail}",
-                        err=True,
-                    )
-                    surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                        parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=False, run_success_after_patch=False,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                        model_cascade_position=_cascade_pos,
-                    )
-                    _aqcli._stage_failed_patch(
-                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                        obs_store=_obs_store, patch_store=_patch_store,
-                    )
-                    break
-
-                # Resolve patch_validation (blueprint override → engine default)
-                _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
-
-                if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    # Sandbox-only validation: write the patched Blueprint without
-                    # running the full pipeline. The next regular `aqueduct run`
-                    # will execute it against real data and real Egress sinks.
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(
-                        f"  ✓ LLM patch validated via sandbox-only ({_g3.sample_rows or '∞'} rows) "
-                        f"→ {blueprint}",
-                        err=True,
-                    )
-                    surveyor.record_healing_outcome(
-                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                        parent_run_id=run_id,
-                        failure_category=patch.category, model=_outcome_model,
-                        patch_id=patch.patch_id, confidence=patch.confidence,
-                        patch_applied=True, run_success_after_patch=True,
-                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                        model_cascade_position=_cascade_pos,
-                    )
-                    break
-
-                new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
-                if new_manifest is None:
-                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
-                    break
-                try:
-                    result2 = execute(
-                        new_manifest, session,
-                        run_id=str(uuid.uuid4()),
-                        store_dir=resolved_store_dir,
-                        surveyor=surveyor,
-                        depot=depot,
-                    )
-                except ExecuteError as exc:
-                    result2 = ExecutionResult(
-                        blueprint_id=manifest.blueprint_id,
-                        run_id=str(uuid.uuid4()),
-                        status="error",
-                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
-                    )
-                patch_success = result2.status == "success"
-                failure_ctx2 = surveyor.record(result2, patched=patch_success)
-                surveyor.record_healing_outcome(
-                    run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
-                    parent_run_id=run_id,
-                    failure_category=patch.category, model=_outcome_model,
-                    patch_id=patch.patch_id, confidence=patch.confidence,
-                    patch_applied=True, run_success_after_patch=patch_success,
-                    failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
-                    model_cascade_position=_cascade_pos,
-                )
-                if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
-                                              obs_store=_obs_store, patch_store=_patch_store)
-                    click.echo(f"  ✓ LLM patch validated and applied → {blueprint}", err=True)
-                    result = result2
-                    failure_ctx = failure_ctx2
-                else:
-                    click.echo("  ✗ LLM patch did not fix the issue, Blueprint unchanged", err=True)
-                    _aqcli._stage_failed_patch(
-                        manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
-                        obs_store=_obs_store, patch_store=_patch_store,
-                    )
-                    result = result2
-                    failure_ctx = failure_ctx2
-                break
-
-            elif effective_mode == "aggressive":
-                # Patch validation pyramid Gates 2, 3, 4 pre-filter for the legacy
-                # `aggressive` mode (deprecated alias for `auto` + `max_patches > 1`).
+                # Multi-patch gate validation: sandbox replay + explain gate check
+                # before writing to the blueprint.
                 # Phase 45: gates already ran on a replay candidate at the
                 # heal-cache check — skip the redundant rerun.
                 if _replay_gates_done:
@@ -1534,9 +2131,7 @@ def run(
                     if manifest.agent.block_on_explain_regression is not None
                     else cfg.agent.block_on_explain_regression
                 )
-                if _g4 is not None and _g4.status == "warn":
-                    for _r in _g4.regressions:
-                        click.echo(f"  ⚠ explain-gate regression: {_r.detail}", err=True)
+                _emit_explain_regressions(_g4)
                 if _block_on_g4 and _g4 is not None and _g4.status == "warn":
                     last_apply_error = (
                         f"Patch {patch.patch_id!r} rejected by the explain gate: "
@@ -1552,6 +2147,9 @@ def run(
                         failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
+                    # A validation gate rejected this patch — if the multi-patch loop
+                    # exhausts with no success, this drives the VALIDATION_GATE(4) exit.
+                    patch_rejected_by_gate = True
                     continue
                 if _g3 is not None and not _g3_passed:
                     click.echo(
@@ -1568,15 +2166,16 @@ def run(
                         failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash, resolution=_resolution,
                         model_cascade_position=_cascade_pos,
                     )
+                    patch_rejected_by_gate = True  # sandbox gate → VALIDATION_GATE(4) if loop exhausts
                     continue  # try next patch iteration
 
                 _patch_validation = manifest.agent.patch_validation or cfg.agent.patch_validation
 
                 if _patch_validation == "sandbox" and _g3 is not None and _g3.status == "pass":
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ multi-patch: sandbox-only validated → {blueprint}",
+                        f"  ✓ multi-patch: sandbox-only validated ({_g3.sample_rows or '∞'} rows) → {blueprint}",
                         err=True,
                     )
                     surveyor.record_healing_outcome(
@@ -1590,9 +2189,18 @@ def run(
                     )
                     break
 
-                new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
+                # Suppress compile warnings on the heal re-compile: they are the
+                # SAME blueprint warnings already shown (grouped) under the run
+                # header — re-emitting leaks the raw `AQ-WARN [...]` fallback
+                # format mid-heal (the patch doesn't change them).
+                import warnings as _wsup
+
+                from aqueduct.warnings import AqueductWarning as _AqWarn
+                with _wsup.catch_warnings():
+                    _wsup.simplefilter("ignore", _AqWarn)
+                    new_manifest = _aqcli._apply_patch_in_memory(patch, Path(blueprint), depot, profile, cli_overrides or {})
                 if new_manifest is None:
-                    click.echo("  ✗ LLM patch produces invalid Blueprint, discarding", err=True)
+                    click.echo("  ✗ Agent patch produces invalid Blueprint, discarding", err=True)
                     last_apply_error = f"Patch {patch.patch_id!r} produced invalid Blueprint"
                     surveyor.record_healing_outcome(
                         run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
@@ -1616,10 +2224,10 @@ def run(
                     result2 = ExecutionResult(
                         blueprint_id=manifest.blueprint_id,
                         run_id=str(uuid.uuid4()),
-                        status="error",
-                        module_results=(ModuleResult(module_id="_executor", status="error", error=str(exc)),),
+                        status=ExecutionStatus.ERROR,
+                        module_results=(ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),),
                     )
-                patch_success = result2.status == "success"
+                patch_success = result2.status == ExecutionStatus.SUCCESS
                 failure_ctx2 = surveyor.record(result2, patched=patch_success)
                 surveyor.record_healing_outcome(
                     run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
@@ -1631,10 +2239,10 @@ def run(
                     model_cascade_position=_cascade_pos,
                 )
                 if patch_success:
-                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="aggressive",
+                    _aqcli._write_patch_to_blueprint(patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
                                               obs_store=_obs_store, patch_store=_patch_store)
                     click.echo(
-                        f"  ✓ LLM patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
+                        f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
                     )
                     result = result2
@@ -1646,7 +2254,7 @@ def run(
                         + (result2.module_results[-1].error or "unknown" if result2.module_results else "unknown")
                     )
                     click.echo(
-                        f"  ✗ LLM patch did not fix the issue ({patch_count}/{max_patches})", err=True,
+                        f"  {click.style('✗', fg='red', bold=True)} Agent patch did not fix the issue ({patch_count}/{max_patches})", err=True,
                     )
                     _aqcli._stage_failed_patch(
                         manifest.agent.on_heal_failure, patch, patches_dir, failure_ctx, cfg, click,
@@ -1661,34 +2269,56 @@ def run(
         # ── Surveyor stop ─────────────────────────────────────────────────────────
         surveyor.stop()
 
-        # ── Depot — persist run_id for @aq.runtime.prev_run_id() ─────────────────
+        # ── Depot — persist run_id for @aq.run.prev_id() ─────────────────
         try:
             depot.put("_last_run_id", run_id)
         except Exception:
-            pass
+            pass  # depot write is best-effort; prev_run_id unavailability is a soft degradation, not a failure
         depot.close()
 
         # ── Report ────────────────────────────────────────────────────────────────
-        for mr in result.module_results:
-            icon = "✓" if mr.status == "success" else "✗"
-            line = f"  {icon} {mr.module_id}"
-            if mr.error:
-                line += f"  — {mr.error}"
-            click.echo(line)
+        # The per-module ✓/✗ summary already printed inline (per heal iteration)
+        # via `_render_module_summary` right after each execute — so the heal
+        # block reads chronologically after the result it heals. Only the framed
+        # terminal footer remains here.
 
-        if result.status not in ("success", "patched"):
+        # T26 — end-of-run runtime-warning roll-up: a single collapsed tally of
+        # everything that warned this run (additive to the inline `↳` lines
+        # under each module — locality there, "don't miss it" tally here). Reuses
+        # the compile-block shape; empty → nothing.
+        _runtime_pairs = [
+            (rid, f"{mr.module_id}: {msg}")
+            for mr in result.module_results
+            for rid, msg in mr.warnings
+        ]
+        if _runtime_pairs:
+            from aqueduct.cli.style import emit_warning_pairs
+            emit_warning_pairs(_runtime_pairs, label="runtime:", verbose=verbose)
+
+        if result.status not in (ExecutionStatus.SUCCESS, ExecutionStatus.PATCHED):
             # Print the outer (user-visible) run_id — that's the join key for
             # heal_attempts and `healing_outcomes.parent_run_id`. In multi-patch
             # mode `result.run_id` would be the LAST iteration's per-iteration
             # uuid, which can't be used to retrieve the full heal history.
+            from aqueduct.cli.style import dim as _dim
+            from aqueduct.cli.style import error as _style_error
+            click.echo(_dim(_rule()), err=True)
             if failure_ctx:
-                click.echo(
-                    f"\n✗ blueprint failed  run_id={run_id}"
-                    f"  failed_module={failure_ctx.failed_module}",
-                    err=True,
+                _style_error(
+                    f"blueprint failed  run_id={run_id}"
+                    f"  failed_module={failure_ctx.failed_module}"
                 )
             else:
-                click.echo(f"\n✗ blueprint failed  run_id={run_id}", err=True)
+                _style_error(f"blueprint failed  run_id={run_id}")
+            # on_failure hooks — after the verdict line, before the exit code.
+            # Hook outcomes never alter the exit code below.
+            from aqueduct.cli.hooks import run_hooks as _run_hooks
+            _run_hooks(
+                manifest.hooks.on_failure, "on_failure",
+                run_id=run_id, status="failure",
+                blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+                allow_command_hooks=cfg.danger.allow_command_hooks,
+            )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
             #   HEAL_PENDING(3)   — a patch was staged for human/ci review
@@ -1716,8 +2346,22 @@ def run(
                 event="on_success",
             )
 
-        status_label = "patched" if result.status == "patched" else "complete"
-        click.echo(f"\n✓ blueprint {status_label}  run_id={run_id}")
+        status_label = "patched" if result.status == ExecutionStatus.PATCHED else "complete"
+        from aqueduct.cli.style import dim as _dim
+        from aqueduct.cli.style import success as _style_success
+        click.echo(_dim(_rule()))
+        _style_success(f"blueprint {status_label}")
+
+        # on_success hooks — chained blueprints / webhooks / gated commands.
+        # A hooks section closes with its own `run complete` footer.
+        from aqueduct.cli.hooks import run_hooks as _run_hooks
+        if _run_hooks(
+            manifest.hooks.on_success, "on_success",
+            run_id=run_id, status=result.status,
+            blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+            allow_command_hooks=cfg.danger.allow_command_hooks,
+        ):
+            _style_success("run complete")
     finally:
         os.chdir(_original_cwd)
 

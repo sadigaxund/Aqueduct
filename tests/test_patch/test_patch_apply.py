@@ -363,3 +363,86 @@ class TestPatchFormatting:
         from aqueduct.parser.parser import parse
         bp = parse(bp_path)
         assert bp.modules[0].config["sql"] == "SELECT 'x' as col"
+
+
+# ── Backend-aware lifecycle move (PatchStore + patch_index object_key) ──────────
+
+
+def _store_and_obs(tmp_path):
+    from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    from aqueduct.stores.object_store import make_patch_store
+    ps = make_patch_store("local", "", tmp_path / "patches")
+    obs = DuckDBObservabilityStore(tmp_path / "obs.db")
+    return ps, obs
+
+
+def _valid_bp(tmp_path):
+    path = tmp_path / "bp.yml"
+    path.write_text(
+        "aqueduct: '1.0'\nid: test.bp\nname: T\nmodules:\n"
+        "  - id: in\n    type: Ingress\n    label: Source\n"
+        "    config: {format: parquet, path: p1}\nedges: []\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_apply_moves_body_in_store_and_updates_index_object_key(tmp_path):
+    """apply with a PatchStore: pending body → applied/, index status+object_key
+    follow so the heal cache's find_replay fetches the body at its new key."""
+    from aqueduct.patch import index as ix
+    from aqueduct.patch.apply import apply_patch_file
+
+    bp_path = _valid_bp(tmp_path)
+    ps, obs = _store_and_obs(tmp_path)
+    body = {
+        "patch_id": "fix-in", "rationale": "r",
+        "operations": [{"op": "set_module_config_key", "module_id": "in",
+                        "key": "path", "value": "p2"}],
+    }
+    pkey = ps.write_pending("0001_fix-in.json", body)
+    with obs.connect() as cur:
+        ix.ensure_schema(cur)
+        ix.upsert(cur, ix.PatchIndexRow(patch_id="fix-in", status="pending",
+                                        object_key=pkey, signature="sigA"))
+    ops_tmp = tmp_path / "ops.json"
+    ops_tmp.write_text(json.dumps(body), encoding="utf-8")
+
+    apply_patch_file(blueprint_path=bp_path, patch_path=ops_tmp,
+                     patches_dir=tmp_path / "patches", obs_store=obs,
+                     patch_store=ps, pending_key=pkey)
+
+    assert ps.list_keys("pending") == []                       # moved out of pending
+    assert ps.list_keys("applied") == ["applied/0001_fix-in.json"]
+    with obs.connect() as cur:
+        row = ix.get(cur, "fix-in")
+        replay = ix.find_replay(cur, "sigA", {"fix-in"})
+    assert row["status"] == "applied"
+    assert row["object_key"] == "applied/0001_fix-in.json"     # object_key followed the move
+    assert replay["object_key"] == "applied/0001_fix-in.json"  # cache fetches the new key
+
+
+def test_reject_moves_body_in_store_and_updates_index(minimal_bp_path, tmp_path):
+    """reject with a PatchStore: pending body → rejected/ (with reason), index
+    status+object_key updated; no stale pending row."""
+    from aqueduct.patch import index as ix
+    from aqueduct.patch.apply import reject_patch
+
+    ps, obs = _store_and_obs(tmp_path)
+    pkey = ps.write_pending("0002_fix-y.json", {"patch_id": "fix-y", "operations": []})
+    with obs.connect() as cur:
+        ix.ensure_schema(cur)
+        ix.upsert(cur, ix.PatchIndexRow(patch_id="fix-y", status="pending",
+                                        object_key=pkey, signature="sigY"))
+
+    reject_patch("fix-y", "too risky", tmp_path / "patches", obs_store=obs,
+                 patch_store=ps, pending_key=pkey)
+
+    assert ps.list_keys("pending") == []
+    assert ps.list_keys("rejected") == ["rejected/0002_fix-y.json"]
+    assert json.loads(ps.get_text("rejected/0002_fix-y.json"))["rejection_reason"] == "too risky"
+    with obs.connect() as cur:
+        row = ix.get(cur, "fix-y")
+        assert ix.find_pending(cur, "sigY") is None  # no longer surfaced as pending
+    assert row["status"] == "rejected"
+    assert row["object_key"] == "rejected/0002_fix-y.json"

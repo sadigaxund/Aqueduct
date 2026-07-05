@@ -1,9 +1,12 @@
-import pytest
 import warnings
 from pathlib import Path
+
+import pytest
+
 from aqueduct import AqueductWarning
-from aqueduct.parser.parser import parse
 from aqueduct.compiler.compiler import compile as compiler_compile
+from aqueduct.errors import CompileError
+from aqueduct.parser.parser import parse
 
 pytestmark = pytest.mark.unit
 
@@ -98,6 +101,81 @@ edges:
             with warnings.catch_warnings():
                 warnings.simplefilter("error")
                 _compile_yaml(yaml_str, tmp_path)
+
+    def test_spillway_condition_no_edge_warns(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    config:
+      op: sql
+      query: SELECT * FROM in
+      spillway_condition: "id < 0"
+  - id: out
+    type: Egress
+    label: OUT
+    config: {format: parquet, path: out, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: out
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert any(
+                "spillway_port_mismatch" in str(x.message)
+                and "no spillway edge" in str(x.message)
+                for x in w
+            )
+
+    def test_spillway_both_present_no_warn(self, tmp_path):
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    config:
+      op: sql
+      query: SELECT * FROM in
+      spillway_condition: "id < 0"
+  - id: main
+    type: Egress
+    label: MAIN
+    config: {format: parquet, path: main, mode: overwrite}
+  - id: spill
+    type: Egress
+    label: SPILL
+    config: {format: parquet, path: spill, mode: overwrite}
+edges:
+  - from: in
+    to: ch
+  - from: ch
+    to: main
+  - from: ch
+    to: spill
+    port: spillway
+        """
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("spillway_port_mismatch" in str(x.message) for x in w)
 
     def test_incremental_channel_no_checkpoint_warns(self, tmp_path):
         yaml_str = """
@@ -209,7 +287,7 @@ modules:
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always", AqueductWarning)
                 _compile_yaml(yaml_str, tmp_path)
-                assert any("small files" in str(x.message) and "planned-future-checks" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
+                assert any("small files" in str(x.message) and "append-no-partition" in str(x.message) for x in w), f"No egress warning for format {fmt}: {[str(x.message) for x in w]}"
 
     def test_egress_append_with_partition_no_warn(self, tmp_path):
         yaml_str = """
@@ -404,7 +482,7 @@ modules:
       maintenance:
         optimize: true
         """
-        with pytest.warns(AqueductWarning, match="OPTIMIZE is a Delta Lake operation"):
+        with pytest.raises(CompileError, match="OPTIMIZE is a Delta Lake operation"):
             _compile_yaml(yaml_str, tmp_path)
 
     def test_optimize_true_delta_no_warn(self, tmp_path):
@@ -509,3 +587,155 @@ edges:
         yaml_str = self._bp("type: custom")
         with pytest.raises(AqueductError, match="exactly one source"):
             _compile_yaml(yaml_str, tmp_path)
+
+
+class TestBlueprintWarningSuppress:
+    """Per-Blueprint compile-warning suppression (`warnings.suppress` in the
+    Blueprint YAML). Covers all compile-time warnings — the modular registry
+    (`aqueduct/compiler/warnings/run_all`) and the inline section-7/8 compiler
+    checks — unioned with the engine-level suppress set, never touching the
+    process-global `set_default_suppress` default (see
+    `aqueduct/compiler/compiler.py`).
+    """
+
+    _REPARTITION_YAML = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: data
+"""
+
+    def test_blueprint_suppress_silences_that_rule(self, tmp_path):
+        yaml_str = self._REPARTITION_YAML + "warnings:\n  suppress: [file_format_no_repartition]\n"
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("file_format_no_repartition" in str(x.message) for x in w)
+
+    def test_without_suppress_block_still_warns(self, tmp_path):
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(self._REPARTITION_YAML, tmp_path)
+            assert any("file_format_no_repartition" in str(x.message) for x in w)
+
+    def test_engine_and_blueprint_suppress_merge(self, tmp_path):
+        """Engine suppresses one rule, Blueprint suppresses a different rule —
+        both must be silent (union), not just the blueprint's own."""
+        from aqueduct.warnings import _DEFAULT_SUPPRESS, set_default_suppress
+
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+modules:
+  - id: in
+    type: Ingress
+    label: IN
+    config: {format: parquet, path: data}
+  - id: ch
+    type: Channel
+    label: CH
+    config:
+      op: sql
+      query: "SELECT COUNT(id) AS n FROM in"
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: out
+warnings:
+  suppress: [file_format_no_repartition]
+"""
+        saved = set(_DEFAULT_SUPPRESS)
+        try:
+            set_default_suppress(["count_col_likely_count_star"])
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always", AqueductWarning)
+                _compile_yaml(yaml_str, tmp_path)
+                msgs = [str(x.message) for x in w]
+                assert not any("file_format_no_repartition" in m for m in msgs)
+                assert not any("count_col_likely_count_star" in m for m in msgs)
+        finally:
+            set_default_suppress(saved)
+
+    def test_blueprint_star_silences_all_compile_warnings(self, tmp_path):
+        yaml_str = self._REPARTITION_YAML + 'warnings:\n  suppress: ["*"]\n'
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any(isinstance(x.message, AqueductWarning) for x in w)
+
+    def test_blueprint_suppress_covers_inline_rules(self, tmp_path):
+        """Blueprint suppress must also silence the inline section-7/8
+        compiler warnings (e.g. delivery_append_retry_dupes), not just the
+        modular-registry rules — regression for the union being applied only
+        to the `run_all` pass."""
+        yaml_str = """
+aqueduct: "1.0"
+id: test
+name: Test
+retry_policy:
+  max_attempts: 3
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: data
+      mode: append
+warnings:
+  suppress: [delivery_append_retry_dupes, file_format_no_repartition]
+"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            _compile_yaml(yaml_str, tmp_path)
+            assert not any("delivery_append_retry_dupes" in str(x.message) for x in w)
+
+    def test_arcade_sub_blueprint_own_warnings_block_parses_and_is_ignored(self, tmp_path):
+        """Sub-Blueprint's own `warnings:` block must PARSE (valid on its own)
+        but is ignored — only the parent's suppress applies to the expanded
+        compilation unit."""
+        arcades_dir = tmp_path / "arcades"
+        arcades_dir.mkdir()
+        sub_yaml = """
+aqueduct: "1.0"
+id: sub.pipeline
+name: Sub
+modules:
+  - id: out
+    type: Egress
+    label: OUT
+    config:
+      format: parquet
+      path: sub_data
+warnings:
+  suppress: [kafka_checkpoint_stale]
+"""
+        (arcades_dir / "sub.yml").write_text(sub_yaml)
+
+        parent_yaml = """
+aqueduct: "1.0"
+id: parent.pipeline
+name: Parent
+modules:
+  - id: arc
+    type: Arcade
+    label: ARC
+    ref: arcades/sub.yml
+    context_override: {}
+warnings:
+  suppress: [file_format_no_repartition]
+"""
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", AqueductWarning)
+            manifest = _compile_yaml(parent_yaml, tmp_path)
+            assert any(m.id == "arc__out" for m in manifest.modules)
+            assert not any("file_format_no_repartition" in str(x.message) for x in w)

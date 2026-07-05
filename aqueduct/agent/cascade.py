@@ -1,4 +1,4 @@
-"""Phase 44 — Multi-model healing cascade.
+"""Multi-model healing cascade.
 
 Try cheap models first, escalate to expensive ones only when cheap
 models get stuck.  ~70% of heals are path typos / column renames a 7B
@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import Any
 
 from aqueduct.agent.budget import BudgetConfig, StopReason
-from aqueduct.agent.loop import AgentPatchResult, generate_agent_patch
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
+from aqueduct.agent.loop import AgentPatchResult, AgentRunConfig, generate_agent_patch
 from aqueduct.parser.models import CascadeTierConfig
 from aqueduct.surveyor.models import FailureContext
 
@@ -29,6 +30,13 @@ _ESCALATION_REASONS: frozenset[StopReason] = frozenset(
     {StopReason.STUCK_SIGNATURE, StopReason.EXHAUSTED_ATTEMPTS, StopReason.DEFERRED}
 )
 
+# A tier whose provider is simply unreachable (api_error: 404 model-not-pulled,
+# connection refused, …) should try the NEXT tier — each cascade tier has its
+# own base_url/api_key, so tier 1 being down says nothing about tier 2. Distinct
+# from _ESCALATION_REASONS ("the model gave up, try a stronger one"): this is
+# "this endpoint failed, try a different one". Only aborts on the final tier.
+_TIER_RETRY_REASONS: frozenset[StopReason] = frozenset({StopReason.API_ERROR})
+
 
 def generate_cascade_patch(
     tiers: list[CascadeTierConfig],
@@ -38,9 +46,10 @@ def generate_cascade_patch(
     # ── Defaults shared across all tiers (overridden per-tier) ──────
     provider: str = "anthropic",
     base_url: str | None = None,
+    api_key: str | None = None,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
-    max_tokens: int = 4096,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
@@ -57,6 +66,7 @@ def generate_cascade_patch(
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
     on_attempt: Callable | None = None,
+    on_token: Callable | None = None,
 ) -> AgentPatchResult:
     """Try each tier in order; escalate on stuck / exhausted / deferred.
 
@@ -82,15 +92,16 @@ def generate_cascade_patch(
     tokens_spent = 0
 
     for idx, tier in enumerate(tiers, start=1):
-        logger.info("── Cascade tier %d/%d: %s ──", idx, n, tier.model)
+        # The transcript renders the tier branch node; keep this at debug.
+        logger.debug("cascade tier %d/%d: %s", idx, n, tier.model)
 
         remaining_tokens = None
         if base_budget.max_tokens_total is not None:
             remaining_tokens = base_budget.max_tokens_total - tokens_spent
             if remaining_tokens < 1:
-                logger.warning(
-                    "── Cascade stopped before tier %d/%d: cascade-wide token cap "
-                    "exhausted (%d/%d tokens spent) ──",
+                logger.debug(
+                    "cascade stopped before tier %d/%d: cascade-wide token cap "
+                    "exhausted (%d/%d tokens spent)",
                     idx, n, tokens_spent, base_budget.max_tokens_total,
                 )
                 if result is not None:
@@ -107,31 +118,47 @@ def generate_cascade_patch(
             max_tokens_total=remaining_tokens,
         )
 
+        # Wrap on_attempt so the transcript writer can attribute each
+        # attempt to the current tier's model via the _aq_tier_model attr.
+        _tier_on_attempt = on_attempt
+        if on_attempt is not None:
+            _tier_model = tier.model
+
+            def _wrapped_on_attempt(rec, _cb=on_attempt, _m=_tier_model):
+                rec._aq_tier_model = _m  # type: ignore[attr-defined]
+                return _cb(rec)
+
+            _tier_on_attempt = _wrapped_on_attempt
+
         result = generate_agent_patch(
-            failure_ctx=failure_ctx,
-            model=tier.model,
-            patches_dir=patches_dir,
-            provider=tier.provider if tier.provider is not None else provider,
-            base_url=tier.base_url if tier.base_url is not None else base_url,
-            provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
-            timeout=tier.timeout if tier.timeout is not None else timeout,
-            max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,
-            max_reprompts=budget_cfg.max_reprompts,
-            engine_prompt_context=engine_prompt_context,
-            blueprint_prompt_context=blueprint_prompt_context,
-            last_apply_error=last_apply_error,
-            guardrails=guardrails,
-            budget=budget_cfg,
-            allow_defer=tier.allow_defer if tier.allow_defer is not None else allow_defer,
-            deep_loop=tier.deep_loop if tier.deep_loop is not None else deep_loop,
-            apply_callback=apply_callback,
-            validate_callback=validate_callback,
-            on_attempt=on_attempt,
-            model_cascade_position=idx - 1,
-            memory_coaching=memory_coaching,
-            retry_max_retries=retry_max_retries,
-            retry_backoff_seconds=retry_backoff_seconds,
-            obs_store=obs_store,
+            agent_cfg=AgentRunConfig(
+                failure_ctx=failure_ctx,
+                model=tier.model,
+                patches_dir=patches_dir,
+                provider=tier.provider if tier.provider is not None else provider,
+                base_url=tier.base_url if tier.base_url is not None else base_url,
+                api_key=tier.api_key if tier.api_key is not None else api_key,
+                provider_options=tier.provider_options if tier.provider_options is not None else provider_options,
+                timeout=tier.timeout if tier.timeout is not None else timeout,
+                max_tokens=tier.max_tokens if tier.max_tokens is not None else max_tokens,
+                max_reprompts=budget_cfg.max_reprompts,
+                engine_prompt_context=engine_prompt_context,
+                blueprint_prompt_context=blueprint_prompt_context,
+                last_apply_error=last_apply_error,
+                guardrails=guardrails,
+                budget=budget_cfg,
+                allow_defer=tier.allow_defer if tier.allow_defer is not None else allow_defer,
+                deep_loop=tier.deep_loop if tier.deep_loop is not None else deep_loop,
+                apply_callback=apply_callback,
+                validate_callback=validate_callback,
+                on_attempt=_tier_on_attempt,
+                on_token=on_token,
+                model_cascade_position=idx - 1,
+                memory_coaching=memory_coaching,
+                retry_max_retries=retry_max_retries,
+                retry_backoff_seconds=retry_backoff_seconds,
+                obs_store=obs_store,
+            ),
         )
 
         tokens_spent += result.tokens_in_total + result.tokens_out_total
@@ -139,24 +166,34 @@ def generate_cascade_patch(
         # Escalation check runs BEFORE the patch check: a defer result carries
         # a non-None patch (the diagnosis), and on any non-final tier that
         # means "this model gave up" — try the next tier.
+        # Cascade transitions are demoted to debug: the heal transcript already
+        # renders each tier as a branch node and the terminal └─ close states the
+        # outcome, so these would double up at default level. Still in -v / json.
         if result.stop_reason in _ESCALATION_REASONS and idx < n:
-            logger.info("⚠  %s — escalating to tier %d", result.stop_reason, idx + 1)
+            logger.debug("%s — escalating to tier %d", result.stop_reason, idx + 1)
             continue
 
         if result.patch is not None:
-            logger.info("── Cascade complete: %s (tier %d/%d, stop_reason=%s) ──",
+            logger.debug("cascade complete: %s (tier %d/%d, stop_reason=%s)",
                          result.patch.patch_id, idx, n, result.stop_reason)
             return result
 
         if result.stop_reason in _ESCALATION_REASONS:
             continue  # final tier — fall through to the exhausted log below
 
-        # Hard failure (api_error, budget_seconds_exceeded, …) — don't escalate.
-        logger.warning("── Cascade aborted: %s (tier %d/%d) ──",
-                       result.stop_reason, idx, n)
+        # Provider unreachable on this tier → try the next endpoint (its own
+        # base_url/api_key may be fine). Only the final tier aborts.
+        if result.stop_reason in _TIER_RETRY_REASONS and idx < n:
+            logger.debug("tier %d/%d unreachable (%s) — trying tier %d",
+                         idx, n, result.stop_reason, idx + 1)
+            continue
+
+        # Hard failure (budget_seconds_exceeded, or api_error on the last tier) —
+        # nothing left to try.
+        logger.debug("cascade aborted: %s (tier %d/%d)", result.stop_reason, idx, n)
         return result
 
     # All tiers exhausted without success.
-    logger.info("── Cascade exhausted: %d tier(s), stop_reason=%s ──",
-                n, result.stop_reason if result else "(no result)")
+    logger.debug("cascade exhausted: %d tier(s), stop_reason=%s",
+                 n, result.stop_reason if result else "(no result)")
     return result  # type: ignore[return-value]

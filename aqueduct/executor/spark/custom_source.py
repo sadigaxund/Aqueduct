@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
+from aqueduct.errors import ConfigError
+
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
@@ -29,29 +31,29 @@ def import_datasource_class(class_path: str):
     from pyspark.sql.datasource import DataSource
 
     if "." not in class_path:
-        raise ValueError(
+        raise ConfigError(
             f"custom DataSource 'class' must be fully qualified (module.Class), got {class_path!r}"
         )
     module_name, _, cls_name = class_path.rpartition(".")
     mod = importlib.import_module(module_name)
     cls = getattr(mod, cls_name, None)
     if cls is None:
-        raise ValueError(f"custom DataSource class {class_path!r} not found")
+        raise ConfigError(f"custom DataSource class {class_path!r} not found")
     if not (isinstance(cls, type) and issubclass(cls, DataSource)):
-        raise ValueError(
+        raise ConfigError(
             f"custom DataSource {class_path!r} must subclass pyspark.sql.datasource.DataSource"
         )
     return cls
 
 
-def register_custom_source(spark: "SparkSession", class_path: str) -> str:
+def register_custom_source(spark: SparkSession, class_path: str) -> str:
     """Import, validate, and register a custom DataSource. Returns its format name.
 
     Raises:
         RuntimeError: the running Spark is < 4.0 (no ``spark.dataSource`` registry).
     """
     if not hasattr(spark, "dataSource"):
-        raise RuntimeError(
+        raise ConfigError(
             "custom Python DataSource requires Spark 4.0+ "
             "(spark.dataSource registry is unavailable on this Spark)"
         )

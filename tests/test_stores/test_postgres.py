@@ -28,6 +28,6 @@ def test_postgres_missing_psycopg2(monkeypatch):
     dsn = "postgresql://aq:aq@localhost:5432/aq_test_missing"
     store = PostgresObservabilityStore(dsn)
     
-    with pytest.raises(ImportError, match="pip install aqueduct-core\[postgres\]"):
+    with pytest.raises(ImportError, match=r"pip install aqueduct-core\[postgres\]"):
         with store.connect():
             pass

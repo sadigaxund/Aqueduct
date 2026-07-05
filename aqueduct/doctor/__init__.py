@@ -29,7 +29,7 @@ avoid a circular import.
 from __future__ import annotations
 
 import os
-from aqueduct.parser.models import ModuleType
+import re
 import sys
 import time
 from pathlib import Path
@@ -43,10 +43,12 @@ from aqueduct.doctor.checks_io import (
     check_config,
     check_depot,
     check_observability,
+    check_remote_target,
     check_secrets,
     check_store_backend,
     check_webhook,
 )
+from aqueduct.parser.models import ModuleType
 
 __all__ = [
     "CheckResult",
@@ -57,9 +59,11 @@ __all__ = [
     "check_blueprint_sources_from_manifest",
     "check_cascade_tiers",
     "check_cloudpickle_compat",
+    "check_java",
     "check_config",
     "check_depot",
     "check_observability",
+    "check_remote_target",
     "check_secrets",
     "check_spark",
     "check_storage",
@@ -72,9 +76,16 @@ __all__ = [
 # ── Spark + network cluster ─────────────────────────────────────────────────
 
 def _host_port(url: str, default_port: int) -> tuple[str, int] | None:
-    """Extract (host, port) from spark://h:p / http://h:p / h:p. None if unparseable."""
+    """Extract (host, port) from spark://h:p / http://h:p / h:p / k8s://https://h:p.
+
+    Returns None if unparseable.  ``k8s://`` URLs carry a double scheme
+    (k8s://https://host:port) — the outer ``k8s://`` is stripped first so the
+    inner ``https://`` URL is parsed normally.
+    """
     import re
     from urllib.parse import urlparse
+    if url.startswith("k8s://"):
+        url = url[len("k8s://"):]
     if "://" in url:
         p = urlparse(url)
         if p.hostname:
@@ -95,34 +106,102 @@ def _tcp_ok(host: str, port: int, timeout: float = 3.0) -> bool:
         return False
 
 
-def _reachability_probe(master_url: str, spark_config: dict[str, Any]) -> tuple[CheckResult, CheckResult]:
+def _reachability_probe(
+    master_url: str, spark_config: dict[str, Any], target: str = "local",
+) -> tuple[CheckResult, CheckResult]:
     """Fast, bounded default: TCP-reach the master + S3 endpoint. No SparkSession.
 
     Answers the 95% question — "is my master/endpoint wiring sane" — in ~3s,
     with no slow-vs-broken ambiguity. Full session test lives behind --preflight.
+
+    target-aware: adds yarn env-var checks and k8s API-server TCP probe +
+    spark.kubernetes.* key validation.
     """
     t = time.monotonic()
     hint = "  (reachability only — run `aqueduct doctor --preflight` for a full Spark session test)"
 
-    if master_url.startswith("local"):
+    if target == "local":
         spark_res = CheckResult(
             "spark", "ok",
-            f"master={master_url}  local mode — session built in-process at run time{hint}",
+            f"target={target}  master={master_url}  local mode — session built in-process at run time{hint}",
             _ms(t),
         )
-    else:
-        hp = _host_port(master_url, 7077)
+    elif target == "yarn":
+        hadoop_dir = os.environ.get("HADOOP_CONF_DIR") or os.environ.get("YARN_CONF_DIR")
+        if hadoop_dir:
+            spark_res = CheckResult(
+                "spark", "ok",
+                f"target={target}  master={master_url}  HADOOP_CONF_DIR/YARN_CONF_DIR={hadoop_dir}{hint}",
+                _ms(t),
+            )
+        else:
+            spark_res = CheckResult(
+                "spark", "warn",
+                f"target={target}  master={master_url}  "
+                f"Spark cannot locate the YARN ResourceManager without "
+                f"HADOOP_CONF_DIR or YARN_CONF_DIR. "
+                f"Set one in the environment.{hint}",
+                _ms(t),
+            )
+    elif target == "kubernetes":
+        # Parse API server host:port from k8s:// URL
+        hp = _host_port(master_url, 443)
         if hp is None:
-            spark_res = CheckResult("spark", "warn", f"master={master_url}  cannot parse host:port for TCP probe{hint}", _ms(t))
+            k8s_detail = f"master={master_url}  cannot parse API server host:port from k8s:// URL{hint}"
+            spark_res = CheckResult("spark", "warn", k8s_detail, _ms(t))
         elif _tcp_ok(*hp):
-            spark_res = CheckResult("spark", "ok", f"master={master_url}  reachable (TCP {hp[0]}:{hp[1]}){hint}", _ms(t))
+            k8s_detail = (
+                f"target={target}  master={master_url}  "
+                f"API server reachable (TCP {hp[0]}:{hp[1]}){hint}"
+            )
+            # Warn if no spark.kubernetes.* keys are present
+            has_k8s_keys = any(
+                k.startswith("spark.kubernetes.") for k in spark_config
+            )
+            if not has_k8s_keys:
+                k8s_detail += (
+                    "  no spark.kubernetes.* keys in spark_config — "
+                    "namespace and container image are normally required"
+                )
+            spark_res = CheckResult("spark", "ok" if has_k8s_keys else "warn", k8s_detail, _ms(t))
         else:
             spark_res = CheckResult(
                 "spark", "fail",
-                f"master={master_url}  TCP connect to {hp[0]}:{hp[1]} failed — master down, "
+                f"target={target}  master={master_url}  "
+                f"TCP connect to API server {hp[0]}:{hp[1]} failed — "
+                f"cluster unreachable, wrong URL, or firewall.",
+                _ms(t),
+            )
+    elif target == "standalone":
+        hp = _host_port(master_url, 7077)
+        if hp is None:
+            spark_res = CheckResult(
+                "spark", "warn",
+                f"target={target}  master={master_url}  cannot parse host:port for TCP probe{hint}",
+                _ms(t),
+            )
+        elif _tcp_ok(*hp):
+            spark_res = CheckResult(
+                "spark", "ok",
+                f"target={target}  master={master_url}  reachable (TCP {hp[0]}:{hp[1]}){hint}",
+                _ms(t),
+            )
+        else:
+            spark_res = CheckResult(
+                "spark", "fail",
+                f"target={target}  master={master_url}  "
+                f"TCP connect to {hp[0]}:{hp[1]} failed — master down, "
                 f"wrong HOST_IP, or firewall. (Not a timeout: no SparkSession was built.)",
                 _ms(t),
             )
+    else:
+        # Fallback for unknown targets (e.g. the remote-submit ones that were
+        # already rejected at config-load — doctor only sees valid config).
+        spark_res = CheckResult(
+            "spark", "ok",
+            f"target={target}  master={master_url}  (no target-specific probe){hint}",
+            _ms(t),
+        )
 
     # S3A endpoint reachability (only if object storage is configured).
     s3_ep = spark_config.get("spark.hadoop.fs.s3a.endpoint")
@@ -139,13 +218,95 @@ def _reachability_probe(master_url: str, spark_config: dict[str, Any]) -> tuple[
     return spark_res, storage_res
 
 
+def _spark_version_verdict(cluster_ver: str, client_ver: str) -> tuple[str, str]:
+    """Compare cluster Spark vs client pyspark on **major.minor** (pure, testable).
+
+    Equality → ``("ok", "")``. Any major **or** minor difference → ``("warn",
+    note)`` — the "driver pyspark X.Y ≠ cluster Spark A.B" mismatch that throws
+    cryptic serialization/RPC errors mid-job, surfaced at doctor time instead. No
+    compatibility matrix — a plain ``major.minor`` equality check."""
+    def _mm(v: str) -> tuple[str, str]:
+        parts = (v or "").split(".")
+        return (parts[0] if parts and parts[0] else "?", parts[1] if len(parts) > 1 else "0")
+    if _mm(cluster_ver) == _mm(client_ver):
+        return "ok", ""
+    return "warn", (
+        f"  ⚠ version mismatch: driver pyspark={client_ver} ≠ cluster Spark={cluster_ver} "
+        f"(differ on major.minor — align them; runtime errors likely)"
+    )
+
+
+def _parse_java_major(version_output: str) -> int | None:
+    """Major Java version from ``java -version`` text (pure, testable).
+
+    Handles legacy ``1.8.0`` → 8 and modern ``17.0.10`` → 17. None when
+    unparseable."""
+    m = re.search(r'version "(\d+)(?:\.(\d+))?', version_output or "")
+    if not m:
+        return None
+    major = int(m.group(1))
+    if major == 1 and m.group(2):  # legacy "1.8" naming → 8
+        return int(m.group(2))
+    return major
+
+
+def check_java() -> CheckResult:
+    """Report the JVM Spark will launch (``JAVA_HOME`` or PATH ``java``).
+
+    Spark runs on the JVM; a wrong JDK fails the session build with a cryptic
+    error (only under ``--preflight``, since plain ``doctor`` builds no session).
+    This surfaces the detected version + where it came from so a mismatch is
+    obvious. **No compatibility matrix** — just the version, plus a single nudge
+    (pyspark 4 dropped Java < 17). Never fatal."""
+    import shutil
+    import subprocess
+    t = time.monotonic()
+    java_home = os.environ.get("JAVA_HOME")
+    exe = None
+    if java_home:
+        cand = Path(java_home) / "bin" / "java"
+        if cand.exists():
+            exe = str(cand)
+    exe = exe or shutil.which("java")
+    if not exe:
+        return CheckResult(
+            "java", "warn",
+            "no java found (JAVA_HOME unset and `java` not on PATH) — Spark needs a JDK; "
+            "point JAVA_HOME at a Java 17 JDK", _ms(t),
+        )
+    try:
+        out = subprocess.run([exe, "-version"], capture_output=True, text=True, timeout=10)
+        text = (out.stderr or "") + (out.stdout or "")
+    except Exception as exc:
+        return CheckResult("java", "warn", f"could not run `{exe} -version`: {exc}", _ms(t))
+    major = _parse_java_major(text)
+    where = f"JAVA_HOME={java_home}" if java_home else f"PATH:{exe}"
+    if major is None:
+        return CheckResult("java", "warn", f"java found ({where}) but version unparseable", _ms(t))
+    detail = f"Java {major}  ({where})"
+    try:  # single non-matrix nudge: Spark 4 requires Java 17+
+        import pyspark
+        if int(pyspark.__version__.split(".")[0]) >= 4 and major < 17:
+            return CheckResult(
+                "java", "warn",
+                f"{detail}  ⚠ pyspark {pyspark.__version__} needs Java 17+ — "
+                f"point JAVA_HOME at a 17 JDK", _ms(t),
+            )
+    except Exception:
+        pass
+    return CheckResult("java", "ok", detail, _ms(t))
+
+
 def check_spark(
-    master_url: str, spark_config: dict[str, Any], preflight: bool = False
+    master_url: str, spark_config: dict[str, Any],
+    preflight: bool = False, target: str = "local",
 ) -> tuple[CheckResult, CheckResult]:
     """Probe Spark + object storage.
 
     Default (`preflight=False`): fast bounded TCP reachability of master +
     S3 endpoint. No SparkSession — no slow/broken ambiguity, no false timeout.
+    Target-aware: yarn checks HADOOP_CONF_DIR, k8s probes the API server
+    and validates spark.kubernetes.* keys.
 
     `preflight=True`: build a real SparkSession with the actual spark_config,
     run a task, check version + storage. **Unbounded** — you asked for the
@@ -153,23 +314,23 @@ def check_spark(
     (Ctrl-C to abort). This is the real "will my pipeline's Spark start" test.
     """
     if not preflight:
-        return _reachability_probe(master_url, spark_config)
+        return _reachability_probe(master_url, spark_config, target=target)
 
     t = time.monotonic()
     try:
         import pyspark
+
         from aqueduct.executor.spark.session import make_spark_session
         spark = make_spark_session("aqueduct.doctor", spark_config, master_url=master_url, quiet=True)
         spark.range(1).count()
         cluster_ver = spark.version
         client_ver = pyspark.__version__
-        ver_mismatch = cluster_ver.split(".")[0] != client_ver.split(".")[0]
-        ver_note = f"  ⚠ major version mismatch: pyspark={client_ver} cluster={cluster_ver}" if ver_mismatch else ""
+        ver_status, ver_note = _spark_version_verdict(cluster_ver, client_ver)
         spark_detail = f"connected  master={master_url}  spark={cluster_ver}  pyspark={client_ver}  [preflight]{ver_note}"
         storage_result = check_storage(spark_config, spark_ok=True)
         from aqueduct.executor.spark.session import stop_spark_session
         stop_spark_session(spark)
-        return CheckResult("spark", "warn" if ver_mismatch else "ok", spark_detail, _ms(t)), storage_result
+        return CheckResult("spark", ver_status, spark_detail, _ms(t)), storage_result
     except Exception as exc:
         return (
             CheckResult("spark", "fail", f"preflight session failed: {master_url}: {exc}", _ms(t)),
@@ -240,7 +401,7 @@ def check_storage(
 
 # ── Blueprint source checks ─────────────────────────────────────────────────
 
-def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "local") -> list[CheckResult]:
+def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "local", *, preflight: bool = False) -> list[CheckResult]:
     """Check all Ingress/Egress paths using an already-compiled Manifest.
 
     Advantages over check_blueprint_sources():
@@ -303,6 +464,24 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
                 results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
             continue
 
+        # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
+        table_val: str | None = cfg.get("table")
+        if table_val:
+            try:
+                from pyspark.sql import SparkSession
+
+                spark = SparkSession.builder.getOrCreate()
+                exists = spark.catalog.tableExists(table_val)
+                if exists:
+                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"table not found: {table_val}", _ms(t)))
+            except ModuleNotFoundError:
+                results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify table existence", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
+            continue
+
         # ── JDBC ──────────────────────────────────────────────────────────────
         jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
         if jdbc_url or fmt == "jdbc":
@@ -316,14 +495,14 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
             try:
                 with socket.create_connection((host, port), timeout=3):
                     pass
-                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+                results.append(_jdbc_result(name, host, port, raw, cfg, t, preflight=preflight))
             except OSError as exc:
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
 
-        # ── Cloud URIs ─────────────────────────────────────────────────────────
+        # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
             continue
 
         # ── Local / relative path (already fully resolved — no ${ctx.*} refs) ─
@@ -378,10 +557,50 @@ def check_blueprint_sources_from_manifest(manifest: Any, deployment_env: str = "
     results.extend(_check_heal_guardrail_typos(manifest))
     results.extend(_check_spillway_error_types(manifest))
     results.extend(_check_iceberg_catalog(manifest))
+    results.extend(_check_udf_registry(manifest, preflight=preflight))
     return results
 
 
-def _check_iceberg_catalog(manifest: Any) -> "list[CheckResult]":
+def _check_udf_registry(manifest: Any, *, preflight: bool = False) -> list[CheckResult]:
+    """Validate Python UDF registry entries by actually importing them.
+
+    Default: nothing (importing executes the module's top-level code → not free).
+    ``--preflight``: import each python ``module`` + resolve its ``entry``, so a
+    typo or missing dependency is caught at doctor time, not mid-run. Java/jar
+    UDFs are skipped (not a Python import). Non-fatal (warn/skip)."""
+    entries = getattr(manifest, "udf_registry", ()) or ()
+    if not entries or not preflight:
+        return []
+    import importlib
+    out: list[CheckResult] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        udf_id = entry.get("id") or entry.get("entry") or "?"
+        name = f"udf:{udf_id}"
+        lang = (entry.get("lang") or "python").lower()
+        if lang != "python":
+            out.append(CheckResult(name, "skip", f"lang={lang} (import check is python-only)", group="validation"))
+            continue
+        module_path = entry.get("module")
+        entry_name = entry.get("entry") or udf_id
+        t = time.monotonic()
+        if not module_path:
+            out.append(CheckResult(name, "warn", "no `module` set for python UDF", _ms(t), group="validation"))
+            continue
+        try:
+            mod = importlib.import_module(module_path)
+        except Exception as exc:
+            out.append(CheckResult(name, "warn", f"cannot import {module_path!r}: {exc}", _ms(t), group="validation"))
+            continue
+        if getattr(mod, entry_name, None) is None:
+            out.append(CheckResult(name, "warn", f"{entry_name!r} not found in {module_path!r}", _ms(t), group="validation"))
+            continue
+        out.append(CheckResult(name, "ok", f"{module_path}:{entry_name} imports", _ms(t), group="validation"))
+    return out
+
+
+def _check_iceberg_catalog(manifest: Any) -> list[CheckResult]:
     """Warn if a `format: iceberg` module has no `spark.sql.catalog.*` configured.
 
     Iceberg needs a catalog (`spark.sql.catalog.<name> = ...`), not just the
@@ -417,7 +636,7 @@ def _check_iceberg_catalog(manifest: Any) -> "list[CheckResult]":
     return results
 
 
-def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
+def _check_spillway_error_types(manifest: Any) -> list[CheckResult]:
     """Warn if a spillway edge's error_types filter can never match.
 
     Quarantined rows carry an ``_aq_error_type`` label: the Assert rule's
@@ -455,7 +674,7 @@ def _check_spillway_error_types(manifest: Any) -> "list[CheckResult]":
     return results
 
 
-def _check_heal_guardrail_typos(manifest: Any) -> "list[CheckResult]":
+def _check_heal_guardrail_typos(manifest: Any) -> list[CheckResult]:
     """Warn if heal_on_errors / never_heal_errors entries don't match any known error_type
     in the blueprint's Assert rules and aren't a recognised exception class name pattern.
 
@@ -507,6 +726,8 @@ def check_cascade_tiers(
     blueprint_path: Path,
     engine_provider: str = "anthropic",
     engine_base_url: str | None = None,
+    *,
+    preflight: bool = False,
 ) -> list[CheckResult]:
     """Phase 46 — per-tier credential/endpoint checks for `agent.cascade:`.
 
@@ -553,6 +774,30 @@ def check_cascade_tiers(
                     "(tier or engine agent.base_url) — escalation to this tier will fail.",
                     _ms(t), group="agent",
                 ))
+            elif preflight:
+                # Default only checks base_url is configured; --preflight proves the
+                # endpoint actually responds AND this tier's model is loaded.
+                from aqueduct.doctor.checks_io import _probe_openai_models
+                available, err = _probe_openai_models(base)
+                if err is not None:
+                    results.append(CheckResult(
+                        name, "warn",
+                        f"tier {idx} ({model})  base_url={base} unreachable: {err}",
+                        _ms(t), group="agent",
+                    ))
+                elif available and model not in available:
+                    results.append(CheckResult(
+                        name, "warn",
+                        f"tier {idx} ({model}) not in {len(available)} loaded models at {base}: "
+                        f"{', '.join(available[:5])}",
+                        _ms(t), group="agent",
+                    ))
+                else:
+                    results.append(CheckResult(
+                        name, "ok",
+                        f"tier {idx} ({model})  reachable  ({len(available)} models)  [preflight]",
+                        _ms(t), group="agent",
+                    ))
             else:
                 results.append(CheckResult(
                     name, "ok", f"tier {idx} ({model})  provider=openai_compat  base_url={base}",
@@ -566,16 +811,77 @@ def check_cascade_tiers(
     return results
 
 
+def _cloud_uri_check(name: str, path_val: str, module_type: Any, t: float, *, preflight: bool) -> CheckResult:
+    """Probe a cloud-URI (s3a/gs/abfss) Ingress/Egress source.
+
+    Default (no ``--preflight``): skip — only the storage check's endpoint
+    reachability runs. With ``--preflight`` a Spark session already exists, so
+    verify the object via Spark's own Hadoop ``FileSystem`` — reusing the exact
+    s3a/gcs/adls credentials the run will use (no separate SDK/cred setup, no
+    credential translation). pyspark is imported lazily so top-level
+    ``import aqueduct.doctor`` stays pyspark-free.
+    """
+    if not preflight:
+        return CheckResult(
+            name, "skip",
+            f"cloud URI — endpoint reachability covered by storage check; "
+            f"--preflight verifies the object exists: {path_val}", _ms(t),
+        )
+    try:
+        from pyspark.sql import SparkSession
+        spark = SparkSession.builder.getOrCreate()
+        jpath = spark._jvm.org.apache.hadoop.fs.Path(path_val)
+        fs = jpath.getFileSystem(spark._jsc.hadoopConfiguration())
+        if module_type == ModuleType.Ingress:
+            if fs.exists(jpath):
+                return CheckResult(name, "ok", f"cloud object exists: {path_val}", _ms(t))
+            return CheckResult(name, "fail", f"cloud object not found: {path_val}", _ms(t))
+        # Egress — confirm the bucket/prefix resolves (credentials + container OK)
+        fs.exists(jpath.getParent())
+        return CheckResult(name, "ok", f"cloud target reachable (parent prefix resolved): {path_val}", _ms(t))
+    except ModuleNotFoundError:
+        return CheckResult(name, "skip", "pyspark not installed — cannot verify cloud object", _ms(t))
+    except Exception as exc:
+        return CheckResult(name, "warn", f"cloud URI {path_val!r}: {exc}", _ms(t))
+
+
+def check_hooks(blueprint_path: Path) -> CheckResult:
+    """Static `hooks:` health — walks `blueprint:` hook references without
+    executing anything; reports cycles, chain-depth overflow, and missing
+    target files. Skips when the Blueprint declares no hooks."""
+    t = time.monotonic()
+    try:
+        import yaml
+        raw = yaml.safe_load(Path(blueprint_path).read_text(encoding="utf-8")) or {}
+    except Exception:
+        raw = {}
+    if not raw.get("hooks"):
+        return CheckResult("hooks", "skip", "not configured", _ms(t))
+    try:
+        from aqueduct.cli.hooks import static_hook_check
+        problems = static_hook_check(Path(blueprint_path))
+    except Exception as exc:  # noqa: BLE001 — doctor checks never raise
+        return CheckResult("hooks", "warn", f"hook check failed: {exc}", _ms(t))
+    if problems:
+        return CheckResult("hooks", "warn", "; ".join(problems), _ms(t))
+    return CheckResult("hooks", "ok", "no cycles; all blueprint targets exist", _ms(t))
+
+
 def check_blueprint_sources(
     blueprint_path: Path,
     _context_override: dict[str, Any] | None = None,
+    *,
+    preflight: bool = False,
 ) -> list[CheckResult]:
     """Parse a Blueprint and probe every Ingress/Egress path or JDBC endpoint.
 
     Local paths: checked for existence (Ingress) or parent-dir writability (Egress).
     Relative paths resolve from the project root (directory containing aqueduct.yml),
     found by walking up from the blueprint — same logic as `aqueduct run`.
-    Cloud URIs (s3a://, gs://, abfss://): skipped here — covered by storage check.
+    Cloud URIs (s3a://, gs://, abfss://): without ``preflight`` only the storage
+    check's endpoint reachability runs; with ``preflight`` (a live Spark session)
+    the object's existence is verified via Spark's Hadoop FileSystem, reusing the
+    run's exact s3a/gcs/adls credentials.
     JDBC URLs: TCP socket probe to host:port (3s timeout — checks reachability,
                not credentials or schema).
     _context_override: caller-provided context injected when checking Arcade sub-blueprints.
@@ -634,6 +940,24 @@ def check_blueprint_sources(
                 results.append(CheckResult(name, "fail", f"custom DataSource {class_path!r}: {exc}", _ms(t)))
             continue
 
+        # ── Table-addressed Ingress/Egress (catalog.schema.table) ──────────────
+        table_val: str | None = cfg.get("table")
+        if table_val:
+            try:
+                from pyspark.sql import SparkSession
+
+                spark = SparkSession.builder.getOrCreate()
+                exists = spark.catalog.tableExists(table_val)
+                if exists:
+                    results.append(CheckResult(name, "ok", f"table exists: {table_val}", _ms(t)))
+                else:
+                    results.append(CheckResult(name, "fail", f"table not found: {table_val}", _ms(t)))
+            except ModuleNotFoundError:
+                results.append(CheckResult(name, "skip", "pyspark not installed — cannot verify table existence", _ms(t)))
+            except Exception as exc:
+                results.append(CheckResult(name, "warn", f"table {table_val!r}: {exc}", _ms(t)))
+            continue
+
         # ── JDBC ──────────────────────────────────────────────────────────────
         jdbc_url = url_val or (path_val if path_val and path_val.startswith("jdbc:") else None)
         if jdbc_url or fmt == "jdbc":
@@ -648,14 +972,14 @@ def check_blueprint_sources(
             try:
                 with socket.create_connection((host, port), timeout=3):
                     pass
-                results.append(CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t)))
+                results.append(_jdbc_result(name, host, port, raw, cfg, t, preflight=preflight))
             except OSError as exc:
                 results.append(CheckResult(name, "fail", f"JDBC {host}:{port} unreachable: {exc}", _ms(t)))
             continue
 
-        # ── Cloud URIs — skip (covered by storage check) ───────────────────
+        # ── Cloud URIs — defer to storage check, or verify object under --preflight ─
         if path_val and re.match(r"(s3a?|gs|abfss?)://", path_val):
-            results.append(CheckResult(name, "skip", f"cloud URI — covered by storage check: {path_val}", _ms(t)))
+            results.append(_cloud_uri_check(name, path_val, module.type, t, preflight=preflight))
             continue
 
         # ── Local / relative path ──────────────────────────────────────────
@@ -708,6 +1032,7 @@ def check_blueprint_sources(
         sub_results = check_blueprint_sources(
             sub_path,
             _context_override=module.context_override or {},
+            preflight=preflight,
         )
         # Prefix each result name so the user knows which arcade it came from
         for r in sub_results:
@@ -765,6 +1090,55 @@ def _jdbc_default_port(jdbc_url: str) -> int:
         if key in jdbc_url.lower():
             return port
     return 5432  # safe fallback
+
+
+def _jdbc_preflight_auth(raw: str, cfg: Any) -> tuple[str, str] | None:
+    """Real JDBC connect+auth under ``--preflight`` (vs the default TCP probe).
+
+    Python-side, so only subprotocols with an installed driver are attempted —
+    ``jdbc:postgresql:`` via psycopg2 (already a store dependency). Other
+    subprotocols (mysql/oracle/…) return ``None`` so the caller keeps the TCP
+    reachability result — the plan's "degrade to skip if the driver is absent".
+    Credentials come from the source ``user``/``password`` options. Never raises."""
+    if not raw.startswith("jdbc:postgresql:"):
+        return None
+    try:
+        import psycopg2  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    dsn = raw[len("jdbc:"):]  # jdbc:postgresql://h:p/db → postgresql://h:p/db (libpq URI)
+    user = cfg.get("user") if hasattr(cfg, "get") else None
+    pwd = cfg.get("password") if hasattr(cfg, "get") else None
+    kw = {"connect_timeout": 5}
+    if user:
+        kw["user"] = user
+    if pwd:
+        kw["password"] = pwd
+    try:
+        conn = psycopg2.connect(dsn, **kw)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                cur.fetchone()
+        finally:
+            conn.close()
+        return "ok", "connect+auth verified [preflight]"
+    except Exception as exc:
+        return "warn", f"reachable but connect/auth failed: {exc} [preflight]"
+
+
+def _jdbc_result(name: str, host: str, port: int, raw: str, cfg: Any, t: float, *, preflight: bool) -> CheckResult:
+    """TCP reachability (default) or a real connect+auth (``--preflight``)."""
+    if preflight:
+        auth = _jdbc_preflight_auth(raw, cfg)
+        if auth is not None:
+            return CheckResult(name, auth[0], f"JDBC {host}:{port} {auth[1]}", _ms(t))
+        return CheckResult(
+            name, "ok",
+            f"JDBC {host}:{port} reachable  [preflight: TCP only — no python driver for subprotocol]",
+            _ms(t),
+        )
+    return CheckResult(name, "ok", f"JDBC {host}:{port} reachable", _ms(t))
 
 
 # ── Cloudpickle compatibility check ──────────────────────────────────────────
@@ -845,7 +1219,7 @@ def run_doctor(
     preflight: bool = False,
 ) -> list[CheckResult]:
     """Run all checks and return results in order."""
-    from aqueduct.config import load_config, ConfigError
+    from aqueduct.config import ConfigError, load_config
 
     results: list[CheckResult] = []
 
@@ -859,6 +1233,7 @@ def run_doctor(
         results.append(CheckResult("secrets", "skip", "config failed"))
         results.append(CheckResult("agent", "skip", "config failed"))
         results.append(CheckResult("webhook", "skip", "config failed"))
+        results.append(CheckResult("remote-target", "skip", "config failed"))
         results.append(CheckResult("spark", "skip", "config failed"))
         results.append(CheckResult("storage", "skip", "config failed"))
         return results
@@ -875,8 +1250,7 @@ def run_doctor(
     if cfg.deployment.env in ("cluster", "cloud"):
         _store_specs = {
             "observability": (cfg.stores.observability.backend, cfg.stores.observability.path),
-            "lineage":        (cfg.stores.lineage.backend,       cfg.stores.lineage.path),
-            "depot":          (cfg.stores.depot.backend,         cfg.stores.depot.path),
+            "depot":          (cfg.stores.default_depot().backend,         cfg.stores.default_depot().path),
         }
         _duckdb_paths = {
             name: p for name, (backend, p) in _store_specs.items()
@@ -901,23 +1275,47 @@ def run_doctor(
         else:
             results.append(CheckResult("cluster-stores", "ok", "no DuckDB stores — backend-managed persistence", group="stores"))
     else:
-        results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
+        # env=local → client-mode (local driver), so DuckDB on the local FS
+        # persists fine. But a REMOTE master + relative DuckDB path is a smell:
+        # switch to --deploy-mode cluster later and it's lost. Soft nudge only.
+        _master = getattr(cfg.deployment, "master_url", None) or ""
+        _remote_master = bool(_master) and not _master.startswith("local")
+        _rel = [
+            name for name, store in (
+                ("observability", cfg.stores.observability), ("depot", cfg.stores.default_depot()),
+            )
+            if store.backend == "duckdb"
+            and (not store.path or str(store.path).startswith(".") or not Path(store.path).is_absolute())
+        ]
+        if _remote_master and _rel:
+            results.append(CheckResult(
+                "cluster-stores", "warn",
+                f"env=local but master is remote ({_master}) with relative DuckDB paths {_rel} — "
+                "fine for client mode (local driver), but lost under --deploy-mode cluster. Use an "
+                "absolute shared-FS path or postgres/redis before switching.",
+                group="stores",
+            ))
+        else:
+            results.append(CheckResult("cluster-stores", "skip", "local mode — no cluster store check", group="stores"))
 
     # Cloudpickle compatibility (pure version check — no Spark needed)
     results.append(check_cloudpickle_compat(cfg.deployment.master_url))
 
+    # Java runtime the JVM/Spark launches (pure detection — no Spark session)
+    results.append(check_java())
+
     # Per-store backend reachability — replaces the legacy observability.db/depot.db
     # file probes when a non-DuckDB backend is configured. For DuckDB
     # backends both probes still run and report the same OK signal.
-    results.append(check_store_backend("observability", cfg.stores.observability))
-    results.append(check_store_backend("lineage",       cfg.stores.lineage))
-    results.append(check_store_backend("depot",   cfg.stores.depot, is_kv_only=True))
+    results.append(check_store_backend("observability", cfg.stores.observability, preflight=preflight))
+    results.append(check_store_backend("depot",   cfg.stores.default_depot(), is_kv_only=True, preflight=preflight))
 
     # Secrets
-    results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver))
+    _secrets_base_dir = str((config_path.parent if config_path else Path.cwd()).resolve())
+    results.append(check_secrets(cfg.secrets.provider, resolver=cfg.secrets.resolver, base_dir=_secrets_base_dir))
 
     # LLM connectivity
-    results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model))
+    results.append(check_agent(cfg.agent.provider, cfg.agent.base_url, cfg.agent.model, preflight=preflight))
 
     # Phase 46 — cascade tier credentials/endpoints (blueprint-level config)
     if blueprint_path is not None:
@@ -925,7 +1323,14 @@ def run_doctor(
             blueprint_path,
             engine_provider=cfg.agent.provider,
             engine_base_url=cfg.agent.base_url,
+            preflight=preflight,
         ))
+
+    # Hooks — static walk of the `hooks.blueprint:` chain (cycles, depth,
+    # missing targets) without running anything. Mirrors the runtime
+    # AQUEDUCT_HOOK_CHAIN guard in cli/hooks.py.
+    if blueprint_path is not None:
+        results.append(check_hooks(blueprint_path))
 
     # Webhook (if configured)
     wh = cfg.webhooks.on_failure
@@ -940,6 +1345,9 @@ def run_doctor(
     else:
         results.append(CheckResult("webhook", "skip", "not configured"))
 
+    # Remote-target credentials / API reachability (non-fatal)
+    results.append(check_remote_target(cfg))
+
     # Spark + storage (optional, slow — storage probe runs inside same session)
     if skip_spark:
         results.append(CheckResult("spark", "skip", "--skip-spark flag set", group="spark"))
@@ -953,13 +1361,18 @@ def run_doctor(
         return results
 
     spark_result, storage_result = check_spark(
-        cfg.deployment.master_url, cfg.spark_config, preflight=preflight
+        cfg.deployment.master_url, cfg.spark_config,
+        preflight=preflight, target=cfg.deployment.target,
     )
     results.append(spark_result)
     results.append(storage_result)
 
     if blueprint_path is not None:
-        results.extend(check_blueprint_sources(blueprint_path))
+        # Pass preflight only when the session actually built — cloud-object
+        # verification reuses it (spark_result.status != "fail" means it's up).
+        results.extend(check_blueprint_sources(
+            blueprint_path, preflight=preflight and spark_result.status != "fail",
+        ))
     if aqtest_path is not None:
         results.extend(check_aqtest(aqtest_path))
     if aqscenario_path is not None:

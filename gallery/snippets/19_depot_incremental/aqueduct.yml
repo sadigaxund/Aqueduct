@@ -1,5 +1,9 @@
 aqueduct_config: "1.0"
 
+warnings:
+  suppress:
+    - "*"
+
 # aqueduct.yml
 deployment:
   engine: spark
@@ -9,8 +13,9 @@ deployment:
 stores:
   observability:
     backend: duckdb
-    path: .aqueduct/observability.db
+    path: .aqueduct
   # The Depot store persists watermarks for incremental processing
-  depot:
-    backend: duckdb
-    path: .aqueduct/depot.db
+  depots:
+    default:
+      backend: duckdb
+      path: .aqueduct/depot.db

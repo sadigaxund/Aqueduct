@@ -14,14 +14,13 @@ import uuid
 
 import pytest
 
-from aqueduct.parser.models import Module, Edge
-
+from aqueduct.parser.models import Edge, Module
 
 # ── 1838: DepotStore round-trips a watermark via kv_put / kv_get ──────────────
 
 def test_depot_store_watermark_roundtrip(depot_store):
     """DepotStore (DuckDB/Postgres/Redis) round-trips a watermark value."""
-    wm_key = f"bp1:ch_inc:_watermark"
+    wm_key = "bp1:ch_inc:_watermark"
     wm_value = "2024-06-01 12:00:00"
 
     # absent → default
@@ -82,20 +81,22 @@ def test_write_lineage_into_configured_store(observability_store, tmp_path):
 @pytest.mark.integration
 def test_execute_persists_into_postgres(spark, tmp_path):
     """execute(..., observability_store=pg) persists rows."""
-    from tests.conftest import _pg_is_reachable, _pg_dsn
+    from tests.conftest import _pg_dsn, _pg_is_reachable
     if not _pg_is_reachable():
         pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
 
     import psycopg2
-    from aqueduct.stores.postgres import (
-        PostgresObservabilityStore, PostgresDepotStore,
-    )
-    from aqueduct.stores.base import StoreBundle
-    from aqueduct.surveyor.surveyor import Surveyor
-    from aqueduct.executor.spark.executor import execute
+
     from aqueduct.compiler.models import Manifest
     from aqueduct.compiler.provenance import ProvenanceMap
+    from aqueduct.executor.spark.executor import execute
     from aqueduct.parser.models import RetryPolicy
+    from aqueduct.stores.base import StoreBundle
+    from aqueduct.stores.postgres import (
+        PostgresDepotStore,
+        PostgresObservabilityStore,
+    )
+    from aqueduct.surveyor.surveyor import Surveyor
 
     dsn = _pg_dsn()
     obs_schema = f"obs_e2e_{uuid.uuid4().hex[:8]}"
@@ -130,7 +131,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
         ),
     )
 
-    bundle = StoreBundle(observability=obs_store, lineage=None, depot=depot_store)
+    bundle = StoreBundle(observability=obs_store, depot=depot_store)
     surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
@@ -170,12 +171,13 @@ def test_execute_persists_into_postgres(spark, tmp_path):
 @pytest.mark.integration
 def test_signal_cli_postgres_roundtrip(tmp_path):
     """aqueduct signal <id> writes then reads observability.signal_overrides (Postgres)."""
-    from tests.conftest import _pg_is_reachable, _pg_dsn
+    from tests.conftest import _pg_dsn, _pg_is_reachable
     if not _pg_is_reachable():
         pytest.skip("Postgres not reachable (set AQ_PG_DSN)")
 
     import psycopg2
     from click.testing import CliRunner
+
     from aqueduct.cli import cli
 
     dsn = _pg_dsn()
@@ -187,12 +189,10 @@ def test_signal_cli_postgres_roundtrip(tmp_path):
         "  observability:\n"
         "    backend: postgres\n"
         f"    path: {dsn}\n"
-        "  lineage:\n"
-        "    backend: postgres\n"
-        f"    path: {dsn}\n"
-        "  depot:\n"
-        "    backend: postgres\n"
-        f"    path: {dsn}\n"
+        "  depots:\n"
+        "    default:\n"
+        "      backend: postgres\n"
+        f"      path: {dsn}\n"
     )
 
     sig_id = f"probe:cli_test_{uuid.uuid4().hex[:8]}"

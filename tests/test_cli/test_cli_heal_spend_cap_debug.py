@@ -18,8 +18,9 @@ aqueduct: '1.0'
 id: fail_bp
 name: Fail BP
 agent:
-  approval_mode: aggressive
+  approval: auto
   max_heal_attempts_per_hour: 1
+  max_patches: 2
 modules:
   - id: m1
     type: Ingress
@@ -67,12 +68,12 @@ edges: []
         config_path = tmp_path / "aqueduct.yml"
         config_path.write_text("""
 danger:
-  allow_aggressive_patching: true
+  allow_multi_patch: true
 """, encoding="utf-8")
         
-        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(bp_path), "--config", str(config_path), "--allow-multi-patch"])
     
     print(f"DEBUG: CLI Output:\n{result.output}")
-    assert "LLM rate-limit reached" in result.output
+    assert "Agent rate-limit reached" in result.output
     assert "max_heal_attempts_per_hour=1" in result.output
     assert result.exit_code == 2

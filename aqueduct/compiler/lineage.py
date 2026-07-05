@@ -19,8 +19,10 @@ Limitations:
 from __future__ import annotations
 
 import logging
-from aqueduct.parser.models import ModuleType
+from datetime import UTC
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,13 @@ def _extract_sql_lineage(
         # Subquery or CTE — treat as opaque
         return _opaque_row(channel_id, upstream_ids)
 
+    # Build alias → actual table name mapping so source_table shows
+    # "raw_orders" instead of "o" when the SQL uses aliases.
+    alias_to_table: dict[str, str] = {}
+    for table in stmt.find_all(exp.Table):
+        if table.alias:
+            alias_to_table[table.alias] = table.name
+
     for sel in stmt.expressions:
         alias = sel.alias if isinstance(sel, exp.Alias) else None
         inner = sel.this if isinstance(sel, exp.Alias) else sel
@@ -76,20 +85,34 @@ def _extract_sql_lineage(
         else:
             out_col = str(inner)[:64]
 
-        # Walk expression to find all Column references
-        col_refs = list(inner.find_all(exp.Column))
+        # Columns inside a window's OVER spec (PARTITION BY / ORDER BY) only
+        # control framing, not the computed value — exclude them. So
+        # `row_number() OVER (ORDER BY id)` derives from nothing (→ "*"), and
+        # `lag(price) OVER (ORDER BY dt)` derives from `price` only, not `dt`.
+        has_window = next(inner.find_all(exp.Window), None) is not None
+        spec_col_ids: set[int] = set()
+        for win in inner.find_all(exp.Window):
+            for part in (win.args.get("partition_by") or []):
+                spec_col_ids.update(id(c) for c in part.find_all(exp.Column))
+            order = win.args.get("order")
+            if order is not None:
+                spec_col_ids.update(id(c) for c in order.find_all(exp.Column))
+
+        # Walk expression to find all value Column references (minus window spec)
+        col_refs = [c for c in inner.find_all(exp.Column) if id(c) not in spec_col_ids]
         if not col_refs:
-            # Literal or function with no column refs
+            # Window function with no value columns, a literal, or a set function:
+            # no single source column. Window/expression → "*"; literal → its text.
             rows.append({
                 "channel_id": channel_id,
                 "output_column": out_col,
                 "source_table": "",
-                "source_column": str(inner)[:64],
+                "source_column": "*" if has_window else str(inner)[:64],
             })
             continue
 
         for col_ref in col_refs:
-            src_table = col_ref.table or (upstream_ids[0] if len(upstream_ids) == 1 else "")
+            src_table = alias_to_table.get(col_ref.table, col_ref.table) or (upstream_ids[0] if len(upstream_ids) == 1 else "")
             rows.append({
                 "channel_id": channel_id,
                 "output_column": out_col,
@@ -166,7 +189,7 @@ def write_lineage(
                              extraction is skipped (no fallback).
     """
     try:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         all_rows = compute_lineage_rows(modules, edges)
         if not all_rows:
@@ -175,7 +198,7 @@ def write_lineage(
         if observability_store is None:
             return  # no store backend configured, skip lineage
 
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=UTC).isoformat()
 
         with observability_store.connect() as cur:
             cur.executemany(

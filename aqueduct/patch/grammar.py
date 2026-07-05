@@ -12,7 +12,7 @@ Usage:
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -235,22 +235,7 @@ class SetSparkConfigOp(BaseModel, extra="forbid"):
 # ── Discriminated union ───────────────────────────────────────────────────────
 
 PatchOperation = Annotated[
-    Union[
-        ReplaceModuleConfigOp,
-        SetModuleConfigKeyOp,
-        ReplaceModuleLabelOp,
-        InsertModuleOp,
-        RemoveModuleOp,
-        ReplaceContextValueOp,
-        AddProbeOp,
-        ReplaceEdgeOp,
-        SetModuleOnFailureOp,
-        ReplaceRetryPolicyOp,
-        AddArcadeRefOp,
-        DeferToHumanOp,
-        SetSparkConfigOp,
-        ReplaceMacroOp,
-    ],
+    ReplaceModuleConfigOp | SetModuleConfigKeyOp | ReplaceModuleLabelOp | InsertModuleOp | RemoveModuleOp | ReplaceContextValueOp | AddProbeOp | ReplaceEdgeOp | SetModuleOnFailureOp | ReplaceRetryPolicyOp | AddArcadeRefOp | DeferToHumanOp | SetSparkConfigOp | ReplaceMacroOp,
     Field(discriminator="op"),
 ]
 
@@ -354,7 +339,7 @@ class PatchSpec(BaseModel, extra="allow"):
     """
 
     @model_validator(mode="after")
-    def _reject_mixed_defer_ops(self) -> "PatchSpec":
+    def _reject_mixed_defer_ops(self) -> PatchSpec:
         """Phase 41: defer_to_human must be the ONLY operation.
 
         Mixing deferral with Blueprint-mutating ops is ambiguous — the

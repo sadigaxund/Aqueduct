@@ -57,7 +57,7 @@ def test_assert_error_site_propagates_exception_in_source():
     assert "except AssertError as exc:" in text
     assert "exception=exc" in text
     # The retry-exhausted branch — see executor.py:1570.
-    assert "module_id=module.id, status=\"error\", error=str(exc), exception=exc" in text
+    assert "module_id=module.id, status=ExecutionStatus.ERROR, error=str(exc), exception=exc" in text
 
 
 def test_surveyor_record_falls_back_to_first_failed_modules_exception(tmp_path):

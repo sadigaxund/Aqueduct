@@ -5,6 +5,13 @@ aqueduct: "1.0"
 id: custom_ds_demo
 name: "Custom DataSource Snippet"
 
+# Add datasource.py to Spark's Python path so importlib can find it.
+# The CLI chdirs to this directory but Python's sys.path doesn't include CWD
+# for CLI entry points — UDFs work around this in udf.py but custom_source.py
+# doesn't, so we tell Spark to distribute the file.
+spark_config:
+  spark.submit.pyFiles: datasource.py
+
 modules:
   - id: src
     label: "Custom Source"

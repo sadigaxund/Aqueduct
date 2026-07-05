@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
-
-logger = logging.getLogger(__name__)
 
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
@@ -39,17 +37,16 @@ from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
 from aqueduct.compiler.wirer import (
     WireError,
     compile_away_regulators,
+    validate_probe_source_edges,
     validate_probes,
     validate_spillway_edges,
 )
+from aqueduct.errors import CompileError
+from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
-from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
-from aqueduct.errors import AqueductError
 
-
-class CompileError(AqueductError):
-    """Raised for any compilation failure."""
+logger = logging.getLogger(__name__)
 
 
 def _resolve_module_tier1(m: Module, registry: AqFunctions) -> Module:
@@ -82,10 +79,13 @@ def compile(  # noqa: A001
     blueprint_path: Path | None = None,
     run_id: str | None = None,
     depot: Any = None,
+    depots: dict[str, Any] | None = None,
     execution_date: Any = None,
     secrets_provider: str = "env",
     secrets_region: str | None = None,
     secrets_resolver: str | None = None,
+    deployment_env: str | None = None,
+    deployment_target: str | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
 ) -> Manifest:
@@ -107,10 +107,17 @@ def compile(  # noqa: A001
     registry = AqFunctions(
         run_id=run_id,
         depot=depot,
+        depots=depots,
         execution_date=execution_date,
         secrets_provider=secrets_provider,
         secrets_region=secrets_region,
         secrets_resolver=secrets_resolver,
+        blueprint_id=blueprint.id,
+        blueprint_name=blueprint.name,
+        blueprint_path=blueprint_path,
+        deployment_env=deployment_env,
+        deployment_target=deployment_target,
+        base_dir=str(blueprint_path.parent) if blueprint_path else None,
     )
 
     # ── 1. Resolve Tier 1 in context values ───────────────────────────────────
@@ -119,7 +126,7 @@ def compile(  # noqa: A001
             k: resolve_tier1(v, registry)
             for k, v in blueprint.context.values.items()
         }
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 context resolution failed: {exc}") from exc
 
     # ── 2. Re-run ${ctx.*} substitution with the now-fully-resolved context ───
@@ -137,7 +144,7 @@ def compile(  # noqa: A001
         modules: list[Module] = [
             _resolve_module_tier1(m, registry) for m in blueprint.modules
         ]
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, CompileError) as exc:
         raise CompileError(f"Tier 1 module config resolution failed: {exc}") from exc
 
     # ── 3.5. Resolve SQL macros in module configs ─────────────────────────────
@@ -231,6 +238,7 @@ def compile(  # noqa: A001
     # ── 5. Validate Probes and Spillways ──────────────────────────────────────
     try:
         validate_probes(modules)
+        validate_probe_source_edges(modules, edges)
         validate_spillway_edges(modules, edges)
     except WireError as exc:
         raise CompileError(f"Wiring validation failed: {exc}") from exc
@@ -249,14 +257,27 @@ def compile(  # noqa: A001
             action = on_fail if isinstance(on_fail, str) else on_fail.get("action", "abort")
             if action == "quarantine":
                 if rtype in _AGG_NO_QUARANTINE:
-                    raise CompileError(
-                        f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
-                        "but quarantine requires a per-row predicate. "
-                        f"{rtype!r} is an aggregate rule with no derivable row filter. "
-                        "Use on_fail=abort or on_fail=warn instead. "
-                        "Row-level quarantine is supported by: sql_row, custom, freshness."
-                    )
-                if rtype in ("freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
+                    if rtype == "null_rate":
+                        raise CompileError(
+                            f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
+                            "but null_rate is a population-level gate — when it trips, the "
+                            "fraction of nulls itself IS the signal.  Quarantining every null "
+                            "row would mask that signal and would also force a full scan "
+                            "(null_rate uses df.sample().agg() to avoid scanning).  "
+                            "Use on_fail=abort or on_fail=warn instead.  "
+                            "For a per-row null filter that IS quarantine-able, use "
+                            "type=not_null, which routes null rows to the spillway with "
+                            "zero extra Spark actions."
+                        )
+                    else:
+                        raise CompileError(
+                            f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine, "
+                            "but quarantine requires a per-row predicate — "
+                            f"{rtype!r} is an aggregate rule with no derivable row filter. "
+                            "Use on_fail=abort or on_fail=warn instead. "
+                            "Row-level quarantine is supported by: not_null, sql_row, custom, freshness."
+                        )
+                if rtype in ("not_null", "freshness", "sql_row", "custom") and m.id not in _assert_spillway_ids:
                     raise CompileError(
                         f"Assert '{m.id}' rule type={rtype!r} uses on_fail=quarantine "
                         "but no spillway edge is connected to this Assert module. "
@@ -274,6 +295,12 @@ def compile(  # noqa: A001
             continue
         fmt = m.config.get("format", "")
         path = m.config.get("path", "")
+        table = m.config.get("table", "")
+        if table:
+            # Table-addressed Ingress — record the catalog identifier; no local
+            # file metadata to stat.
+            inputs_fingerprint[m.id] = {"table": table, "size_bytes": None, "last_modified": None}
+            continue
         if not path or fmt in PATHLESS_INGRESS_FORMATS or any(path.startswith(s) for s in CLOUD_SCHEMES):
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
             continue
@@ -282,7 +309,7 @@ def compile(  # noqa: A001
             inputs_fingerprint[m.id] = {
                 "path": path,
                 "size_bytes": st.st_size,
-                "last_modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                "last_modified": datetime.fromtimestamp(st.st_mtime, tz=UTC).isoformat(),
             }
         except (OSError, ValueError):
             # OSError: file missing / permission denied.
@@ -291,9 +318,68 @@ def compile(  # noqa: A001
             # fingerprint is "not collected" rather than a hard failure.
             inputs_fingerprint[m.id] = {"path": path, "size_bytes": None, "last_modified": None}
 
+    # ── 6.7. Conditional execution — cascade-disable (`enabled: false`) ──────
+    # Any consumer of a disabled module's output is disabled too, transitively
+    # and uniformly (incl. joins/unions — a silently partial union is a data
+    # change nobody asked for). Propagation follows edges, depends_on, and
+    # Probe attach_to. Disabled modules stay in the Manifest (the executor
+    # marks them SKIPPED, the summary shows ⏭ + reason).
+    _disabled: dict[str, str] = {m.id: "disabled" for m in modules if not m.enabled}
+    for m in modules:
+        # Reasons stamped by the Arcade expander survive as-is.
+        if not m.enabled and m.disabled_reason:
+            _disabled[m.id] = m.disabled_reason
+    if _disabled:
+        _changed = True
+        while _changed:
+            _changed = False
+            for e in edges:
+                if e.from_id in _disabled and e.to_id not in _disabled:
+                    _disabled[e.to_id] = f"upstream '{e.from_id}' disabled"
+                    _changed = True
+            for m in modules:
+                if m.id in _disabled:
+                    continue
+                _src = next((d for d in m.depends_on if d in _disabled), None)
+                if _src is None and m.attach_to and m.attach_to in _disabled:
+                    _src = m.attach_to
+                if _src is not None:
+                    _disabled[m.id] = f"upstream '{_src}' disabled"
+                    _changed = True
+        if len(_disabled) == len(modules):
+            raise CompileError(
+                "All modules are disabled — `enabled: false` cascades to every "
+                "downstream consumer, and nothing is left to execute. Enable at "
+                "least one root module (check the active context profile)."
+            )
+        import dataclasses as _dc
+        modules = [
+            _dc.replace(m, enabled=False, disabled_reason=_disabled[m.id])
+            if m.id in _disabled else m
+            for m in modules
+        ]
+
+    # Sections 7–8 (and the modular registry pass at the bottom) diagnose
+    # modules that will RUN — disabled modules are pruned from the warnings
+    # view only; `_all_modules` carries them into the Manifest so the
+    # executor can mark them ⏭.
+    _all_modules = list(modules)
+    modules = [m for m in modules if m.enabled]
+
     # ── 7. Delivery semantics warning ─────────────────────────────────────────
+    from aqueduct.warnings import _DEFAULT_SUPPRESS
     from aqueduct.warnings import emit as _aq_emit
-    _supp = warnings_suppress
+    # Per-Blueprint suppression (`blueprint.warning_suppress`, from the
+    # Blueprint's own `warnings:` block) is unioned with the engine-level
+    # suppress set HERE, scoped to this one compile pass only — it never
+    # mutates the process-global `set_default_suppress` default, so it can't
+    # leak into other blueprints, session warnings, or runtime warnings.
+    # Covers BOTH the inline section-7/8 warnings below and the modular
+    # registry pass (Phase 30a tier 1) further down.
+    _supp = (
+        set(warnings_suppress) if warnings_suppress is not None
+        else set(_DEFAULT_SUPPRESS)
+    ) | set(blueprint.warning_suppress)
     if warnings_silence_all:
         _supp = {"*"}  # universal suppress sentinel — emit() short-circuits on "*"
 
@@ -310,7 +396,11 @@ def compile(  # noqa: A001
                     f"Egress '{m.id}' uses mode=append with "
                     f"max_attempts={blueprint.retry_policy.max_attempts} — "
                     "retries may produce duplicate rows. "
-                    "Use mode=overwrite for idempotent writes, or set max_attempts=1.",
+                    "For Delta, make appends idempotent with the "
+                    "txnAppId/txnVersion writer options; otherwise dedup on a "
+                    "key downstream or set max_attempts=1. (mode=overwrite is "
+                    "only safe for full-refresh outputs — on an incremental "
+                    "sink it destroys history.)",
                 )
 
     # ── 8. Performance diagnostics ────────────────────────────────────────────
@@ -336,37 +426,68 @@ def compile(  # noqa: A001
                 "See docs/spark_guide.md#probe-sample-cost.",
             )
 
-    # 8b. Incremental channel without cache — MAX() watermark triggers extra scan
+    # 8b. Incremental channel — MAX() watermark re-reads the WRITTEN output.
+    # (The executor's `_compute_watermark_from_output` reads the materialized
+    # Egress files, NOT the upstream DAG — so upstream checkpoints are
+    # irrelevant here. For Delta outputs Spark can often satisfy MAX() from
+    # transaction-log statistics, near metadata-only — those are exempt when
+    # every reachable downstream Egress is Delta.)
+    _fwd: dict[str, list[str]] = {}
+    for e in edges:
+        _fwd.setdefault(e.from_id, []).append(e.to_id)
+
+    def _reachable_egress_formats(start_id: str) -> list[str]:
+        seen, stack, fmts = {start_id}, [start_id], []
+        by_id = {m.id: m for m in modules}
+        while stack:
+            for nxt in _fwd.get(stack.pop(), []):
+                if nxt in seen:
+                    continue
+                seen.add(nxt)
+                stack.append(nxt)
+                nm = by_id.get(nxt)
+                if nm is not None and nm.type == ModuleType.Egress:
+                    fmts.append(str(nm.config.get("format", "")).lower())
+        return fmts
+
     for m in modules:
         if m.type != ModuleType.Channel or m.config.get("materialize") != "incremental":
             continue
-        # Check if any upstream module in the edge list is a cache/checkpoint
-        upstream_ids = {e.from_id for e in edges if e.to_id == m.id}
-        upstream_checkpointed = any(
-            um.checkpoint for um in modules if um.id in upstream_ids
+        _egress_fmts = _reachable_egress_formats(m.id)
+        if _egress_fmts and all(f == "delta" for f in _egress_fmts):
+            continue  # Delta MAX() ≈ metadata-only via txn-log stats
+        _w(
+            "perf_incremental_watermark_scan",
+            f"Channel '{m.id}' uses materialize=incremental. After each run, "
+            "Aqueduct computes MAX(watermark_column) by re-reading the WRITTEN "
+            "output files (not the upstream DAG) — one extra read scaling with "
+            "output size. Delta outputs satisfy this from transaction-log "
+            "statistics (near metadata-only): prefer format: delta on the "
+            "downstream Egress, or accept the extra read. "
+            "See docs/spark_guide.md#incremental-watermark-scan.",
         )
-        if not upstream_checkpointed:
-            _w(
-                "perf_incremental_watermark_scan",
-                f"Channel '{m.id}' uses materialize=incremental. "
-                "After each run, Aqueduct computes MAX(watermark_column) on the output — "
-                "a second full scan if the DataFrame is not cached. "
-                "Add a Checkpoint upstream or accept the extra Spark action. "
-                "See docs/spark_guide.md#incremental-watermark-scan.",
-            )
 
-    # 8c. Python UDF registered — row-at-a-time execution warning
-    for udf_entry in blueprint.udf_registry:
-        if udf_entry.get("lang", "python") == "python":
-            _w(
-                "perf_python_udf_row_at_a_time",
-                f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
-                "Python UDFs execute row-at-a-time and bypass Arrow/vectorized execution. "
-                "For high-volume channels, prefer native Spark SQL expressions or "
-                "pandas_udf (Arrow-optimized). Spillway routing itself is SQL-native "
-                "and unaffected, but the UDF body will not be vectorized. "
-                "See docs/spark_guide.md#python-udf-performance.",
-            )
+    # 8c. Python UDF registered — row-at-a-time execution warning.
+    # Skipped when the Blueprint enables Arrow-optimized Python UDFs
+    # (spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+) — then the
+    # claim simply isn't true and the warning would be noise.
+    _arrow_udf_enabled = str(
+        blueprint.spark_config.get("spark.sql.execution.pythonUDF.arrow.enabled", "")
+    ).lower() == "true"
+    if not _arrow_udf_enabled:
+        for udf_entry in blueprint.udf_registry:
+            if udf_entry.get("lang", "python") == "python":
+                _w(
+                    "perf_python_udf_row_at_a_time",
+                    f"UDF '{udf_entry.get('id', '?')}' uses lang=python — "
+                    "without Arrow-optimized UDF execution "
+                    "(spark.sql.execution.pythonUDF.arrow.enabled, Spark 3.5+), "
+                    "Python UDFs run row-at-a-time with per-row serialization. "
+                    "For high-volume channels, enable that flag, or prefer native "
+                    "Spark SQL expressions / pandas_udf. Spillway routing itself is "
+                    "SQL-native and unaffected. "
+                    "See docs/spark_guide.md#python-udf-performance.",
+                )
 
     # 8d. Delta append without partition hint — small-file accumulation risk
     for m in modules:
@@ -374,14 +495,18 @@ def compile(  # noqa: A001
             continue
         if m.config.get("format") in ("delta", "parquet") and m.config.get("mode") == "append":
             has_partition = bool(m.config.get("partition_by") or m.config.get("repartition"))
-            if not has_partition:
+            # maintenance.optimize on the same Egress already compacts small
+            # files — warning would double-signal a handled concern.
+            has_optimize = bool(m.config.get("maintenance", {}).get("optimize"))
+            if not has_partition and not has_optimize:
                 _w(
                     "perf_delta_append_no_partition",
                     f"Egress '{m.id}' uses format={m.config.get('format')!r} with mode=append "
                     "but has no partition_by or repartition hint. "
                     "Incremental appends without partitioning accumulate small files over time, "
-                    "degrading read performance. Add partition_by or schedule external OPTIMIZE. "
-                    "See docs/spark_guide.md#planned-future-checks.",
+                    "degrading read performance. Add partition_by, a maintenance.optimize "
+                    "block, or schedule external OPTIMIZE. "
+                    "See docs/spark_guide.md#append-no-partition.",
                 )
 
     # 8e. Multi-consumer Channel without cache — DAG re-evaluated per consumer
@@ -397,9 +522,11 @@ def compile(  # noqa: A001
             _w(
                 "perf_multi_consumer_no_cache",
                 f"Channel '{m.id}' has {consumer_counts[m.id]} downstream consumers "
-                "but no Checkpoint upstream. Spark will re-evaluate the full DAG for each "
-                "consumer branch — consider adding a Checkpoint or cache() boundary to "
-                "avoid redundant computation. "
+                "but is not checkpointed. Spark will re-evaluate the full DAG for each "
+                "consumer branch — consider `checkpoint: true` on this Channel or a "
+                "cache() boundary. Trade-off: caching materializes the FULL frame; if "
+                "the branches each read narrow column slices, recompute with column "
+                "pruning can be cheaper — measure before caching. "
                 "See docs/spark_guide.md#caching-strategy.",
             )
 
@@ -421,21 +548,24 @@ def compile(  # noqa: A001
                 "see them and authentication will fail. Move these to spark_config with "
                 "the 'spark.hadoop.' prefix instead: e.g. "
                 "'spark.hadoop.fs.s3a.access.key'. "
-                "See docs/spark_guide.md#jdbc-ingress-parallelism.",
+                "See docs/spark_guide.md#hadoop-fs-in-options.",
             )
 
-    # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only
+    # 8g. maintenance.optimize on non-delta Egress — OPTIMIZE is Delta-only.
+    # Escalated from a warning (rule_id maintenance_optimize_non_delta) to a
+    # hard error: the failure is deterministic at runtime — format is known at
+    # compile time and OPTIMIZE cannot succeed on a non-Delta table, so
+    # letting the run start only moves the same error later.
     for m in modules:
         if m.type != ModuleType.Egress:
             continue
         maint = m.config.get("maintenance", {})
         if maint and maint.get("optimize") and m.config.get("format", "").lower() != "delta":
-            _w(
-                "maintenance_optimize_non_delta",
+            raise CompileError(
                 f"Egress '{m.id}' has maintenance.optimize=true but format="
                 f"{m.config.get('format')!r}. OPTIMIZE is a Delta Lake operation and "
                 "will fail at runtime on non-Delta tables. Set format: delta or remove "
-                "the maintenance block.",
+                "the maintenance block."
             )
 
     prov_map = ProvenanceMap(
@@ -451,7 +581,8 @@ def compile(  # noqa: A001
         description=blueprint.description,
         aqueduct_version=blueprint.aqueduct_version,
         context=resolved_ctx,
-        modules=tuple(modules),
+        modules=tuple(_all_modules),
+        hooks=blueprint.hooks,
         edges=tuple(edges),
         spark_config=dict(blueprint.spark_config),
         retry_policy=blueprint.retry_policy,
@@ -464,12 +595,20 @@ def compile(  # noqa: A001
     )
 
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
+    # `_supp` (section 7) already carries engine-level ∪ per-Blueprint suppress.
     if not warnings_silence_all:
         try:
             from aqueduct.compiler.warnings import run_all as _run_compile_warnings
             from aqueduct.warnings import emit as _emit
-            for _rid, _msg in _run_compile_warnings(manifest, suppress=warnings_suppress):
-                _emit(_rid, _msg, suppress=warnings_suppress)
+            _warn_manifest = manifest
+            if any(not m.enabled for m in manifest.modules):
+                import dataclasses as _dc3
+                _warn_manifest = _dc3.replace(
+                    manifest,
+                    modules=tuple(m for m in manifest.modules if m.enabled),
+                )
+            for _rid, _msg in _run_compile_warnings(_warn_manifest, suppress=_supp):
+                _emit(_rid, _msg, suppress=_supp)
         except Exception:
             pass  # warnings must never block compilation
 

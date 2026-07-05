@@ -20,12 +20,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
-
-from aqueduct.parser.models import Blueprint, Edge, Module
-from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
+from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 
+logger = logging.getLogger(__name__)
 
 class ExpandError(AqueductError):
     """Raised when an Arcade cannot be expanded."""
@@ -109,6 +107,13 @@ def _expand_single(
                 attach_to=id_map.get(m.attach_to) if m.attach_to else None,
                 spillway=id_map.get(m.spillway) if m.spillway else None,
                 depends_on=tuple(id_map.get(d, d) for d in m.depends_on),
+                # A disabled Arcade disables every expanded child; a child's
+                # own `enabled: false` (from the sub-Blueprint) is preserved.
+                enabled=m.enabled and arcade.enabled,
+                disabled_reason=(
+                    f"arcade '{arcade.id}' disabled"
+                    if not arcade.enabled else m.disabled_reason
+                ),
             )
         )
 
@@ -130,7 +135,12 @@ def _expand_single(
         raise ExpandError(
             f"Arcade {arcade.id!r}: sub-Blueprint has no entry modules (cycle?)"
         )
-    if not exit_ids:
+    # Exit modules are only required when the parent actually consumes data
+    # FROM the arcade. A self-contained arcade (e.g. Junction -> 2x Egress,
+    # writing internally with nothing returned to the parent) is valid even
+    # though `_exit_modules()` excludes Egress/Probe from the exit set.
+    needs_exit = any(e.from_id == arcade.id for e in parent_edges)
+    if needs_exit and not exit_ids:
         raise ExpandError(
             f"Arcade {arcade.id!r}: sub-Blueprint has no exit modules (cycle?)"
         )
@@ -155,7 +165,6 @@ def _expand_single(
     # raw_module_configs has the pre-resolution config (original ${ctx.*} expressions)
     # sub_bp.modules have the resolved config (context_override applied)
     arcade_provenance: dict[str, ModuleProvenance] = {}
-    sub_bp_modules_by_orig_id = {m.id: m for m in sub_bp.modules}
     for orig_m, expanded_m in zip(sub_bp.modules, expanded_modules):
         raw_cfg = raw_module_configs.get(orig_m.id, {})
         resolved_cfg = orig_m.config or {}
@@ -243,7 +252,8 @@ def _expand_recursive(
         # file's subdirectory. Using parse() default base_dir=path.parent
         # would anchor them to <parent>/arcades/ — breaking the path.
         import yaml  # noqa: PLC0415 — plain load, no side effects
-        from aqueduct.parser.parser import parse_dict, ParseError  # noqa: PLC0415
+
+        from aqueduct.parser.parser import ParseError, parse_dict  # noqa: PLC0415
 
         try:
             raw_sub = yaml.safe_load(sub_path.read_text(encoding="utf-8"))

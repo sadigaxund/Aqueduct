@@ -29,7 +29,7 @@ services:
     command: server /data --console-address ":9001"
 
   spark-master:
-    image: sakhund/aqueduct-spark:4.0.0-python3.12-showcase01
+    image: sakhund/aqueduct-spark:lts
     hostname: spark-master
     ports:
       - "7077:7077"
@@ -42,7 +42,7 @@ services:
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
 
   spark-worker-1:
-    image: sakhund/aqueduct-spark:4.0.0-python3.12-showcase01
+    image: sakhund/aqueduct-spark:lts
     hostname: spark-worker-1
     ports:
       - "8081:8081"
@@ -54,7 +54,7 @@ services:
     command: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
 
   spark-worker-2:
-    image: sakhund/aqueduct-spark:4.0.0-python3.12-showcase01
+    image: sakhund/aqueduct-spark:lts
     hostname: spark-worker-2
     ports:
       - "8082:8081"

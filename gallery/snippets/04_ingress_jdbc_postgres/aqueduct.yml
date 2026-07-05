@@ -1,5 +1,9 @@
 aqueduct_config: "1.0"
 
+warnings:
+  suppress:
+    - "*"
+
 # aqueduct.yml
 deployment:
   engine: spark
@@ -13,4 +17,4 @@ spark_config:
 stores:
   observability:
     backend: duckdb
-    path: .aqueduct/observability.db
+    path: .aqueduct

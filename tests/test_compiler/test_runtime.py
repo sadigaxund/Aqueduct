@@ -7,6 +7,7 @@ import pytest
 pytestmark = pytest.mark.unit
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1_str
 from aqueduct.compiler.compiler import compile
+from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -42,11 +43,11 @@ class TestTier1Resolution:
         assert result == date.today().replace(day=1).isoformat()
 
     def test_runtime_run_id(self):
-        result = resolve_tier1_str("@aq.runtime.run_id()", self.reg)
+        result = resolve_tier1_str("@aq.run.id()", self.reg)
         assert result == "test-run-001"
 
     def test_runtime_prev_run_id_empty(self):
-        result = resolve_tier1_str("@aq.runtime.prev_run_id()", self.reg)
+        result = resolve_tier1_str("@aq.run.prev_id()", self.reg)
         assert result == ""
 
     def test_runtime_prev_run_id_exists(self, tmp_path):
@@ -55,11 +56,11 @@ class TestTier1Resolution:
         store.put("_last_run_id", "test-run-999")
         
         reg = AqFunctions(run_id="test-run-001", depot=store)
-        result = resolve_tier1_str("@aq.runtime.prev_run_id()", reg)
+        result = resolve_tier1_str("@aq.run.prev_id()", reg)
         assert result == "test-run-999"
 
     def test_runtime_timestamp_is_iso(self):
-        result = resolve_tier1_str("@aq.runtime.timestamp()", self.reg)
+        result = resolve_tier1_str("@aq.run.timestamp()", self.reg)
         from datetime import datetime
         dt = datetime.fromisoformat(result)
         assert dt.tzinfo is not None
@@ -71,7 +72,7 @@ class TestTier1Resolution:
 
     def test_env_missing_raises(self, monkeypatch):
         monkeypatch.delenv("MISSING_VAR", raising=False)
-        with pytest.raises(RuntimeError, match="not set"):
+        with pytest.raises(CompileError, match="not set"):
             resolve_tier1_str("@aq.env('MISSING_VAR')", self.reg)
 
     def test_depot_get_default_when_no_depot(self):
@@ -94,7 +95,7 @@ class TestTier1Resolution:
         assert result == f"s3://bucket/{date.today().isoformat()}/data"
 
     def test_unknown_function_raises(self):
-        with pytest.raises(ValueError, match="Unknown @aq function"):
+        with pytest.raises(CompileError, match="Unknown @aq function"):
             resolve_tier1_str("@aq.does.not.exist()", self.reg)
 
     def test_tier1_resolved_in_manifest_context(self, tmp_path):
@@ -130,7 +131,7 @@ class TestLogicalExecutionDate:
     def test_runtime_timestamp_with_execution_date_is_midnight_utc(self):
         from datetime import datetime
         aq = AqFunctions(execution_date=date(2026, 1, 15))
-        ts = aq.runtime_timestamp()
+        ts = aq.run_timestamp()
         parsed = datetime.fromisoformat(ts)
         assert parsed.hour == 0
         assert parsed.tzinfo is not None
@@ -176,3 +177,47 @@ class TestCompilerEdgeCases:
             warnings.simplefilter("always")
             compiler_compile(bp, blueprint_path=bp_file, depot=MagicMock())
         assert any("append" in str(warning.message) for warning in w)
+
+
+class TestAqMeta:
+    """@aq.blueprint.* / @aq.deployment.* — pipeline identity / deployment context."""
+
+    def test_meta_resolves(self):
+        reg = AqFunctions(
+            blueprint_id="my_bp", blueprint_name="My BP",
+            blueprint_path="/proj/blueprints/my_bp.yml",
+            deployment_env="cluster", deployment_target="databricks",
+        )
+        assert resolve_tier1_str("@aq.blueprint.id()", reg) == "my_bp"
+        assert resolve_tier1_str("@aq.blueprint.name()", reg) == "My BP"
+        assert resolve_tier1_str("@aq.blueprint.path()", reg) == "/proj/blueprints/my_bp.yml"
+        assert resolve_tier1_str("@aq.blueprint.dir()", reg) == "/proj/blueprints"
+        assert resolve_tier1_str("@aq.deployment.env()", reg) == "cluster"
+        assert resolve_tier1_str("@aq.deployment.target()", reg) == "databricks"
+        assert resolve_tier1_str("@aq.version()", reg)  # non-empty
+
+    def test_meta_in_path_expression(self):
+        reg = AqFunctions(blueprint_id="sales", blueprint_path="/p/sales.yml")
+        out = resolve_tier1_str("out/@aq.blueprint.id()/data", reg)
+        assert out == "out/sales/data"
+
+    def test_meta_unavailable_raises(self):
+        reg = AqFunctions()  # no metadata threaded
+        with pytest.raises(CompileError, match="not available here"):
+            resolve_tier1_str("@aq.deployment.env()", reg)
+
+    def test_meta_resolves_through_compile(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: meta_demo\nname: Meta Demo\n"
+            "context:\n  tag: \"@aq.blueprint.id()-@aq.deployment.env()\"\n"
+            "modules:\n"
+            "  - id: out\n    type: Egress\n    label: Out\n"
+            "    config:\n      format: parquet\n      path: /tmp/${ctx.tag}\n      mode: overwrite\n"
+            "edges: []\n",
+            encoding="utf-8",
+        )
+        bp = parse(str(bp_file))
+        manifest = compile(bp, blueprint_path=bp_file, deployment_env="dev")
+        out = next(m for m in manifest.modules if m.id == "out")
+        assert out.config["path"] == "/tmp/meta_demo-dev"

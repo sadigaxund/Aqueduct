@@ -38,16 +38,23 @@ from __future__ import annotations
 
 import importlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.parser.models import Module
-from aqueduct.executor.spark.error_columns import AQ_ERROR_MODULE, AQ_ERROR_MSG, AQ_ERROR_RULE, AQ_ERROR_TYPE, AQ_ERROR_TS
 from aqueduct.errors import AqueductError
+from aqueduct.executor.models import _add_module_warning
+from aqueduct.executor.spark.error_columns import (
+    AQ_ERROR_MODULE,
+    AQ_ERROR_MSG,
+    AQ_ERROR_RULE,
+    AQ_ERROR_TS,
+    AQ_ERROR_TYPE,
+)
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +66,7 @@ class AssertRuleType(StrEnum):
     MIN_ROWS = "min_rows"
     MAX_ROWS = "max_rows"
     FRESHNESS = "freshness"
+    NOT_NULL = "not_null"
     SQL = "sql"
     SQL_ROW = "sql_row"
     CUSTOM = "custom"
@@ -97,11 +105,11 @@ class AssertError(AqueductError):
 
 def execute_assert(
     module: Module,
-    df: "DataFrame",
-    spark: "SparkSession",
+    df: DataFrame,
+    spark: SparkSession,
     run_id: str,
     blueprint_id: str,
-) -> "tuple[DataFrame, DataFrame | None]":
+) -> tuple[DataFrame, DataFrame | None]:
     """Evaluate Assert rules against df.
 
     Args:
@@ -156,7 +164,13 @@ def execute_assert(
                     )
                 max_age_hours = float(rule.get("max_age_hours", 24))
                 from pyspark.sql import functions as F
-                from pyspark.sql.types import LongType, DoubleType, FloatType, IntegerType, ShortType
+                from pyspark.sql.types import (
+                    DoubleType,
+                    FloatType,
+                    IntegerType,
+                    LongType,
+                    ShortType,
+                )
                 hours_int = int(max_age_hours)
                 minutes_int = round((max_age_hours - hours_int) * 60)
                 interval = f"INTERVAL {hours_int} HOURS {minutes_int} MINUTES" if minutes_int else f"INTERVAL {hours_int} HOURS"
@@ -179,6 +193,28 @@ def execute_assert(
                     .withColumn(AQ_ERROR_TS, F.current_timestamp())
                 )
                 passing_df = passing_df.filter(passing_filter)
+                quarantine_parts.append(q_df)
+        elif rtype == AssertRuleType.NOT_NULL:
+            on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
+            action = on_fail if isinstance(on_fail, str) else on_fail.get("action", AssertOnFailAction.ABORT)
+            if action == AssertOnFailAction.QUARANTINE:
+                col = rule.get("column")
+                if not col:
+                    raise AssertError(
+                        f"[{module.id}] not_null rule requires 'column'",
+                        rule_id="not_null",
+                    )
+                from pyspark.sql import functions as F
+                is_null = F.col(col).isNull()
+                q_df = (
+                    passing_df.filter(is_null)
+                    .withColumn(AQ_ERROR_MODULE, F.lit(module.id))
+                    .withColumn(AQ_ERROR_RULE, F.lit(AssertRuleType.NOT_NULL.value))
+                    .withColumn(AQ_ERROR_TYPE, F.lit(rule.get("error_type") or "not_null"))
+                    .withColumn(AQ_ERROR_MSG, F.lit(f"column {col!r} contains null"))
+                    .withColumn(AQ_ERROR_TS, F.current_timestamp())
+                )
+                passing_df = passing_df.filter(~is_null)
                 quarantine_parts.append(q_df)
 
     quarantine_df: DataFrame | None = None
@@ -218,7 +254,8 @@ def _handle_fail(
     elif action == AssertOnFailAction.TRIGGER_AGENT:
         raise AssertError(message, rule_id=rule_type, trigger_agent=True, error_type=error_type)
     elif action == AssertOnFailAction.WARN:
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
     elif action == AssertOnFailAction.WEBHOOK:
         if webhook_url:
             _fire_rule_webhook(
@@ -226,26 +263,43 @@ def _handle_fail(
             )
         else:
             logger.warning(
-                "[%s] Assert %r on_fail=webhook but no url specified.", module_id, rule_type
+                "[runtime_assert_webhook] [%s] Assert [%s] on_fail=webhook but no url specified.",
+                module_id, rule_type,
+            )
+            _add_module_warning(
+                "runtime_assert_webhook",
+                f"Assert [{rule_type}] on_fail=webhook but no url specified.",
             )
     elif action == AssertOnFailAction.QUARANTINE:
         # Row-level only — handled by _apply_row_rule; aggregate rules treat as warn
         logger.warning(
-            "[%s] Assert %r on_fail=quarantine used on aggregate rule; treated as warn.",
+            "[runtime_assert_quarantine_aggregate] [%s] Assert [%s] on_fail=quarantine used "
+            "on aggregate rule; treated as warn.",
             module_id, rule_type,
         )
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        _add_module_warning(
+            "runtime_assert_quarantine_aggregate",
+            f"Assert [{rule_type}] on_fail=quarantine used on aggregate rule; treated as warn.",
+        )
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
     else:
         logger.warning(
-            "[%s] Assert %r unknown on_fail action %r; treating as warn.",
+            "[runtime_assert_unknown_action] [%s] Assert [%s] unknown on_fail action %r; "
+            "treating as warn.",
             module_id, rule_type, action,
         )
-        logger.warning("[%s] Assert %r: %s", module_id, rule_type, message)
+        _add_module_warning(
+            "runtime_assert_unknown_action",
+            f"Assert [{rule_type}] unknown on_fail action {action!r}; treating as warn.",
+        )
+        logger.warning("[runtime_assert] [%s] Assert [%s]: %s", module_id, rule_type, message)
+        _add_module_warning("runtime_assert", f"Assert [{rule_type}]: {message}")
 
 
 # ── Phase 1: schema_match ─────────────────────────────────────────────────────
 
-def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -> None:
+def _check_schema_match(module_id: str, df: DataFrame, rule: dict[str, Any]) -> None:
     """Zero Spark action. Checks df.schema against expected field map."""
     expected: dict[str, str] = rule.get("expected", {})
     on_fail = rule.get("on_fail", AssertOnFailAction.ABORT)
@@ -272,7 +326,7 @@ def _check_schema_match(module_id: str, df: "DataFrame", rule: dict[str, Any]) -
 
 def _batch_aggregate_rules(
     module_id: str,
-    df: "DataFrame",
+    df: DataFrame,
     rules: list[dict[str, Any]],
     blueprint_id: str,
     run_id: str,
@@ -301,6 +355,11 @@ def _batch_aggregate_rules(
             expr_str = rule.get("expr", "")
             if expr_str:
                 agg_cols[f"_sql_{i}"] = F.expr(expr_str)
+                agg_rule_indices.append(i)
+        elif rtype == AssertRuleType.NOT_NULL:
+            col = rule.get("column")
+            if col:
+                agg_cols[f"_notnull_{i}"] = F.sum(F.col(col).isNull().cast("int"))
                 agg_rule_indices.append(i)
 
     agg_row = None
@@ -344,10 +403,19 @@ def _batch_aggregate_rules(
                     )
                 else:
                     if hasattr(max_ts, "timestamp"):
-                        ts_utc = max_ts.replace(tzinfo=timezone.utc) if max_ts.tzinfo is None else max_ts
+                        ts_utc = max_ts.replace(tzinfo=UTC) if max_ts.tzinfo is None else max_ts
                     else:
-                        ts_utc = datetime.fromtimestamp(float(max_ts), tz=timezone.utc)
-                    age_hours = (datetime.now(tz=timezone.utc) - ts_utc).total_seconds() / 3600
+                        try:
+                            ts_utc = datetime.fromtimestamp(float(max_ts), tz=UTC)
+                        except (ValueError, TypeError):
+                            col = rule.get("column", "?")
+                            _handle_fail(
+                                on_fail, module_id, AssertRuleType.FRESHNESS,
+                                f"freshness: column '{col}' has non-numeric value {max_ts!r}",
+                                blueprint_id, run_id, error_type=rule.get("error_type"),
+                            )
+                            continue
+                    age_hours = (datetime.now(tz=UTC) - ts_utc).total_seconds() / 3600
                     if age_hours > max_age_hours:
                         _handle_fail(
                             on_fail, module_id, AssertRuleType.FRESHNESS,
@@ -362,6 +430,16 @@ def _batch_aggregate_rules(
                     _handle_fail(
                         on_fail, module_id, AssertRuleType.SQL,
                         f"sql assertion failed: {rule.get('expr', '')!r} evaluated to {result!r}",
+                        blueprint_id, run_id, error_type=rule.get("error_type"),
+                    )
+
+            elif rtype == AssertRuleType.NOT_NULL and f"_notnull_{i}" in agg_cols:
+                null_count = agg_row[f"_notnull_{i}"] or 0
+                col = rule.get("column", "?")
+                if null_count > 0:
+                    _handle_fail(
+                        on_fail, module_id, AssertRuleType.NOT_NULL,
+                        f"not_null[{col!r}]: {null_count} null value(s) found",
                         blueprint_id, run_id, error_type=rule.get("error_type"),
                     )
 
@@ -403,8 +481,8 @@ def _batch_aggregate_rules(
 
 def _check_spillway_rate(
     module_id: str,
-    df: "DataFrame",
-    quarantine_df: "DataFrame | None",
+    df: DataFrame,
+    quarantine_df: DataFrame | None,
     spillway_rules: list[tuple[int, dict[str, Any]]],
     blueprint_id: str,
     run_id: str,
@@ -433,10 +511,10 @@ def _check_spillway_rate(
 
 def _apply_row_rule(
     module_id: str,
-    df: "DataFrame",
+    df: DataFrame,
     rule: dict[str, Any],
-    spark: "SparkSession",
-) -> "tuple[DataFrame, DataFrame | None]":
+    spark: SparkSession,
+) -> tuple[DataFrame, DataFrame | None]:
     """Apply a row-level rule.  Returns (passing_df, quarantine_df | None).
 
     Lazy — no Spark actions triggered.
@@ -494,7 +572,8 @@ def _apply_row_rule(
     elif rtype == AssertRuleType.CUSTOM:
         fn_path = rule.get("fn", "")
         if not fn_path:
-            logger.warning("[%s] custom rule missing fn path; skipped.", module_id)
+            logger.warning("[runtime_assert_custom_missing_fn] [%s] custom rule missing fn path; skipped.", module_id)
+            _add_module_warning("runtime_assert_custom_missing_fn", "custom rule missing fn path; skipped.")
             return df, None
 
         try:
@@ -503,7 +582,8 @@ def _apply_row_rule(
         except AssertError:
             raise
         except Exception as exc:
-            logger.warning("[%s] custom rule %r raised: %s", module_id, fn_path, exc)
+            logger.warning("[runtime_assert_custom_error] [%s] custom rule %r raised: %s", module_id, fn_path, exc)
+            _add_module_warning("runtime_assert_custom_error", f"custom rule {fn_path!r} raised: {exc}")
             return df, None
 
         if not result.get("passed", True):
@@ -530,7 +610,7 @@ def _apply_row_rule(
 
 def _handle_fail_if_any(
     module_id: str,
-    failing_df: "DataFrame",
+    failing_df: DataFrame,
     on_fail: Any,
     rule_type: str,
     message: str,
@@ -589,9 +669,7 @@ def _fire_rule_webhook(
 ) -> None:
     """Fire assertion failure webhook asynchronously (best-effort)."""
     try:
-        from aqueduct.config import WebhookEndpointConfig
-        from aqueduct.surveyor.webhook import fire_webhook
-        config = WebhookEndpointConfig(url=url)
+        from aqueduct.infra.http import _deliver_webhook_payload
         full_payload = {
             "event": "assert_rule_failed",
             "module_id": module_id,
@@ -599,8 +677,9 @@ def _fire_rule_webhook(
             "message": message,
             "blueprint_id": blueprint_id,
             "run_id": run_id,
-            "fired_at": datetime.now(tz=timezone.utc).isoformat(),
+            "fired_at": datetime.now(tz=UTC).isoformat(),
         }
-        fire_webhook(config, full_payload)
+        _deliver_webhook_payload(url, full_payload)
     except Exception as exc:
-        logger.warning("[%s] Assert webhook fire failed: %s", module_id, exc)
+        logger.warning("[runtime_assert_webhook_fire_failed] [%s] Assert webhook fire failed: %s", module_id, exc)
+        _add_module_warning("runtime_assert_webhook_fire_failed", f"Assert webhook fire failed: {exc}")

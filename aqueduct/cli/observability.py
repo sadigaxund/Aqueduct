@@ -6,7 +6,9 @@ commands register onto `cli` when imported at the bottom of __init__.
 from __future__ import annotations
 
 import json
+import os
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -14,12 +16,48 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
-    _DEFAULT_OBS_PATH,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
+    cli,
+)
+from aqueduct.cli.output import emit
+from aqueduct.cli.style import error as _error
+from aqueduct.executor.models import ExecutionStatus
+from aqueduct.stores.read import open_obs_read  # Phase 69 — backend-aware reads
+
+
+def _store_not_found(
+    cfg: Any = None,
+    *,
+    run_id: str | None = None,
+    blueprint_id: str | None = None,
+    store_dir: str | None = None,
+) -> None:
+    """Actionable store-miss error + exit (2.0 routed layout).
+
+    Says WHERE the read looked and WHAT to check — a store miss is usually
+    "wrong cwd / hasn't run yet", not corruption.
+    """
+    from aqueduct.stores.read import _OBS_ROUTING_ROOT
+    if store_dir:
+        searched = f"{store_dir}/observability.db"
+    else:
+        _base = None
+        if cfg is not None:
+            _base = cfg.stores.observability.path
+        searched = f"{_base or _OBS_ROUTING_ROOT}/*/observability.db"
+    scope = ""
+    if run_id:
+        scope = f" for run_id={run_id!r}"
+    elif blueprint_id:
+        scope = f" for blueprint {blueprint_id!r}"
+    _error(
+        f"no observability store found{scope} — searched {searched}. "
+        "has this pipeline run yet? (--store-dir overrides; "
+        "config: stores.observability.path)"
+    )
+    sys.exit(exit_codes.DATA_OR_RUNTIME)
 
 
 # ── aqueduct report ───────────────────────────────────────────────────────────
@@ -80,9 +118,11 @@ import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
 @click.option(
     "--format",
     "fmt",
-    type=click.Choice(["table", "json", "csv"]),
+    type=click.Choice(["table", "json", "csv", "html"]),
     default="table",
     show_default=True,
+    help="Output format. 'html' emits a self-contained run report to stdout "
+         "(redirect to a file, e.g. > run.html).",
 )
 @_env_options
 def report(
@@ -100,13 +140,12 @@ def report(
         _report_trend(trend_column, blueprint_arg, since, store_dir, config_path,
                       fmt, env_file, cli_env)
         return
+    from aqueduct.cli.style import error as _error
     if not run_id:
-        click.echo("✗ RUN_ID is required (or pass --trend COLUMN --blueprint ID)", err=True)
+        _error("RUN_ID is required — or pass --trend COLUMN --blueprint ID")
         sys.exit(exit_codes.USAGE_ERROR)
     import csv as _csv
     import io
-
-    import duckdb as _duckdb
 
     from aqueduct.config import ConfigError, load_config
 
@@ -117,22 +156,16 @@ def report(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
-        click.echo(
-            f"✗ observability.db not found for run_id={run_id!r} "
-            f"(searched: --store-dir, cfg.stores.observability.path, "
-            f"and .aqueduct/observability/*/observability.db)",
-            err=True,
-        )
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        row = conn.execute(
+    metrics_rows: list = []
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, status,
                    CAST(started_at AS VARCHAR),
@@ -141,27 +174,49 @@ def report(
             FROM run_records WHERE run_id = ?
             """,
             [run_id],
-        ).fetchone()
-    finally:
-        conn.close()
+        )
+        row = cur.fetchone()
+        if fmt == "html":
+            # Resource profile rows for the HTML report (reuses Phase 62 data).
+            try:
+                cur.execute(
+                    """
+                    SELECT module_id, records_written, bytes_written, duration_ms
+                    FROM module_metrics WHERE run_id = ?
+                    ORDER BY duration_ms DESC NULLS LAST
+                    """,
+                    [run_id],
+                )
+                metrics_rows = cur.fetchall()
+            except Exception:
+                metrics_rows = []  # module_metrics table may not exist yet
 
     if row is None:
-        click.echo(f"✗ run {run_id!r} not found in {observability_db}", err=True)
+        _error(f"run {run_id!r} not found in the observability store — `aqueduct runs` lists known run ids")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     run_id_val, blueprint_id, status, started_at, finished_at, module_results_raw = row
     module_results = json.loads(module_results_raw) if isinstance(module_results_raw, str) else (module_results_raw or [])
 
+    if fmt == "html":
+        click.echo(_render_run_html(
+            run_id_val, blueprint_id, status, started_at, finished_at,
+            module_results, metrics_rows,
+        ))
+        return
+
     if fmt == "json":
-        out = {
-            "run_id": run_id_val,
-            "blueprint_id": blueprint_id,
-            "status": status,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "module_results": module_results,
-        }
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            {
+                "run_id": run_id_val,
+                "blueprint_id": blueprint_id,
+                "status": status,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "module_results": module_results,
+            },
+            fmt="json",
+        )
         return
 
     if fmt == "csv":
@@ -179,7 +234,7 @@ def report(
         return
 
     # table format
-    status_icon = "✓" if status == "success" else "✗"
+    status_icon = "✓" if status == ExecutionStatus.SUCCESS else "✗"
     click.echo(f"{status_icon} run_id={run_id_val}  blueprint={blueprint_id}  status={status}")
     click.echo(f"  started:  {started_at}")
     click.echo(f"  finished: {finished_at or '(running)'}")
@@ -187,12 +242,22 @@ def report(
     click.echo(f"  {'Module':<30} {'Status':<10} Error")
     click.echo(f"  {'-'*30} {'-'*10} {'-'*40}")
     for mr in module_results:
-        icon = "✓" if mr.get("status") == "success" else ("⏭" if mr.get("status") == "skipped" else "✗")
+        icon = "✓" if mr.get("status") == ExecutionStatus.SUCCESS else ("⏭" if mr.get("status") == ExecutionStatus.SKIPPED else "✗")
         err = mr.get("error") or ""
         if len(err) > 60:
             err = err[:57] + "..."
         click.echo(f"  {icon} {mr.get('module_id', ''):<28} {mr.get('status', ''):<10} {err}")
 
+
+
+def _first_module_id(module_results: Any) -> str:
+    """First module id from a run's module_results JSON (backend-portable —
+    computed in Python instead of duckdb-specific json_extract_string)."""
+    try:
+        data = json.loads(module_results) if isinstance(module_results, str) else (module_results or [])
+        return data[0].get("module_id", "") if data else ""
+    except Exception:
+        return ""
 
 
 def _resolve_blueprint_id(blueprint_arg: str | None) -> str | None:
@@ -226,8 +291,6 @@ def _report_trend(
     form, filters to ``column``, and reports null-rate + type history ordered by
     capture time. Type changes between consecutive snapshots are flagged.
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     try:
@@ -237,61 +300,50 @@ def _report_trend(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
-
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-        if obs_db.is_dir():
-            obs_db = obs_db / "observability.db"
-    elif blueprint_id:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-    else:
-        obs_db = Path(_DEFAULT_OBS_PATH)
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
     if since is None:
-        from datetime import datetime, timedelta, timezone
-        since = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat()
+        from datetime import datetime, timedelta
+        since = (datetime.now(tz=UTC) - timedelta(days=30)).isoformat()
 
-    # Long-form unroll: null_rates map and schema_snapshot fields → one row per
-    # (run_id, column, captured_at). DuckDB json_each explodes the payload; no
-    # view is materialised, so nothing is duplicated on disk.
-    null_q = """
-        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
-               CAST(je.value AS DOUBLE) AS null_rate
-        FROM probe_signals ps,
-             json_each(json_extract(ps.payload, '$.null_rates')) je
-        WHERE ps.signal_type = 'null_rates'
-          AND je.key = ?
-          AND ps.captured_at >= ?
-        ORDER BY ps.captured_at
+    # Fetch the raw probe payloads (portable SQL — no `json_each`/`json_extract`,
+    # which are DuckDB-only) and explode the JSON in Python so this works
+    # identically on DuckDB and Postgres. `payload` is a str on DuckDB and an
+    # already-parsed dict via psycopg2 on Postgres — handle both.
+    payload_q = """
+        SELECT run_id, CAST(captured_at AS VARCHAR) AS ts, signal_type, payload
+        FROM probe_signals
+        WHERE signal_type IN ('null_rates', 'schema_snapshot')
+          AND captured_at >= ?
+        ORDER BY captured_at
     """
-    type_q = """
-        SELECT ps.run_id, CAST(ps.captured_at AS VARCHAR) AS ts,
-               json_extract_string(f.value, '$.type') AS col_type
-        FROM probe_signals ps,
-             json_each(json_extract(ps.payload, '$.fields')) f
-        WHERE ps.signal_type = 'schema_snapshot'
-          AND json_extract_string(f.value, '$.name') = ?
-          AND ps.captured_at >= ?
-        ORDER BY ps.captured_at
-    """
-    conn = _duckdb.connect(str(obs_db), read_only=True)
     try:
-        null_rows = conn.execute(null_q, [column, since]).fetchall()
-        type_rows = conn.execute(type_q, [column, since]).fetchall()
+        with store.connect() as cur:
+            cur.execute(payload_q, [since])
+            _raw = cur.fetchall()
     except Exception as exc:
-        click.echo(f"✗ trend query failed: {exc}", err=True)
+        _error(f"trend query failed: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
-    finally:
-        conn.close()
+
+    null_rows: list[tuple] = []
+    type_rows: list[tuple] = []
+    for run_id, ts, sig_type, payload in _raw:
+        data = json.loads(payload) if isinstance(payload, str) else (payload or {})
+        if sig_type == "null_rates":
+            nr = (data.get("null_rates") or {}).get(column)
+            if nr is not None:
+                null_rows.append((run_id, ts, float(nr)))
+        elif sig_type == "schema_snapshot":
+            for f in data.get("fields", []):
+                if f.get("name") == column:
+                    type_rows.append((run_id, ts, f.get("type")))
+                    break
 
     if not null_rows and not type_rows:
         click.echo(
@@ -301,14 +353,16 @@ def _report_trend(
         return
 
     if fmt == "json":
-        out = {
-            "column": column,
-            "blueprint_id": blueprint_id,
-            "since": since,
-            "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
-            "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
-        }
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            {
+                "column": column,
+                "blueprint_id": blueprint_id,
+                "since": since,
+                "null_rate": [{"run_id": r[0], "captured_at": r[1], "null_rate": r[2]} for r in null_rows],
+                "type": [{"run_id": r[0], "captured_at": r[1], "type": r[2]} for r in type_rows],
+            },
+            fmt="json",
+        )
         return
 
     click.echo(f"Quality trend — column: {column}"
@@ -329,7 +383,7 @@ def _report_trend(
             prev = ct
 
 
-def _fmt_bytes(n: "int | None") -> str:
+def _fmt_bytes(n: int | None) -> str:
     """Human-readable byte size for table output (raw ints kept in json/csv)."""
     if n is None:
         return "-"
@@ -339,6 +393,96 @@ def _fmt_bytes(n: "int | None") -> str:
             return f"{size:.0f}{unit}" if unit == "B" else f"{size:.1f}{unit}"
         size /= 1024
     return f"{size:.1f}TB"
+
+
+_HTML_CSS = """
+body{font:14px/1.5 system-ui,sans-serif;margin:2rem;color:#1a1a1a;background:#fff}
+h1{font-size:1.4rem;margin:0 0 1rem}h2{font-size:1.05rem;margin:1.75rem 0 .5rem;border-bottom:1px solid #eee;padding-bottom:.25rem}
+.badge{display:inline-block;padding:.1rem .5rem;border-radius:.25rem;font-weight:600;font-size:.85rem}
+.ok{background:#e6f4ea;color:#137333}.err{background:#fce8e6;color:#c5221f}.skip{background:#f1f3f4;color:#5f6368}
+table{border-collapse:collapse;width:100%;margin:.25rem 0}
+th,td{text-align:left;padding:.35rem .6rem;border-bottom:1px solid #eee;font-variant-numeric:tabular-nums}
+th{color:#555;font-weight:600;font-size:.85rem}
+th.num,td.num{text-align:right}.muted{color:#999}
+.kv{width:auto;border:1px solid #eee;border-radius:.4rem;overflow:hidden}
+.kv td,.kv th{border:none;border-bottom:1px solid #f3f3f3;padding:.3rem 1rem}
+.kv tr:last-child td,.kv tr:last-child th{border-bottom:none}
+.kv th{text-align:right;color:#555;white-space:nowrap;width:1%;background:#fafafa}
+.kv td{font-weight:500}
+.foot{margin-top:2rem;color:#999;font-size:.8rem}
+"""
+
+
+def _render_run_html(
+    run_id: str,
+    blueprint_id: str,
+    status: str,
+    started_at: str,
+    finished_at: str | None,
+    module_results: list,
+    metrics_rows: list,
+) -> str:
+    """Render a single-file, self-contained HTML report for one run.
+
+    No server, no external assets — renders offline. Reuses the same data the
+    table/json formats already fetch, plus the Phase-62 resource profile rows.
+    """
+    from html import escape
+
+    def e(v: object) -> str:
+        return escape("" if v is None else str(v))
+
+    status_cls = "ok" if status == ExecutionStatus.SUCCESS else "err"
+
+    # Module results table
+    res_rows = []
+    for mr in module_results:
+        st = mr.get("status", "")
+        cls = "ok" if st == ExecutionStatus.SUCCESS else ("skip" if st == ExecutionStatus.SKIPPED else "err")
+        res_rows.append(
+            f"<tr><td>{e(mr.get('module_id'))}</td>"
+            f"<td><span class='badge {cls}'>{e(st)}</span></td>"
+            f"<td>{e(mr.get('error') or '')}</td></tr>"
+        )
+    results_html = "\n".join(res_rows) or "<tr><td colspan=3 class='muted'>no module results</td></tr>"
+
+    # Resource profile table (heaviest first; metrics_rows already ordered)
+    total_dur = sum((r[3] or 0) for r in metrics_rows)
+    prof_rows = []
+    for module_id, rec_w, by_w, dur in metrics_rows:
+        pct = (100.0 * (dur or 0) / total_dur) if total_dur else 0.0
+        prof_rows.append(
+            f"<tr><td>{e(module_id)}</td>"
+            f"<td class='num'>{e(dur) if dur is not None else '-'}</td>"
+            f"<td class='num'>{pct:.1f}%</td>"
+            f"<td class='num'>{('-' if rec_w is None else format(rec_w, ','))}</td>"
+            f"<td class='num'>{_fmt_bytes(by_w)}</td></tr>"
+        )
+    profile_html = (
+        "\n".join(prof_rows)
+        or "<tr><td colspan=5 class='muted'>no module_metrics for this run</td></tr>"
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Aqueduct run {e(run_id)}</title><style>{_HTML_CSS}</style></head>
+<body>
+<h1>Aqueduct run report</h1>
+<table class="kv">
+  <tr><th>Run</th><td>{e(run_id)}</td></tr>
+  <tr><th>Blueprint</th><td>{e(blueprint_id)}</td></tr>
+  <tr><th>Status</th><td><span class="badge {status_cls}">{e(status)}</span></td></tr>
+  <tr><th>Started</th><td>{e(started_at)}</td></tr>
+  <tr><th>Finished</th><td>{e(finished_at) or '<span class="muted">(running)</span>'}</td></tr>
+</table>
+<h2>Modules</h2>
+<table><thead><tr><th>Module</th><th>Status</th><th>Error</th></tr></thead>
+<tbody>{results_html}</tbody></table>
+<h2>Resource profile</h2>
+<table><thead><tr><th>Module</th><th class="num">Duration (ms)</th><th class="num">% of run</th><th class="num">Rows out</th><th class="num">Bytes out</th></tr></thead>
+<tbody>{profile_html}</tbody></table>
+<div class="foot">Generated by <code>aqueduct report --format html</code> · self-contained, no external assets.</div>
+</body></html>"""
 
 
 def _report_profile(
@@ -361,8 +505,6 @@ def _report_profile(
         ``--last`` runs (count, avg/max duration, most-recent duration), flagging
         a module whose latest run is >1.5× its window average as a slowdown.
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     try:
@@ -372,27 +514,25 @@ def _report_profile(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     if run_id:
-        _profile_run(run_id, cfg, store_dir, fmt, _duckdb)
+        _profile_run(run_id, cfg, store_dir, fmt)
     elif blueprint_arg:
-        _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb)
+        _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt)
     else:
-        click.echo("✗ --profile needs RUN_ID (one run) or --blueprint ID (trend)", err=True)
+        _error("RUN_ID (one run) or --blueprint ID (trend) is required with --profile")
         sys.exit(exit_codes.USAGE_ERROR)
 
 
-def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
-        click.echo(f"✗ observability.db not found for run_id={run_id!r}", err=True)
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+def _profile_run(run_id, cfg, store_dir, fmt) -> None:
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        rows = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT module_id, records_read, bytes_read, records_written,
                    bytes_written, duration_ms
@@ -400,9 +540,8 @@ def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
             ORDER BY duration_ms DESC NULLS LAST
             """,
             [run_id],
-        ).fetchall()
-    finally:
-        conn.close()
+        )
+        rows = cur.fetchall()
 
     if not rows:
         click.echo(f"No module_metrics for run {run_id!r}.")
@@ -414,9 +553,15 @@ def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
     total_bw = sum((r["bytes_written"] or 0) for r in records)
 
     if fmt == "json":
-        click.echo(json.dumps(
-            {"run_id": run_id, "total_duration_ms": total_dur,
-             "total_bytes_written": total_bw, "modules": records}, indent=2))
+        emit(
+            {
+                "run_id": run_id,
+                "total_duration_ms": total_dur,
+                "total_bytes_written": total_bw,
+                "modules": records,
+            },
+            fmt="json",
+        )
         return
     if fmt == "csv":
         import csv as _csv
@@ -442,36 +587,28 @@ def _profile_run(run_id, cfg, store_dir, fmt, _duckdb) -> None:
     click.echo(f"  {'TOTAL':<26}{str(total_dur)+'ms':>10}{'100.0%':>7}{'':>12}{_fmt_bytes(total_bw):>11}")
 
 
-def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
+def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     blueprint_id = _resolve_blueprint_id(blueprint_arg)
     if not blueprint_id:
-        click.echo(f"✗ could not resolve blueprint from {blueprint_arg!r}", err=True)
+        _error(f"could not resolve blueprint from {blueprint_arg!r}")
         sys.exit(exit_codes.USAGE_ERROR)
 
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-        if obs_db.is_dir():
-            obs_db = obs_db / "observability.db"
-    else:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
-    try:
-        run_ids = [r[0] for r in conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             "SELECT run_id FROM run_records WHERE blueprint_id = ? ORDER BY started_at DESC LIMIT ?",
             [blueprint_id, last_n],
-        ).fetchall()]
+        )
+        run_ids = [r[0] for r in cur.fetchall()]
         if not run_ids:
             click.echo(f"No runs for blueprint {blueprint_id!r}.")
             return
         latest = run_ids[0]
         placeholders = ",".join("?" * len(run_ids))
-        agg = conn.execute(
+        cur.execute(
             f"""
             SELECT module_id, COUNT(*) AS runs, AVG(duration_ms) AS avg_dur,
                    MAX(duration_ms) AS max_dur
@@ -479,13 +616,13 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
             GROUP BY module_id
             """,
             run_ids,
-        ).fetchall()
-        last_dur = dict(conn.execute(
+        )
+        agg = cur.fetchall()
+        cur.execute(
             "SELECT module_id, duration_ms FROM module_metrics WHERE run_id = ?",
             [latest],
-        ).fetchall())
-    finally:
-        conn.close()
+        )
+        last_dur = dict(cur.fetchall())
 
     records = []
     for module_id, runs, avg_dur, max_dur in agg:
@@ -500,8 +637,14 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt, _duckdb) -> None:
     records.sort(key=lambda r: (r["avg_duration_ms"] or 0), reverse=True)
 
     if fmt == "json":
-        click.echo(json.dumps(
-            {"blueprint_id": blueprint_id, "runs_analyzed": len(run_ids), "modules": records}, indent=2))
+        emit(
+            {
+                "blueprint_id": blueprint_id,
+                "runs_analyzed": len(run_ids),
+                "modules": records,
+            },
+            fmt="json",
+        )
         return
     if fmt == "csv":
         import csv as _csv
@@ -558,7 +701,6 @@ def runs(
     cli_env: tuple[str, ...],
 ) -> None:
     """List recent blueprint runs."""
-    import duckdb as _duckdb
     from aqueduct.config import load_config
 
     _resolve_and_load_env(
@@ -580,34 +722,36 @@ def runs(
         else:
             blueprint_id = blueprint
 
-    # Collect candidate DBs across per-pipeline dirs + legacy shared path.
-    # When the user set an explicit obs path, honour it verbatim. When
-    # `--blueprint` is given, prefer that per-pipeline dir.
-    candidates: list[Path] = []
-    if store_dir:
-        c = Path(store_dir) / "observability.db"
-        if c.exists():
-            candidates.append(c)
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        c = Path(cfg.stores.observability.path)
-        if c.is_dir():
-            c = c / "observability.db"
-        if c.exists():
-            candidates.append(c)
+    # Build the observability stores to scan. Postgres keeps every run in one
+    # schema → a single store. DuckDB may have per-pipeline files → scan all
+    # candidates (honouring --store-dir / a non-default path / --blueprint).
+    stores: list = []
+    if cfg.stores.observability.backend == "postgres":
+        from aqueduct.stores.base import get_stores
+        stores = [get_stores(cfg).observability]
     else:
-        if blueprint_id:
-            c = Path(".aqueduct/observability") / blueprint_id / "observability.db"
+        # 2.0: duckdb path = routing base directory; per-blueprint files at
+        # <base>/<blueprint_id>/observability.db. Explicit-file mode and the
+        # pre-routing flat `.aqueduct/observability.db` fallback are gone.
+        candidates: list[Path] = []
+        if store_dir:
+            c = Path(store_dir) / "observability.db"
             if c.exists():
                 candidates.append(c)
+        else:
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
+            _base = Path(cfg.stores.observability.path or _OBS_ROUTING_ROOT)
+            if blueprint_id:
+                c = _base / blueprint_id / "observability.db"
+                if c.exists():
+                    candidates.append(c)
+            if not candidates:
+                candidates = sorted(_base.glob("*/observability.db"))
         if not candidates:
-            candidates = sorted(Path(".aqueduct/observability").glob("*/observability.db"))
-        legacy = Path(_DEFAULT_OBS_PATH)
-        if legacy.exists():
-            candidates.append(legacy)
-
-    if not candidates:
-        click.echo("No runs found (no observability.db files discovered)")
-        return
+            click.echo("No runs found (no observability.db files discovered)")
+            return
+        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        stores = [DuckDBObservabilityStore(c) for c in candidates]
 
     if heal_coverage:
         # Phase 45 — playbook coverage: how many heals were resolved with
@@ -615,20 +759,18 @@ def runs(
         # heal = one (parent_run_id-or-run_id, patch_id) outcome row group;
         # raw row counts are good enough at this granularity.
         _by_resolution: dict[str, int] = {}
-        for db in candidates:
+        for _s in stores:
             try:
-                conn = _duckdb.connect(str(db), read_only=True)
-                try:
-                    # healing_outcomes has no blueprint_id column — scoping
-                    # happens via the per-pipeline DB selection above.
-                    _rows = conn.execute(
+                # healing_outcomes has no blueprint_id column — scoping happens
+                # via the per-pipeline store selection above.
+                with _s.connect() as cur:
+                    cur.execute(
                         """
                         SELECT COALESCE(resolution, 'llm') AS res, COUNT(*)
                         FROM healing_outcomes GROUP BY res
                         """
-                    ).fetchall()
-                finally:
-                    conn.close()
+                    )
+                    _rows = cur.fetchall()
             except Exception:
                 continue
             for _res, _n in _rows:
@@ -637,13 +779,15 @@ def runs(
         _zero_token = _by_resolution.get("cached", 0) + _by_resolution.get("replayed", 0)
         _coverage = (_zero_token / _total) if _total else 0.0
         if out_format.lower() == "json":
-            import json as _json
-            click.echo(_json.dumps({
-                "total_heals": _total,
-                "by_resolution": _by_resolution,
-                "zero_token_heals": _zero_token,
-                "zero_token_coverage": round(_coverage, 4),
-            }, indent=2))
+            emit(
+                {
+                    "total_heals": _total,
+                    "by_resolution": _by_resolution,
+                    "zero_token_heals": _zero_token,
+                    "zero_token_coverage": round(_coverage, 4),
+                },
+                fmt="json",
+            )
         elif _total == 0:
             click.echo("No healing outcomes recorded yet.")
         else:
@@ -663,21 +807,20 @@ def runs(
     where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     rows: list = []
-    for db in candidates:
+    for _s in stores:
         try:
-            conn = _duckdb.connect(str(db), read_only=True)
-            try:
-                rows.extend(conn.execute(
+            with _s.connect() as cur:
+                cur.execute(
                     f"""
                     SELECT run_id, blueprint_id, status, started_at, finished_at,
-                           json_extract_string(module_results, '$[0].module_id') AS first_failed
+                           module_results
                     FROM run_records
                     {where}
                     """,
                     params_base,
-                ).fetchall())
-            finally:
-                conn.close()
+                )
+                for run_id_v, bp_v, st_v, sa_v, fa_v, mr in cur.fetchall():
+                    rows.append((run_id_v, bp_v, st_v, sa_v, fa_v, _first_module_id(mr)))
         except Exception:
             continue
     # Sort merged result by started_at DESC (col index 3), then limit
@@ -685,19 +828,20 @@ def runs(
     rows = rows[:limit]
 
     if out_format.lower() == "json":
-        import json as _json
-        payload = [
-            {
-                "run_id": rv,
-                "blueprint_id": bp,
-                "status": st,
-                "started_at": str(sa) if sa else None,
-                "finished_at": str(fa) if fa else None,
-                "first_failed_module": ff,
-            }
-            for rv, bp, st, sa, fa, ff in rows
-        ]
-        click.echo(_json.dumps(payload, indent=2))
+        emit(
+            [
+                {
+                    "run_id": rv,
+                    "blueprint_id": bp,
+                    "status": st,
+                    "started_at": str(sa) if sa else None,
+                    "finished_at": str(fa) if fa else None,
+                    "first_failed_module": ff,
+                }
+                for rv, bp, st, sa, fa, ff in rows
+            ],
+            fmt="json",
+        )
         return
 
     if not rows:
@@ -707,8 +851,8 @@ def runs(
     click.echo(f"  {'run_id':<38} {'blueprint':<30} {'status':<10} {'started':<22} {'failed_module'}")
     click.echo(f"  {'-'*38} {'-'*30} {'-'*10} {'-'*22} {'-'*20}")
     for run_id_val, bp_id, status, started_at, finished_at, first_failed in rows:
-        icon = "✓" if status == "success" else ("↻" if status == "running" else "✗")
-        failed_col = (first_failed or "") if status == "error" else ""
+        icon = "✓" if status == ExecutionStatus.SUCCESS else ("↻" if status == "running" else "✗")
+        failed_col = (first_failed or "") if status == ExecutionStatus.ERROR else ""
         click.echo(f"  {icon} {run_id_val:<37} {bp_id:<30} {status:<10} {str(started_at)[:19]:<22} {failed_col}")
 
 
@@ -781,8 +925,6 @@ def lineage(
     PIPELINE_ID_OR_BLUEPRINT: blueprint id (e.g. nyc_taxi_demo) or path to
     the blueprint YAML file (e.g. blueprint.yml — id is extracted automatically).
     """
-    import duckdb as _duckdb
-
     from aqueduct.config import ConfigError, load_config
 
     # ── --chain: on-demand type-tracked trace, computed from the blueprint ──────
@@ -798,7 +940,7 @@ def lineage(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # Accept blueprint file path — extract blueprint id from it
@@ -809,24 +951,16 @@ def lineage(
             bp = parse(str(arg_path))
             blueprint_id = bp.id
         except Exception as exc:
-            click.echo(f"✗ could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}", err=True)
+            _error(f"could not read blueprint id from {blueprint_id_or_blueprint!r}: {exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
     else:
         blueprint_id = blueprint_id_or_blueprint
 
-    # Phase 38: lineage merged into observability — column_lineage lives in
-    # observability.db alongside all other observability tables.
-    if store_dir:
-        obs_db = Path(store_dir) / "observability.db"
-    elif cfg.stores.observability.path != _DEFAULT_OBS_PATH:
-        obs_db = Path(cfg.stores.observability.path)
-    else:
-        obs_db = Path(".aqueduct/observability") / blueprint_id / "observability.db"
-        if not obs_db.exists():
-            obs_db = Path(".aqueduct/observability.db")
-    if not obs_db.exists():
-        click.echo(f"✗ observability.db not found at {obs_db}", err=True)
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    # Phase 38: lineage merged into observability — column_lineage lives in the
+    # observability store alongside all other observability tables.
+    store = open_obs_read(cfg, store_dir, blueprint_id=blueprint_id)
+    if store is None:
+        _store_not_found(cfg, blueprint_id=blueprint_id, store_dir=store_dir)
 
     params: list[Any] = [blueprint_id]
     where_parts = ["blueprint_id = ?"]
@@ -845,27 +979,27 @@ def lineage(
         ORDER BY channel_id, output_column
     """
 
-    conn = _duckdb.connect(str(obs_db), read_only=True)
-    try:
-        rows = conn.execute(query, params).fetchall()
-    finally:
-        conn.close()
+    with store.connect() as cur:
+        cur.execute(query, params)
+        rows = cur.fetchall()
 
     if not rows:
         click.echo(f"No lineage records found for blueprint {blueprint_id!r}.")
         return
 
     if fmt == "json":
-        out = [
-            {
-                "channel_id": r[0],
-                "output_column": r[1],
-                "source_table": r[2],
-                "source_column": r[3],
-            }
-            for r in rows
-        ]
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            [
+                {
+                    "channel_id": r[0],
+                    "output_column": r[1],
+                    "source_table": r[2],
+                    "source_column": r[3],
+                }
+                for r in rows
+            ],
+            fmt="json",
+        )
         return
 
     click.echo(f"Column lineage — blueprint: {blueprint_id}")
@@ -892,7 +1026,7 @@ def _lineage_chain(
     """
     arg_path = Path(blueprint_arg)
     if arg_path.suffix not in (".yml", ".yaml") or not arg_path.exists():
-        click.echo("✗ --chain requires a blueprint file path (not a blueprint id)", err=True)
+        _error("--chain requires a blueprint file path (not a blueprint id)")
         sys.exit(exit_codes.USAGE_ERROR)
 
     from aqueduct.compiler.chain import compute_type_chain
@@ -911,7 +1045,7 @@ def _lineage_chain(
         bp = parse(str(arg_path))
         manifest = compiler_compile(bp, blueprint_path=arg_path)
     except (ParseError, CompileError) as exc:
-        click.echo(f"✗ could not compile {blueprint_arg!r}: {exc}", err=True)
+        _error(f"could not compile {blueprint_arg!r}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     hops = compute_type_chain(manifest.modules, manifest.edges, column)
@@ -920,18 +1054,20 @@ def _lineage_chain(
         return
 
     if fmt == "json":
-        out = [
-            {
-                "channel_id": h.channel_id,
-                "output_column": h.output_column,
-                "source_table": h.source_table,
-                "source_column": h.source_column,
-                "output_type": h.output_type,
-                "transform_op": h.transform_op,
-            }
-            for h in hops
-        ]
-        click.echo(json.dumps(out, indent=2))
+        emit(
+            [
+                {
+                    "channel_id": h.channel_id,
+                    "output_column": h.output_column,
+                    "source_table": h.source_table,
+                    "source_column": h.source_column,
+                    "output_type": h.output_type,
+                    "transform_op": h.transform_op,
+                }
+                for h in hops
+            ],
+            fmt="json",
+        )
         return
 
     click.echo(f"Column chain — blueprint: {bp.id}  column: {column}")
@@ -975,6 +1111,16 @@ def _lineage_chain(
     help="Observability store directory",
 )
 @click.option(
+    "--blueprint",
+    "blueprint_id",
+    default=None,
+    help=(
+        "Blueprint id whose observability store holds the override (DuckDB "
+        "routes per blueprint: <base>/<blueprint_id>/observability.db). "
+        "Required for duckdb unless --store-dir is given; ignored for postgres."
+    ),
+)
+@click.option(
     "--config",
     "config_path",
     default=None,
@@ -986,6 +1132,7 @@ def signal(
     value_str: str | None,
     error_msg: str | None,
     store_dir: str | None,
+    blueprint_id: str | None,
     config_path: str | None,
     env_file: str | None,
     cli_env: tuple[str, ...],
@@ -1000,7 +1147,7 @@ def signal(
     Clear override (resume normal evaluation):
       aqueduct signal my_probe --value true
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
@@ -1013,10 +1160,27 @@ def signal(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
-    bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
+    # DuckDB routes per blueprint — without an id the override would land in
+    # the `default/` store no run ever reads. (Postgres: one schema, no routing.)
+    if (
+        cfg.stores.observability.backend == "duckdb"
+        and not blueprint_id
+        and not store_dir
+    ):
+        _error(
+            "signal: --blueprint <id> is required with the duckdb backend "
+            "(overrides live in the blueprint's routed store)"
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    bundle = get_stores(
+        cfg,
+        store_dir_override=Path(store_dir) if store_dir else None,
+        blueprint_id=blueprint_id,
+    )
 
     if value_str is None and error_msg is None:
         # Show current override status
@@ -1036,13 +1200,13 @@ def signal(
         return
 
     if error_msg is not None and value_str == "true":
-        click.echo("✗ --error implies gate closed; cannot combine with --value true", err=True)
+        _error("--error implies gate closed; cannot combine with --value true")
         sys.exit(exit_codes.USAGE_ERROR)
 
     # Resolve passed value
     passed = value_str == "true"
 
-    now = datetime.now(tz=timezone.utc).isoformat()
+    now = datetime.now(tz=UTC).isoformat()
     with bundle.observability.connect() as cur:
         cur.execute(_SIGNAL_OVERRIDES_DDL)
         if passed:
@@ -1066,3 +1230,99 @@ def signal(
             if msg_note:
                 click.echo(msg_note)
 
+
+
+# ── aqueduct studio (Phase 67) ────────────────────────────────────────────────
+
+@cli.command()
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store dir (default: scan .aqueduct/observability/*)",
+)
+@_env_options
+def studio(
+    config_path: str | None,
+    store_dir: str | None,
+    env_file: str | None,
+    cli_env: tuple[str, ...],
+) -> None:
+    """Launch the interactive Aqueduct studio (read-only TUI).
+
+    Requires the optional 'tui' extra: pip install aqueduct-core[tui]
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("textual") is None:
+        click.echo(
+            "✗ aqueduct studio needs the 'tui' extra: pip install aqueduct-core[tui]",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    try:
+        _resolve_and_load_env(
+            env_file, Path(config_path) if config_path else None, cli_env=cli_env
+        )
+    except Exception:
+        pass  # env loading is best-effort for a read-only viewer
+
+    from aqueduct.tui.app import run_studio
+
+    code = run_studio(config_path=config_path, store_dir=store_dir)
+    sys.exit(exit_codes.SUCCESS if code == 0 else exit_codes.DATA_OR_RUNTIME)
+
+
+# ── aqueduct dashboard (Phase 68) ─────────────────────────────────────────────
+
+@cli.command()
+@click.option("--config", "config_path", default=None, help="Path to aqueduct.yml")
+@click.option(
+    "--store-dir",
+    default=None,
+    help="Observability store dir (default: scan .aqueduct/observability/*)",
+)
+@click.option("--port", default=8501, show_default=True, help="Local port for the Streamlit server.")
+@click.option("--no-browser", is_flag=True, default=False, help="Do not auto-open a browser.")
+def dashboard(
+    config_path: str | None,
+    store_dir: str | None,
+    port: int,
+    no_browser: bool,
+) -> None:
+    """Launch the local, read-only observability dashboard (Streamlit).
+
+    Requires the optional 'dashboard' extra: pip install aqueduct-core[dashboard]
+
+    This is a LOCAL dev viewer (like the Spark UI) — on-demand, read-only, never a
+    production server and never required by a pipeline. Shells out to
+    `streamlit run` on the dashboard app; Ctrl-C to stop.
+    """
+    import importlib.util
+    import subprocess
+
+    if importlib.util.find_spec("streamlit") is None:
+        click.echo(
+            "✗ aqueduct dashboard needs the 'dashboard' extra: "
+            "pip install aqueduct-core[dashboard]",
+            err=True,
+        )
+        sys.exit(exit_codes.CONFIG_ERROR)
+
+    app_path = str(Path(__file__).resolve().parent.parent / "dashboard" / "app.py")
+    env = dict(os.environ)
+    if config_path:
+        env["AQ_DASH_CONFIG"] = config_path
+    if store_dir:
+        env["AQ_DASH_STORE_DIR"] = store_dir
+
+    args = [
+        sys.executable, "-m", "streamlit", "run", app_path,
+        "--server.port", str(port),
+        "--server.headless", "true" if no_browser else "false",
+    ]
+    try:
+        sys.exit(subprocess.call(args, env=env))
+    except KeyboardInterrupt:
+        sys.exit(130)

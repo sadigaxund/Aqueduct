@@ -21,14 +21,11 @@ from __future__ import annotations
 
 import os
 import re
-import sys
 import threading
+from datetime import UTC
 from typing import Any
 
-import httpx
-
-from aqueduct.redaction import redact as _redact
-
+from aqueduct.infra.http import _deliver_webhook_payload
 
 # ── Template rendering ────────────────────────────────────────────────────────
 
@@ -53,15 +50,8 @@ def _render_dict(template: dict[str, Any], vars: dict[str, str]) -> dict[str, An
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-# Delivery statuses worth one retry — transient by nature. 4xx other than
-# 429 means the request itself is wrong; retrying it identically is noise.
-_RETRYABLE_DELIVERY_STATUS = frozenset({429, 500, 502, 503, 504})
-_DELIVERY_ATTEMPTS = 2          # total tries per webhook fire
-_DELIVERY_BACKOFF_SECONDS = 2.0
-
-
 def fire_webhook(
-    config: "WebhookEndpointConfig",  # type: ignore[name-defined]  # noqa: F821
+    config: WebhookEndpointConfig,  # type: ignore[name-defined]  # noqa: F821
     full_payload: dict[str, Any],
     template_vars: dict[str, str] | None = None,
     event: str | None = None,
@@ -95,7 +85,6 @@ def fire_webhook(
 
     # Render headers (e.g. Authorization: "Bearer ${SLACK_TOKEN}")
     rendered_headers: dict[str, str] = {
-        "Content-Type": "application/json",
         **_render_dict(config.headers, vars),
     }
 
@@ -105,60 +94,31 @@ def fire_webhook(
     # @aq.secret('SLACK_TOKEN')`) and represent the intended transmission of a
     # credential to the destination.
     if config.payload is not None:
-        body = _redact(_render_dict(config.payload, vars))
+        body = _render_dict(config.payload, vars)
     elif event is not None:
-        from datetime import datetime, timezone
-        body = _redact({
+        from datetime import datetime
+        body = {
             "event": event,
-            "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+            "timestamp": datetime.now(tz=UTC).isoformat(),
             "run_id": vars.get("run_id"),
             "blueprint_id": vars.get("blueprint_id"),
             "data": full_payload,
-        })
+        }
     else:
-        body = _redact(full_payload)
+        body = full_payload
 
-    url = config.url
-    method = config.method
-    timeout = config.timeout
+    # HMAC payload signing secret rendered from template vars (may contain ${ENV_VAR}).
+    rendered_secret: str | None = None
+    if config.secret:
+        rendered_secret = _render_value(config.secret, vars)
 
-    def _send() -> None:
-        import time as _time
-        for attempt in range(1, _DELIVERY_ATTEMPTS + 1):
-            retryable = False
-            try:
-                resp = httpx.request(
-                    method,
-                    url,
-                    json=body,
-                    headers=rendered_headers,
-                    timeout=timeout,
-                )
-                if resp.status_code < 400:
-                    return
-                retryable = resp.status_code in _RETRYABLE_DELIVERY_STATUS
-                print(
-                    f"[surveyor] webhook {method} {url!r} returned HTTP {resp.status_code}"
-                    + (f" — retrying ({attempt}/{_DELIVERY_ATTEMPTS})" if retryable and attempt < _DELIVERY_ATTEMPTS else ""),
-                    file=sys.stderr,
-                )
-            except httpx.RequestError as exc:
-                retryable = True
-                print(
-                    f"[surveyor] webhook {method} {url!r} failed: {exc}"
-                    + (f" — retrying ({attempt}/{_DELIVERY_ATTEMPTS})" if attempt < _DELIVERY_ATTEMPTS else ""),
-                    file=sys.stderr,
-                )
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    f"[surveyor] webhook {method} {url!r} raised unexpected error: {exc}",
-                    file=sys.stderr,
-                )
-                return
-            if not retryable or attempt >= _DELIVERY_ATTEMPTS:
-                return
-            _time.sleep(_DELIVERY_BACKOFF_SECONDS)
-
-    thread = threading.Thread(target=_send, daemon=True, name="surveyor-webhook")
-    thread.start()
-    return thread
+    return _deliver_webhook_payload(
+        config.url,
+        body,
+        method=config.method,
+        headers=rendered_headers,
+        timeout=config.timeout,
+        attempts=config.max_retries + 1,
+        backoff_seconds=config.backoff_seconds,
+        secret=rendered_secret,
+    )

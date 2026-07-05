@@ -16,10 +16,8 @@ Regulator compile-away (P6 — Passive-by-default gates):
 
 from __future__ import annotations
 
-
-from aqueduct.parser.models import Edge, Module
-from aqueduct.parser.models import ModuleType
 from aqueduct.errors import AqueductError
+from aqueduct.parser.models import Edge, Module, ModuleType
 
 
 class WireError(AqueductError):
@@ -72,6 +70,20 @@ def validate_spillway_edges(modules: list[Module], edges: list[Edge]) -> None:
                 raise WireError(
                     f"Spillway edge {e.from_id!r} → {e.to_id!r}: target module does not exist."
                 )
+
+
+def validate_probe_source_edges(modules: list[Module], edges: list[Edge]) -> None:
+    """Reject a Probe used as a data-flow source (executor excludes Probes from
+    the topo-sort node set, so a non-signal edge with from_id=Probe crashes it
+    with a bare KeyError — catch the mistake here with a pointer instead)."""
+    probe_ids = {m.id for m in modules if m.type == ModuleType.Probe}
+    for e in edges:
+        if e.from_id in probe_ids and e.port != "signal":
+            raise WireError(
+                f"Probe {e.from_id!r} cannot be a data source via edge to {e.to_id!r} "
+                f"(port={e.port!r}) — Probes attach to a module via attach_to and only "
+                "emit signals over port: signal. Remove this edge."
+            )
 
 
 def compile_away_regulators(

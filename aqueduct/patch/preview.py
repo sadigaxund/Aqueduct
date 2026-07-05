@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 from aqueduct.compiler.lineage import _extract_sql_lineage
+from aqueduct.parser.models import ModuleType
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +92,7 @@ def _channel_modules(bp: dict) -> list[dict]:
     for m in bp.get("modules") or []:
         if not isinstance(m, dict):
             continue
-        if m.get("type") != "Channel":
+        if m.get("type") != ModuleType.Channel.value:
             continue
         cfg = m.get("config") or {}
         if cfg.get("op") != "sql":
@@ -234,7 +236,7 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
     egress_targets: list[dict[str, Any]] = []
     sandboxed_modules = []
     for m in manifest.modules:
-        if m.type == "Egress":
+        if m.type == ModuleType.Egress:
             egress_targets.append({
                 "id": m.id,
                 "format": (m.config or {}).get("format"),
@@ -247,7 +249,7 @@ def build_sandbox_manifest(manifest: Any, sample_rows: int) -> tuple[Any, list[d
     if sample_rows and sample_rows > 0:
         sandboxed_modules = [
             _dc.replace(m, config={**m.config, "sandbox_limit": sample_rows})
-            if m.type == "Ingress"
+            if m.type == ModuleType.Ingress
             else m
             for m in sandboxed_modules
         ]
@@ -304,9 +306,10 @@ def run_sandbox_gate(
     try:
         from pathlib import Path as _Path
 
-        from aqueduct.parser.parser import ParseError, parse_dict
-        from aqueduct.compiler.compiler import CompileError, compile as compiler_compile
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.executor import ExecuteError, get_executor
+        from aqueduct.parser.parser import ParseError, parse_dict
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
             status="skip",
@@ -442,6 +445,7 @@ def render_unified_diff(blueprint_before: dict, blueprint_after: dict) -> str:
     """Return a unified-diff string of the Blueprint YAML representations."""
     import difflib
     from io import StringIO
+
     from aqueduct.patch.apply import _yaml_dumps
 
     before = _yaml_dumps(blueprint_before)

@@ -18,7 +18,8 @@ To add a rule:
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from . import (
     count_col_likely_count_star,
@@ -27,6 +28,7 @@ from . import (
     jdbc_missing_partition,
     kafka_checkpoint_stale,
     nondeterministic_fanout,
+    spillway_port_mismatch,
 )
 
 CheckFn = Callable[[Any], list[str]]
@@ -40,6 +42,7 @@ RULES: list[tuple[str, CheckFn]] = [
     (file_format_no_repartition.RULE_ID,     file_format_no_repartition.check),
     (jdbc_missing_partition.RULE_ID,         jdbc_missing_partition.check),
     (custom_probe_driver_code.RULE_ID,       custom_probe_driver_code.check),
+    (spillway_port_mismatch.RULE_ID,         spillway_port_mismatch.check),
 ]
 
 

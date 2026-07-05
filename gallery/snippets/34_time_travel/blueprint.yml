@@ -1,0 +1,63 @@
+# blueprint.yml
+# Time-travel read — read a Delta table at a specific version.
+
+aqueduct: "1.0"
+id: time_travel_demo
+name: "Time Travel Snippet"
+
+modules:
+  - id: v1_snapshot
+    label: "Delta at version 1"
+    type: Ingress
+    config:
+      format: delta
+      path: data/delta_events
+      time_travel:
+        version: 1
+
+  - id: current_snapshot
+    label: "Delta at latest"
+    type: Ingress
+    config:
+      format: delta
+      path: data/delta_events
+
+  - id: v1_probe
+    label: "V1 Stats"
+    type: Probe
+    attach_to: v1_snapshot
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+
+  - id: current_probe
+    label: "Current Stats"
+    type: Probe
+    attach_to: current_snapshot
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+
+  - id: output_v1
+    label: "Save V1 Snapshot"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/v1_snapshot.parquet
+      mode: overwrite
+
+  - id: output_current
+    label: "Save Current"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/current_snapshot.parquet
+      mode: overwrite
+
+edges:
+  - from: v1_snapshot
+    to: output_v1
+  - from: current_snapshot
+    to: output_current

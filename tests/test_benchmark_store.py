@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import sys
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -29,7 +28,6 @@ from aqueduct.surveyor.benchmark_store import (
     persist_results,
 )
 from aqueduct.surveyor.scenario import ScenarioResult
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -160,9 +158,6 @@ def test_persist_results_best_effort_on_duckdb_missing(tmp_path):
     """persist_results is best-effort — duckdb import fails → returns 0, logs warning."""
     store_path = tmp_path / "bench.duckdb"
     results = {"s1": {"m1": _make_result()}}
-
-    import importlib
-    real_find = importlib.util.find_spec
 
     # Make _connect fail by patching duckdb.connect at the import level
     with patch("aqueduct.surveyor.benchmark_store._connect", side_effect=RuntimeError("no duckdb")):
@@ -554,38 +549,6 @@ def test_run_scenario_populates_phase33_fields_early_exit(tmp_path):
 
 # ── BenchmarkStore violated_guardrails migration ─────────────────────────────
 
-def _create_legacy_benchmark_db(path: Path) -> None:
-    """Create a pre-1.0.3 benchmark store without violated_guardrails."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(path))
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS benchmark_results (
-        id VARCHAR PRIMARY KEY,
-        recorded_at VARCHAR NOT NULL,
-        scenario_id VARCHAR NOT NULL,
-        model VARCHAR NOT NULL,
-        prompt_version VARCHAR,
-        provider VARCHAR,
-        base_url VARCHAR,
-        passed BOOLEAN,
-        patch_valid BOOLEAN,
-        patch_applies BOOLEAN,
-        confidence DOUBLE PRECISION,
-        duration_seconds DOUBLE PRECISION,
-        attempts_to_parse INTEGER,
-        diag_score DOUBLE PRECISION,
-        root_cause_match BOOLEAN,
-        category_match BOOLEAN,
-        failures JSON,
-        soft_failures JSON
-    )""")
-    con.execute(
-        "INSERT INTO benchmark_results VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [str(uuid.uuid4()), "2026-01-01T00:00:00+00:00", "s-legacy", "m1", "1.0", None, None, True, True, True, 0.9, 1.0, 1, 0.8, None, None, "[]", "[]"]
-    )
-    con.close()
-
-
 def test_benchmark_fresh_db_has_violated_guardrails(tmp_path):
     """Fresh store has violated_guardrails JSON column in benchmark_results DDL."""
     store_path = tmp_path / "bench.duckdb"
@@ -597,36 +560,6 @@ def test_benchmark_fresh_db_has_violated_guardrails(tmp_path):
     ).fetchone()
     con.close()
     assert has_col is not None
-
-
-def test_benchmark_migration_adds_violated_guardrails_to_legacy_db(tmp_path):
-    """Pre-existing store -> _connect issues ALTER TABLE; existing rows preserved with NULL."""
-    store_path = tmp_path / "bench.duckdb"
-    _create_legacy_benchmark_db(store_path)
-
-    # Confirm column absent before migration
-    con = duckdb.connect(str(store_path))
-    before = con.execute(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name='benchmark_results' AND column_name='violated_guardrails'"
-    ).fetchone()
-    con.close()
-    assert before is None
-
-    # Connect to trigger migration
-    con = _connect(store_path)
-    has_col = con.execute(
-        "SELECT 1 FROM information_schema.columns "
-        "WHERE table_name='benchmark_results' AND column_name='violated_guardrails'"
-    ).fetchone()
-    old_vg = con.execute(
-        "SELECT violated_guardrails FROM benchmark_results WHERE scenario_id='s-legacy'"
-    ).fetchone()
-    con.close()
-
-    assert has_col is not None
-    assert old_vg is not None
-    assert old_vg[0] is None  # preserved with NULL
 
 
 def test_benchmark_migration_violated_guardrails_idempotent(tmp_path):
@@ -687,20 +620,6 @@ def test_benchmark_migration_phase34_new_store(tmp_path):
     assert "escalated" in cnames
     assert "tokens_in_total" in cnames
     assert "tokens_out_total" in cnames
-
-def test_benchmark_migration_phase34_alter_existing(tmp_path):
-    """Pre-existing store gets ALTER; existing rows preserved with NULL/default."""
-    store_path = tmp_path / "bench.duckdb"
-    _create_legacy_benchmark_db(store_path)
-    
-    # Run migration
-    con = _connect(store_path)
-    old_row = con.execute("SELECT stop_reason, escalated, tokens_in_total FROM benchmark_results WHERE scenario_id='s-legacy'").fetchone()
-    con.close()
-    
-    assert old_row[0] is None
-    assert old_row[1] is None
-    assert old_row[2] is None
 
 def test_benchmark_migration_phase34_idempotent(tmp_path):
     """Migration is idempotent — second _connect does not re-issue the ALTERs."""

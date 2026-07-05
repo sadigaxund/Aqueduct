@@ -2,8 +2,12 @@
 # Delta JAR is fetched by Spark at runtime via spark.jars.packages.
 # Python package only needed for populate_delta.py (pre-populating test data).
 #
-# Delta ↔ Spark version matrix:
+# Pins:  install these versions or adjust env vars to match your install.
 #   PySpark 4.0.x  →  delta-spark 4.0.0  (JAR: delta-spark_4.0_2.13:4.2.0)
 #   PySpark 4.1.x  →  delta-spark 4.2.0  (JAR: delta-spark_4.1_2.13:4.2.0)
+#
+# If your versions differ, set DELTA_SPARK_VER and DELTA_VER when running
+# the blueprint (see README).
 pyspark==4.0.0
-delta-spark==4.0.0  # Python wrapper; JAR artifact: delta-spark_4.0_2.13:4.2.0
+delta-spark==4.0.0
+pandas>=2.0  # needed by populate_delta.py

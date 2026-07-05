@@ -1,0 +1,54 @@
+# blueprint.yml
+# Checkpoint + resume
+
+aqueduct: "1.0"
+id: checkpoint_resume
+name: "Checkpoint Resume Demo"
+
+retry_policy:
+  max_attempts: 2
+  backoff:
+    base_seconds: 1
+
+modules:
+
+  - id: raw_items
+    label: "Raw Items"
+    type: Ingress
+    config:
+      format: csv
+      path: "data/input/items.csv"
+      options: {header: "true", inferSchema: "true"}
+
+  # Checkpointed: once this module succeeds, it is never re-executed
+  # on a retry or resume.
+  - id: transform
+    label: "Transform"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT UPPER(name) AS name, category FROM __input__"
+    checkpoint: true
+
+  - id: by_category
+    label: "By Category"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT category, COUNT(*) AS cnt FROM __input__ GROUP BY category"
+
+  - id: output
+    label: "Output"
+    type: Egress
+    config:
+      format: parquet
+      path: "data/output/category_counts.parquet"
+      mode: overwrite
+
+edges:
+  - from: raw_items
+    to: transform
+  - from: transform
+    to: by_category
+  - from: by_category
+    to: output

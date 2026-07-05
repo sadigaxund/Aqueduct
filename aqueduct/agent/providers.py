@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import logging
 import os
-import random
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from aqueduct.agent.constants import ANTHROPIC_API_VERSION, DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.prompts import _build_system_prompt
+from aqueduct.errors import AqueductError, ConfigError
+from aqueduct.infra.http import RETRYABLE_PROVIDER_STATUS, backoff_delay, retry_after_seconds
 from aqueduct.redaction import redact as _redact
 
 logger = logging.getLogger(__name__)
@@ -29,22 +31,14 @@ logger = logging.getLogger(__name__)
 # doesn't keep regenerating the same wrong tree.
 _ESCALATION_TEMPERATURE = 0.8
 
-# Phase 46 — transient provider errors worth retrying. 429 rate limit,
-# 503 service unavailable, 529 Anthropic "overloaded".
-_RETRYABLE_STATUS = frozenset({429, 503, 529})
+# Phase 46 — transient provider errors worth retrying (429 rate limit, 503
+# unavailable, 529 Anthropic "overloaded"). Single source of truth in
+# infra.http; aliased here so existing patch paths keep working
+# (providers._RETRYABLE_STATUS / providers._retry_after_seconds).
+_RETRYABLE_STATUS = RETRYABLE_PROVIDER_STATUS
+_retry_after_seconds = retry_after_seconds
 
 _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
-
-
-def _retry_after_seconds(response: Any) -> float | None:
-    """Parse a Retry-After header (delta-seconds form only) — None when absent/invalid."""
-    raw = response.headers.get("retry-after")
-    if not raw:
-        return None
-    try:
-        return max(0.0, float(raw))
-    except (TypeError, ValueError):
-        return None
 
 
 def _post_with_retry(
@@ -79,7 +73,7 @@ def _post_with_retry(
         attempt += 1
         sleep = _retry_after_seconds(response)
         if sleep is None:
-            sleep = backoff_seconds * (2 ** (attempt - 1)) * (1.0 + random.random() * 0.25)
+            sleep = backoff_delay(attempt, backoff_seconds, jitter=0.25)
         remaining = total_seconds - (time.monotonic() - t0)
         if sleep >= remaining - 1.0:
             response.raise_for_status()
@@ -101,11 +95,12 @@ class _ProviderConfig:
     """
 
     model: str
-    max_tokens: int = 4096
+    max_tokens: int = DEFAULT_MAX_TOKENS
     provider: str = "anthropic"
     base_url: str | None = None
+    api_key: str | None = None
     provider_options: dict[str, Any] | None = None
-    timeout: float = 120.0
+    timeout: float = DEFAULT_LLM_TIMEOUT
     patches_dir: Path = Path()
     engine_prompt_context: str | None = None
     blueprint_prompt_context: str | None = None
@@ -141,26 +136,11 @@ def _format_llm_error_hint(
     # httpx.ReadTimeout / ConnectTimeout / WriteTimeout all subclass TimeoutException.
     if "timeout" in cls_name.lower() or "timed out" in msg or "timeout" in msg:
         seconds = f"{int(timeout)}s" if timeout else "unbounded"
-        suggestion = (
-            f"\n  hint: timed out after {seconds}. "
-            f"Local model cold-start (first call after Ollama restart) can take "
-            f"30–90s extra. Options:\n"
-            f"    1. Raise the timeout:  --timeout 600  "
-            f"(or set agent.timeout in aqueduct.yml)\n"
-            f"    2. Pre-warm the model before benchmarking:"
+        return (
+            f"\n  hint: timed out after {seconds} — raise `agent.timeout` "
+            f"(aqueduct.yml or the blueprint's agent: block; a cascade tier's own "
+            f"`timeout:` overrides it). Local models cold-start +30–90s."
         )
-        if base_url:
-            ollama_url = base_url.rstrip("/").removesuffix("/v1")
-            suggestion += (
-                f"\n         curl -sS {ollama_url}/api/generate "
-                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
-            )
-        else:
-            suggestion += (
-                f'\n         curl -sS <ollama_url>/api/generate '
-                f'-d \'{{"model":"{model}","prompt":"hi","stream":false}}\''
-            )
-        return suggestion
 
     # Common connect-failure modes from httpx / OS-level networking.
     if (
@@ -191,6 +171,7 @@ def _call_agent(
     last_apply_error: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     """Call the LLM provider; return (text, tokens_in, tokens_out).
 
@@ -223,21 +204,25 @@ def _call_agent(
         return _call_openai_compat(
             messages, cfg.model, cfg.max_tokens, cfg.base_url, system_prompt,
             cfg.provider_options, timeout=cfg.timeout,
+            api_key=cfg.api_key,
             temperature_override=temperature_override,
             deadline=deadline,
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
+            on_token=on_token,
         )
     else:
         return _call_anthropic(
             messages, cfg.model, cfg.max_tokens, system_prompt,
             timeout=cfg.timeout,
+            api_key=cfg.api_key,
             temperature_override=temperature_override,
             deadline=deadline,
             base_url=cfg.base_url,
             provider_options=cfg.provider_options,
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
+            on_token=on_token,
         )
 
 
@@ -246,19 +231,21 @@ def _call_anthropic(
     model: str,
     max_tokens: int,
     system_prompt: str,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
+    api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
     base_url: str | None = None,
     provider_options: dict[str, Any] | None = None,
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     import httpx
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError(
+        raise ConfigError(
             "ANTHROPIC_API_KEY environment variable not set. "
             "Set it or configure agent.provider: openai_compat in aqueduct.yml."
         )
@@ -281,15 +268,22 @@ def _call_anthropic(
     if temperature_override is not None:
         payload["temperature"] = temperature_override
     effective_timeout = float(deadline if deadline is not None else timeout)
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": ANTHROPIC_API_VERSION,
+        "content-type": "application/json",
+    }
+    # Streaming path — only when a live-token sink is supplied (the non-streaming
+    # POST below stays the default so existing callers/tests are unaffected).
+    if on_token is not None:
+        return _stream_anthropic(url, payload, headers, effective_timeout, on_token)
+
     with httpx.Client() as client:
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
-                headers={
-                    "x-api-key": api_key,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json",
-                },
+                headers=headers,
                 json=payload,
                 timeout=min(effective_timeout, read_timeout),
             )
@@ -302,13 +296,13 @@ def _call_anthropic(
         data = response.json()
     content = data.get("content") or []
     if not content:
-        raise ValueError(
+        raise AqueductError(
             "Anthropic returned empty content block. "
             "The model may have refused the request or been interrupted."
         )
     text = content[0].get("text")
     if text is None:
-        raise ValueError(
+        raise AqueductError(
             "Anthropic returned null/empty text in content block. "
             "The model may have refused the request or been interrupted."
         )
@@ -323,22 +317,24 @@ def _call_openai_compat(
     base_url: str | None,
     system_prompt: str,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
+    api_key: str | None = None,
     temperature_override: float | None = None,
     deadline: float | None = None,
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
+    on_token: Callable[[str, str], None] | None = None,
 ) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
 
     if not base_url:
-        raise RuntimeError(
+        raise ConfigError(
             "agent.base_url must be set for provider=openai_compat "
             "(e.g. http://localhost:11434/v1)"
         )
 
-    api_key = os.environ.get("OPENAI_API_KEY", "ollama")
+    api_key = api_key or os.environ.get("OPENAI_API_KEY", "ollama")
     url = base_url.rstrip("/") + "/chat/completions"
 
     payload: dict[str, Any] = {
@@ -362,12 +358,19 @@ def _call_openai_compat(
             payload["options"]["temperature"] = temperature_override
 
     effective_read = float(deadline if deadline is not None else timeout)
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    # Streaming path — only when a live-token sink is supplied (the non-streaming
+    # POST below stays the default so existing callers/tests are unaffected).
+    if on_token is not None:
+        return _stream_openai_compat(url, payload, headers, effective_read, on_token)
+
     with httpx.Client() as client:
         def _do_post(read_timeout: float) -> httpx.Response:
             return client.post(
                 url,
                 json=payload,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers=headers,
                 timeout=httpx.Timeout(
                     connect=15.0, read=min(effective_read, read_timeout),
                     write=30.0, pool=5.0,
@@ -382,10 +385,109 @@ def _call_openai_compat(
         data = response.json()
     text = data["choices"][0]["message"].get("content")
     if text is None:
-        raise ValueError(
+        raise AqueductError(
             "LLM returned null/empty content from OpenAI-compatible endpoint. "
             "The model may have refused the request, hit a content filter, "
             "or been interrupted mid-generation."
         )
     usage = data.get("usage") or {}
     return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
+
+
+def _iter_sse_data(resp: Any):
+    """Yield the JSON payload of each ``data:`` SSE line (skips blanks/comments
+    and the OpenAI ``[DONE]`` sentinel). ``resp`` is an open httpx streaming
+    response."""
+    import json as _json
+    for line in resp.iter_lines():
+        if not line or not line.startswith("data:"):
+            continue
+        chunk = line[len("data:"):].strip()
+        if not chunk or chunk == "[DONE]":
+            continue
+        try:
+            yield _json.loads(chunk)
+        except ValueError:
+            continue
+
+
+def _stream_openai_compat(url, payload, headers, read_timeout, on_token) -> tuple[str, int, int]:
+    """SSE streaming for OpenAI-compatible endpoints.
+
+    Fires ``on_token('thinking'|'answer', text)`` per delta as the model
+    generates, accumulating the answer. ``reasoning_content`` (deepseek-r1 /
+    o-series via a compat gateway) streams as the thinking channel; ``content``
+    is the answer. ``stream_options.include_usage`` requests a final usage frame
+    (ignored by servers that don't support it → 0 tokens)."""
+    import httpx
+    payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    # Drop structured-output enforcement on the streaming path: several endpoints
+    # (Ollama included) BUFFER the whole response instead of emitting incremental
+    # deltas when json_object format is requested, which defeats streaming. The
+    # parser already recovers JSON from fenced / think-wrapped output.
+    payload.pop("response_format", None)
+    parts: list[str] = []
+    ti = to = 0
+    timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
+    with httpx.Client() as client, client.stream(
+        "POST", url, json=payload, headers=headers, timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        for obj in _iter_sse_data(resp):
+            choices = obj.get("choices") or []
+            if choices:
+                delta = choices[0].get("delta") or {}
+                rc = delta.get("reasoning_content")
+                if rc:
+                    on_token("thinking", rc)
+                c = delta.get("content")
+                if c:
+                    parts.append(c)
+                    on_token("answer", c)
+            usage = obj.get("usage")
+            if usage:
+                ti = int(usage.get("prompt_tokens", 0) or 0)
+                to = int(usage.get("completion_tokens", 0) or 0)
+    text = "".join(parts)
+    if not text:
+        raise AqueductError(
+            "LLM returned empty content from the streaming OpenAI-compatible endpoint."
+        )
+    return text, ti, to
+
+
+def _stream_anthropic(url, payload, headers, read_timeout, on_token) -> tuple[str, int, int]:
+    """SSE streaming for the Anthropic Messages API.
+
+    ``thinking_delta`` (extended thinking) streams as the thinking channel;
+    ``text_delta`` is the answer. Usage arrives on ``message_start`` (input) and
+    ``message_delta`` (output)."""
+    import httpx
+    payload = {**payload, "stream": True}
+    parts: list[str] = []
+    ti = to = 0
+    timeout = httpx.Timeout(connect=15.0, read=read_timeout, write=30.0, pool=5.0)
+    with httpx.Client() as client, client.stream(
+        "POST", url, json=payload, headers=headers, timeout=timeout,
+    ) as resp:
+        resp.raise_for_status()
+        for obj in _iter_sse_data(resp):
+            t = obj.get("type")
+            if t == "content_block_delta":
+                d = obj.get("delta") or {}
+                if d.get("type") == "thinking_delta" and d.get("thinking"):
+                    on_token("thinking", d["thinking"])
+                elif d.get("type") == "text_delta" and d.get("text"):
+                    parts.append(d["text"])
+                    on_token("answer", d["text"])
+            elif t == "message_start":
+                u = (obj.get("message") or {}).get("usage") or {}
+                ti = int(u.get("input_tokens", 0) or 0)
+            elif t == "message_delta":
+                u = obj.get("usage") or {}
+                if u.get("output_tokens"):
+                    to = int(u.get("output_tokens") or 0)
+    text = "".join(parts)
+    if not text:
+        raise AqueductError("Anthropic returned empty text in the streaming response.")
+    return text, ti, to

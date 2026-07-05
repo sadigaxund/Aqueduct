@@ -1,0 +1,3 @@
+# Required for inspect_results.py (post-run inspection script).
+# The blueprint itself runs with only aqueduct-core[spark].
+rich>=13.0

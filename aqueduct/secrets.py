@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import importlib
 import os
-from aqueduct.errors import AqueductError
+import sys
 from typing import Any
+
+from aqueduct.errors import AqueductError
 
 
 class SecretsError(AqueductError):
@@ -30,6 +32,7 @@ def resolve_secret(
     provider: str = "env",
     region: str | None = None,
     resolver: str | None = None,
+    base_dir: str | None = None,
 ) -> str:
     """Resolve a secret key to its string value.
 
@@ -44,6 +47,10 @@ def resolve_secret(
         provider: Backend: env | aws | gcp | azure | custom.
         region:   Cloud region (aws/gcp/azure only).
         resolver: Dotted import path (custom only).
+        base_dir: Directory to add to sys.path before importing a custom
+                  resolver module (custom only) — lets a resolver package
+                  that lives next to the config/blueprint file be imported
+                  by dotted path without requiring install or PYTHONPATH.
 
     Returns:
         Secret value as string.
@@ -67,7 +74,7 @@ def resolve_secret(
     elif provider == "azure":
         fetched = _fetch_azure(key, region)
     elif provider == "custom":
-        fetched = _fetch_custom(key, resolver)
+        fetched = _fetch_custom(key, resolver, base_dir)
     else:
         raise SecretsError(
             f"Unknown secrets provider {provider!r}. "
@@ -141,8 +148,8 @@ def _fetch_aws(key: str, region: str | None) -> str | None:
 
 def _fetch_gcp(key: str, region: str | None) -> str | None:
     try:
-        from google.cloud import secretmanager
         from google.api_core.exceptions import NotFound
+        from google.cloud import secretmanager
     except ImportError:
         raise SecretsError(
             "secrets.provider=gcp requires google-cloud-secret-manager. "
@@ -172,9 +179,9 @@ def _fetch_gcp(key: str, region: str | None) -> str | None:
 
 def _fetch_azure(key: str, region: str | None) -> str | None:
     try:
-        from azure.keyvault.secrets import SecretClient
-        from azure.identity import DefaultAzureCredential
         from azure.core.exceptions import ResourceNotFoundError
+        from azure.identity import DefaultAzureCredential
+        from azure.keyvault.secrets import SecretClient
     except ImportError:
         raise SecretsError(
             "secrets.provider=azure requires azure-keyvault-secrets and azure-identity. "
@@ -196,12 +203,17 @@ def _fetch_azure(key: str, region: str | None) -> str | None:
         raise SecretsError(f"Azure Key Vault error for {key!r}: {exc}") from exc
 
 
-def _fetch_custom(key: str, resolver: str | None) -> str | None:
+def _fetch_custom(key: str, resolver: str | None, base_dir: str | None = None) -> str | None:
     if not resolver:
         raise SecretsError(
             "secrets.provider=custom requires secrets.resolver to be set "
             "(dotted import path, e.g. 'mypackage.secrets.fetch')"
         )
+    # Let a resolver package that lives next to aqueduct.yml / the blueprint
+    # (not installed, not on PYTHONPATH) be found by dotted import path.
+    inserted = base_dir is not None and base_dir not in sys.path
+    if inserted:
+        sys.path.insert(0, base_dir)
     try:
         module_path, fn_name = resolver.rsplit(".", 1)
         mod = importlib.import_module(module_path)
@@ -210,6 +222,9 @@ def _fetch_custom(key: str, resolver: str | None) -> str | None:
         raise SecretsError(
             f"secrets.resolver {resolver!r} could not be loaded: {exc}"
         ) from exc
+    finally:
+        if inserted:
+            sys.path.remove(base_dir)
     try:
         result = fn(key)
     except Exception as exc:

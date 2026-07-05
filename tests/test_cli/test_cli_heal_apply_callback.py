@@ -44,8 +44,7 @@ edges: []
     mock_surveyor = MagicMock()
     mock_bundle = MagicMock()
     mock_bundle.observability = None
-    mock_bundle.lineage = None
-
+    
     # Call with iteration_run_id
     res = _run_patch_gates_inline(
         patch=patch_spec,
@@ -98,8 +97,9 @@ aqueduct: "1.0"
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: aggressive
+  approval: auto
   sandbox_mode: "off"
+  max_patches: 2
   guardrails:
     forbidden_ops: ["remove_module"]
 modules:
@@ -119,7 +119,7 @@ agent:
   provider: openai_compat
   base_url: "http://localhost:8000"
 danger:
-  allow_aggressive_patching: true
+  allow_multi_patch: true
   allow_skip_sandbox: true
 """, encoding="utf-8")
 
@@ -166,9 +166,9 @@ danger:
 
     # Verify generate_agent_patch was called with apply_callback
     assert mock_generate_patch.called
-    kwargs = mock_generate_patch.call_args[1]
-    assert "apply_callback" in kwargs
-    apply_cb = kwargs["apply_callback"]
+    agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]
+    assert agent_cfg.apply_callback is not None
+    apply_cb = agent_cfg.apply_callback
 
     # Test the apply_callback with a valid patch
     success, err_class, msg, _ = apply_cb(patch_spec)
@@ -191,18 +191,19 @@ danger:
     assert err_class == "guardrail_violation"
 
 @patch("aqueduct.agent.generate_agent_patch")
-@patch("aqueduct.cli._resolve_obs_db")
-@patch("duckdb.connect")
+@patch("aqueduct.stores.read.open_obs_read")
 def test_cli_heal_wires_apply_callback(
-    mock_connect, mock_resolve_obs_db, mock_generate_patch, tmp_path
+    mock_open, mock_generate_patch, tmp_path
 ):
     """Verify that `aqueduct heal` wires the apply_callback correctly and validates guardrails from store metadata."""
-    # 1. Setup db failure context row
-    mock_conn = MagicMock()
-    mock_connect.return_value = mock_conn
-    
+    # 1. Setup db failure context row (backend-aware store read)
+    mock_cur = MagicMock()
+    mock_store = MagicMock()
+    mock_store.connect.return_value.__enter__.return_value = mock_cur
+    mock_open.return_value = mock_store
+
     # row_records mock query results
-    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, started_at, finished_at
+    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, provenance_json, started_at, finished_at
     fc_row = (
         "run-123",
         "test_bp",
@@ -211,10 +212,11 @@ def test_cli_heal_wires_apply_callback(
         "Traceback test",
         # manifest_json carries the guardrails config under agent
         '{"id": "test_bp", "modules": [{"id": "m1", "type": "Ingress"}], "agent": {"guardrails": {"forbidden_ops": ["remove_module"]}}}',
+        None,  # provenance_json
         "2023-01-01T00:00:00Z",
         "2023-01-01T00:01:00Z"
     )
-    mock_conn.execute.return_value.fetchone.return_value = fc_row
+    mock_cur.fetchone.return_value = fc_row
 
     # Mock generate_agent_patch
     from aqueduct.agent import AgentPatchResult
@@ -245,9 +247,9 @@ def test_cli_heal_wires_apply_callback(
         result = runner.invoke(cli, ["heal", "run-123", "--store-dir", str(tmp_path)])
 
     assert mock_generate_patch.called
-    kwargs = mock_generate_patch.call_args[1]
-    assert "apply_callback" in kwargs
-    apply_cb = kwargs["apply_callback"]
+    agent_cfg = mock_generate_patch.call_args[1]["agent_cfg"]
+    assert agent_cfg.apply_callback is not None
+    apply_cb = agent_cfg.apply_callback
 
     # Test the apply_callback with a valid patch
     success, err_class, msg, _ = apply_cb(patch_spec)

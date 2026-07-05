@@ -22,7 +22,6 @@ from __future__ import annotations
 from aqueduct.stores.base import (
     BackendUnsupportedError,
     DepotStore,
-    LineageStore,
     ObservabilityStore,
     RelationalCursor,
     StoreBundle,
@@ -32,7 +31,6 @@ from aqueduct.stores.base import (
 __all__ = [
     "BackendUnsupportedError",
     "DepotStore",
-    "LineageStore",
     "ObservabilityStore",
     "RelationalCursor",
     "StoreBundle",

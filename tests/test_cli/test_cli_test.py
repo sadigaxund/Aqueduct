@@ -210,7 +210,8 @@ def test_cli_test_master_routing_custom_master(test_setup, tmp_path):
     cfg_path.write_text("""
 aqueduct_config: "1.0"
 deployment:
-  master_url: "spark://h:7077"
+  target: local
+  master_url: "local[2]"
 """)
 
     from aqueduct.executor.spark.test_runner import TestSuiteResult

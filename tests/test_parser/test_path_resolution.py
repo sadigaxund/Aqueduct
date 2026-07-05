@@ -83,10 +83,10 @@ def test_config_store_path_resolution_relative(tmp_path):
     cfg_file.write_text("""
 stores:
   observability:
-    path: .aqueduct/observability.db
+    path: .aqueduct/observability
 """)
     cfg = load_config(cfg_file)
-    expected_path = (cfg_dir / ".aqueduct/observability.db").resolve()
+    expected_path = (cfg_dir / ".aqueduct/observability").resolve()
     assert cfg.stores.observability.path == str(expected_path)
 
 def test_module_config_other_keys_resolution(tmp_path):
@@ -202,6 +202,9 @@ def test_path_keys_registry_per_module_type():
     assert get_path_keys("Ingress") == ("path", "data_dir", "input_dir", "jar")
     assert get_path_keys("Egress") == ("path", "output_dir", "jar")
     assert get_path_keys("UDF") == ("jar",)
+    # Phase 65 — `table` is a catalog identifier, never a filesystem path
+    assert "table" not in get_path_keys("Ingress")
+    assert "table" not in get_path_keys("Egress")
     # Unknown / unregistered types fall back to the legacy blanket tuple.
     legacy = ("path", "data_dir", "input_dir", "output_dir", "jar")
     assert get_path_keys("Channel") == legacy
@@ -256,8 +259,9 @@ def test_fs_path_marker_visible_on_store_fields():
     from aqueduct.config import RelationalStoreConfig, KVStoreConfig
     from aqueduct.parser.fs_path import field_is_fs_path
     for cls in (RelationalStoreConfig, KVStoreConfig):
-        meta = tuple(cls.model_fields["path"].metadata)
-        assert field_is_fs_path(meta) is not None, f"{cls.__name__}.path missing FsPath()"
+        field_info = cls.model_fields["path"]
+        meta = tuple(field_info.metadata)
+        assert field_is_fs_path(meta, field_info.annotation) is not None, f"{cls.__name__}.path missing FsPath()"
 
 
 def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
@@ -272,13 +276,11 @@ def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):
     cfg_file = tmp_path / "aqueduct.yml"
     cfg_file.write_text(
         "stores:\n"
-        "  observability: { backend: duckdb, path: .aqueduct/obs.db }\n"
-        "  lineage:       { backend: duckdb, path: .aqueduct/lin.db }\n"
-        "  depot:         { backend: redis,  path: 'redis://h:6379/0' }\n"
+        "  observability: { backend: duckdb, path: .aqueduct/obs }\n"
+        "  depots: { default: { backend: redis,  path: 'redis://h:6379/0' } }\n"
     )
     from aqueduct.config import load_config
     c = load_config(cfg_file)
-    assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs.db").resolve())
-    assert c.stores.lineage.path == str((tmp_path / ".aqueduct/lin.db").resolve())
+    assert c.stores.observability.path == str((tmp_path / ".aqueduct/obs").resolve())
     # URI passthrough — walker bails on any ``://`` value.
-    assert c.stores.depot.path == "redis://h:6379/0"
+    assert c.stores.default_depot().path == "redis://h:6379/0"

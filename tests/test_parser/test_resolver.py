@@ -116,7 +116,8 @@ class TestContextResolution:
     def test_sub_ctx_unknown_non_reserved_still_raises(self):
         """Non-reserved unknown ${ctx.foo} still raises (carve-out is exact-set)."""
         from aqueduct.parser.resolver import _sub_ctx
-        with pytest.raises(ValueError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
+        from aqueduct.errors import ParseError
+        with pytest.raises(ParseError, match=r"Undefined context reference: \$\{ctx\.foo\}"):
             _sub_ctx("${ctx.foo}", {})
 
     def test_sub_ctx_preserves_watermark_resolves_others_same_string(self):
@@ -236,7 +237,7 @@ class TestContextResolution:
             "  llm_model: 'my-custom-model'\n"
             "  llm_base: 'http://my-endpoint:11434'\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "  model: '${ctx.llm_model}'\n"
             "  base_url: '${ctx.llm_base}'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
@@ -253,7 +254,7 @@ class TestContextResolution:
         good.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "  base_url: '${AQ_OLLAMA_URL}/v1'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
@@ -269,7 +270,7 @@ class TestContextResolution:
         bad.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "  model: '${MY_MODEL}'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
@@ -284,7 +285,7 @@ class TestContextResolution:
             "context:\n"
             "  team: 'analytics'\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "  prompt_context: 'run for ${ctx.team}'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
@@ -298,7 +299,7 @@ class TestContextResolution:
         good.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "  provider_options:\n"
             "    api_version: '${OPENAI_API_VERSION}'\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
@@ -314,7 +315,7 @@ class TestContextResolution:
         good.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
             "agent:\n"
-            "  approval_mode: human\n"
+            "  approval: human\n"
             "modules:\n  - id: m\n    type: Ingress\n    label: M\n"
             "edges: []\n"
         )

@@ -14,10 +14,10 @@ modules:
       format: jdbc
       
       options:
-        url: "${JDBC_URL}"
-        user: "${JDBC_USER}"
-        password: "${JDBC_PASSWORD}"
-        driver: "org.postgresql.Driver"
+        url: "${JDBC_URL:-jdbc:sqlite:data/input/inventory.db}"
+        user: "${JDBC_USER:-}"
+        password: "${JDBC_PASSWORD:-}"
+        driver: "${JDBC_DRIVER:-org.sqlite.JDBC}"
         # Spark JDBC uses 'dbtable'
         dbtable: "inventory"
         fetchsize: "1000"

@@ -1,0 +1,59 @@
+# blueprint.yml
+# Context Registry — Tier 0 static resolution with ${ctx.*}
+
+aqueduct: "1.0"
+id: ctx_tier0_demo
+name: "Context Registry Snippet"
+
+# The context block defines reusable values resolved at parse time.
+# - `${ctx.env}` reads from the env block
+# - `${ctx.paths.input}` nests into the paths object
+# - Defaults via `${ENV_VAR:-default}` work too: see env
+context:
+  env: ${AQ_DEMO_ENV:-US}
+  paths:
+    input: "data/input/products.csv"
+    output: "data/output/${ctx.env}/products.parquet"
+
+# context_profiles let you swap values per environment:
+#   aqueduct run blueprint.yml --profile prod
+context_profiles:
+  prod:
+    # Swap to a different dataset + output path.  All local, no S3 needed.
+    paths.input: "data/input/products_prod.csv"
+    paths.output: "data/output/prod/products.parquet"
+
+    env: US
+
+modules:
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: "${ctx.paths.input}"
+      options: {header: "true", inferSchema: "true"}
+
+  - id: filtered_by_env
+    label: "Filtered by Environment"
+    type: Channel
+    config:
+      op: filter
+      # Context values resolve at parse time — this becomes a literal before Spark sees it.
+      # On first run AQ_DEMO_ENV is unset, so env defaults to "US".
+      # Dev profile matches 3 of 5 rows; `--profile prod` reads a different file.
+      condition: "region = '${ctx.env}'"
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: "${ctx.paths.output}"
+      mode: overwrite
+
+edges:
+  - from: raw_products
+    to: filtered_by_env
+  - from: filtered_by_env
+    to: output

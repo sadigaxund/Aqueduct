@@ -1,0 +1,174 @@
+# blueprint.yml
+# Funnel — union_all and union and zip modes side-by-side
+
+aqueduct: "1.0"
+id: funnel_modes_demo
+name: "Funnel Modes Comparison"
+
+description: |
+  Compares all three Funnel merge modes from the same two inputs.
+  order_id 1003 appears in both sources to show dedup behaviour.
+
+modules:
+
+  # ── Shared inputs ─────────────────────────────────────────────────
+  - id: orders_2024
+    label: "2024 Orders"
+    type: Ingress
+    description: "Orders from 2024 — 3 rows"
+    tags: ["input", "orders"]
+    config:
+      format: csv
+      path: "data/input/orders_2024.csv"
+      options: {header: "true", inferSchema: "true"}
+
+  - id: orders_2025
+    label: "2025 Orders"
+    type: Ingress
+    description: "Orders from 2025 — 4 rows, includes order 1003 (overlap)"
+    tags: ["input", "orders"]
+    config:
+      format: csv
+      path: "data/input/orders_2025.csv"
+      options: {header: "true", inferSchema: "true"}
+
+  # ── union_all mode ────────────────────────────────────────────────
+  - id: merge_all
+    label: "Union All"
+    type: Funnel
+    description: "Appends all rows from both inputs — 7 rows total"
+    tags: ["mode:union_all", "funnel"]
+    config:
+      mode: union_all
+      inputs: [orders_2024, orders_2025]
+
+  - id: count_all
+    label: "Count All"
+    type: Channel
+    description: "Aggregate total spend per product from combined data"
+    tags: ["aggregate"]
+    config:
+      op: sql
+      query: "SELECT product, ROUND(SUM(amount), 2) AS total FROM __input__ GROUP BY product ORDER BY total DESC"
+
+  - id: output_all
+    label: "Save Union-All"
+    type: Egress
+    description: "Result from union_all merge (7 rows)"
+    tags: ["output", "union_all"]
+    config:
+      format: parquet
+      path: "data/output/spend_all.parquet"
+      mode: overwrite
+
+  # ── union mode (dedup) ────────────────────────────────────────────
+  - id: merge_union
+    label: "Union (Dedup)"
+    type: Funnel
+    description: "Concatenates rows dropping duplicates — 6 rows (1003 appears once)"
+    tags: ["mode:union", "funnel"]
+    config:
+      mode: union
+      inputs: [orders_2024, orders_2025]
+
+  - id: count_union
+    label: "Count Union"
+    type: Channel
+    description: "Aggregate total spend per product from deduped data"
+    tags: ["aggregate"]
+    config:
+      op: sql
+      query: "SELECT product, ROUND(SUM(amount), 2) AS total FROM __input__ GROUP BY product ORDER BY total DESC"
+
+  - id: output_union
+    label: "Save Union (Dedup)"
+    type: Egress
+    description: "Result from union dedup merge (6 rows)"
+    tags: ["output", "union_dedup"]
+    config:
+      format: parquet
+      path: "data/output/spend_union.parquet"
+      mode: overwrite
+
+  # ── zip mode ──────────────────────────────────────────────────────
+  # Zip requires unique column names across inputs — prefix each side.
+  - id: prep_zip_a
+    label: "Zip Prefix A"
+    type: Channel
+    description: "Prefix columns from the first input (src_a_*)"
+    tags: ["zip-prep"]
+    config:
+      op: sql
+      query: "SELECT order_id AS src_a_order_id, product AS src_a_product, amount AS src_a_amount FROM __input__"
+
+  - id: prep_zip_b
+    label: "Zip Prefix B"
+    type: Channel
+    description: "Prefix columns from the second input (src_b_*)"
+    tags: ["zip-prep"]
+    config:
+      op: sql
+      query: "SELECT order_id AS src_b_order_id, product AS src_b_product, amount AS src_b_amount FROM __input__"
+
+  - id: merge_zip
+    label: "Zip"
+    type: Funnel
+    description: "Interleaves rows by position — 3 rows (shorter input length)"
+    tags: ["mode:zip", "funnel"]
+    config:
+      mode: zip
+      inputs: [prep_zip_a, prep_zip_b]
+
+  - id: count_zip
+    label: "Count Zip"
+    type: Channel
+    description: "Aggregate total spend per product from zipped data"
+    tags: ["aggregate"]
+    config:
+      op: sql
+      query: "SELECT src_a_product, ROUND(SUM(src_a_amount), 2) AS total FROM __input__ GROUP BY src_a_product ORDER BY total DESC"
+
+  - id: output_zip
+    label: "Save Zip"
+    type: Egress
+    description: "Result from zip merge (3 rows)"
+    tags: ["output", "zip"]
+    config:
+      format: parquet
+      path: "data/output/spend_zip.parquet"
+      mode: overwrite
+
+edges:
+  # union_all
+  - from: orders_2024
+    to: merge_all
+  - from: orders_2025
+    to: merge_all
+  - from: merge_all
+    to: count_all
+  - from: count_all
+    to: output_all
+
+  # union (dedup)
+  - from: orders_2024
+    to: merge_union
+  - from: orders_2025
+    to: merge_union
+  - from: merge_union
+    to: count_union
+  - from: count_union
+    to: output_union
+
+  # zip (via prefix-prep modules for unique column names)
+  - from: orders_2024
+    to: prep_zip_a
+  - from: orders_2025
+    to: prep_zip_b
+  - from: prep_zip_a
+    to: merge_zip
+  - from: prep_zip_b
+    to: merge_zip
+  - from: merge_zip
+    to: count_zip
+  - from: count_zip
+    to: output_zip

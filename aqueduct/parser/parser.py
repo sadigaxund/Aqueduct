@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
+from aqueduct.errors import ParseError
 from aqueduct.parser.graph import (
     detect_cycles,
     validate_edge_error_types,
@@ -26,29 +27,44 @@ from aqueduct.parser.models import (
     ContextRegistry,
     Edge,
     GuardrailsConfig,
+    HookEntry,
+    Hooks,
     Module,
     RetryPolicy,
 )
 from aqueduct.parser.resolver import build_context_map, resolve_value
 from aqueduct.parser.schema import BlueprintSchema
-from aqueduct.errors import AqueductError
 
 
-class ParseError(AqueductError):
-    """Raised for any Blueprint parse, validation, or resolution failure."""
+def _hook_entry(h) -> HookEntry:
+    """HookEntrySchema → HookEntry (kind + verbatim value)."""
+    for kind in ("blueprint", "webhook", "command"):
+        v = getattr(h, kind)
+        if v is not None:
+            return HookEntry(kind=kind, value=v, timeout=h.timeout)
+    raise ParseError("hook entry has no action")  # unreachable — schema enforces exactly-one
 
 
-def _build_cascade(raw: list | None) -> tuple | None:
-    """Phase 44 — Convert Pydantic ``CascadeTierSchema`` list to frozen configs."""
+def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | None:
+    """Phase 44 — Convert Pydantic ``CascadeTierSchema`` list to frozen configs.
+
+    ``ctx_map`` resolves ``${ENV:-default}`` template literals on the tier's
+    string fields, exactly as the flat ``agent.*`` fields are resolved (ISSUE-047
+    #1 — without this a cascade ``base_url`` reaches httpx as the literal
+    ``${AQ_CASCADE_0_URL:-…}`` and fails "missing http:// protocol"). When
+    ``ctx_map`` is None the raw values pass through unchanged.
+    """
     if not raw:
         return None
+    _rv = (lambda v: resolve_value(v, ctx_map)) if ctx_map is not None else (lambda v: v)
     tiers: list[CascadeTierConfig] = []
     for t in raw:
         tiers.append(CascadeTierConfig(
-            model=t.model,
-            provider=t.provider,
-            base_url=t.base_url,
-            provider_options=t.provider_options,
+            model=_rv(t.model),
+            provider=_rv(t.provider),
+            base_url=_rv(t.base_url),
+            api_key=_rv(t.api_key),
+            provider_options=_rv(t.provider_options),
             timeout=t.timeout,
             max_tokens=t.max_tokens,
             max_reprompts=t.max_reprompts,
@@ -166,44 +182,6 @@ def parse_dict(
     if not isinstance(raw, dict):
         raise ParseError(f"Blueprint must be a mapping, got {type(raw).__name__}")
 
-    # 1.1.0 — Deprecation warnings: `approval_mode: aggressive` and
-    # `aggressive_max_patches` are aliases that still parse but should migrate
-    # to `approval_mode: auto` + `max_patches`. Print to stderr (does not block).
-    # When both canonical and alias keys are present in the same dict, drop the
-    # alias before pydantic validation — `extra="forbid"` would otherwise reject
-    # the second key as an unknown field even though it maps to an alias.
-    # Clone the agent sub-dict before the alias-stripping pops below, so callers
-    # reusing `raw` (in-memory patch / sandbox flows) don't see their keys mutated.
-    if isinstance(raw.get("agent"), dict):
-        raw = {**raw, "agent": dict(raw["agent"])}
-    _agent_raw = raw.get("agent") if isinstance(raw, dict) else None
-    if isinstance(_agent_raw, dict):
-        import sys as _sys
-        # `approval` is canonical; `approval_mode` is a deprecated input alias.
-        if "approval_mode" in _agent_raw:
-            _sys.stderr.write(
-                "[deprecated] agent.approval_mode → use agent.approval "
-                "(same values: disabled/human/auto/ci). The alias parses until 2.0.\n"
-            )
-            # Both keys present → canonical `approval` wins; drop the alias so
-            # AgentSchema's AliasChoices + extra=forbid don't see a duplicate.
-            if "approval" in _agent_raw:
-                _agent_raw.pop("approval_mode", None)
-        # `aggressive` value (under either key) is itself deprecated.
-        if _agent_raw.get("approval") == "aggressive" or _agent_raw.get("approval_mode") == "aggressive":
-            _sys.stderr.write(
-                "[deprecated] approval: aggressive → use approval: auto "
-                "with max_patches: N (and danger.allow_multi_patch: true for N > 1).\n"
-            )
-        if "aggressive_max_patches" in _agent_raw:
-            _sys.stderr.write(
-                "[deprecated] aggressive_max_patches → use max_patches "
-                "(same semantics, shorter name).\n"
-            )
-            if "max_patches" in _agent_raw:
-                # Canonical wins; drop the alias to keep the AgentSchema strict.
-                _agent_raw.pop("aggressive_max_patches", None)
-
     # ── 2. Pydantic schema validation ─────────────────────────────────────────
     try:
         validated = BlueprintSchema.model_validate(raw)
@@ -218,7 +196,7 @@ def parse_dict(
             profiles=validated.context_profiles,
             cli_overrides=cli_overrides,
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"Context resolution failed: {exc}") from exc
 
     # ── 4. Build Module dataclasses (with config substitution) ────────────────
@@ -258,6 +236,22 @@ def parse_dict(
                 out[k] = _anchor_path_value(out[k])
         return out
 
+    def _coerce_enabled(raw: Any, module_id: str) -> bool:
+        """`enabled:` — resolve ${ctx.*}/${ENV} then coerce to bool."""
+        v = resolve_value(raw, ctx_map) if isinstance(raw, str) else raw
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("true", "1", "yes", "on"):
+                return True
+            if s in ("false", "0", "no", "off"):
+                return False
+        raise ParseError(
+            f"Module {module_id!r}: `enabled` must resolve to a boolean "
+            f"(true/false/1/0/yes/no/on/off), got {v!r}"
+        )
+
     try:
         modules = tuple(
             Module(
@@ -270,6 +264,7 @@ def parse_dict(
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
                 checkpoint=m.checkpoint,
+                enabled=_coerce_enabled(m.enabled, m.id),
                 spillway=m.spillway,
                 depends_on=tuple(m.depends_on),
                 attach_to=m.attach_to,
@@ -278,7 +273,7 @@ def parse_dict(
             )
             for m in validated.modules
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"Module config resolution failed: {exc}") from exc
 
     # ── 5. Build Edge dataclasses ─────────────────────────────────────────────
@@ -326,6 +321,7 @@ def parse_dict(
             max_patches=validated.agent.max_patches,
             provider=validated.agent.provider,
             base_url=resolve_value(validated.agent.base_url, ctx_map),
+            api_key=resolve_value(validated.agent.api_key, ctx_map),
             provider_options=resolve_value(validated.agent.provider_options, ctx_map),
             guardrails=GuardrailsConfig(
                 forbidden_ops=tuple(validated.agent.guardrails.forbidden_ops),
@@ -340,13 +336,13 @@ def parse_dict(
             on_heal_failure=validated.agent.on_heal_failure,
             allow_defer=validated.agent.allow_defer,
             deep_loop=validated.agent.deep_loop,
-            cascade=_build_cascade(validated.agent.cascade),
+            cascade=_build_cascade(validated.agent.cascade, ctx_map),
             max_heal_attempts_per_hour=validated.agent.max_heal_attempts_per_hour,
             patch_validation=validated.agent.patch_validation,
             block_on_explain_regression=validated.agent.block_on_explain_regression,
             sandbox_mode=validated.agent.sandbox_mode,
         )
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"agent config resolution failed: {exc}") from exc
 
     # Tier-0 resolution applies here too (parity with module config /
@@ -356,7 +352,7 @@ def parse_dict(
     try:
         resolved_spark_config = resolve_value(dict(validated.spark_config), ctx_map)
         resolved_macros = resolve_value(dict(validated.macros), ctx_map)
-    except ValueError as exc:
+    except (ValueError, ParseError) as exc:
         raise ParseError(f"spark_config / macros resolution failed: {exc}") from exc
 
     return Blueprint(
@@ -380,4 +376,12 @@ def parse_dict(
         macros=resolved_macros,
         required_context=tuple(validated.required_context),
         checkpoint=validated.checkpoint,
+        warning_suppress=tuple(validated.warnings.suppress),
+        # Hook values pass through VERBATIM — ${run.id}/${run.status}/
+        # ${blueprint.id} are runtime variables the CLI hook runner
+        # interpolates at fire time (resolve_value here would reject them).
+        hooks=Hooks(
+            on_success=tuple(_hook_entry(h) for h in validated.hooks.on_success),
+            on_failure=tuple(_hook_entry(h) for h in validated.hooks.on_failure),
+        ),
     )

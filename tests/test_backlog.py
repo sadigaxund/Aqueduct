@@ -23,10 +23,4 @@ from __future__ import annotations
 import pytest
 
 
-@pytest.mark.todo("iceberg + hudi read/write + maintenance run on a real SparkSession with the format jars: write a table, rewrite_data_files/expire_snapshots (iceberg) and run_compaction/run_clean (hudi) execute, maintenance_metrics rows recorded")
-def test_iceberg_hudi_roundtrip_and_maintenance():
-    # intended: tests/test_executor/test_executor_lakehouse.py  (mark spark integration)
-    # context: Phase 59 — build_maintenance_ops + doctor check are unit-tested;
-    # this needs spark.jars.packages for iceberg/hudi, so it lives behind the
-    # spark marker and pulls the bundles at session build.
-    ...
+

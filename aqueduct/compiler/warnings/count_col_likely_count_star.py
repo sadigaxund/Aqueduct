@@ -10,8 +10,9 @@ silence by switching to `COUNT(col + 0)` or adding a comment.
 from __future__ import annotations
 
 import re
-from aqueduct.parser.models import ModuleType
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "count_col_likely_count_star"
 

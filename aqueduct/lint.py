@@ -23,11 +23,10 @@ than a missed *negative*. When a rule cannot decide, it stays silent.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Callable, Iterator
 
-from aqueduct.parser.models import Blueprint
-from aqueduct.parser.models import ModuleType
+from aqueduct.parser.models import Blueprint, ModuleType
 
 logger = logging.getLogger(__name__)
 

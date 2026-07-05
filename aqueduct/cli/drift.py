@@ -32,6 +32,7 @@ from aqueduct.cli import (
     _resolve_and_load_env,
     cli,
 )
+from aqueduct.cli.output import emit
 from aqueduct.parser.models import ModuleType
 
 
@@ -66,25 +67,30 @@ def drift(
     """
     import json as _json
 
+    from aqueduct.cli.style import error as _error
     from aqueduct.compiler.compiler import CompileError
     from aqueduct.compiler.compiler import compile as compiler_compile
     from aqueduct.config import ConfigError, load_config
     from aqueduct.drift import store as drift_store
     from aqueduct.drift.classifier import diff_schemas
     from aqueduct.parser.parser import ParseError, parse
-    from aqueduct.stores import get_stores
+    from aqueduct.stores.read import open_obs_write
 
     try:
         _resolve_and_load_env(env_file, Path(config_path) if config_path else None, cli_env=cli_env)
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         bp = parse(blueprint)
-        manifest = compiler_compile(bp, blueprint_path=Path(blueprint))
+        manifest = compiler_compile(
+            bp, blueprint_path=Path(blueprint),
+            deployment_env=getattr(cfg.deployment, "env", None),
+            deployment_target=getattr(cfg.deployment, "target", None),
+        )
     except (ParseError, CompileError) as exc:
         click.echo(f"✗ could not compile {blueprint!r}: {exc}", err=True)
         sys.exit(exit_codes.CONFIG_ERROR)
@@ -96,8 +102,9 @@ def drift(
         click.echo("✗ no Ingress modules to check" + (f" (module {only_module!r} not found)" if only_module else ""), err=True)
         sys.exit(exit_codes.USAGE_ERROR)
 
-    bundle = get_stores(cfg, store_dir_override=Path(store_dir) if store_dir else None)
-    obs = bundle.observability
+    # Per-blueprint write store (mirrors `run` — must not open the routing
+    # directory as a file; see resolve_obs_store_dir).
+    obs = open_obs_write(cfg, manifest.blueprint_id, store_dir)
     drift_store.ensure_schema(obs)
 
     manifest_json = _json.dumps(manifest.to_dict())
@@ -137,8 +144,13 @@ def drift(
             patch_id = None
 
             if result.has_breaking:
+                try:
+                    _src_yaml = Path(blueprint).read_text(encoding="utf-8")
+                except Exception:
+                    _src_yaml = None
                 patch_id = _heal_drift(
                     cfg, manifest.blueprint_id, mod.id, result, manifest_json, Path(patches_dir),
+                    blueprint_source_yaml=_src_yaml,
                 )
                 if patch_id:
                     staged_any = True
@@ -162,16 +174,16 @@ def drift(
         try:
             session.stop()
         except Exception:
-            pass
+            pass  # session.stop() is best-effort cleanup in a finally; the process is about to exit
 
     if fmt == "json":
-        click.echo(_json.dumps({"blueprint_id": manifest.blueprint_id, "checks": results}, indent=2))
+        emit({"blueprint_id": manifest.blueprint_id, "checks": results}, fmt="json")
 
     if undiffable:
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     if staged_any:
         sys.exit(exit_codes.HEAL_PENDING)
-    sys.exit(0)
+    sys.exit(exit_codes.SUCCESS)
 
 
 def _change_dict(c: Any) -> dict[str, Any]:
@@ -201,9 +213,15 @@ def _heal_drift(
     result: Any,
     manifest_json: str,
     patches_path: Path,
+    blueprint_source_yaml: str | None = None,
 ) -> str | None:
     """Run the agent on a synthetic drift FailureContext; stage a patch. Returns patch_id."""
-    from aqueduct.agent import generate_agent_patch, resolve_budget, stage_patch_for_human
+    from aqueduct.agent import (
+        AgentRunConfig,
+        generate_agent_patch,
+        resolve_budget,
+        stage_patch_for_human,
+    )
     from aqueduct.drift.context import build_synthetic_failure_context
 
     eng = cfg.agent
@@ -211,23 +229,33 @@ def _heal_drift(
         click.echo(f"  (agent disabled — set agent.model to auto-heal {module_id!r})", err=True)
         return None
 
-    failure_ctx = build_synthetic_failure_context(blueprint_id, module_id, result, manifest_json)
+    failure_ctx = build_synthetic_failure_context(
+        blueprint_id, module_id, result, manifest_json,
+        blueprint_source_yaml=blueprint_source_yaml,
+    )
     budget = resolve_budget(getattr(eng, "budget", None), max_reprompts=eng.max_reprompts)
 
     agent_result = generate_agent_patch(
-        failure_ctx,
-        model=eng.model,
-        patches_dir=patches_path,
-        provider=eng.provider or "anthropic",
-        base_url=eng.base_url,
-        provider_options=eng.provider_options,
-        timeout=eng.timeout,
-        max_reprompts=eng.max_reprompts,
-        engine_prompt_context=eng.prompt_context,
-        budget=budget,
-        allow_defer=False,
+        agent_cfg=AgentRunConfig(
+            failure_ctx=failure_ctx,
+            model=eng.model,
+            patches_dir=patches_path,
+            provider=eng.provider or "anthropic",
+            base_url=eng.base_url,
+            api_key=eng.api_key,
+            provider_options=eng.provider_options,
+            timeout=eng.timeout,
+            max_reprompts=eng.max_reprompts,
+            engine_prompt_context=eng.prompt_context,
+            budget=budget,
+            allow_defer=False,
+        ),
     )
     if agent_result.patch is None:
         return None
-    stage_patch_for_human(agent_result.patch, patches_path, failure_ctx)
+    # Stage to the configured patch store (local OR s3/gcs/adls per stores.blob),
+    # not a hardcoded local dir — so a remote backend actually receives the body.
+    from aqueduct.stores.object_store import make_patch_store
+    _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
+    stage_patch_for_human(agent_result.patch, patches_path, failure_ctx, patch_store=_patch_store)
     return agent_result.patch.patch_id

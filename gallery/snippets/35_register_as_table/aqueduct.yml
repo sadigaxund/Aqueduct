@@ -1,0 +1,21 @@
+aqueduct_config: "1.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+spark_config:
+  spark.sql.catalogImplementation: hive
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct
+
+danger:
+  allow_full_probe_actions: true

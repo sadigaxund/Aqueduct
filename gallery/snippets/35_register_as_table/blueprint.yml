@@ -1,0 +1,49 @@
+# blueprint.yml
+# register_as_table on Egress — publish output to the Spark catalog.
+
+aqueduct: "1.0"
+id: register_as_table_demo
+name: "Register as Table Snippet"
+
+modules:
+  - id: raw_products
+    label: "Raw Products"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options: {header: "true", inferSchema: "true"}
+
+  # Filter to only in-stock products, then write to parquet AND
+  # register the output as a temporary catalog table for the session.
+  - id: in_stock_only
+    label: "In-Stock Only"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/products_in_stock.parquet
+      mode: overwrite
+      register_as_table: in_stock_products
+
+  # Read back from the registered table in the same session.
+  # Note: table reads don't use 'format' — the catalog knows the storage format.
+  - id: readback
+    label: "Read from Catalog"
+    type: Ingress
+    config:
+      table: in_stock_products
+
+  - id: probe_readback
+    label: "Verify readback"
+    type: Probe
+    attach_to: readback
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+
+edges:
+  - from: raw_products
+    to: in_stock_only
+  - from: in_stock_only
+    to: readback

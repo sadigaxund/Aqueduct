@@ -24,8 +24,9 @@ pytestmark = pytest.mark.unit
 
 # ── 1 & 2 & 14 & 15. Render Collapse and Verbose Tests ────────────────────────
 
-def test_doctor_render_hides_skip_and_quiet_ok(tmp_path):
-    """Default view omits skip/quiet_ok rows; collapses to '· more' row. --verbose shows all."""
+@pytest.mark.parametrize("verbose_flag", ["-v", "--verbose"])
+def test_doctor_render_hides_skip_and_quiet_ok(tmp_path, verbose_flag):
+    """Default view omits skip/quiet_ok rows; collapses to '· more' row. --verbose/-v shows all."""
     runner = CliRunner()
     config = tmp_path / "aqueduct.yml"
     config.write_text("""
@@ -48,26 +49,24 @@ deployment:
     ]
 
     with patch("aqueduct.doctor.run_doctor", return_value=mock_results):
-        # 1. Default (no --verbose)
+        # 1. Default (no verbose flag)
         result = runner.invoke(cli, ["doctor", str(config), "--skip-spark"])
         assert result.exit_code == 0
         assert "config" in result.output
         assert "observability" in result.output
-        # Hidden rows are omitted from top
-        assert "webhook" not in result.output.split("·")[0]
-        # Collapsed line printed
+        # Hidden rows are in collapsed "· more" line
         assert "· more" in result.output
         assert "webhook" in result.output
         assert "cloudpickle" in result.output
         assert "(ok / not applicable / not configured — --verbose)" in result.output
 
-        # 2. --verbose
-        result_verbose = runner.invoke(cli, ["doctor", str(config), "--skip-spark", "--verbose"])
+        # 2. Verbose (via -v or --verbose)
+        result_verbose = runner.invoke(cli, ["doctor", str(config), "--skip-spark", verbose_flag])
         assert result_verbose.exit_code == 0
         assert "config" in result_verbose.output
         assert "observability" in result_verbose.output
-        assert "webhook" in result_verbose.output.split("·")[0]
-        assert "cloudpickle" in result_verbose.output.split("·")[0]
+        assert "webhook" in result_verbose.output
+        assert "cloudpickle" in result_verbose.output
         assert "· more" not in result_verbose.output
 
 
@@ -157,11 +156,13 @@ def test_explain_formatted_plan_no_sql_ctx_access():
 # ── 7 & 8. TCP Reachability and Parsing Tests ─────────────────────────────────
 
 def test_host_port_parsing():
-    """_host_port parses spark://h:p, http://h:p, h:p; bad -> None."""
+    """_host_port parses spark://h:p, http://h:p, h:p, k8s://https://h:p; bad -> None."""
     assert _host_port("spark://localhost:7077", 7077) == ("localhost", 7077)
     assert _host_port("http://my-host:8080", 80) == ("my-host", 8080)
     assert _host_port("my-host:9000", 7077) == ("my-host", 9000)
     assert _host_port("bad-url-format", 7077) is None
+    assert _host_port("k8s://https://kube-api:6443", 443) == ("kube-api", 6443)
+    assert _host_port("k8s://https://hostname", 443) == ("hostname", 443)
 
 
 def test_tcp_ok_refused():
@@ -173,21 +174,85 @@ def test_tcp_ok_refused():
 def test_spark_check_tcp_reachability(monkeypatch):
     """Default check_spark (preflight=False) uses fast TCP probe and does not build session."""
     # Local mode is always ok
-    ok_local, _ = check_spark("local[*]", {}, preflight=False)
+    ok_local, _ = check_spark("local[*]", {}, preflight=False, target="local")
     assert ok_local.status == "ok"
     assert "local mode" in ok_local.detail
 
-    # Remote master reachable
+    # Remote master reachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=True):
-        ok_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False)
+        ok_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
         assert ok_remote.status == "ok"
         assert "reachable" in ok_remote.detail
 
-    # Remote master unreachable
+    # Remote master unreachable (standalone target)
     with patch("aqueduct.doctor._tcp_ok", return_value=False):
-        fail_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False)
+        fail_remote, _ = check_spark("spark://localhost:7077", {}, preflight=False, target="standalone")
         assert fail_remote.status == "fail"
         assert "(Not a timeout: no SparkSession was built.)" in fail_remote.detail
+
+
+def test_yarn_reachability_warns_without_hadoop_conf_dir(monkeypatch):
+    """yarn target warns when HADOOP_CONF_DIR and YARN_CONF_DIR are both unset."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "warn"
+    assert "HADOOP_CONF_DIR" in spark_res.detail
+
+
+def test_yarn_reachability_ok_with_hadoop_conf_dir(monkeypatch):
+    """yarn target passes when HADOOP_CONF_DIR is set."""
+    monkeypatch.setenv("HADOOP_CONF_DIR", "/etc/hadoop/conf")
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "ok"
+    assert "/etc/hadoop/conf" in spark_res.detail
+
+
+def test_yarn_reachability_ok_with_yarn_conf_dir(monkeypatch):
+    """yarn target passes when YARN_CONF_DIR is set (fallback)."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.setenv("YARN_CONF_DIR", "/opt/yarn/conf")
+    spark_res, _ = check_spark("yarn", {}, preflight=False, target="yarn")
+    assert spark_res.status == "ok"
+    assert "/opt/yarn/conf" in spark_res.detail
+
+
+def test_k8s_reachability_parses_api_server():
+    """kubernetes target parses k8s:// URL to host:port."""
+    hp = _host_port("k8s://https://kube-api.cluster.local:6443", 443)
+    assert hp == ("kube-api.cluster.local", 6443)
+
+
+def test_k8s_reachability_ok_when_api_server_tcp_ok(monkeypatch):
+    """kubernetes target with reachable API server and k8s keys -> ok."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    k8s_cfg = {"spark.kubernetes.namespace": "aqueduct", "spark.kubernetes.container.image": "img"}
+    with patch("aqueduct.doctor._tcp_ok", return_value=True):
+        spark_res, _ = check_spark("k8s://https://host:443", k8s_cfg, preflight=False, target="kubernetes")
+    assert spark_res.status == "ok"
+    assert "reachable" in spark_res.detail
+
+
+def test_k8s_reachability_warns_without_k8s_keys(monkeypatch):
+    """kubernetes target warns when no spark.kubernetes.* keys are present."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    with patch("aqueduct.doctor._tcp_ok", return_value=True):
+        spark_res, _ = check_spark("k8s://https://host:443", {}, preflight=False, target="kubernetes")
+    assert spark_res.status == "warn"
+    assert "spark.kubernetes" in spark_res.detail
+
+
+def test_k8s_reachability_fail_when_api_server_unreachable(monkeypatch):
+    """kubernetes target with unreachable API server -> fail."""
+    monkeypatch.delenv("HADOOP_CONF_DIR", raising=False)
+    monkeypatch.delenv("YARN_CONF_DIR", raising=False)
+    with patch("aqueduct.doctor._tcp_ok", return_value=False):
+        spark_res, _ = check_spark("k8s://https://host:6443", {}, preflight=False, target="kubernetes")
+    assert spark_res.status == "fail"
+    assert "unreachable" in spark_res.detail
 
 
 # ── 9. S3A Endpoint TCP Probe and bucketless design Test ──────────────────────
@@ -328,15 +393,15 @@ deployment:
   master_url: "local[*]"
   env: cluster
 stores:
-  observability: {backend: duckdb, path: ".aqueduct/obs.db"}
-  lineage: {backend: duckdb, path: ".aqueduct/lin.db"}
-  depot: {backend: duckdb, path: ".aqueduct/depot.db"}
+  observability: {backend: duckdb, path: ".aqueduct/obs"}
+  depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
     from aqueduct.config import (
         load_config as _real_load_config,
         RelationalStoreConfig,
         KVStoreConfig,
+        DepotMountConfig,
     )
 
     def _load_with_relative_paths(path=None):
@@ -345,9 +410,8 @@ stores:
         # StoresConfig is a frozen Pydantic model — rebuild it with unresolved paths.
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
-            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
-            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
+            depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})
 
@@ -366,10 +430,12 @@ stores:
 
     # Check that check_store_backend runs real duckdb open / usability check
     from aqueduct.doctor import check_store_backend
-    store_cfg = RelationalStoreConfig(backend="duckdb", path=str(tmp_path / "obs.db"))
+    obs_dir = tmp_path / "obs"
+    obs_dir.mkdir()
+    store_cfg = RelationalStoreConfig(backend="duckdb", path=str(obs_dir))
     res = check_store_backend("observability", store_cfg)
     assert res.status == "ok"
-    assert "backend=duckdb" in res.detail
+    assert "backend=duckdb" in res.detail  # routing-base write probe
 
 
 # ── 20. Additive Flags scenario test ──────────────────────────────────────────
@@ -498,9 +564,8 @@ deployment:
   master_url: "local[*]"
   env: cluster
 stores:
-  observability: {backend: duckdb, path: ".aqueduct/obs.db"}
-  lineage: {backend: duckdb, path: ".aqueduct/lin.db"}
-  depot: {backend: duckdb, path: ".aqueduct/depot.db"}
+  observability: {backend: duckdb, path: ".aqueduct/obs"}
+  depots: {default: {backend: duckdb, path: ".aqueduct/depot.db"}}
 """, encoding="utf-8")
 
     bp_file = tmp_path / "blueprint.yml"
@@ -516,6 +581,7 @@ edges: []
         load_config as _real_load_config,
         RelationalStoreConfig,
         KVStoreConfig,
+        DepotMountConfig,
     )
 
     def _load_with_relative_paths(path=None):
@@ -523,9 +589,8 @@ edges: []
         cfg = _real_load_config(path)
         from aqueduct.config import StoresConfig
         new_stores = StoresConfig(
-            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs.db"),
-            lineage=RelationalStoreConfig(backend="duckdb", path=".aqueduct/lin.db"),
-            depot=KVStoreConfig(backend="duckdb", path=".aqueduct/depot.db"),
+            observability=RelationalStoreConfig(backend="duckdb", path=".aqueduct/obs"),
+            depots={"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         )
         return cfg.model_copy(update={"stores": new_stores})
 
@@ -715,3 +780,204 @@ class TestCheckSpillwayErrorTypes:
             )
             results = _check_spillway_error_types(m)
             assert results == [], f"builtin label {label!r} falsely flagged as unknown"
+
+
+# ── T27 Part 1: Spark version handshake (major.minor, no matrix) ────────────────
+
+from aqueduct.doctor import _spark_version_verdict, _parse_java_major, check_java
+
+
+class TestSparkVersionVerdict:
+    def test_exact_match_ok(self):
+        assert _spark_version_verdict("3.5.0", "3.5.0")[0] == "ok"
+        assert _spark_version_verdict("3.5.1", "3.5.0")[0] == "ok"   # patch differs → still ok
+
+    def test_minor_mismatch_warns(self):
+        status, note = _spark_version_verdict("3.4.1", "3.5.0")
+        assert status == "warn"
+        assert "pyspark=3.5.0" in note and "Spark=3.4.1" in note
+
+    def test_major_mismatch_warns(self):
+        assert _spark_version_verdict("3.5.0", "4.0.0")[0] == "warn"
+
+
+class TestJavaCheck:
+    @pytest.mark.parametrize("text,expected", [
+        ('openjdk version "17.0.10" 2024-01-16', 17),
+        ('java version "1.8.0_292"', 8),
+        ('openjdk version "11.0.21"', 11),
+        ('not a version line', None),
+        ("", None),
+    ])
+    def test_parse_java_major(self, text, expected):
+        assert _parse_java_major(text) == expected
+
+    def test_check_java_reports_version(self, monkeypatch):
+        import subprocess
+        monkeypatch.delenv("JAVA_HOME", raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/java")
+        monkeypatch.setattr(subprocess, "run", lambda *a, **k: MagicMock(
+            stderr='openjdk version "17.0.1"', stdout=""))
+        r = check_java()
+        assert r.status == "ok" and "Java 17" in r.detail
+
+    def test_check_java_missing_warns(self, monkeypatch):
+        monkeypatch.delenv("JAVA_HOME", raising=False)
+        monkeypatch.setattr("shutil.which", lambda _: None)
+        r = check_java()
+        assert r.status == "warn" and "no java found" in r.detail
+
+
+# ── T27 Part 2: preflight checks (agent ping, UDF import) ───────────────────────
+
+from aqueduct.doctor import _check_udf_registry, check_agent as _check_agent
+
+
+class _FakeManifest:
+    def __init__(self, udf_registry):
+        self.udf_registry = udf_registry
+
+
+class TestUdfImportCheck:
+    def test_default_skips_import(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
+        assert _check_udf_registry(m, preflight=False) == []   # default: no import
+
+    def test_preflight_imports_ok(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "loads"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert len(res) == 1 and res[0].status == "ok"
+
+    def test_preflight_missing_module_warns(self):
+        m = _FakeManifest(({"id": "u", "module": "no_such_mod_xyz", "entry": "f"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "warn" and "cannot import" in res[0].detail
+
+    def test_preflight_missing_entry_warns(self):
+        m = _FakeManifest(({"id": "u", "module": "json", "entry": "not_a_func"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "warn" and "not found" in res[0].detail
+
+    def test_java_udf_skipped(self):
+        m = _FakeManifest(({"id": "u", "lang": "java", "module": "x"},))
+        res = _check_udf_registry(m, preflight=True)
+        assert res[0].status == "skip"
+
+
+class TestAgentPreflightPing:
+    def test_anthropic_default_no_api_call(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        r = _check_agent("anthropic", "https://api.anthropic.com", "claude-x", preflight=False)
+        assert r.status == "ok" and "API not called" in r.detail
+
+    def test_anthropic_preflight_verifies_key(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        import httpx
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=lambda: None))
+        r = _check_agent("anthropic", None, "claude-x", preflight=True)
+        assert r.status == "ok" and "key verified" in r.detail
+
+    def test_anthropic_preflight_bad_key_warns(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-bad")
+        import httpx
+        resp = MagicMock(status_code=401)
+        def _raise(): raise httpx.HTTPStatusError("401", request=MagicMock(), response=resp)
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: MagicMock(raise_for_status=_raise, response=resp))
+        r = _check_agent("anthropic", None, "claude-x", preflight=True)
+        assert r.status == "warn" and "401" in r.detail
+
+
+# ── T27 Part 2: store round-trip + JDBC preflight ──────────────────────────────
+
+from types import SimpleNamespace
+from aqueduct.doctor import check_store_backend, _jdbc_preflight_auth, _jdbc_result
+
+
+class TestStoreRoundTrip:
+    def test_duckdb_preflight_write_read(self, tmp_path):
+        cfg = SimpleNamespace(backend="duckdb", path=str(tmp_path / "obs.db"))
+        r = check_store_backend("observability", cfg, preflight=True)
+        assert r.status == "ok" and "write+read ok" in r.detail
+
+    def test_duckdb_default_no_roundtrip_note(self, tmp_path):
+        cfg = SimpleNamespace(backend="duckdb", path=str(tmp_path / "obs.db"))
+        r = check_store_backend("observability", cfg, preflight=False)
+        assert r.status == "ok" and "write+read ok" not in r.detail
+
+
+class TestJdbcPreflight:
+    def test_non_postgres_returns_none(self):
+        assert _jdbc_preflight_auth("jdbc:mysql://h:3306/db", {}) is None
+
+    def test_result_default_is_tcp_reachable(self):
+        r = _jdbc_result("src", "h", 5432, "jdbc:postgresql://h:5432/db", {}, 0.0, preflight=False)
+        assert r.status == "ok" and "reachable" in r.detail and "preflight" not in r.detail
+
+    def test_result_preflight_non_postgres_tcp_only(self):
+        r = _jdbc_result("src", "h", 3306, "jdbc:mysql://h:3306/db", {}, 0.0, preflight=True)
+        assert r.status == "ok" and "TCP only" in r.detail
+
+    def test_result_preflight_postgres_attempts_auth(self):
+        # Proves the auth path runs (not TCP-only). On CI with trust auth the
+        # connect may succeed → "ok"; on a strict PG setup it fails → "warn".
+        r = _jdbc_result("src", "127.0.0.1", 5432, "jdbc:postgresql://127.0.0.1:5432/nope",
+                         {"user": "u", "password": "p"}, 0.0, preflight=True)
+        assert r.status in ("ok", "warn")
+        assert "preflight" in r.detail
+
+
+# ── Queued follow-ups: cascade-tier preflight ping + agent model count ──────────
+
+from aqueduct.doctor import check_cascade_tiers as _check_cascade
+
+
+def _fake_bp_with_tier(provider, model, base_url=None):
+    tier = SimpleNamespace(provider=provider, model=model, base_url=base_url)
+    return SimpleNamespace(agent=SimpleNamespace(cascade=[tier]))
+
+
+class TestCascadeTierPing:
+    def test_default_only_checks_base_url_present(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
+        res = _check_cascade(Path("bp.yml"), preflight=False)
+        assert res[0].status == "ok" and "base_url=http://h/v1" in res[0].detail
+        assert "models" not in res[0].detail  # no ping without preflight
+
+    def test_preflight_pings_and_confirms_model(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "deepseek", "http://h/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["deepseek", "other"], None))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "ok" and "2 models" in res[0].detail and "[preflight]" in res[0].detail
+
+    def test_preflight_model_not_loaded_warns(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "missing", "http://h/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["only-this"], None))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "warn" and "not in 1 loaded models" in res[0].detail
+
+    def test_preflight_unreachable_warns(self, monkeypatch):
+        import aqueduct.parser.parser as P
+        monkeypatch.setattr(P, "parse", lambda _p: _fake_bp_with_tier("openai_compat", "x", "http://dead/v1"))
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: ([], "Connection refused"))
+        res = _check_cascade(Path("bp.yml"), preflight=True)
+        assert res[0].status == "warn" and "unreachable" in res[0].detail
+
+
+class TestAgentModelCount:
+    def test_main_agent_reports_count(self, monkeypatch):
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["a", "b", "c"], None))
+        r = _check_agent("openai_compat", "http://h/v1", "b")
+        assert r.status == "ok" and "3 models available" in r.detail
+
+    def test_main_agent_selected_missing_warns(self, monkeypatch):
+        monkeypatch.setattr("aqueduct.doctor.checks_io._probe_openai_models",
+                            lambda *a, **k: (["a", "b"], None))
+        r = _check_agent("openai_compat", "http://h/v1", "zzz")
+        assert r.status == "warn" and "not in 2 loaded models" in r.detail

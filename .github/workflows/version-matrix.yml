@@ -24,6 +24,25 @@ jobs:
       - run: pip install -e ".[dev,spark,postgres,redis]"
       - run: pytest -m "not spark and not integration and not agent" --no-cov -q
 
+  # Gallery snippets — full end-to-end runs of every shipped example against a
+  # real local Spark. Moved here from test-suite.yml (2026-07-03): these are
+  # compat checks, not per-push unit checks. The suite keeps the fast
+  # parse/compile `gallery-tests` guard for branch pushes.
+  snippets:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm]"
+      - run: bash scripts/run_snippets.sh
+
   compat:
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -87,6 +106,10 @@ jobs:
         env:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
           AQ_SPARK_MASTER: "local[1]"
+          # Provision Hudi/Iceberg jars from Maven coords derived off the
+          # matrix pyspark version; per-datasource self-skip when no build
+          # exists for that Spark line (Iceberg has no Spark 4.1 runtime).
+          AQ_LAKEHOUSE: "1"
         run: |
           mkdir -p ${{ env.RESULTS_DIR }}
           LOGFILE=$(mktemp)

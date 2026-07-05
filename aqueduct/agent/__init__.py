@@ -29,18 +29,24 @@ from aqueduct.agent.budget import BudgetConfig as BudgetConfig
 from aqueduct.agent.budget import StopReason as StopReason
 from aqueduct.agent.cascade import generate_cascade_patch as generate_cascade_patch
 from aqueduct.agent.loop import (
-    AgentPatchResult as AgentPatchResult,
     PROMPT_VERSION as PROMPT_VERSION,
+)
+from aqueduct.agent.loop import (
+    AgentPatchResult as AgentPatchResult,
+)
+from aqueduct.agent.loop import (
+    AgentRunConfig as AgentRunConfig,
+)
+from aqueduct.agent.loop import (
     archive_patch as archive_patch,
+)
+from aqueduct.agent.loop import (
     generate_agent_patch as generate_agent_patch,
+)
+from aqueduct.agent.loop import (
     stage_patch_for_human as stage_patch_for_human,
 )
 from aqueduct.agent.prompts import build_prompt as build_prompt
-
-# Backward-compatible alias for the legacy single-axis knob.
-# External callers can pass max_reprompts=... or configure the full
-# BudgetConfig via agent.budget: in aqueduct.yml.
-MAX_REPROMPTS = 3
 
 
 def resolve_budget(

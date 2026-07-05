@@ -15,7 +15,7 @@ unqualified (`SELECT … FROM run_records` works the same as on DuckDB).
 
 DSN handling
 ------------
-`StoreBackendConfig.path` carries a libpq DSN
+`RelationalStoreConfig.path` carries a libpq DSN
 (`postgresql://user:pass@host:5432/aqueduct_db`). Identical DSNs across
 `observability` / `lineage` / `depot` are connection-pool-deduplicated so a typical
 3-line config opens one logical pool, not three.
@@ -31,10 +31,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any
 
-from aqueduct.stores.base import DepotStore, LineageStore, ObservabilityStore, RelationalCursor, _RelationalDepotMixin
+from aqueduct.stores.base import (
+    DepotStore,
+    ObservabilityStore,
+    RelationalCursor,
+    _RelationalDepotMixin,
+)
+from aqueduct.stores.ddl import DEPOT_KV_DDL
 
 logger = logging.getLogger(__name__)
 
@@ -157,30 +164,9 @@ class PostgresObservabilityStore(_PostgresRelational, ObservabilityStore):
     _SCHEMA = "observability"
 
 
-class PostgresLineageStore(_PostgresRelational, LineageStore):
-    _SCHEMA = "lineage"
-
-
 class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore):
     _SCHEMA = "depot"
-
-    _DDL = """
-        CREATE TABLE IF NOT EXISTS depot_kv (
-            key        VARCHAR PRIMARY KEY,
-            value      VARCHAR NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL
-        );
-    """
-
-
-
-    _DDL = """
-        CREATE TABLE IF NOT EXISTS depot_kv (
-            key        VARCHAR PRIMARY KEY,
-            value      VARCHAR NOT NULL,
-            updated_at TIMESTAMPTZ NOT NULL
-        )
-    """
+    _DDL = DEPOT_KV_DDL
 
     def kv_get(self, key: str, default: str = "") -> str:
         try:
@@ -205,7 +191,7 @@ class PostgresDepotStore(_PostgresRelational, _RelationalDepotMixin, DepotStore)
                     SET value = excluded.value,
                         updated_at = excluded.updated_at
                 """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
+                [key, value, datetime.now(tz=UTC).isoformat()],
             )
 
     def kv_delete(self, key: str) -> None:

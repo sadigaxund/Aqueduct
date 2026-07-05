@@ -6,6 +6,11 @@ repos:
         stages: [commit-msg]
         entry: python3 scripts/check_commit_msg.py
         language: system
+      - id: py311-syntax
+        name: Python 3.11 syntax check (min supported version)
+        entry: python3.11 -m py_compile
+        language: system
+        types: [python]
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.0
     hooks:

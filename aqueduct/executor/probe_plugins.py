@@ -27,7 +27,10 @@ never surfaced to the healing LLM. Only install probe plugins you trust.
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
+from aqueduct.errors import ConfigError
 
 # setuptools entry-point group for distributing custom probe signals.
 AQ_PROBE_ENTRYPOINT_GROUP = "aqueduct.probe_signals"
@@ -57,17 +60,17 @@ def custom_signal_source(sig_cfg: dict[str, Any]) -> str:
         if present
     ]
     if not forms:
-        raise ValueError(
+        raise ConfigError(
             "custom probe signal requires exactly one source: 'sql'/'passed_when', "
             "'module'+'entry', or 'plugin'"
         )
     if len(forms) > 1:
-        raise ValueError(
+        raise ConfigError(
             f"custom probe signal has conflicting sources {forms}; specify exactly one of "
             "'sql'/'passed_when', 'module'+'entry', or 'plugin'"
         )
     if forms[0] == "pointer" and not (sig_cfg.get("module") and sig_cfg.get("entry")):
-        raise ValueError(
+        raise ConfigError(
             "custom probe signal pointer form requires BOTH 'module' and 'entry'"
         )
     return forms[0]
@@ -88,7 +91,7 @@ def resolve_callable(sig_cfg: dict[str, Any]) -> CustomSignalFn:
         mod = importlib.import_module(module_name)
         fn = getattr(mod, entry, None)
         if not callable(fn):
-            raise ValueError(
+            raise ConfigError(
                 f"custom probe: {module_name}:{entry} is not a callable"
             )
         return fn
@@ -96,12 +99,12 @@ def resolve_callable(sig_cfg: dict[str, Any]) -> CustomSignalFn:
         name = sig_cfg["plugin"]
         fn = _load_entry_point(name)
         if fn is None:
-            raise ValueError(
+            raise ConfigError(
                 f"custom probe plugin {name!r} not found in entry-point group "
                 f"{AQ_PROBE_ENTRYPOINT_GROUP!r}"
             )
         return fn
-    raise ValueError(
+    raise ConfigError(
         "resolve_callable() called for an inline-SQL custom signal (no callable)"
     )
 

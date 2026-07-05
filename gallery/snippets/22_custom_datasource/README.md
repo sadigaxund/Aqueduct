@@ -29,5 +29,9 @@ in `options`).
 aqueduct doctor blueprint.yml   # verifies the class imports
 aqueduct run blueprint.yml
 ```
-The module must be importable — running from this directory puts `datasource.py`
-on the path.
+The module must be on Python's ``sys.path`` at import time. Since the
+``aqueduct`` CLI entry point doesn't auto-add CWD (only ``python -c`` /
+``python script.py`` do), the blueprint's ``spark_config`` declares
+``spark.submit.pyFiles: datasource.py`` so Spark distributes it to the
+driver's Python path. If you add more importable files, append them as a
+comma-separated list.

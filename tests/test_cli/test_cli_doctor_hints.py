@@ -15,8 +15,8 @@ aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
 agent:
-  approval_mode: aggressive
-  aggressive_max_patches: 1
+  approval: auto
+  max_patches: 2
 modules:
   - id: in
     type: Ingress
@@ -71,12 +71,11 @@ def test_doctor_warn_adds_hints_before_agent(
     
     mock_gen_patch.return_value = MagicMock(patch=None)  # stop loop
     
-    result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+    result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
     # Verify doctor_hints in failure context
     assert mock_gen_patch.call_count == 1
-    call_args = mock_gen_patch.call_args[0]
-    failure_ctx = call_args[0]
+    failure_ctx = mock_gen_patch.call_args[1]["agent_cfg"].failure_ctx
     
     assert failure_ctx.doctor_hints is not None
     assert len(failure_ctx.doctor_hints) == 1
@@ -124,12 +123,11 @@ def test_doctor_exception_swallowed_hints_empty(
     
     mock_gen_patch.return_value = MagicMock(patch=None)  # stop loop
     
-    result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+    result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
     # Verify doctor_hints in failure context
     assert mock_gen_patch.call_count == 1
-    call_args = mock_gen_patch.call_args[0]
-    failure_ctx = call_args[0]
+    failure_ctx = mock_gen_patch.call_args[1]["agent_cfg"].failure_ctx
     
     # Hints should be empty, but self-healing continued
     assert failure_ctx.doctor_hints == []

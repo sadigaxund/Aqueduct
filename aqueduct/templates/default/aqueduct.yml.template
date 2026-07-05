@@ -25,23 +25,25 @@ deployment:
   # engine: execution engine. Currently supported: spark.
   engine: spark
 
-  # target: informational label only — never changes execution behaviour.
-  # Use it to tag the environment for monitoring/logging.
-  # Values: local | standalone | yarn | kubernetes | databricks | emr | dataproc
+  # target: deployment target. Validated against master_url at config-load;
+  # a mismatch raises a clear ConfigError naming both values and the expected shape.
+  #   local | standalone | yarn | kubernetes — Aqueduct runs on the Spark driver (in-process).
+  #   databricks | emr | dataproc — remote-submit targets planned for a future release;
+  #   currently rejected at config-load with a "not yet supported" message.
   target: local
 
-  # master_url: passed verbatim to SparkSession.builder.master()
+  # master_url: passed verbatim to SparkSession.builder.master().
+  # Must match the declared target (validated at config-load):
+  #   local       → starts with "local"   (e.g. local[*], local[4])
+  #   standalone  → starts with "spark://" (e.g. spark://host:7077)
+  #   yarn        → exactly "yarn"         (needs HADOOP_CONF_DIR / YARN_CONF_DIR)
+  #   kubernetes  → starts with "k8s://"   (e.g. k8s://https://apiserver:443)
   master_url: "local[*]"
-  # master_url: "local[4]"                         # 4 threads
-  # master_url: "spark://host:7077"                # Spark Standalone
-  # master_url: "yarn"                             # YARN (needs HADOOP_CONF_DIR)
-  # master_url: "k8s://https://k8s-apiserver:443"  # Kubernetes
-  # master_url: "sc://databricks-host:443"         # Databricks Connect
 
   # env: deployment environment tier.
   # local (default) — dev machine, no cluster validation.
-  # cluster — standalone/YARN/K8s; doctor errors on relative store paths.
-  # cloud   — managed cloud (Databricks/EMR/Dataproc); same validation as cluster.
+  # cluster — standalone/YARN/K8s; doctor warns on relative store paths.
+  # cloud   — future remote-submit targets (Databricks/EMR/Dataproc); same validation as cluster.
   env: local
   # env: cluster
 
@@ -103,19 +105,18 @@ spark_config: {}
 # Terraform conventions.
 #
 # Each store is pluggable. Default DuckDB layout under .aqueduct/:
-#   observability.db      — run records, failure contexts, signal overrides, probe
-#                 signals, module + maintenance metrics, healing outcomes
-#   lineage.db  — column-level lineage
+#   observability.db  — run records, failure contexts, signal overrides, probe
+#                 signals, module + maintenance metrics, healing outcomes, AND
+#                 column-level lineage (column_lineage)
 #   depot.db    — depot KV store (@aq.depot.*)
-#   snapshots/  — schema_snapshot JSON files (one file per probe per run)
 #
 # Supported backends:
 #   duckdb    — embedded; single-writer file. Suits local / dev / NFS.
-#               Accepted by obs / lineage / depot.
-#   postgres  — networked DSN; MVCC concurrent writers. Accepted by all
-#               three stores. With a shared DSN the engine creates `observability`,
-#               `lineage`, `depot` schemas inside the target database.
-#   redis     — depot-only KV; rejected at config-load for obs / lineage.
+#               Accepted by obs / depot.
+#   postgres  — networked DSN; MVCC concurrent writers. Accepted by both
+#               stores. With a shared DSN the engine creates `observability`
+#               and `depot` schemas inside the target database.
+#   redis     — depot-only KV; rejected at config-load for observability.
 #
 # `aqueduct stores info` prints the resolved backend per store.
 # `aqueduct stores migrate --from-duckdb <old.db>` copies depot KV rows.
@@ -124,25 +125,39 @@ stores:
 
   observability:
     backend: duckdb
-    path: ".aqueduct/observability.db"
-    # Postgres example (uncomment + install `aqueduct-core[postgres]`):
+    # DuckDB path = a routing base DIRECTORY (see specs §10.4.1):
+    #   unset (default) → per-blueprint routing under
+    #     .aqueduct/observability/<blueprint_id>/observability.db (parallel-safe).
+    #   a DIRECTORY, e.g. "/mnt/aqueduct/obs" → same per-blueprint split under
+    #     your dir (parallel-safe, custom location).
+    #   a FILE path (.db suffix) is a CONFIG ERROR — the single-shared-file
+    #   layout was removed in 2.0 (never parallel-safe); for one shared
+    #   concurrent store use backend: postgres below.
+    # path: ".aqueduct/observability"
+    # Postgres example (uncomment + install `aqueduct-core[postgres]`) — MVCC,
+    # fully concurrent, the right choice for parallel runs + live dashboards:
     # backend: postgres
     # path: "postgresql://aq@host:5432/aqueduct_db"
 
-  lineage:
-    backend: duckdb
-    path: ".aqueduct/lineage.db"
-    # backend: postgres
-    # path: "postgresql://aq@host:5432/aqueduct_db"
-
-  depot:
-    backend: duckdb
-    path: ".aqueduct/depot.db"
-    # backend: postgres
-    # path: "postgresql://aq@host:5432/aqueduct_db"
-    # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
-    # backend: redis
-    # path: "redis://host:6379/0"
+  # Depot — cross-run KV state (@aq.depot.*). A name-keyed MAP of mounts. The
+  # `default` mount always exists even if omitted; every mount is per-blueprint
+  # KEY-ISOLATED (keys prefixed by blueprint_id) so blueprints never collide on a
+  # shared depot. Read with @aq.depot.get('k') (default) / @aq.depot.<name>.get('k').
+  depots:
+    default:
+      backend: duckdb
+      path: ".aqueduct/depot.db"
+      # backend: postgres
+      # path: "postgresql://aq@host:5432/aqueduct_db"
+      # Redis-only fast-path (uncomment + install `aqueduct-core[redis]`):
+      # backend: redis
+      # path: "redis://host:6379/0"
+    # An extra, explicitly CROSS-BLUEPRINT mount (raw keys — the one place
+    # collisions are possible; use postgres/redis for parallel writers):
+    # fleet:
+    #   backend: postgres
+    #   path: "postgresql://aq@host:5432/fleet_db"
+    #   shared: true
 
   # Object store for observability blobs (fat manifest/stack/provenance
   # columns) + the patch lifecycle (pending/applied/rejected). `local`
@@ -186,15 +201,13 @@ stores:
 #   env: cluster
 #
 # stores:
-#   obs:
+#   observability:
 #     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/observability.db"
-#   lineage:
-#     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/lineage.db"
-#   depot:
-#     backend: duckdb
-#     path: "/mnt/nfs/aqueduct/depot.db"
+#     path: "/mnt/nfs/aqueduct/observability"   # directory — per-blueprint files underneath
+#   depots:
+#     default:
+#       backend: duckdb
+#       path: "/mnt/nfs/aqueduct/depot.db"
 #
 # spark_config:
 #   spark.executor.memory: "8g"
@@ -214,7 +227,7 @@ stores:
 
 probes:
   max_sample_rows: 100
-  default_sample_fraction: 0.01
+  default_sample_fraction: 0.1
 
   # Probe signals that trigger a Spark action on a sample
   # (row_count_estimate/sample, null_rates, value_distribution, distinct_count)
@@ -434,9 +447,15 @@ webhooks:
   #   url: "https://ops.example.com/api/v1/aqueduct-failure"
   #   method: POST
   #   headers:
-  #     Authorization: "Bearer ${OPS_API_TOKEN}"
+  #     Authorization: "Bearer ${OPS_API_TOKEN}"   # endpoint auth (header is NOT redacted)
   #     X-Source: "aqueduct"
   #   timeout: 15
+  #   # Optional hardening:
+  #   secret: "${WEBHOOK_SIGNING_SECRET}"  # HMAC-SHA256-sign the body; receiver verifies
+  #                                        # the X-Aqueduct-Signature: sha256=<digest> header
+  #   max_retries: 2                       # retries on 429/5xx/network (default 1; 0 disables)
+  #   backoff_seconds: 2.0                 # base backoff; exponential when max_retries > 1
+  # Every delivery also carries an X-Aqueduct-Delivery: <uuid> header for receiver-side dedup.
 
 
 # ── OpenLineage Emission ─────────────────────────────────────────────────────
@@ -448,7 +467,7 @@ webhooks:
 # serialized from the same compile-time lineage as the `column_lineage` table.
 #
 # NAMING COLLISION: this top-level `lineage:` block is NOT `stores.lineage`.
-# `stores.lineage` is an inert store-backend config (lineage merged into the
+# `stores.lineage` was removed in 2.0 (lineage merged into the
 # observability store); THIS block configures OpenLineage *emission*.
 #
 # Disabled by default — leave openlineage_url unset for zero cost.
@@ -472,7 +491,8 @@ agent:
   # ── Anthropic (default) ────────────────────────────────────────────────────
   provider: "anthropic"              # "anthropic" | "openai_compat"
   model: "claude-sonnet-4-6"
-  # ANTHROPIC_API_KEY env var required at runtime
+  # api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # optional; falls back to ANTHROPIC_API_KEY env var
+  # ANTHROPIC_API_KEY env var required at runtime when api_key is unset
 
   # ── Timeouts and retries ──────────────────────────────────────────────────
   # timeout: 120.0              # HTTP socket timeout in seconds per agent call.
@@ -482,7 +502,7 @@ agent:
   #   backoff_seconds: 2.0      # base backoff; attempt N sleeps ~2^N * base (+ jitter),
   #                             # honors server Retry-After, always capped by the remaining
   #                             # agent.budget.max_seconds deadline. Shared with `aqueduct benchmark`.
-  # max_reprompts: 5            # Legacy single-axis cap; the unified loop also catches
+  # max_reprompts: 5            # single-axis cap; the unified loop also catches
   #                             # apply-gate rejections (guardrail / compile error) and
   #                             # feeds them back as reprompts. Use agent.budget below for
   #                             # finer-grained, multi-axis control.
@@ -598,6 +618,21 @@ agent:
   # model: "deepseek-r1:14b"
   # timeout: 600.0              # large local models need more time
   # provider_options:
+
+  # ── Engine-wide cascade default ────────────────────────────────────────────
+  # A multi-model healing cascade tried in order; cheaper models first, escalate
+  # on stuck/exhausted/deferred. A blueprint's own agent.cascade (or
+  # model: [list] shorthand) fully overrides this engine default. The engine
+  # cascade does NOT support the model: [list] shorthand — use explicit tiers.
+  # cascade:
+  #   - model: qwen2.5-coder:7b
+  #     max_reprompts: 2
+  #     max_seconds: 30
+  #   - model: claude-sonnet-4-6
+  #     max_reprompts: 3
+  #     max_seconds: 120
+  #     deep_loop: true
+  #     allow_defer: true
   #   # Standard OpenAI params — merged into payload top-level (all openai_compat providers)
   #   temperature: 0.7
   #   top_p: 0.9
@@ -626,6 +661,11 @@ agent:
 # CLI: `aqueduct --suppress-warning <id> run bp.yml` (or '*'); goes BEFORE the
 # subcommand. Merged on top of this list.
 #
+# Per-blueprint scoping: a Blueprint YAML may also declare its own
+# `warnings.suppress` (compile-time rules only — see blueprint.yml.template)
+# — it is unioned with this engine-wide list for that blueprint's compile
+# pass, without silencing the rule elsewhere.
+#
 # Available compile-time rule IDs (registry: aqueduct/compiler/warnings/):
 #   kafka_checkpoint_stale, nondeterministic_fanout,
 #   count_col_likely_count_star, file_format_no_repartition,
@@ -634,7 +674,9 @@ agent:
 #   delivery_append_retry_dupes, perf_probe_sample_full_scan,
 #   perf_incremental_watermark_scan, perf_python_udf_row_at_a_time,
 #   perf_delta_append_no_partition, perf_multi_consumer_no_cache,
-#   perf_hadoop_fs_in_options, maintenance_optimize_non_delta
+#   perf_hadoop_fs_in_options
+# (maintenance_optimize_non_delta was escalated to a compile ERROR —
+#  deterministic runtime failure; not suppressible.)
 # Session-startup rules (registry: aqueduct/executor/spark/warnings/):
 #   jar_availability
 #
@@ -653,8 +695,7 @@ agent:
 # danger:
 #   allow_multi_patch: false          # if true, max_patches > 1 is allowed
 #                                     # (multi-patch reprompt loop auto-applies patches
-#                                     # without human review). Legacy alias:
-#                                     # `allow_aggressive_patching` still parses.
+#                                     # without human review).
 #   allow_full_probe_actions: false   # if true, Probes may run full Spark actions
 #                                     # (null_rates, value_distribution, distinct_count)
 #                                     # adds latency; leave false in production
@@ -663,3 +704,8 @@ agent:
 #   allow_skip_sandbox: false         # if true, agent.sandbox_mode: off is allowed
 #                                     # (skip sandbox replay entirely; patches hit real data via
 #                                     # the next execute(). Combine with max_patches > 1 at your own risk.)
+#   allow_command_hooks: false        # if true, blueprint `hooks:` may use `command:` entries
+#                                     # (arbitrary subprocess after on_success/on_failure).
+#                                     # Gate lives HERE (operator-owned) so a blueprint cannot
+#                                     # self-authorize shell execution. blueprint:/webhook: hook
+#                                     # entries are declarative and never gated.

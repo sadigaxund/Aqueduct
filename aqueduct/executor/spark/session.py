@@ -7,6 +7,7 @@ The factory is the only place in the codebase that calls SparkSession.builder.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import sys
 from typing import Any
@@ -48,6 +49,7 @@ def make_spark_session(
     spark_config: dict[str, Any],
     master_url: str = _DEFAULT_MASTER,
     quiet: bool = False,
+    quiet_startup: bool = False,
 ) -> SparkSession:
     """Build or reuse a SparkSession for the given blueprint.
 
@@ -65,8 +67,12 @@ def make_spark_session(
                         ``"k8s://https://..."`` — Kubernetes
                       Passed verbatim to ``SparkSession.builder.master()``.
         quiet:        Suppress all Spark/JVM log output during and after session
-                      startup. Use for health-check commands (doctor). Leave
-                      False for blueprint runs so Spark warnings remain visible.
+                      startup. Use for health-check commands (doctor).
+        quiet_startup: Suppress only the JVM/Spark *startup banner* (incubator
+                      notice, log4j profile lines, NativeCodeLoader warning) by
+                      muting stderr around session creation — but leave the
+                      runtime log level at WARN so genuine Spark warnings during
+                      execution still print. The clean default for `aqueduct run`.
 
     Returns:
         An active SparkSession.
@@ -77,6 +83,14 @@ def make_spark_session(
 
     _patch_pyspark_cloudpickle()
     builder = SparkSession.builder.master(master_url).appName(blueprint_id)
+
+    # Spark 4.0 defaults to structured (JSON) logging: its SQLQueryContextLogger
+    # dumps the whole Catalyst plan tree as JSON to stderr on every
+    # AnalysisException (ISSUE-046), fighting Aqueduct's own --log-format. Revert
+    # to plain text unless the user explicitly opts in (their spark_config below
+    # still wins).
+    if "spark.log.structuredLogging.enabled" not in spark_config:
+        builder = builder.config("spark.log.structuredLogging.enabled", "false")
 
     if quiet:
         # Inject log4j suppress flags before JVM init so startup messages are
@@ -94,10 +108,46 @@ def make_spark_session(
         with _suppress_stderr():
             session = builder.getOrCreate()
         session.sparkContext.setLogLevel("ERROR")
+    elif quiet_startup:
+        # Mute only the startup banner; keep the default (WARN) runtime level.
+        with _suppress_stderr():
+            session = builder.getOrCreate()
     else:
         session = builder.getOrCreate()
 
+    _mute_query_context_loggers()
     return session
+
+
+def _mute_query_context_loggers() -> None:
+    """Silence pyspark's per-error query-context JSON dump (ISSUE-046).
+
+    On every ``AnalysisException`` pyspark 4.x logs the full query context (the
+    entire Catalyst plan tree) as one JSON line to stderr. The crucial fact —
+    confirmed against a live ``local[1]`` Spark 4.1 — is that this is emitted
+    **python-side, not by the JVM**: ``pyspark/errors/exceptions/base.py`` calls
+    ``PySparkLogger.getLogger("SQLQueryContextLogger").exception(...)`` (and a
+    ``DataFrameQueryContextLogger`` sibling). That is why no JVM/log4j lever
+    touches it — ``Configurator.setLevel`` (default + Spark-classloader context),
+    per-instance ``core.Logger.setLevel``, ``setRootLevel(OFF)`` and
+    ``sparkContext.setLogLevel("OFF")`` were all verified to do nothing. The dump
+    duplicates the root cause Aqueduct already reports concisely on the module
+    status line and ignores ``--log-format``.
+
+    The fix is plain Python ``logging``: these are ``logging.Logger`` instances
+    (own ``StreamHandler``, ``propagate=False``). We create them via pyspark's
+    own ``PySparkLogger.getLogger`` (so the class/handler match) and raise the
+    level above ERROR — ``logger.exception()`` logs at ERROR, so it is filtered.
+    ``logging`` caches loggers by name, so pyspark's later ``getLogger`` at error
+    time returns this same muted instance. The ``AnalysisException`` itself still
+    propagates to Aqueduct untouched (the heal path is unaffected).
+    """
+    try:
+        from pyspark.logger import PySparkLogger
+        for name in ("SQLQueryContextLogger", "DataFrameQueryContextLogger"):
+            PySparkLogger.getLogger(name).setLevel(logging.CRITICAL)
+    except Exception:
+        pass  # best-effort — pyspark logging internals may differ across versions
 
 
 def stop_spark_session(spark: SparkSession) -> None:

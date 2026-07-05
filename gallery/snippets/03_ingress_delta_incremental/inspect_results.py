@@ -8,21 +8,19 @@ console = Console()
 def main():
     path = "data/output/output.parquet"
     if not os.path.exists(path):
-        console.print(f"[bold red]Error:[/bold red] {path} not found. Did you run 'aqueduct run blueprint.yml'?")
+        console.print(f"[bold red]✗[/bold red] {path} not found — did you run 'aqueduct run blueprint.yml'?")
         return
 
-    console.print(f"[bold green]✓[/bold green] Found results. Reading...")
+    console.print(f"[bold green]✓[/bold green] Found results. Reading...\n")
     df = pd.read_parquet(path)
-    
-    table = Table(title="Delta Time-Travel Results (Version 2)", header_style="bold magenta")
-    for col in df.columns:
-        table.add_column(col)
-    
-    for _, row in df.iterrows():
-        table.add_row(*[str(val) for val in row])
-        
-    console.print(table)
-    console.print(f"\n[dim]Note: This shows only the records from version 2 of the source table.[/dim]")
+    t = Table(title="Delta Time-Travel (Version 2)", header_style="bold cyan")
+    for c in df.columns:
+        t.add_column(c)
+    for _, r in df.iterrows():
+        t.add_row(*[str(v) for v in r])
+    console.print(t)
+    console.print(f"[dim]  Row count: {len(df)}[/dim]")
+    console.print("\n[dim]versionAsOf: 2 reads an older snapshot of the Delta table, before new rows were appended.[/dim]")
 
 if __name__ == "__main__":
     main()

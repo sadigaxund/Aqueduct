@@ -1,0 +1,110 @@
+# blueprint.yml
+# Egress — 5 write modes side-by-side
+
+aqueduct: "1.0"
+id: egress_modes_demo
+name: "Egress Mode Comparison"
+
+description: |
+  Shows all 5 write modes from the same input. Run twice to see how
+  each mode behaves when the target already exists.
+
+modules:
+
+  # ── Input ─────────────────────────────────────────────────────────
+  - id: events
+    label: "Raw Events"
+    type: Ingress
+    description: "Event log with event type and user columns"
+    tags: ["input", "events"]
+    config:
+      format: csv
+      path: "data/input/events.csv"
+      options: {header: "true", inferSchema: "true"}
+
+  # ── Channel adds a category column ────────────────────────────────
+  - id: add_category
+    label: "Categorize Events"
+    type: Channel
+    description: "Derives a category from the event type for partition_by demo"
+    tags: ["transform", "category"]
+    config:
+      op: sql
+      query: |
+        SELECT *, CASE
+          WHEN event = 'page_view' THEN 'view'
+          ELSE 'click'
+        END AS category
+        FROM __input__
+
+  # ── mode: append ──────────────────────────────────────────────────
+  - id: save_append
+    label: "Append"
+    type: Egress
+    description: "Adds rows to existing target — grows with each run"
+    tags: ["mode:append", "egress"]
+    config:
+      format: parquet
+      path: "data/output/modes_append/"
+      mode: append
+
+  # ── mode: error ───────────────────────────────────────────────────
+  - id: save_error
+    label: "Error If Exists"
+    type: Egress
+    description: "Fails on second run if target exists"
+    tags: ["mode:error", "egress"]
+    config:
+      format: parquet
+      path: "data/output/modes_error/"
+      mode: error
+
+  # ── mode: ignore ──────────────────────────────────────────────────
+  - id: save_ignore
+    label: "Ignore If Exists"
+    type: Egress
+    description: "Silently skips on second run — target unchanged"
+    tags: ["mode:ignore", "egress"]
+    config:
+      format: parquet
+      path: "data/output/modes_ignore/"
+      mode: ignore
+
+  # ── mode: overwrite_partitions + partition_by ─────────────────────
+  - id: save_partitioned
+    label: "Overwrite Partitioned"
+    type: Egress
+    description: "Replaces only files in matching partition directories"
+    tags: ["mode:overwrite_partitions", "egress", "partitioning"]
+    config:
+      format: parquet
+      path: "data/output/modes_partitioned/"
+      mode: overwrite_partitions
+      partition_by: ["category"]
+
+  # ── mode: overwrite_partitions + replace_where ────────────────────
+  - id: save_replace
+    label: "Replace Where"
+    type: Egress
+    description: "Replaces only rows matching the replace_where predicate"
+    tags: ["mode:overwrite_partitions", "egress", "replace_where"]
+    config:
+      format: parquet
+      path: "data/output/modes_replace/"
+      mode: overwrite_partitions
+      replace_where: "event = 'page_view'"
+
+edges:
+  - from: events
+    to: add_category
+
+  - from: add_category
+    to: save_append
+  - from: add_category
+    to: save_error
+  - from: add_category
+    to: save_ignore
+  - from: add_category
+    to: save_partitioned
+  - from: add_category
+    to: save_replace

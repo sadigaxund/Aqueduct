@@ -38,7 +38,7 @@ def _write_config(path: Path, extra: str = ""):
 aqueduct_config: "1.0"
 stores:
   observability:
-    path: %s/obs.db
+    path: %s/obs
 agent:
   provider: anthropic
   model: claude-3
@@ -80,7 +80,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
     """Pending hit → LLM skipped, HEAL_PENDING(3) exit."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: human")
+    _write_bp(bp_path, "approval: human")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -95,7 +95,7 @@ def test_pending_hit_skips_llm_exits_heal_pending(tmp_path):
         with patch("aqueduct.agent.memory.find_pending", return_value=hit):
             res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
-    assert "skipping LLM" in res.output
+    assert "skipping Agent" in res.output
     assert res.exit_code == HEAL_PENDING
 
 
@@ -105,7 +105,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     """Replay candidate passes gates → zero LLM calls."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -133,7 +133,7 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
 
     # Verify that the replayed healing outcome recorded a NULL model column.
     import duckdb
-    obs_db = tmp_path / "obs.db"
+    obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     conn = duckdb.connect(str(obs_db))
     row = conn.execute("SELECT model FROM healing_outcomes WHERE patch_id = 'replay-1'").fetchone()
     conn.close()
@@ -147,7 +147,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
     """Replay candidate fails sandbox → falls through to LLM."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -173,7 +173,7 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                     )
                     res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
-    assert "falling through to LLM" in res.output
+    assert "falling through to Agent" in res.output
     assert mock_gap.called
     assert res.exit_code == 0
 
@@ -184,7 +184,7 @@ def test_replay_human_mode_stages_pending(tmp_path):
     """Replay in human mode → staged to pending with source='replay'."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: human")
+    _write_bp(bp_path, "approval: human")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -218,7 +218,7 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
     """agent.memory.replay: false → pending/replay lookups skipped, LLM called."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path, 'memory: {replay: false, coaching: false}')
 
@@ -337,7 +337,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
     """LLM-generated patch records resolution='llm' and failure_signature in healing_outcomes."""
     runner = CliRunner()
     bp_path = tmp_path / "bp.yml"
-    _write_bp(bp_path, "approval_mode: auto")
+    _write_bp(bp_path, "approval: auto")
     cfg_path = tmp_path / "aq.yml"
     _write_config(cfg_path)
 
@@ -361,7 +361,7 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
 
     # Check healing_outcomes in observability DB
     import duckdb
-    obs_db = tmp_path / "obs.db"
+    obs_db = tmp_path / "obs" / "heal_cache" / "observability.db"
     if obs_db.exists():
         conn = duckdb.connect(str(obs_db))
         row = conn.execute(

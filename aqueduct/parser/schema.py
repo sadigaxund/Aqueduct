@@ -63,6 +63,7 @@ class CascadeTierSchema(BaseModel):
     model: str
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None
+    api_key: str | None = None
     provider_options: dict[str, Any] | None = None
     timeout: float | None = Field(default=None, gt=0)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -73,7 +74,11 @@ class CascadeTierSchema(BaseModel):
 
 
 class AgentSchema(BaseModel):
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    # No populate_by_name: the `approval_mode` attr is settable from YAML ONLY via
+    # its `approval` alias — the former `approval_mode` YAML key is rejected (2.0).
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -100,21 +105,17 @@ class AgentSchema(BaseModel):
                 data["cascade"] = [{"model": m} for m in models]
         return data
 
-    # `approval` is the canonical YAML key (since 1.x). `approval_mode` stays a
-    # deprecated input alias until 2.0 (parser emits a warning). The Python
-    # attribute name remains `approval_mode` — internal, unchanged. Both YAML
-    # keys populate it via AliasChoices.
-    approval_mode: Literal["disabled", "human", "auto", "aggressive", "ci"] = Field(
+    # `approval` is the YAML key; the Python attribute name stays `approval_mode`
+    # (internal — keyed in via the alias).
+    approval_mode: Literal["disabled", "human", "auto", "ci"] = Field(
         default="disabled",
-        validation_alias=AliasChoices("approval", "approval_mode"),
+        validation_alias=AliasChoices("approval"),
     )
     on_pending_patches: Literal["ignore", "warn", "block"] = "warn"
-    # 1.1.0 — `max_patches` is the canonical name. `aggressive_max_patches` is
-    # accepted as a deprecated alias and emits a warning at parse time.
-    # Default 1 = single-patch try (former `auto` mode behavior). Set > 1 to
-    # opt into the multi-patch reprompt loop; that path also requires
-    # `danger.allow_multi_patch: true` (alias: `allow_aggressive_patching`).
-    max_patches: int = Field(default=1, ge=1, validation_alias=AliasChoices("max_patches", "aggressive_max_patches"))
+    # `max_patches` (default 1 = single-patch try). Set > 1 to opt into the
+    # multi-patch reprompt loop; that path also requires
+    # `danger.allow_multi_patch: true`.
+    max_patches: int = Field(default=1, ge=1)
     # Connection fields — None means "inherit from aqueduct.yml agent: defaults"
     provider: Literal["anthropic", "openai_compat"] | None = None
     base_url: str | None = None
@@ -180,6 +181,12 @@ class ModuleSchema(BaseModel):
     spillway: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     checkpoint: bool = False
+    # Conditional execution — bool, or an unresolved "${ctx.*}" string at
+    # validation time (Tier 0 resolution runs after schema validation); the
+    # parser coerces true/false/1/0/yes/no/on/off. A disabled module compiles
+    # but is skipped (⏭) at run time, and the disable cascades to every module
+    # consuming its output (edges, depends_on, Probe attach_to).
+    enabled: bool | str = True
     # Probe-specific
     attach_to: str | None = None
     # Arcade-specific
@@ -256,6 +263,76 @@ class UdfSchema(BaseModel):
         return v
 
 
+class WarningsSchema(BaseModel):
+    """Per-Blueprint compile-warning suppression (see `docs/specs.md` §4.2).
+
+    Mirrors the shape of the engine-level ``warnings:`` block in
+    ``aqueduct.yml`` (`aqueduct/config.py::WarningsConfig`) but is a distinct
+    model — the parser layer does not import `config.py`'s engine models.
+    Scope is intentionally narrow: this only affects the compiler's modular
+    `aqueduct/compiler/warnings/run_all` rule pass for THIS Blueprint. It does
+    NOT touch engine/session warnings, runtime (probe/assert) warnings, or the
+    process-global `set_default_suppress` default — those stay engine-wide.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    suppress: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of compile-warning `rule_id` strings to silence for this "
+            "Blueprint only. Merged (union) with the engine-level "
+            "`warnings.suppress` from aqueduct.yml / `--suppress-warning`. "
+            "The single entry `\"*\"` silences every compile warning for "
+            "this Blueprint."
+        ),
+    )
+
+
+class HookEntrySchema(BaseModel):
+    """One lifecycle-hook action — exactly one of `blueprint:` / `webhook:` /
+    `command:` (see `docs/specs.md` §Hooks).
+
+    - `blueprint:` chains another Blueprint as a fresh `aqueduct run`
+      subprocess (own session/run_id/report — loose coupling by design).
+    - `webhook:` fires the same endpoint model as the engine-level
+      `webhooks:` block in aqueduct.yml — a bare URL string, or a map with
+      url/method/headers/payload (full payload templating included).
+    - `command:` runs an arbitrary subprocess (shlex argv, NO shell) —
+      requires `danger.allow_command_hooks: true` in aqueduct.yml; entries
+      are skipped with a warning otherwise.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    blueprint: str | None = None
+    webhook: str | dict[str, Any] | None = None
+    command: str | None = None
+    timeout: int = 300  # seconds — blueprint/command subprocesses
+
+    @model_validator(mode="after")
+    def _exactly_one_action(self) -> HookEntrySchema:
+        set_keys = [k for k in ("blueprint", "webhook", "command") if getattr(self, k) is not None]
+        if len(set_keys) != 1:
+            raise ValueError(
+                "hook entry must set exactly one of blueprint/webhook/command"
+                f" — got {set_keys or 'none'}"
+            )
+        return self
+
+
+class HooksSchema(BaseModel):
+    """Blueprint lifecycle hooks — run AFTER the pipeline's terminal state.
+
+    Hooks never change the run's exit code; a failing hook is a warning and
+    stops the remaining hooks of that event. Distinct from the engine-level
+    `webhooks:` block in aqueduct.yml (ops-owned alerting that fires
+    regardless of what the Blueprint declares).
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    on_success: list[HookEntrySchema] = Field(default_factory=list)
+    on_failure: list[HookEntrySchema] = Field(default_factory=list)
+
+
 class BlueprintSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -274,6 +351,8 @@ class BlueprintSchema(BaseModel):
     macros: dict[str, str] = Field(default_factory=dict)
     required_context: list[str] = Field(default_factory=list)  # Arcade sub-Blueprint
     checkpoint: bool = False
+    warnings: WarningsSchema = Field(default_factory=WarningsSchema)
+    hooks: HooksSchema = Field(default_factory=HooksSchema)
 
     @field_validator("aqueduct")
     @classmethod
@@ -291,7 +370,7 @@ class BlueprintSchema(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_unique_module_ids(self) -> "BlueprintSchema":
+    def validate_unique_module_ids(self) -> BlueprintSchema:
         ids = [m.id for m in self.modules]
         seen: set[str] = set()
         dupes = {mid for mid in ids if mid in seen or seen.add(mid)}  # type: ignore[func-returns-value]

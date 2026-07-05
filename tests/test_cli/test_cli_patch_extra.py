@@ -35,7 +35,7 @@ edges: []
 """)
     (project / "aqueduct.yml").write_text(f"""
 stores:
-  depot: {{path: "{project}/depot.db"}}
+  depots: {{default: {{path: "{project}/depot.db"}}}}
   obs: {{path: "{project}/obs.db"}}
 """)
 
@@ -133,6 +133,19 @@ class TestPatchList:
         assert "P001.json" in result.output
         assert "P001" in result.output
         assert "Fix the source path" in result.output
+
+    def test_long_filename_shown_in_full(self, setup):
+        """The `file` column is the unique key copied into apply/reject — it must
+        appear in FULL, not truncated (regression: a 30-char cut produced an
+        unusable key that matched nothing on reject)."""
+        project, bp_path, patches_dir, patch_file = setup
+        long_name = "20260628T080624_fix-stock-query-join.json"
+        (patches_dir / "pending" / long_name).write_text(
+            json.dumps({"patch_id": "fix-stock-query-join", "rationale": "r"})
+        )
+        result = CliRunner().invoke(cli, ["patch", "list", "--blueprint", str(bp_path)])
+        assert result.exit_code == 0
+        assert long_name in result.output  # full filename, untruncated
 
     def test_no_pending_patches_message(self, setup):
         """No pending patches → message about none found."""

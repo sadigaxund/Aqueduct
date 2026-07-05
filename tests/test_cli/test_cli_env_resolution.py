@@ -154,14 +154,14 @@ def test_stderr_notices(tmp_path, clean_env):
     # Both .env and -e
     result = runner.invoke(cli, ["validate", str(bp_path), "-e", "C=3"])
     assert result.exit_code == 0, result.output
-    assert "(env: loaded 2 var(s)" in result.output
+    assert "env  ·  loaded 2 var(s)" in result.output
     assert "; 1 from -e" in result.output
     
     # Only -e, no .env
     (project_dir / ".env").unlink()
     result = runner.invoke(cli, ["validate", str(bp_path), "-e", "D=4"])
     assert result.exit_code == 0, result.output
-    assert "(env: no .env file found; 1 from -e)" in result.output
+    assert "env  ·  no .env file found; 1 from -e" in result.output
 
 def test_env_options_decorator_presence():
     """Verify @_env_options decorator present on config commands."""
@@ -187,7 +187,7 @@ def test_stores_info_resolves_env(tmp_path, clean_env):
     """stores info resolves ${VAR} from anchored .env"""
     project_dir = tmp_path / "proj"
     project_dir.mkdir()
-    (project_dir / ".env").write_text("DB_PATH=my_obs.db", encoding="utf-8")
+    (project_dir / ".env").write_text("DB_PATH=my_obs", encoding="utf-8")
     
     cfg_path = project_dir / "aqueduct.yml"
     cfg_path.write_text("""
@@ -201,5 +201,36 @@ stores:
     result = runner.invoke(cli, ["stores", "info", "--config", str(cfg_path)])
     assert result.exit_code == 0, result.output
     # The output should show the resolved path
-    assert "my_obs.db" in result.output
+    assert "my_obs" in result.output
     assert "loaded 1 var(s) from" in result.output
+
+
+def test_load_config_with_env_resolves_dotenv(tmp_path, clean_env):
+    """_load_config_with_env resolves ${VAR} from .env found via project-root walking."""
+    from aqueduct.cli import _load_config_with_env
+    (tmp_path / ".env").write_text("AQ_DASH_TEST_VAR=resolved_from_env", encoding="utf-8")
+    # Use a field with a ${VAR} reference; posix path so anchoring is a no-op
+    (tmp_path / "aqueduct.yml").write_text("""
+aqueduct_config: '1.0'
+stores:
+  observability: {path: "/tmp/${AQ_DASH_TEST_VAR}"}
+""", encoding="utf-8")
+
+    old = os.getcwd()
+    try:
+        os.chdir(tmp_path)
+        cfg = _load_config_with_env()
+        assert cfg.stores.observability.path == f"/tmp/resolved_from_env"
+    finally:
+        os.chdir(old)
+
+
+def test_load_config_with_env_explicit_path(tmp_path, clean_env):
+    """_load_config_with_env with explicit config_path discovers .env from its dir."""
+    from aqueduct.cli import _load_config_with_env
+    (tmp_path / ".env").write_text("EXPLICIT_VAR=explicit", encoding="utf-8")
+    cfg_p = tmp_path / "aqueduct.yml"
+    cfg_p.write_text("aqueduct_config: '1.0'\n" + 'deployment: {engine: spark, target: local, master_url: "local[*]"}', encoding="utf-8")
+
+    cfg = _load_config_with_env(cfg_p)
+    assert os.environ.get("EXPLICIT_VAR") == "explicit"

@@ -28,7 +28,7 @@ edges: []
     config_path = project / "aqueduct.yml"
     config_path.write_text(f"""
 stores:
-  depot: {{path: "{project}/depot.db"}}
+  depots: {{default: {{path: "{project}/depot.db"}}}}
   obs: {{path: "{project}/obs.db"}}
 """)
     

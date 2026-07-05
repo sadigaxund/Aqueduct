@@ -16,8 +16,11 @@ import ast
 import os
 import re
 import uuid
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
 from typing import Any
+
+from aqueduct.errors import CompileError
 
 # Matches the innermost @aq.* call — args must not contain another @aq.
 _INNER_CALL_RE = re.compile(r"@aq\.([\w.]+)\(([^@)]*)\)")
@@ -48,17 +51,39 @@ class AqFunctions:
         self,
         run_id: str | None = None,
         depot: Any = None,
+        depots: dict[str, Any] | None = None,
         execution_date: date | None = None,
         secrets_provider: str = "env",
         secrets_region: str | None = None,
         secrets_resolver: str | None = None,
+        blueprint_id: str | None = None,
+        blueprint_name: str | None = None,
+        blueprint_path: str | Path | None = None,
+        deployment_env: str | None = None,
+        deployment_target: str | None = None,
+        base_dir: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
-        self._depot = depot
+        # Depot mounts (name → store). `depot=` (single kwarg) → the default mount.
+        # `@aq.depot.get` uses default; `@aq.depot.<name>.get` a named mount.
+        if depots:
+            self._depots = dict(depots)
+        elif depot is not None:
+            self._depots = {"default": depot}
+        else:
+            self._depots = {}
+        self._depot = self._depots.get("default", depot)
         self._execution_date = execution_date  # None = use system clock
         self._secrets_provider = secrets_provider
         self._secrets_region = secrets_region
         self._secrets_resolver = secrets_resolver
+        self._base_dir = base_dir
+        # @aq.blueprint.* / @aq.deployment.* / @aq.version — identity & deploy context.
+        self._blueprint_id = blueprint_id
+        self._blueprint_name = blueprint_name
+        self._blueprint_path = Path(blueprint_path) if blueprint_path else None
+        self._deployment_env = deployment_env
+        self._deployment_target = deployment_target
 
     def _base_date(self) -> date:
         return self._execution_date if self._execution_date is not None else date.today()
@@ -80,17 +105,17 @@ class AqFunctions:
     def date_format(self, date_str: str, pattern: str) -> str:
         return date.fromisoformat(date_str).strftime(_java_to_strftime(pattern))
 
-    # ── runtime ───────────────────────────────────────────────────────────────
+    # ── run — this execution ────────────────────────────────────────────────────
 
-    def runtime_timestamp(self) -> str:
+    def run_timestamp(self) -> str:
         if self._execution_date is not None:
-            return datetime.combine(self._execution_date, time.min, tzinfo=timezone.utc).isoformat()
-        return datetime.now(tz=timezone.utc).isoformat()
+            return datetime.combine(self._execution_date, time.min, tzinfo=UTC).isoformat()
+        return datetime.now(tz=UTC).isoformat()
 
-    def runtime_run_id(self) -> str:
+    def run_id(self) -> str:
         return self._run_id
 
-    def runtime_prev_run_id(self) -> str:
+    def run_prev_id(self) -> str:
         return self.depot_get("_last_run_id", "")
 
     # ── secret / env ──────────────────────────────────────────────────────────
@@ -103,14 +128,15 @@ class AqFunctions:
                 provider=self._secrets_provider,
                 region=self._secrets_region,
                 resolver=self._secrets_resolver,
+                base_dir=self._base_dir,
             )
-        except SecretsError as exc:
-            raise RuntimeError(str(exc)) from exc
+        except SecretsError:
+            raise
 
     def env(self, var: str) -> str:
         val = os.environ.get(var)
         if val is None:
-            raise RuntimeError(
+            raise CompileError(
                 f"@aq.env: variable {var!r} is not set. "
                 "Unlike ${VAR:-default}, @aq.env fails fast when the variable is absent."
             )
@@ -129,8 +155,58 @@ class AqFunctions:
         )
         return default
 
+    def depot_get_named(self, name: str, key: str, default: str = "") -> str:
+        """`@aq.depot.<name>.get('key')` — read from a named depot mount."""
+        store = self._depots.get(name)
+        if store is None:
+            known = ", ".join(sorted(self._depots)) or "(none configured)"
+            raise CompileError(
+                f"@aq.depot.{name}.get: no depot mount named {name!r}. "
+                f"Configured mounts: {known}. Add it under stores.depots in aqueduct.yml."
+            )
+        return str(store.get(key, default))
+
+    # ── blueprint / deployment / version — identity & deploy context ─────────────
+    # Resolvable only during blueprint compilation (NOT in aqueduct.yml, where no
+    # blueprint/run exists yet). Grouped by subject, not by dynamic-vs-static.
+
+    def _require(self, token: str, value: Any) -> str:
+        if value is None or value == "":
+            raise CompileError(
+                f"@aq.{token} is not available here — it resolves only during blueprint "
+                "compilation, not in aqueduct.yml (no blueprint/run context exists at "
+                "config-load time)."
+            )
+        return str(value)
+
+    def blueprint_id(self) -> str:
+        return self._require("blueprint.id", self._blueprint_id)
+
+    def blueprint_name(self) -> str:
+        return self._require("blueprint.name", self._blueprint_name)
+
+    def blueprint_path(self) -> str:
+        return self._require(
+            "blueprint.path", str(self._blueprint_path) if self._blueprint_path else None)
+
+    def blueprint_dir(self) -> str:
+        return self._require(
+            "blueprint.dir", str(self._blueprint_path.parent) if self._blueprint_path else None)
+
+    def deployment_env(self) -> str:
+        return self._require("deployment.env", self._deployment_env)
+
+    def deployment_target(self) -> str:
+        return self._require("deployment.target", self._deployment_target)
+
+    def engine_version(self) -> str:
+        from aqueduct import __version__
+        return __version__
+
 
 # ── Dispatch table ─────────────────────────────────────────────────────────────
+# Subject-grouped namespaces: date · run · blueprint · deployment · depot ·
+# secret · env · version. The namespace names what the value is ABOUT.
 
 _DISPATCH: dict[str, str] = {
     "aq.date.today": "date_today",
@@ -138,21 +214,38 @@ _DISPATCH: dict[str, str] = {
     "aq.date.offset": "date_offset",
     "aq.date.month_start": "date_month_start",
     "aq.date.format": "date_format",
-    "aq.runtime.timestamp": "runtime_timestamp",
-    "aq.runtime.run_id": "runtime_run_id",
-    "aq.runtime.prev_run_id": "runtime_prev_run_id",
+    "aq.run.id": "run_id",
+    "aq.run.timestamp": "run_timestamp",
+    "aq.run.prev_id": "run_prev_id",
     "aq.secret": "secret",
     "aq.env": "env",
     "aq.depot.get": "depot_get",
+    "aq.blueprint.id": "blueprint_id",
+    "aq.blueprint.name": "blueprint_name",
+    "aq.blueprint.path": "blueprint_path",
+    "aq.blueprint.dir": "blueprint_dir",
+    "aq.deployment.env": "deployment_env",
+    "aq.deployment.target": "deployment_target",
+    "aq.version": "engine_version",
 }
+
+
+_NAMED_DEPOT_RE = re.compile(r"^aq\.depot\.([A-Za-z_][\w-]*)\.get$")
 
 
 def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
     """Dispatch a parsed @aq.* call to the registry method."""
     method_name = _DISPATCH.get(func_path)
-    if not method_name:
-        raise ValueError(f"Unknown @aq function: {func_path!r}")
-    method = getattr(registry, method_name)
+    if method_name:
+        method = getattr(registry, method_name)
+    else:
+        # Dynamic: @aq.depot.<name>.get('key'[, default]) → a named mount.
+        nm = _NAMED_DEPOT_RE.match(func_path)
+        if nm:
+            _name = nm.group(1)
+            method = lambda *a, **k: registry.depot_get_named(_name, *a, **k)  # noqa: E731
+        else:
+            raise CompileError(f"Unknown @aq function: {func_path!r}")
 
     if not args_str.strip():
         return str(method())
@@ -164,7 +257,7 @@ def _call(registry: AqFunctions, func_path: str, args_str: str) -> str:
         args = [ast.literal_eval(a) for a in call_node.args]
         kwargs = {kw.arg: ast.literal_eval(kw.value) for kw in call_node.keywords}
     except (SyntaxError, ValueError) as exc:
-        raise ValueError(
+        raise CompileError(
             f"Cannot parse arguments for {func_path}({args_str!r}): {exc}"
         ) from exc
 
@@ -184,7 +277,7 @@ def resolve_tier1_str(value: str, registry: AqFunctions) -> str:
         value = value[: m.start()] + replacement + value[m.end() :]
 
     if _ANY_TIER1_RE.search(value):
-        raise ValueError(
+        raise CompileError(
             f"Unresolvable @aq.* reference after 20 passes (possible cycle): {value!r}"
         )
     return value

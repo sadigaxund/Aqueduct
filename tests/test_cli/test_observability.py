@@ -21,7 +21,9 @@ def cli_runner():
 
 @pytest.fixture
 def obs_db(tmp_path):
-    db_path = tmp_path / "observability.db"
+    # 2.0: config path is a routing BASE dir — seed the routed per-blueprint file.
+    db_path = tmp_path / "obs" / "bp" / "observability.db"
+    db_path.parent.mkdir(parents=True)
     conn = duckdb.connect(str(db_path))
     conn.execute("CREATE TABLE run_records (run_id VARCHAR, blueprint_id VARCHAR, status VARCHAR, started_at TIMESTAMP, finished_at TIMESTAMP, module_results JSON)")
     conn.execute("CREATE TABLE failure_contexts (run_id VARCHAR PRIMARY KEY, blueprint_id VARCHAR, failed_module VARCHAR, error_message VARCHAR, stack_trace VARCHAR, manifest_json VARCHAR, provenance_json VARCHAR, started_at TIMESTAMP, finished_at TIMESTAMP)")
@@ -46,7 +48,7 @@ def lineage_obs_db(tmp_path):
 @pytest.fixture
 def aq_config(tmp_path, obs_db):
     config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  observability: {{ path: {obs_db} }}\n")
+    config_path.write_text(f"aqueduct_config: '1.0'\nstores:\n  observability: {{ path: {obs_db.parent.parent} }}\n")
     return config_path
 
 
@@ -70,7 +72,7 @@ class TestLineageCommand:
 
 class TestSignalCommand:
     def test_signal_set_override(self, cli_runner, obs_db, aq_config):
-        result = cli_runner.invoke(cli, ["signal", "probe1", "--value", "false", "--config", str(aq_config)])
+        result = cli_runner.invoke(cli, ["signal", "probe1", "--value", "false", "--blueprint", "bp", "--config", str(aq_config)])
         assert result.exit_code == 0
         conn = duckdb.connect(str(obs_db))
         row = conn.execute("SELECT passed FROM signal_overrides WHERE signal_id = 'probe1'").fetchone()
@@ -81,7 +83,7 @@ class TestSignalCommand:
         conn = duckdb.connect(str(obs_db))
         conn.execute("INSERT INTO signal_overrides VALUES ('probe1', false, 'reason', '2026-01-01')")
         conn.close()
-        result = cli_runner.invoke(cli, ["signal", "probe1", "--value", "true", "--config", str(aq_config)])
+        result = cli_runner.invoke(cli, ["signal", "probe1", "--value", "true", "--blueprint", "bp", "--config", str(aq_config)])
         assert result.exit_code == 0
         conn = duckdb.connect(str(obs_db))
         count = conn.execute("SELECT COUNT(*) FROM signal_overrides WHERE signal_id = 'probe1'").fetchone()[0]
@@ -89,7 +91,7 @@ class TestSignalCommand:
         assert count == 0
 
     def test_close_gate_with_error_msg(self, cli_runner, obs_db, aq_config):
-        result = cli_runner.invoke(cli, ["signal", "my_probe", "--error", "Stale source", "--config", str(aq_config)])
+        result = cli_runner.invoke(cli, ["signal", "my_probe", "--error", "Stale source", "--blueprint", "bp", "--config", str(aq_config)])
         assert result.exit_code == 0
         conn = duckdb.connect(str(obs_db))
         row = conn.execute("SELECT passed, error_message FROM signal_overrides WHERE signal_id = 'my_probe'").fetchone()
@@ -98,12 +100,12 @@ class TestSignalCommand:
         assert "Stale source" in row[1]
 
     def test_conflicting_flags_exit_1(self, cli_runner, aq_config):
-        result = cli_runner.invoke(cli, ["signal", "p", "--value", "true", "--error", "x", "--config", str(aq_config)])
+        result = cli_runner.invoke(cli, ["signal", "p", "--value", "true", "--error", "x", "--blueprint", "bp", "--config", str(aq_config)])
         from aqueduct.exit_codes import USAGE_ERROR
         assert result.exit_code == USAGE_ERROR
 
     def test_no_flags_shows_status(self, cli_runner, aq_config):
-        result = cli_runner.invoke(cli, ["signal", "my_probe", "--config", str(aq_config)])
+        result = cli_runner.invoke(cli, ["signal", "my_probe", "--blueprint", "bp", "--config", str(aq_config)])
         assert result.exit_code == 0
         assert "no persistent override" in result.output
 
@@ -112,7 +114,7 @@ class TestRunsCommand:
     def test_runs_no_db(self, cli_runner, tmp_path):
         """aqueduct runs with no obs.db -> prints 'No runs found' without error."""
         conf = tmp_path / "aq_no_db.yml"
-        conf.write_text("stores:\n  observability: { path: /tmp/ghost_obs.db }\n")
+        conf.write_text("stores:\n  observability: { path: /tmp/ghost_obs_dir }\n")
         result = cli_runner.invoke(cli, ["runs", "--config", str(conf)])
         assert result.exit_code == 0
         assert "No runs found" in result.output

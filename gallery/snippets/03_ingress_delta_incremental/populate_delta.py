@@ -1,9 +1,14 @@
 import os
 import shutil
+import logging
 from pyspark.sql import SparkSession
 import pandas as pd
 
 import pyspark
+
+# Suppress Spark's own verbose INFO logging
+logging.getLogger("py4j").setLevel(logging.WARN)
+logging.getLogger("pyspark").setLevel(logging.WARN)
 
 # Delta Lake setup (Spark 3.5 uses Delta 3.x, Spark 4.0+ uses Delta 4.x)
 # Note: Starting with Delta 4.1.0, artifact IDs include the Spark version.
@@ -12,17 +17,13 @@ major = int(parts[0])
 minor = int(parts[1])
 
 if major >= 4:
-    # Example: delta-spark_4.1_2.13 for Spark 4.1.x
-    # We use 4.0.1 as a fallback for older 4.x or if 4.2 isn't desired
     if major == 4 and minor == 1:
         DELTA_PACKAGE = f"io.delta:delta-spark_4.1_2.13:4.2.0"
     elif major == 4 and minor == 0:
         DELTA_PACKAGE = f"io.delta:delta-spark_4.0_2.13:4.2.0"
     else:
-        # Fallback for future/other 4.x
         DELTA_PACKAGE = "io.delta:delta-spark_2.13:4.0.1"
 else:
-    # Spark 3.x is typically built with Scala 2.12
     DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.1.0"
 
 def main():
@@ -31,7 +32,6 @@ def main():
         shutil.rmtree(target_dir)
     os.makedirs(target_dir, exist_ok=True)
 
-    # Fix for Python 3.14 / Spark serialization issues
     try:
         import cloudpickle
         from pyspark import cloudpickle as bundled
@@ -40,13 +40,13 @@ def main():
     except (ImportError, AttributeError):
         pass
 
-    print(f"Initializing Spark {pyspark.__version__} with Delta Lake support ({DELTA_PACKAGE})...")
     spark = SparkSession.builder \
         .appName("PopulateDelta") \
         .master("local[*]") \
         .config("spark.jars.packages", DELTA_PACKAGE) \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
+        .config("spark.log.level", "WARN") \
         .getOrCreate()
 
     print("Creating Delta table with 3 versions (0-2)...")

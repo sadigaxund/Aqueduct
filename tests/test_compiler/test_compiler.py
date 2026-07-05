@@ -1,10 +1,49 @@
 import pytest
 from pathlib import Path
 from datetime import datetime, timezone
+from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
 from aqueduct.compiler.compiler import compile as compiler_compile
 
 pytestmark = pytest.mark.unit
+
+
+def test_probe_wired_as_data_source_raises_compile_error(tmp_path):
+    """A Probe used as a main-port edge source used to reach the executor's
+    topo-sort (Probes are excluded from its node set) and crash with a bare
+    KeyError. The compiler must catch it with an actionable message instead."""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text("""
+aqueduct: "1.0"
+id: test_bp
+name: Test Blueprint
+modules:
+  - id: session_metrics
+    type: Ingress
+    label: Session Metrics
+    config:
+      format: parquet
+      path: data.parquet
+  - id: probe_signal_gate
+    type: Probe
+    label: Probe Gate
+    attach_to: session_metrics
+    config:
+      signals:
+        - type: row_count_estimate
+  - id: quality_gate
+    type: Regulator
+    label: Quality Gate
+    config: {}
+edges:
+  - from: session_metrics
+    to: probe_signal_gate
+  - from: probe_signal_gate
+    to: quality_gate
+""")
+    bp = parse(str(bp_path))
+    with pytest.raises(CompileError, match=r"cannot be a data source"):
+        compiler_compile(bp, blueprint_path=bp_path)
 
 @pytest.fixture
 def bp_path(tmp_path):

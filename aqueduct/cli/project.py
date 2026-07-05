@@ -12,10 +12,11 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
+    cli,
+)
 
 
 @cli.command("completion")
@@ -111,6 +112,8 @@ def test_cmd(
     """
     from pathlib import Path
 
+    from aqueduct.cli.style import error as _error
+    from aqueduct.cli.style import success as _success
     from aqueduct.config import ConfigError, load_config
     from aqueduct.executor.spark.session import make_spark_session, stop_spark_session
     from aqueduct.executor.spark.test_runner import TestSchemaError, run_test_file
@@ -126,7 +129,7 @@ def test_cmd(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     merged_spark_config = dict(cfg.spark_config)
@@ -161,7 +164,7 @@ def test_cmd(
             blueprint_path_override=Path(blueprint_path) if blueprint_path else None,
         )
     except TestSchemaError as exc:
-        click.echo(f"✗ test file error: {exc}", err=True)
+        _error(f"test file error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         stop_spark_session(spark)
@@ -181,10 +184,10 @@ def test_cmd(
 
     click.echo()
     if suite.failed > 0:
-        click.echo(f"✗ {suite.failed} test(s) failed", err=True)
+        _error(f"{suite.failed} test(s) failed")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     else:
-        click.echo(f"✓ all {suite.passed} test(s) passed")
+        _success(f"all {suite.passed} test(s) passed")
 
 
 

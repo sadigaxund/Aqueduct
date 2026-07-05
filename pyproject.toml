@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqueduct-core"
-version = "1.3.3"
+version = "2.0.0"
 description = "Agentic Spark — declarative, self-healing Apache Spark blueprints."
 readme = "README.md"
 authors = [
@@ -67,6 +67,9 @@ object-store = [
     "gcsfs>=2024.0",
     "adlfs>=2024.0",
 ]
+# Phase 64 — Databricks Jobs API remote-submit target. Uses httpx directly
+# for the API calls; the databricks-sdk is optional for richer client features.
+databricks = ["databricks-sdk>=0.30"]
 # Aggregate convenience extra — pulls every networked store backend.
 stores = [
     "aqueduct-core[postgres]",
@@ -85,6 +88,7 @@ all = [
     "aqueduct-core[stores]",
     "aqueduct-core[schedulers]",
     "aqueduct-core[llm]",
+    "aqueduct-core[databricks]",
 ]
 dev = [
     "pytest>=8.0.0",
@@ -92,6 +96,13 @@ dev = [
     "black>=24.0.0",
     "ruff>=0.4.0",
 ]
+# Dev-tooling extras (NOT runtime capabilities) for the local observability
+# viewers — `aqueduct studio` (textual TUI) and `aqueduct dashboard` (Streamlit).
+# Deliberately kept out of [all] and out of the two-axis runtime extras — see the
+# documented carve-out in AGENTS.md "Packaging & Extras Policy". Both are local,
+# read-only, on-demand dev tools (like the Spark UI) — never required at runtime.
+tui = ["textual>=0.50"]
+dashboard = ["streamlit>=1.50", "plotly>=5.18"]
 
 [project.urls]
 Homepage = "https://github.com/sadigaxund/Aqueduct"
@@ -109,6 +120,7 @@ packages = ["aqueduct"]
 include = [
     "/aqueduct",
     "/README.md",
+    "/SKILL.md",
     "/LICENSE",
     "/pyproject.toml",
     "/CHANGELOG.md",
@@ -134,7 +146,7 @@ ignore = ["E501"]
 # startup — it must stay dedicated (never point it at a dir holding other files).
 # tmp_path_retention_* still trims within a session as a belt-and-braces measure.
 [tool.pytest.ini_options]
-addopts   = "--cov=aqueduct --cov-report=term-missing --basetemp=/tmp/aqueduct-pytest"
+addopts   = "--basetemp=/tmp/aqueduct-pytest"
 testpaths = ["tests"]
 cache_dir = "/tmp/pytest_cache_aqueduct"
 tmp_path_retention_count = 1

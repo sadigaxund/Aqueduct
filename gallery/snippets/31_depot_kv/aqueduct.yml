@@ -1,0 +1,20 @@
+aqueduct_config: "1.0"
+
+warnings:
+  suppress:
+    - "*"
+
+deployment:
+  engine: spark
+  target: local
+  master_url: "local[*]"
+
+stores:
+  observability:
+    backend: duckdb
+    path: .aqueduct
+  # Depot for incremental watermark persistence across runs
+  depots:
+    default:
+      backend: duckdb
+      path: .aqueduct/depot.db

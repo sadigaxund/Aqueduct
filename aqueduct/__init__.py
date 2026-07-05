@@ -28,7 +28,8 @@ try:
     # Sourced from installed package metadata so `aqueduct --version` always
     # reflects the actually-installed wheel, not a hardcoded literal that
     # drifts from pyproject.toml.
-    from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
 
     try:
         __version__ = _pkg_version("aqueduct-core")
@@ -37,8 +38,8 @@ try:
 except Exception:  # pragma: no cover
     __version__ = "0.0.0+unknown"
 
-from aqueduct.parser.parser import parse, ParseError
 from aqueduct.errors import AqueductError
+from aqueduct.parser.parser import ParseError, parse
 from aqueduct.warnings import AqueductWarning
 
 __all__ = [

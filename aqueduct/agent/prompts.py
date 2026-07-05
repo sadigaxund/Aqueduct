@@ -14,6 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from aqueduct.agent.constants import DEFAULT_MAX_TOKENS
 from aqueduct.patch.grammar import PatchSpec
 from aqueduct.surveyor.models import FailureContext
 
@@ -22,7 +23,10 @@ logger = logging.getLogger(__name__)
 _PATCH_HISTORY_MAX = 3
 
 
-from aqueduct.patch.grammar import _METADATA_ALIASES, VALID_PATCH_OPS
+from aqueduct.patch.grammar import (  # noqa: E402  (intentional mid-file import)
+    _METADATA_ALIASES,
+    VALID_PATCH_OPS,
+)
 
 # ── System-level constants exposed to the reprompt / alias machinery ───────
 
@@ -135,6 +139,7 @@ The provenance section tells you the `source_type` of each config value. Pick th
 - SQL query wrong → `set_module_config_key` with key="query".
 - SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
 - If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
+- If `error_class` is `PREDICTED_SCHEMA_DRIFT`, the upstream SOURCE physically changed (a column was added, dropped, or renamed) — the format/header rule above does NOT apply. Do NOT change the Ingress `format`, `header`, or `options`; the provenance shows these are intentional authored values, and a real source change is not fixed by reinterpreting the file. Instead update the downstream Channel SQL / `schema_hint` to match the new column set, or make NO change if a dropped column is genuinely gone and unused.
 
 ## Required output — complete example
 Every response MUST be a single JSON object with ALL of these fields. The `operations` field is MANDATORY — a response without it is always wrong.
@@ -526,7 +531,7 @@ def _build_user_prompt(failure_ctx: FailureContext, patches_dir: Path, guardrail
             if isinstance(_mac, dict):
                 macros_defined = [str(k) for k in _mac]
         except Exception:
-            pass
+            pass  # macro inspection is best-effort; YAML parse failures must not break prompt construction
         if macros_defined:
             blueprint_yaml_section += (
                 "\n**Macros in scope:** "
@@ -579,6 +584,7 @@ def _build_coaching_section(failure_ctx: Any, obs_store: Any) -> str:
         sig_exact, sig_coarse = from_failure_context(failure_ctx)
         examples = find_coaching_examples(
             obs_store, sig_exact.hash, sig_coarse.hash, sig_exact.error_class,
+            blueprint_id=getattr(failure_ctx, "blueprint_id", ""),
         )
     except Exception:
         logger.debug("Coaching retrieval failed — section omitted", exc_info=True)
@@ -690,15 +696,15 @@ def _build_system_prompt(
     ctx_parts = [c for c in [engine_prompt_context, blueprint_prompt_context] if c and c.strip()]
 
     # Load operator-managed rules file: patches/rules.md (if present)
-    # Capped at 4096 chars to prevent context overflow from an accidentally-large file.
+    # Capped to prevent context overflow from an accidentally-large file.
     rules_file = patches_dir / "rules.md"
     if rules_file.exists():
         try:
             rules_content = rules_file.read_text(encoding="utf-8").strip()
             if rules_content:
-                if len(rules_content) > 4096:
-                    rules_content = rules_content[:4096] + "\n…(truncated at 4096 chars)"
-                    logger.warning("patches/rules.md exceeds 4096 chars — truncated")
+                if len(rules_content) > DEFAULT_MAX_TOKENS:
+                    rules_content = rules_content[:DEFAULT_MAX_TOKENS] + f"\n…(truncated at {DEFAULT_MAX_TOKENS} chars)"
+                    logger.warning(f"patches/rules.md exceeds {DEFAULT_MAX_TOKENS} chars — truncated")
                 ctx_parts.append(rules_content)
         except Exception:
             logger.debug("Could not read patches/rules.md at %s", rules_file, exc_info=True)

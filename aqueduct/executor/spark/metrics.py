@@ -20,11 +20,11 @@ from aqueduct.executor.path_keys import CLOUD_SCHEMES
 
 
 def observe_df(
-    df: "DataFrame",
+    df: DataFrame,
     obs_name: str,
     alias: str = "records_written",
     enabled: bool = True,
-) -> "tuple[DataFrame, Any]":
+) -> tuple[DataFrame, Any]:
     """Wrap df with an Observation for row counting during the next action.
 
     Args:
@@ -53,7 +53,7 @@ def observe_df(
         return df, None
 
 
-def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
+def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> int | None:
     """Safely read a completed Observation with a timeout.
 
     Returns:
@@ -76,7 +76,7 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
         try:
             result[0] = int(obs.get.get(alias, 0))
         except Exception:
-            pass
+            pass  # observation read must never hang the process; daemon thread best-effort
 
     t = threading.Thread(target=_get, daemon=True)
     t.start()
@@ -86,7 +86,7 @@ def get_observation(obs: Any, alias: str, timeout: float = 2.0) -> "int | None":
     return None if t.is_alive() else result[0]
 
 
-def _hadoop_fs_bytes(path_str: str) -> "int | None":
+def _hadoop_fs_bytes(path_str: str) -> int | None:
     """Query Hadoop FileSystem via py4j for remote/HDFS/cloud path size.
 
     Requires an active SparkSession with the matching FileSystem jars on the
@@ -108,7 +108,7 @@ def _hadoop_fs_bytes(path_str: str) -> "int | None":
         return None
 
 
-def dir_bytes(path_str: str) -> "int | None":
+def dir_bytes(path_str: str) -> int | None:
     """Return total byte size of a path — local or remote.
 
     For local paths: uses os.stat() directly.
@@ -147,7 +147,7 @@ def dir_bytes(path_str: str) -> "int | None":
         return None
 
 
-def null_metrics() -> "dict[str, Any]":
+def null_metrics() -> dict[str, Any]:
     """Return a metrics dict with all collection fields set to None (unknown/not-yet-collected)."""
     return {
         "records_read": None,

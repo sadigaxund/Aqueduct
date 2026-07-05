@@ -29,8 +29,8 @@ context:
   env: dev
   today: "@aq.date.today()"
   yesterday: "@aq.date.yesterday()"
-  run_id: "@aq.runtime.run_id()"
-  prev_run: "@aq.runtime.prev_run_id()"
+  run_id: "@aq.run.id()"
+  prev_run: "@aq.run.prev_id()"
 
 
 # ── Context profiles ─────────────────────────────────────────────────────────
@@ -82,6 +82,47 @@ spark_config:
 #     - "AnalysisException"
 
 
+# ── Compile-warning suppression (per-blueprint) ─────────────────────────────────
+#
+# Silences compile-time warnings (rule_ids printed as
+# `AQ-WARN [rule_id] ...`) for THIS blueprint only — merged (union) with the
+# engine-level warnings.suppress in aqueduct.yml. Compile-time only: does not
+# touch session-startup or runtime (Probe/Assert) warnings, and never affects
+# other blueprints. On an Arcade sub-blueprint, this block is ignored — only
+# the parent blueprint's suppress list covers the expanded compilation unit.
+
+# warnings:
+#   suppress:
+#     - file_format_no_repartition
+#     - jdbc_missing_partition
+# # nuclear option — silence every compile warning for this blueprint:
+# warnings:
+#   suppress: ["*"]
+
+
+# ── Lifecycle hooks ─────────────────────────────────────────────────────────────
+#
+# Run sequentially AFTER the pipeline's terminal state; hook outcomes never
+# change the run's exit code (a failing hook warns and skips the event's
+# remaining hooks). Exactly one action per entry:
+#   blueprint: <path>   chain another blueprint (fresh `aqueduct run` subprocess,
+#                       own run_id/report) — cycle-guarded, ungated
+#   webhook: <url|map>  same endpoint model as aqueduct.yml `webhooks:`
+#                       (url shorthand, or url/method/headers/payload) — ungated
+#   command: "<argv>"   subprocess (shlex, no shell); interpolates ${run.id},
+#                       ${run.status}, ${blueprint.id} only. REQUIRES
+#                       danger.allow_command_hooks: true in aqueduct.yml.
+
+# hooks:
+#   on_success:
+#     - blueprint: blueprints/downstream.yml
+#     - command: "scripts/commit_outputs.sh ${run.id}"
+#       timeout: 120                  # seconds, default 300
+#   on_failure:
+#     - webhook: https://hooks.example/alert
+#     - command: "scripts/cleanup_partial.sh ${run.id}"
+
+
 # ── Checkpointing ──────────────────────────────────────────────────────────────
 #
 # When true, every module's output is materialized to Parquet under
@@ -107,13 +148,11 @@ agent:
   #                reprompt loop; requires danger.allow_multi_patch: true in aqueduct.yml.
   #   ci         — Patch staged + POSTed to ci_webhook_url for external PR creation
   #
-  # `approval_mode:` is a deprecated alias for `approval:` (parses with a warning until 2.0).
-  # Legacy: `approval: aggressive` still parses but is deprecated → use `auto` + max_patches.
   approval: "human"
 
   on_pending_patches: "warn"      # ignore | warn | block
   max_patches: 1                  # 1 = single auto patch (default); > 1 enables the multi-patch loop
-                                  # (legacy alias: aggressive_max_patches)
+                                  # (needs danger.allow_multi_patch: true or --allow-multi-patch)
 
   # on_heal_failure: what to do when a patch is generated but the re-run still fails
   #   stage   — stage failed patch to patches/pending/ for human inspection (default)
@@ -144,6 +183,7 @@ agent:
   #     max_seconds: 120
   #     deep_loop: true
   #     allow_defer: true
+  #     api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # per-tier key override
   #
   # Shorthand: a model LIST expands to a default-settings cascade.
   # Mutually exclusive with an explicit cascade: block.
@@ -234,10 +274,11 @@ agent:
   # provider: "openai_compat"
   # base_url: "http://ollama.internal:11434/v1"
   # model: "claude-sonnet-4-6"
+  # api_key: "@aq.secret('OPENAI_API_KEY')"       # optional; overrides engine-level api_key
   # timeout: 300.0               # seconds; increase for slow local models
   # provider_options: {}         # extra payload keys for openai_compat endpoints
   #                              # (ollama_* keys land in Ollama's options block)
-  # max_reprompts: 5             # legacy single-axis cap — prefer `budget:` below
+  # max_reprompts: 5             # single-axis cap — prefer `budget:` below for multi-axis control
   #                              
   # Multi-axis budget (available at both engine and blueprint level):
   # budget:
@@ -264,6 +305,11 @@ agent:
 #   depends_on: [other_module]   # ordering-only dependency — adds a DAG edge
 #                                # without passing data (e.g. run after an Egress)
 #   checkpoint: true             # per-module checkpoint (see blueprint-level note above)
+#   enabled: ${ctx.run_exports}  # conditional execution (default true). Accepts a
+#                                # bool or ${ctx.*}/${ENV} — flip per context profile.
+#                                # Disabled modules are skipped (⏭) and the disable
+#                                # cascades to every downstream consumer (a join/union
+#                                # never runs with a missing input).
 modules: []
 
   # ── INGRESS — load data from any Spark-supported source ──────────────────────
@@ -273,6 +319,7 @@ modules: []
   #   label: "Load raw orders"
   #   config:
   #     format: parquet               # any Spark format: parquet, delta, csv, json, jdbc, orc, avro...
+  #     table: "unity.sales.orders"   # OR: catalog.schema.table (mutually exclusive with path)
   #     path: "s3a://bucket/orders/date=${ctx.today}/"
   #     partition_filters: "event_date >= '${ctx.start_date}'"   # manual predicate pushdown hint
   #     options: {}                 # forwarded verbatim to df.read.options()
@@ -415,6 +462,9 @@ modules: []
   #   label: "Capture quality signals after cleaning"
   #   attach_to: clean_orders
   #   config:
+  #     report: stdout                  # optional — also print signal results under this
+  #                                     # module in the run summary (dim ↳ lines, capped
+  #                                     # at 10 unless -v). Persistence is unchanged.
   #     signals:
   #       - type: schema_snapshot         # zero Spark action — metadata only
 
@@ -486,7 +536,11 @@ modules: []
   #         column: order_id
   #         fraction: 0.1            # sample fraction for speed
   #         max: 0.001               # max allowed null fraction
-  #         on_fail: abort
+  #         on_fail: abort           # population gate — sampled, not per-row
+
+  #       - type: not_null
+  #         column: order_id          # per-row null check — quarantine-able
+  #         on_fail: quarantine       # routes null rows to spillway port
 
   #       - type: freshness
   #         column: event_ts
@@ -520,6 +574,7 @@ modules: []
   #   config:
   #     format: parquet
   #     path: "s3a://bucket/clean/date=${ctx.today}/"
+  #     table: "unity.sales.orders_clean"  # OR: catalog.schema.table (mutually exclusive with path)
   #     mode: overwrite             # overwrite | append | merge | error | ignore
   #     merge_key: [order_id]       # required for mode: merge (Delta Lake only)
   #     partition_by: [region]

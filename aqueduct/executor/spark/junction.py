@@ -41,8 +41,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
-from aqueduct.parser.models import Module
 from aqueduct.errors import AqueductError
+from aqueduct.models import Module
 
 
 class JunctionError(AqueductError):

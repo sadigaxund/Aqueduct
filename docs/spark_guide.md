@@ -12,24 +12,54 @@ pitfalls, transformation reference).
 
 Every warning links to an anchor here. Warnings are informational unless marked **[ERROR]**.
 
-Each warning prints as `AQ-WARN [<rule_id>] …`; silence one with
-`aqueduct --suppress-warning <rule_id> <command>` (repeatable, `'*'` = all)
-or `warnings.suppress:` in `aqueduct.yml`. Current rule ids:
+Each warning prints as `AQ-WARN [<rule_id>] …`. Only **registered** rules
+(listed under `compiler/warnings/__init__.py`'s `RULES` list) are suppressible
+via `aqueduct --suppress-warning <rule_id> <command>` (repeatable, `'*'` = all)
+or `warnings.suppress:` in `aqueduct.yml`. Inline, runtime, and session-startup
+warnings are **not suppressible**.
+
+#### Registered (suppressible via `warnings.suppress`)
 
 | Rule id | Flags | Detail |
 |---|---|---|
-| `perf_probe_sample_full_scan` | Probe sample-based signal — `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
-| `perf_incremental_watermark_scan` | `materialize: incremental` re-scans output for `MAX(watermark_column)` | [incremental-watermark-scan](#incremental-watermark-scan) |
-| `perf_python_udf_row_at_a_time` | Python UDF bypasses Arrow/vectorized execution | [python-udf-performance](#python-udf-performance) |
-| `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [delivery-semantics-append-retry](#delivery-semantics-append-retry) |
-| `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
-| `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration — use `spark_config:` | — |
 | `count_col_likely_count_star` | `COUNT(col)` silently skips NULLs — likely meant `COUNT(*)` | — |
-| `file_format_no_repartition` | parquet/json/csv Egress without repartition/`partition_by` → one file per task | — |
+| `custom_probe_driver_code` | Custom probe signal backed by driver-side code — engine cannot enforce zero-cost | [custom-probe-driver-code](#custom-probe-driver-code) |
+| `file_format_no_repartition` | parquet/json/csv Egress without repartition/`partition_by` → one file per task | [one-file-per-partition](#parquet-and-json-output-one-file-per-partition) |
 | `jdbc_missing_partition` | JDBC Ingress without `partitionColumn`/bounds reads through one connection | [jdbc-ingress-parallelism](#jdbc-ingress-parallelism) |
 | `kafka_checkpoint_stale` | Checkpointing a Kafka-fed Channel freezes a stale snapshot for other consumers | — |
-| `nondeterministic_fanout` | `rand()`/`uuid()`/`current_timestamp()` diverges across consumer branches | — |
-| `jar_availability` | Declared format (jdbc/kafka/delta/…) has no matching JAR on the session classpath (session-startup check) | — |
+| `nondeterministic_fanout` | `rand()`/`uuid()`/`current_timestamp()` diverges across consumer branches | [caching-strategy](#caching-strategy) |
+
+#### Inline compiler (not suppressible)
+
+| Rule id | Flags | Detail |
+|---|---|---|
+| `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1` — retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
+| ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure — OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
+| `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
+| `perf_hadoop_fs_in_options` | Hadoop FS credentials in `options:` don't reach HadoopConfiguration — use `spark_config:` | [hadoop-fs-in-options](#hadoop-fs-in-options) |
+| `perf_incremental_watermark_scan` | `materialize: incremental` re-reads the WRITTEN output for `MAX(watermark_column)` (all-Delta outputs exempt) | [incremental-watermark-scan](#incremental-watermark-scan) |
+| `perf_multi_consumer_no_cache` | Multi-consumer Channel without a Checkpoint re-evaluates the DAG per branch | [caching-strategy](#caching-strategy) |
+| `perf_probe_sample_full_scan` | Probe sample-based signal — `df.sample()` is a full dataset scan | [probe-sample-cost](#probe-sample-cost) |
+| `perf_python_udf_row_at_a_time` | Python UDF row-at-a-time (skipped when `spark.sql.execution.pythonUDF.arrow.enabled: true`) | [python-udf-performance](#python-udf-performance) |
+| `spillway_port_mismatch` | Channel `spillway_condition` with no `port: spillway` edge (spillway rows silently dropped to main), or a spillway edge with no `spillway_condition` (spillway always empty) | Spillway routing (Contributor section) |
+
+#### Runtime CLI (not suppressible)
+
+| Rule id | Flags | Detail |
+|---|---|---|
+| `cluster_store_path_relative` | Relative observability store path on cluster target — lost on driver restart | [cluster-store-path-relative](#cluster-store-path-relative) |
+
+#### Session-startup (not suppressible)
+
+| Rule id | Flags | Detail |
+|---|---|---|
+| `jar_availability` | Declared format (jdbc/kafka/delta/…) has no matching JAR on the session classpath | — |
+
+#### Doctor-only (not suppressible)
+
+| Rule id | Flags | Detail |
+|---|---|---|
+| `iceberg_catalog` | `format: iceberg` module has no catalog key in blueprint `spark_config` | [iceberg-hudi](#iceberg--hudi-jars-catalog-and-maintenance) |
 
 #### `probe-sample-cost`
 
@@ -61,40 +91,53 @@ statistics) would make these signals genuinely cheap. Not yet implemented.
 
 #### `incremental-watermark-scan`
 
-**Triggered when:** A Channel has `materialize: incremental` and no `Checkpoint`
-upstream.
+**Triggered when:** A Channel has `materialize: incremental` and at least one
+reachable downstream Egress writes a non-Delta format. (All-Delta outputs are
+exempt — see below.)
 
-After each incremental run Aqueduct advances the watermark via:
+After each incremental run Aqueduct advances the watermark by **re-reading the
+WRITTEN Egress output** (`_compute_watermark_from_output`), not by re-executing
+the upstream DAG:
 
 ```python
-df.agg(F.max(watermark_column)).collect()
+# delta: often satisfied from transaction-log statistics — near metadata-only
+spark.sql("SELECT MAX(`wm_col`) FROM delta.`<output path>`")
+# other formats: one extra read of the materialized output files
+spark.read.format(fmt).load(path).agg(F.max(wm_col)).collect()
 ```
 
-This is an extra Spark action. If the DataFrame is not cached, Spark re-executes
-the full DAG — a second scan of the output data. On large outputs (hundreds of GB)
-this doubles the incremental step's reading cost.
+So the cost is one extra read **scaling with output size** — upstream caching or
+checkpointing does NOT change it (the scan targets the written files).
 
 **Mitigations:**
-1. Add a `Checkpoint` upstream — materializes the DataFrame so subsequent actions
-   read from checkpoint, not recompute the DAG.
-2. Cache the Channel output upstream of the egress.
-3. Accept the cost for small/medium datasets.
+1. Prefer `format: delta` on the downstream Egress — `MAX()` is answered from
+   Delta transaction-log statistics, near metadata-only (and the warning is
+   suppressed automatically when every reachable Egress is Delta).
+2. Accept the extra read for small/medium outputs.
 
-**Future:** Track watermark max as a side-effect of the write phase to eliminate
-the extra action entirely.
+*(Historical note: earlier versions computed the watermark from the in-memory
+DataFrame, where a second full DAG evaluation was possible — the "add a
+Checkpoint upstream" advice from that era no longer applies.)*
 
 ---
 
 #### `python-udf-performance`
 
-**Triggered when:** A UDF in `udf_registry` has `lang: python` (the default).
+**Triggered when:** A UDF in `udf_registry` has `lang: python` (the default) AND
+the Blueprint's `spark_config` does not enable Arrow-optimized Python UDFs.
 
-Python UDFs execute **row-at-a-time** in the Python interpreter and bypass
-Arrow-optimized (vectorized) execution entirely:
+Without Arrow-optimized UDF execution, Python UDFs execute **row-at-a-time** in
+the Python interpreter:
 
 - Each row crosses the JVM↔Python serialization boundary
 - No Arrow batch transfer, no SIMD/columnar processing
 - For billions of rows: **10–100× slower** than a native Spark SQL expression
+
+Since Spark 3.5, `spark.sql.execution.pythonUDF.arrow.enabled: true` (or
+`useArrow=True` per UDF) switches plain Python UDFs to Arrow-batched execution —
+setting that flag in the Blueprint's `spark_config` silences this warning
+automatically. Semantics caveat: Arrow-optimized UDFs can differ on edge-case
+type coercions, so validate before flipping it on an existing pipeline.
 
 **The spillway is unaffected.** Spillway routing uses SQL `filter()` — fully
 vectorized. The concern is the UDF body, not the error-routing mechanism.
@@ -104,12 +147,39 @@ vectorized. The concern is the UDF body, not the error-routing mechanism.
 | Option | When to use |
 |---|---|
 | Native Spark SQL (`try_cast`, `try_divide`, `coalesce`, etc.) | Preferred — vectorized, zero overhead |
+| `spark.sql.execution.pythonUDF.arrow.enabled: true` (Spark 3.5+) | Keep plain UDF syntax, get Arrow batching |
 | `pandas_udf` with Arrow | Complex Python logic; batched via Arrow, much faster |
 | `lang: java` | Maximum performance required |
 
 ---
 
-#### `delivery-semantics-append-retry`
+#### `append-no-partition`
+
+**Triggered when:** An Egress uses `mode: append` with `format: parquet` or `format: delta`
+and has no `partition_by`, `repartition`, or `coalesce`.
+
+Each append run writes new files into the output directory. Without partitioning,
+every run produces at least as many files as the number of Spark partitions at
+the output stage (default 200 after a shuffle). Over time the directory fills with
+thousands of tiny files, degrading read performance (S3 ListObjects latency, Parquet
+metadata overhead, Hive metastore thrash).
+
+**Mitigations:**
+1. `partition_by: [high_cardinality_col, ...]` — organises files into a directory tree;
+   each partition gets its own subdirectory so per-partition file counts stay bounded.
+2. `repartition: N` or `coalesce: N` — reduces output file count at the cost of a shuffle
+   (`repartition`) or potential skew (`coalesce`). Target 128–512 MB per file.
+3. External `OPTIMIZE` job (Delta) — runs periodically to compact small files outside
+   the pipeline. See the [post-write maintenance](#iceberg-hudi) table.
+
+**Note:** The related `file_format_no_repartition` warning fires for ALL write modes
+(append, overwrite, etc.) and all problematic formats (parquet, json, csv). This warning
+is narrower — only `append` mode — because the severity is higher (compounding over time
+vs. a one-time small-file problem).
+
+---
+
+#### `delivery-append-retry-dupes`
 
 **Triggered when:** `retry_policy.max_attempts > 1` and any Egress uses `mode: append`.
 
@@ -119,6 +189,111 @@ is not.
 
 **Fix:** Use `mode: overwrite` for retried pipelines, or `max_attempts: 1` with
 orchestrator-level retry handling.
+
+---
+
+#### `hadoop-fs-in-options`
+
+**Triggered when:** An Ingress has Hadoop filesystem keys (`fs.s3a.*`, `fs.gs.*`,
+`fs.azure.*`, `fs.hdfs.*`, `fs.abfs.*`) inside its `options:` block.
+
+`DataFrameReader.option()` passes values to the connector (Parquet, CSV, JDBC, etc.)
+but **does not** propagate them to Spark's `HadoopConfiguration`. The S3A, GCS,
+Azure, or HDFS filesystem delegate reads Hadoop configuration to resolve credentials,
+endpoints, and timeouts — so these keys are silently ignored.
+
+**Fix:** Move them to `spark_config:` with the `spark.hadoop.` prefix:
+
+```yaml
+# Wrong — silently ignored:
+config:
+  format: parquet
+  path: s3a://bucket/table/
+  options:
+    fs.s3a.access.key: "${AWS_ACCESS_KEY_ID}"
+    fs.s3a.secret.key: "${AWS_SECRET_ACCESS_KEY}"
+
+# Correct:
+spark_config:
+  spark.hadoop.fs.s3a.access.key: "${AWS_ACCESS_KEY_ID}"
+  spark.hadoop.fs.s3a.secret.key: "${AWS_SECRET_ACCESS_KEY}"
+```
+
+See the [S3A committer](#s3a-committer) section for committer-specific options
+(e.g. `spark.hadoop.fs.s3a.committer.name`) which follow the same pattern.
+
+---
+
+#### `maintenance-optimize-non-delta`
+
+**Now a compile ERROR** (was warning `maintenance_optimize_non_delta`): an Egress
+with `maintenance.optimize: true` and a format other than `delta` (e.g. `parquet`,
+`csv`, `json`) fails compilation — the runtime failure is deterministic, so the
+run is never allowed to start.
+
+`OPTIMIZE` is a Delta Lake-only SQL command. Iceberg and Hudi have their own
+compaction operations (`rewrite_data_files`, `run_compaction`) configured through
+different `maintenance:` keys. On non-delta, non-iceberg, non-hudi formats the
+maintenance block is silently skipped at runtime — the pipeline continues, but
+the `optimize:` setting has no effect.
+
+**Fix:** Set `format: delta` if you need OPTIMIZE, or use the correct key for your format:
+
+| Format | Compaction key |
+|--------|---------------|
+| `delta` | `optimize: true` |
+| `iceberg` | `rewrite_data_files: true` |
+| `hudi` | `compaction: true` |
+
+See the [post-write maintenance](#iceberg-hudi) table for the full reference.
+
+---
+
+#### `custom-probe-driver-code`
+
+**Triggered when:** A Probe signal has `type: custom` and uses a `module:` + `entry:`
+pointer (or a `plugin:` entry-point reference).
+
+Custom probes run arbitrary Python on the Spark driver. Unlike built-in signals
+(`null_rates`, `schema_snapshot`, `partition_stats`) which execute as lazy Spark
+expressions, a driver-code callable can call `.collect()`, `.count()`, or other
+Spark actions — the engine cannot enforce the zero-cost-observability contract.
+
+**Suggested alternatives:**
+1. **Inline SQL** (`sql:` or `passed_when:`) — executes as a native Spark expression,
+   fully vectorized, zero driver-side Python overhead.
+2. **Built-in signal types** — use `schema_snapshot`, `partition_stats`, or
+   `row_count_estimate` with `method: spark_listener` for zero-cost observability.
+
+**To silence:** If the callable is known to be cheap (e.g. it only inspects the
+DataFrame schema without triggering an action), explicitly `--suppress-warning
+custom_probe_driver_code` to document the conscious choice.
+
+---
+
+#### `cluster-store-path-relative`
+
+**Triggered when:** `stores.observability.path` is a relative path and the deployment
+target is a remote cluster (`spark://`, `yarn`, `k8s://`). This is a **runtime**
+warning emitted by `aqueduct run`, not a compile-time compiler warning.
+
+On cluster targets, the Spark driver may start in an ephemeral working directory
+(YARN container, Kubernetes pod, remote Spark worker). A relative path like
+`.aqueduct/observability` resolves against the current working directory — which
+may differ across runs or disappear after a restart.
+
+**Fix:** Set an absolute path (or use `stores.observability.backend: postgres` for
+a database-backed store). If using a shared filesystem (NFS, EFS), mount it at a
+fixed path:
+
+```yaml
+stores:
+  observability:
+    path: /mnt/shared/aqueduct/observability
+```
+
+For cloud deployments, prefer `backend: postgres` with a connection string over
+a filesystem path — no CWD dependency.
 
 ---
 
@@ -138,6 +313,13 @@ orchestrator-level retry handling.
 | Incremental watermark `MAX()` | Full scan of output (if uncached) | 1 | No |
 | Assert aggregate rules | Full scan | 1 (batched `agg`) | — |
 | Assert `spillway_rate` | Full scan × 2 | 2 extra | — |
+
+**Assert `not_null` vs `null_rate` performance.** `not_null` with `on_fail: quarantine` runs a row-wise
+`df.filter(col IS NULL)` — a single lazy transformation, zero extra Spark actions beyond the original
+pipeline. `null_rate` uses `df.sample(fraction).agg()` to avoid a full scan on large data; if it were made
+quarantine-able, the engine would need a full scan + filter + split (2 extra actions), defeating its
+performance-through-sampling design. Choose `not_null` when you want to drop null rows; choose `null_rate`
+when you want a sampled population alarm that does not pay the cost of a full scan.
 
 ---
 
@@ -186,6 +368,25 @@ so users understand why estimates occasionally differ from expected counts.
 
 The `errorIfExists` default means re-running a pipeline without changing the output path will fail immediately. Aqueduct Egress config should always set `mode` explicitly — never rely on defaults.
 
+**`mode: overwrite_partitions`** (Delta and partition-aware formats). Two strategies:
+
+| Strategy | Config | Behaviour |
+|---|---|---|
+| `replaceWhere` | `replace_where: "<predicate>"` (e.g. `"event_date = '2025-01-01'"`) | Delta `replaceWhere` — atomically replaces rows matching the predicate. No dynamic partition overwrite. |
+| Dynamic partition overwrite | `partition_by: ["col"]` + `mode: overwrite_partitions` | Spark's `spark.sql.sources.partitionOverwriteMode=dynamic` — replaces only the partitions present in the output DataFrame. Requires `partition_by` to be set. |
+
+When neither `replace_where` nor `partition_by` is set, `mode: overwrite_partitions` falls back to a plain `overwrite` (full table replacement).
+
+**`on_new_columns`** — schema-drift contract (Ingress and Egress). Compares the live DataFrame schema against `known_columns` (or `schema_hint` names as fallback); policies:
+
+| Policy | Behaviour |
+|---|---|
+| `allow` | Default. Absorbs new columns silently. |
+| `fail` | Raises if the source/DataFrame has columns outside the declared baseline. |
+| `alert` | Warns, then proceeds with the new columns. |
+
+No-op when no baseline is declared, or on the first write (`mode: merge`).
+
 ---
 
 ### Parquet and JSON Output: One File Per Partition
@@ -200,6 +401,55 @@ When writing Parquet, JSON, CSV, or ORC, Spark writes **one file per partition**
 **Rule of thumb:** target 128–512 MB per output file. Use `coalesce` (no shuffle) when reducing from many balanced partitions; use `repartition` when redistribution is needed.
 
 **Parquet version incompatibility:** Parquet files written by older Spark versions (< 2.x) may be unreadable by newer Spark or vice versa. If reading files written by an older cluster, set `spark.sql.parquet.enableVectorizedReader: "false"` as a fallback.
+
+---
+
+### Table addressing — wiring an external catalog {#catalog-wiring}
+
+When a Blueprint uses `table:` (instead of `path:`) on an Ingress or Egress,
+Spark resolves `catalog.schema.table` through whichever catalog the session is
+configured to talk to. Aqueduct defines nothing about the table's internals ---
+the catalog (Unity Catalog, AWS Glue, Hive metastore, Iceberg REST, Polaris)
+owns the location, schema, format, and permissions.
+
+The catalog connection is configured through standard `spark.sql.catalog.*`
+properties in `spark_config:` (blueprint-level or `aqueduct.yml` engine-level).
+There is no Aqueduct-specific catalog config:
+
+```yaml
+spark_config:
+  # Spark session catalog (default in-memory — tables are session-scoped)
+  # No special config needed; `table: my_table` works out of the box.
+
+  # Unity Catalog (Databricks) — Spark automatically discovers UC tables
+  # through the Databricks Runtime; no extra spark_config needed when
+  # running on a Databricks cluster.
+
+  # Hive metastore
+  spark.sql.catalogImplementation: "hive"
+  spark.sql.warehouse.dir: "s3a://my-bucket/warehouse"
+  # spark.hadoop.hive.metastore.uris: "thrift://metastore:9083"
+
+  # Iceberg REST catalog
+  spark.sql.catalog.iceberg: "org.apache.iceberg.spark.SparkCatalog"
+  spark.sql.catalog.iceberg.type: "rest"
+  spark.sql.catalog.iceberg.uri: "https://iceberg-rest.example.com/"
+
+  # Polaris (Iceberg catalog)
+  spark.sql.catalog.polaris: "org.apache.iceberg.spark.SparkCatalog"
+  spark.sql.catalog.polaris.type: "rest"
+  spark.sql.catalog.polaris.credential: "${POLARIS_CREDENTIAL}"
+  spark.sql.catalog.polaris.rest-catalog.uri: "https://polaris.example.com/api/catalog"
+```
+
+Once configured, use `table: catalog.db.table` in your Blueprint modules --- the
+identifier is resolved through the active catalog.
+
+**Limitations.** `time_travel` (version/timestamp pin) is not supported on
+`table:`-addressed Ingress reads (the `spark.read.table()` API does not accept
+DataFrameReader options). Use a Channel with `TIMESTAMP AS OF` / `VERSION AS OF`
+SQL syntax instead. `register_as_table` is meaningless when `table:` is set on
+an Egress --- the catalog table is already the direct write target.
 
 ---
 
@@ -244,6 +494,27 @@ All maintenance ops are **non-fatal** (logged as warnings, pipeline continues).
 Timing lands in `maintenance_metrics`: `optimize_ms` is the compaction-class op
 (OPTIMIZE / rewrite_data_files / run_compaction) and `vacuum_ms` the cleanup-class
 op (VACUUM / expire_snapshots / run_clean), across all three engines.
+
+### Custom Python DataSources (`format: custom`) {#format-custom}
+
+Spark 4.0+ supports user-defined Python DataSources via `format: custom` +
+`class:` — an importable `DataSource` subclass that implements the
+`DataSourceRegister` contract. Aqueduct supports this on both Ingress and
+Egress:
+
+```yaml
+ingress:
+  format: custom
+  class: my_package.MyDataSource
+egress:
+  format: custom
+  class: my_package.MySink
+```
+
+The class must be importable on the driver (i.e. in `PYTHONPATH` or an installed
+package). `aqueduct doctor` verifies importability; a missing class raises an
+error at module dispatch. As with UDFs, Aqueduct never inspects or modifies the
+class body — the code is opaque to the engine.
 
 ---
 
@@ -403,6 +674,7 @@ Never use positional `union()` — column order is not guaranteed across sources
 | Incremental `MAX()` rescans output | Instruct users to add Checkpoint or cache; tracked in `incremental-watermark-scan` warning |
 | Join produces duplicate column names | When both DataFrames have a column with the same name (beyond the join key), the result has two columns with the same name — ambiguous to reference. Fix by: (1) using string join key (auto-deduplicates), (2) dropping the duplicate after join, or (3) renaming before join. |
 | Natural join uses implicit column matching | `NATURAL JOIN` matches on all columns with the same name — silently produces wrong results if shared column names are coincidental. Never use natural joins in Channel SQL. |
+| Window-spec columns appear in lineage | `PARTITION BY` / `ORDER BY` columns inside an `OVER()` clause are excluded from data-source lineage — `row_number() OVER (ORDER BY id) AS rn` reports `rn ← *` (not `rn ← id`). The ordering column is not a data dependency of the result row. |
 
 ### Transformation Reference
 

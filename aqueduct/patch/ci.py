@@ -10,9 +10,9 @@ only the pure helpers below.
 """
 from __future__ import annotations
 
-from aqueduct.patch.grammar import PATCH_META_KEY
-
 from typing import Any
+
+from aqueduct.patch.grammar import PATCH_META_KEY
 
 # ── CI webhook payload schema ────────────────────────────────────────────────
 # Keys the ``on_patch_pending`` webhook always carries (approval_mode: ci). The

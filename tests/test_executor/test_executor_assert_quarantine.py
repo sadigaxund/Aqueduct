@@ -90,11 +90,12 @@ def test_freshness_quarantine_non_timestamp_column(spark):
     df = spark.createDataFrame([Row(id=1, ts="not a timestamp")])
     module = Module(
         id="a1", type="Assert", label="A1",
-        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "quarantine"}]}
+        config={"rules": [{"type": "freshness", "column": "ts", "max_age_hours": 24, "on_fail": "abort"}]}
     )
     
-    # This should fail during execution (Phase 2 or Phase 3)
-    with pytest.raises((AssertError, Exception)):
+    # The bad value is caught by the float() guard in _batch_aggregate_rules,
+    # which routes through _handle_fail → AssertError. No raw traceback.
+    with pytest.raises(AssertError):
         execute_assert(module, df, spark, "run-1", "bp1")
 
 def test_freshness_quarantine_missing_column_key(spark):

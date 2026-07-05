@@ -26,9 +26,18 @@ from aqueduct.agent.prompts import (
     _REPROMPT_TEMPLATE_ESCALATED,
     _VALID_OPS,
 )
+from aqueduct.errors import AqueductError
 from aqueduct.patch.grammar import PatchSpec
 
 logger = logging.getLogger(__name__)
+
+
+class AgentParseError(AqueductError):
+    """Raised when an LLM response can't even be treated as patch text — e.g. a
+    non-string response (interrupted stream, empty payload). Distinct from
+    ``pydantic.ValidationError`` (parsed JSON failing the PatchSpec schema) and
+    ``json.JSONDecodeError`` (malformed JSON text); this is the "not text at all"
+    case caught upstream in ``agent/loop.py``'s parse-phase except clause."""
 
 
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
@@ -241,7 +250,7 @@ def _parse_patch_spec(text: str) -> tuple[PatchSpec, list[str]]:
       * a ``json-repair`` last-ditch pass when the soft dep is installed
     """
     if not isinstance(text, str):
-        raise ValueError(
+        raise AgentParseError(
             f"LLM returned non-string response: {type(text).__name__}. "
             "The model may have been interrupted or returned an empty payload."
         )

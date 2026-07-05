@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
-import warnings
-
 import click
+
+_PROJECT_ROOT_MAX_DEPTH = 8
+_DEFAULT_CONFIG_FILENAME = "aqueduct.yml"
 
 logger = logging.getLogger(__name__)
 
@@ -32,33 +33,35 @@ def _apply_warnings_from_cfg(cfg) -> None:
     set_default_suppress(suppress=merged)
 
 
-def _compile_with_warnings(compile_fn, *args, **kwargs):
+
+def _compile_with_warnings(compile_fn, *args, _verbose: bool = False, _defer: bool = False, **kwargs):
     """Call compile_fn, intercept warnings, reprint as clean CLI output.
 
     Aqueduct's own diagnostics (AqueductWarning category, prefix
     `[aqueduct:rule_id] `) become `AQ-WARN [rule_id] <msg>` lines so the
     rule_id is easy to copy into `warnings.suppress` in aqueduct.yml.
     Non-Aqueduct UserWarnings fall back to the legacy `WARNING:` prefix.
+
+    When ``_defer`` is True, the captured records are RETURNED as
+    ``(result, caught)`` instead of emitted here — so the caller can flush them
+    at the right point in the output progression (e.g. AFTER the run header,
+    where the blueprint these warnings are about is named).
     """
-    from aqueduct.warnings import AqueductWarning
-    _AQ_PREFIX = "[aqueduct:"
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    import warnings as _w
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
         result = compile_fn(*args, **kwargs)
-    for w in caught:
-        msg = str(w.message)
-        if issubclass(w.category, AqueductWarning) and msg.startswith(_AQ_PREFIX):
-            body = msg[len(_AQ_PREFIX):]
-            try:
-                rid, rest = body.split("] ", 1)
-                click.echo(f"AQ-WARN [{rid}] {rest}", err=True)
-            except ValueError:
-                click.echo(f"AQ-WARN {body}", err=True)
-        elif issubclass(w.category, UserWarning):
-            click.echo(f"WARNING: {w.message}", err=True)
-        else:
-            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+    if _defer:
+        return result, list(caught)
+    from aqueduct.cli.style import emit_warnings
+    emit_warnings(caught, verbose=_verbose, label="compile:")
     return result
+
+
+def _rule(char: str = "─") -> str:
+    """A horizontal rule spanning the terminal width (fallback 64)."""
+    import shutil
+    return char * shutil.get_terminal_size(fallback=(64, 20)).columns
 
 
 # ── Self-healing helpers ──────────────────────────────────────────────────────
@@ -134,7 +137,8 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     are kept separate so the agent loop can concatenate them.
     """
     class _Resolved:
-        __slots__ = ("provider", "base_url", "model", "provider_options",
+        __slots__ = ("provider", "base_url", "model", "api_key", "cascade",
+                      "provider_options",
                       "timeout", "max_reprompts", "engine_prompt_context",
                       "blueprint_prompt_context")
 
@@ -143,16 +147,83 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r = _Resolved()
     r.provider = (bp.provider or eng.provider) if bp else eng.provider
     r.base_url = (bp.base_url or eng.base_url) if bp else eng.base_url
+    r.api_key = (bp.api_key or eng.api_key) if bp else eng.api_key
     r.model = (bp.model or eng.model) if bp else eng.model
     r.provider_options = (bp.provider_options or eng.provider_options) if bp else eng.provider_options
     r.timeout = (bp.timeout or eng.timeout) if bp else eng.timeout
     r.max_reprompts = (bp.max_reprompts or eng.max_reprompts) if bp else eng.max_reprompts
+    # Cascade: blueprint wins when present; fall back to engine cascade default
+    from aqueduct.parser.parser import _build_cascade
+    _bp_cascade = bp.cascade if bp else None
+    _eng_cascade = _build_cascade(eng.cascade) if eng.cascade else None
+    r.cascade = _bp_cascade if _bp_cascade else _eng_cascade
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
     return r
 
 
-_DEFAULT_OBS_PATH = ".aqueduct/observability.db"
+def _resolve_project_root(
+    blueprint_path: Path | None = None,
+    config_path: Path | None = None,
+) -> Path:
+    """Walk up from blueprint or config to find the project root.
+
+    Returns the directory containing ``aqueduct.yml`` (the _DEFAULT_CONFIG_FILENAME) when found (walking up
+    to _PROJECT_ROOT_MAX_DEPTH levels from the blueprint), or falls back to the file's immediate
+    parent directory.  ``config_path``, when given, always wins — its parent
+    is the project root.
+    """
+    from pathlib import Path as _Path
+    if config_path is not None:
+        return config_path.parent
+    if blueprint_path is not None:
+        root = blueprint_path.parent
+        search = blueprint_path.parent
+        for _ in range(_PROJECT_ROOT_MAX_DEPTH):
+            if (search / _DEFAULT_CONFIG_FILENAME).exists():
+                return search
+            if search.parent == search:
+                break
+            search = search.parent
+        return root
+    return _Path.cwd()
+
+
+def _load_config_with_env(
+    config_path: Path | None = None,
+    *,
+    env_file: str | None = None,
+    cli_env: tuple[str, ...] | list[str] | None = None,
+    quiet: bool = False,
+) -> Any:
+    """Load engine config after resolving .env / CI-injected env vars.
+
+    Single entry point so ``load_config()`` is never called without first
+    populating ``os.environ`` from the project ``.env`` file.  When
+    ``config_path`` is ``None`` the project root is discovered by walking up
+    from CWD (same ``_resolve_project_root`` logic as every CLI command).
+
+    ``quiet`` suppresses the stderr notice — useful for long-running
+    processes (dashboard) that re-load config on every refresh.
+    """
+    from pathlib import Path as _Path2
+    _cfg = _Path2(config_path) if config_path is not None else None
+    _anchor = (
+        _cfg if _cfg is not None
+        else _resolve_project_root() / _DEFAULT_CONFIG_FILENAME
+    )
+    if quiet:
+        import click as _click
+        _real_echo = _click.echo
+        _click.echo = lambda *a, **kw: None
+        try:
+            _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+        finally:
+            _click.echo = _real_echo
+    else:
+        _resolve_and_load_env(env_file, _anchor, cli_env=cli_env)
+    from aqueduct.config import load_config as _load_config
+    return _load_config(_cfg)
 
 
 def _resolve_obs_db(
@@ -171,66 +242,62 @@ def _resolve_obs_db(
     ``Path(cfg.stores.observability.path).parent``, which only worked when the
     user explicitly set a non-default path.
 
-    Resolution order:
-      1. ``--store-dir <path>`` flag (explicit user override) → ``<path>/observability.db``
-      2. User set a non-default ``stores.observability.path`` in aqueduct.yml → use it verbatim
-      3. Default sentinel AND ``run_id`` provided → glob the per-pipeline dirs
-         and return the first DB containing a row for that run_id
-      4. Fall back to the default file
+    Canonical logic now lives in ``aqueduct.stores.read.resolve_duckdb_obs_path``
+    (Phase 69) so every reader shares one resolver; this stays as a thin,
+    monkeypatch-friendly wrapper. For backend-aware reads (DuckDB *or* Postgres),
+    prefer ``aqueduct.stores.read.open_obs_read``.
     """
-    from aqueduct.config import DEFAULT_OBS_DB_FILENAME
-    if store_dir:
-        candidate = Path(store_dir) / DEFAULT_OBS_DB_FILENAME
-        return candidate if candidate.exists() else None
+    from aqueduct.stores.read import resolve_duckdb_obs_path
 
-    obs_path = cfg.stores.observability.path
-    if obs_path != _DEFAULT_OBS_PATH:
-        explicit = Path(obs_path)
-        if explicit.is_dir():
-            explicit = explicit / DEFAULT_OBS_DB_FILENAME
-        return explicit if explicit.exists() else None
-
-    if run_id:
-        import duckdb as _duckdb
-        for candidate in sorted(Path(".aqueduct/observability").glob(f"*/{DEFAULT_OBS_DB_FILENAME}")):
-            try:
-                conn = _duckdb.connect(str(candidate), read_only=True)
-                try:
-                    hit = conn.execute(
-                        "SELECT 1 FROM run_records WHERE run_id = ? LIMIT 1",
-                        [run_id],
-                    ).fetchone()
-                finally:
-                    conn.close()
-                if hit:
-                    return candidate
-            except Exception:
-                continue
-
-    legacy = Path(_DEFAULT_OBS_PATH)
-    return legacy if legacy.exists() else None
+    return resolve_duckdb_obs_path(cfg, store_dir, run_id)
 
 
-def _agent_usable(provider: str, base_url: str | None) -> bool:
+def _agent_usable(provider: str, base_url: str | None, api_key: str | None = None) -> bool:
     """Return True if the LLM provider appears reachable without making a network call.
 
-    anthropic:     requires ANTHROPIC_API_KEY in os.environ
-    openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY
+    anthropic:     requires ANTHROPIC_API_KEY in os.environ (or api_key param)
+    openai_compat: requires base_url (Ollama/vLLM) OR OPENAI_API_KEY (or api_key param)
     """
     import os as _os
     if provider == "anthropic":
-        return bool(_os.environ.get("ANTHROPIC_API_KEY"))
+        return bool(api_key or _os.environ.get("ANTHROPIC_API_KEY"))
     if provider == "openai_compat":
-        return bool(base_url or _os.environ.get("OPENAI_API_KEY"))
+        return bool(base_url or api_key or _os.environ.get("OPENAI_API_KEY"))
     return False
 
 
-def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:
+def _agent_usable_with_cascade(
+    provider: str,
+    base_url: str | None,
+    api_key: str | None = None,
+    cascade_tiers: list | None = None,
+) -> bool:
+    """Return True if the flat config OR any cascade tier is reachable.
+
+    A cascade tier carries its own base_url/api_key (falling back to the
+    flat agent.* defaults).  If ANY tier is usable, healing works even
+    when the flat agent.base_url/api_key are unset (ISSUE-045).
+    """
+    if _agent_usable(provider, base_url, api_key):
+        return True
+    if cascade_tiers:
+        for t in cascade_tiers:
+            if _agent_usable(
+                provider,
+                getattr(t, "base_url", None) or base_url,
+                getattr(t, "api_key", None) or api_key,
+            ):
+                return True
+    return False
+
+
+def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_overrides: dict) -> Any:  # noqa: F811
     """Apply patch operations to Blueprint without touching disk. Returns new Manifest or None."""
     try:
-        from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse_dict
-        from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
+        from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
@@ -255,15 +322,17 @@ def _apply_patch_in_memory(patch, blueprint_path: Path, depot, profile, cli_over
         return None
 
 
-def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,
+def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, failure_ctx, mode: str,  # noqa: F811
                               obs_store=None, patch_store=None) -> Any:
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
-        from aqueduct.parser.parser import ParseError, parse
-        from aqueduct.compiler.compiler import compile as compiler_compile, CompileError
+
         from aqueduct.agent import archive_patch
+        from aqueduct.compiler.compiler import CompileError
+        from aqueduct.compiler.compiler import compile as compiler_compile
+        from aqueduct.parser.parser import ParseError, parse
+        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
@@ -272,8 +341,8 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         backup_dir = patches_dir / "backups"
         backup_dir.mkdir(parents=True, exist_ok=True)
         import shutil
-        from datetime import datetime, timezone
-        ts = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        from datetime import datetime
+        ts = datetime.now(tz=UTC).strftime("%Y%m%dT%H%M%SZ")
         shutil.copy2(blueprint_path, backup_dir / f"{patch.patch_id}_{ts}_{blueprint_path.name}")
 
         # Write atomically
@@ -293,9 +362,9 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
         return None
 
 
-def _run_patch_gates_inline(
+def _run_patch_gates_inline(  # noqa: F811
     *,
-    patch,
+    patch,  # noqa: F811
     blueprint_path,
     bundle,
     surveyor,
@@ -315,8 +384,8 @@ def _run_patch_gates_inline(
     `agent.block_on_explain_regression` is True).
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
-    from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
     from aqueduct.patch.explain_gate import run_explain_gate
+    from aqueduct.patch.preview import run_lineage_gate, run_sandbox_gate
 
     bp_raw = _yaml_load(blueprint_path)
     try:
@@ -399,7 +468,7 @@ def _run_patch_gates_inline(
     return lineage_res, sandbox_res, explain_res, gates_passed
 
 
-def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,
+def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, cfg, click_mod,  # noqa: F811
                         obs_store=None, patch_store=None) -> None:
     """Handle on_heal_failure policy for a patch that failed to fix the pipeline."""
     if on_heal_failure == "stage":
@@ -407,20 +476,16 @@ def _stage_failed_patch(on_heal_failure: str, patch, patches_dir, failure_ctx, c
         stage_patch_for_human(patch, patches_dir, failure_ctx,
                               on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                               patch_store=patch_store, obs_store=obs_store)
-        # Reflect the actual on-disk filename (timestamp prefix added by
-        # `_patch_filename`) instead of the bare patch_id.
-        pending = patches_dir / "pending"
-        _file = next(pending.glob(f"*_{patch.patch_id}.json"), None)
-        _shown = _file.name if _file else f"{patch.patch_id}.json"
+        _label = patch_store.location_label if patch_store is not None else patches_dir
         click_mod.echo(
-            f"  ✎ Failed patch staged for review → patches/pending/{_shown}",
+            f"  ✎ Failed patch staged for review → {_label}/pending/  (id={patch.patch_id})",
             err=True,
         )
     # discard: do nothing
     # abort: caller handles break
 
 
-def _load_env_file(env_path: "Path") -> int:
+def _load_env_file(env_path: Path) -> int:
     """Load KEY=VALUE pairs from a .env file into os.environ.
 
     Skips blank lines and comments (#). Existing env vars are NOT overwritten.
@@ -457,7 +522,7 @@ def _load_env_file(env_path: "Path") -> int:
 # stderr notice is always emitted so the implicit load is never invisible.
 
 
-def _apply_cli_env(cli_env: "tuple[str, ...] | list[str]") -> int:
+def _apply_cli_env(cli_env: tuple[str, ...] | list[str]) -> int:
     """Apply `-e KEY=VAL` overrides into os.environ. Returns count.
 
     Highest precedence: overwrites real env AND any later .env (the .env
@@ -478,9 +543,9 @@ def _apply_cli_env(cli_env: "tuple[str, ...] | list[str]") -> int:
 
 
 def _resolve_and_load_env(
-    explicit: "str | None",
-    anchor: "Path | None",
-    cli_env: "tuple[str, ...] | list[str] | None" = None,
+    explicit: str | None,
+    anchor: Path | None,
+    cli_env: tuple[str, ...] | list[str] | None = None,
 ) -> None:
     """Apply -e overrides, then load a single .env file. Emits a stderr notice.
 
@@ -489,13 +554,15 @@ def _resolve_and_load_env(
     discovery (overrides still applied).
     """
     import os
+
+    from aqueduct.cli.style import ICON
+    from aqueduct.cli.style import info as _info
     n_over = _apply_cli_env(cli_env or ())
     over = f"; {n_over} from -e" if n_over else ""
+    _env = f"{ICON['info']} env  ·  "
 
     if os.environ.get("AQ_NO_ENV_FILE"):
-        click.echo(
-            f"(env: .env discovery disabled — AQ_NO_ENV_FILE{over})", err=True
-        )
+        _info(f"{_env}.env discovery disabled — AQ_NO_ENV_FILE{over}", err=True)
         return
 
     candidates: list[Path] = []
@@ -510,11 +577,11 @@ def _resolve_and_load_env(
             seen.add(cand)
             continue
         n = _load_env_file(cand)
-        click.echo(f"(env: loaded {n} var(s) from {cand}{over})", err=True)
+        _info(f"{_env}loaded {n} var(s) from {cand}{over}", err=True)
         return  # first existing file wins — do not stack multiple .env files
 
     if n_over:
-        click.echo(f"(env: no .env file found{over})", err=True)
+        _info(f"{_env}no .env file found{over}", err=True)
 
 
 def _env_options(f):
@@ -536,7 +603,7 @@ def _env_options(f):
     return f
 
 
-def _sniff_file_kind(path: "Path") -> "str | None":
+def _sniff_file_kind(path: Path) -> str | None:
     """Identify an Aqueduct YAML by its version header (no full parse).
 
     Returns one of: "blueprint", "config", "aqtest", "aqscenario", or None
@@ -564,8 +631,30 @@ def _sniff_file_kind(path: "Path") -> "str | None":
     return None
 
 
-from aqueduct import __version__ as _aqueduct_version
-from aqueduct import exit_codes
+
+from aqueduct import __version__ as _aqueduct_version  # noqa: E402  (intentional mid-file import)
+
+
+def _install_styled_echo() -> None:
+    """Wrap ``click.echo`` so the icon vocabulary is coloured on every status line.
+
+    The systemic styler — installed once at top-level (text mode only), so each
+    call site no longer has to colour status lines by hand (the recurring
+    "uncoloured `✗ …` / raw line" class of bug). Idempotent; composes as the
+    outer wrapper over the redaction hook. JSON/prose/already-styled lines pass
+    through untouched (see ``style.colorize_line``)."""
+    if getattr(click.echo, "_aq_styled_wrapped", False):
+        return
+    from aqueduct.cli.style import colorize_line
+    _inner_echo = click.echo
+
+    def _styled_echo(message=None, file=None, nl=True, err=False, color=None):
+        if isinstance(message, str):
+            message = colorize_line(message)
+        return _inner_echo(message, file=file, nl=nl, err=err, color=color)
+
+    _styled_echo._aq_styled_wrapped = True  # type: ignore[attr-defined]
+    click.echo = _styled_echo  # type: ignore[assignment]
 
 
 def _install_secret_redaction_hooks() -> None:
@@ -577,8 +666,9 @@ def _install_secret_redaction_hooks() -> None:
     eagerly at top-level ``cli`` invocation; commands that never resolve a
     secret incur a tiny per-emit no-op cost (empty registry → fast path).
     """
-    from aqueduct.redaction import redact as _redact
     import logging as _logging
+
+    from aqueduct.redaction import redact as _redact
 
     if getattr(click.echo, "_aq_redaction_wrapped", False):
         return
@@ -599,7 +689,7 @@ def _install_secret_redaction_hooks() -> None:
                 record.msg = _redact(record.getMessage())
                 record.args = ()
             except Exception:  # noqa: BLE001
-                pass
+                pass  # redaction must never break logging; best-effort sanitisation
             return True
 
     root = _logging.getLogger()
@@ -632,10 +722,10 @@ class _AqueductJsonLogFormatter:
     def format(self, record) -> str:  # noqa: D401
         import json as _json
         import logging as _logging
-        from datetime import datetime as _dt, timezone as _tz
+        from datetime import datetime as _dt
 
         payload = {
-            "ts": _dt.fromtimestamp(record.created, tz=_tz.utc).isoformat(),
+            "ts": _dt.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
@@ -654,7 +744,7 @@ class _AqueductJsonLogFormatter:
         return _json.dumps(payload, default=str)
 
 
-@click.group()
+@click.group(invoke_without_command=True, no_args_is_help=False)
 @click.version_option(
     version=_aqueduct_version,
     prog_name="aqueduct",
@@ -694,6 +784,7 @@ def cli(
 ) -> None:
     """Aqueduct — Intelligent Spark Blueprint Engine."""
     import logging
+
     from aqueduct.warnings import install_cli_formatter, set_default_suppress
     level = logging.DEBUG if verbose else logging.WARNING
 
@@ -706,8 +797,25 @@ def cli(
         root.addHandler(handler)
         root.setLevel(level)
     else:
-        fmt = "%(levelname)s %(name)s: %(message)s" if verbose else "%(levelname)s: %(message)s"
-        logging.basicConfig(level=level, format=fmt)
+        from aqueduct.cli.style import StyledLogFormatter
+        handler = logging.StreamHandler()
+        handler.setFormatter(StyledLogFormatter(verbose=verbose))
+
+        class _RuntimeNestedFilter(logging.Filter):
+            """Probe/Assert runtime warnings are displayed nested under their
+            module by `run` (the `↳ [rule_id]` lines). Drop their loose console
+            line here so they aren't printed twice. They remain in the logger
+            for `--log-format json` and pytest's caplog (separate handlers)."""
+
+            def filter(self, record: logging.LogRecord) -> bool:
+                m = record.getMessage()
+                return "[runtime_probe" not in m and "[runtime_assert" not in m
+
+        handler.addFilter(_RuntimeNestedFilter())
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.addHandler(handler)
+        root.setLevel(level)
 
     # Install AQ-WARN [rule_id] format + stash CLI suppress overrides.
     # Engine-level `warnings.suppress` from aqueduct.yml is merged later, once a
@@ -720,17 +828,43 @@ def cli(
 
     _install_secret_redaction_hooks()
 
+    # Outer wrapper over redaction — colour the icon vocabulary on every status
+    # line (text mode only; JSON output must stay un-styled).
+    if log_format.lower() != "json":
+        _install_styled_echo()
+
+    # Bare `aqueduct` (no subcommand) → branded banner above the help.
+    if ctx.invoked_subcommand is None:
+        click.echo(_render_banner())
+        click.echo(ctx.get_help())
+        ctx.exit()
+
+
+def _render_banner() -> str:
+    """Small branded wordmark for the bare `aqueduct` command (not per-run)."""
+    aq = click.style("aq", fg="red", bold=True)
+    ueduct = click.style("ueduct", fg="yellow", bold=True)   # sand
+    arches = click.style("∩∩∩", fg="cyan")
+    tag = click.style("declarative · self-healing · Apache Spark", dim=True)
+    ver = click.style(f"v{_aqueduct_version}", dim=True)
+    return f"\n  {arches}  {aq}{ueduct}  {ver}\n  {tag}\n"
+
 
 
 
 
 # ── patch helpers ────────────────────────────────────────────────────────────
 
-def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> list[Path]:
+def _uncommitted_applied_patches(
+    blueprint_path: Path, patches_root: Path, blueprint_id: str | None = None
+) -> list[Path]:
     """Return applied patches with applied_at newer than the last git commit for blueprint_path.
 
     Falls back to returning all applied patches when not in a git repo or blueprint
-    has never been committed.
+    has never been committed. When ``blueprint_id`` is given, only patches OWNED by
+    that blueprint are considered — the ``patches/applied/`` dir is shared across a
+    project, so without this filter running blueprint B would warn about (and
+    mis-suggest committing) blueprint A's patches.
     """
     import subprocess
 
@@ -741,6 +875,23 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
     all_applied = sorted(applied_dir.glob("*.json"), key=lambda f: f.stat().st_mtime)
     if not all_applied:
         return []
+
+    # Keep only patches owned by this blueprint (via _aq_meta.blueprint_id).
+    # Patches without a recorded blueprint_id are kept (conservative).
+    if blueprint_id is not None:
+        from aqueduct.patch.grammar import PATCH_META_KEY as _PMK
+        owned = []
+        for _p in all_applied:
+            try:
+                _d = json.loads(_p.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            _bp = (_d.get(_PMK) or {}).get("blueprint_id")
+            if _bp is None or _bp == blueprint_id:
+                owned.append(_p)
+        all_applied = owned
+        if not all_applied:
+            return []
 
     # Get ISO timestamp of last git commit touching this blueprint.
     # Tolerate environments without git (containerized workers, etc.) — the
@@ -761,6 +912,7 @@ def _uncommitted_applied_patches(blueprint_path: Path, patches_root: Path) -> li
 
     uncommitted = []
     from datetime import datetime
+
     from aqueduct.patch.grammar import PATCH_META_KEY
     for p in all_applied:
         try:
@@ -794,8 +946,8 @@ def _patches_root_from_blueprint(blueprint_path: Path) -> Path:
     """Return <project_root>/patches by walking up from blueprint to find aqueduct.yml."""
     _search = blueprint_path.parent
     project_root = blueprint_path.parent
-    for _ in range(8):
-        if (_search / "aqueduct.yml").exists():
+    for _ in range(_PROJECT_ROOT_MAX_DEPTH):
+        if (_search / _DEFAULT_CONFIG_FILENAME).exists():
             project_root = _search
             break
         if _search.parent == _search:
@@ -817,12 +969,21 @@ if __name__ == "__main__":
 
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
-from .diagnostics import validate, lint_cmd, schema, doctor  # noqa: E402,F401
-from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401
-
-from .run import compile, run  # noqa: E402,F401
-from .patch import patch, patch_preview, patch_apply, patch_reject, patch_commit, patch_discard, patch_list, log_cmd, rollback_cmd  # noqa: E402,F401
-from .observability import report, runs, lineage, signal  # noqa: E402,F401
-from .heal import heal  # noqa: E402,F401
+from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
-from .project import completion_cmd, test_cmd, init  # noqa: E402,F401
+from .heal import heal  # noqa: E402,F401
+from .observability import lineage, report, runs, signal  # noqa: E402,F401
+from .patch import (  # noqa: E402,F401,F811
+    log_cmd,
+    patch,
+    patch_apply,
+    patch_commit,
+    patch_discard,
+    patch_list,
+    patch_preview,
+    patch_reject,
+    rollback_cmd,
+)
+from .project import completion_cmd, init, test_cmd  # noqa: E402,F401
+from .run import compile, run  # noqa: E402,F401
+from .stores import stores_group, stores_info, stores_migrate  # noqa: E402,F401

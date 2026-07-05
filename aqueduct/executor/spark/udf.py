@@ -23,11 +23,16 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import sys
-from aqueduct.errors import AqueductError
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
 from pyspark.sql.functions import UserDefinedFunction
+
+from aqueduct.errors import AqueductError
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
@@ -44,6 +49,58 @@ def _ensure_project_root_on_path() -> None:
     cwd = str(Path.cwd())
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
+
+_shipped_packages: set[str] = set()
+
+
+def _ship_module_to_executors(mod, spark: SparkSession) -> None:
+    """Zip the module's package directory and ship it to executors via addPyFile.
+
+    Called after a successful import on the driver.  Modules in site-packages
+    are skipped (already available on every executor).  Each distinct package
+    root is shipped at most once per session.
+    """
+    mod_file = getattr(mod, "__file__", None)
+    if mod_file is None:
+        return
+
+    mod_path = Path(mod_file).resolve()
+    if "site-packages" in mod_path.parts or "dist-packages" in mod_path.parts:
+        return
+
+    # Determine the package root: if the module lives in a directory with an
+    # __init__.py, the package root is that directory's parent; otherwise it
+    # is the directory containing the .py file itself.
+    if mod_path.name == "__init__.py":
+        pkg_dir = mod_path.parent
+        root = pkg_dir.parent
+    else:
+        pkg_dir = mod_path.parent
+        # Walk up one level if this looks like a package (dir with __init__.py)
+        init = pkg_dir / "__init__.py"
+        if init.exists():
+            root = pkg_dir.parent
+        else:
+            root = pkg_dir
+
+    cache_key = str(root.resolve())
+    if cache_key in _shipped_packages:
+        return
+    _shipped_packages.add(cache_key)
+
+    # Zip everything under the package root directory.  Use mkdtemp — the
+    # file must survive for the Spark session's lifetime because addPyFile
+    # queues it for distribution when the next job starts; executors may
+    # not pull it until well after this function returns.
+    tmp_dir = tempfile.mkdtemp(prefix="aq_udf_")
+    zip_path = os.path.join(tmp_dir, root.name + ".zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        _top = root.resolve()
+        for py_file in sorted(root.rglob("*.py")):
+            arcname = str(py_file.resolve().relative_to(_top))
+            zf.write(py_file, arcname)
+    spark.sparkContext.addPyFile(zip_path)
+
 
 def _patch_pyspark_cloudpickle() -> None:
     """Replace pyspark's bundled cloudpickle 2.x with system cloudpickle 3.x.
@@ -88,9 +145,10 @@ def _patch_pyspark_cloudpickle() -> None:
         import cloudpickle as system_cp  # system-installed (pip install cloudpickle)
     except ImportError:
         logger.warning(
-            "%s detected but system cloudpickle is not installed. "
-            "Python UDFs will fail with infinite recursion / segfault during "
-            "serialization. Fix: `pip install cloudpickle` (or run on Python ≤ 3.12).",
+            "[runtime_udf_cloudpickle_missing] %s detected but system "
+            "cloudpickle is not installed. Python UDFs will fail with infinite "
+            "recursion / segfault during serialization. Fix: `pip install "
+            "cloudpickle` (or run on Python ≤ 3.12).",
             py_label,
         )
         return
@@ -109,8 +167,9 @@ def _patch_pyspark_cloudpickle() -> None:
 
     if bundled_cp is None or bundled_path is None:
         logger.warning(
-            "%s detected and `pyspark.cloudpickle` is not importable under any "
-            "known path (tried: pyspark.cloudpickle, pyspark.cloudpickle_fast, "
+            "[runtime_udf_cloudpickle_not_importable] %s detected and "
+            "`pyspark.cloudpickle` is not importable under any known path "
+            "(tried: pyspark.cloudpickle, pyspark.cloudpickle_fast, "
             "pyspark._cloudpickle). Skipping the cloudpickle compatibility "
             "patch — Python UDFs may fail with cryptic recursion errors. "
             "Pin pyspark to a version that bundles cloudpickle at the expected "
@@ -126,10 +185,11 @@ def _patch_pyspark_cloudpickle() -> None:
     missing = [a for a in required_attrs if not hasattr(bundled_cp, a)]
     if missing:
         logger.warning(
-            "%s detected; `%s` was imported but lacks expected attributes %s. "
-            "Aqueduct cannot patch cloudpickle — Python UDFs may fail with "
-            "recursion errors. Likely a future PySpark restructured the "
-            "module; report this with the installed pyspark version.",
+            "[runtime_udf_cloudpickle_missing_attrs] %s detected; `%s` was "
+            "imported but lacks expected attributes %s. Aqueduct cannot patch "
+            "cloudpickle — Python UDFs may fail with recursion errors. Likely "
+            "a future PySpark restructured the module; report this with the "
+            "installed pyspark version.",
             py_label, bundled_path, missing,
         )
         return
@@ -140,8 +200,9 @@ def _patch_pyspark_cloudpickle() -> None:
         bundled_ver = tuple(int(x) for x in str(bundled_ver_str).split(".")[:2])
     except (AttributeError, ValueError) as exc:
         logger.warning(
-            "%s detected; could not compare cloudpickle versions "
-            "(system=%r, bundled=%r): %s. Skipping patch.",
+            "[runtime_udf_cloudpickle_version_mismatch] %s detected; could not "
+            "compare cloudpickle versions (system=%r, bundled=%r): %s. "
+            "Skipping patch.",
             py_label, getattr(system_cp, "__version__", "?"),
             getattr(bundled_cp, "__version__", "?"), exc,
         )
@@ -224,8 +285,15 @@ def _register_java_udf(
     if not Path(jar_abs).exists():
         raise UDFError(f"UDF {udf_id!r}: JAR not found at {jar_abs!r}")
 
+    # Session-level `ADD JAR` rather than SparkContext.addJar: PySpark's Python
+    # SparkContext has no addJar() (JVM-only method), and the JVM call alone
+    # ships the JAR to executors but does NOT add it to the driver's session
+    # classloader — which registerJavaFunction needs to resolve the class.
+    # `ADD JAR` does both (SessionResourceLoader.addJar → sparkContext.addJar
+    # + jarClassLoader.addURL) and is stable SQL across Spark 3.x/4.x.
+    escaped = jar_abs.replace("\\", "\\\\").replace('"', '\\"')
     try:
-        spark.sparkContext.addJar(jar_abs)
+        spark.sql(f'ADD JAR "{escaped}"')
     except Exception as exc:
         raise UDFError(f"UDF {udf_id!r}: failed to add JAR {jar_abs!r}: {exc}") from exc
 
@@ -294,6 +362,8 @@ def _register_python_udf(
         raise UDFError(
             f"UDF {udf_id!r}: cannot import module {module_path!r}: {exc}"
         ) from exc
+
+    _ship_module_to_executors(mod, spark)
 
     fn = getattr(mod, entry_name, None)
     if fn is None:

@@ -25,13 +25,14 @@ from aqueduct.agent.budget import (
     BudgetTracker,
     StopReason,
 )
+from aqueduct.agent.constants import DEFAULT_LLM_TIMEOUT, DEFAULT_MAX_TOKENS
 from aqueduct.agent.parse import (
+    AgentParseError,
     _detect_structural_error,
     _format_reprompt_error,
     _format_reprompt_for_next_turn,
     _parse_patch_spec,
 )
-from aqueduct.utils import utcnow_iso
 from aqueduct.agent.prompts import _build_user_prompt
 from aqueduct.agent.providers import (
     _ESCALATION_TEMPERATURE,
@@ -49,6 +50,7 @@ from aqueduct.agent.signature import (
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
+from aqueduct.utils import utcnow_iso
 
 if TYPE_CHECKING:
     from aqueduct.config import WebhookEndpointConfig
@@ -64,7 +66,9 @@ logger = logging.getLogger(__name__)
 #       selection, multi-key wrapper unwrap, reprompt char cap).
 # 1.3 — Phase 47: replace_macro op added to the grammar/schema; macro hint
 #       now points at it for in-macro root causes.
-PROMPT_VERSION = "1.3"
+# 1.4 — drift rule: PREDICTED_SCHEMA_DRIFT means the source changed; do NOT
+#       flip Ingress format/header/options — fix downstream or do nothing.
+PROMPT_VERSION = "1.4"
 
 
 @dataclass
@@ -92,6 +96,43 @@ class AgentPatchResult:
     # results — no LLM was involved.
     model: str | None = None
     model_cascade_position: int | None = None
+
+
+@dataclass(frozen=True)
+class AgentRunConfig:
+    """All inputs for one ``generate_agent_patch`` invocation.
+
+    Collapses the ~25 keyword args into a single frozen object so CLI call
+    sites build it once and the function body reads from ``cfg.*``.
+    Defaults are byte-identical to the old ``generate_agent_patch`` signature.
+    """
+
+    failure_ctx: FailureContext
+    model: str
+    patches_dir: Path
+    provider: str = "anthropic"
+    base_url: str | None = None
+    api_key: str | None = None
+    max_tokens: int = DEFAULT_MAX_TOKENS
+    provider_options: dict[str, Any] | None = None
+    timeout: float = DEFAULT_LLM_TIMEOUT
+    max_reprompts: int = 3
+    engine_prompt_context: str | None = None
+    blueprint_prompt_context: str | None = None
+    last_apply_error: str | None = None
+    guardrails: Any = None
+    budget: BudgetConfig | None = None
+    allow_defer: bool = False
+    deep_loop: bool = False
+    validate_callback: Callable[[Any], tuple[bool, str]] | None = None
+    apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None
+    on_attempt: Callable[[Any], None] | None = None
+    on_token: Callable[[str, str], None] | None = None  # live SSE sink: (kind, text)
+    model_cascade_position: int | None = None
+    memory_coaching: bool = True
+    retry_max_retries: int = 2
+    retry_backoff_seconds: float = 2.0
+    obs_store: ObservabilityStore | None = None
 
 
 # ── Timestamp helpers ────────────────────────────────────────────────────
@@ -320,14 +361,15 @@ def archive_patch(
 
 
 def generate_agent_patch(
-    failure_ctx: FailureContext,
-    model: str,
-    patches_dir: Path,
+    failure_ctx: FailureContext | None = None,
+    model: str | None = None,
+    patches_dir: Path | None = None,
     provider: str = "anthropic",
     base_url: str | None = None,
-    max_tokens: int = 4096,
+    api_key: str | None = None,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     provider_options: dict[str, Any] | None = None,
-    timeout: float = 120.0,
+    timeout: float = DEFAULT_LLM_TIMEOUT,
     max_reprompts: int = 3,
     engine_prompt_context: str | None = None,
     blueprint_prompt_context: str | None = None,
@@ -339,11 +381,13 @@ def generate_agent_patch(
     validate_callback: Callable[[Any], tuple[bool, str]] | None = None,
     apply_callback: Callable[[PatchSpec], tuple[bool, str | None, str | None, str | None]] | None = None,
     on_attempt: Callable[[Any], None] | None = None,
+    on_token: Callable[[str, str], None] | None = None,
     model_cascade_position: int | None = None,
     memory_coaching: bool = True,
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
     obs_store: ObservabilityStore | None = None,
+    agent_cfg: AgentRunConfig | None = None,
 ) -> AgentPatchResult:
     """Call the LLM and return an AgentPatchResult with patch + attempt metadata.
 
@@ -363,6 +407,42 @@ def generate_agent_patch(
     ``on_attempt`` is invoked with the AttemptRecord after each turn —
     used by the Surveyor to persist into ``heal_attempts``.
     """
+    if agent_cfg is not None:
+        failure_ctx = agent_cfg.failure_ctx
+        model = agent_cfg.model
+        patches_dir = agent_cfg.patches_dir
+        provider = agent_cfg.provider
+        base_url = agent_cfg.base_url
+        api_key = agent_cfg.api_key
+        max_tokens = agent_cfg.max_tokens
+        provider_options = agent_cfg.provider_options
+        timeout = agent_cfg.timeout
+        max_reprompts = agent_cfg.max_reprompts
+        engine_prompt_context = agent_cfg.engine_prompt_context
+        blueprint_prompt_context = agent_cfg.blueprint_prompt_context
+        last_apply_error = agent_cfg.last_apply_error
+        guardrails = agent_cfg.guardrails
+        budget = agent_cfg.budget
+        allow_defer = agent_cfg.allow_defer
+        deep_loop = agent_cfg.deep_loop
+        validate_callback = agent_cfg.validate_callback
+        apply_callback = agent_cfg.apply_callback
+        on_attempt = agent_cfg.on_attempt
+        on_token = agent_cfg.on_token
+        model_cascade_position = agent_cfg.model_cascade_position
+        memory_coaching = agent_cfg.memory_coaching
+        retry_max_retries = agent_cfg.retry_max_retries
+        retry_backoff_seconds = agent_cfg.retry_backoff_seconds
+        obs_store = agent_cfg.obs_store
+
+    if agent_cfg is None:
+        if failure_ctx is None:
+            raise TypeError("generate_agent_patch: failure_ctx is required when agent_cfg is not provided")
+        if model is None:
+            raise TypeError("generate_agent_patch: model is required when agent_cfg is not provided")
+        if patches_dir is None:
+            raise TypeError("generate_agent_patch: patches_dir is required when agent_cfg is not provided")
+
     if budget is None:
         budget = BudgetConfig(max_reprompts=max(1, max_reprompts))
     tracker = BudgetTracker(budget)
@@ -372,6 +452,7 @@ def generate_agent_patch(
         max_tokens=max_tokens,
         provider=provider,
         base_url=base_url,
+        api_key=api_key,
         provider_options=provider_options,
         timeout=timeout,
         patches_dir=patches_dir,
@@ -396,7 +477,18 @@ def generate_agent_patch(
     reprompt_errors: list[str] = []
     escalate_next = False
 
+    # Per-turn raw model output, surfaced to the -v transcript (verbatim view of
+    # what the model returned — the key diagnostic when a patch won't parse).
+    # Transient display data; never persisted to heal_attempts. Reset each turn,
+    # set after a successful provider call; None on a failed call.
+    _turn_raw: dict[str, str | None] = {"v": None}
+
+    def _fire_turn(rec) -> None:
+        rec._aq_raw = _turn_raw["v"]
+        _fire_on_attempt(on_attempt=on_attempt, rec=rec)
+
     while True:
+        _turn_raw["v"] = None
         attempt_num = tracker.begin_attempt()
         temperature_override = _ESCALATION_TEMPERATURE if escalate_next else None
         logger.info("── Heal attempt %d/%d ──", attempt_num, budget.max_reprompts)
@@ -414,7 +506,7 @@ def generate_agent_patch(
                 gate_that_rejected="budget", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
             tracker.mark_budget_seconds_exceeded()
             break
 
@@ -425,6 +517,7 @@ def generate_agent_patch(
                 last_apply_error=last_apply_error,
                 temperature_override=temperature_override,
                 deadline=deadline,
+                on_token=on_token,
             )
         except Exception as exc:
             latency_ms = int((time.monotonic() - t_start) * 1000)
@@ -436,7 +529,10 @@ def generate_agent_patch(
             # instead of a generic api_error.
             import httpx
             if isinstance(exc, httpx.TimeoutException) and deadline < cfg.timeout:
-                logger.warning(
+                # Demoted to debug — the transcript renders this on the turn line
+                # (✗ budget exhausted) + the hint below; a loose warning here would
+                # also interleave above the tree.
+                logger.debug(
                     "LLM API call timed out on budget deadline %.1fs "
                     "(attempt %d/%d): %s",
                     deadline, attempt_num, budget.max_reprompts, exc,
@@ -449,12 +545,23 @@ def generate_agent_patch(
                     gate_that_rejected="budget", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                # The total-heal budget (agent.budget.max_seconds), NOT agent.timeout,
+                # capped this call — point the user at the right knob.
+                rec._aq_detail = f"hit the {deadline:.0f}s heal budget mid-call"
+                rec._aq_hint = (
+                    f"the {budget.max_seconds:.0f}s agent.budget.max_seconds budget capped this "
+                    f"call (agent.timeout was {cfg.timeout:.0f}s) — raise agent.budget.max_seconds "
+                    f"(and agent.timeout) for slow/local models"
+                )
+                _fire_turn(rec)
                 tracker.mark_budget_seconds_exceeded()
                 break
 
             hint = _format_llm_error_hint(exc, timeout=timeout, base_url=base_url, model=model)
-            logger.error(
+            # Demoted to debug: the transcript renders the failure inline on the
+            # tier's turn line (✗ provider error — <reason>) + the hint, so this
+            # full line would just duplicate it. Still available with -v / json.
+            logger.debug(
                 "LLM API call failed (attempt %d/%d): %s%s",
                 attempt_num, budget.max_reprompts, exc, hint,
             )
@@ -466,7 +573,12 @@ def generate_agent_patch(
                 gate_that_rejected="provider", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            # Transcript display data (transient — not persisted to heal_attempts).
+            _reason = str(exc).split(" for url")[0].replace("Client error ", "").replace(
+                "Server error ", "").strip(" '\"") or type(exc).__name__
+            rec._aq_detail = _reason
+            rec._aq_hint = hint.strip().removeprefix("hint:").strip() or None
+            _fire_turn(rec)
             tracker.mark_api_error()
             break
 
@@ -476,19 +588,22 @@ def generate_agent_patch(
             tokens_in, tokens_out, latency_ms,
         )
         logger.debug("LLM raw response (attempt %d):\n%s", attempt_num, raw)
+        _turn_raw["v"] = raw  # captured for the -v transcript
 
         # ── Parse phase ────────────────────────────────────────────────
         parse_exc: BaseException | None = None
         recovery_applied: list[str] = []
         try:
             patch_spec, recovery_applied = _parse_patch_spec(raw)
-        except (ValidationError, json.JSONDecodeError, ValueError) as exc:
+        except (ValidationError, json.JSONDecodeError, ValueError, AgentParseError) as exc:
             parse_exc = exc
 
         if parse_exc is not None:
             friendly = _format_reprompt_error(parse_exc, raw)
             reprompt_errors.append(friendly)
-            logger.warning(
+            # Demoted to debug — the transcript shows the parse failure inline
+            # (✗ invalid patch (schema) — <first line>). Full text via -v / json.
+            logger.debug(
                 "LLM patch response invalid (attempt %d/%d):\n%s",
                 attempt_num, budget.max_reprompts, friendly,
             )
@@ -505,7 +620,9 @@ def generate_agent_patch(
                 gate_that_rejected="schema", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _short = friendly.strip().splitlines()[0] if friendly.strip() else ""
+            rec._aq_detail = _short[:120] or None
+            _fire_turn(rec)
 
             _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
             if _should_break:
@@ -565,7 +682,7 @@ def generate_agent_patch(
                     gate_that_rejected="defer_rejected", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
 
                 _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
                 if _should_break:
@@ -588,7 +705,7 @@ def generate_agent_patch(
                 gate_that_rejected=None, escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
             tracker.mark_deferred()
             break
 
@@ -624,7 +741,7 @@ def generate_agent_patch(
                     gate_that_rejected="validate", escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
 
                 stop = tracker.check_stop()
                 if stop is not None and stop != StopReason.SOLVED:
@@ -665,7 +782,7 @@ def generate_agent_patch(
                     gate_that_rejected=None, escalated=escalate_next,
                     model_cascade_position=model_cascade_position,
                 )
-                _fire_on_attempt(on_attempt, rec)
+                _fire_turn(rec)
                 tracker.check_stop()  # sets 'solved'
                 logger.info("  ✓ Applied: patch accepted by guardrails + apply")
                 break
@@ -691,7 +808,7 @@ def generate_agent_patch(
                 gate_that_rejected="apply", escalated=escalate_next,
                 model_cascade_position=model_cascade_position,
             )
-            _fire_on_attempt(on_attempt, rec)
+            _fire_turn(rec)
 
             _should_break, escalate_next = _check_budget_and_escalate(tracker, attempt_num)
             if _should_break:
@@ -714,7 +831,7 @@ def generate_agent_patch(
             gate_that_rejected=None, escalated=escalate_next,
             model_cascade_position=model_cascade_position,
         )
-        _fire_on_attempt(on_attempt, rec)
+        _fire_turn(rec)
         tracker.check_stop()
         break
 
@@ -724,7 +841,9 @@ def generate_agent_patch(
             tracker.current_attempt, tracker.stop_reason,
             tracker.tokens_in_total, tracker.tokens_out_total,
         )
-        logger.error(
+        # Demoted to debug — the transcript's └─ close node already states the
+        # outcome (✗ <reason> · N turn(s)); the caller prints the terminal line.
+        logger.debug(
             "LLM agent failed to produce a valid PatchSpec after %d attempt(s) "
             "for blueprint %r run %r (stop_reason=%s)",
             tracker.current_attempt, failure_ctx.blueprint_id, failure_ctx.run_id,

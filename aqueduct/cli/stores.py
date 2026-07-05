@@ -11,11 +11,12 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
     _env_options,
     _resolve_and_load_env,
+    cli,
 )
+from aqueduct.cli.output import emit
 
 # ── aqueduct stores ──────────────────────────────────────────────────────────
 
@@ -38,6 +39,7 @@ def stores_info(
     config_path: str | None, env_file: str | None, cli_env: tuple[str, ...]
 ) -> None:
     """Print each store's resolved backend + location label."""
+    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
 
@@ -48,23 +50,22 @@ def stores_info(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg)
     rows = [
         ("observability", bundle.observability.backend, bundle.observability.location_label),
-        ("lineage",       bundle.lineage.backend,       bundle.lineage.location_label),
         ("depot",         bundle.depot.backend,         bundle.depot.location_label),
         ("blob",          cfg.stores.blob.backend,      cfg.stores.blob.path or "(default)"),
         ("benchmark",     cfg.stores.benchmark.backend,  cfg.stores.benchmark.path or "(default)"),
     ]
     w0 = max(len(r[0]) for r in rows)
     w1 = max(len(r[1]) for r in rows)
-    click.echo(f"  {'store'.ljust(w0)}  {'backend'.ljust(w1)}  location")
-    click.echo(f"  {'-' * w0}  {'-' * w1}  --------")
+    emit(f"  {'store'.ljust(w0)}  {'backend'.ljust(w1)}  location", fmt="text", redact=True)
+    emit(f"  {'-' * w0}  {'-' * w1}  --------", fmt="text", redact=True)
     for store, backend, loc in rows:
-        click.echo(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}")
+        emit(f"  {store.ljust(w0)}  {backend.ljust(w1)}  {loc}", fmt="text", redact=True)
 
 
 @stores_group.command("migrate")
@@ -105,11 +106,12 @@ def stores_migrate(
     without losing depot watermarks and counters. Idempotent: re-running upserts
     the same keys with the same values.
     """
+    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
     from aqueduct.stores import get_stores
 
     if store.lower() != "depot":
-        click.echo(f"✗ unsupported --store: {store}", err=True)
+        _error(f"unsupported --store: {store}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
@@ -119,26 +121,26 @@ def stores_migrate(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     bundle = get_stores(cfg)
     target_label = f"{bundle.depot.backend}:{bundle.depot.location_label}"
     if bundle.depot.backend == "duckdb" and Path(bundle.depot.location_label) == Path(from_path).resolve():
-        click.echo("✗ source and target depot are the same DuckDB file; nothing to migrate", err=True)
+        _error("source and target depot are the same DuckDB file; nothing to migrate")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     try:
         import duckdb as _duckdb
     except ImportError as exc:
-        click.echo(f"✗ duckdb not installed: {exc}", err=True)
+        _error(f"duckdb not installed: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     conn = _duckdb.connect(str(Path(from_path).resolve()), read_only=True)
     try:
         rows = conn.execute("SELECT key, value FROM depot_kv").fetchall()
     except Exception as exc:
-        click.echo(f"✗ could not read depot_kv from {from_path}: {exc}", err=True)
+        _error(f"could not read depot_kv from {from_path}: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
     finally:
         conn.close()

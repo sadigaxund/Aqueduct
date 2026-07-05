@@ -97,4 +97,4 @@ def test_profile_requires_run_or_blueprint(tmp_path):
     _conn(tmp_path).close()
     res = CliRunner().invoke(cli, ["report", "--profile", "--store-dir", str(tmp_path)])
     assert res.exit_code != 0
-    assert "needs RUN_ID" in res.output
+    assert "is required with --profile" in res.output

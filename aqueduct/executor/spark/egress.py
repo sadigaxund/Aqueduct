@@ -25,8 +25,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.parser.models import Module
 from aqueduct.errors import AqueductError
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,16 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
     # ── Spark writer ──────────────────────────────────────────────────────────
     path: str | None = cfg.get("path")
-    if not path:
-        raise EgressError(f"[{module.id}] 'path' is required in Egress config")
+    table: str | None = cfg.get("table")
+
+    if table and path:
+        raise EgressError(
+            f"[{module.id}] 'table' and 'path' are mutually exclusive. "
+            f"Set one or the other, not both."
+        )
+
+    if not table and not path and fmt not in ("depot", "custom"):
+        raise EgressError(f"[{module.id}] 'path' or 'table' is required in Egress config")
 
     mode: str = cfg.get("mode", "error")
     if mode not in SUPPORTED_MODES:
@@ -88,7 +96,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
     force_merge_schema = False
     if cfg.get("on_new_columns") and mode != "merge":
         force_merge_schema = _enforce_on_new_columns(
-            df, module, fmt, path, cfg.get("table"), str(cfg["on_new_columns"])
+            df, module, fmt, path or "", table, str(cfg["on_new_columns"])
         )
 
     if mode == "merge":
@@ -96,7 +104,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         return
 
     if mode == "overwrite_partitions":
-        _write_overwrite_partitions(df, module, fmt, path, force_merge_schema=force_merge_schema)
+        _write_overwrite_partitions(df, module, fmt, path or "", table, force_merge_schema=force_merge_schema)
         return
 
     writer = df.write.format(fmt).mode(mode)
@@ -116,21 +124,33 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
         writer = writer.option(str(key), str(value))
 
     try:
-        writer.save(path)
+        if table:
+            writer.saveAsTable(table)
+        else:
+            writer.save(path)
     except EgressError:
         raise
     except Exception as exc:
+        loc = f"as {table!r}" if table else f"to {path!r}"
         raise EgressError(
-            f"[{module.id}] write failed to {path!r}: {exc}"
+            f"[{module.id}] write failed {loc}: {exc}"
         ) from exc
 
     register_as: str | None = cfg.get("register_as_table")
     if register_as:
-        _register_external_table(df, module.id, register_as, fmt, path)
+        if table:
+                logger.warning(
+                    "[runtime_egress_register_as_table_ignored] [%s] "
+                    "register_as_table=%r ignored — module already writes to a "
+                    "catalog table via 'table:'. Use 'table:' to write directly.",
+                    module.id, register_as,
+                )
+        else:
+            _register_external_table(df, module.id, register_as, fmt, path)
 
 
 def _register_external_table(
-    df: "DataFrame",
+    df: DataFrame,
     module_id: str,
     table_name: str,
     fmt: str,
@@ -152,12 +172,13 @@ def _register_external_table(
         logger.info("Registered external table %r at %s", table_name, path)
     except Exception as exc:
         logger.warning(
-            "[%s] register_as_table %r failed (non-fatal): %s",
+            "[runtime_egress_register_table_failed] [%s] register_as_table %r "
+            "failed (non-fatal): %s",
             module_id, table_name, exc,
         )
 
 
-def _write_merge(df: "DataFrame", module: Module) -> None:
+def _write_merge(df: DataFrame, module: Module) -> None:
     """Delta MERGE INTO: upsert df into an existing Delta table.
 
     Config keys:
@@ -223,13 +244,13 @@ def _write_merge(df: "DataFrame", module: Module) -> None:
         try:
             spark.catalog.dropTempView(view_name)
         except Exception:
-            pass
+            pass  # drop is best-effort cleanup in a finally; temp view may not exist (first merge)
 
     logger.info("[%s] merge completed into %s on keys %s", module.id, target, keys)
 
 
 def _write_overwrite_partitions(
-    df: "DataFrame", module: Module, fmt: str, path: str, force_merge_schema: bool = False
+    df: DataFrame, module: Module, fmt: str, path: str, table: str | None = None, force_merge_schema: bool = False
 ) -> None:
     """Idempotent partition overwrite — replace only the touched partitions.
 
@@ -245,6 +266,10 @@ def _write_overwrite_partitions(
         are overwritten; untouched partitions are preserved. Requires
         ``partition_by`` (without it, dynamic mode would overwrite the whole
         table — exactly the footgun this mode exists to avoid).
+
+    When ``table:`` is set instead of ``path:``, writes via
+    ``saveAsTable(table)`` — ``replaceWhere`` and dynamic partition overwrite
+    both work on Delta tables addressed by catalog identifier.
     """
     cfg = module.config
     partition_by: list[str] | None = cfg.get("partition_by")
@@ -272,22 +297,47 @@ def _write_overwrite_partitions(
         writer = writer.option(str(key), str(value))
 
     try:
-        writer.save(path)
+        if table:
+            if replace_where:
+                # Delta replaceWhere — atomic predicate overwrite on a catalog table.
+                writer.saveAsTable(table)
+            else:
+                # Dynamic partition overwrite on an existing catalog table.
+                # saveAsTable(mode=overwrite) would truncate the WHOLE table, and the
+                # per-writer partitionOverwriteMode option is NOT honoured by
+                # insertInto — only the SESSION conf is. Set it around the write so
+                # insertInto replaces only the partitions present in df. insertInto is
+                # POSITIONAL and uses the table's declared partitioning (no partitionBy).
+                spark = df.sparkSession
+                _prev = spark.conf.get("spark.sql.sources.partitionOverwriteMode", "STATIC")
+                spark.conf.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+                try:
+                    ins = df.write.format(fmt).mode("overwrite")
+                    if cfg.get("merge_schema") or force_merge_schema:
+                        ins = ins.option("mergeSchema", "true")
+                    for key, value in cfg.get("options", {}).items():
+                        ins = ins.option(str(key), str(value))
+                    ins.insertInto(table, overwrite=True)
+                finally:
+                    spark.conf.set("spark.sql.sources.partitionOverwriteMode", _prev)
+        else:
+            writer.save(path)
     except Exception as exc:
+        loc = f"as {table!r}" if table else f"to {path!r}"
         raise EgressError(
-            f"[{module.id}] overwrite_partitions write failed to {path!r}: {exc}"
+            f"[{module.id}] overwrite_partitions write failed {loc}: {exc}"
         ) from exc
 
     logger.info(
         "[%s] overwrite_partitions completed to %s (%s)",
-        module.id, path,
+        module.id, table or path,
         f"replaceWhere={replace_where!r}" if replace_where else "dynamic partition overwrite",
     )
 
 
 def _existing_target_columns(
-    df: "DataFrame", fmt: str, path: str, table: str | None
-) -> "set[str] | None":
+    df: DataFrame, fmt: str, path: str, table: str | None
+) -> set[str] | None:
     """Return the existing target's column names, or None if it does not exist.
 
     Metadata-only: ``.schema`` on a lazy reader fires no Spark action. A missing
@@ -305,7 +355,7 @@ def _existing_target_columns(
 
 
 def _enforce_on_new_columns(
-    df: "DataFrame", module: Module, fmt: str, path: str, table: str | None, policy: str
+    df: DataFrame, module: Module, fmt: str, path: str, table: str | None, policy: str
 ) -> bool:
     """Apply the ``on_new_columns`` write contract. Returns force_merge_schema.
 
@@ -342,8 +392,8 @@ def _enforce_on_new_columns(
         )
     if policy == "alert":
         logger.warning(
-            "[%s] on_new_columns=alert: schema drift — new column(s) %s added to "
-            "the target. Absorbing (mergeSchema).",
+            "[runtime_egress_new_columns] [%s] on_new_columns=alert: schema "
+            "drift — new column(s) %s added to the target. Absorbing (mergeSchema).",
             module.id, new_cols,
         )
     return True  # allow + alert both evolve the schema
@@ -414,7 +464,7 @@ def build_maintenance_ops(
 
 
 def run_maintenance(
-    spark: "SparkSession",
+    spark: SparkSession,
     module_id: str,
     path: str,
     maintenance_cfg: dict[str, Any],
@@ -434,7 +484,7 @@ def run_maintenance(
     try:
         ops = build_maintenance_ops(fmt, path, table, maintenance_cfg)
     except EgressError as exc:
-        logger.warning("[%s] maintenance skipped (non-fatal): %s", module_id, exc)
+        logger.warning("[runtime_egress_maintenance_skipped] [%s] maintenance skipped (non-fatal): %s", module_id, exc)
         return result
 
     for slot, label, sql in ops:
@@ -444,12 +494,12 @@ def run_maintenance(
             result[f"{slot}_ms"] = int((time.monotonic() - t0) * 1000)
             logger.info("[%s] %s completed in %dms", module_id, label, result[f"{slot}_ms"])
         except Exception as exc:
-            logger.warning("[%s] %s failed (non-fatal): %s", module_id, label, exc)
+            logger.warning("[runtime_egress_maintenance_failed] [%s] %s failed (non-fatal): %s", module_id, label, exc)
 
     return result
 
 
-def _write_custom(df: "DataFrame", module: Module) -> None:
+def _write_custom(df: DataFrame, module: Module) -> None:
     """Write via a custom Python DataSource (``format: custom`` + ``class:``).
 
     Path is optional — custom sinks may carry their target in ``options``.
@@ -482,7 +532,7 @@ def _write_custom(df: "DataFrame", module: Module) -> None:
     logger.info("[%s] custom DataSource write completed via %s", module.id, name)
 
 
-def _write_depot(df: "DataFrame", module: Module, depot: Any) -> None:
+def _write_depot(df: DataFrame, module: Module, depot: Any) -> None:
     """Write a KV entry to the Depot store. ``depot`` must not be None."""
     from pyspark.sql import functions as F
 

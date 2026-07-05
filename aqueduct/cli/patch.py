@@ -13,37 +13,88 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
-    _resolve_and_load_env,
     _env_options,
     _patches_root_from_blueprint,
-    _uncommitted_applied_patches,)
+    _resolve_and_load_env,
+    _uncommitted_applied_patches,
+    cli,
+)
+from aqueduct.cli.output import emit
 
 
-def _patch_index_obs_store(blueprint_path: "Path | None" = None):
+def _patch_index_obs_store(blueprint_path: Path | None = None):
     """Best-effort observability store for patch_index status updates (Phase 53).
 
     Postgres → the shared DSN. DuckDB → the per-blueprint store when a blueprint
     is known, else the configured default. Returns None on any failure — the
     index update is best-effort and never blocks a local patch command."""
     try:
-        from aqueduct.config import load_config
-        cfg = load_config(None)
-        if cfg.stores.observability.backend == "postgres":
-            from aqueduct.stores import get_stores
-            return get_stores(cfg).observability
-        from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+        from aqueduct.cli import _load_config_with_env
+        from aqueduct.stores.read import open_obs_read
+
+        # Auto-discover aqueduct.yml (walk up from CWD) AND load .env — the same
+        # resolution every other command uses. `load_config(None)` did neither, so
+        # a config/blueprint needing env or @aq.secret() (Postgres DSN, s3
+        # endpoint) failed to open → the index update was silently skipped.
+        cfg = _load_config_with_env(None, quiet=True)
+        bp_id = None
         if blueprint_path is not None:
             from aqueduct.parser.parser import parse as _parse
             bp_id = _parse(str(blueprint_path)).id
-            cand = Path(".aqueduct/observability") / bp_id / "observability.db"
-            if cand.exists():
-                return DuckDBObservabilityStore(cand)
-        default = Path(cfg.stores.observability.path)
-        return DuckDBObservabilityStore(default) if default.exists() else None
+        # Backend-aware (Phase 69): postgres → shared store; duckdb → per-blueprint
+        # file when known, else the configured/flat default.
+        return open_obs_read(cfg, blueprint_id=bp_id)
     except Exception:
         return None
+
+
+def _list_from_store(ps, filter_status: str, out_format: str) -> None:
+    """Render patches read straight from the patch store (the source of truth).
+
+    Lists ``pending/`` (or applied/rejected) via ``PatchStore.iter_payloads`` —
+    works for local and object backends. ``blueprint_id``/``rationale`` come from
+    each body's metadata."""
+    from aqueduct.patch.grammar import PATCH_META_KEY
+    statuses = ("pending", "applied", "rejected") if filter_status == "all" else (filter_status,)
+    rows: list[dict] = []
+    for st in statuses:
+        for _key, _mtime, payload in ps.iter_payloads(st):
+            meta = payload.get(PATCH_META_KEY) or {}
+            rows.append({
+                "status": st,
+                "file": _key.rsplit("/", 1)[-1],  # unique surrogate key (timestamped)
+                "patch_id": payload.get("patch_id", ""),
+                "rationale": payload.get("rationale"),
+                "confidence": payload.get("confidence"),
+                "blueprint_id": meta.get("blueprint_id"),
+                "run_id": meta.get("run_id"),
+                "failed_module": meta.get("failed_module"),
+            })
+    if out_format.lower() == "json":
+        emit(rows, fmt="json")
+        return
+    if not rows:
+        click.echo(f"No {filter_status} patches found in the patch store ({ps.location_label}).")
+        return
+    # `file` is the UNIQUE key (`<ts>_<patch_id>.json`) — shown in FULL so it can
+    # be copied verbatim into `apply`/`reject` (the embedded slug is the model's
+    # non-unique patch_id, so no separate column). Width is the longest filename;
+    # ljust never truncates, so a long name prints whole.
+    _fw = max((len(r.get("file") or "") for r in rows), default=4)
+    click.echo(f"\n  {'file':<{_fw}}  {'status':<9} {'blueprint':<22} rationale")
+    click.echo(f"  {'-' * _fw}  {'-' * 9} {'-' * 22} {'-' * 20}")
+    has_pending = False
+    for r in rows:
+        st = r["status"]
+        has_pending = has_pending or st == "pending"
+        fn = r.get("file") or ""
+        bp = (r.get("blueprint_id") or "")[:22]
+        rationale = (r.get("rationale") or "").replace("\n", " ")[:60]
+        click.echo(f"  {fn:<{_fw}}  {st:<9} {bp:<22} {rationale}")
+    if has_pending:
+        click.echo("\n  Apply:  aqueduct patch apply <patch_id|file> --blueprint <blueprint.yml>")
+        click.echo("  Reject: aqueduct patch reject <patch_id|file> --reason '<reason>'")
 
 
 # ── patch command group ───────────────────────────────────────────────────────
@@ -111,8 +162,8 @@ def patch_preview(
     explain gate (post-patch `explain()` regression
     check against the most recent baseline in `observability.explain_snapshot`).
     """
-    import json as _json
     from pathlib import Path as _Path
+
     from aqueduct.config import ConfigError, load_config
     from aqueduct.patch.apply import (
         PatchError,
@@ -121,12 +172,12 @@ def patch_preview(
         apply_patch_to_dict,
         load_patch_spec,
     )
+    from aqueduct.patch.explain_gate import run_explain_gate
     from aqueduct.patch.preview import (
         render_unified_diff,
         run_lineage_gate,
         run_sandbox_gate,
     )
-    from aqueduct.patch.explain_gate import run_explain_gate
 
     bp_raw = _yaml_load(_Path(blueprint_path))
     try:
@@ -140,7 +191,7 @@ def patch_preview(
     try:
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
-        click.echo(f"✗ Guardrails gate blocked: {exc}", err=True)
+        click.echo(f"✗ guardrails gate blocked: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
@@ -225,8 +276,8 @@ def patch_preview(
                 "baseline_run_id": explain_res.baseline_run_id,
                 "regressions": [r.__dict__ for r in explain_res.regressions],
             }
-        click.echo(_json.dumps(report, indent=2))
-        sys.exit(0 if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else 2)
+        emit(report, fmt="json")
+        sys.exit(exit_codes.SUCCESS if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else exit_codes.DATA_OR_RUNTIME)
 
     # Text report
     click.echo(f"Patch {spec.patch_id}")
@@ -276,16 +327,110 @@ def patch_preview(
                 click.echo(f"  ⚠ {r.detail}")
         click.echo(f"  duration: {explain_res.duration_ms} ms")
 
-    exit_code = 0
+    exit_code = exit_codes.SUCCESS
     if lineage_res.status == "fail":
-        exit_code = 2
+        exit_code = exit_codes.DATA_OR_RUNTIME
     if sandbox_res is not None and sandbox_res.status == "fail":
-        exit_code = 2
+        exit_code = exit_codes.DATA_OR_RUNTIME
     sys.exit(exit_code)
 
 
+def _patch_store_from(patches_root, config_path, env_file, cli_env):
+    """Build the configured PatchStore (local OR object backend), or None.
+
+    Resolves aqueduct.yml (CWD walk-up / --config) + .env, so the body lifecycle
+    (apply/reject move) acts on the same store `patch list` shows."""
+    from pathlib import Path
+    try:
+        from aqueduct.cli import _load_config_with_env
+        from aqueduct.stores.object_store import make_patch_store
+        cfg = _load_config_with_env(
+            Path(config_path) if config_path else None,
+            env_file=env_file, cli_env=cli_env or (),
+        )
+        return make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, Path(patches_root))
+    except Exception:
+        return None
+
+
+def _resolve_pending_key(ps, ref: str):
+    """Resolve PATCH_REF to a unique pending store key.
+
+    A full filename (``00003_…_slug.json``) wins outright — that is the unique
+    surrogate key. A bare ``patch_id`` is accepted only when it matches exactly
+    one pending body; if several share the id (same fix re-staged across runs)
+    the caller must use the full filename. Returns ``(key, [])`` on success,
+    ``(None, [ambiguous keys])`` for >1 match, ``(None, [])`` for none."""
+    from pathlib import Path
+    by_id: list[str] = []
+    for key, _mt, payload in ps.iter_payloads("pending"):
+        name = key.rsplit("/", 1)[-1]
+        if name == ref or name == f"{ref}.json" or key == ref or Path(ref).name == name:
+            return key, []
+        if payload.get("patch_id") == ref:
+            by_id.append(key)
+    if len(by_id) == 1:
+        return by_id[0], []
+    return None, by_id
+
+
+def _fetch_pending_to_temp(ps, key: str):
+    """Materialise a pending body to a scratch temp file (the operations source
+    `apply_patch_file` reads; the store still owns the canonical body)."""
+    import tempfile
+    from pathlib import Path
+    fd, tmp = tempfile.mkstemp(suffix="_" + key.rsplit("/", 1)[-1])
+    import os as _os
+    _os.close(fd)
+    Path(tmp).write_text(ps.get_text(key), encoding="utf-8")
+    return Path(tmp)
+
+
+def _resolve_patch_source(ref, patches_root, config_path, env_file, cli_env, *, need_local: bool):
+    """PATCH_REF → ``(ops_path, patch_store, pending_key)``.
+
+    External local file → ``(that path, store, None)`` (applied straight to the
+    store, no pending to move). Otherwise a unique pending key in the configured
+    store → ``(temp body | None, store, key)``. Exits with a clear message on
+    ambiguous / not-found."""
+    from pathlib import Path
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    p = Path(ref)
+    if p.exists() and p.parent.name != "pending":
+        return p, ps, None  # genuinely external file (CI download) → applied copy
+    if p.exists() and p.parent.name == "pending":
+        ref = p.name  # a pending file path → resolve to its store key below (move)
+    if ps is None:
+        click.echo(
+            f"✗ {ref!r} is not a local file and no patch store could be resolved "
+            f"(need aqueduct.yml / --config + env)", err=True,
+        )
+        sys.exit(exit_codes.USAGE_ERROR)
+    key = _require_pending_key(ps, ref)
+    ops_path = _fetch_pending_to_temp(ps, key) if need_local else None
+    return ops_path, ps, key
+
+
+def _require_pending_key(ps, ref: str) -> str:
+    """Resolve PATCH_REF to a unique pending key or exit with a clear message
+    (ambiguous → list the full filenames; none → not-found)."""
+    key, ambiguous = _resolve_pending_key(ps, ref)
+    if key is None:
+        if ambiguous:
+            click.echo(
+                f"✗ {len(ambiguous)} pending patches share id {ref!r} — re-run with the "
+                f"full filename:", err=True,
+            )
+            for k in ambiguous:
+                click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
+        else:
+            click.echo(f"✗ no pending patch matching {ref!r} in the store ({ps.location_label})", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+    return key
+
+
 @patch.command("apply")
-@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("patch_ref")
 @click.option(
     "--blueprint",
     required=True,
@@ -297,11 +442,22 @@ def patch_preview(
     default=None,
     help="Root directory for patch lifecycle subdirs (default: <blueprint-dir>/patches)",
 )
-def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> None:
-    """Validate and apply a PatchSpec JSON file to a Blueprint YAML.
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a patch_id.",
+)
+@_env_options
+def patch_apply(
+    patch_ref: str, blueprint: str, patches_dir: str | None,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """Validate and apply a patch to a Blueprint YAML.
 
-    Backs up the original Blueprint, applies all operations atomically,
-    verifies the result parses cleanly, then archives the patch.
+    PATCH_REF is either a local PatchSpec JSON file, or a bare ``patch_id`` —
+    in which case the body is fetched from the configured patch store (local or
+    object store) automatically (no manual ``patch pull`` needed). Backs up the
+    original Blueprint, applies all operations atomically, verifies the result
+    parses cleanly, then archives the patch.
     """
     from pathlib import Path
 
@@ -310,12 +466,17 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
 
+    ops_path, ps, pending_key = _resolve_patch_source(
+        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+    )
     try:
         result = apply_patch_file(
             blueprint_path=blueprint_path,
-            patch_path=Path(patch_file),
+            patch_path=ops_path,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
+            patch_store=ps,
+            pending_key=pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -329,7 +490,7 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
 
 
 @patch.command("import")
-@click.argument("patch_file", type=click.Path(exists=True, dir_okay=False))
+@click.argument("patch_ref")
 @click.option(
     "--blueprint",
     required=True,
@@ -347,9 +508,19 @@ def patch_apply(patch_file: str, blueprint: str, patches_dir: str | None) -> Non
     default=False,
     help="Apply only, skip the git commit (leave the change staged for review).",
 )
-def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_commit: bool) -> None:
-    """Apply a received patch JSON and commit it — the CI entry point (Phase 54).
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
+)
+@_env_options
+def patch_import(
+    patch_ref: str, blueprint: str, patches_dir: str | None, no_commit: bool,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """Apply a received patch and commit it — the CI entry point (Phase 54).
 
+    PATCH_REF is a local patch JSON file (a bare PatchSpec or a CI webhook
+    envelope), or a bare ``patch_id`` fetched from the configured store.
     `approval_mode: ci` reference flow: a cluster run heals, stages the patch,
     and fires the on_patch_pending webhook; a CI runner obtains the patch body
     and calls this to apply + commit it on a fresh checkout, then opens a PR
@@ -365,6 +536,14 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
 
     blueprint_path = Path(blueprint)
     patches_root = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(blueprint_path)
+
+    # PATCH_REF may be a local file (CI download) or a pending patch_id/filename
+    # in the configured store. Resolve to an operations source + the store/key so
+    # the body lifecycle (move pending → applied) runs in the store.
+    _ops_path, _ps, _pending_key = _resolve_patch_source(
+        patch_ref, patches_root, config_path, env_file, cli_env, need_local=True,
+    )
+    patch_file = str(_ops_path)
 
     # Pre-flight: if we are going to commit, fail BEFORE mutating the Blueprint
     # when we are not inside a git work tree (so a non-repo checkout doesn't end
@@ -409,6 +588,8 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
             patch_path=_apply_path,
             patches_dir=patches_root,
             obs_store=_patch_index_obs_store(blueprint_path),
+            patch_store=_ps,
+            pending_key=_pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ patch failed: {exc}", err=True)
@@ -472,37 +653,62 @@ def patch_import(patch_file: str, blueprint: str, patches_dir: str | None, no_co
     default=None,
     help="Root directory for patch lifecycle subdirs (default: derived from patch file path or CWD/patches)",
 )
-def patch_reject(patch_ref: str, reason: str, patches_dir: str | None) -> None:
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the patch store when PATCH_REF is a remote patch_id.",
+)
+@_env_options
+def patch_reject(
+    patch_ref: str, reason: str, patches_dir: str | None,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
     """Reject a pending patch and record the reason.
 
-    PATCH_REF can be a file path (patches/pending/00001_*.json) or a bare patch_id slug.
-
-    Moves patches/pending/<file> → patches/rejected/<file> with a rejection_reason annotation.
+    PATCH_REF is a bare ``patch_id`` (when unique) or the full pending filename
+    (``00001_…_slug.json``) when several share an id. The body is moved
+    ``pending/`` → ``rejected/`` **in the configured store** (local or object
+    backend) with a rejection_reason annotation, and the index status/object_key
+    is updated.
     """
     from pathlib import Path
 
     from aqueduct.patch.apply import PatchError, reject_patch
 
-    # Accept either a file path or a bare patch_id slug.
-    ref_path = Path(patch_ref)
-    if ref_path.suffix == ".json" and ref_path.exists():
-        # Full path given — derive patches_dir from grandparent (pending/ → patches/)
-        resolved_patches_dir = ref_path.parent.parent
-        patch_id = ref_path.stem
-    elif ref_path.suffix == ".json" and not ref_path.exists() and ref_path.parent.name == "pending":
-        # Path given but file not found via CWD — try same derivation
-        resolved_patches_dir = ref_path.parent.parent
-        patch_id = ref_path.stem
+    p = Path(patch_ref)
+    if p.parent.name == "pending":
+        patches_root = p.parent.parent  # derive from the given pending path
+    elif patches_dir:
+        patches_root = Path(patches_dir)
     else:
-        resolved_patches_dir = Path(patches_dir) if patches_dir else _patches_root_from_blueprint(Path.cwd() / "_sentinel")
-        patch_id = patch_ref
+        patches_root = _patches_root_from_blueprint(Path.cwd() / "_sentinel")
+
+    ps = _patch_store_from(patches_root, config_path, env_file, cli_env)
+    pending_key, ambiguous = _resolve_pending_key(ps, patch_ref) if ps is not None else (None, [])
+    if ambiguous:
+        click.echo(
+            f"✗ {len(ambiguous)} pending patches share id {patch_ref!r} — re-run with the "
+            f"full filename:", err=True,
+        )
+        for k in ambiguous:
+            click.echo(f"    {k.rsplit('/', 1)[-1]}", err=True)
+        sys.exit(exit_codes.USAGE_ERROR)
+
+    if pending_key:
+        try:
+            patch_id = json.loads(ps.get_text(pending_key)).get("patch_id") or Path(pending_key).stem
+        except Exception:
+            patch_id = Path(pending_key).stem
+    else:
+        patch_id = p.stem  # not in store → legacy reject_patch raises the not-found error
 
     try:
         rejected_path = reject_patch(
             patch_id=patch_id,
             reason=reason,
-            patches_dir=resolved_patches_dir,
+            patches_dir=patches_root,
             obs_store=_patch_index_obs_store(),
+            patch_store=ps if pending_key else None,
+            pending_key=pending_key,
         )
     except PatchError as exc:
         click.echo(f"✗ reject failed: {exc}", err=True)
@@ -536,13 +742,15 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
     """
     from pathlib import Path
 
-    from aqueduct.config import load_config
+    from aqueduct.cli import _load_config_with_env
     from aqueduct.patch import index as _ix
     from aqueduct.stores.object_store import make_patch_store
 
     blueprint_path = Path(blueprint)
     patches_root = _patches_root_from_blueprint(blueprint_path)
-    cfg = load_config(None)
+    # Auto-discover aqueduct.yml (CWD walk-up) + load .env so a remote store
+    # backend resolves (was load_config(None) — no discovery, no env).
+    cfg = _load_config_with_env(None, quiet=True)
 
     obs = _patch_index_obs_store(blueprint_path)
     if obs is None:
@@ -555,7 +763,7 @@ def patch_pull(patch_id: str, blueprint: str, out: str | None) -> None:
         click.echo(f"✗ index query failed: {exc}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
     if row is None:
-        click.echo(f"✗ patch {patch_id!r} not found in the index", err=True)
+        click.echo(f"✗ patch {patch_id!r} not found in the index — `aqueduct patch list --blueprint <bp>` shows known patches", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_root)
@@ -728,12 +936,48 @@ def patch_discard(blueprint: str, patches_dir: str | None) -> None:
     default="text", show_default=True,
     help="Output format. `json` for machine-readable consumption (Phase 30b).",
 )
-def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str) -> None:
-    """List patches, showing metadata for each.
+@click.option(
+    "--config", "config_path", default=None,
+    help="Path to aqueduct.yml — resolves the configured patch store backend (local / s3 / …).",
+)
+@_env_options
+def patch_list(
+    blueprint: str | None, patches_dir: str | None, filter_status: str, out_format: str,
+    config_path: str | None, env_file: str | None, cli_env: tuple[str, ...],
+) -> None:
+    """List patches from the configured patch store (backend-blind).
 
-    Defaults to showing pending patches. Use --status=applied/rejected/all for other dirs.
+    Lists the patch store directly — local ``patches/`` **or** the configured
+    object store (s3/gcs/…) per ``stores.blob`` — which is the source of truth.
+    Defaults to pending; use ``--status`` for applied/rejected/all. Resolves the
+    store from ``aqueduct.yml`` (``--config`` / CWD) + env, so it sees remote
+    backends instead of silently scanning the local dir.
     """
     from pathlib import Path
+
+    # Primary path: resolve the configured patch store (local OR object store)
+    # from aqueduct.yml + env and list it directly. `--patches-dir` forces the
+    # legacy local scan; any resolution failure falls back to it too.
+    if not patches_dir:
+        try:
+            from aqueduct.cli import _load_config_with_env
+            from aqueduct.stores.object_store import make_patch_store
+            # Auto-discovers aqueduct.yml (CWD walk-up) when no --config + loads .env.
+            cfg = _load_config_with_env(
+                Path(config_path) if config_path else None,
+                env_file=env_file, cli_env=cli_env,
+            )
+            _bp_path = Path(blueprint) if blueprint else None
+            # No blueprint → walk up from CWD to the project root (where
+            # aqueduct.yml is) for patches/, not raw CWD/patches.
+            _patches_root = _patches_root_from_blueprint(
+                _bp_path if _bp_path else (Path.cwd() / "_sentinel")
+            )
+            ps = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, _patches_root)
+            _list_from_store(ps, filter_status, out_format)
+            return
+        except Exception:
+            pass  # fall through to the local-dir scan
 
     if patches_dir:
         patches_root = Path(patches_dir)
@@ -775,7 +1019,7 @@ def patch_list(blueprint: str | None, patches_dir: str | None, filter_status: st
                     "blueprint_id": meta.get("blueprint_id"),
                     "failed_module": meta.get("failed_module"),
                 })
-        click.echo(json.dumps(payload, indent=2))
+        emit(payload, fmt="json")
         return
 
     total = 0
@@ -883,7 +1127,7 @@ def log_cmd(blueprint: str, fmt: str) -> None:
         })
 
     if fmt == "json":
-        click.echo(json.dumps(entries, indent=2))
+        emit(entries, fmt="json")
         return
 
     if not entries:

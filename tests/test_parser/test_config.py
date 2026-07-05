@@ -84,9 +84,9 @@ def test_config_defaults():
     config = AqueductConfig()
     assert config.deployment.target == "local"
     assert config.deployment.master_url == "local[*]"
-    assert config.stores.observability.path == ".aqueduct/observability.db"
-    assert config.stores.lineage.path == ".aqueduct/lineage.db"  # Phase 38: inert, kept for compat
-    assert config.stores.depot.path == ".aqueduct/depot.db"
+    assert config.stores.observability.path is None
+    assert not hasattr(config.stores, "lineage")  # removed — merged into observability
+    assert config.stores.default_depot().path == ".aqueduct/depot.db"
     assert config.agent.model == "claude-sonnet-4-6"
     assert config.probes.max_sample_rows == 100
     assert config.secrets.provider == "env"
@@ -107,18 +107,18 @@ def test_config_overrides(tmp_path):
     """
     path = tmp_path / "override.yml"
     data = {
-        "deployment": {"master_url": "spark://host:7077"},
+        "deployment": {"master_url": "local[2]"},
         "spark_config": {"spark.driver.memory": "2g"}
     }
     path.write_text(yaml.dump(data))
     config = load_config(path)
     
     # Custom read back
-    assert config.deployment.master_url == "spark://host:7077"
+    assert config.deployment.master_url == "local[2]"
     
     # Partial fallback
     assert config.deployment.target == "local"
-    assert config.stores.depot.backend == "duckdb"
+    assert config.stores.default_depot().backend == "duckdb"
     
     # Dict preserved
     assert config.spark_config == {"spark.driver.memory": "2g"}
@@ -159,7 +159,7 @@ def test_load_config_redis_missing_driver(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "redis", None)
     
     path = tmp_path / "aq_redis.yml"
-    path.write_text("stores:\n  depot: {backend: redis, path: redis://localhost}")
+    path.write_text("stores:\n  depots: {default: {backend: redis, path: redis://localhost}}")
     
     from aqueduct.config import ConfigError
     with pytest.raises(ConfigError, match="redis"):
@@ -171,10 +171,25 @@ def test_load_config_duckdb_lazy_imports(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "redis", None)
     
     path = tmp_path / "aq_duck.yml"
-    path.write_text("stores:\n  observability: {backend: duckdb, path: obs.db}")
-    
+    path.write_text("stores:\n  observability: {backend: duckdb, path: obs}")
+
     cfg = load_config(path)
     assert cfg.stores.observability.backend == "duckdb"
+
+def test_duckdb_obs_file_path_rejected(tmp_path):
+    """2.0 — the duckdb observability path is a routing DIRECTORY; a `.db` file
+    path (the removed single-shared-file mode) fails config load with guidance."""
+    path = tmp_path / "aq_file.yml"
+    path.write_text("stores:\n  observability: {backend: duckdb, path: .aqueduct/observability.db}")
+    with pytest.raises(ConfigError, match="DIRECTORY"):
+        load_config(path)
+
+def test_postgres_dsn_not_rejected_by_dir_rule(tmp_path):
+    """The directory rule is duckdb-only — a Postgres DSN passes."""
+    path = tmp_path / "aq_pg.yml"
+    path.write_text("stores:\n  observability: {backend: postgres, path: 'postgresql://aq@h:5432/aq'}")
+    cfg = load_config(path)
+    assert cfg.stores.observability.backend == "postgres"
 
 def test_metrics_config_parsing(tmp_path):
     """MetricsConfig parses use_observe: true and use_observe: false without error"""
@@ -214,6 +229,115 @@ def test_deployment_config_literal_validation(tmp_path):
     # Invalid env
     path.write_text("deployment:\n  env: void")
     with pytest.raises(ConfigError, match="validation error"):
+        load_config(path)
+
+
+# ── Target ↔ master_url validation tests ──────────────────────────────────────
+
+def test_target_local_valid_master_url_ok(tmp_path):
+    """local target with matching master_url passes"""
+    for url in ("local[*]", "local[4]", "local"):
+        path = tmp_path / "cfg.yml"
+        path.write_text(f"deployment:\n  target: local\n  master_url: {url}")
+        cfg = load_config(path)
+        assert cfg.deployment.target == "local"
+        assert cfg.deployment.master_url == url
+
+
+def test_target_local_wrong_master_url_raises(tmp_path):
+    """local target with non-local master_url raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: local\n  master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'local'"):
+        load_config(path)
+
+
+def test_target_standalone_valid_master_url_ok(tmp_path):
+    """standalone target with spark:// master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: standalone\n  master_url: spark://my-master:7077")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "standalone"
+
+
+def test_target_standalone_wrong_master_url_raises(tmp_path):
+    """standalone target with non-spark:// master_url raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: standalone\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'spark://'"):
+        load_config(path)
+
+
+def test_target_yarn_valid_master_url_ok(tmp_path):
+    """yarn target with master_url='yarn' passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: yarn\n  master_url: yarn")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "yarn"
+
+
+def test_target_yarn_wrong_master_url_raises(tmp_path):
+    """yarn target with master_url != 'yarn' raises ConfigError (exact match)"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: yarn\n  master_url: \"yarn-client\"")
+    with pytest.raises(ConfigError, match="requires master_url='yarn'"):
+        load_config(path)
+
+
+def test_target_kubernetes_valid_master_url_ok(tmp_path):
+    """kubernetes target with k8s:// master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: kubernetes\n  master_url: k8s://https://apiserver:6443")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "kubernetes"
+
+
+def test_target_kubernetes_wrong_master_url_raises(tmp_path):
+    """kubernetes target without k8s:// prefix raises ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: kubernetes\n  master_url: spark://host:7077")
+    with pytest.raises(ConfigError, match="requires master_url starting with 'k8s://'"):
+        load_config(path)
+
+
+def test_target_databricks_requires_block(tmp_path):
+    """databricks is now an implemented remote-submit target; without its config block it errors."""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: databricks\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="requires the deployment.databricks block"):
+        load_config(path)
+
+
+def test_target_emr_raises(tmp_path):
+    """emr target is not yet supported → ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: emr\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="not yet supported"):
+        load_config(path)
+
+
+def test_target_dataproc_raises(tmp_path):
+    """dataproc target is not yet supported → ConfigError"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: dataproc\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match="not yet supported"):
+        load_config(path)
+
+
+def test_target_default_master_url_passes(tmp_path):
+    """Default local target with default local[*] master_url passes"""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  target: local\n  master_url: \"local[*]\"")
+    cfg = load_config(path)
+    assert cfg.deployment.target == "local"
+    assert cfg.deployment.master_url == "local[*]"
+
+
+def test_target_validation_rejects_flink_engine(tmp_path):
+    """engine: flink is rejected at config-load regardless of target↔master_url."""
+    path = tmp_path / "cfg.yml"
+    path.write_text("deployment:\n  engine: flink\n  target: databricks\n  master_url: local[*]")
+    with pytest.raises(ConfigError, match=r"flink is not yet supported"):
         load_config(path)
 
 
@@ -345,3 +469,33 @@ def test_load_config_pass2_registers_redaction(monkeypatch, tmp_path):
     load_config(path)
     assert redaction.is_registered("reg-secret-999999")
 
+
+
+def test_legacy_stores_lineage_block_rejected(tmp_path):
+    """2.0: a removed `stores.lineage:` block is no longer tolerated — it raises
+    ConfigError (extra=forbid) instead of being silently stripped with a warning."""
+    from aqueduct.config import ConfigError
+    p = tmp_path / "aqueduct.yml"
+    p.write_text("stores:\n  lineage: {backend: duckdb, path: .aqueduct/lin.db}\n")
+    with pytest.raises(ConfigError):
+        load_config(p)
+
+
+def test_legacy_flat_stores_depot_block_rejected(tmp_path):
+    """2.0: a legacy flat `stores.depot:` mapping is no longer auto-migrated — it
+    raises ConfigError. Use `stores.depots.default:`."""
+    from aqueduct.config import ConfigError
+    p = tmp_path / "aqueduct.yml"
+    p.write_text("stores:\n  depot: {backend: duckdb, path: .aqueduct/depot.db}\n")
+    with pytest.raises(ConfigError):
+        load_config(p)
+
+
+def test_stores_depot_property_removed():
+    """2.0: the `cfg.stores.depot` back-compat property is gone — use
+    `default_depot()` or `depots['default']`."""
+    from aqueduct.config import StoresConfig
+    assert not hasattr(StoresConfig, "depot")
+    s = StoresConfig()
+    assert s.default_depot().backend == "duckdb"          # explicit accessor works
+    assert s.depots["default"].backend == "duckdb"        # or index the map

@@ -20,6 +20,8 @@ import os
 import re
 from typing import Any
 
+from aqueduct.errors import ParseError
+
 # ${ctx.some.dotted.key}
 _CTX_RE = re.compile(r"\$\{ctx\.([a-zA-Z0-9_.]+)\}")
 
@@ -60,7 +62,7 @@ def _sub_env(value: str) -> str:
             return env_val
         if default is not None:
             return default
-        raise ValueError(
+        raise ParseError(
             f"Environment variable ${{{var_name}}} is not set and no default was provided"
         )
 
@@ -70,7 +72,7 @@ def _sub_env(value: str) -> str:
 def _sub_ctx(value: str, ctx_map: dict[str, str], depth: int = 0) -> str:
     """Substitute ${ctx.key} patterns from ctx_map. Recursive to handle transitive refs."""
     if depth > 20:
-        raise ValueError(
+        raise ParseError(
             f"Context reference depth limit exceeded — possible cycle near: {value!r}"
         )
 
@@ -80,7 +82,7 @@ def _sub_ctx(value: str, ctx_map: dict[str, str], depth: int = 0) -> str:
             if key in _RESERVED_DEFERRED:
                 # Preserve the token for the Executor's runtime substitution.
                 return m.group(0)
-            raise ValueError(f"Undefined context reference: ${{ctx.{key}}}")
+            raise ParseError(f"Undefined context reference: ${{ctx.{key}}}")
         resolved = ctx_map[key]
         # If resolved value itself has ctx refs, recurse
         if _CTX_RE.search(resolved):
@@ -143,7 +145,7 @@ def build_context_map(
     else:
         unresolved = {k: v for k, v in str_flat.items() if _CTX_RE.search(v)}
         if unresolved:
-            raise ValueError(
+            raise ParseError(
                 f"Unresolvable context references (possible cycle): {list(unresolved.keys())}"
             )
 

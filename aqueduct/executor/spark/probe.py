@@ -112,7 +112,8 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -120,9 +121,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-from aqueduct.parser.models import Module
+from aqueduct.errors import ConfigError
+from aqueduct.executor.models import _add_module_warning
+from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ProbeSampling:
+    max_sample_rows: int = 100
+    default_sample_fraction: float = 0.1
+
 
 # ── DuckDB DDL ────────────────────────────────────────────────────────────────
 
@@ -140,7 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_probe_signals_probe
 
 
 def _utcnow_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
+    return datetime.now(tz=UTC).isoformat()
 
 
 def _json_dumps(obj: Any) -> str:
@@ -183,9 +193,10 @@ def _row_count_estimate(
     signal_cfg: dict[str, Any],
     probe_id: str = "",
     run_id: str = "",
-    store_dir: "Path | None" = None,
+    store_dir: Path | None = None,
     block_full_actions: bool = False,
     observability_store: Any = None,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Estimate row count. sample method only triggers on a fraction.
 
@@ -227,9 +238,10 @@ def _row_count_estimate(
 
     # method: sample
     if block_full_actions:
-        logger.warning("Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
+        logger.warning("[runtime_probe_blocked] Probe %r: block_full_actions=True; skipping row_count_estimate sample.", probe_id)
+        _add_module_warning("runtime_probe_blocked", f"Probe {probe_id!r}: block_full_actions=True; skipping row_count_estimate sample.")
         return {"method": "sample", "blocked": True, "estimate": None}
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     sample_count = df.sample(fraction=fraction).count()
     estimate = int(round(sample_count / fraction)) if fraction > 0 else 0
     return {"method": "sample", "fraction": fraction, "sample_count": sample_count, "estimate": estimate}
@@ -239,15 +251,17 @@ def _null_rates(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Compute per-column null rates on a random sample."""
     from pyspark.sql import functions as F
 
     columns: list[str] = signal_cfg.get("columns") or df.columns
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping null_rates sample.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping null_rates sample.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping null_rates sample.")
         return {"fraction": fraction, "blocked": True, "null_rates": {c: None for c in columns}}
 
     sample_df = df.sample(fraction=fraction).select(columns)
@@ -267,6 +281,7 @@ def _null_rates(
 def _sample_rows(
     df: DataFrame,
     signal_cfg: dict[str, Any],
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Fetch at most n rows as JSON-serialisable dicts.
 
@@ -274,6 +289,7 @@ def _sample_rows(
     partition(s) without scanning the full dataset.
     """
     n = int(signal_cfg.get("n", 10))
+    n = min(n, sampling.max_sample_rows)
     rows = df.limit(n).collect()
     serialised = [row.asDict(recursive=True) for row in rows]
     return {"n": n, "rows": serialised}
@@ -283,16 +299,18 @@ def _value_distribution(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Min/max/mean/stddev + percentiles per column on a sample."""
     from pyspark.sql import functions as F
     from pyspark.sql.types import NumericType
 
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     percentiles: list[float] = signal_cfg.get("percentiles", [0.25, 0.5, 0.75])
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping value_distribution.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping value_distribution.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping value_distribution.")
         return {"blocked": True, "fraction": fraction, "stats": {}}
 
     # Default to numeric columns only when caller didn't specify
@@ -345,15 +363,17 @@ def _distinct_count(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Approximate distinct-value count per column via approx_count_distinct."""
     from pyspark.sql import functions as F
 
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
     columns: list[str] = signal_cfg.get("columns") or df.columns
 
     if block_full_actions:
-        logger.warning("Probe: block_full_actions=True; skipping distinct_count.")
+        logger.warning("[runtime_probe_blocked] Probe: block_full_actions=True; skipping distinct_count.")
+        _add_module_warning("runtime_probe_blocked", "block_full_actions=True; skipping distinct_count.")
         return {"blocked": True, "fraction": fraction, "distinct_counts": {c: None for c in columns}}
 
     source = df.sample(fraction=fraction).select(columns) if fraction > 0 else df.select(columns)
@@ -366,22 +386,28 @@ def _data_freshness(
     df: DataFrame,
     signal_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    sampling: ProbeSampling = ProbeSampling(),
 ) -> dict[str, Any]:
     """Capture the max value of a timestamp/date column."""
     from pyspark.sql import functions as F
 
     column: str | None = signal_cfg.get("column")
     if not column:
-        raise ValueError("data_freshness signal requires 'column'")
+        raise ConfigError("data_freshness signal requires 'column'")
 
     allow_sample = bool(signal_cfg.get("allow_sample", False))
-    fraction = float(signal_cfg.get("fraction", 0.1))
+    fraction = float(signal_cfg.get("fraction", sampling.default_sample_fraction))
 
     if block_full_actions and not allow_sample:
         logger.warning(
-            "Probe: block_full_actions=True; skipping data_freshness for column=%r. "
-            "Set allow_sample: true to use a sample instead.",
+            "[runtime_probe_blocked] Probe: block_full_actions=True; skipping "
+            "data_freshness for column=%r. Set allow_sample: true to use a sample instead.",
             column,
+        )
+        _add_module_warning(
+            "runtime_probe_blocked",
+            f"block_full_actions=True; skipping data_freshness for "
+            f"column={column!r}. Set allow_sample: true to use a sample instead.",
         )
         return {"blocked": True, "column": column}
 
@@ -442,7 +468,7 @@ def _custom(
     call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
     result = fn(df, call_cfg)
     if not isinstance(result, dict):
-        raise ValueError(
+        raise ConfigError(
             f"custom probe callable must return a dict, got {type(result).__name__}"
         )
     return {"custom": True, **result}
@@ -461,7 +487,7 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
 
     expr_str = sig_cfg.get("expr", "")
     if not expr_str:
-        raise ValueError("threshold signal requires an 'expr' field")
+        raise ConfigError("threshold signal requires an 'expr' field")
 
     result = df.selectExpr(expr_str).collect()[0][0]
     passed = bool(result) if result is not None else False
@@ -469,6 +495,28 @@ def _threshold(df: DataFrame, sig_cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
+def _stdout_report_lines(sig_type: str, payload: Any) -> list[str]:
+    """Human-readable lines for `report: stdout` (per signal).
+
+    Scalar payload fields collapse onto one header line
+    (``sig_type: k=v  ·  k=v``); dict/list-valued fields expand to one
+    indented line per entry. The CLI renderer caps the block (unless -v),
+    so this never bounds itself.
+    """
+    if not isinstance(payload, dict):
+        return [f"{sig_type}: {payload}"]
+    scalars = {k: v for k, v in payload.items() if not isinstance(v, (dict, list))}
+    nested = {k: v for k, v in payload.items() if isinstance(v, (dict, list))}
+    head = "  ·  ".join(f"{k}={v}" for k, v in scalars.items())
+    lines = [f"{sig_type}: {head}" if head else f"{sig_type}:"]
+    for k, v in nested.items():
+        if isinstance(v, dict):
+            lines.extend(f"  {k}.{kk}: {vv}" for kk, vv in v.items())
+        else:
+            lines.extend(f"  {k}[{i}]: {vv}" for i, vv in enumerate(v))
+    return lines
+
 
 def execute_probe(
     module: Module,
@@ -478,7 +526,8 @@ def execute_probe(
     store_dir: Path,
     block_full_actions: bool = False,
     observability_store: Any = None,
-) -> None:
+    sampling: ProbeSampling = ProbeSampling(),
+) -> tuple[str, ...]:
     """Capture observability signals for a single Probe module.
 
     Writes one row per signal to the configured observability store
@@ -497,16 +546,25 @@ def execute_probe(
         block_full_actions: Forward to per-signal helpers.
         observability_store: Optional Phase 28 obs-store backend. When None, a default
                    DuckDB store at ``store_dir/observability.db`` is constructed.
+        sampling: Probe sampling governance (max_sample_rows cap + default_sample_fraction).
+
+    Returns:
+        Report lines for the CLI when the Probe declares ``report: stdout``
+        (one entry per line, printed dim under the module summary row);
+        empty tuple otherwise. Persistence to ``probe_signals`` is unchanged
+        and always happens — ``report: stdout`` is additive.
 
     Raises:
         Nothing — all exceptions are caught and logged.  Probe failure must
         never halt the blueprint.
     """
+    _report_stdout = str(module.config.get("report", "")).lower() == "stdout"
+    _notes: list[str] = []
     try:
         signals: list[dict[str, Any]] = module.config.get("signals", [])
         if not signals:
             logger.debug("Probe %r has no signals configured; skipping.", module.id)
-            return
+            return ()
 
         store_dir.mkdir(parents=True, exist_ok=True)
 
@@ -530,17 +588,18 @@ def execute_probe(
                             store_dir=store_dir,
                             block_full_actions=block_full_actions,
                             observability_store=observability_store,
+                            sampling=sampling,
                         )
                     elif sig_type == "null_rates":
-                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _null_rates(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "sample_rows":
-                        payload = _sample_rows(df, sig_cfg)
+                        payload = _sample_rows(df, sig_cfg, sampling=sampling)
                     elif sig_type == "value_distribution":
-                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _value_distribution(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "distinct_count":
-                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _distinct_count(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "data_freshness":
-                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _data_freshness(df, sig_cfg, block_full_actions=block_full_actions, sampling=sampling)
                     elif sig_type == "partition_stats":
                         payload = _partition_stats(df)
                     elif sig_type == "threshold":
@@ -548,7 +607,8 @@ def execute_probe(
                     elif sig_type == "custom":
                         payload = _custom(df, sig_cfg, block_full_actions=block_full_actions)
                     else:
-                        logger.warning("Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
+                        logger.warning("[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
+                        _add_module_warning("runtime_probe_unknown_signal", f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.")
                         continue
 
                     cur.execute(
@@ -559,9 +619,18 @@ def execute_probe(
                         """,
                         [run_id, module.id, sig_type, _json_dumps(payload), _utcnow_iso()],
                     )
+                    if _report_stdout:
+                        try:
+                            _notes.extend(_stdout_report_lines(sig_type, payload))
+                        except Exception:  # noqa: BLE001 — report formatting must never fail the probe
+                            pass
                 except Exception as exc:
                     logger.warning(
-                        "Probe %r signal %r failed: %s", module.id, sig_type, exc
+                        "[runtime_probe_signal_error] Probe %r signal %r failed: %s",
+                        module.id, sig_type, exc,
                     )
+                    _add_module_warning("runtime_probe_signal_error", f"Probe {module.id!r} signal {sig_type!r} failed: {exc}")
     except Exception as exc:
-        logger.warning("execute_probe %r: unexpected error: %s", module.id, exc)
+        logger.warning("[runtime_probe_error] execute_probe %r: unexpected error: %s", module.id, exc)
+        _add_module_warning("runtime_probe_error", f"execute_probe {module.id!r}: unexpected error: {exc}")
+    return tuple(_notes)

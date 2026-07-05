@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from aqueduct.errors import AqueductError
 from abc import ABC, abstractmethod
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Sequence
+from typing import TYPE_CHECKING, Any
+
+from aqueduct.errors import AqueductError
 
 if TYPE_CHECKING:
-    from aqueduct.config import AqueductConfig, StoreBackendConfig
+    from aqueduct.config import AqueductConfig, RelationalStoreConfig
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +60,7 @@ class RelationalCursor:
         self._cursor = raw_cursor
         self._paramstyle = paramstyle
 
-    def execute(self, sql: str, params: Sequence[Any] | None = None) -> "RelationalCursor":
+    def execute(self, sql: str, params: Sequence[Any] | None = None) -> RelationalCursor:
         sql_out = sql if self._paramstyle == "qmark" else sql.replace("?", "%s")
         if params is None:
             self._cursor.execute(sql_out)
@@ -65,7 +68,7 @@ class RelationalCursor:
             self._cursor.execute(sql_out, tuple(params))
         return self
 
-    def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> "RelationalCursor":
+    def executemany(self, sql: str, seq_of_params: Sequence[Sequence[Any]]) -> RelationalCursor:
         sql_out = sql if self._paramstyle == "qmark" else sql.replace("?", "%s")
         self._cursor.executemany(sql_out, [tuple(p) for p in seq_of_params])
         return self
@@ -107,11 +110,7 @@ class _RelationalStore(ABC):
 
 
 class ObservabilityStore(_RelationalStore):
-    """Run records, failures, healing outcomes, signal overrides, probe signals, metrics."""
-
-
-class LineageStore(_RelationalStore):
-    """Column-level lineage."""
+    """Run records, failures, healing outcomes, signal overrides, probe signals, metrics, column lineage."""
 
 
 class DepotStore(ABC):
@@ -179,7 +178,7 @@ class _RelationalDepotMixin:
             return default
 
     def kv_put(self, key: str, value: str) -> None:
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         with self.connect() as cur:
             cur.execute(self._DDL)
@@ -191,7 +190,7 @@ class _RelationalDepotMixin:
                     SET value = excluded.value,
                         updated_at = excluded.updated_at
                 """,
-                [key, value, datetime.now(tz=timezone.utc).isoformat()],
+                [key, value, datetime.now(tz=UTC).isoformat()],
             )
 
     def kv_delete(self, key: str) -> None:
@@ -205,6 +204,34 @@ class _RelationalDepotMixin:
 
 # ── Factory ───────────────────────────────────────────────────────────────────
 
+class _NamespacedDepot:
+    """Transparently prefixes every depot key with ``<blueprint_id>:`` so two
+    blueprints sharing a physical depot are isolated (no key collisions). Applied
+    to the default mount + any mount without ``shared: true``; shared mounts use
+    raw keys. Wraps the **raw** KV store at the ``kv_*`` level, so all access —
+    the ``DepotStore`` wrapper (``@aq.depot.*`` reads + ``format: depot`` Egress
+    writes + ``_last_run_id``) and any direct ``kv_*`` call — stays consistent.
+    Everything else (``backend``, ``location_label``, ``relational_connect`` …)
+    passes through.
+    """
+
+    def __init__(self, inner: DepotStore, prefix: str) -> None:
+        self._inner = inner
+        self._prefix = prefix
+
+    def kv_get(self, key: str, default: Any = "") -> Any:
+        return self._inner.kv_get(f"{self._prefix}{key}", default)
+
+    def kv_put(self, key: str, value: Any) -> None:
+        self._inner.kv_put(f"{self._prefix}{key}", value)
+
+    def kv_delete(self, key: str) -> None:
+        self._inner.kv_delete(f"{self._prefix}{key}")
+
+    def __getattr__(self, name: str) -> Any:  # passthrough (backend, location_label, …)
+        return getattr(self._inner, name)
+
+
 @dataclass(frozen=True)
 class StoreBundle:
     """Resolved per-run stores. Each store may share an underlying connection
@@ -212,11 +239,15 @@ class StoreBundle:
     """
 
     observability: ObservabilityStore
-    lineage: LineageStore
-    depot: DepotStore
+    depot: DepotStore                          # the default mount (key-isolated per blueprint)
+    depots: dict[str, DepotStore] = field(default_factory=dict)   # name → mount (incl. "default")
 
 
-def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = None) -> StoreBundle:
+def get_stores(
+    cfg: AqueductConfig,
+    store_dir_override: Path | str | None = None,
+    blueprint_id: str | None = None,
+) -> StoreBundle:
     """Construct the per-run store bundle from validated config.
 
     Backend dispatch:
@@ -229,7 +260,7 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
     - `redis`    → `aqueduct.stores.redis_.RedisDepotStore` (depot only).
 
     Backends are validated at config-load time
-    (`StoreBackendConfig` + `StoresConfig` validators in `aqueduct.config`),
+    (`RelationalStoreConfig` + `StoresConfig` validators in `aqueduct.config`),
     so an observability/lineage backend of `redis` cannot reach this function.
 
     Args:
@@ -242,57 +273,77 @@ def get_stores(cfg: "AqueductConfig", store_dir_override: "Path | str | None" = 
     # Lazy imports keep optional backends optional.
     from aqueduct.stores.duckdb_ import (
         DuckDBDepotStore,
-        DuckDBLineageStore,
         DuckDBObservabilityStore,
     )
 
-    def _resolve_duckdb_path(store_cfg: "StoreBackendConfig") -> Path:
-        p = Path(store_cfg.path)
+    def _resolve_obs_duckdb_path(store_cfg: RelationalStoreConfig) -> Path:
+        # 2.0 — the duckdb OBSERVABILITY path is always a routing BASE
+        # directory (config load rejects file paths): the store file lives at
+        # <base>/<blueprint_id>/observability.db. `store_dir_override`
+        # (--store-dir) replaces the base entirely. Depot mounts are different
+        # — their `path` IS the db file — see `_resolve_depot_duckdb_path`.
+        from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+        from aqueduct.stores.read import _OBS_ROUTING_ROOT
+        if store_dir_override:
+            _base = Path(store_dir_override)
+        elif store_cfg.path is not None:
+            _base = Path(store_cfg.path)
+        else:
+            _base = Path(_OBS_ROUTING_ROOT)
+        return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+
+    def _resolve_depot_duckdb_path(mount: Any) -> Path:
+        # Depot mounts: `path` names the db FILE (e.g. .aqueduct/depot.db).
+        if mount.path is None:
+            from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+            from aqueduct.stores.read import _OBS_ROUTING_ROOT
+            _base = Path(store_dir_override) if store_dir_override else Path(_OBS_ROUTING_ROOT)
+            return _base / (blueprint_id or "default") / DEFAULT_OBS_DB_FILENAME
+        p = Path(mount.path)
         if store_dir_override is not None and not p.is_absolute():
             return Path(store_dir_override) / p.name
         return p
 
     obs: ObservabilityStore
-    lineage: LineageStore
     depot: DepotStore
 
-    # ── observability ──────────────────────────────────────────────────────────────────
+    # ── observability (includes column lineage — merged in Phase 38) ──────────
     if cfg.stores.observability.backend == "duckdb":
-        obs = DuckDBObservabilityStore(_resolve_duckdb_path(cfg.stores.observability))
+        obs = DuckDBObservabilityStore(_resolve_obs_duckdb_path(cfg.stores.observability))
     elif cfg.stores.observability.backend == "postgres":
         from aqueduct.stores.postgres import PostgresObservabilityStore
-        obs = PostgresObservabilityStore(cfg.stores.observability.path)
+        obs = PostgresObservabilityStore(cfg.stores.observability.path or "")
     else:  # pragma: no cover — guarded at config layer
         raise BackendUnsupportedError(
             f"obs.backend={cfg.stores.observability.backend!r} is not a supported relational backend"
         )
 
-    # ── lineage ──────────────────────────────────────────────────────────────
-    if cfg.stores.lineage.backend == "duckdb":
-        lineage = DuckDBLineageStore(_resolve_duckdb_path(cfg.stores.lineage))
-    elif cfg.stores.lineage.backend == "postgres":
-        from aqueduct.stores.postgres import PostgresLineageStore
-        lineage = PostgresLineageStore(cfg.stores.lineage.path)
-    else:  # pragma: no cover
-        raise BackendUnsupportedError(
-            f"lineage.backend={cfg.stores.lineage.backend!r} is not a supported relational backend"
-        )
+    # ── depot mounts ───────────────────────────────────────────────────────────
+    # Build every mount in stores.depots (incl. the implicit `default`). Each is
+    # per-blueprint key-isolated (prefixed) unless shared: true. With no
+    # blueprint_id (some non-run contexts) keys are raw — same as pre-isolation.
+    def _build_depot(mount: Any) -> DepotStore:
+        if mount.backend == "duckdb":
+            return DuckDBDepotStore(_resolve_depot_duckdb_path(mount))
+        if mount.backend == "postgres":
+            from aqueduct.stores.postgres import PostgresDepotStore
+            return PostgresDepotStore(mount.path)
+        if mount.backend == "redis":
+            from aqueduct.stores.redis_ import RedisDepotStore
+            return RedisDepotStore(mount.path)
+        raise BackendUnsupportedError(  # pragma: no cover — guarded at config layer
+            f"depot.backend={mount.backend!r} is not a supported KV backend")
 
-    # ── depot ────────────────────────────────────────────────────────────────
-    if cfg.stores.depot.backend == "duckdb":
-        depot = DuckDBDepotStore(_resolve_duckdb_path(cfg.stores.depot))
-    elif cfg.stores.depot.backend == "postgres":
-        from aqueduct.stores.postgres import PostgresDepotStore
-        depot = PostgresDepotStore(cfg.stores.depot.path)
-    elif cfg.stores.depot.backend == "redis":
-        from aqueduct.stores.redis_ import RedisDepotStore
-        depot = RedisDepotStore(cfg.stores.depot.path)
-    else:  # pragma: no cover
-        raise BackendUnsupportedError(
-            f"depot.backend={cfg.stores.depot.backend!r} is not a supported KV backend"
-        )
+    depots: dict[str, DepotStore] = {}
+    for name, mount in cfg.stores.effective_depots().items():
+        raw = _build_depot(mount)
+        if blueprint_id and not mount.shared:
+            depots[name] = _NamespacedDepot(raw, f"{blueprint_id}:")  # type: ignore[assignment]
+        else:
+            depots[name] = raw
+    depot = depots["default"]
 
-    return StoreBundle(observability=obs, lineage=lineage, depot=depot)
+    return StoreBundle(observability=obs, depot=depot, depots=depots)
 
 
 # Field placeholder so static analysis tools don't complain about the

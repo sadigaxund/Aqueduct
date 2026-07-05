@@ -444,59 +444,79 @@ class TestPostWithRetry:
         assert do_post.call_count == 1
 
     def test_non_retryable_4xx_raises_immediately(self):
+        import httpx
+
         from aqueduct.agent.providers import _post_with_retry
         do_post = MagicMock()
         resp = MagicMock(status_code=401)
-        resp.raise_for_status.side_effect = RuntimeError("401 Unauthorized")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "401 Unauthorized", request=MagicMock(), response=resp
+        )
         do_post.return_value = resp
-        with pytest.raises(RuntimeError, match=r"401"):
+        with pytest.raises(httpx.HTTPStatusError, match=r"401"):
             _post_with_retry(do_post, total_seconds=60.0, max_retries=3, backoff_seconds=2.0)
         assert do_post.call_count == 1
 
     def test_retryable_429_retried_up_to_max_retries(self):
+        import httpx
+
         from aqueduct.agent.providers import _post_with_retry
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
-        resp.raise_for_status.side_effect = RuntimeError("429 Too Many Requests")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "429 Too Many Requests", request=MagicMock(), response=resp
+        )
         resp.headers = {}
         do_post.return_value = resp
-        with pytest.raises(RuntimeError, match=r"429"):
+        with pytest.raises(httpx.HTTPStatusError, match=r"429"):
             _post_with_retry(do_post, total_seconds=60.0, max_retries=2, backoff_seconds=0.01)
         # 1 initial + 2 retries = 3 total
         assert do_post.call_count == 3
 
     def test_retryable_503_retried_then_raises(self):
+        import httpx
+
         from aqueduct.agent.providers import _post_with_retry
         do_post = MagicMock()
         resp = MagicMock(status_code=503)
-        resp.raise_for_status.side_effect = RuntimeError("503 Service Unavailable")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "503 Service Unavailable", request=MagicMock(), response=resp
+        )
         resp.headers = {}
         do_post.return_value = resp
-        with pytest.raises(RuntimeError, match=r"503"):
+        with pytest.raises(httpx.HTTPStatusError, match=r"503"):
             _post_with_retry(do_post, total_seconds=60.0, max_retries=1, backoff_seconds=0.01)
         # 1 initial + 1 retry = 2 total
         assert do_post.call_count == 2
 
     def test_deadline_cap_skips_retry_when_sleep_exceeds_remaining(self):
+        import httpx
+
         from aqueduct.agent.providers import _post_with_retry
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
-        resp.raise_for_status.side_effect = RuntimeError("429")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "429", request=MagicMock(), response=resp
+        )
         resp.headers = {}
         do_post.return_value = resp
-        with pytest.raises(RuntimeError, match=r"429"):
+        with pytest.raises(httpx.HTTPStatusError, match=r"429"):
             _post_with_retry(do_post, total_seconds=0.5, max_retries=3, backoff_seconds=10.0)
         # Only the initial call — retry skipped because sleep ≥ remaining - 1.0
         assert do_post.call_count == 1
 
     def test_no_retries_when_max_retries_zero(self):
+        import httpx
+
         from aqueduct.agent.providers import _post_with_retry
         do_post = MagicMock()
         resp = MagicMock(status_code=429)
-        resp.raise_for_status.side_effect = RuntimeError("429")
+        resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "429", request=MagicMock(), response=resp
+        )
         resp.headers = {}
         do_post.return_value = resp
-        with pytest.raises(RuntimeError, match=r"429"):
+        with pytest.raises(httpx.HTTPStatusError, match=r"429"):
             _post_with_retry(do_post, total_seconds=60.0, max_retries=0, backoff_seconds=2.0)
         assert do_post.call_count == 1
 

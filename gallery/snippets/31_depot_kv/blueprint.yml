@@ -1,0 +1,45 @@
+# blueprint.yml
+# Depot KV: cross-run state with @aq.depot.get()
+
+aqueduct: "1.0"
+id: depot_kv_demo
+name: "Depot KV Snippet"
+
+modules:
+  - id: raw_events
+    label: "Raw Events"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/events.csv
+      options: {header: "true", inferSchema: "true"}
+
+  # Filter to only events after the last processed watermark.
+  # On first run the depot is empty, so @aq.depot.get returns the fallback
+  # '2025-06-01'. Subsequent runs use the stored watermark from the depot.
+  - id: incremental_filter
+    label: "Incremental Filter"
+    type: Channel
+    config:
+      op: sql
+      # @aq.depot.get resolves at compile time — the returned value replaces
+      # the function call directly in the SQL string before Spark sees it.
+      query: >
+        SELECT * FROM raw_events
+        WHERE created_at > '@aq.depot.get('watermark', '2025-06-01')'
+      materialize: incremental
+      watermark_column: created_at
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/events.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_events
+    to: incremental_filter
+  - from: incremental_filter
+    to: output

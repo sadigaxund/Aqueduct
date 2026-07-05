@@ -20,8 +20,8 @@ aqueduct: '1.0'
 id: test_bp
 name: Test Blueprint
 agent:
-  approval_mode: aggressive
-  aggressive_max_patches: 2
+  approval: auto
+  max_patches: 2
 modules:
   - id: in
     type: Ingress
@@ -91,9 +91,9 @@ def test_aggressive_mode_invalid_patch_stops_loop(
     
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(None, None, None, False)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=None):
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✗ LLM patch produces invalid Blueprint, discarding" in result.output
+    assert "✗ Agent patch produces invalid Blueprint, discarding" in result.output
     # Loop should have stopped after the first invalid patch
     assert mock_gen_patch.call_count == 1
     # Blueprint should NOT have been updated (check its content)
@@ -146,12 +146,12 @@ def test_aggressive_mode_fails_then_continues(
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._stage_failed_patch") as mock_stage:
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✗ LLM patch did not fix the issue (1/2)" in result.output
-    assert "✗ LLM patch did not fix the issue (2/2)" in result.output
+    assert "✗ Agent patch did not fix the issue (1/2)" in result.output
+    assert "✗ Agent patch did not fix the issue (2/2)" in result.output
     # 1.1.0 — renamed to max_patches in the log message.
-    assert "⚠  LLM: max_patches=2 reached" in result.output
+    assert "⚠  Agent: max_patches=2 reached" in result.output
     
     assert mock_gen_patch.call_count == 2
     assert mock_stage.call_count == 2
@@ -189,9 +189,9 @@ def test_aggressive_mode_succeeds_stops_loop(
     with patch("aqueduct.cli._run_patch_gates_inline", return_value=(MagicMock(), MagicMock(), MagicMock(), True)), \
          patch("aqueduct.cli._apply_patch_in_memory", return_value=MagicMock()), \
          patch("aqueduct.cli._write_patch_to_blueprint") as mock_write:
-        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-aggressive"])
+        result = runner.invoke(cli, ["run", str(base_blueprint), "--allow-multi-patch"])
     
-    assert "✓ LLM patch validated and applied (1/2)" in result.output
+    assert "✓ Agent patch validated and applied (1/2)" in result.output
     assert mock_gen_patch.call_count == 1
     assert mock_write.call_count == 1
 
@@ -214,7 +214,7 @@ def test_trigger_agent_escalation(
     mock_surveyor_cls.return_value.patch_store.return_value = None
     
     # Update blueprint to disabled
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: disabled"))
     
     # 1. First run fails but triggers agent
     mock_exec.side_effect = [
@@ -228,8 +228,8 @@ def test_trigger_agent_escalation(
     with patch("aqueduct.agent.stage_patch_for_human") as mock_stage:
         result = runner.invoke(cli, ["run", str(base_blueprint)])
     
-    assert "LLM triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
-    assert "✎ LLM patch staged" in result.output
+    assert "Agent triggered by module rule (overriding approval_mode=disabled → staging patch for review)" in result.output
+    assert "▸ Agent patch staged →" in result.output
     assert mock_stage.call_count == 1
 
 @patch("aqueduct.executor.get_executor")
@@ -246,13 +246,13 @@ def test_trigger_agent_false_disabled_breaks(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: disabled"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: disabled"))
     
     mock_exec.return_value = ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", module_results=(), trigger_agent=False)
     
     result = runner.invoke(cli, ["run", str(base_blueprint)])
     
-    assert "LLM self-healing" not in result.output
+    assert "Agent self-healing" not in result.output
     assert mock_gen_patch.call_count == 0
 
 @patch("aqueduct.config.load_config")
@@ -273,13 +273,12 @@ def test_block_full_actions_propagation(
     mock_cfg = AqueductConfig(
         danger=DangerConfig(
             allow_full_probe_actions=False,
-            allow_aggressive_patching=True
+            allow_multi_patch=True
         ),
         deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
         stores={
-            "observability": {"path": ".aqueduct/obs.db"},
-            "lineage": {"path": ".aqueduct/lineage.db"},
-            "depot": {"path": ".aqueduct/depot.db"}
+            "observability": {"path": ".aqueduct/obs"},
+            "depots": {"default": {"path": ".aqueduct/depot.db"}}
         },
         spark_config={}
     )
@@ -307,7 +306,7 @@ def test_trigger_agent_stays_human(
     mock_get_executor.return_value = mock_exec
     
     # Set to human
-    base_blueprint.write_text(base_blueprint.read_text().replace("approval_mode: aggressive", "approval_mode: human"))
+    base_blueprint.write_text(base_blueprint.read_text().replace("approval: auto", "approval: human"))
     
     mock_exec.side_effect = [
         ExecutionResult(blueprint_id="test_bp", run_id="r1", status="error", 
@@ -324,5 +323,5 @@ def test_trigger_agent_stays_human(
     
     # Should NOT have the override message
     assert "overriding approval_mode=disabled" not in result.output
-    assert "✎ LLM patch staged" in result.output
+    assert "▸ Agent patch staged →" in result.output
     assert mock_stage.call_count == 1

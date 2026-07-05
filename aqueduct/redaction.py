@@ -35,7 +35,6 @@ import warnings
 from collections.abc import Iterable
 from typing import Any
 
-
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 # Minimum length for a value to be registered. Below this, substring redaction

@@ -19,16 +19,27 @@ Phase 5 scope: logging + webhook only.  LLM patch loop wired in Phase 7.
 from __future__ import annotations
 
 import json
+import logging
 import traceback
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import logging
-
-from aqueduct.compiler.models import Manifest
-from aqueduct.executor.models import ExecutionResult
+from aqueduct.executor.models import ExecutionResult, ExecutionStatus
+from aqueduct.models import Manifest
 from aqueduct.redaction import redact as _redact
+from aqueduct.surveyor.ddl import (
+    _DDL,
+    _EXPLAIN_SNAPSHOT_DDL,
+    _HEAL_ATTEMPTS_DDL,
+    _SIGNAL_OVERRIDES_DDL,
+)
+from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
+    _COLUMN_SUGGEST_CLASSES,
+    _PY4J_CAUSE_HOP_LIMIT,
+    _extract_structured_error,
+    _parse_suggested_columns,
+)
 from aqueduct.surveyor.models import FailureContext
 from aqueduct.surveyor.webhook import fire_webhook
 
@@ -38,170 +49,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# ── DDL ───────────────────────────────────────────────────────────────────────
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS run_records (
-    run_id         VARCHAR PRIMARY KEY,
-    blueprint_id   VARCHAR NOT NULL,
-    status         VARCHAR NOT NULL,
-    started_at     TIMESTAMPTZ NOT NULL,
-    finished_at    TIMESTAMPTZ,
-    module_results JSON,
-    parent_run_id  VARCHAR
-);
-
-CREATE TABLE IF NOT EXISTS failure_contexts (
-    run_id            VARCHAR PRIMARY KEY,
-    blueprint_id      VARCHAR NOT NULL,
-    failed_module     VARCHAR NOT NULL,
-    error_message     VARCHAR NOT NULL,
-    stack_trace       VARCHAR,
-    manifest_json     VARCHAR,     -- Phase 39: blob path or inline JSON
-    provenance_json   VARCHAR,     -- Phase 39: blob path or inline JSON
-    started_at        TIMESTAMPTZ NOT NULL,
-    finished_at       TIMESTAMPTZ NOT NULL,
-    -- Structured Spark-error extraction. Populated when PySparkException or
-    -- Py4JJavaError surfaces enough metadata to identify the failure class,
-    -- offending object, and suggested column names — much cheaper for the
-    -- agent to consume than a raw multi-kilobyte JVM stack trace.
-    error_class       VARCHAR,
-    root_exception    JSON,
-    sql_state         VARCHAR,
-    object_name       VARCHAR,
-    suggested_columns JSON
-);
-
-CREATE TABLE IF NOT EXISTS healing_outcomes (
-    id           VARCHAR PRIMARY KEY,
-    run_id       VARCHAR NOT NULL,
-    parent_run_id VARCHAR,
-    failed_module VARCHAR,
-    failure_category VARCHAR,
-    model        VARCHAR,
-    patch_id     VARCHAR,
-    confidence   DOUBLE PRECISION,
-    patch_applied BOOLEAN,
-    run_success_after_patch BOOLEAN,
-    applied_at   VARCHAR,
-    prompt_version VARCHAR,
-    -- Phase 45 signature memory: exact failure-signature hash + how the heal
-    -- was resolved ('llm' fresh agent patch, 'cached' pending-patch reuse,
-    -- 'replayed' zero-token replay of an archived successful patch).
-    failure_signature VARCHAR,
-    resolution   VARCHAR,
-    failure_signature_coarse VARCHAR,
-    -- Phase 46: 0-based cascade tier index of the model that produced the
-    -- patch; NULL outside multi-model cascade (or when no LLM was involved).
-    model_cascade_position INTEGER
-);
-
-CREATE TABLE IF NOT EXISTS patch_simulation (
-    id           VARCHAR PRIMARY KEY,
-    run_id       VARCHAR,
-    blueprint_id VARCHAR,
-    patch_id     VARCHAR NOT NULL,
-    gate         VARCHAR NOT NULL,
-    status       VARCHAR NOT NULL,
-    detail       VARCHAR,
-    sample_rows  BIGINT,
-    duration_ms  BIGINT,
-    recorded_at  VARCHAR NOT NULL
-);
-
--- Column-level lineage extracted at compile time (driver-side, zero Spark actions).
--- Merged from the former lineage.db in Phase 38.
-CREATE TABLE IF NOT EXISTS column_lineage (
-    blueprint_id   VARCHAR NOT NULL,
-    run_id         VARCHAR NOT NULL,
-    channel_id     VARCHAR NOT NULL,
-    output_column  VARCHAR NOT NULL,
-    source_table   VARCHAR NOT NULL,
-    source_column  VARCHAR NOT NULL,
-    captured_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX IF NOT EXISTS idx_lineage_channel
-    ON column_lineage (blueprint_id, channel_id);
-
--- Phase 56 (Lineage v2): SQL-AST normalised fingerprint per Channel.
--- Changelog, NOT a run-log: one row per distinct fingerprint per
--- (blueprint_id, channel_id). Repeat runs of unchanged SQL only bump
--- last_seen/last_run_id (ON CONFLICT), so size tracks SQL edits, not runs.
-CREATE TABLE IF NOT EXISTS channel_fingerprints (
-    blueprint_id  VARCHAR NOT NULL,
-    channel_id    VARCHAR NOT NULL,
-    fingerprint   VARCHAR NOT NULL,
-    canonical_sql VARCHAR NOT NULL,
-    first_seen    TIMESTAMPTZ NOT NULL,
-    last_seen     TIMESTAMPTZ NOT NULL,
-    first_run_id  VARCHAR NOT NULL,
-    last_run_id   VARCHAR NOT NULL,
-    PRIMARY KEY (blueprint_id, channel_id, fingerprint)
-);
-CREATE INDEX IF NOT EXISTS idx_fingerprint_latest
-    ON channel_fingerprints (blueprint_id, channel_id, last_seen);
-"""
-
-_SIGNAL_OVERRIDES_DDL = """
-CREATE TABLE IF NOT EXISTS signal_overrides (
-    signal_id     VARCHAR PRIMARY KEY,
-    passed        BOOLEAN NOT NULL,
-    error_message VARCHAR,
-    set_at        TIMESTAMPTZ NOT NULL
-);
-"""
-
-_EXPLAIN_SNAPSHOT_DDL = """
-CREATE TABLE IF NOT EXISTS explain_snapshot (
-    blueprint_id     VARCHAR NOT NULL,
-    run_id           VARCHAR NOT NULL,
-    module_id        VARCHAR NOT NULL,
-    captured_at      VARCHAR NOT NULL,
-    exchange_count   INTEGER NOT NULL,
-    python_udf_count INTEGER NOT NULL,
-    broadcast_count  INTEGER NOT NULL,
-    plan_text        VARCHAR NOT NULL,
-    PRIMARY KEY (blueprint_id, run_id, module_id)
-);
-"""
-
-# Per-attempt log for the unified reprompt loop.
-# One row per LLM turn (success or failure) so post-mortem can answer
-# "what did attempt 2 actually say" — which `healing_outcomes` alone could
-# not (it only carries the final patch outcome).
-_HEAL_ATTEMPTS_DDL = """
-CREATE TABLE IF NOT EXISTS heal_attempts (
-    id                    VARCHAR PRIMARY KEY,
-    run_id                VARCHAR NOT NULL,
-    attempt_num           INTEGER NOT NULL,
-    error_class           VARCHAR,
-    where_field           VARCHAR,
-    normalized_message    VARCHAR,
-    signature_hash        VARCHAR,
-    tokens_in             INTEGER NOT NULL DEFAULT 0,
-    tokens_out            INTEGER NOT NULL DEFAULT 0,
-    latency_ms            INTEGER NOT NULL DEFAULT 0,
-    gate_that_rejected    VARCHAR,
-    escalated             BOOLEAN NOT NULL DEFAULT FALSE,
-    stop_reason           VARCHAR,
-    prompt_version        VARCHAR,
-    recorded_at           VARCHAR NOT NULL
-);
-"""
-
-# Phase 45/46 columns for observability DBs created before the schema change.
-# Both DuckDB and Postgres support ADD COLUMN IF NOT EXISTS.
-_PHASE45_MIGRATION_DDL = """
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS resolution VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS failure_signature_coarse VARCHAR;
-ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS model_cascade_position INTEGER;
-"""
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _utcnow() -> datetime:
-    return datetime.now(tz=timezone.utc)
+    return datetime.now(tz=UTC)
 
 
 def _iso(dt: datetime) -> str:
@@ -211,182 +63,24 @@ def _iso(dt: datetime) -> str:
 def _first_failed_module(result: ExecutionResult) -> str:
     """Return the module_id of the first failing module, or '_executor'."""
     for mr in result.module_results:
-        if mr.status == "error":
+        if mr.status == ExecutionStatus.ERROR:
             return mr.module_id
     return "_executor"
 
 
 def _first_error_message(result: ExecutionResult, exc: Exception | None) -> str:
     for mr in result.module_results:
-        if mr.status == "error" and mr.error:
+        if mr.status == ExecutionStatus.ERROR and mr.error:
             return mr.error
     if exc is not None:
         return str(exc)
     return "unknown error"
 
 
-_PY4J_CAUSE_HOP_LIMIT = 10
-# Spark 4.0 error-class names we recognise as carrying column-suggestion data.
-_COLUMN_SUGGEST_CLASSES = frozenset({
-    "UNRESOLVED_COLUMN.WITH_SUGGESTION",
-    "UNRESOLVED_FIELD.WITH_SUGGESTION",
-    "UNRESOLVED_MAP_KEY.WITH_SUGGESTION",
-})
-
-
-def _parse_suggested_columns(blob: str) -> tuple[str, ...]:
-    """Parse Spark 'Did you mean one of the following? [`a`, `b`]' segment.
-
-    Spark's UNRESOLVED_COLUMN.WITH_SUGGESTION message embeds the suggestion
-    list as backtick-quoted identifiers separated by commas. Extracting them
-    explicitly lets the prompt show "actual columns: …" without asking the
-    LLM to parse the trace.
-    """
-    import re as _re
-    if not blob:
-        return ()
-    out: list[str] = []
-    for m in _re.finditer(r"`([^`]+)`", blob):
-        name = m.group(1).strip()
-        if name and name not in out:
-            out.append(name)
-    return tuple(out)
-
-
-def _extract_structured_error(exc: BaseException | None) -> dict[str, Any] | None:
-    """Return a dict of structured error fields, or None if extraction fails.
-
-    Best-effort: lazy-imports pyspark/py4j and swallows any failure so that a
-    bug in extraction can never block self-heal. Used by Surveyor.record()
-    before the exception is stringified into FailureContext.error_message.
-
-    Resolution order:
-      1. PySparkException (Spark 4.0): getCondition / getErrorClass +
-         getMessageParameters + getSqlState. Highest-fidelity path.
-      2. Py4JJavaError: walk .java_exception.getCause() up to
-         _PY4J_CAUSE_HOP_LIMIT to find innermost Java throwable.
-      3. Python cause chain: traceback.TracebackException root.
-
-    Returns mapping with keys: error_class, root_exception, sql_state,
-    suggested_columns, object_name. Any field may be None / empty tuple.
-    """
-    if exc is None:
-        return None
-    out: dict[str, Any] = {
-        "error_class": None,
-        "root_exception": None,
-        "sql_state": None,
-        "suggested_columns": (),
-        "object_name": None,
-    }
-    try:
-        # --- 1. Spark 4.0 PySparkException ---------------------------------
-        try:
-            from pyspark.errors import PySparkException  # type: ignore
-        except Exception:
-            PySparkException = None  # type: ignore[assignment]
-
-        spark_exc = None
-        if PySparkException is not None:
-            cur = exc
-            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                if isinstance(cur, PySparkException):
-                    spark_exc = cur
-                    break
-                cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
-                if cur is None:
-                    break
-
-        if spark_exc is not None:
-            try:
-                if hasattr(spark_exc, "getCondition"):
-                    out["error_class"] = spark_exc.getCondition()
-                elif hasattr(spark_exc, "getErrorClass"):
-                    out["error_class"] = spark_exc.getErrorClass()
-            except Exception:
-                pass
-            try:
-                if hasattr(spark_exc, "getSqlState"):
-                    out["sql_state"] = spark_exc.getSqlState()
-            except Exception:
-                pass
-            params: dict[str, Any] = {}
-            try:
-                if hasattr(spark_exc, "getMessageParameters"):
-                    raw = spark_exc.getMessageParameters() or {}
-                    params = {str(k): str(v) for k, v in dict(raw).items()}
-            except Exception:
-                params = {}
-            if params:
-                for k in ("objectName", "fieldName", "tableName", "relationName", "columnName"):
-                    if k in params:
-                        out["object_name"] = params[k]
-                        break
-                if out["error_class"] in _COLUMN_SUGGEST_CLASSES:
-                    for k in ("proposal", "suggestion", "suggestions"):
-                        if k in params:
-                            out["suggested_columns"] = _parse_suggested_columns(params[k])
-                            break
-
-        # --- 2. Py4JJavaError cause chain ----------------------------------
-        if out["error_class"] is None:
-            try:
-                from py4j.protocol import Py4JJavaError  # type: ignore
-            except Exception:
-                Py4JJavaError = None  # type: ignore[assignment]
-
-            if Py4JJavaError is not None:
-                cur = exc
-                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                    if isinstance(cur, Py4JJavaError):
-                        java_exc = getattr(cur, "java_exception", None)
-                        if java_exc is not None:
-                            try:
-                                innermost = java_exc
-                                for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                                    nxt = innermost.getCause()
-                                    if nxt is None or nxt is innermost:
-                                        break
-                                    innermost = nxt
-                                jclass = innermost.getClass().getName()
-                                jmsg = innermost.getMessage() or ""
-                                out["error_class"] = out["error_class"] or jclass
-                                out["root_exception"] = {"type": jclass, "message": jmsg}
-                            except Exception:
-                                pass
-                        break
-                    cur = getattr(cur, "__cause__", None) or getattr(cur, "__context__", None)
-                    if cur is None:
-                        break
-
-        # --- 3. Python cause chain (root fallback) -------------------------
-        if out["root_exception"] is None:
-            root = exc
-            for _ in range(_PY4J_CAUSE_HOP_LIMIT):
-                nxt = getattr(root, "__cause__", None) or getattr(root, "__context__", None)
-                if nxt is None or nxt is root:
-                    break
-                root = nxt
-            out["root_exception"] = {
-                "type": type(root).__name__,
-                "message": str(root),
-            }
-            if out["error_class"] is None:
-                out["error_class"] = type(root).__name__
-
-        if not any((out["error_class"], out["root_exception"], out["sql_state"],
-                    out["suggested_columns"], out["object_name"])):
-            return None
-        return out
-    except Exception:
-        logger.debug("_extract_structured_error failed", exc_info=True)
-        return None
-
-
 def _first_error_type(result: ExecutionResult) -> str | None:
     """Return the error_type of the first failing module, or None for infra errors."""
     for mr in result.module_results:
-        if mr.status == "error":
+        if mr.status == ExecutionStatus.ERROR:
             return getattr(mr, "error_type", None)
     return None
 
@@ -406,10 +100,10 @@ class Surveyor:
         manifest: Manifest,
         store_dir: Path,
         webhook_url: str | None = None,
-        webhook_config: "WebhookEndpointConfig | None" = None,  # type: ignore[name-defined]  # noqa: F821
+        webhook_config: WebhookEndpointConfig | None = None,  # type: ignore[name-defined]  # noqa: F821
         blueprint_path: Path | None = None,
         patches_dir: Path | None = None,
-        stores: "StoreBundle | None" = None,
+        stores: StoreBundle | None = None,
         blob_config: tuple[str, str] | None = None,
         lineage_config: tuple[str, str] | None = None,
     ) -> None:
@@ -436,7 +130,7 @@ class Surveyor:
         # Phase 53 — (backend, location) for the object store. None → local
         # backend rooted at store_dir, byte-identical to the historical layout.
         self._blob_config = blob_config
-        self._blob_store_cached: "BlobStore | None" = None
+        self._blob_store_cached: BlobStore | None = None
         # Phase 55 — OpenLineage emitter. Built only when a url is configured
         # (lineage.openlineage_url); otherwise emission is off, zero cost.
         self._openlineage = None
@@ -451,12 +145,12 @@ class Surveyor:
                 self._openlineage = None
         self._run_id: str | None = None
         self._started_at: datetime | None = None
-        self._stores: "StoreBundle | None" = stores
-        self._observability: "ObservabilityStore | None" = stores.observability if stores is not None else None
+        self._stores: StoreBundle | None = stores
+        self._observability: ObservabilityStore | None = stores.observability if stores is not None else None
         self._started: bool = False  # DDL/migrations applied once per Surveyor.start()
         self._iteration_parents: dict[str, str] = {}  # run_id → parent_run_id (multi-patch)
 
-    def _blob_store(self) -> "BlobStore | None":
+    def _blob_store(self) -> BlobStore | None:
         """Lazily build the Phase 53 BlobStore. None when no ``store_dir`` is
         configured — programmatic callers without a store keep blobs inline."""
         if self._store_dir is None:
@@ -468,11 +162,11 @@ class Surveyor:
         return self._blob_store_cached
 
     @property
-    def observability(self) -> "ObservabilityStore | None":
+    def observability(self) -> ObservabilityStore | None:
         """The active observability store (backs the patch_index + heal cache)."""
         return self._observability
 
-    def patch_store(self) -> "PatchStore":
+    def patch_store(self) -> PatchStore:
         """Build the PatchStore from the configured object-store backend.
 
         Local default reproduces the historical ``patches/`` directory; an
@@ -508,7 +202,6 @@ class Surveyor:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
-            cur.execute(_PHASE45_MIGRATION_DDL)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.
@@ -580,7 +273,7 @@ class Surveyor:
              for r in result.module_results]
         ))
 
-        effective_status = "patched" if (patched and result.status == "success") else result.status
+        effective_status = ExecutionStatus.PATCHED if (patched and result.status == ExecutionStatus.SUCCESS) else result.status
         # 1.1.0 fix — multi-patch heal mints a new run_id per iteration. The
         # outer run_id is INSERTed by start(); iteration 1+ never had a row
         # to UPDATE. Use INSERT-or-UPDATE so each iteration owns its row,
@@ -611,7 +304,7 @@ class Surveyor:
                 ],
             )
 
-        if result.status == "success":
+        if result.status == ExecutionStatus.SUCCESS:
             # Phase 55 — terminal OpenLineage COMPLETE (daemon thread, best-effort).
             if self._openlineage is not None:
                 self._openlineage.emit("COMPLETE", run_id=result.run_id, event_time=_iso(finished_at))
@@ -627,7 +320,7 @@ class Surveyor:
         live_exc: BaseException | None = exc
         if live_exc is None:
             for _mr in result.module_results:
-                if _mr.status == "error" and getattr(_mr, "exception", None) is not None:
+                if _mr.status == ExecutionStatus.ERROR and getattr(_mr, "exception", None) is not None:
                     live_exc = _mr.exception
                     break
         stack_trace: str | None = None
@@ -659,14 +352,25 @@ class Surveyor:
         # Phase 39 — externalise fat columns to compressed blobs so the DB
         # row stores only a relative path (DuckDB row width drops ~10×).
         # Postgres is unaffected — TOAST handles large JSON natively.
+        #
+        # ISSUE-047 #2: externalising is a *storage* concern — it must NOT
+        # corrupt the live `ctx` handed to the inline heal agent. The agent
+        # `json.loads()` these fields (prompts.py); a blob marker string like
+        # "blobs/<run>/manifest.json.zst" parses to nothing → empty module
+        # context. So keep `ctx` on the FULL values and externalise *copies*
+        # into separate `_db_*` vars used only for the DB INSERT. The post-hoc
+        # `aqueduct heal` path re-materialises the markers back to full text.
         _manifest_json = _redact(json.dumps(self._manifest.to_dict()))
         _stack_trace_str = _redact(stack_trace) or ""
         _prov_json = _redact(provenance_json) or ""
+        _db_manifest_json = _manifest_json
+        _db_stack_trace_str = _stack_trace_str
+        _db_prov_json = _prov_json
         _blob = self._blob_store()
         if _blob is not None:
-            _manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
-            _stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
-            _prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
+            _db_manifest_json = _blob.externalise(_manifest_json, result.run_id, "manifest")
+            _db_stack_trace_str = _blob.externalise(_stack_trace_str, result.run_id, "stack")
+            _db_prov_json = _blob.externalise(_prov_json, result.run_id, "prov")
 
         ctx = FailureContext(
             run_id=result.run_id,
@@ -715,9 +419,11 @@ class Surveyor:
                     ctx.blueprint_id,
                     ctx.failed_module,
                     ctx.error_message,
-                    ctx.stack_trace,
-                    ctx.manifest_json,
-                    ctx.provenance_json,
+                    # ISSUE-047 #2 — DB row stores the compact blob markers;
+                    # `ctx` (above) keeps the full values for inline heal.
+                    _db_stack_trace_str,
+                    _db_manifest_json,
+                    _db_prov_json,
                     ctx.started_at,
                     ctx.finished_at,
                     ctx.error_class,
@@ -729,7 +435,7 @@ class Surveyor:
             )
 
         if self._webhook_config:
-            attempt = sum(1 for mr in result.module_results if mr.status == "error")
+            attempt = sum(1 for mr in result.module_results if mr.status == ExecutionStatus.ERROR)
             template_vars = {
                 "run_id": ctx.run_id,
                 "blueprint_id": ctx.blueprint_id,
@@ -807,7 +513,7 @@ class Surveyor:
                     str(_uuid.uuid4()),
                     run_id, parent_run_id, failed_module, failure_category, model, patch_id,
                     confidence, patch_applied, run_success_after_patch,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                     prompt_version,
                     failure_signature, failure_signature_coarse, resolution, model_cascade_position,
                 ],
@@ -895,7 +601,7 @@ class Surveyor:
                         bool(getattr(attempt_record, "escalated", False)),
                         stop_reason,
                         prompt_version,
-                        _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                        _dt.datetime.now(_dt.UTC).isoformat(),
                     ],
                 )
         except Exception:
@@ -997,7 +703,7 @@ class Surveyor:
                     detail,
                     sample_rows,
                     duration_ms,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                 ],
             )
 
@@ -1052,7 +758,7 @@ class Surveyor:
                 """,
                 [
                     bp_id, run_id, module_id,
-                    _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                    _dt.datetime.now(_dt.UTC).isoformat(),
                     exchange_count, python_udf_count, broadcast_count, plan_text,
                 ],
             )
@@ -1074,7 +780,7 @@ class Surveyor:
                             [bp_id, module_id, rid],
                         )
             except Exception:
-                pass
+                pass  # explain-snapshot rotation is best-effort housekeeping; never fail a run for stale cleanup
 
     def latest_explain_snapshots(
         self,
@@ -1136,7 +842,7 @@ class Surveyor:
         if self._observability is None:
             return 0
         import datetime as _dt
-        threshold = (_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(minutes=within_minutes)).isoformat()
+        threshold = (_dt.datetime.now(_dt.UTC) - _dt.timedelta(minutes=within_minutes)).isoformat()
         try:
             with self._observability.connect() as cur:
                 row = cur.execute(

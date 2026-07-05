@@ -125,12 +125,12 @@ def test_benchmark_overrides_precedence(mock_run_benchmark, tmp_path):
     config_path.write_text("agent:\n  provider: anthropic\n  model: my-sonnet\n  base_url: http://default-url\n  provider_options:\n    ollama_num_thread: 4\n")
 
     runner = CliRunner()
-    # Pass --provider, --base-url, --model overrides
+    # Override agent connection via --set (the deprecated --provider/--base-url flags were removed in 2.0)
     result = runner.invoke(cli, [
         "benchmark", str(scenarios_dir),
         "--config", str(config_path),
-        "--provider", "openai_compat",
-        "--base-url", "http://my-override-url",
+        "--set", "agent.provider=openai_compat",
+        "--set", "agent.base_url=http://my-override-url",
         "--model", "my-override-model",
     ])
     
@@ -180,11 +180,11 @@ def test_benchmark_timeout_override_precedence(mock_run_benchmark, tmp_path):
 
     runner = CliRunner()
     
-    # 1. With flag --timeout 600
+    # 1. Override timeout via --set (the --timeout flag was removed in 2.0)
     result = runner.invoke(cli, [
         "benchmark", str(scenarios_dir),
         "--config", str(config_path),
-        "--timeout", "600",
+        "--set", "agent.timeout=600",
     ])
     assert result.exit_code == 0
     called_kwargs = mock_run_benchmark.call_args[1]
@@ -198,29 +198,6 @@ def test_benchmark_timeout_override_precedence(mock_run_benchmark, tmp_path):
     assert result.exit_code == 0
     called_kwargs = mock_run_benchmark.call_args[1]
     assert called_kwargs["timeout"] == 300.0
-
-
-@patch("aqueduct.surveyor.scenario.run_benchmark")
-def test_benchmark_timeout_zero_unbounded(mock_run_benchmark, tmp_path):
-    scenarios_dir = tmp_path / "scenarios"
-    scenarios_dir.mkdir()
-    
-    mock_run_benchmark.return_value = {}
-
-    config_path = tmp_path / "aqueduct.yml"
-    config_path.write_text("agent:\n  provider: openai_compat\n  model: cfg-model\n")
-
-    runner = CliRunner()
-    
-    # --timeout 0 maps to None
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir),
-        "--config", str(config_path),
-        "--timeout", "0",
-    ])
-    assert result.exit_code == 0
-    called_kwargs = mock_run_benchmark.call_args[1]
-    assert called_kwargs["timeout"] is None
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -419,31 +396,13 @@ def test_benchmark_no_persist_skips_db(mock_run, tmp_path):
 
     runner = CliRunner()
     result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg), "--no-persist",
+        "benchmark", str(scenarios_dir), "--config", str(cfg),
+        "--set", "stores.benchmark.persist=false",
     ])
 
     assert result.exit_code == 0
     store = scenarios_dir / ".aqueduct" / "benchmark.duckdb"
     assert not store.exists()
-
-
-@patch("aqueduct.surveyor.scenario.run_benchmark")
-def test_benchmark_no_persist_emits_deprecation_warning(mock_run, tmp_path):
-    """--no-persist prints '[deprecated]' stderr warning."""
-    scenarios_dir = tmp_path / "scenarios"
-    scenarios_dir.mkdir()
-    mock_run.return_value = {"s1": {"m1": _passing_result()}}
-
-    cfg = tmp_path / "aqueduct.yml"
-    cfg.write_text("agent:\n  provider: anthropic\n  model: m1\n")
-
-    runner = CliRunner()
-    result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg), "--no-persist",
-    ])
-
-    assert result.exit_code == 0
-    assert "[deprecated]" in result.stderr
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -480,13 +439,12 @@ def test_benchmark_store_path_override(mock_run, tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, [
         "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--store-path", str(override),
+        "--set", f"stores.benchmark.path={override}",
     ])
 
     assert result.exit_code == 0, result.output
     assert override.exists()
     assert not (scenarios_dir / ".aqueduct" / "benchmark.duckdb").exists()
-    assert "[deprecated] --store-path" in result.stderr
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -514,13 +472,13 @@ def test_benchmark_gate_on_regression_with_regression_exits_1(mock_run, tmp_path
         )}
     }
     result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg), "--gate-on-regression",
+        "benchmark", str(scenarios_dir), "--config", str(cfg),
+        "--set", "stores.benchmark.gate_on_regression=true",
     ])
 
     from aqueduct.exit_codes import DATA_OR_RUNTIME
     assert result.exit_code == DATA_OR_RUNTIME
     assert "regression(s) detected" in result.stderr
-    assert "[deprecated] --gate-on-regression" in result.stderr
 
 
 @patch("aqueduct.surveyor.scenario.run_benchmark")
@@ -538,7 +496,8 @@ def test_benchmark_gate_on_regression_no_regression_exits_0(mock_run, tmp_path):
     runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg)])
     # Second run — same outcome, no regression
     result = runner.invoke(cli, [
-        "benchmark", str(scenarios_dir), "--config", str(cfg), "--gate-on-regression",
+        "benchmark", str(scenarios_dir), "--config", str(cfg),
+        "--set", "stores.benchmark.gate_on_regression=true",
     ])
     assert result.exit_code == 0
 
@@ -555,11 +514,11 @@ def test_benchmark_gate_on_regression_with_no_persist_is_ignored(mock_run, tmp_p
     runner = CliRunner()
     result = runner.invoke(cli, [
         "benchmark", str(scenarios_dir), "--config", str(cfg),
-        "--gate-on-regression", "--no-persist",
+        "--set", "stores.benchmark.gate_on_regression=true",
+        "--set", "stores.benchmark.persist=false",
     ])
 
     assert result.exit_code == 0
-    assert "[deprecated] --no-persist" in result.stderr
     assert "(regression gate ignored: persistence is off)" in result.stderr
 
 
@@ -587,7 +546,7 @@ def test_benchmark_diff_reads_store_exits_1_on_regression(mock_run, tmp_path):
     # First run — baseline (passing)
     mock_run.return_value = {"s1": {"m1": _passing_result()}}
     runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--store-path", str(store)])
+                        "--set", f"stores.benchmark.path={store}"])
 
     # Second run — regression
     mock_run.return_value = {
@@ -600,7 +559,7 @@ def test_benchmark_diff_reads_store_exits_1_on_regression(mock_run, tmp_path):
         )}
     }
     runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--store-path", str(store)])
+                        "--set", f"stores.benchmark.path={store}"])
 
     result = runner.invoke(cli, ["benchmark-diff", "--store-path", str(store)])
     from aqueduct.exit_codes import DATA_OR_RUNTIME
@@ -623,7 +582,7 @@ def test_benchmark_diff_scenario_model_filter(mock_run, tmp_path):
     }
     runner = CliRunner()
     runner.invoke(cli, ["benchmark", str(scenarios_dir), "--config", str(cfg),
-                        "--store-path", str(store)])
+                        "--set", f"stores.benchmark.path={store}"])
 
     result = runner.invoke(cli, [
         "benchmark-diff", "--store-path", str(store),
@@ -632,3 +591,27 @@ def test_benchmark_diff_scenario_model_filter(mock_run, tmp_path):
     assert result.exit_code == 0
     assert "s1" in result.output
     assert "s2" not in result.output
+
+
+def test_benchmark_diff_resolves_configured_store_path(tmp_path, monkeypatch):
+    """B2 regression: benchmark-diff resolves the store from stores.benchmark
+    (like benchmark/benchmark-stats), not a hardcoded .aqueduct/benchmark.duckdb."""
+    (tmp_path / "aqueduct.yml").write_text(
+        "stores:\n  benchmark:\n    backend: duckdb\n    path: /nope/custom_bench.duckdb\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
+    assert result.exit_code != 0
+    assert "custom_bench.duckdb" in result.output  # configured path, not the hardcoded default
+
+
+def test_benchmark_diff_rejects_postgres_backend(tmp_path, monkeypatch):
+    """B2: diff reads via a raw duckdb connection → a postgres benchmark backend
+    is reported as unsupported, not silently mishandled."""
+    (tmp_path / "aqueduct.yml").write_text(
+        "stores:\n  benchmark:\n    backend: postgres\n    path: postgresql://h/db\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli, ["benchmark-diff", "--config", "aqueduct.yml"])
+    assert result.exit_code != 0
+    assert "duckdb benchmark stores only" in result.output

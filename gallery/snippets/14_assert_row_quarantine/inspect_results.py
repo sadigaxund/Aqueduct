@@ -9,37 +9,33 @@ console = Console()
 def main():
     clean_path = "data/output/clean_orders.parquet"
     quarantine_path = "data/output/quarantined_orders.csv"
-    
+
     if not os.path.exists(clean_path):
-        console.print("[bold red]Error:[/bold red] Clean output not found.")
+        console.print("[bold red]✗[/bold red] Clean output not found — did you run 'aqueduct run blueprint.yml'?")
         return
 
-    # Clean Records
     df_clean = pd.read_parquet(clean_path)
-    table_clean = Table(title="Clean Orders (Main Stream)", header_style="bold green")
-    for col in df_clean.columns:
-        table_clean.add_column(col)
-    for _, row in df_clean.iterrows():
-        table_clean.add_row(*[str(val) for val in row])
-    
-    # Quarantined Records
+    t = Table(title="Clean Orders (Main Stream)", header_style="bold green")
+    for c in df_clean.columns:
+        t.add_column(c)
+    for _, r in df_clean.iterrows():
+        t.add_row(*[str(v) for v in r])
+    console.print(t)
+    console.print(f"[dim]  Row count: {len(df_clean)}[/dim]\n")
+
     csv_files = glob.glob(os.path.join(quarantine_path, "part-*.csv"))
-    if not csv_files:
-        df_bad = pd.DataFrame()
-    else:
-        df_bad = pd.concat([pd.read_csv(f) for f in csv_files])
-    
-    table_bad = Table(title="Quarantined Orders (Spillway)", header_style="bold red")
+    df_bad = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True) if csv_files else pd.DataFrame()
+    t = Table(title="Quarantined Orders (Spillway)", header_style="bold red")
     if not df_bad.empty:
-        for col in df_bad.columns:
-            table_bad.add_column(col)
-        for _, row in df_bad.iterrows():
-            table_bad.add_row(*[str(val) for val in row])
-    
-    console.print(table_clean)
-    console.print(table_bad)
-    
-    console.print(f"\n[dim]Summary: {len(df_clean)} passed, {len(df_bad)} quarantined.[/dim]")
+        for c in df_bad.columns:
+            t.add_column(c)
+        for _, r in df_bad.iterrows():
+            t.add_row(*[str(v) for v in r])
+    console.print(t)
+    console.print(f"[dim]  Row count: {len(df_bad)}[/dim]\n")
+
+    console.print(f"[dim]Summary: {len(df_clean)} clean, {len(df_bad)} quarantined. "
+                  "on_fail=quarantine routes bad rows to the spillway instead of aborting.[/dim]")
 
 if __name__ == "__main__":
     main()

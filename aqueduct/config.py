@@ -5,7 +5,7 @@ itself: deployment target, store backends, probe limits, secrets provider, and
 webhook endpoints.  It is NOT the blueprint definition.
 
 LLM agent connection config (provider, base_url, model, provider_options) lives
-here as engine-level defaults.  Per-blueprint policy (approval_mode,
+here as engine-level defaults.  Per-blueprint policy (approval,
 on_pending_patches, max_patches) lives in the Blueprint agent: block.
 Blueprint connection values override engine defaults on conflict.
 
@@ -28,22 +28,66 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from aqueduct.agent.constants import DEFAULT_LLM_MODEL
+from aqueduct.errors import ConfigError
 from aqueduct.parser.fs_path import FsPath, field_is_fs_path
-
-from aqueduct.errors import AqueductError
+from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
-
-# ── Schema error ──────────────────────────────────────────────────────────────
-
-class ConfigError(AqueductError):
-    """Raised when aqueduct.yml cannot be loaded or fails validation."""
+# ``ConfigError`` lives in ``aqueduct.errors`` (imported above) to break an
+# import cycle: config → agent.constants → agent.budget → config. Imported at
+# module scope so ``from aqueduct.config import ConfigError`` keeps working with
+# a single class identity.
 
 
 # ── Sub-models ────────────────────────────────────────────────────────────────
+
+class DatabricksDeployConfig(BaseModel):
+    """Per-target settings for ``deployment.target: databricks``.
+
+    Required when ``target`` is ``databricks``.  Credentials flow through
+    ``DATABRICKS_TOKEN`` env var or ``@aq.secret(...)`` — never plaintext
+    in this block.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workspace_url: str = Field(
+        ...,
+        description="Databricks workspace URL, e.g. https://dbc-xxxx.cloud.databricks.com",
+    )
+    cluster_id: str | None = Field(
+        default=None,
+        description="Existing all-purpose cluster ID. Mutually exclusive with new_cluster.",
+    )
+    new_cluster: dict | None = Field(
+        default=None,
+        description="Raw cluster-creation spec per the Databricks Jobs API new_cluster object. "
+                    "Mutually exclusive with cluster_id.",
+    )
+    libraries: list[dict] | None = Field(
+        default=None,
+        description="Libraries to install on the cluster, e.g. [{'pypi': {'package': 'aqueduct-core[spark]'}}].",
+    )
+    max_concurrent_runs: int | None = Field(
+        default=1,
+        description="Maximum concurrent runs for the generated one-shot job.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_cluster(self) -> DatabricksDeployConfig:
+        if not self.cluster_id and not self.new_cluster:
+            raise ValueError(
+                "deployment.databricks: one of cluster_id or new_cluster is required"
+            )
+        if self.cluster_id and self.new_cluster:
+            raise ValueError(
+                "deployment.databricks: cluster_id and new_cluster are mutually exclusive"
+            )
+        return self
+
 
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -67,6 +111,71 @@ class DeploymentConfig(BaseModel):
         description="Deployment environment tier. Doctor warns on local paths in cluster/cloud mode.",
     )
 
+    @model_validator(mode="after")
+    def _validate_target_master_url(self) -> DeploymentConfig:
+        """Enforce target ↔ master_url consistency for in-cluster Spark targets.
+
+        Remote-submit targets (databricks / emr / dataproc) are rejected with
+        a forward pointer to Phase 64.
+        """
+        if self.engine != "spark":
+            if self.engine == "flink":
+                raise ConfigError(
+                    "engine: flink is not yet supported (see docs/roadmap.md). "
+                    "Use engine: spark."
+                )
+            return self
+
+        target = self.target
+        master = self.master_url
+
+        # ── Remote-submit targets (not yet implemented) ─────────────────────
+        if target == "databricks":
+            if self.databricks is None:
+                raise ConfigError(
+                    "deployment.target=databricks requires the "
+                    "deployment.databricks block to be set"
+                )
+            return self
+
+        if target in ("emr", "dataproc"):
+            raise ConfigError(
+                f"deployment.target={target!r} is a remote-submit target not "
+                f"yet supported. "
+                f"Use local | standalone | yarn | kubernetes | databricks."
+            )
+
+        # ── In-cluster targets ────────────────────────────────────────────────
+        _EXPECTED: dict[str, str] = {
+            "local":       "local",
+            "standalone":  "spark://",
+            "yarn":        "yarn",
+            "kubernetes":  "k8s://",
+        }
+        expected = _EXPECTED.get(target)
+        if expected is None:
+            return self
+
+        if expected == "yarn":
+            if master != "yarn":
+                raise ConfigError(
+                    f"deployment.target={target!r} requires "
+                    f"master_url={expected!r}, "
+                    f"got master_url={master!r}"
+                )
+        elif not master.startswith(expected):
+            raise ConfigError(
+                f"deployment.target={target!r} requires "
+                f"master_url starting with {expected!r}, "
+                f"got master_url={master!r}"
+            )
+
+        return self
+    databricks: DatabricksDeployConfig | None = Field(
+        default=None,
+        description="Databricks Jobs API settings. Required when target=databricks.",
+    )
+
 
 RelationalBackend = Literal["duckdb", "postgres"]
 KVBackend = Literal["duckdb", "postgres", "redis"]
@@ -74,11 +183,11 @@ ObjectBackend = Literal["local", "s3", "gcs", "adls"]
 
 
 class RelationalStoreConfig(BaseModel):
-    """Backend config for stores that need SQL semantics (observability, lineage).
+    """Backend config for stores that need SQL semantics (observability).
 
     `redis` is rejected at parse time via the `RelationalBackend` Literal —
-    redis is KV-only and cannot satisfy joins/aggregates that the observability /
-    lineage queries rely on.
+    redis is KV-only and cannot satisfy joins/aggregates that the observability
+    queries rely on.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -91,13 +200,36 @@ class RelationalStoreConfig(BaseModel):
             "processes. `s3 | gcs | adls` are deferred (TODOs.md Phase 28+)."
         ),
     )
-    path: Annotated[str, FsPath()] = Field(
-        ...,
+    path: Annotated[str, FsPath()] | None = Field(
+        default=None,
         description=(
-            "DuckDB: local file path. Postgres: libpq DSN such as "
+            "DuckDB: a DIRECTORY (routing base) — per-blueprint files are "
+            "created underneath as `<path>/<blueprint_id>/observability.db`; "
+            "None (default) routes under `.aqueduct/observability/`. A file "
+            "path (`.db` suffix) is a config error (2.0: the single-shared-"
+            "file mode was removed — DuckDB is single-writer, so it was never "
+            "parallel-safe; use `backend: postgres` for one shared concurrent "
+            "store). Postgres: libpq DSN such as "
             "`postgresql://user:pass@host/aqueduct_db`."
         ),
     )
+
+    @model_validator(mode="after")
+    def _duckdb_path_is_directory(self) -> RelationalStoreConfig:
+        # 2.0 BREAKING — duckdb observability path is a routing DIRECTORY only.
+        # The old explicit-.db-file mode wrote to `<parent>/observability.db`
+        # while reads honoured the configured basename (silent read/write
+        # split-brain for any name but the default), and a single shared file
+        # is not parallel-safe anyway. Fail loud at load with the migration.
+        if self.backend == "duckdb" and self.path and Path(self.path).suffix:
+            raise ValueError(
+                f"stores.observability.path {self.path!r} looks like a file. "
+                "Point it at a DIRECTORY — per-blueprint files are created "
+                "underneath (<path>/<blueprint_id>/observability.db). For one "
+                "shared concurrent store use backend: postgres. (The DuckDB "
+                "single-file mode was removed in 2.x.)"
+            )
+        return self
 
 
 class KVStoreConfig(BaseModel):
@@ -109,8 +241,8 @@ class KVStoreConfig(BaseModel):
         description=(
             "Depot backend. `duckdb` (default) or `postgres` for relational; "
             "`redis` for high-QPS KV-only depot reads (watermarks, atomic "
-            "counters). `redis` is depot-only; choosing it for observability or "
-            "lineage is rejected at config load."
+            "counters). `redis` is depot-only; choosing it for observability "
+            "is rejected at config load."
         ),
     )
     path: Annotated[str, FsPath()] = Field(
@@ -119,6 +251,39 @@ class KVStoreConfig(BaseModel):
             "DuckDB: local file path. Postgres: libpq DSN. "
             "Redis: `redis://host:port/db` URL."
         ),
+    )
+
+
+class DepotMountConfig(BaseModel):
+    """One depot mount, keyed by name in the ``stores.depots:`` map.
+
+    The depot is the cross-run KV store (`@aq.depot.*`). There is always an
+    implicit **default** mount (per-blueprint isolated, DuckDB) even when
+    ``depots:`` is omitted; add a ``default:`` entry only to re-back it
+    (different backend/path). Any other key is an additional mount accessed via
+    ``@aq.depot.<name>.get(...)``.
+
+    Isolation: every mount is **per-blueprint isolated by default** — keys are
+    transparently prefixed with the ``blueprint_id`` so two blueprints sharing a
+    physical depot never collide. Set ``shared: true`` to opt a mount into
+    **cross-blueprint** sharing (raw, unprefixed keys) — the *only* place key
+    collisions are possible, and an explicit choice.
+    """
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    backend: KVBackend = Field(
+        default="duckdb",
+        description="`duckdb` (default) / `postgres` (relational) or `redis` (KV-only).",
+    )
+    path: Annotated[str, FsPath()] = Field(
+        ...,
+        description="DuckDB: local file path. Postgres: libpq DSN. Redis: `redis://host:port/db`.",
+    )
+    shared: bool = Field(
+        default=False,
+        description="False (default) = per-blueprint isolated (keys prefixed by blueprint_id). "
+                    "True = cross-blueprint shared (raw keys) — collisions become your "
+                    "deliberate semantics; for parallel writers use postgres/redis.",
     )
 
 
@@ -193,10 +358,6 @@ class BenchmarkStoreConfig(BaseModel):
     )
 
 
-# Backwards-compatible alias for code that still imports the old name.
-# The two new classes have identical shapes for the relational path; the
-# alias maps to `RelationalStoreConfig` so static typing keeps working.
-StoreBackendConfig = RelationalStoreConfig
 
 
 def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
@@ -216,21 +377,12 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
     if not isinstance(stores_raw, dict):
         return
 
-    # Map store-name (observability / lineage / depot) → sub-model class
-    # via StoresConfig's own field annotations. Avoids a hardcoded mapping
-    # that would drift if a new store is added.
-    for store_name, field_info in StoresConfig.model_fields.items():
-        sub_model_cls = field_info.annotation
-        if not (isinstance(sub_model_cls, type) and issubclass(sub_model_cls, BaseModel)):
-            continue
-        store_val = stores_raw.get(store_name)
-        if not isinstance(store_val, dict):
-            continue
-        for sub_field_name, sub_field_info in sub_model_cls.model_fields.items():
-            marker = field_is_fs_path(tuple(sub_field_info.metadata))
+    def _anchor_entry(entry: dict, model_cls: type[BaseModel]) -> None:
+        for sub_field_name, sub_field_info in model_cls.model_fields.items():
+            marker = field_is_fs_path(tuple(sub_field_info.metadata), sub_field_info.annotation)
             if marker is None:
                 continue
-            raw_val = store_val.get(sub_field_name)
+            raw_val = entry.get(sub_field_name)
             if not isinstance(raw_val, str) or not raw_val:
                 continue
             if marker.allow_uri and "://" in raw_val:
@@ -238,14 +390,30 @@ def _anchor_fs_path_fields_under_stores(data: dict, base_dir: Path) -> None:
             pp = Path(raw_val)
             if pp.is_absolute():
                 continue
-            store_val[sub_field_name] = str((base_dir / pp).resolve())
+            entry[sub_field_name] = str((base_dir / pp).resolve())
+
+    # Map store-name → sub-model class via StoresConfig's own field annotations.
+    for store_name, field_info in StoresConfig.model_fields.items():
+        sub_model_cls = field_info.annotation
+        if not (isinstance(sub_model_cls, type) and issubclass(sub_model_cls, BaseModel)):
+            continue
+        store_val = stores_raw.get(store_name)
+        if isinstance(store_val, dict):
+            _anchor_entry(store_val, sub_model_cls)
+
+    # `depots` is a MAP of sub-models, not a single one — anchor each value.
+    depots_raw = stores_raw.get("depots")
+    if isinstance(depots_raw, dict):
+        for entry in depots_raw.values():
+            if isinstance(entry, dict):
+                _anchor_entry(entry, DepotMountConfig)
 
 
 class StoresConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     observability: RelationalStoreConfig = Field(
-        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/observability.db"),
+        default_factory=lambda: RelationalStoreConfig(path=None),
         description=(
             "Observability store. Contains run records, failure contexts, "
             "healing outcomes, signal overrides, probe signals, module + "
@@ -253,21 +421,37 @@ class StoresConfig(BaseModel):
             "`observability` schema of the target DB."
         ),
     )
-    lineage: RelationalStoreConfig = Field(
-        default_factory=lambda: RelationalStoreConfig(path=".aqueduct/lineage.db"),
+    depots: dict[str, DepotMountConfig] = Field(
+        default_factory=lambda: {
+            "default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")},
         description=(
-            "Column-level lineage store. With postgres backend, tables live "
-            "in the `lineage` schema of the target DB."
+            "Depot KV mounts (`@aq.depot.*`), keyed by name. The implicit "
+            "`default` mount (per-blueprint isolated, DuckDB) always exists even "
+            "when omitted; add a `default:` entry to re-back it, and other keys as "
+            "extra mounts (`@aq.depot.<name>.get()`). Set `shared: true` on a mount "
+            "for cross-blueprint (raw-key) sharing. Override a mount with "
+            "`--set stores.depots.<name>.backend=…`."
         ),
     )
-    depot: KVStoreConfig = Field(
-        default_factory=lambda: KVStoreConfig(path=".aqueduct/depot.db"),
-        description=(
-            "Depot KV store (`@aq.depot.*`). With postgres backend, the "
-            "`depot_kv` table lives in the `depot` schema. With redis "
-            "backend, keys live directly in the configured Redis database."
-        ),
-    )
+
+    def default_depot(self) -> DepotMountConfig:
+        """The effective **default** depot mount.
+
+        Returns the ``default`` entry, or an implicit DuckDB default when
+        ``depots:`` has none (e.g. ``AqueductConfig()`` built in-memory). Call
+        this explicitly, or index ``cfg.stores.depots['default']``.
+        """
+        d = self.depots.get("default")
+        if d is not None:
+            return d
+        return DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db")
+
+    def effective_depots(self) -> dict[str, DepotMountConfig]:
+        """All mounts (name → config) including the implicit default if absent."""
+        if "default" in self.depots:
+            return dict(self.depots)
+        return {"default": DepotMountConfig(backend="duckdb", path=".aqueduct/depot.db"),
+                **self.depots}
     blob: ObjectStoreConfig = Field(
         default_factory=ObjectStoreConfig,
         description=(
@@ -286,25 +470,31 @@ class StoresConfig(BaseModel):
     )
 
     @model_validator(mode="after")
-    def _deprecate_lineage_store(self) -> "StoresConfig":
-        """Phase 38 — lineage merged into observability.
-        
-        The `lineage` config block is now inert.  ``column_lineage`` lives in
-        the observability store.  Emit a deprecation warning when the lineage
-        path is explicitly set to a different value, and normalise it so
-        downstream code sees one canonical path.
+    def _warn_local_blob_under_remote_obs(self) -> StoresConfig:
+        """Storage-integrity guardrail: a remote observability backend with an
+        IMPLICITLY-local blob store silently writes large payloads (manifests,
+        stack traces, provenance) to the driver's local disk — a surprise that can
+        fill the driver. Warn ONLY when blob was left at its default (not an
+        explicit `local` choice) so users who deliberately keep blobs local are
+        never nagged, and unrelated features never trigger it.
         """
         import warnings as _warnings
-        obs_path = self.observability.path
-        lin_path = self.lineage.path
-        if lin_path != obs_path:
+
+        from aqueduct import AqueductWarning
+
+        obs_remote = self.observability.backend != "duckdb"
+        blob_defaulted_local = (
+            self.blob.backend == "local" and "backend" not in self.blob.model_fields_set
+        )
+        if obs_remote and blob_defaulted_local:
             _warnings.warn(
-                f"stores.lineage.path ({lin_path!r}) differs from "
-                f"stores.observability.path ({obs_path!r}). "
-                "Phase 38 merged lineage into the observability store — "
-                "the lineage config block is now inert. "
-                "Set only stores.observability.path.",
-                DeprecationWarning,
+                f"stores.observability.backend is {self.observability.backend!r} but "
+                "stores.blob.backend is unset and defaults to 'local' — externalised "
+                "blobs (manifests/stack traces/provenance) will be written to the "
+                "DRIVER's local disk, not your remote backend. Set stores.blob.backend "
+                "(e.g. s3/gcs/adls) to keep them remote, or set it explicitly to 'local' "
+                "to acknowledge and silence this.",
+                AqueductWarning,
                 stacklevel=2,
             )
         return self
@@ -336,9 +526,8 @@ class ProbesConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_sample_rows: int = Field(default=100, ge=1, description="Maximum rows to sample in probes (>= 1)")
-    default_sample_fraction: float = Field(default=0.01, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
-    # Note: the legacy `block_full_actions_in_prod` flag was removed in v1.0.0a3.
-    # The active gate is `danger.allow_full_probe_actions` (inverted polarity).
+    default_sample_fraction: float = Field(default=0.1, gt=0, le=1, description="Default sampling fraction (0 < x <= 1)")
+    # Full probe actions are gated by `danger.allow_full_probe_actions` (inverted polarity).
 
 
 class DangerConfig(BaseModel):
@@ -348,12 +537,9 @@ class DangerConfig(BaseModel):
         default=False,
         description="Allow full Spark actions in Probes (row_count, freshness). Default false = safe.",
     )
-    # 1.1.0 — `allow_multi_patch` is the canonical name. `allow_aggressive_patching`
-    # is accepted as a deprecated alias and emits a warning when the multi-patch
-    # loop is opted into (max_patches > 1).
+    # `allow_multi_patch` gates the multi-patch loop (max_patches > 1).
     allow_multi_patch: bool = Field(
         default=False,
-        validation_alias=AliasChoices("allow_multi_patch", "allow_aggressive_patching"),
         description=(
             "Allow `max_patches > 1` — the multi-patch reprompt loop. Auto-applies "
             "successive LLM patches without human review until success or budget exhaustion."
@@ -371,8 +557,19 @@ class DangerConfig(BaseModel):
         description=(
             "Allow agent.sandbox_mode: off — skip sandbox replay entirely; "
             "patches go straight to production data via the next execute(). "
-            "Most dangerous; combine with approval_mode: auto + max_patches > 1 "
+            "Most dangerous; combine with approval: auto + max_patches > 1 "
             "only when you fully trust the model and blueprint scope is tiny."
+        ),
+    )
+    allow_command_hooks: bool = Field(
+        default=False,
+        description=(
+            "Allow `command:` entries in a Blueprint's `hooks:` block (arbitrary "
+            "subprocess after on_success/on_failure). The gate lives HERE — in "
+            "the operator-owned engine config — so a Blueprint cannot "
+            "self-authorize shell execution. `blueprint:` and `webhook:` hook "
+            "entries are declarative and never gated. Default false = command "
+            "hooks are skipped with a warning."
         ),
     )
 
@@ -465,14 +662,34 @@ class AgentConnectionConfig(BaseModel):
     """Engine-level LLM connection defaults.
 
     Sets provider, endpoint, and model used by all blueprints unless overridden
-    in the Blueprint agent: block.  Policy fields (approval_mode,
+    in the Blueprint agent: block.  Policy fields (approval,
     on_pending_patches, max_patches) belong in the Blueprint, not here.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider: Literal["anthropic", "openai_compat"] = "anthropic"
     base_url: str | None = None
-    model: str = "claude-sonnet-4-6"
+    model: str = DEFAULT_LLM_MODEL
+    api_key: str | None = Field(
+        default=None,
+        description=(
+            "LLM API key. Optional — falls back to ANTHROPIC_API_KEY / "
+            "OPENAI_API_KEY in the environment when unset. Prefer "
+            "@aq.secret('NAME') or ${ENV_VAR} over a plaintext literal; "
+            "a literal triggers an insecure-config warning and is redacted "
+            "from logs and LLM payloads."
+        ),
+    )
+    cascade: list[CascadeTierSchema] | None = Field(
+        default=None,
+        description=(
+            "Engine-wide default multi-model healing cascade. Each tier is tried "
+            "in order; cheaper models first, escalate on stuck/exhausted/deferred. "
+            "A blueprint's own agent.cascade (or model: [list] shorthand) fully "
+            "overrides this default. The engine cascade does NOT support the "
+            "model: [list] shorthand — use an explicit list of tiers."
+        ),
+    )
     provider_options: dict[str, Any] | None = None
     timeout: float = Field(
         default=300.0,
@@ -497,7 +714,7 @@ class AgentConnectionConfig(BaseModel):
     )
     ci_webhook_url: str | None = Field(
         default=None,
-        description="Webhook URL for approval_mode: ci. POST target for external CI to create PR.",
+        description="Webhook URL for approval: ci. POST target for external CI to create PR.",
     )
     max_heal_attempts_per_hour: int | None = Field(
         default=None,
@@ -600,6 +817,28 @@ class WebhookEndpointConfig(BaseModel):
         ),
     )
     timeout: int = Field(default=10, ge=1, description="HTTP socket timeout in seconds (>= 1)")
+    secret: str | None = Field(
+        default=None,
+        description=(
+            "HMAC-SHA256 signing secret. When set, an "
+            "'X-Aqueduct-Signature: sha256=<digest>' header is added so the "
+            "receiver can verify payload authenticity and integrity. The digest "
+            "is computed over the exact request body. May contain ${ENV_VAR} tokens."
+        ),
+    )
+    max_retries: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "Retries beyond the first attempt on transient failures "
+            "(429/500/502/503/504 or network errors). 0 disables retry."
+        ),
+    )
+    backoff_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        description="Base backoff between retries; exponential (base * 2**(n-1)) when max_retries > 1.",
+    )
 
 
 class WebhooksConfig(BaseModel):
@@ -619,7 +858,7 @@ class WebhooksConfig(BaseModel):
     )
     on_ci_patch: WebhookEndpointConfig | None = Field(
         default=None,
-        description="Endpoint for approval_mode: ci — receives patch JSON for external PR creation.",
+        description="Endpoint for approval: ci — receives patch JSON for external PR creation.",
     )
 
     @field_validator("on_failure", "on_success", "on_patch_pending", "on_ci_patch", mode="before")
@@ -656,10 +895,10 @@ class WarningsConfig(BaseModel):
 class LineageConfig(BaseModel):
     """Phase 55 — OpenLineage emission.
 
-    Top-level `lineage:` block. **Naming collision:** this is NOT
-    `stores.lineage`, which has been inert since Phase 38 (column lineage merged
-    into the observability store). `stores.lineage` configures a (dead) store
-    backend; this block configures *emission* of OpenLineage run events.
+    Top-level `lineage:` block. **Naming note:** this is the OpenLineage
+    *emission* config — unrelated to the former `stores.lineage` store, which was
+    removed (column lineage merged into the observability store). This block
+    configures *emission* of OpenLineage run events.
 
     When `openlineage_url` is unset (default), no events are emitted — zero cost.
     """
@@ -683,7 +922,7 @@ class AqueductConfig(BaseModel):
     (development / CI) works out of the box.
 
     LLM connection defaults (provider, base_url, model) live here.
-    Per-blueprint policy (approval_mode) lives in the Blueprint agent: block.
+    Per-blueprint policy (approval) lives in the Blueprint agent: block.
     """
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -697,7 +936,7 @@ class AqueductConfig(BaseModel):
     webhooks: WebhooksConfig = Field(default_factory=WebhooksConfig)
     lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
-    warnings: "WarningsConfig" = Field(default_factory=lambda: WarningsConfig())
+    warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
     spark_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",
@@ -732,7 +971,7 @@ _OBJECT_BACKEND_REQUIREMENTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
+def _validate_store_backends(stores_cfg: StoresConfig) -> None:
     """Fail fast at config-load if a store's backend SDK is missing.
 
     Mirrors `_validate_secrets_backend()`. The `RelationalBackend` /
@@ -746,8 +985,7 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
     seen: set[str] = set()
     for store_label, backend in (
         ("observability", stores_cfg.observability.backend),
-        ("lineage",       stores_cfg.lineage.backend),
-        ("depot",         stores_cfg.depot.backend),
+        ("depot",         stores_cfg.default_depot().backend),
     ):
         if backend == "duckdb":
             continue
@@ -781,7 +1019,7 @@ def _validate_store_backends(stores_cfg: "StoresConfig") -> None:
                 )
 
 
-def _validate_secrets_backend(secrets_cfg: "SecretsConfig") -> None:
+def _validate_secrets_backend(secrets_cfg: SecretsConfig) -> None:
     """Fail fast at config-load if the configured secrets provider's SDK is missing.
 
     Mirrors the check `aqueduct doctor:check_secrets()` performs, but earlier in
@@ -837,7 +1075,9 @@ def _expand_env(text: str) -> tuple[str, list[str]]:
     return _ENV_VAR_RE.sub(_replace_env, text), missing
 
 
-def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[str]]:
+def _expand_secrets(
+    text: str, secrets_cfg: SecretsConfig, base_dir: str | None = None
+) -> tuple[str, list[str]]:
     """Second pass — resolve ``@aq.secret('KEY')`` via the configured provider.
 
     Registers every resolved value with ``aqueduct.redaction`` so it can be
@@ -847,8 +1087,8 @@ def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[
     Returns ``(expanded_text, missing_secrets)``. ``missing_secrets`` collects
     keys the provider did not find — caller raises ``ConfigError``.
     """
-    from aqueduct.secrets import SecretsError, resolve_secret
     from aqueduct import redaction
+    from aqueduct.secrets import SecretsError, resolve_secret
 
     missing: list[str] = []
 
@@ -860,6 +1100,7 @@ def _expand_secrets(text: str, secrets_cfg: "SecretsConfig") -> tuple[str, list[
                 provider=secrets_cfg.provider,
                 region=secrets_cfg.region,
                 resolver=secrets_cfg.resolver,
+                base_dir=base_dir,
             )
         except SecretsError:
             missing.append(f"@aq.secret('{key}')")
@@ -930,6 +1171,32 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     if not isinstance(data, dict):
         raise ConfigError(f"Config file {resolved} must be a YAML mapping, not {type(data).__name__}")
 
+
+    # ── Agent API key insecure-literal check ──────────────────────────────────
+    # Inspect the raw pre-expansion text so we can distinguish
+    # @aq.secret('X') / ${X} from plaintext. By the time the value reaches
+    # AgentConnectionConfig it is already resolved; only the raw text tells us
+    # whether the user baked a literal key into the file.
+    try:
+        _raw_data = yaml.safe_load(raw_text)
+        if isinstance(_raw_data, dict):
+            _raw_agent = _raw_data.get("agent") or {}
+            _raw_key = _raw_agent.get("api_key") if isinstance(_raw_agent, dict) else None
+            if isinstance(_raw_key, str) and _raw_key.strip() and not _raw_key.startswith("@aq.secret(") and "${" not in _raw_key:
+                import warnings as _warnings
+
+                from aqueduct.warnings import AqueductWarning
+                _warnings.warn(
+                    f"[aqueduct:insecure_api_key] agent.api_key is a plaintext literal in "
+                    f"{resolved} — prefer @aq.secret('NAME') or ${{ENV_VAR}}. The value is "
+                    "redacted from logs and LLM payloads, but a literal in a committed config "
+                    "is a credential leak risk.",
+                    AqueductWarning,
+                    stacklevel=2,
+                )
+    except Exception:
+        pass  # best-effort; real parse errors surface later
+
     # Schema-driven anchoring. The hand-rolled
     # ``data["stores"][name]["path"]`` walk has been replaced with a
     # generic walker that reads ``FsPath()`` markers from each store
@@ -950,6 +1217,23 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # `aqueduct.yml` validation, not a generic ImportError mid-compile.
     _validate_secrets_backend(cfg_pass1.secrets)
 
+    # Guard: only @aq.secret() resolves in aqueduct.yml. Any other @aq.* token
+    # (run / blueprint / deployment / date / depot / version) needs a Blueprint
+    # + run context that does not exist at config-load time (override-downstream,
+    # not propagate-uphill — see specs §5.3.1). Reject with a clear pointer
+    # instead of letting an unresolved literal leak into a config value.
+    _bad_aq = sorted({
+        f"@aq.{m.group(1)}"
+        for m in re.finditer(r"@aq\.(?!secret\b)([a-zA-Z_][\w.]*)", pass1_text)
+    })
+    if _bad_aq:
+        raise ConfigError(
+            f"{resolved}: {', '.join(_bad_aq)} cannot be used in aqueduct.yml — only "
+            "@aq.secret(...) and ${ENV} resolve in the engine config. The "
+            "run / blueprint / deployment scopes don't exist until a Blueprint "
+            "compiles; move these into the Blueprint instead."
+        )
+
     # ── Pass 2: resolve @aq.secret() via the configured provider ──────────────
     # Short-circuit when the file has no @aq.secret() tokens — keeps the common
     # case (no secrets) at one YAML parse and one validation.
@@ -957,7 +1241,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
         _validate_store_backends(cfg_pass1.stores)
         return cfg_pass1
 
-    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets)
+    pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
     if missing_secrets:
         unique_missing = list(dict.fromkeys(missing_secrets))
         raise ConfigError(

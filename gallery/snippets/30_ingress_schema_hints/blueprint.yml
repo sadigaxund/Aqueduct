@@ -1,0 +1,50 @@
+# blueprint.yml
+# Ingress schema_hints — override Spark's inferred column types.
+
+aqueduct: "1.0"
+id: schema_hints_demo
+name: "Schema Hints Snippet"
+
+modules:
+  - id: hinted_ingress
+    label: "Products with Schema Hints"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/products.csv
+      options:
+        header: "true"
+        inferSchema: "true"
+      # schema_hint validates the source schema against expectations at read
+      # time — the declared types must match what Spark actually infers.
+      # This is not a cast: Spark's type inference must already agree.
+      # If the source schema ever changes (e.g. price becomes string), the
+      # hint catches it immediately.
+      schema_hint:
+        id: string
+        name: string
+        price: double
+        quantity: integer
+        listed_at: date
+
+  - id: schema_probe
+    label: "Verify schema"
+    type: Probe
+    attach_to: hinted_ingress
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: sample_rows
+          num_rows: 4
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/products.parquet
+      mode: overwrite
+
+edges:
+  - from: hinted_ingress
+    to: output

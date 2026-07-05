@@ -14,19 +14,19 @@ import click
 
 from aqueduct import exit_codes
 from aqueduct.cli import (
-    cli,
     _apply_warnings_from_cfg,
+    _env_options,
     _resolve_and_load_env,
-    _env_options,)
-import aqueduct.cli as _aqcli  # noqa: E402  (monkeypatch-able helpers)
-
+    cli,
+)
+from aqueduct.cli.output import emit
 
 # ── aqueduct heal ─────────────────────────────────────────────────────────────
 
 def _print_prompt(prompt: dict, fmt: str) -> None:
     """Print system+user prompt to stdout in the requested format."""
     if fmt == "json":
-        click.echo(json.dumps(prompt, indent=2))
+        emit(prompt, fmt="json")
     else:
         sep = "─" * 72
         click.echo(f"## SYSTEM PROMPT\n{sep}")
@@ -67,7 +67,7 @@ def _print_prompt(prompt: dict, fmt: str) -> None:
     flag_value="text",
     default=None,
     type=click.Choice(["text", "json"]),
-    help="Print the LLM prompt that would be sent and exit without calling "
+    help="Print the Agent prompt that would be sent and exit without calling "
     "the model. Bare = text; `--print-prompt json` for JSON.",
 )
 @click.option(
@@ -90,7 +90,7 @@ def heal(
     env_file: str | None,
     cli_env: tuple[str, ...],
 ) -> None:
-    """Manually trigger LLM self-healing for a failed run.
+    """Manually trigger Agent self-healing for a failed run.
 
     \b
     aqueduct heal <run_id>
@@ -100,11 +100,17 @@ def heal(
     Scenario/aqscenario evaluation is a separate concern — use
     `aqueduct benchmark <file-or-dir>`.
     """
+    from aqueduct.agent import (
+        AgentRunConfig,
+        build_prompt,
+        generate_agent_patch,
+        stage_patch_for_human,
+    )
+    from aqueduct.cli.style import error as _error
     from aqueduct.config import ConfigError, load_config
-    from aqueduct.agent import build_prompt, generate_agent_patch, stage_patch_for_human
 
     if not run_id:
-        click.echo("✗ provide a run_id argument", err=True)
+        _error("RUN_ID is required — `aqueduct heal <run_id>` (find ids via `aqueduct runs`)")
         sys.exit(exit_codes.USAGE_ERROR)
 
     try:
@@ -116,7 +122,7 @@ def heal(
         cfg = load_config(Path(config_path) if config_path else None)
         _apply_warnings_from_cfg(cfg)
     except ConfigError as exc:
-        click.echo(f"✗ config error: {exc}", err=True)
+        _error(f"config error: {exc}")
         sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── -s/--set overrides (config-only) ───────────────────────────────────────
@@ -126,21 +132,27 @@ def heal(
             _cfg_set_nested, _ = route_overrides(set_items, allow_blueprint=False)
             cfg = apply_to_model(cfg, _cfg_set_nested)
         except OverrideError as exc:
-            click.echo(f"✗ {exc}", err=True)
+            _error(f"{exc}")
             sys.exit(exit_codes.CONFIG_ERROR)
 
     eng = cfg.agent
     resolved_provider = eng.provider
     resolved_base_url = eng.base_url
     resolved_model = eng.model
+    resolved_api_key = eng.api_key
     resolved_provider_options = eng.provider_options
     resolved_timeout = eng.timeout
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
 
+    # ── Register agent API key for redaction ─────────────────────────────────
+    if resolved_api_key:
+        from aqueduct.redaction import register as _register_secret
+        _register_secret(resolved_api_key, key_hint="agent.api_key")
+
     if resolved_model is None and not print_prompt:
         click.echo(
-            "✗ no LLM agent configured — set agent.model in aqueduct.yml",
+            "✗ no agent configured — set agent.model in aqueduct.yml",
             err=True,
         )
         sys.exit(exit_codes.CONFIG_ERROR)
@@ -148,32 +160,30 @@ def heal(
     patches_path = Path(patches_dir)
 
     # ── Live run mode ─────────────────────────────────────────────────────────
-    import duckdb as _duckdb
+    from aqueduct.stores.read import (
+        open_obs_read,
+        resolve_duckdb_obs_path,
+        resolve_obs_store_dir,
+    )
     from aqueduct.surveyor.models import FailureContext
 
-    observability_db = _aqcli._resolve_obs_db(cfg, store_dir, run_id=run_id)
-    if observability_db is None or not observability_db.exists():
-        click.echo(
-            f"✗ observability.db not found for run_id={run_id!r} "
-            f"(searched: --store-dir, cfg.stores.observability.path, "
-            f"and .aqueduct/observability/*/observability.db)",
-            err=True,
-        )
-        sys.exit(exit_codes.DATA_OR_RUNTIME)
+    # Backend-aware: DuckDB file (resolved) OR the configured Postgres store.
+    store = open_obs_read(cfg, store_dir, run_id=run_id)
+    if store is None:
+        from aqueduct.cli.observability import _store_not_found
+        _store_not_found(cfg, run_id=run_id, store_dir=store_dir)
 
-    conn = _duckdb.connect(str(observability_db), read_only=True)
-    try:
-        fc_row = conn.execute(
+    with store.connect() as cur:
+        cur.execute(
             """
             SELECT run_id, blueprint_id, failed_module, error_message,
-                   stack_trace, manifest_json,
+                   stack_trace, manifest_json, provenance_json,
                    CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
             FROM failure_contexts WHERE run_id = ?
             """,
             [run_id],
-        ).fetchone()
-    finally:
-        conn.close()
+        )
+        fc_row = cur.fetchone()
 
     if fc_row is None:
         click.echo(
@@ -185,16 +195,27 @@ def heal(
 
     (
         fc_run_id, blueprint_id, failed_module, error_message,
-        stack_trace, manifest_json_raw, started_at, finished_at,
+        stack_trace, manifest_json_raw, provenance_json_raw, started_at, finished_at,
     ) = fc_row
 
     # Phase 39/53 — materialize blob-externalised columns transparently.
     # If the DB row stores a blob marker ("blobs/<run_id>/manifest.json.zst"),
     # load and decompress via the configured object store; otherwise inline text.
+    # Local blobs live next to the per-blueprint store: the DuckDB file's dir, or
+    # (Postgres — no obs file) the per-blueprint routing dir the run materialised
+    # them into. Object-store blob backends (s3/gcs/adls) ignore this base.
     from aqueduct.stores.object_store import make_blob_store
-    _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, observability_db.parent)
+    if cfg.stores.observability.backend == "duckdb":
+        _obs_file = resolve_duckdb_obs_path(cfg, store_dir, run_id=run_id, blueprint_id=blueprint_id)
+        _blob_base = _obs_file.parent if _obs_file else resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+    else:
+        _blob_base = resolve_obs_store_dir(cfg, blueprint_id, store_dir)
+    _blob = make_blob_store(cfg.stores.blob.backend, cfg.stores.blob.path, _blob_base)
     _manifest_str = _blob.materialize(manifest_json_raw if isinstance(manifest_json_raw, str) else "")
     _stack_str = _blob.materialize(stack_trace or "")
+    # ISSUE-047 #2 — provenance is externalised to a blob marker too; without
+    # materialising it the agent prompt loses its provenance section.
+    _prov_str = _blob.materialize(provenance_json_raw if isinstance(provenance_json_raw, str) else "")
 
     target_module = module_id or failed_module
 
@@ -205,6 +226,7 @@ def heal(
         error_message=error_message,
         stack_trace=_stack_str,
         manifest_json=_manifest_str,
+        provenance_json=_prov_str or None,
         started_at=started_at,
         finished_at=finished_at,
     )
@@ -234,10 +256,19 @@ def heal(
     )
 
     from aqueduct.agent import resolve_budget as _resolve_budget
+    from aqueduct.agent.transcript import TranscriptWriter
+    from aqueduct.cli.style import colorize_line as _style_heal_line
+    _transcript = TranscriptWriter(verbose=False, write=lambda s: emit(_style_heal_line(s)))
+
     _budget = _resolve_budget(
         getattr(cfg.agent, "budget", None),
         max_reprompts=resolved_max_reprompts,
     )
+
+    def _on_attempt(rec):
+        _transcript.write(rec, None, model=resolved_model)
+
+    _transcript.header(1, resolved_max_reprompts, resolve="llm")
 
     # Wire deterministic apply-gate guardrail check INTO the loop so
     # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
@@ -247,7 +278,7 @@ def heal(
         if not _gb:
             return True, None, None, None
         try:
-            from aqueduct.patch.apply import _check_guardrails, PatchError
+            from aqueduct.patch.apply import PatchError, _check_guardrails
             bp_raw = {"agent": {"guardrails": _gb}}
             try:
                 _check_guardrails(patch_spec, bp_raw, provenance_map=None)
@@ -258,25 +289,37 @@ def heal(
             return False, "apply_error", str(exc), None
 
     agent_result = generate_agent_patch(
-        failure_ctx,
-        model=resolved_model,
-        patches_dir=patches_path,
-        provider=resolved_provider or "anthropic",
-        base_url=resolved_base_url,
-        provider_options=resolved_provider_options,
-        timeout=resolved_timeout,
-        max_reprompts=resolved_max_reprompts,
-        engine_prompt_context=resolved_engine_prompt_context,
-        guardrails=_guardrails_for_prompt,
-        budget=_budget,
-        allow_defer=_allow_defer,
-        apply_callback=_apply_cb,
+        agent_cfg=AgentRunConfig(
+            failure_ctx=failure_ctx,
+            model=resolved_model,
+            patches_dir=patches_path,
+            provider=resolved_provider or "anthropic",
+            base_url=resolved_base_url,
+            api_key=resolved_api_key,
+            provider_options=resolved_provider_options,
+            timeout=resolved_timeout,
+            max_reprompts=resolved_max_reprompts,
+            engine_prompt_context=resolved_engine_prompt_context,
+            guardrails=_guardrails_for_prompt,
+            budget=_budget,
+            allow_defer=_allow_defer,
+            apply_callback=_apply_cb,
+            on_attempt=_on_attempt,
+        ),
     )
     patch = agent_result.patch
 
+    _transcript.summary(
+        agent_result.stop_reason,
+        agent_result.attempts,
+        agent_result.tokens_in_total,
+        agent_result.tokens_out_total,
+        model=resolved_model,
+    )
+
     if patch is None:
         click.echo(
-            f"✗ LLM failed to produce a valid patch after {agent_result.attempts} attempt(s) "
+            f"✗ Agent failed to produce a valid patch after {agent_result.attempts} attempt(s) "
             f"(stop_reason={agent_result.stop_reason})",
             err=True,
         )
@@ -284,7 +327,12 @@ def heal(
             click.echo(f"  · {err}", err=True)
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
-    stage_patch_for_human(patch, patches_path, failure_ctx)
-    click.echo(f"✓ patch staged → {patches_path}/pending/{patch.patch_id}.json")
-    click.echo(f"  apply with: aqueduct patch apply patches/pending/{patch.patch_id}.json --blueprint <path>")
+    # Stage to the CONFIGURED patch store (local OR s3/gcs/adls per stores.blob),
+    # not a hardcoded local dir — otherwise on a remote backend the body lands on
+    # the local FS and `patch list`/`apply` (which read the store) never see it.
+    from aqueduct.stores.object_store import make_patch_store
+    _patch_store = make_patch_store(cfg.stores.blob.backend, cfg.stores.blob.path, patches_path)
+    stage_patch_for_human(patch, patches_path, failure_ctx, patch_store=_patch_store)
+    click.echo(f"✓ patch staged → {_patch_store.location_label}/pending/  (id={patch.patch_id})")
+    click.echo(f"  apply with: aqueduct patch apply {patch.patch_id} --blueprint <path>")
 

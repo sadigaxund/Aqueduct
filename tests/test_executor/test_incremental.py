@@ -195,53 +195,8 @@ def test_incremental_depot_none_no_crash(spark, tmp_path):
     assert result.status == "success"
 
 
-# ── Phase 53 — legacy watermark-sidecar migration (sidecar removed) ───────────
-# The local sidecar was dropped; the watermark now lives in the Depot. These
-# cover the one-time migration of a sidecar left by a pre-Phase-53 release.
-
-class _FakeDepot:
-    def __init__(self):
-        self.kv = {}
-    def put(self, key, value):
-        self.kv[key] = value
-
-
-def _write_legacy_sidecar(store_dir, bp, ch, value):
-    import json
-    from aqueduct.executor.spark.executor import _legacy_watermark_sidecar_path
-    p = _legacy_watermark_sidecar_path(store_dir, bp, ch)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"watermark": value}))
-    return p
-
-
-def test_migrate_legacy_sidecar_absent_returns_empty(tmp_path):
-    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
-    assert _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "k", _FakeDepot()) == ""
-
-
-def test_migrate_legacy_sidecar_writes_depot_and_deletes_file(tmp_path):
-    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
-    p = _write_legacy_sidecar(tmp_path, "bp1", "ch1", "2024-07-01 00:00:00")
-    depot = _FakeDepot()
-    out = _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "bp1:ch1:_watermark", depot)
-    assert out == "2024-07-01 00:00:00"
-    assert depot.kv["bp1:ch1:_watermark"] == "2024-07-01 00:00:00"
-    assert not p.exists(), "sidecar must be deleted after migration"
-
-
-def test_migrate_legacy_sidecar_no_depot_keeps_file(tmp_path):
-    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
-    p = _write_legacy_sidecar(tmp_path, "bp1", "ch1", "2024-07-01 00:00:00")
-    # No depot configured → value still returned for this run, file left in place.
-    out = _migrate_legacy_watermark_sidecar(tmp_path, "bp1", "ch1", "k", None)
-    assert out == "2024-07-01 00:00:00"
-    assert p.exists()
-
-
-def test_migrate_legacy_sidecar_none_store_dir(tmp_path):
-    from aqueduct.executor.spark.executor import _migrate_legacy_watermark_sidecar
-    assert _migrate_legacy_watermark_sidecar(None, "bp1", "ch1", "k", _FakeDepot()) == ""
+# (The pre-Phase-53 watermark-sidecar migration shim and its tests were
+# removed in 2.0 — the Depot is the sole watermark store.)
 
 
 def test_compute_watermark_from_output_parquet(spark, tmp_path):

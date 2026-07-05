@@ -1,48 +1,42 @@
-import json
-import os
-
 import duckdb
+import json
 from rich.console import Console
 from rich.table import Table
+import os
 
 console = Console()
 
 
 def main():
-    db_path = ".aqueduct/observability/probe_custom_demo/observability.db"
-
+    db_path = ".aqueduct/observability.db"
     if not os.path.exists(db_path):
-        console.print("[bold red]Error:[/bold red] Observability store not found. Did you run the pipeline?")
+        console.print(f"[bold red]✗[/bold red] Observability DB not found at {db_path}. Did you run 'aqueduct run blueprint.yml'?")
         return
 
-    conn = duckdb.connect(db_path)
-    try:
-        row = conn.execute("""
-            SELECT payload
-            FROM probe_signals
-            WHERE signal_type = 'custom'
-            ORDER BY captured_at DESC
-            LIMIT 1
-        """).fetchone()
+    con = duckdb.connect(db_path)
+    rows = con.execute(
+        "SELECT signal_type, payload, captured_at FROM probe_signals ORDER BY captured_at"
+    ).fetchall()
 
-        if not row:
-            console.print("[bold red]Error:[/bold red] No custom signal found in store.")
-            return
+    if not rows:
+        console.print("[bold yellow]⚠[/bold yellow] No probe signals found in the database.")
+        return
 
-        payload = json.loads(row[0])
+    t = Table(title="Custom Probe Signals", header_style="bold cyan")
+    t.add_column("Signal Type")
+    t.add_column("Estimate")
+    t.add_column("Metadata")
+    t.add_column("Captured At")
 
-        table = Table(title="Custom Probe Signal")
-        table.add_column("Key")
-        table.add_column("Value")
-        for k, v in payload.items():
-            table.add_row(str(k), str(v))
-        console.print(table)
+    for signal_type, payload_raw, captured_at in rows:
+        payload = json.loads(payload_raw) if isinstance(payload_raw, str) else payload_raw
+        estimate = payload.get("estimate", "?")
+        full_payload = json.dumps(payload)
+        t.add_row(str(signal_type), str(estimate), full_payload, str(captured_at))
 
-        if "passed" in payload:
-            verdict = "[bold green]OPEN[/bold green]" if payload["passed"] else "[bold red]CLOSED[/bold red]"
-            console.print(f"Regulator gate verdict (from passed_when): {verdict}")
-    finally:
-        conn.close()
+    console.print(t)
+    console.print("\n[dim]Custom probe signals use a Python callable to compute arbitrary metrics "
+                  "at runtime; results are stored in probe_signals with signal_type=custom.[/dim]")
 
 
 if __name__ == "__main__":

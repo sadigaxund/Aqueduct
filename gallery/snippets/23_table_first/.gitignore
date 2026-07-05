@@ -1,0 +1,5 @@
+data/output/
+.aqueduct/
+spark-warehouse/
+metastore_db/
+derby.log

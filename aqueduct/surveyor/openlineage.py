@@ -4,7 +4,8 @@ Emits OpenLineage RunEvents — START on run begin, COMPLETE / FAIL on end — t
 OpenLineage-compatible backend (Marquez, DataHub, Atlan) over ``httpx`` in a
 daemon thread. Async, non-blocking, best-effort: delivery never blocks the run
 and never raises (mirrors ``surveyor/webhook.py``). The blueprint result is
-authoritative; a dropped lineage event is logged to stderr and swallowed.
+authoritative; a dropped lineage event is logged via ``logger.warning``
+(``_RedactingFilter`` covers the output) and swallowed.
 
 The output datasets carry the column-level **``columnLineage``** facet, built
 from the same compile-time lineage rows that populate the ``column_lineage``
@@ -13,19 +14,22 @@ in Marquez/DataHub/Atlan. sqlglot resolves ~90% of SparkSQL; unresolved columns
 fall back to ``UNKNOWN``.
 
 Config lives in the top-level ``lineage:`` block (``openlineage_url`` /
-``openlineage_namespace``) — NOT ``stores.lineage``, which has been inert since
-Phase 38. When ``openlineage_url`` is unset, the Surveyor builds no emitter and
-nothing is emitted (zero cost).
+``openlineage_namespace``). When
+``openlineage_url`` is unset, the Surveyor builds no emitter and nothing is
+emitted (zero cost).
 """
 from __future__ import annotations
 
-import sys
+import logging
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-import httpx
+from aqueduct.infra.http import deliver_with_retry, fire_and_forget
+from aqueduct.models import ModuleType
+
+logger = logging.getLogger(__name__)
 
 _PRODUCER = "https://github.com/sadigaxund/aqueduct"
 _RUN_EVENT_SCHEMA = (
@@ -38,10 +42,6 @@ _COLUMN_LINEAGE_FACET_SCHEMA = (
 
 # Terminal run states recognised by the OpenLineage spec.
 _VALID_EVENT_TYPES = frozenset({"START", "COMPLETE", "FAIL"})
-
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
-_DELIVERY_ATTEMPTS = 2
-_DELIVERY_BACKOFF_SECONDS = 2.0
 
 
 def run_uuid(run_id: str) -> str:
@@ -65,9 +65,9 @@ def extract_datasets(manifest: Any, namespace: str) -> tuple[list[dict], list[di
     inputs: list[dict] = []
     outputs: list[dict] = []
     for m in manifest.modules:
-        if m.type == "Ingress":
+        if m.type == ModuleType.Ingress:
             inputs.append({"namespace": namespace, "name": _dataset_name(m)})
-        elif m.type == "Egress":
+        elif m.type == ModuleType.Egress:
             outputs.append({"namespace": namespace, "name": _dataset_name(m)})
     return inputs, outputs
 
@@ -134,7 +134,7 @@ def build_run_event(
         }
     return {
         "eventType": event_type,
-        "eventTime": event_time or datetime.now(tz=timezone.utc).isoformat(),
+        "eventTime": event_time or datetime.now(tz=UTC).isoformat(),
         "run": {"runId": run_uuid(run_id), "facets": run_facets},
         "job": {"namespace": job_namespace, "name": job_name},
         "inputs": inputs,
@@ -196,37 +196,18 @@ class OpenLineageEmitter:
                 error_message=error_message,
             )
         except Exception as exc:  # noqa: BLE001 — building an event must never break a run
-            print(f"[surveyor] openlineage event build failed: {exc}", file=sys.stderr)
+            logger.warning("openlineage event build failed: %s", exc)
             return None
         if event_type == "START":
             self._started_runs.add(run_id)
         return self._post(event)
 
     def _post(self, event: dict) -> threading.Thread:
-        url, timeout = self._url, self._timeout
-
-        def _send() -> None:
-            import time as _time
-            for attempt in range(1, _DELIVERY_ATTEMPTS + 1):
-                retryable = False
-                try:
-                    resp = httpx.post(url, json=event, timeout=timeout,
-                                      headers={"Content-Type": "application/json"})
-                    if resp.status_code < 400:
-                        return
-                    retryable = resp.status_code in _RETRYABLE_STATUS
-                    print(f"[surveyor] openlineage POST {url!r} returned HTTP {resp.status_code}",
-                          file=sys.stderr)
-                except httpx.RequestError as exc:
-                    retryable = True
-                    print(f"[surveyor] openlineage POST {url!r} failed: {exc}", file=sys.stderr)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"[surveyor] openlineage POST {url!r} raised: {exc}", file=sys.stderr)
-                    return
-                if not retryable or attempt >= _DELIVERY_ATTEMPTS:
-                    return
-                _time.sleep(_DELIVERY_BACKOFF_SECONDS)
-
-        thread = threading.Thread(target=_send, daemon=True, name="surveyor-openlineage")
-        thread.start()
-        return thread
+        return fire_and_forget(
+            lambda: deliver_with_retry(
+                "POST", self._url, json=event,
+                headers={"Content-Type": "application/json"},
+                timeout=self._timeout, label="openlineage",
+            ),
+            name="surveyor-openlineage",
+        )

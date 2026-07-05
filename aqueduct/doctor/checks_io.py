@@ -102,15 +102,50 @@ def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None
         return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
 
 
+def _redact_dsn(dsn: str) -> str:
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(dsn)
+        if parts.password:
+            netloc = parts.netloc.replace(f":{parts.password}@", ":***@")
+            return urlunsplit(parts._replace(netloc=netloc))
+    except Exception:
+        return dsn
+    return dsn
+
+
+def _openai_models_url(base_url: str) -> str:
+    return base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
+
+
+def _probe_openai_models(base_url: str, timeout: float = 10) -> tuple[list[str], str | None]:
+    """``GET {base_url}/v1/models`` → ``(model_ids, error)`` (free, no tokens).
+
+    Shared by the main agent check and the cascade-tier preflight ping so both
+    report the same "N models available / selected model present" signal."""
+    import httpx
+    try:
+        resp = httpx.get(_openai_models_url(base_url), timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        ids = [m.get("id", m.get("name", "?")) for m in data.get("data", data.get("models", []))]
+        return ids, None
+    except Exception as exc:
+        return [], str(exc)
+
+
 def check_agent(
     agent_provider: str,
     base_url: str | None,
     model: str,
+    *,
+    preflight: bool = False,
 ) -> CheckResult:
     """Probe agent (LLM) connectivity.
 
-    anthropic:     verifies ANTHROPIC_API_KEY is set; does not make an API call
-                   (avoid token cost in a health check).
+    anthropic:     default verifies ANTHROPIC_API_KEY is set (no API call, no
+                   token cost). ``--preflight`` additionally proves the key +
+                   endpoint actually work via ``GET /v1/models`` (free, no tokens).
     openai_compat: GET {base_url}/models — lists loaded models, free, no tokens.
                    Skipped if base_url is not configured.
     """
@@ -139,6 +174,36 @@ def check_agent(
                 "Self-healing only; pipeline runs fine without it.",
                 _ms(t), group="agent",
             )
+        if preflight:
+            # Prove the key + endpoint actually work — GET /v1/models lists the
+            # account's models (free, no tokens), unlike the default key-set check.
+            api = (base_url or "https://api.anthropic.com").rstrip("/")
+            if api.endswith("/v1"):
+                api = api[:-3]
+            url = api + "/v1/models"
+            try:
+                resp = httpx.get(
+                    url, headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=10,
+                )
+                resp.raise_for_status()
+                return CheckResult(
+                    "agent", "ok",
+                    f"provider=anthropic  model={model}  key verified ({url})  [preflight]",
+                    _ms(t), group="agent",
+                )
+            except httpx.HTTPStatusError as exc:
+                return CheckResult(
+                    "agent", "warn",
+                    f"provider=anthropic  ANTHROPIC_API_KEY set but {url} returned "
+                    f"{exc.response.status_code} — key may be invalid/expired",
+                    _ms(t), group="agent",
+                )
+            except Exception as exc:
+                return CheckResult(
+                    "agent", "warn",
+                    f"provider=anthropic  key set but {url} unreachable: {exc}",
+                    _ms(t), group="agent",
+                )
         return CheckResult(
             "agent", "ok",
             f"provider=anthropic  model={model}  ANTHROPIC_API_KEY present (API not called)",
@@ -153,27 +218,28 @@ def check_agent(
             _ms(t),
         )
 
-    models_url = base_url.rstrip("/").rstrip("/v1").rstrip("/") + "/v1/models"
-    try:
-        resp = httpx.get(models_url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        available = [m.get("id", m.get("name", "?")) for m in data.get("data", data.get("models", []))]
-        model_note = f"  model={model}"
-        if available and model not in available:
-            model_note += f"  ⚠ not in loaded models: {', '.join(available[:5])}"
+    models_url = _openai_models_url(base_url)
+    available, err = _probe_openai_models(base_url)
+    if err is not None:
+        return CheckResult("agent", "fail", f"{models_url}: {err}", _ms(t))
+    if available and model not in available:
         return CheckResult(
-            "agent", "ok",
-            f"provider=openai_compat  endpoint={models_url}{model_note}",
+            "agent", "warn",
+            f"provider=openai_compat  endpoint={models_url}  ⚠ model={model} not in "
+            f"{len(available)} loaded models: {', '.join(available[:5])}",
             _ms(t),
         )
-    except httpx.RequestError as exc:
-        return CheckResult("agent", "fail", f"{models_url}: {exc}", _ms(t))
-    except Exception as exc:
-        return CheckResult("agent", "fail", f"{models_url}: unexpected error: {exc}", _ms(t))
+    return CheckResult(
+        "agent", "ok",
+        f"provider=openai_compat  endpoint={models_url}  model={model}  "
+        f"({len(available)} models available)",
+        _ms(t),
+    )
 
 
-def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
+def check_secrets(
+    provider: str, resolver: str | None = None, base_dir: str | None = None
+) -> CheckResult:
     """Report secrets provider status and verify required deps are installed."""
     t = time.monotonic()
     if provider == "env":
@@ -206,6 +272,10 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
                 _ms(t),
             )
         import importlib as _il
+        import sys as _sys
+        inserted = base_dir is not None and base_dir not in _sys.path
+        if inserted:
+            _sys.path.insert(0, base_dir)
         try:
             module_path, fn_name = resolver.rsplit(".", 1)
             mod = _il.import_module(module_path)
@@ -213,6 +283,9 @@ def check_secrets(provider: str, resolver: str | None = None) -> CheckResult:
             return CheckResult("secrets", "ok", f"provider=custom  resolver={resolver!r} loaded", _ms(t))
         except Exception as exc:
             return CheckResult("secrets", "fail", f"provider=custom resolver {resolver!r} failed: {exc}", _ms(t))
+        finally:
+            if inserted:
+                _sys.path.remove(base_dir)
 
     return CheckResult("secrets", "warn", f"provider={provider!r} unknown — will fall back to env", _ms(t))
 
@@ -404,6 +477,7 @@ def check_store_backend(
     store_cfg: Any,
     *,
     is_kv_only: bool = False,
+    preflight: bool = False,
 ) -> CheckResult:
     """Probe a single configured store backend for reachability.
 
@@ -412,6 +486,8 @@ def check_store_backend(
         store_cfg:   Pydantic store config (`RelationalStoreConfig` or
                      `KVStoreConfig`). Has `.backend` and `.path` attributes.
         is_kv_only:  When True, treats redis as a valid backend (depot only).
+        preflight:   When True, do a throwaway **write+read** round-trip (temp
+                     table / SET-GET-DEL) — proves write perms, not just connect.
 
     Returns:
         `CheckResult` with status `ok | fail | warn`. Failures include the
@@ -423,16 +499,31 @@ def check_store_backend(
 
     if backend == "duckdb":
         try:
-            import duckdb as _duckdb
             from pathlib import Path as _Path
+
+            import duckdb as _duckdb
+            if path_or_dsn is None:
+                return CheckResult(label, "ok", "backend=duckdb  (default per-blueprint routing)", _ms(t))
             p = _Path(path_or_dsn)
+            # Per-blueprint routing: path is a directory, not a db file.
+            # Verify write access instead of trying duckdb.connect().
+            if p.is_dir():
+                from tempfile import NamedTemporaryFile as _Ntf
+                _Ntf(dir=str(p), delete=True).close()
+                return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}  (routing base)", _ms(t))
             p.parent.mkdir(parents=True, exist_ok=True)
             conn = _duckdb.connect(str(p))
             try:
                 conn.execute("SELECT 1").fetchone()
+                if preflight:
+                    conn.execute("CREATE TEMPORARY TABLE _aq_doctor_rt (x INTEGER)")
+                    conn.execute("INSERT INTO _aq_doctor_rt VALUES (1)")
+                    conn.execute("SELECT x FROM _aq_doctor_rt").fetchone()
+                    conn.execute("DROP TABLE _aq_doctor_rt")
             finally:
                 conn.close()
-            return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}", _ms(t))
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=duckdb  path={path_or_dsn}{_rt}", _ms(t))
         except Exception as exc:
             return CheckResult(label, "fail", f"backend=duckdb  path={path_or_dsn}  error={exc}", _ms(t))
 
@@ -452,6 +543,12 @@ def check_store_backend(
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
                     cur.fetchone()
+                    if preflight:
+                        # Temp table auto-drops on disconnect; proves write perms.
+                        cur.execute("CREATE TEMP TABLE _aq_doctor_rt (x INT)")
+                        cur.execute("INSERT INTO _aq_doctor_rt VALUES (1)")
+                        cur.execute("SELECT x FROM _aq_doctor_rt")
+                        cur.fetchone()
             finally:
                 conn.close()
             # Redact DSN for log line — password lives inside path_or_dsn
@@ -459,7 +556,8 @@ def check_store_backend(
             redacted = _PostgresRelational.__dict__["location_label"].fget(
                 type("S", (), {"_dsn": path_or_dsn})()
             )
-            return CheckResult(label, "ok", f"backend=postgres  dsn={redacted}", _ms(t))
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=postgres  dsn={redacted}{_rt}", _ms(t))
         except Exception as exc:
             return CheckResult(label, "fail", f"backend=postgres  error={exc}", _ms(t))
 
@@ -482,8 +580,91 @@ def check_store_backend(
         try:
             client = _redis.Redis.from_url(path_or_dsn, socket_connect_timeout=5)
             client.ping()
-            return CheckResult(label, "ok", f"backend=redis  url={path_or_dsn}", _ms(t))
+            if preflight:
+                _k = "_aq_doctor_rt"
+                client.set(_k, "1", ex=60)
+                client.get(_k)
+                client.delete(_k)
+            _rt = "  [preflight: write+read ok]" if preflight else ""
+            return CheckResult(label, "ok", f"backend=redis  url={_redact_dsn(path_or_dsn)}{_rt}", _ms(t))
         except Exception as exc:
-            return CheckResult(label, "fail", f"backend=redis  error={exc}", _ms(t))
+            return CheckResult(label, "fail", f"backend=redis  error={_redact_dsn(str(exc))}", _ms(t))
 
     return CheckResult(label, "warn", f"backend={backend!r} unknown", _ms(t))
+
+
+def check_remote_target(cfg: Any) -> CheckResult:
+    """Verify credentials and API reachability for remote-submit targets.
+
+    Only runs when ``deployment.target`` is ``databricks`` / ``emr`` /
+    ``dataproc`` — no-op (return ``warn``) otherwise.  Non-fatal:
+    failures warn, never block.
+    """
+    t = time.monotonic()
+    target = getattr(cfg.deployment, "target", "local")
+    if target not in ("databricks", "emr", "dataproc"):
+        if target in ("standalone", "yarn", "kubernetes"):
+            msg = (
+                f"target={target} — no remote-submit credentials to verify "
+                "(cluster reachability is covered by the Spark check)"
+            )
+        else:
+            msg = "target is local — no remote cluster to check"
+        return CheckResult("remote-target", "skip", msg, _ms(t))
+
+    if target == "databricks":
+        db_cfg = getattr(cfg.deployment, "databricks", None)
+        if db_cfg is None:
+            return CheckResult(
+                "remote-target", "fail",
+                "deployment.databricks block is required for target=databricks",
+                _ms(t),
+            )
+        workspace = getattr(db_cfg, "workspace_url", "")
+        if not workspace:
+            return CheckResult(
+                "remote-target", "fail",
+                "deployment.databricks.workspace_url is required",
+                _ms(t),
+            )
+
+        token = os.environ.get("DATABRICKS_TOKEN")
+        if not token:
+            return CheckResult(
+                "remote-target", "fail",
+                "DATABRICKS_TOKEN environment variable is not set — "
+                "set it or reference it via @aq.secret('DATABRICKS_TOKEN')",
+                _ms(t),
+            )
+
+        # Liveness check
+        try:
+            import httpx as _httpx
+            ws = workspace.rstrip("/")
+            if not ws.startswith("https://"):
+                ws = f"https://{ws}"
+            r = _httpx.head(
+                f"{ws}/api/2.1/clusters/list",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            r.raise_for_status()
+        except Exception as exc:
+            return CheckResult(
+                "remote-target", "fail",
+                f"Databricks API unreachable at {workspace!r}: {exc}",
+                _ms(t),
+            )
+
+        return CheckResult(
+            "remote-target", "ok",
+            f"Databricks workspace={workspace}  cluster_id={getattr(db_cfg, 'cluster_id', None) or 'new_cluster'}",
+            _ms(t),
+        )
+
+    # emr / dataproc — not yet wired
+    return CheckResult(
+        "remote-target", "warn",
+        f"remote target {target!r} is not yet implemented for doctor checks",
+        _ms(t),
+    )

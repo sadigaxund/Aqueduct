@@ -34,9 +34,8 @@ edges: []
     config_path = tmp_path / "aqueduct.yml"
     config_path.write_text("""
 stores:
-  observability: { path: .aqueduct/obs.db }
-  lineage: { path: .aqueduct/lineage.db }
-  depot: { path: .aqueduct/depot.db }
+  observability: { path: .aqueduct/obs }
+  depots: {default: { path: .aqueduct/depot.db }}
 deployment: { engine: spark, target: local }
 """)
     
@@ -151,5 +150,5 @@ def test_patch_preview_gate1_blocked(mock_guard, setup):
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
     
     assert result.exit_code == 2
-    assert "✗ Guardrails gate blocked: Guardrail violation" in result.output
+    assert "✗ guardrails gate blocked: Guardrail violation" in result.output
 

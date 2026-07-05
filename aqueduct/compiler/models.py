@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from aqueduct.parser.models import AgentConfig, Edge, Module, RetryPolicy
+from aqueduct.parser.models import AgentConfig, Edge, Hooks, Module, RetryPolicy
 
 if TYPE_CHECKING:
     from aqueduct.compiler.provenance import ProvenanceMap
@@ -38,8 +38,11 @@ class Manifest:
     udf_registry: tuple[dict[str, Any], ...] = ()
     macros: dict[str, str] = field(default_factory=dict)
     checkpoint: bool = False
-    provenance_map: "ProvenanceMap | None" = None
+    provenance_map: ProvenanceMap | None = None
     inputs_fingerprint: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Lifecycle hooks (top-level Blueprint only — sub-Blueprint hooks are
+    # ignored at expansion). Fired by the CLI after the run's terminal state.
+    hooks: Hooks = field(default_factory=Hooks)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -60,6 +63,8 @@ class Manifest:
                     "attach_to": m.attach_to,
                     "spillway": m.spillway,
                     "depends_on": list(m.depends_on),
+                    "enabled": m.enabled,
+                    "disabled_reason": m.disabled_reason,
                 }
                 for m in self.modules
             ],
@@ -91,4 +96,14 @@ class Manifest:
             "checkpoint": self.checkpoint,
             "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
             "inputs_fingerprint": self.inputs_fingerprint,
+            "hooks": {
+                "on_success": [
+                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
+                    for h in self.hooks.on_success
+                ],
+                "on_failure": [
+                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
+                    for h in self.hooks.on_failure
+                ],
+            },
         }

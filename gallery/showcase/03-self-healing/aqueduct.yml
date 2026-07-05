@@ -12,7 +12,7 @@ agent:
   base_url: "${AQ_OLLAMA_URL:-http://localhost:11434}/v1"
   model: "qwen2.5-coder:7b"      # any small coder model works; smaller = more interesting heal_attempts
   timeout: 300.0
-  max_reprompts: 3                # legacy single-axis cap
+  max_reprompts: 3                # single-axis cap
 
   # Multi-axis budget (1.1.0). Three of the six axes wired to small numbers so
   # you can SEE the loop terminate on different reasons across the three demo runs.

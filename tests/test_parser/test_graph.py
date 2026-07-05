@@ -100,7 +100,8 @@ class TestParserGraph:
         modules = (
             Module(id="m1", type="Channel", label="M1", config={}, spillway="nonexistent_egress"),
         )
-        with pytest.raises(ValueError, match="nonexistent_egress"):
+        from aqueduct.errors import ParseError
+        with pytest.raises(ParseError, match="nonexistent_egress"):
             validate_spillway_targets(list(modules))
 
     def test_validate_spillway_targets_valid(self):
@@ -149,7 +150,7 @@ class TestParserGraphTopologicalSort:
 
         m1 = Module(id="a", type="Ingress", label="A", config={})
         bad_edge = Edge(from_id="NOPE", to_id="a", port="main")
-        with pytest.raises(ValueError, match="NOPE"):
+        with pytest.raises(ParseError, match="NOPE"):
             _build_adjacency([m1], [bad_edge])
 
     def test_build_adjacency_unknown_to_raises(self):
@@ -158,7 +159,7 @@ class TestParserGraphTopologicalSort:
 
         m1 = Module(id="a", type="Ingress", label="A", config={})
         bad_edge = Edge(from_id="a", to_id="NOPE", port="main")
-        with pytest.raises(ValueError, match="NOPE"):
+        with pytest.raises(ParseError, match="NOPE"):
             _build_adjacency([m1], [bad_edge])
 
 

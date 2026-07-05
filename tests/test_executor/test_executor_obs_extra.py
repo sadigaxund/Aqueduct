@@ -1,5 +1,6 @@
 from __future__ import annotations
 import pytest
+pytestmark = pytest.mark.spark
 import duckdb
 from pathlib import Path
 from unittest.mock import MagicMock

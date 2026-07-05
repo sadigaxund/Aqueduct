@@ -1,54 +1,51 @@
 # blueprint.yml
-# Routing Logic: Junction with Else Branch
+# Junction modes via Arcades: one shared Ingress feeds three Arcade instances.
+# Each Arcade sub-blueprint bundles a Junction mode + its Egress modules.
+#
+# NOTE: requires expander fix for self-contained Arcades (Egress-only exits).
+# Until then, run with the monolithic approach.
+# See .dev/ISSUES/pending/ for details.
 
 aqueduct: "1.0"
-id: junction_else_demo
-name: "Conditional Junction Snippet"
+id: junction_modes_demo
+name: "Junction Modes via Arcades"
+
+description: |
+  Compares all three Junction modes from the same input data.
+  Each mode lives in its own reusable Arcade sub-blueprint.
+  - conditional: routes rows by a predicate (one row → one port)
+  - broadcast: sends every row to every port
+  - partition: routes rows by matching partition_key column value
 
 modules:
   - id: raw_tickets
     label: "Raw Tickets"
     type: Ingress
+    description: "Support tickets with status field — shared input for all three arcades"
     config:
       format: csv
       path: data/input/tickets.csv
       options: {header: "true", inferSchema: "true"}
 
-  - id: route_tickets
-    label: "Ticket Router"
-    type: Junction
-    config:
-      mode: conditional
-      branches:
-        - id: active
-          condition: "status IN ('NEW', 'PENDING')"
-        - id: other
-          condition: "_else_"
+  - id: arcade_conditional
+    label: "Conditional Route"
+    type: Arcade
+    ref: arcades/conditional_junction.yml
 
-  - id: save_active
-    label: "Save Active"
-    type: Egress
-    config:
-      format: parquet
-      path: data/output/active_tickets.parquet
-      mode: overwrite
+  - id: arcade_broadcast
+    label: "Broadcast Route"
+    type: Arcade
+    ref: arcades/broadcast_junction.yml
 
-  - id: save_other
-    label: "Save Other"
-    type: Egress
-    config:
-      format: parquet
-      path: data/output/other_tickets.parquet
-      mode: overwrite
+  - id: arcade_partition
+    label: "Partition Route"
+    type: Arcade
+    ref: arcades/partition_junction.yml
 
 edges:
   - from: raw_tickets
-    to: route_tickets
-  
-  - from: route_tickets
-    to: save_active
-    port: active
-  
-  - from: route_tickets
-    to: save_other
-    port: other
+    to: arcade_conditional
+  - from: raw_tickets
+    to: arcade_broadcast
+  - from: raw_tickets
+    to: arcade_partition

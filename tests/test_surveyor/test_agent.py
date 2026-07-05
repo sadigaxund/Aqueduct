@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.spark, pytest.mark.integration]
 from aqueduct.patch.grammar import PatchSpec
 
 
-from aqueduct.agent import MAX_REPROMPTS, PROMPT_VERSION
+from aqueduct.agent import PROMPT_VERSION
 from aqueduct.agent.budget import StopReason
 from aqueduct.agent.loop import archive_patch, generate_agent_patch, stage_patch_for_human
 from aqueduct.agent.parse import _parse_patch_spec
@@ -442,7 +442,7 @@ class TestStageForHuman:
         assert payload["diagnosis"] == "UDF bug"
         assert payload["suggestions"] == ["check python"]
 
-    def test_stage_patch_webhook_error_swallowed(self, tmp_path, capsys):
+    def test_stage_patch_webhook_error_swallowed(self, tmp_path):
         """Webhook fire failure is swallowed — staging never blocks."""
         from aqueduct.config import WebhookEndpointConfig
 
@@ -657,7 +657,7 @@ class TestGenerateLlmPatch:
 
         monkeypatch.setattr("aqueduct.agent.loop._call_agent", failing_llm)
 
-        with caplog.at_level(logging.ERROR):
+        with caplog.at_level(logging.DEBUG):
             result = generate_agent_patch(
                 failure_ctx=_failure_ctx(),
                 model="claude-sonnet-4-6",
@@ -669,9 +669,11 @@ class TestGenerateLlmPatch:
         assert len(result.reprompt_errors) == 1
         assert "API error: API timeout or disconnect" in result.reprompt_errors[0]
 
-        # Verify the error log uses actual attempts_made (1)
-        err_messages = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.ERROR]
-        assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in err_messages)
+        # The terminal "failed to produce a valid PatchSpec" line is demoted to
+        # DEBUG (the heal transcript's └─ close node carries it at default level);
+        # verify it still reports the actual attempts_made (1).
+        debug_messages = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.DEBUG]
+        assert any("failed to produce a valid PatchSpec after 1 attempt(s)" in msg for msg in debug_messages)
 
     def test_generate_agent_patch_with_guardrails_threads_to_prompt(self, tmp_path, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
@@ -735,7 +737,7 @@ class TestSurveyorLlmIntegration:
     # Surveyor.record() now only persists the run outcome and fires webhooks.
     # These tests document the current behavior (LLM NOT called from record()).
 
-    def _make_manifest_with_approval(self, approval_mode: str):
+    def _make_manifest_with_approval(self, approval: str):
         from aqueduct.compiler.models import Manifest
         from aqueduct.parser.models import AgentConfig
 
@@ -745,7 +747,7 @@ class TestSurveyorLlmIntegration:
             edges=(),
             context={},
             spark_config={},
-            agent=AgentConfig(approval_mode=approval_mode),
+            agent=AgentConfig(approval_mode=approval),
         )
 
     def test_record_failure_returns_failure_context(self, tmp_path):
@@ -839,7 +841,6 @@ class TestLlmHelpers:
         assert extract_failure_context("ghost", tmp_path / "obs") is None
 
     def test_reprompt_limit_exceeded(self, monkeypatch, tmp_path):
-        from aqueduct.agent import MAX_REPROMPTS
         from aqueduct.agent.loop import generate_agent_patch 
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
@@ -855,8 +856,8 @@ class TestLlmHelpers:
         result = generate_agent_patch(_failure_ctx(), "model", tmp_path)
 
         assert result.patch is None
-        # Should have tried exactly max_reprompts (defaults to MAX_REPROMPTS=3)
-        assert call_count == MAX_REPROMPTS
+        # Should have tried exactly max_reprompts (defaults to 3)
+        assert call_count == 3
 
     def test_reprompt_uses_custom_llm_max_reprompts(self, monkeypatch, tmp_path):
         from aqueduct.agent.prompts import _build_guardrails_section
@@ -1226,7 +1227,7 @@ class TestProviderOptionsDispatch:
         from aqueduct.parser.schema import AgentSchema
 
         with pytest.raises(ValidationError):
-            AgentSchema(**{"approval_mode": "disabled", "ollama_options": {"num_thread": 4}})
+            AgentSchema(**{"approval": "disabled", "ollama_options": {"num_thread": 4}})
 
 
 # ── Guardrails ────────────────────────────────────────────────────────────────

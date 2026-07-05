@@ -10,12 +10,11 @@ import pytest
 
 from aqueduct.compiler.models import Manifest
 from aqueduct.compiler.provenance import ProvenanceMap
-from aqueduct.parser.models import RetryPolicy, Module, Edge
+from aqueduct.parser.models import Edge, Module, RetryPolicy
 from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
 from aqueduct.stores.postgres import PostgresObservabilityStore
-from aqueduct.surveyor.surveyor import _DDL, _SIGNAL_OVERRIDES_DDL, _EXPLAIN_SNAPSHOT_DDL, Surveyor
-from tests.conftest import requires_postgres, _pg_dsn, requires_redis
-
+from aqueduct.surveyor.surveyor import _DDL, _EXPLAIN_SNAPSHOT_DDL, _SIGNAL_OVERRIDES_DDL, Surveyor
+from tests.conftest import _pg_dsn, requires_postgres, requires_redis
 
 # ── Test 1: DDL contains DOUBLE PRECISION and creates clean on both ──────────
 
@@ -98,8 +97,9 @@ def test_surveyor_upserts_postgres():
     schema = f"obs_upsert_{uuid.uuid4().hex[:8]}"
     
     import psycopg2
-    from aqueduct.stores.postgres import PostgresObservabilityStore
+
     from aqueduct.stores.base import StoreBundle
+    from aqueduct.stores.postgres import PostgresObservabilityStore
     
     manifest = Manifest(
         blueprint_id="bp_test", name="Test", description="", aqueduct_version="1.0",
@@ -118,7 +118,7 @@ def test_surveyor_upserts_postgres():
         backend = "postgres"
         location_label = "dummy"
     
-    bundle = StoreBundle(observability=obs_store, lineage=obs_store, depot=DummyDepot())
+    bundle = StoreBundle(observability=obs_store, depot=DummyDepot())
     surveyor = Surveyor(manifest, store_dir=Path("/tmp"), stores=bundle)
     run_id = uuid.uuid4().hex
     
@@ -151,22 +151,19 @@ def test_surveyor_upserts_postgres():
 @pytest.mark.spark
 def test_phase33_matrix_postgres_redis(spark, tmp_path):
     """Verify that a real blueprint run with Postgres relational stores + Redis depot completes successfully."""
-    from tests.conftest import _redis_url
-    from aqueduct.stores.postgres import PostgresObservabilityStore, PostgresLineageStore
-    from aqueduct.stores.redis_ import RedisDepotStore
     from aqueduct.executor.spark.executor import execute
     from aqueduct.stores.base import StoreBundle
+    from aqueduct.stores.postgres import PostgresObservabilityStore
+    from aqueduct.stores.redis_ import RedisDepotStore
+    from tests.conftest import _redis_url
     
     dsn = _pg_dsn()
     redis_conn_url = _redis_url()
     
     obs_schema = f"obs_p33_{uuid.uuid4().hex[:8]}"
-    lin_schema = f"lin_p33_{uuid.uuid4().hex[:8]}"
     
     obs_store = PostgresObservabilityStore(dsn)
     obs_store._SCHEMA = obs_schema
-    lin_store = PostgresLineageStore(dsn)
-    lin_store._SCHEMA = lin_schema
     depot_store = RedisDepotStore(redis_conn_url)
     
     in_path = str(tmp_path / "in_p33.parquet")
@@ -198,7 +195,7 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     import psycopg2
     try:
         # Patch get_stores to return our bundle
-        bundle = StoreBundle(observability=obs_store, lineage=lin_store, depot=depot_store)
+        bundle = StoreBundle(observability=obs_store, depot=depot_store)
         surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
         run_id = f"run_{uuid.uuid4().hex[:8]}"
         
@@ -238,7 +235,6 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f'DROP SCHEMA IF EXISTS "{obs_schema}" CASCADE')
-            cur.execute(f'DROP SCHEMA IF EXISTS "{lin_schema}" CASCADE')
         conn.close()
         
         # Prune redis keys

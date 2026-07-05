@@ -1,10 +1,13 @@
 name: Test Suite
 
+# Trigger design (2026-07-03): branch pushes prove the SHA; the PR to main
+# re-ran the identical suite on the identical commit, so the pull_request
+# trigger was dropped. main is in the push list so post-merge skew is still
+# caught (and that's where coverage runs). Revisit if external contributors
+# arrive (fork PRs would need the pull_request trigger back).
 on:
   push:
-    branches: [feat/**, phase/**]
-  pull_request:
-    branches: [main, feat/**, phase/**]
+    branches: [feat/**, phase/**, main]
   workflow_dispatch:
 
 concurrency:
@@ -26,6 +29,7 @@ jobs:
       config:    ${{ steps.filter.outputs.config }}
       gallery:   ${{ steps.filter.outputs.gallery }}
       drift:     ${{ steps.filter.outputs.drift }}
+      tui:       ${{ steps.filter.outputs.tui }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -42,12 +46,13 @@ jobs:
               - 'aqueduct/executor/**'
               - 'tests/test_executor/**'
               - 'tests/test_blueprints.py'
-              - 'gallery/snippets/**'
             surveyor:
               - 'aqueduct/surveyor/**'
+              - 'aqueduct/infra/**'
               - 'tests/test_surveyor/**'
             agent:
               - 'aqueduct/agent/**'
+              - 'aqueduct/infra/**'
               - 'tests/test_agent/**'
             patch:
               - 'aqueduct/patch/**'
@@ -77,6 +82,9 @@ jobs:
             drift:
               - 'aqueduct/drift/**'
               - 'tests/test_drift/**'
+            tui:
+              - 'aqueduct/tui/**'
+              - 'tests/test_tui/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -89,7 +97,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_parser/ -m "not spark"
 
   compiler-tests:
@@ -168,6 +176,18 @@ jobs:
       - run: pip install -e ".[dev,spark,llm,redis]"
       - run: pytest tests/test_cli/
 
+  tui-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.tui == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,tui]"
+      - run: pytest tests/test_tui/ -m "not spark"
+
   config-tests:
     needs: changes
     if: ${{ needs.changes.outputs.config == 'true' || github.ref == 'refs/heads/main' }}
@@ -177,7 +197,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev,llm,redis]"
+      - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark"
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
@@ -199,23 +219,17 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm,redis]"
+      # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
+      # derived from the installed pyspark version); tests self-skip for any
+      # datasource with no build for this Spark line (e.g. Iceberg on 4.1).
       - run: pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark
+        env:
+          AQ_LAKEHOUSE: "1"
 
-  snippets:
-    needs: changes
-    if: ${{ needs.changes.outputs.executor == 'true' || github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-      - run: pip install -e ".[dev,spark,llm]"
-      - run: bash scripts/run_snippets.sh
+  # (The slow full-run `snippets` job moved to version-matrix.yml — snippets
+  # are end-to-end compat checks, not per-push unit checks. They run there on
+  # main pushes + workflow_dispatch; the fast `gallery-tests` guard below
+  # still parse/compiles every example on branch pushes.)
 
   # ── Gallery guard — fast parse/compile/load of every shipped example ──
   # Complements the slow `snippets` full-run job: catches gallery rot in
@@ -283,3 +297,22 @@ jobs:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
           AQ_REDIS_URL: "redis://localhost:6379/15"
         run: pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py -m integration
+
+  # ── Coverage — dedicated job, decoupled from Spark to avoid session flakiness ──
+  # Runs the full pure-Python suite under coverage. Spark tests are excluded
+  # because the shared-session Spark fixture destabilises under coverage
+  # tracing (~154 flaky Py4JJavaError failures vanish under --no-cov).
+  # The 80% gate covers the pure-Python layers (the bulk of the codebase).
+
+  coverage:
+    # main-only (post-merge) + manual — the pre-merge PR run was the same
+    # suite twice; branch pushes already prove the code, coverage gates main.
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis,stores]"
+      - run: pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=80 -m "not spark"

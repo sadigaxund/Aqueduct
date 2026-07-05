@@ -1,18 +1,20 @@
 from __future__ import annotations
-import pytest
-import duckdb
-import threading
+
 import json
+import threading
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import duckdb
+import pytest
 from pyspark.sql import Row
 
-from aqueduct.executor.spark.probe import _threshold, _custom, execute_probe
-from aqueduct.executor.spark.executor import execute
-from aqueduct.surveyor.surveyor import Surveyor
-from aqueduct.parser.models import Module, Edge, RetryPolicy
 from aqueduct.compiler.models import Manifest
+from aqueduct.errors import ConfigError
+from aqueduct.executor.spark.executor import execute
+from aqueduct.executor.spark.probe import _custom, _threshold, execute_probe
+from aqueduct.parser.models import Edge, Module
+from aqueduct.surveyor.surveyor import Surveyor
 
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
 
@@ -50,7 +52,7 @@ def test_threshold_missing_expr(spark):
     df = spark.createDataFrame([Row(id=1)])
     sig_cfg = {"type": "threshold"}
     
-    with pytest.raises(ValueError, match="threshold signal requires an 'expr' field"):
+    with pytest.raises(ConfigError, match="threshold signal requires an 'expr' field"):
         _threshold(df, sig_cfg)
 
 def test_custom_inline_sql_estimate(spark):
@@ -92,7 +94,7 @@ def test_custom_callable_must_return_dict(spark):
     df = spark.createDataFrame([Row(amount=10)])
     import sys as _sys
     _modname = _sys.modules[__name__].__name__
-    with pytest.raises(ValueError, match="must return a dict"):
+    with pytest.raises(ConfigError, match="must return a dict"):
         _custom(
             df,
             {

@@ -318,6 +318,9 @@ def test_webhook_redaction(monkeypatch):
     mock_config.payload = {
         "data": f"sending {secret} to target",  # Body SHOULD be scrubbed
     }
+    mock_config.secret = None          # no HMAC signing for this test
+    mock_config.max_retries = 1
+    mock_config.backoff_seconds = 2.0
 
     captured_reqs = []
 

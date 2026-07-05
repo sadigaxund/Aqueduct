@@ -26,7 +26,6 @@ operation: extend the relevant tuple here, or add a new key.
 
 from __future__ import annotations
 
-
 # Strict per-type tuples. Each entry lists the free-form config keys
 # whose string values are filesystem paths and must be anchored to
 # ``base_dir`` during ``parse_dict`` resolution.

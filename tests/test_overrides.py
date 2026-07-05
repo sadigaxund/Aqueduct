@@ -155,8 +155,8 @@ class TestDeepMerge:
 class TestApplyToModel:
     def test_simple_override(self):
         cfg = AqueductConfig()
-        result = apply_to_model(cfg, {"deployment": {"master_url": "spark://h:7077"}})
-        assert result.deployment.master_url == "spark://h:7077"
+        result = apply_to_model(cfg, {"deployment": {"master_url": "local[2]"}})
+        assert result.deployment.master_url == "local[2]"
 
     def test_nested_override(self):
         cfg = AqueductConfig()
@@ -176,7 +176,7 @@ class TestApplyToModel:
     def test_immutable_original(self):
         cfg = AqueductConfig()
         original = cfg.deployment.master_url
-        apply_to_model(cfg, {"deployment": {"master_url": "yarn"}})
+        apply_to_model(cfg, {"deployment": {"master_url": "local[4]"}})
         assert cfg.deployment.master_url == original
 
 
@@ -226,9 +226,9 @@ class TestSuggestForPath:
 class TestRouteOverrides:
     def test_blueprint_path_routed_to_blueprint(self):
         config_nested, blueprint_nested = route_overrides(
-            ["agent.approval_mode=auto"], allow_blueprint=True
+            ["agent.approval=auto"], allow_blueprint=True
         )
-        assert blueprint_nested == {"agent": {"approval_mode": "auto"}}
+        assert blueprint_nested == {"agent": {"approval": "auto"}}
         assert config_nested == {}
 
     def test_config_path_routed_to_config(self):

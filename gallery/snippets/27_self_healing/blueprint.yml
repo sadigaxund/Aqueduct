@@ -1,0 +1,52 @@
+# blueprint.yml
+# Self-healing demo with @aq.* runtime functions.
+# The pipeline has a deliberate error (wrong column name) that the agent
+# can diagnose and propose a fix for.
+
+aqueduct: "1.0"
+id: self_healing_demo
+name: "Self-Healing Snippet"
+
+modules:
+  - id: raw_orders
+    label: "Raw Orders"
+    type: Ingress
+    config:
+      format: csv
+      path: data/input/orders.csv
+      options: {header: "true", inferSchema: "true"}
+
+  # Demonstrates self-healing agent integration. With an LLM backend (agent/provider
+  # configured in aqueduct.yml + AQ_OPENAI_BASE_URL/AQ_LLM_API_KEY env vars), the
+  # agent can diagnose and fix deliberate errors at runtime.
+  - id: enriched
+    label: "Enriched Orders"
+    type: Channel
+    config:
+      op: sql
+      query: "SELECT order_id, customer, amount, total_amt * 1.1 AS total_with_tax FROM raw_orders"
+
+  - id: metadata_probe
+    label: "Run metadata"
+    type: Probe
+    attach_to: raw_orders
+    config:
+      signals:
+        - type: schema_snapshot
+        - type: row_count_estimate
+
+  - id: output
+    label: "Save Result"
+    type: Egress
+    config:
+      format: parquet
+      path: data/output/orders.parquet
+      mode: overwrite
+
+edges:
+  - from: raw_orders
+    to: enriched
+  - from: raw_orders
+    to: metadata_probe
+  - from: enriched
+    to: output

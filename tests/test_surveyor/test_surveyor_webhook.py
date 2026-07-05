@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 from unittest.mock import MagicMock, patch
 
 import httpx
-
 import pytest
+
 pytestmark = pytest.mark.unit
 
 from aqueduct.config import WebhookEndpointConfig
@@ -45,30 +46,30 @@ def test_fire_webhook_payload_verification():
         assert args[0] == "POST"
 
 
-def test_fire_webhook_server_error_logged(capsys):
+def test_fire_webhook_server_error_logged(caplog):
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request") as mock_req:
         mock_req.return_value = MagicMock(status_code=500)
 
         fire_webhook(_cfg("http://fail.test"), {"a": 1}).join(timeout=2)
 
-        captured = capsys.readouterr()
-        assert "500" in captured.err
+        assert "500" in caplog.text
 
 
-def test_fire_webhook_url_error_swallowed(capsys):
+def test_fire_webhook_url_error_swallowed(caplog):
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request", side_effect=httpx.ConnectError("DNS failure")):
         fire_webhook(_cfg("http://non-existent"), {"a": 1}).join(timeout=2)
 
-        captured = capsys.readouterr()
-        assert "failed" in captured.err
+        assert "failed" in caplog.text
 
 
-def test_fire_webhook_generic_exception_swallowed(capsys):
+def test_fire_webhook_generic_exception_swallowed(caplog):
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request", side_effect=RuntimeError("Panic!")):
         fire_webhook(_cfg("http://panic.test"), {"a": 1}).join(timeout=2)
 
-        captured = capsys.readouterr()
-        assert "Panic!" in captured.err
+        assert "Panic!" in caplog.text
 
 
 def test_fire_webhook_template_vars_resolution():
@@ -163,8 +164,9 @@ def test_fire_webhook_custom_payload_wins_over_envelope():
         assert "event" not in body
 
 
-def test_fire_webhook_retry_429(capsys):
+def test_fire_webhook_retry_429(caplog):
     """429 → retried once (2 total attempts)."""
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request") as mock_req:
         mock_req.side_effect = [
             MagicMock(status_code=429, headers={}),
@@ -172,11 +174,10 @@ def test_fire_webhook_retry_429(capsys):
         ]
         fire_webhook(_cfg("http://retry.test"), {"a": 1}).join(timeout=5)
         assert mock_req.call_count == 2
-        captured = capsys.readouterr()
-        assert "retrying" in captured.err
+        assert "retrying" in caplog.text
 
 
-def test_fire_webhook_retry_500(capsys):
+def test_fire_webhook_retry_500():
     """500 → retried once."""
     with patch("httpx.request") as mock_req:
         mock_req.side_effect = [
@@ -187,18 +188,19 @@ def test_fire_webhook_retry_500(capsys):
         assert mock_req.call_count == 2
 
 
-def test_fire_webhook_non_retryable_4xx_no_retry(capsys):
+def test_fire_webhook_non_retryable_4xx_no_retry(caplog):
     """400 → single attempt, no retry."""
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request") as mock_req:
         mock_req.return_value = MagicMock(status_code=400)
         fire_webhook(_cfg("http://badreq.test"), {"a": 1}).join(timeout=5)
         assert mock_req.call_count == 1
-        captured = capsys.readouterr()
-        assert "400" in captured.err
+        assert "400" in caplog.text
 
 
-def test_fire_webhook_network_error_retried(capsys):
+def test_fire_webhook_network_error_retried(caplog):
     """httpx.RequestError → retried once."""
+    caplog.set_level(logging.WARNING)
     with patch("httpx.request") as mock_req:
         mock_req.side_effect = [
             httpx.ConnectError("DNS fail"),
@@ -206,5 +208,43 @@ def test_fire_webhook_network_error_retried(capsys):
         ]
         fire_webhook(_cfg("http://network.test"), {"a": 1}).join(timeout=5)
         assert mock_req.call_count == 2
-        captured = capsys.readouterr()
-        assert "retrying" in captured.err
+        assert "retrying" in caplog.text
+
+
+def test_fire_webhook_hmac_signing():
+    """When config.secret is set, an X-Aqueduct-Signature header is added and the
+    body is sent as signed bytes (content=) so the digest matches what is sent."""
+    import hashlib
+    import hmac
+
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        cfg = _cfg("http://hooks.test/secure", secret="topsecret", payload={"k": "v"})
+        fire_webhook(cfg, full_payload={}, template_vars={}).join(timeout=2)
+
+        kwargs = mock_req.call_args.kwargs
+        # Signed path sends bytes via content=, NOT json=
+        assert kwargs.get("json") is None
+        content = kwargs["content"]
+        assert isinstance(content, bytes)
+        sig = kwargs["headers"]["X-Aqueduct-Signature"]
+        assert sig.startswith("sha256=")
+        expected = "sha256=" + hmac.new(b"topsecret", content, hashlib.sha256).hexdigest()
+        assert sig == expected
+
+
+def test_fire_webhook_no_signature_without_secret():
+    """No X-Aqueduct-Signature header when no secret is configured."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=200)
+        fire_webhook(_cfg("http://hooks.test/plain"), {"k": "v"}).join(timeout=2)
+        assert "X-Aqueduct-Signature" not in mock_req.call_args.kwargs["headers"]
+
+
+def test_fire_webhook_configurable_retries():
+    """max_retries controls the number of delivery attempts."""
+    with patch("httpx.request") as mock_req:
+        mock_req.return_value = MagicMock(status_code=503)  # retryable
+        # 0 retries → exactly 1 attempt; backoff small so the thread finishes fast
+        fire_webhook(_cfg("http://hooks.test/x", max_retries=0, backoff_seconds=0.01), {"k": 1}).join(timeout=2)
+        assert mock_req.call_count == 1

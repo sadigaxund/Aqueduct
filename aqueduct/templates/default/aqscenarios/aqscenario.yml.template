@@ -72,9 +72,6 @@ inject_failure:
 # Omit the `expected_patch:` block entirely (or set it to {}) when the
 # scenario has multiple valid fixes that touch different modules — the
 # scenario then gates on `patch_applies` + `root_cause_contains` only.
-#
-# The legacy `expected_patch.ops:` / `expected_patch.forbidden_ops:` syntax
-# was DELETED in 1.0.3 — scenarios using it now fail with a migration hint.
 
 expected_patch:
   effect:

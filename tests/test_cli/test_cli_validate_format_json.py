@@ -17,11 +17,10 @@ deployment:
   master_url: local[*]
 stores:
   observability:
-    path: .aqueduct/obs.db
-  lineage:
-    path: .aqueduct/lin.db
-  depot:
-    path: .aqueduct/depot.db
+    path: .aqueduct/obs
+  depots:
+    default:
+      path: .aqueduct/depot.db
 """
 
 BP_VALID = """aqueduct: "1.0"

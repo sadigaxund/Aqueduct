@@ -204,13 +204,79 @@ class TestCheckpointField:
         assert manifest.to_dict()["checkpoint"] is True
 
 
+class TestWarningsField:
+    """Per-Blueprint compile-warning suppression (`warnings.suppress`).
+
+    Compile-only scope — verified end-to-end (rule actually suppressed) in
+    `tests/test_compiler/test_compiler_warnings.py::TestBlueprintWarningSuppress`.
+    These tests cover parser-layer parsing/defaults/rejection only.
+    """
+
+    def test_blueprint_warning_suppress_default_empty(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ()
+
+    def test_blueprint_warning_suppress_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: [file_format_no_repartition, jdbc_missing_partition]\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("file_format_no_repartition", "jdbc_missing_partition")
+
+    def test_blueprint_warning_suppress_star_round_trips(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: ['*']\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("*",)
+
+    def test_warnings_block_unknown_key_raises(self, tmp_path):
+        bp_file = tmp_path / "bp.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: test\nname: Test\n"
+            "warnings:\n  suppress: []\n  bogus_key: true\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        with pytest.raises(ParseError, match="validation error"):
+            parse(bp_file)
+
+    def test_sub_blueprint_own_warnings_block_parses_standalone(self, tmp_path):
+        """A sub-Blueprint's `warnings:` block must be valid Blueprint input on
+        its own — arcade inheritance ignoring it (compiler-level) is a
+        separate concern from "does it parse"."""
+        bp_file = tmp_path / "sub.yml"
+        bp_file.write_text(
+            "aqueduct: '1.0'\nid: sub.pipeline\nname: Sub\n"
+            "warnings:\n  suppress: [kafka_checkpoint_stale]\n"
+            "modules:\n  - id: m\n    type: Channel\n    label: M\n"
+            "edges: []\n"
+        )
+        bp = parse(bp_file)
+        assert bp.warning_suppress == ("kafka_checkpoint_stale",)
+
+
 class TestPromptContext:
     def test_agent_config_prompt_context_round_trips(self, tmp_path):
         """AgentConfig.prompt_context round-trips through Parser -> Blueprint.agent.prompt_context"""
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n  approval_mode: auto\n  prompt_context: 'Use PySpark version 3.5.'\n"
+            "agent:\n  approval: auto\n  prompt_context: 'Use PySpark version 3.5.'\n"
             "modules:\n  - id: m\n    type: Channel\n    label: M\n"
             "edges: []\n"
         )
@@ -222,7 +288,7 @@ class TestPromptContext:
         bp_file = tmp_path / "bp.yml"
         bp_file.write_text(
             "aqueduct: '1.0'\nid: test\nname: Test\n"
-            "agent:\n  approval_mode: auto\n  prompt_context: 'Contextual info'\n"
+            "agent:\n  approval: auto\n  prompt_context: 'Contextual info'\n"
             "modules:\n  - id: m\n    type: Channel\n    label: M\n"
             "edges: []\n"
         )
@@ -295,7 +361,7 @@ edges:
 class TestAgentModelListSugar:
     def test_list_two_models_synthesises_cascade(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": ["claude", "gpt4"], "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is not None
         assert len(s.cascade) == 2
@@ -304,24 +370,24 @@ class TestAgentModelListSugar:
 
     def test_single_item_list_collapses_to_plain_string(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": ["claude"], "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": ["claude"], "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is None
 
     def test_empty_list_raises_validation_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": [], "approval": "auto"})
 
     def test_list_with_non_string_item_raises_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": ["claude", 42], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": ["claude", 42], "approval": "auto"})
 
     def test_list_with_empty_string_raises_error(self):
         from aqueduct.parser.schema import AgentSchema
         with pytest.raises(ValueError, match=r"non-empty model name strings"):
-            AgentSchema.model_validate({"model": [""], "approval_mode": "auto"})
+            AgentSchema.model_validate({"model": [""], "approval": "auto"})
 
     def test_list_and_explicit_cascade_mutually_exclusive(self):
         from aqueduct.parser.schema import AgentSchema
@@ -329,12 +395,12 @@ class TestAgentModelListSugar:
             AgentSchema.model_validate({
                 "model": ["claude", "gpt4"],
                 "cascade": [{"model": "claude"}],
-                "approval_mode": "auto",
+                "approval": "auto",
             })
 
     def test_plain_string_model_no_list_preserved(self):
         from aqueduct.parser.schema import AgentSchema
-        s = AgentSchema.model_validate({"model": "claude", "approval_mode": "auto"})
+        s = AgentSchema.model_validate({"model": "claude", "approval": "auto"})
         assert s.model == "claude"
         assert s.cascade is None
 
@@ -342,7 +408,7 @@ class TestAgentModelListSugar:
         from aqueduct.parser.schema import AgentSchema
         s = AgentSchema.model_validate({
             "model": ["claude", "gpt4", "gemini"],
-            "approval_mode": "auto",
+            "approval": "auto",
         })
         assert s.model == "claude"
         assert len(s.cascade) == 3

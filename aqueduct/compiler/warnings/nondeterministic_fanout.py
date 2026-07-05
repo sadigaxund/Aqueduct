@@ -3,15 +3,19 @@
 When a Channel has 2+ downstream consumers AND its SQL contains a
 non-deterministic function, each consumer branch re-evaluates the function
 independently — producing divergent values per branch. Almost never the
-user's intent. Recommend a Checkpoint upstream (already covered by 8e for
-pure cache reasons; this rule is the data-correctness variant).
+user's intent. Recommend checkpointing THIS Channel — freezing the value
+requires materializing the Channel's OWN output (the exemption below checks
+the Channel's own `checkpoint` flag accordingly; an upstream checkpoint would
+NOT stop per-branch re-evaluation). 8e is the pure-cache variant; this rule
+is the data-correctness variant.
 """
 
 from __future__ import annotations
 
 import re
-from aqueduct.parser.models import ModuleType
 from typing import Any
+
+from aqueduct.parser.models import ModuleType
 
 RULE_ID = "nondeterministic_fanout"
 
@@ -48,7 +52,7 @@ def check(manifest: Any) -> list[str]:
             f"SQL uses {match.group(1).lower()}() — a non-deterministic "
             "function. Each consumer branch will re-evaluate the function "
             "independently, yielding different values per branch. "
-            "Add a Checkpoint upstream of this Channel so the value is "
-            "computed once and shared."
+            "Set `checkpoint: true` on this Channel so the value is "
+            "materialized once and shared by every branch."
         )
     return out

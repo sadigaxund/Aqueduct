@@ -547,15 +547,12 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  lineage:
-    backend: duckdb
-    path: "{lin}"
-  depot:
-    backend: duckdb
-    path: "{dep}"
+  depots:
+    default:
+      backend: duckdb
+      path: "{dep}"
 """.format(
         obs=str(tmp_path / "obs.duckdb"),
-        lin=str(tmp_path / "lin.duckdb"),
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 
@@ -706,7 +703,7 @@ aqueduct: '1.0'
 id: test_bp
 name: Test BP
 agent:
-  approval_mode: human
+  approval: human
 modules:
   - id: src
     type: Ingress
@@ -722,15 +719,12 @@ stores:
   observability:
     backend: duckdb
     path: "{obs}"
-  lineage:
-    backend: duckdb
-    path: "{lin}"
-  depot:
-    backend: duckdb
-    path: "{dep}"
+  depots:
+    default:
+      backend: duckdb
+      path: "{dep}"
 """.format(
-        obs=str(tmp_path / "obs.duckdb"),
-        lin=str(tmp_path / "lin.duckdb"),
+        obs=str(tmp_path / "obs"),
         dep=str(tmp_path / "dep.duckdb"),
     ), encoding="utf-8")
 

@@ -36,6 +36,13 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
 
+The `target` field is validated against `master_url` at config-load. A
+mismatch raises a `ConfigError` naming both values and the expected shape.
+`databricks` is a fully wired **remote‑submit** target — the engine packages
+the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
+polls to completion. `emr` and `dataproc` are rejected — they require a
+packaging/submit layer planned for a future release.
+
 ```yaml
 deployment:
   env: cluster
@@ -50,6 +57,10 @@ spark_config:
 
 `spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict.
 
+**Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `spark_config` — standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
+
+`table:` and `path:` are **mutually exclusive** on both Ingress and Egress — setting both raises a parse error.
+
 Environment variable substitution works inside config values:
 
 ```yaml
@@ -63,6 +74,102 @@ aqueduct run pipeline.yml --config aqueduct.cluster.yml
 ```
 
 In K8s, mount a PersistentVolumeClaim at `.aqueduct/` and `patches/` so observability state and patch history survive pod restarts.
+
+### Per‑target configuration
+
+#### local
+
+```yaml
+deployment:
+  target: local
+  master_url: "local[*]"              # or local[4], local[8], …
+```
+
+The session runs in‑process inside the driver JVM. No external connectivity
+needed — `aqueduct doctor` always reports `ok`.
+
+#### standalone
+
+```yaml
+deployment:
+  target: standalone
+  master_url: "spark://spark-master.internal:7077"
+```
+
+`master_url` must start with `spark://`. The doctor TCP‑probes `<host>:<port>`
+from the master URL (default port 7077) to verify the Spark master is reachable
+before a run.
+
+#### yarn
+
+```yaml
+deployment:
+  target: yarn
+  master_url: "yarn"
+  env: cluster
+```
+
+`master_url` must be exactly `"yarn"`. The driver uses the Hadoop configuration
+on the node to locate the ResourceManager. Set `HADOOP_CONF_DIR` (or
+`YARN_CONF_DIR`) to the directory containing `yarn-site.xml`:
+
+```bash
+export HADOOP_CONF_DIR=/etc/hadoop/conf
+```
+
+`aqueduct doctor` warns if neither env var is set — the session will fail at
+startup without them. The doctor does **not** build a SparkSession (that would
+trigger a full YARN negotiation); use `--preflight` for a real session test.
+
+#### kubernetes
+
+```yaml
+deployment:
+  target: kubernetes
+  master_url: "k8s://https://k8s-api.internal:6443"
+  env: cluster
+
+spark_config:
+  spark.kubernetes.namespace: "aqueduct"
+  spark.kubernetes.container.image: "my-registry/aqueduct:latest"
+  spark.kubernetes.authenticate.driver.serviceAccountName: "aqueduct-sa"
+```
+
+`master_url` must start with `k8s://`. The doctor parses the API server
+host:port from the URL and TCP‑probes it (port defaults to 443). It also warns
+if no `spark.kubernetes.*` keys are present in `spark_config` — at minimum a
+namespace and container image are normally required.
+
+Credentials come from the pod's service account (no `@aq.secret()` needed when
+using in‑cluster `spark.kubernetes.authenticate.*` config). For out‑of‑cluster
+submission, add a kubeconfig path under `spark_config`.
+
+### Write-mode features
+
+**`mode: overwrite_partitions`** — two strategies for atomically replacing a subset
+of a table:
+
+| Strategy | Config | Behaviour |
+|---|---|---|
+| `replaceWhere` | `replace_where: "<predicate>"` (e.g. `"event_date = '2025-01-01'"`) | Delta `replaceWhere` — atomically replaces rows matching the predicate |
+| Dynamic partition overwrite | `partition_by: ["col"]` + `mode: overwrite_partitions` | Spark dynamic partition overwrite — replaces only partitions in the output DataFrame |
+
+When neither `replace_where` nor `partition_by` is set, falls back to plain `overwrite`.
+
+**`format: custom` + `class:`** (Spark 4.0+). User-defined Python DataSources
+(implements `DataSourceRegister`) on Ingress and Egress. The class must be
+importable on the driver; `aqueduct doctor` verifies importability. As with
+UDFs, the class body is opaque to Aqueduct.
+
+**`on_new_columns`** — schema-drift contract (`allow` | `fail` | `alert`) on
+Ingress and Egress (see the [Spark Guide](spark_guide.md) for the policy table).
+
+**Iceberg / Hudi / Delta maintenance.** The Egress `maintenance:` block runs
+format-aware post-write ops (`delta`: `OPTIMIZE` + `VACUUM`, `iceberg`:
+`rewrite_data_files` + `expire_snapshots`, `hudi`: `run_compaction` +
+`run_clean`). Timing lands in `maintenance_metrics`. `aqueduct doctor` emits an
+`iceberg_catalog` warning when a `format: iceberg` module has no catalog key in
+the blueprint `spark_config`.
 
 ---
 
@@ -104,6 +211,8 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`). When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning — the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+
 ---
 
 ## Observability State Persistence
@@ -122,9 +231,11 @@ Each store has its own path under the `stores:` block in `aqueduct.yml`. In ephe
 ```yaml
 stores:
   observability:
-    path: "/mnt/aqueduct-state/observability.db"
-  depot:
-    path: "/mnt/aqueduct-state/depot.db"
+    path: "/mnt/aqueduct-state/observability"   # a DIRECTORY — per-blueprint
+                                                # files are created underneath
+  depots:
+    default:
+      path: "/mnt/aqueduct-state/depot.db"
 ```
 
 ### Pod-native: external stores, zero local artefacts
@@ -134,13 +245,15 @@ Instead of a PVC, point every store at an external backend so the pod writes **n
 ```yaml
 stores:
   observability: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
-  depot:         { backend: postgres, path: "postgresql://aq@host/aqueduct_db" }
+  depots: { default: { backend: postgres, path: "postgresql://aq@host/aqueduct_db" } }
   blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
 ```
 
 The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
 
-> The `stores.lineage` config block is **inert** as of 1.1.2 — `column_lineage` lives in `observability.db`. Setting it emits a `DeprecationWarning` and is ignored.
+> **Storage-integrity guardrail.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset, Aqueduct warns at startup that externalised blobs (manifests, stack traces, provenance) will land on the driver's local disk. Set `stores.blob.backend: local` explicitly to silence the warning — you've made an informed choice about where blobs live. Unrelated configurations never trigger it.
+
+> `stores.lineage` was **removed** in 2.0 — `column_lineage` lives in the `observability` store. Use `stores.depots:` for depot mounts.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
@@ -148,7 +261,7 @@ The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory fo
 
 Per-pipeline DuckDB files are the right default: zero setup, single-writer is fine because one pipeline runs at a time, and the file sits next to the project. You have outgrown them when any of these become true:
 
-- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `lineage` / `depot` schemas per store automatically).
+- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
 - **Many pipelines** — dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
 - **Ephemeral drivers** — Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
 - **Concurrent access** — a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
@@ -160,9 +273,10 @@ stores:
   observability:
     backend: postgres
     path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
-  depot:
-    backend: postgres
-    path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
+  depots:
+    default:
+      backend: postgres
+      path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
 ```
 
 Tables are created on the first run — no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
@@ -204,13 +318,13 @@ agent:
   approval: human
 ```
 
-Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`.
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`. As of 1.9, `agent.api_key` can be configured per blueprint or per cascade tier — always use `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A project-wide cascade default can live in `aqueduct.yml` under `agent.cascade` (useful for fleets of blueprints sharing a heal policy); each Blueprint's own `agent.cascade` overrides it.
 
 ---
 
 ## Danger Settings
 
-Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning.
+Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning — these warnings cannot be suppressed via `warnings.suppress`.
 
 ```yaml
 danger:
@@ -276,6 +390,11 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
+**Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact — that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:
+
+- `secret:` — HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
+- `max_retries:` (default 1) / `backoff_seconds:` (default 2.0) — bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
+
 ### `patches/rules.md`
 
 `patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt. Use it to encode project-specific repair rules:
@@ -336,6 +455,55 @@ VACUUM delta.`s3://my-bucket/output/orders` RETAIN 168 HOURS;
 Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` will accumulate small files over time, degrading read performance significantly.
 
 ---
+
+## Remote-Submit Targets
+
+`emr` and `dataproc` are **rejected at config‑load** in the current
+release. Setting `deployment.target` to either of these two values raises
+a `ConfigError`. `databricks` is the sole supported remote‑submit target
+(see below).
+
+The sections below (Databricks E2E, EMR, Dataproc) are forward‑looking
+reference for EMR/Dataproc; the Databricks sections are fully wired.
+
+### Databricks
+
+**Prerequisites.** `aqueduct-core[databricks]` (optional SDK) or plain `httpx` (already a base dep). The Databricks cluster must have `aqueduct-core[spark]` installed as a library (pypi or init script).
+
+**Configuration.** Add a `deployment.databricks` block to `aqueduct.yml`:
+
+```yaml
+deployment:
+  target: databricks
+  databricks:
+    workspace_url: "https://dbc-xxxx.cloud.databricks.com"
+    cluster_id: "0123-456789-abcdefgh"          # existing cluster — mutually exclusive with new_cluster
+    max_concurrent_runs: 1                      # max parallel job runs submitted by this pipeline (default 1)
+    # new_cluster:                               # one-shot cluster spec per Jobs API
+    #   spark_version: "15.3.x-scala2.12"
+    #   node_type_id: "i3.xlarge"
+    #   num_workers: 4
+    # libraries:                                 # optional — pypi libraries installed on the job cluster
+    #   - pypi:
+    #       package: "aqueduct-core[spark]"
+    #   - pypi:
+    #       package: "delta-spark"
+```
+
+**Credentials.** Set `DATABRICKS_TOKEN` in the submitting environment or reference it via `@aq.secret('DATABRICKS_TOKEN')` in the Blueprint context. The token is never placed in `aqeduct.yml` plaintext.
+
+**Execution flow.**
+1. `aqueduct run blueprint.yml` on the submitting machine
+2. Blueprint + `aqeduct.yml` + bootstrap script uploaded to `dbfs:/aqueduct/jobs/<run_id>/`
+3. `POST /api/2.1/jobs/runs/submit` with a `spark_python_task` running `aqueduct run dbfs:/.../blueprint.yml`
+4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
+5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
+
+**Doctor check.** `aqueduct doctor` includes a `remote-target` check — it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking — `run_doctor` continues to subsequent checks).
+
+### EMR / Dataproc
+
+Deferred. These targets raise `NotImplementedError` at runtime. They will reuse the existing `aws` / `gcp` extras for their submit clients when implemented.
 
 ## Production Readiness Checklist
 
