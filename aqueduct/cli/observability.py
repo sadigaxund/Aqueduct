@@ -681,11 +681,11 @@ def _profile_trend(blueprint_arg, last_n, cfg, store_dir, fmt) -> None:
     "--format", "out_format",
     type=click.Choice(["text", "json"], case_sensitive=False),
     default="text", show_default=True,
-    help="Output format. `json` for machine-readable consumption (Phase 30b).",
+    help="Output format. `json` for machine-readable consumption.",
 )
 @click.option(
     "--heal-coverage", is_flag=True, default=False,
-    help="Phase 45 — summarize healing_outcomes by resolution (llm / cached / "
+    help="Summarize healing_outcomes by resolution (llm / cached / "
          "replayed) and report zero-token heal coverage instead of listing runs.",
 )
 @_env_options

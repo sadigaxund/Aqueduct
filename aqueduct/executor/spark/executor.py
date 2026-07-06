@@ -1268,6 +1268,13 @@ def execute(
                         "quarantine rows produced but no spillway edge; discarded.",
                         module.id,
                     )
+                elif has_spillway_edge:
+                    # A quarantine-eligible rule (e.g. `custom`) reported no rows
+                    # to quarantine this run — still supply an empty frame so a
+                    # wired spillway Egress doesn't see "upstream produced no
+                    # DataFrame" (same rule as the Channel spillway_condition
+                    # mismatch case above).
+                    frame_store[f"{module.id}.spillway"] = val.filter("1=0")
                 local_results.append(_mr(module_id=module.id, status=ExecutionStatus.SUCCESS))
 
             # ── Regulator ─────────────────────────────────────────────────────

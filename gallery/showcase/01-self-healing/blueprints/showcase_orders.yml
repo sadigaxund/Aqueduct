@@ -98,7 +98,15 @@ modules:
     tags: [transform, routing]
     config:
       op: sql
-      query: "SELECT *,\n  CASE\n    WHEN total_value >= 500 THEN 'express'\n    WHEN total_value >= 100 THEN 'standard'\n    ELSE 'bulk'\n  END AS priority_tier\nFROM __input__"
+      query: >
+        SELECT *,
+          CASE
+            WHEN total_val >= 500 THEN 'express'
+            WHEN total_val >= 100 THEN 'standard'
+            ELSE 'bulk'
+          END AS priority_tier
+        FROM __input__
+
   # ── 7. Quality gate with quarantine spillway ───────────────────────
   - id: quality_gate
     label: "Data Quality Gate"

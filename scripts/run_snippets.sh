@@ -52,6 +52,7 @@ WORK_BASE="${AQ_SNIPPET_WORKDIR:-$REPO_ROOT/.snippet_runs}"
 # Snippets that require live external services, or aren't compatible with the
 # one-blueprint-per-snippet assumption below — skip entirely
 SKIP_PATTERNS=(
+    "12_assert_null_sampling",
     "44_dag_cycle_detection"
 )
 

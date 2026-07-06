@@ -303,7 +303,7 @@ def lint_cmd(
     help="Output file path. `-` writes to stdout.",
 )
 def schema(target: str, output: str) -> None:
-    """Emit Pydantic-derived JSON Schema (Phase 30b — v1.0 stability contract).
+    """Emit Pydantic-derived JSON Schema.
 
     Targets:
       blueprint  Blueprint YAML schema (enables IDE autocomplete + CI gate)

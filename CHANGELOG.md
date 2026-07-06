@@ -28,6 +28,13 @@ release and are marked **BREAKING**.
   `Manifest.base_dir` field (the top-level Blueprint's own directory) before
   falling back to a normal import — collision-proof against same-named
   stdlib/installed modules, and requires no `sys.path` mutation.
+- Assert `type: custom` rule with `on_fail: quarantine` that finds nothing to
+  quarantine on a given run left a wired spillway Egress reading `None` for
+  its upstream (`"upstream produced no DataFrame"`) instead of an empty
+  frame — the executor only wrote the spillway frame_store key when
+  `quarantine_df` was non-`None`, which built-in row rules (`not_null`,
+  `freshness`, `sql_row`) always are (even when empty) but a fully-passing
+  `custom` callable is not.
 
 ## [2.0.0] — 2026-06-30
 

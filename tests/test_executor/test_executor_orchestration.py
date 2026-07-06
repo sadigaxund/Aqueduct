@@ -1510,6 +1510,45 @@ def test_execute_assert_end_to_end_quarantine(spark: SparkSession, tmp_path):
     assert "_aq_error_module" in quarantine_df.columns
 
 
+def test_execute_assert_custom_rule_no_quarantine_rows_still_feeds_spillway(spark: SparkSession, tmp_path):
+    """A `type: custom` quarantine rule that finds nothing to quarantine must
+    still supply an (empty) frame to a wired spillway Egress — it must not
+    surface as 'upstream produced no DataFrame' (see
+    .dev/ISSUES/pending/snippet24-quarantine-upstream-no-dataframe.md)."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(5).write.parquet(in_path)
+    rules_path = tmp_path / "rules.py"
+    rules_path.write_text(
+        "def check_all_pass(df):\n    return {'passed': True}\n"
+    )
+    main_out = str(tmp_path / "main.parquet")
+    spill_out = str(tmp_path / "spill.parquet")
+
+    manifest = Manifest(
+        blueprint_id="test.assert_custom_no_quarantine",
+        modules=(
+            Module(id="in", type="Ingress", label="In", config={"format": "parquet", "path": in_path}),
+            Module(id="ast", type="Assert", label="Ast", config={
+                "rules": [{"type": "custom", "fn": "rules.check_all_pass", "on_fail": "quarantine"}]
+            }),
+            Module(id="out_main", type="Egress", label="Main", config={"format": "parquet", "path": main_out}),
+            Module(id="out_spill", type="Egress", label="Spill", config={"format": "parquet", "path": spill_out}),
+        ),
+        edges=(
+            Edge(from_id="in", to_id="ast", port="main"),
+            Edge(from_id="ast", to_id="out_main", port="main"),
+            Edge(from_id="ast", to_id="out_spill", port="spillway"),
+        ),
+        context={}, spark_config={},
+        base_dir=str(tmp_path),
+    )
+    result = execute(manifest, spark)
+    assert result.status == "success"
+
+    assert spark.read.parquet(main_out).count() == 5
+    assert spark.read.parquet(spill_out).count() == 0
+
+
 class TestExecuteModuleDispatch:
     """Tests for _execute_module dispatch — patched executor functions."""
 
