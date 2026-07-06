@@ -44,12 +44,14 @@ def _normalize_type(t: str) -> str:
     return _TYPE_ALIASES.get(lower, lower)
 
 
-def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
+def read_ingress(module: Module, spark: SparkSession, base_dir: str | None = None) -> DataFrame:
     """Read source data described by module.config.
 
     Args:
         module: An Ingress Module from the compiled Manifest.
         spark:  Active SparkSession (caller owns lifecycle).
+        base_dir: Manifest.base_dir — lets format=custom's 'class:' resolve a
+                   sibling .py file next to the blueprint.
 
     Returns:
         Lazy DataFrame — no Spark actions fired.
@@ -127,7 +129,7 @@ def read_ingress(module: Module, spark: SparkSession) -> DataFrame:
         from aqueduct.executor.spark.custom_source import register_custom_source
 
         try:
-            fmt = register_custom_source(spark, str(class_path))
+            fmt = register_custom_source(spark, str(class_path), base_dir)
         except Exception as exc:
             raise IngressError(
                 f"[{module.id}] custom DataSource {class_path!r}: {exc}"

@@ -592,6 +592,10 @@ def compile(  # noqa: A001
         checkpoint=blueprint.checkpoint,
         provenance_map=prov_map,
         inputs_fingerprint=inputs_fingerprint,
+        # Top-level blueprint's dir — arcade sub-Blueprints keep their own
+        # dirs for FsPath anchoring at parse time, but the ONE Manifest per
+        # compilation unit carries the parent's (see Manifest.base_dir doc).
+        base_dir=blueprint.base_dir,
     )
 
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────

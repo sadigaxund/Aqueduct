@@ -1,258 +1,109 @@
-# Showcase 03 — Self-Healing Tutorial
+# Self-Healing Showcase
 
-Three interactive demos that walk you through the self-healing loop step by step. Each demo uses a different defect and agent config so you can see how the Agent behaves in different scenarios:
+A single pipeline that demonstrates how Aqueduct **parses, compiles, observes,
+routes, quality-gates, and self-heals** — all from one declarative YAML file.
 
-| Demo | What it proves |
-|---|---|
-| `01_schema_drift.yml` | Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION` → structured error extraction → LLM resolves the correct column name from the suggestion list |
-| `02_guardrail_apply_reject.yml` | Apply-time guardrail rejection feeds back into the reprompt loop — the LLM self-corrects instead of failing silently |
-| `03_unrecoverable_budget.yml` | Multi-axis budget (time + tokens + signatures) actually terminates runaway loops and records the correct termination reason |
+## Pipeline
 
-All three write to the same `observability.db` so a single query at the end shows the whole picture.
+```
+ingest_orders ─┐
+load_products ─┼─→ enrich_products (Arcade: join)   ← product_name, category, total_value
+               │
+load_customers ┼─→ enrich_customers (Arcade: join)  ← customer_name, region, segment
+               │
+               ▼
+        classify_priority (Channel)   ← priority_tier — 👾 has a deliberate bug
+               │
+        quality_gate (Assert)
+           ├─ main → route_by_priority (Junction)
+           │           ├── express  → store_express
+           │           ├── standard → store_standard
+           │           └── bulk     → store_bulk
+           └─ spillway → quarantine_storage
+```
 
-## Prereqs
+Reference data (`load_products`, `load_customers`) is read once at the parent
+level and passed into each Arcade as a named upstream — the Arcades themselves
+contain nothing but the join, so they stay reusable and parent-agnostic.
 
-- Python 3.11+, `pip install -e '.[spark,llm]'` from repo root (or wheel install of `aqueduct-core[spark]`)
-- Java 17 + Spark 4.0 (`use_java17: true` in `aqueduct.yml` will pick the right JDK if `JAVA_HOME_17` is set)
-- Ollama (or any OpenAI-compatible endpoint) running locally with a small coder model, e.g.
-  ```bash
-  ollama pull qwen2.5-coder:7b
-  export AQ_OLLAMA_URL=http://localhost:11434
-  ```
-- DuckDB CLI optional but recommended for the post-run inspection (`brew install duckdb` / `apt install duckdb`)
-
-## Get into the demo dir
+## What to run
 
 ```bash
-cd gallery/showcase/03-self-healing
+cd gallery/showcase/01-self-healing
+cp .env.template .env   # optional — point at a real agent endpoint/model
+aqueduct run blueprints/showcase_orders.yml
 ```
 
-Everything below assumes you are inside this directory. The local `aqueduct.yml` is the engine config; the three blueprints are under `blueprints/`.
+Every value in `.env.template` already has a working default (shown after
+`:-` in `aqueduct.yml`/`blueprints/showcase_orders.yml`) — you only need a
+real `.env` to point `AQ_OLLAMA_URL`/`AQ_OLLAMA_MODEL` at a real endpoint,
+tighten the agent budget, or send the `on_success`/`on_failure` webhooks
+somewhere that isn't a 404.
 
----
+The pipeline **will fail** — `classify_priority` references `total_val`
+which doesn't exist (the real column is `total_value`).
 
-## DEMO 1 — Structured error extraction
+The Surveyor captures the structured Spark error, and the agent loop fires
+to fix it. Watch for:
+
+1. `Source Health` — probe prints schema + row count inline
+2. Both Arcades render as a nested tree (`enrich_products └─ ✓ join`)
+3. Pipeline fails with `UNRESOLVED_COLUMN.WITH_SUGGESTION`
+4. `on_failure` hooks fire (command + webhook) — the healing loop is
+   engaged, but the run's terminal state is still "failed" until it resolves
+5. Agent receives the structured root cause + suggested columns
+6. Agent proposes a patch fixing `total_val → total_value`
+7. Patch passes gates (guardrails → compile → lineage → sandbox)
+8. Re-run succeeds → `on_success` hooks fire → output written to `data/output/`
+
+Then take a look at what actually happened:
 
 ```bash
-aqueduct run blueprints/01_schema_drift.yml
+pip install -r requirements.txt   # duckdb + pandas + rich, one-time
+python inspect_results.py
 ```
 
-Expect: run fails (status=error). Take note of the printed `run_id` — call it `R1`.
+Shows the run's terminal status, the healing attempt history, the full
+PatchSpec the agent wrote (rationale, root cause, confidence, operations),
+a real before/after diff of the blueprint (reconstructed from
+`patches/backups/` — the snapshot Aqueduct writes before overwriting the
+file), and the final output row counts per priority tier.
 
-### 1a. Confirm the structured error was captured
+Inspect the healing record:
 
 ```bash
-duckdb .aqueduct/obs/schema_drift_demo/observability.db <<'SQL'
-SELECT run_id, error_class, object_name, suggested_columns, sql_state
-FROM failure_contexts
-ORDER BY started_at DESC LIMIT 1;
-SQL
+duckdb .aqueduct/showcase.self_healing.orders/observability.db \
+  "SELECT attempt_num, gate_that_rejected, stop_reason, tokens_in, tokens_out
+   FROM heal_attempts ORDER BY attempt_num"
 ```
 
-You should see:
+## Without an LLM
 
-```
-error_class         = UNRESOLVED_COLUMN.WITH_SUGGESTION
-object_name         = event_ts
-suggested_columns   = ["event_id","event_time","user_id","event_type"]
-sql_state           = 42703
-```
-
-If `error_class IS NULL` → the structured error extractor did not fire. Either the exception was not a `PySparkException` (check the stack trace), or `_extract_structured_error` threw and swallowed the error. Run `python -c "from aqueduct.surveyor.surveyor import _extract_structured_error; print('ok')"` to confirm it imports.
-
-### 1b. Confirm the prompt uses the structured block
+If no agent endpoint is available, the pipeline still fails clearly — the
+healing loop reports "all tiers unreachable" and the `on_failure` hooks still
+fire (hooks care about the run's terminal state, not whether an agent was
+reachable). Inspect the structured error directly:
 
 ```bash
-aqueduct heal R1 --print-prompt | tee /tmp/prompt-R1.txt
+duckdb .aqueduct/showcase.self_healing.orders/observability.db \
+  "SELECT error_class, object_name, suggested_columns FROM failure_contexts"
 ```
 
-Then:
+Expected: `error_class = UNRESOLVED_COLUMN.WITH_SUGGESTION`,
+`object_name = total_val`, `suggested_columns` includes `total_value`.
 
-```bash
-grep -n "Root cause (structured)" /tmp/prompt-R1.txt   # expect at least 1 hit
-grep -n "Actual columns available" /tmp/prompt-R1.txt  # expect: event_id, event_time, ...
-grep -nc "## Stack trace" /tmp/prompt-R1.txt           # expect: 0
-```
+## What each piece demonstrates
 
-If you see `## Stack trace` the structured extraction fell back to the raw stack trace — meaning the error didn't contain parseable structured fields (or `_extract_structured_error` threw).
-
-### 1c. Confirm the patch landed
-
-```bash
-ls patches/pending/
-cat patches/pending/*schema_drift*.json | python -m json.tool | head -40
-```
-
-Look at `root_cause` and the `operations[]` block — should mention `event_time` (the real column), NOT `ts` or any hallucinated name. The structured `proposal` list from Spark eliminates the column-name guess; the LLM never needs to invent a column name.
-
----
-
-## DEMO 2 — Guardrail rejection with reprompt
-
-```bash
-aqueduct run blueprints/02_guardrail_apply_reject.yml
-```
-
-Take the `run_id` — call it `R2`.
-
-### 2a. Confirm multiple attempts, first rejected by apply gate
-
-```bash
-duckdb .aqueduct/obs/guardrail_apply_reject_demo/observability.db <<'SQL'
-SELECT attempt_num, gate_that_rejected, escalated, stop_reason,
-       substr(signature_hash, 1, 8) AS sig
-FROM heal_attempts
-WHERE run_id = (SELECT MAX(run_id) FROM heal_attempts)
-ORDER BY attempt_num;
-SQL
-```
-
-You should see 2+ rows. The first one(s) should have `gate_that_rejected = 'apply'` — the guardrail rejected the model's first patch. Pre-1.1.0 this would have been the FINAL row (rejection dropped silently); in 1.1.0 the loop reprompts.
-
-Terminal `stop_reason` should be one of:
-- `solved` — the model picked a non-forbidden op on retry (best case)
-- `stuck_signature` — model kept proposing the same forbidden op even after escalation (also a valid outcome for a small model)
-- `exhausted_attempts` — ran out of reprompt budget
-
-All three confirm the loop is doing the right thing. The bug we are guarding against is "1 row, gate_that_rejected=apply, stop_reason=exhausted_attempts" with NO retry — that would mean the rejection was wasted.
-
-### 2b. Eyeball the reprompt content
-
-```bash
-aqueduct heal R2 --print-prompt | grep -A 20 "guardrail"
-```
-
-The prompt should explicitly tell the model that the previous attempt was rejected by a guardrail and which op was forbidden. That is the unification — apply-side failures travel back through the same prompt builder as schema failures.
-
----
-
-## DEMO 3 — Multi-axis budget terminates correctly
-
-```bash
-aqueduct run blueprints/03_unrecoverable_budget.yml
-```
-
-Take the `run_id` — call it `R3`.
-
-### 3a. Confirm budget axes did the job
-
-```bash
-duckdb .aqueduct/obs/unrecoverable_budget_demo/observability.db <<'SQL'
-SELECT attempt_num, escalated, stop_reason,
-       tokens_in, tokens_out, latency_ms
-FROM heal_attempts
-WHERE run_id = (SELECT MAX(run_id) FROM heal_attempts)
-ORDER BY attempt_num;
-SQL
-```
-
-You should see:
-
-- Total rows ≤ `max_reprompts` (4 in the config).
-- Exactly ONE row with `escalated = true` (triggered when `same_error_consecutive=2` tripped; the loop then bumped temperature to 0.8 and switched to the skeleton-anchored reprompt template for one more attempt).
-- Final row's `stop_reason` ∈ `{stuck_signature, budget_seconds_exceeded, budget_tokens_exceeded, exhausted_attempts}`. The exact reason depends on your model speed — slow model → `budget_seconds_exceeded`; fast model → `stuck_signature`.
-
-### 3b. Confirm the stderr / final message names the reason
-
-Scroll the `aqueduct run` output above. The final error line should explicitly say which axis tripped (e.g. `agent loop ended with stop_reason=stuck_signature`). If it's a generic "ran out of attempts" with no `stop_reason` → CLI wire-through regressed.
-
----
-
-## Cross-cutting check — vocabulary sanity
-
-After all three demos have run:
-
-```bash
-duckdb -c "ATTACH '.aqueduct/obs/schema_drift_demo/observability.db' AS d1;
-           ATTACH '.aqueduct/obs/guardrail_apply_reject_demo/observability.db' AS d2;
-           ATTACH '.aqueduct/obs/unrecoverable_budget_demo/observability.db' AS d3;
-           SELECT 'd1' src, stop_reason, COUNT(*) FROM d1.heal_attempts GROUP BY 2
-           UNION ALL SELECT 'd2', stop_reason, COUNT(*) FROM d2.heal_attempts GROUP BY 2
-           UNION ALL SELECT 'd3', stop_reason, COUNT(*) FROM d3.heal_attempts GROUP BY 2;"
-```
-
-Every `stop_reason` value should be one of: `solved`, `exhausted_attempts`, `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`, `progress_stalled`, `api_error`. Anything else → enum drift.
-
----
-
-## Clean up
-
-```bash
-rm -rf .aqueduct patches/pending/*
-```
-
-Leaves the blueprints + CSV untouched so you can re-run.
-
-
-## Untested modules — candidate test blueprints
-
-These modules lack dedicated unit tests (tested only transitively via integration
-suites).  Blueprint snippets below trigger their core logic — write a `*.aqtest.yml`
-or a showcase Blueprint that exercises the path, then assert the expected error /
-warning / outcome.
-
-### `compiler/wirer.py` — Probe / Spillway validation
-```yaml
-# Probe with missing attach_to → CompileError
-modules:
-  - {id: ingress, type: Ingress, config: {format: parquet, path: data.parquet}}
-  - {id: probe,  type: Probe,   config: {type: null_rates, column: col}}
-```
-Expected: `CompileError` — Probe `probe` has no `attach_to`
-
-```yaml
-# Spillway edge with no error_types on assert → CompileError
-modules:
-  - {id: ingress, type: Ingress, config: {format: parquet, path: data.parquet}}
-  - {id: assert,  type: Assert, config: {rules: [{type: sql_row, expr: "1=0", on_fail: quarantine}]}}
-  - {id: egress,  type: Egress, config: {format: parquet, path: out/, mode: overwrite}}
-edges:
-  - {from: ingress, to: assert}
-  - {from: assert,  to: egress, port: spillway}  # spillway without error_types
-```
-Expected: `CompileError` or `WireError`
-
-### `cli/diagnostics.py` — validate / lint / schema / doctor
-```bash
-aqueduct validate bp.yml --format json   # expect exit 0, JSON with schema_version
-aqueduct lint bp.yml --strict            # expect warnings on SELECT * into Egress
-aqueduct schema                           # expect JSON schema output
-aqueduct doctor --skip-spark              # expect section-header grouping
-```
-
-### `doctor/checks_io.py` — backend connectivity
-```bash
-# With depot configured and backend=duckdb (default)
-aqueduct doctor   # expect check 6: depot store → pass
-# With depot configured and backend=redis (requires redis running)
-AQUEDUCT_DEPOT_URL=redis://localhost:6379 aqueduct doctor
-# expect check 6: depot store → pass | fail with clear error
-```
-
-### `stores/duckdb_.py` — DuckDB backend edge cases
-```python
-# concurrent-reader: open read_only=True → expect no write-lock error
-# path-is-directory: DuckDBDepotStore with _path.is_dir() → expect clear error
-# kv_get nonexistent key with empty file → returns default, no exception
-```
-
-### Compiler warnings — trigger each rule
-```yaml
-# count_col_likely_count_star
-channel: {op: sql, sql: "SELECT col, COUNT(col) FROM {ingress}"}  # → AQ-LINT202
-
-# file_format_no_repartition
-ingress: {format: csv, path: large.csv}   # → AQ-LINT301 if no repartition
-
-# jdbc_missing_partition
-ingress: {format: jdbc, options: {url: jdbc:..., dbtable: large}}  # → AQ-LINT302
-
-# nondeterministic_fanout
-junction: {op: partition, ...} with non-deterministic Channel upstream  # → AQ-LINT401
-```
-
-### `executor/spark/warnings/jar_availability.py`
-```bash
-# With Spark 4.0 + Delta 3.x local JAR path set
-aqueduct doctor   # expect "Delta Lake JARs found" or "missing" in Spark checks
-```
+| Module | What it shows |
+|--------|---------------|
+| `ingest_orders` | Context Registry (`${ctx.data_dir}`), `schema_hint` type contracts |
+| `load_products` / `load_customers` | Reference data read once at parent level, joined by both Arcades |
+| `enrich_products` | **Arcade** — join-only sub-pipeline, takes two real upstream inputs via `context_override` |
+| `enrich_customers` | **Arcade** — same shape, chained after `enrich_products`'s output |
+| `classify_priority` | SQL Channel with CASE routing — **bug planted** (`total_val` instead of `total_value`) |
+| `quality_gate` | Assert with `not_null` + `sql_row` rules; **spillway** routes bad rows to quarantine |
+| `route_by_priority` | Junction `conditional` mode — three branches by `priority_tier` |
+| `observe_source` | Probe with `report: stdout` — inline schema + row count |
+| `quarantine_storage` | Spillway sink — one bad order (quantity=0 or negative price) isolated here |
+| `hooks` | `on_success`/`on_failure` — command + webhook, fired based on the run's terminal state |
+| Agent block | `approval: auto` with multi-axis budget — the healing loop |

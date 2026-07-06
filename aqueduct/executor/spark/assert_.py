@@ -109,6 +109,7 @@ def execute_assert(
     spark: SparkSession,
     run_id: str,
     blueprint_id: str,
+    base_dir: str = "",
 ) -> tuple[DataFrame, DataFrame | None]:
     """Evaluate Assert rules against df.
 
@@ -118,6 +119,9 @@ def execute_assert(
         spark:        Active SparkSession.
         run_id:       Current run identifier.
         blueprint_id: Blueprint identifier (used in webhook payloads).
+        base_dir:     Manifest.base_dir — the blueprint's directory, used to
+                      resolve a `type: custom` rule's `fn:` as a sibling .py
+                      file (see infra/module_loading.py).
 
     Returns:
         (passing_df, quarantine_df)
@@ -149,7 +153,7 @@ def execute_assert(
     for rule in rules:
         rtype = rule.get("type")
         if rtype in (AssertRuleType.SQL_ROW, AssertRuleType.CUSTOM):
-            passing_df, q_df = _apply_row_rule(module.id, passing_df, rule, spark)
+            passing_df, q_df = _apply_row_rule(module.id, passing_df, rule, spark, base_dir)
             if q_df is not None:
                 quarantine_parts.append(q_df)
         elif rtype == AssertRuleType.FRESHNESS:
@@ -514,6 +518,7 @@ def _apply_row_rule(
     df: DataFrame,
     rule: dict[str, Any],
     spark: SparkSession,
+    base_dir: str = "",
 ) -> tuple[DataFrame, DataFrame | None]:
     """Apply a row-level rule.  Returns (passing_df, quarantine_df | None).
 
@@ -577,7 +582,7 @@ def _apply_row_rule(
             return df, None
 
         try:
-            fn = _load_callable(fn_path)
+            fn = _load_callable(fn_path, base_dir)
             result = fn(df)
         except AssertError:
             raise
@@ -634,8 +639,13 @@ def _handle_fail_if_any(
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _load_callable(fn_path: str) -> Any:
-    """Load a Python callable from a dotted path (e.g. 'my_pkg.rules.check_orders')."""
+def _load_callable(fn_path: str, base_dir: str = "") -> Any:
+    """Load a Python callable from a dotted path (e.g. 'my_pkg.rules.check_orders').
+
+    ``base_dir`` (Manifest.base_dir) lets ``fn: rules.check_orders`` resolve a
+    ``rules.py`` sitting next to the blueprint — see infra/module_loading.py."""
+    from aqueduct.infra.module_loading import load_module
+
     parts = fn_path.rsplit(".", 1)
     if len(parts) != 2:
         raise AssertError(
@@ -644,7 +654,7 @@ def _load_callable(fn_path: str) -> Any:
         )
     module_path, attr = parts
     try:
-        mod = importlib.import_module(module_path)
+        mod = load_module(module_path, base_dir)
     except ImportError as exc:
         raise AssertError(
             f"custom rule fn {fn_path!r}: cannot import {module_path!r}: {exc}",

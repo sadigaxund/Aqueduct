@@ -208,7 +208,7 @@ Downstream edges use `port: high` / `port: low`.
       - { type: sql_row, expr: "amount > 0", on_fail: quarantine }   # bad rows → spillway
       - { type: not_null, column: order_id, on_fail: quarantine }  # per-row null → spillway (not population gate)
 ```
-Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshness | sql | sql_row | spillway_rate | custom`. `on_fail`: `abort | warn | webhook | quarantine`.  Quarantine-eligible rule types: `not_null`, `sql_row`, `custom`, `freshness` (per-row predicates).  The rest are aggregate / population gates — quarantining is rejected at compile time with a clear pointer.
+Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshness | sql | sql_row | spillway_rate | custom`. `on_fail`: `abort | warn | webhook | quarantine`.  Quarantine-eligible rule types: `not_null`, `sql_row`, `custom`, `freshness` (per-row predicates).  The rest are aggregate / population gates — quarantining is rejected at compile time with a clear pointer. `type: custom` → `fn: module.callable`, `fn(df) -> {"passed": bool, ...}`, pointer-only (no inline body); resolves against a sibling `.py` file next to the blueprint before falling back to a normal import (same rule as UDFs/probes/custom DataSource below).
 
 ### Probe — non-blocking observability tap
 ```yaml
@@ -221,7 +221,7 @@ Rule types: `schema_match | not_null | min_rows | max_rows | null_rate | freshne
       - { type: schema_snapshot }   # zero-cost (SparkListener)
       - { type: row_count_estimate }
 ```
-Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom`. Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` (they add Spark actions). Probes attach by `attach_to`, not edges — a `from:` edge off a Probe on any port but `signal` is a `CompileError`.
+Signal types: `schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom`. Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) need `danger.allow_full_probe_actions: true` in `aqueduct.yml` (they add Spark actions). Probes attach by `attach_to`, not edges — a `from:` edge off a Probe on any port but `signal` is a `CompileError`. `type: custom` → `module:`+`entry:` pointer (mirrors the UDF contract) resolves against a sibling `.py` file next to the blueprint before falling back to a normal import; never inline code.
 
 ### Regulator — gate driven by a Probe `signal` edge
 ```yaml
@@ -279,7 +279,7 @@ udf_registry:
     class: com.example.GeoHashUDF
     return_type: STRING
 ```
-Reference UDFs in a Channel via `udfs: [clean_phone]` and call them in SQL. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code).
+Reference UDFs in a Channel via `udfs: [clean_phone]` and call them in SQL. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code). Python `module:` resolves against a sibling `.py` file next to the blueprint before falling back to a normal import/PYTHONPATH lookup — same rule applies to Assert `custom` `fn:`, Probe `custom` `module:`, and `format: custom` DataSource `class:`.
 
 ## Macros (compile-time text dedup)
 ```yaml

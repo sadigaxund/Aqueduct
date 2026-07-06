@@ -43,13 +43,15 @@ class EgressError(AqueductError):
     """Raised when an Egress module fails to write."""
 
 
-def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
+def write_egress(df: DataFrame, module: Module, depot: Any = None, base_dir: str | None = None) -> None:
     """Write df to the target described by module.config.
 
     Args:
         df:     DataFrame produced by upstream module(s).
         module: An Egress Module from the compiled Manifest.
         depot:  Optional DepotStore instance for ``format: depot`` writes.
+        base_dir: Manifest.base_dir — lets format=custom's 'class:' resolve a
+                   sibling .py file next to the blueprint.
 
     Raises:
         EgressError: Config invalid or write fails.
@@ -67,7 +69,7 @@ def write_egress(df: DataFrame, module: Module, depot: Any = None) -> None:
 
     # ── Custom Python DataSource (Spark 4.0+) ──────────────────────────────────
     if fmt == "custom":
-        _write_custom(df, module)
+        _write_custom(df, module, base_dir)
         return
 
     # ── Spark writer ──────────────────────────────────────────────────────────
@@ -499,7 +501,7 @@ def run_maintenance(
     return result
 
 
-def _write_custom(df: DataFrame, module: Module) -> None:
+def _write_custom(df: DataFrame, module: Module, base_dir: str | None = None) -> None:
     """Write via a custom Python DataSource (``format: custom`` + ``class:``).
 
     Path is optional — custom sinks may carry their target in ``options``.
@@ -512,7 +514,7 @@ def _write_custom(df: DataFrame, module: Module) -> None:
     from aqueduct.executor.spark.custom_source import register_custom_source
 
     try:
-        name = register_custom_source(df.sparkSession, str(class_path))
+        name = register_custom_source(df.sparkSession, str(class_path), base_dir)
     except Exception as exc:
         raise EgressError(
             f"[{module.id}] custom DataSource {class_path!r}: {exc}"

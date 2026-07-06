@@ -815,7 +815,7 @@ def execute(
 
     # Register UDFs before any module executes so Channel SQL can reference them.
     try:
-        register_udfs(manifest.udf_registry, spark)
+        register_udfs(manifest.udf_registry, spark, base_dir=manifest.base_dir)
     except UDFError as exc:
         raise ExecuteError(str(exc)) from exc
 
@@ -925,7 +925,7 @@ def execute(
                 _t0 = time.monotonic()
                 try:
                     df = _with_retry(
-                        lambda: read_ingress(module, spark),
+                        lambda: read_ingress(module, spark, base_dir=manifest.base_dir),
                         mod_policy,
                         module.id,
                     )
@@ -1242,6 +1242,7 @@ def execute(
                 try:
                     passing_df, quarantine_df = execute_assert(
                         module, val, spark, run_id, manifest.blueprint_id,
+                        base_dir=manifest.base_dir,
                     )
                 except AssertError as exc:
                     local_results.append(
@@ -1390,7 +1391,7 @@ def execute(
                 _t0 = time.monotonic()
                 try:
                     _with_retry(
-                        lambda: write_egress(_obs_df, module, depot=depot),
+                        lambda: write_egress(_obs_df, module, depot=depot, base_dir=manifest.base_dir),
                         mod_policy,
                         module.id,
                     )
@@ -1475,7 +1476,7 @@ def execute(
                     )
                 elif store_dir is not None:
                     try:
-                        _probe_notes = execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling) or ()
+                        _probe_notes = execute_probe(module, source_val, spark, run_id, store_dir, block_full_actions=block_full_actions, observability_store=observability_store, sampling=sampling, base_dir=manifest.base_dir) or ()
                     except Exception as exc:
                         logger.warning("[runtime_probe_error] Probe %r failed: %s", module.id, exc)
 

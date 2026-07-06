@@ -12,7 +12,6 @@ Same trust/precedent as UDFs and custom probe plugins: the Blueprint carries a
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING
 
 from aqueduct.errors import ConfigError
@@ -21,8 +20,12 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 
-def import_datasource_class(class_path: str):
+def import_datasource_class(class_path: str, base_dir: str | None = None):
     """Import ``module.Class`` and verify it subclasses ``DataSource``.
+
+    ``base_dir`` (Manifest.base_dir) lets ``class: mymod.MyDataSource`` resolve
+    a ``mymod.py`` sitting next to the blueprint — see
+    ``aqueduct/infra/module_loading.py``.
 
     Raises:
         ValueError: not fully qualified, not found, or not a DataSource subclass.
@@ -30,12 +33,14 @@ def import_datasource_class(class_path: str):
     """
     from pyspark.sql.datasource import DataSource
 
+    from aqueduct.infra.module_loading import load_module
+
     if "." not in class_path:
         raise ConfigError(
             f"custom DataSource 'class' must be fully qualified (module.Class), got {class_path!r}"
         )
     module_name, _, cls_name = class_path.rpartition(".")
-    mod = importlib.import_module(module_name)
+    mod = load_module(module_name, base_dir)
     cls = getattr(mod, cls_name, None)
     if cls is None:
         raise ConfigError(f"custom DataSource class {class_path!r} not found")
@@ -46,7 +51,7 @@ def import_datasource_class(class_path: str):
     return cls
 
 
-def register_custom_source(spark: SparkSession, class_path: str) -> str:
+def register_custom_source(spark: SparkSession, class_path: str, base_dir: str | None = None) -> str:
     """Import, validate, and register a custom DataSource. Returns its format name.
 
     Raises:
@@ -57,6 +62,6 @@ def register_custom_source(spark: SparkSession, class_path: str) -> str:
             "custom Python DataSource requires Spark 4.0+ "
             "(spark.dataSource registry is unavailable on this Spark)"
         )
-    cls = import_datasource_class(class_path)
+    cls = import_datasource_class(class_path, base_dir)
     spark.dataSource.register(cls)
     return cls.name()

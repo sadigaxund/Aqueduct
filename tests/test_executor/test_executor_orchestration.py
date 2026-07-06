@@ -905,12 +905,12 @@ def test_execute_ingress_retry_success(spark: SparkSession, tmp_path, monkeypatc
     original_read = aqueduct.executor.spark.executor.read_ingress
     calls = []
     
-    def mock_read(module, spark_session):
+    def mock_read(module, spark_session, base_dir=None):
         calls.append(1)
         if len(calls) < 3:
             raise RuntimeError("transient read error")
         return original_read(module, spark_session)
-        
+
     monkeypatch.setattr(aqueduct.executor.spark.executor, "read_ingress", mock_read)
     monkeypatch.setattr(aqueduct.executor.spark.executor.time, "sleep", lambda x: None)
     
@@ -953,7 +953,7 @@ def test_per_module_on_failure_overrides_manifest_policy(spark: SparkSession, tm
     original_read = _exe.read_ingress
     calls = []
 
-    def mock_read(module, spark_session):
+    def mock_read(module, spark_session, base_dir=None):
         calls.append(1)
         if len(calls) < 3:
             raise RuntimeError("transient")
@@ -1196,7 +1196,7 @@ def test_per_module_on_failure_abort_stops_blueprint(spark: SparkSession, tmp_pa
     import aqueduct.executor.spark.executor as _exe
     from aqueduct.executor.spark.ingress import IngressError
 
-    def always_fails(module, spark_session):
+    def always_fails(module, spark_session, base_dir=None):
         raise IngressError("always broken")
 
     monkeypatch.setattr(_exe, "read_ingress", always_fails)

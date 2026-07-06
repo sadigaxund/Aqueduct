@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.6 — Reference Document**
+**Version 2.7 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -141,6 +141,8 @@ The compile step is not cosmetic — the Executor consumes the Manifest, never t
 | Passive Regulators | Regulators with no wired signal input are compiled away entirely. |
 
 The Manifest also carries the **ProvenanceMap** (per-config-key audit trail recording where every value came from) and **`inputs_fingerprint`** (compile-time snapshot of Ingress file metadata for the LLM to distinguish data-drift bugs from code bugs).
+
+**`base_dir`** — the top-level Blueprint file's own directory (empty string when compiled from an in-memory dict with no file). Every executor-side user-code import site — Assert `type: custom`'s `fn:`, Probe `type: custom`'s `module:`/`entry:`, `udf_registry`'s Python `module:`, and Egress/Ingress `format: custom`'s `class:` — resolves its dotted path against `base_dir` first (a sibling `.py` file next to the Blueprint), falling back to a normal `import` for installed packages. This exists because the `aqueduct` console-script entry point never puts the Blueprint's directory on `sys.path` (unlike `python -m`/`python -c`), so a bare `import` of a sibling file used to fail unless the user manually mutated `sys.path`. For an Arcade sub-Blueprint, callable refs still resolve against the **top-level** Blueprint's `base_dir`, not the arcade's own directory (one Manifest per compilation unit).
 
 ---
 
@@ -388,7 +390,7 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 - **`replace_where: <predicate>`** (Delta) — atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
 - **no `replace_where`** — Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`** — without it the engine refuses (a plain `overwrite` would wipe the whole table).
 
-**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer — never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
+**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. `class:` resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**), falling back to a normal import. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer — never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
 
 ### Junction (Fan-out)
 
@@ -461,7 +463,7 @@ signals:
     plugin: p99_latency               # setuptools entry-point group "aqueduct.probe_signals"
 ```
 
-The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt).
+The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt). The `module:` pointer resolves against the Manifest's `base_dir` before falling back to a normal import — see **§3, `base_dir`**.
 
 **Inline-SQL form — `sql` vs `passed_when`:** the two keys play different roles, so they are named differently. `sql` computes a **scalar metric** (any single-value Spark SQL aggregate over the probed DataFrame) and stores it as `estimate` for trending (`report --trend`/`--profile`). `passed_when` is an **optional boolean** that becomes the `passed` gate verdict (like `threshold`). Provide either or both:
 - **`sql` only** → record-only: captures the metric every run, never gates (a Regulator reading it stays open — an absent `passed` key is treated as open).
@@ -534,9 +536,14 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
       - type: sql_row
         expr: "amount > 0 AND order_id IS NOT NULL"
         on_fail: quarantine
+      - type: custom
+        fn: my_rules.check_completed_max   # importable module.callable — see below
+        on_fail: quarantine
 ```
 
 Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
+
+**`type: custom`** points `fn:` at an importable `module.callable` — `fn(df) -> {"passed": bool, "message"?: str, "quarantine_df"?: DataFrame}`. Same pointer-only rule as UDFs/custom probes: no inline code body. `fn`'s module resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**), falling back to a normal import.
 
 #### Quarantine eligibility
 
@@ -687,9 +694,10 @@ udf_registry:
 ```
 
 The driver imports `module` and looks up `entry` (a plain Python callable),
-registering it with `spark.udf.register`. The module must be importable from the
-run's working directory / `PYTHONPATH`. Python UDFs execute row-at-a-time via the
-JVM bridge — for high-volume Channels prefer native Spark SQL.
+registering it with `spark.udf.register`. `module` resolves against the Manifest's
+`base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**),
+falling back to a normal import from `PYTHONPATH` / an installed package. Python UDFs
+execute row-at-a-time via the JVM bridge — for high-volume Channels prefer native Spark SQL.
 
 **Parameterized (context-aware) Python UDFs.** Add a `params:` map and `entry`
 becomes a **factory** — `entry(**params) -> callable` — so one importable

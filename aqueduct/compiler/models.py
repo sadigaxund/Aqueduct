@@ -43,6 +43,15 @@ class Manifest:
     # Lifecycle hooks (top-level Blueprint only — sub-Blueprint hooks are
     # ignored at expansion). Fired by the CLI after the run's terminal state.
     hooks: Hooks = field(default_factory=Hooks)
+    # Absolute directory of the TOP-LEVEL blueprint file ("" when compiled
+    # from an in-memory dict with no file). Executor user-code import sites
+    # (custom Assert fn:, Probe module:+entry:, python UDFs, format: custom)
+    # resolve sibling .py files against it via infra/module_loading.py.
+    # One Manifest per compilation unit — same rule as warning_suppress/
+    # hooks: an Arcade sub-Blueprint's own directory is used for FsPath
+    # anchoring at parse time, but callable refs inside an arcade resolve
+    # against THIS (the parent blueprint's) dir.
+    base_dir: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict for writing to disk."""
@@ -94,6 +103,7 @@ class Manifest:
             "udf_registry": list(self.udf_registry),
             "macros": self.macros,
             "checkpoint": self.checkpoint,
+            "base_dir": self.base_dir,
             "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
             "inputs_fingerprint": self.inputs_fingerprint,
             "hooks": {

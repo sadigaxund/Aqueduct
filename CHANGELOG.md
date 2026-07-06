@@ -16,6 +16,19 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- Custom-callable import sites (Assert `type: custom`'s `fn:`, Probe `type: custom`'s
+  `module:`+`entry:`, `udf_registry`'s Python `module:`, and `format: custom`
+  DataSource `class:`) failed to import a `.py` file sitting next to the
+  Blueprint when run via the `aqueduct` console script from any other working
+  directory — the entry point never puts the Blueprint's directory on
+  `sys.path` (unlike `python -m`/`python -c`). All five sites (plus the
+  secrets resolver, fixed earlier) now share one loader
+  (`aqueduct/infra/module_loading.py`) that resolves against the new
+  `Manifest.base_dir` field (the top-level Blueprint's own directory) before
+  falling back to a normal import — collision-proof against same-named
+  stdlib/installed modules, and requires no `sys.path` mutation.
+
 ## [2.0.0] — 2026-06-30
 
 > ⚠️ **Breaking changes** (see **Removed** + **Changed**): the deprecated `agent.approval_mode` / `agent.aggressive_max_patches` / `danger.allow_aggressive_patching` keys and the `--allow-aggressive` flag now **error** instead of warning; the inert `stores.lineage` block is removed; and `engine: flink` is now **rejected** at config-load. A `2.0.0`-worthy batch.

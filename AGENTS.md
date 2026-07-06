@@ -196,6 +196,7 @@ modules.
 | Module | What it owns |
 |--------|--------------|
 | `http.py` | Single source of truth for outbound-HTTP mechanics: `RETRYABLE_DELIVERY_STATUS` / `RETRYABLE_PROVIDER_STATUS`, `retry_after_seconds`, `backoff_delay`, `sign_body` (HMAC-SHA256), `fire_and_forget` (daemon thread), `deliver_with_retry` (best-effort POST loop, stderr-logged). The webhook + OpenLineage daemon-delivery paths build on it; `agent/providers.py` aliases its retryable-status constant + helpers (so existing `providers._RETRYABLE_STATUS` / `_retry_after_seconds` patch paths keep working). Add a new outbound-HTTP caller here, do not re-implement retry/backoff inline. |
+| `module_loading.py` | Single source of truth for "load user code from a dotted path" (`load_module`, `load_callable`): collision-proof `spec_from_file_location` load from a `base_dir` sibling `.py` file when present, `importlib.import_module` fallback otherwise. Backs the secrets resolver, Assert `custom` `fn:`, Probe `custom` `module:`, `udf_registry` `module:`, and `format: custom` DataSource `class:` — all resolve against `Manifest.base_dir` (the top-level Blueprint's directory). Add a new "import user code by dotted path" site here, do not hand-roll `importlib.import_module`/`spec_from_file_location` inline (see failure_taxonomy.md #11). |
 
 When adding a new outbound-HTTP path: reuse `infra/http.py`. The Databricks Jobs-API client (`deploy/databricks.py`) and doctor probes are intentionally NOT on this path (synchronous API client / one-shot reachability probe — different shapes).
 
@@ -383,6 +384,9 @@ These rules come from the recurring failure patterns that caused the most fixes 
 
 ### Path anchoring
 Every path-typed field in a schema model must use `Annotated[str, FsPath()]`. Every YAML parse must go through `parse_dict(base_dir=…)`, never round-trip through temp files. A relative path resolved against the wrong base directory (CWD, /tmp, an arcade file's dir instead of the parent blueprint's) has been the single most recurring bug class — tempfile detours, sandbox replay, and arcade expansion all hit it independently before `FsPath` anchoring made it structural.
+
+### User-code imports go through `infra/module_loading.py`
+Any feature that imports **user-authored** code from a Blueprint/config reference (a dotted `fn:`, a `module:`+`entry:` pointer, a `module.Class` path) must use `infra.module_loading.load_callable`/`load_module` with `manifest.base_dir` — never a bare `importlib.import_module`. Bare imports only search `sys.path`, and the `aqueduct` console script never has the blueprint's directory there — a sibling `.py` next to the blueprint is invisible. This exact bug shipped independently 5 times (secrets resolver, custom Assert, custom Probe pointer, python UDF, custom DataSource) before being fixed once at the root (see failure_taxonomy.md #11). Bare `import_module` remains correct only for engine-internal/bundled modules (e.g. `udf.py`'s bundled-cloudpickle probe).
 
 ### No silent no-ops
 When you add a config field, a callback, a flag, or a schema field — trace it to every consumer. Code that executes but produces no effect and no error is worse than a crash because it silently lies to the user. Examples: a pydantic field with a docstring that no code reads (user thinks they're tuning behavior), a field in the schema that's accepted but never consumed at runtime (user sets it, nothing happens), a callback that's wired but silently skipped under a condition the caller doesn't know about.

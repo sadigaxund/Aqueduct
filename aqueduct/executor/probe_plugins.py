@@ -26,7 +26,6 @@ never surfaced to the healing LLM. Only install probe plugins you trust.
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable
 from typing import Any
 
@@ -76,8 +75,13 @@ def custom_signal_source(sig_cfg: dict[str, Any]) -> str:
     return forms[0]
 
 
-def resolve_callable(sig_cfg: dict[str, Any]) -> CustomSignalFn:
+def resolve_callable(sig_cfg: dict[str, Any], base_dir: str | None = None) -> CustomSignalFn:
     """Import the callable for a ``pointer`` or ``plugin`` custom signal.
+
+    ``base_dir`` (Manifest.base_dir) lets ``module: probes`` resolve a
+    ``probes.py`` sitting next to the blueprint — see
+    ``aqueduct/infra/module_loading.py``. Stays pyspark-free (executor-agnostic
+    module, imported outside ``executor/spark/``).
 
     Raises:
         ValueError: the form is ``sql`` (no callable), the target is missing, or
@@ -88,7 +92,9 @@ def resolve_callable(sig_cfg: dict[str, Any]) -> CustomSignalFn:
     if source == "pointer":
         module_name = sig_cfg["module"]
         entry = sig_cfg["entry"]
-        mod = importlib.import_module(module_name)
+        from aqueduct.infra.module_loading import load_module
+
+        mod = load_module(module_name, base_dir)
         fn = getattr(mod, entry, None)
         if not callable(fn):
             raise ConfigError(

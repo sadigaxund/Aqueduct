@@ -232,3 +232,10 @@ class Blueprint:
     # Lifecycle hooks (`hooks:` block). For an Arcade sub-Blueprint this is
     # parsed but ignored — only the top-level Blueprint's hooks fire.
     hooks: Hooks = field(default_factory=Hooks)
+    # Absolute directory the Blueprint YAML was loaded from ("" when parsed
+    # from a dict with no file). Threaded into the Manifest so executor-side
+    # user-code imports (custom Assert fn:, Probe module:+entry:, python
+    # UDFs, format: custom) resolve a sibling .py file next to the blueprint
+    # via infra/module_loading.py — sys.path never has this directory when
+    # running the `aqueduct` console script.
+    base_dir: str = ""

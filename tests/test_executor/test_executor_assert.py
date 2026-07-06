@@ -321,6 +321,52 @@ def test_custom_rule_bad_fn_path(spark: SparkSession):
         execute_assert(module, df, spark, "run-1", "blueprint-1")
 
 
+def test_custom_rule_resolves_via_base_dir_without_sys_path(spark: SparkSession, tmp_path):
+    """Manifest.base_dir resolves a sibling rules.py next to the blueprint —
+    no sys.path mutation needed (the console-script bug this field fixes:
+    the ``aqueduct`` entry point never puts the blueprint's dir on sys.path)."""
+    (tmp_path / "rules.py").write_text(
+        "def my_check(df):\n    return {'passed': True}\n"
+    )
+    df = spark.range(10)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "custom", "fn": "rules.my_check"}]}
+    )
+    passing, quarantine = execute_assert(
+        module, df, spark, "run-1", "blueprint-1", base_dir=str(tmp_path)
+    )
+    assert quarantine is None
+    assert passing is df
+
+
+def test_custom_rule_survives_stdlib_name_collision(spark: SparkSession, tmp_path):
+    """A rules module colliding with an already-imported stdlib name (e.g.
+    ``json``) must still load, and must not disturb the real module."""
+    import sys
+
+    pkg_dir = tmp_path / "json"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "rules.py").write_text(
+        "def my_check(df):\n    return {'passed': True}\n"
+    )
+    sentinel = sys.modules["json"]
+    df = spark.range(5)
+    module = Module(
+        id="a1", type="Assert", label="A1",
+        config={"rules": [{"type": "custom", "fn": "json.rules.my_check"}]}
+    )
+    try:
+        passing, quarantine = execute_assert(
+            module, df, spark, "run-1", "blueprint-1", base_dir=str(tmp_path)
+        )
+        assert quarantine is None
+        assert sys.modules["json"] is sentinel
+    finally:
+        sys.modules.pop("json.rules", None)
+
+
 def test_multiple_aggregate_rules_batched(spark: SparkSession):
     # Checking that min_rows + freshness + sql triggers exactly 1 action is hard via test assertions
     # but we can verify it doesn't fail.

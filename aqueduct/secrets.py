@@ -15,10 +15,7 @@ is intentionally deferred (see TODOs.md, Phase 32 deferred items).
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 import os
-from pathlib import Path
 from typing import Any, Callable
 
 from aqueduct.errors import AqueductError
@@ -31,41 +28,17 @@ class SecretsError(AqueductError):
 def load_resolver_fn(resolver: str, base_dir: str | None = None) -> Callable[[str], Any]:
     """Load the callable named by a ``secrets.resolver`` dotted path.
 
-    When ``base_dir`` is given, the module is loaded directly from
-    ``<base_dir>/<module/path>.py`` via ``importlib.util.spec_from_file_location``
-    and is never registered in ``sys.modules`` — this makes it immune to
-    colliding with an unrelated module of the same name already loaded
-    elsewhere in the process (e.g. a resolver package named ``secrets``
-    colliding with the stdlib ``secrets`` module). The module is re-loaded
-    on every call (no caching), matching this file's "no cache, provider
-    rotation takes effect immediately" design — a nice side effect is that
-    editing the resolver file takes effect on the next call with no restart.
-
-    Caveat: this only covers a single flat file. If the resolver module
-    itself does a relative (``from . import x``) or sibling-package import,
-    that inner import still goes through the normal ``sys.path``-based
-    import system and is not covered by this collision-proofing — keep a
-    custom resolver self-contained in one file.
-
-    When ``base_dir`` is ``None``, or no file exists at the derived path
-    (e.g. ``resolver`` names an installed package, or a module already
-    registered in ``sys.modules``/reachable via ``sys.path``), falls back
-    to the normal ``importlib.import_module`` — ``base_dir`` is passed
-    unconditionally by callers (config/blueprint directory), so this must
-    stay a fallback, not a hard requirement, for resolvers that aren't a
-    file sitting next to the config.
+    Thin delegate to :func:`aqueduct.infra.module_loading.load_callable` —
+    the shared collision-proof loader (file-path load from ``base_dir`` when
+    the file exists, ``importlib.import_module`` fallback otherwise; see that
+    module's docstring for the full semantics and caveats). The module is
+    re-loaded on every call (no caching), matching this file's "no cache,
+    provider rotation takes effect immediately" design — a nice side effect
+    is that editing the resolver file takes effect on the next call with no
+    restart.
     """
-    module_path, fn_name = resolver.rsplit(".", 1)
-    file_path = Path(base_dir) / (module_path.replace(".", "/") + ".py") if base_dir is not None else None
-    if file_path is not None and file_path.is_file():
-        spec = importlib.util.spec_from_file_location(module_path, file_path)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"could not load spec for {file_path}")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-    else:
-        mod = importlib.import_module(module_path)
-    return getattr(mod, fn_name)
+    from aqueduct.infra.module_loading import load_callable
+    return load_callable(resolver, base_dir)
 
 
 def resolve_secret(

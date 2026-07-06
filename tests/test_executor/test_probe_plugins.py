@@ -76,3 +76,42 @@ def test_resolve_sql_form_raises():
 def test_entrypoint_group_name_stable():
     # The group name is a public contract for plugin authors — guard it.
     assert AQ_PROBE_ENTRYPOINT_GROUP == "aqueduct.probe_signals"
+
+
+# ── resolve_callable base_dir (Manifest.base_dir sibling-file resolution) ───
+
+def test_resolve_pointer_survives_stdlib_name_collision(tmp_path):
+    """A probe module named e.g. ``types`` (stdlib collision) must still load
+    correctly, and must never touch the colliding sys.modules entry — same
+    bug class as the secrets resolver, see tests/test_secrets.py."""
+    import sys
+
+    pkg_dir = tmp_path / "types"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "probe.py").write_text(
+        "def check(df, sig_cfg):\n    return {'estimate': 1, 'metadata': {}, 'passed': True}\n"
+    )
+
+    sentinel = sys.modules["types"]
+    try:
+        fn = resolve_callable(
+            {"module": "types.probe", "entry": "check"}, base_dir=str(tmp_path)
+        )
+        assert fn(None, {}) == {"estimate": 1, "metadata": {}, "passed": True}
+        assert sys.modules["types"] is sentinel
+    finally:
+        sys.modules.pop("types.probe", None)
+
+
+def test_resolve_pointer_falls_back_to_import_when_no_file(tmp_path):
+    fn = resolve_callable(
+        {"module": "tests.test_executor.test_probe_plugins", "entry": "_demo_signal"},
+        base_dir=str(tmp_path),
+    )
+    assert fn(None, {}) == {"estimate": 42, "metadata": {}, "passed": True}
+
+
+def test_resolve_pointer_missing_both_raises():
+    with pytest.raises(ImportError):
+        resolve_callable({"module": "nope_mod_xyz", "entry": "fn"}, base_dir=None)

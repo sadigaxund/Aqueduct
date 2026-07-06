@@ -384,4 +384,5 @@ def parse_dict(
             on_success=tuple(_hook_entry(h) for h in validated.hooks.on_success),
             on_failure=tuple(_hook_entry(h) for h in validated.hooks.on_failure),
         ),
+        base_dir=str(_bp_dir),
     )

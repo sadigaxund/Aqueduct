@@ -124,3 +124,61 @@ class TestUdfRegistration:
                 ({"id": "loads", "lang": "python", "module": "json", "return_type": "string"},),
                 mock_spark,
             )
+
+    def test_resolves_via_base_dir_without_sys_path(self, tmp_path):
+        """Manifest.base_dir resolves a sibling my_udfs.py next to the
+        blueprint — no sys.path mutation needed."""
+        from aqueduct.executor.spark.udf import register_udfs
+
+        (tmp_path / "my_udfs.py").write_text(
+            "def double(x):\n    return x * 2\n"
+        )
+        mock_spark = MagicMock()
+        register_udfs(
+            ({"id": "double", "lang": "python", "module": "my_udfs", "return_type": "bigint"},),
+            mock_spark,
+            base_dir=str(tmp_path),
+        )
+        mock_spark.udf.register.assert_called_once()
+
+    def test_survives_stdlib_name_collision(self, tmp_path):
+        """A UDF module colliding with an already-imported stdlib name (e.g.
+        ``string``) must still load, and must not disturb the real module."""
+        import sys
+
+        from aqueduct.executor.spark.udf import register_udfs
+
+        pkg_dir = tmp_path / "string"
+        pkg_dir.mkdir()
+        (pkg_dir / "__init__.py").write_text("")
+        (pkg_dir / "my_udfs.py").write_text(
+            "def shout(s):\n    return s.upper()\n"
+        )
+        sentinel = sys.modules["string"]
+        mock_spark = MagicMock()
+        try:
+            register_udfs(
+                ({"id": "shout", "lang": "python", "module": "string.my_udfs", "return_type": "string"},),
+                mock_spark,
+                base_dir=str(tmp_path),
+            )
+            mock_spark.udf.register.assert_called_once()
+            assert sys.modules["string"] is sentinel
+        finally:
+            sys.modules.pop("string.my_udfs", None)
+
+    def test_ship_module_to_executors_ships_flat_file(self, tmp_path):
+        """A single-file (non-package) UDF module gets zipped and shipped via
+        addPyFile — the flat-file branch of _ship_module_to_executors."""
+        from aqueduct.executor.spark.udf import _ship_module_to_executors
+        import importlib.util
+
+        mod_file = tmp_path / "flat_udf_mod.py"
+        mod_file.write_text("def triple(x):\n    return x * 3\n")
+        spec = importlib.util.spec_from_file_location("flat_udf_mod", mod_file)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        mock_spark = MagicMock()
+        _ship_module_to_executors(mod, mock_spark)
+        mock_spark.sparkContext.addPyFile.assert_called_once()

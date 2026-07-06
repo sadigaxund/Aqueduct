@@ -430,6 +430,7 @@ def _custom(
     df: DataFrame,
     sig_cfg: dict[str, Any],
     block_full_actions: bool = False,
+    base_dir: str | None = None,
 ) -> dict[str, Any]:
     """Execute a user-defined custom probe signal (Phase 60).
 
@@ -464,7 +465,7 @@ def _custom(
         return out
 
     # callable form (pointer or plugin)
-    fn = resolve_callable(sig_cfg)
+    fn = resolve_callable(sig_cfg, base_dir)
     call_cfg = {**sig_cfg, "block_full_actions": block_full_actions}
     result = fn(df, call_cfg)
     if not isinstance(result, dict):
@@ -527,6 +528,7 @@ def execute_probe(
     block_full_actions: bool = False,
     observability_store: Any = None,
     sampling: ProbeSampling = ProbeSampling(),
+    base_dir: str | None = None,
 ) -> tuple[str, ...]:
     """Capture observability signals for a single Probe module.
 
@@ -547,6 +549,8 @@ def execute_probe(
         observability_store: Optional Phase 28 obs-store backend. When None, a default
                    DuckDB store at ``store_dir/observability.db`` is constructed.
         sampling: Probe sampling governance (max_sample_rows cap + default_sample_fraction).
+        base_dir: Manifest.base_dir — lets a `custom` signal's `module:` pointer
+                   resolve a sibling .py file next to the blueprint.
 
     Returns:
         Report lines for the CLI when the Probe declares ``report: stdout``
@@ -605,7 +609,7 @@ def execute_probe(
                     elif sig_type == "threshold":
                         payload = _threshold(df, sig_cfg)
                     elif sig_type == "custom":
-                        payload = _custom(df, sig_cfg, block_full_actions=block_full_actions)
+                        payload = _custom(df, sig_cfg, block_full_actions=block_full_actions, base_dir=base_dir)
                     else:
                         logger.warning("[runtime_probe_unknown_signal] Probe %r: unknown signal type %r; skipping.", module.id, sig_type)
                         _add_module_warning("runtime_probe_unknown_signal", f"Probe {module.id!r}: unknown signal type {sig_type!r}; skipping.")

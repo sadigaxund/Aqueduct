@@ -44,3 +44,46 @@ def test_import_not_found():
 def test_import_not_a_datasource_subclass():
     with pytest.raises(ConfigError, match="must subclass"):
         import_datasource_class("builtins.dict")
+
+
+def test_import_resolves_via_base_dir_without_sys_path(tmp_path):
+    """Manifest.base_dir resolves a sibling module next to the blueprint —
+    no sys.path mutation needed."""
+    (tmp_path / "my_ds.py").write_text(
+        "from pyspark.sql.datasource import DataSource\n\n"
+        "class MyDS(DataSource):\n"
+        "    @classmethod\n"
+        "    def name(cls):\n"
+        "        return 'aq_my_ds'\n"
+        "    def schema(self):\n"
+        "        return 'id int'\n"
+    )
+    cls = import_datasource_class("my_ds.MyDS", str(tmp_path))
+    assert cls.__name__ == "MyDS"
+    assert cls.name() == "aq_my_ds"
+
+
+def test_import_survives_stdlib_name_collision(tmp_path):
+    """A DataSource module colliding with an already-imported stdlib name
+    (e.g. ``csv``) must still load, and must not disturb the real module."""
+    import sys
+
+    pkg_dir = tmp_path / "csv"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "my_ds.py").write_text(
+        "from pyspark.sql.datasource import DataSource\n\n"
+        "class MyDS(DataSource):\n"
+        "    @classmethod\n"
+        "    def name(cls):\n"
+        "        return 'aq_my_ds'\n"
+        "    def schema(self):\n"
+        "        return 'id int'\n"
+    )
+    sentinel = sys.modules["csv"]
+    try:
+        cls = import_datasource_class("csv.my_ds.MyDS", str(tmp_path))
+        assert cls.name() == "aq_my_ds"
+        assert sys.modules["csv"] is sentinel
+    finally:
+        sys.modules.pop("csv.my_ds", None)

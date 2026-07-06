@@ -241,8 +241,12 @@ class UDFError(AqueductError):
 def register_udfs(
     udf_registry: tuple[dict[str, Any], ...],
     spark: SparkSession,
+    base_dir: str | None = None,
 ) -> None:
     """Register all UDFs from manifest.udf_registry with SparkSession.
+
+    ``base_dir`` (Manifest.base_dir) lets a python UDF's ``module:`` resolve a
+    sibling .py file next to the blueprint — see ``aqueduct/infra/module_loading.py``.
 
     Raises:
         UDFError: On import failure, missing entry, or unsupported language.
@@ -260,7 +264,7 @@ def register_udfs(
             raise UDFError("UDF registry entry missing required 'id' field")
 
         if lang == "python":
-            _register_python_udf(udf_id, entry, spark)
+            _register_python_udf(udf_id, entry, spark, base_dir=base_dir)
         elif lang in ("java", "scala"):
             _register_java_udf(udf_id, entry, spark)
         else:
@@ -360,6 +364,7 @@ def _register_python_udf(
     udf_id: str,
     entry: dict[str, Any],
     spark: SparkSession,
+    base_dir: str | None = None,
 ) -> None:
     module_path: str | None = entry.get("module")
     entry_name: str | None = entry.get("entry") or udf_id
@@ -368,8 +373,10 @@ def _register_python_udf(
     if not module_path:
         raise UDFError(f"UDF {udf_id!r}: 'module' is required for python UDFs")
 
+    from aqueduct.infra.module_loading import load_module
+
     try:
-        mod = importlib.import_module(module_path)
+        mod = load_module(module_path, base_dir)
     except ImportError as exc:
         raise UDFError(
             f"UDF {udf_id!r}: cannot import module {module_path!r}: {exc}"

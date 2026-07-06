@@ -45,6 +45,34 @@ edges:
     with pytest.raises(CompileError, match=r"cannot be a data source"):
         compiler_compile(bp, blueprint_path=bp_path)
 
+
+def test_base_dir_round_trips_from_parse_through_compile(tmp_path):
+    """Blueprint.base_dir (the blueprint YAML's own directory) must survive
+    into Manifest.base_dir — executor-side user-code import sites (custom
+    Assert fn:, Probe module:+entry:, python UDFs, format: custom) rely on
+    it to resolve sibling .py files, since the `aqueduct` console script
+    never puts the blueprint's dir on sys.path."""
+    bp_path = tmp_path / "blueprint.yml"
+    bp_path.write_text("""
+aqueduct: "1.0"
+id: test_bp
+name: Test Blueprint
+modules:
+  - id: ingress
+    type: Ingress
+    label: Ingress
+    config:
+      format: parquet
+      path: data.parquet
+""")
+    bp = parse(str(bp_path))
+    assert bp.base_dir == str(tmp_path.resolve())
+
+    manifest = compiler_compile(bp, blueprint_path=bp_path)
+    assert manifest.base_dir == str(tmp_path.resolve())
+    assert manifest.to_dict()["base_dir"] == str(tmp_path.resolve())
+
+
 @pytest.fixture
 def bp_path(tmp_path):
     return tmp_path / "blueprint.yml"

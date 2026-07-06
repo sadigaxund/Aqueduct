@@ -101,7 +101,7 @@ def test_execute_parallel_unexpected_thread_exception(independent_manifest, tmp_
     
     original_read_ingress = exec_module.read_ingress
     
-    def mock_read_ingress(module, spark_session):
+    def mock_read_ingress(module, spark_session, base_dir=None):
         if module.id == "A":
             raise Exception("Unexpected thread exception")
         return original_read_ingress(module, spark_session)
