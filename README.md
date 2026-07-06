@@ -8,6 +8,8 @@
 
 <p align="center">
   <strong>Self-healing Spark pipelines. Declarative. Observable. Autonomous.</strong>
+  <br/>
+  <strong>Your data never leaves your servers.</strong>
 </p>
 
 <!-- Badges: two deliberate rows so a long badge can never orphan the last one onto its own line. -->
@@ -30,18 +32,19 @@
 
 A Spark job fails at 3 a.m. on a column rename upstream. Today that means a paged engineer scrolling a four-kilobyte JVM stack trace to find a one-line fix. Aqueduct turns it into a Git-diffable patch waiting for review in the morning.
 
-<kbd>
-  <img width="1600" height="764" alt="Figure 1: Aqueduct at a glance" src="https://github.com/user-attachments/assets/dedd5af5-aa59-4f09-9fa8-9632b02a6894" />
-</kbd>  
+<img width="1920" height="1080" alt="Showcase1" src="https://github.com/user-attachments/assets/a9653dae-4f98-4128-bf6b-6fdac8eb92f7" /><br>
 
-<br><br>
+>
+> **Wake up to a pending patch — not a wall of Spark errors.**
+>
+<br>
 
 - **Declarative, not DAG code.** Pipelines are YAML *Blueprints* — no PySpark boilerplate, no scheduler glue, no operator classes. Bring your own scheduler; Aqueduct is the control plane on top of Spark.
 - **Self-healing, not just alerting.** On failure an LLM agent diagnoses the root cause and emits a structured patch that passes guardrail, lineage, and sandbox gates *before* it touches your pipeline. No codegen, no shell access, no silent mutation — and a failure it has solved before heals from memory with **zero tokens**.
 - **Observable by construction.** Every run, every heal attempt, every column-lineage edge lands in a queryable store — at zero extra Spark actions on the hot path.
-- **Model-agnostic.** Anthropic natively, or **any OpenAI-compatible endpoint** (OpenRouter, DeepSeek, Groq, Gemini-compat, a local 7B on Ollama / LM Studio) — set `provider` + `base_url`. The constrained patch grammar (14 deterministic operations, no code generation) is what keeps small models reliable; multi-model cascades escalate to bigger models only when needed.
+- **Model-agnostic — and local-first.** Anthropic natively, or **any OpenAI-compatible endpoint** (OpenRouter, DeepSeek, Groq, Gemini-compat, a local 7B on Ollama / LM Studio) — set `provider` + `base_url`. Point it at a model inside your perimeter and **nothing — not your data, not your schemas, not your error traces — ever leaves your servers.** Multi-model cascades escalate to bigger models only when needed.
+- **The harness owns correctness — the model only proposes.** The LLM is used for exactly one thing deterministic code can't do: turning an unstructured failure context into a structured hypothesis. Everything after that is deterministic: a constrained patch grammar (14 operations, no code generation), guardrail + lineage + sandbox gates, budget caps, and a signature cache. That division of labor is why a small local model is reliable here when raw "AI assistant" codegen isn't.
 
-> **Wake up to a pending patch — not a wall of Spark errors.**
 
 ---
 
@@ -85,6 +88,7 @@ A Spark job fails at 3 a.m. on a column rename upstream. Today that means a page
 | **Funnel**    | Fan-in (unions, coalesce, zip)                |
 | **Spillway**  | Routes bad rows to error sink                 |
 | **Probe**     | Non-blocking observability taps               |
+| **Regulator** | Gate driven by Probe signals (skip / abort / trigger agent) |
 | **Assert**    | Inline quality gates                          |
 | **Depot**     | Cross-run state & watermarks                  |
 | **Arcade**    | Reusable sub-pipelines                        |
@@ -95,22 +99,9 @@ Full details in the [References](#references).
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline, and the model works inside a constrained grammar — it cannot write code, mutate files, or run shell commands.
 
-<!--
-  TODO(demo): drop the terminal GIF at docs/media/heal-loop.gif, then DELETE the
-  "coming soon" <p> below and uncomment the <img>.
-  Recipe (sharp text, tiny file — better than screen-recording a terminal):
-    asciinema rec heal-loop.cast      # aqueduct run → schema-drift ✗ → agent patch → gates → re-run ✓
-    agg heal-loop.cast docs/media/heal-loop.gif
-  Keep it ~20s and looping; let the colored ✓/✗ output carry it (no narration).
--->
-<!-- <p align="center"><img src="docs/media/heal-loop.gif" alt="Aqueduct self-heal loop — run to green in ~20s" width="760" /></p> -->
-<p align="center">
-  <em>📽️ Demo coming soon — a live heal, start to green, in under 20 seconds.</em>
-</p>
-
 <kbd>
   
-<img width="1362" height="1410" alt="Figure 2: The Healing Flow" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
+<img width="1362" height="1410" alt="Figure 1: The Healing Flow" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />
 
 </kbd>
 
@@ -163,7 +154,15 @@ For the stage-by-stage detail, see the [Blueprint & Engine Spec](docs/specs.md).
 
 ## Architecture
 
-Aqueduct is a single CLI that runs on the Spark driver — no servers, no daemons. Logic flows through four immutable layers:
+Where Aqueduct sits in a data platform — the control plane between your scheduler and Spark:
+
+<kbd>
+  <img width="1600" height="764" alt="Figure 2: Aqueduct at a glance" src="https://github.com/user-attachments/assets/dedd5af5-aa59-4f09-9fa8-9632b02a6894" />
+</kbd>
+
+<br><br>
+
+Inside the box, Aqueduct is a single CLI that runs on the Spark driver — no servers, no daemons. Logic flows through four immutable layers:
 
 <kbd>
 <img width="1343" height="663" alt="Figure 3: Architecture" src="https://github.com/user-attachments/assets/d3f00605-2322-4a7b-a3e8-583bbf932d88" />
@@ -196,24 +195,18 @@ aqueduct dashboard            # opens http://localhost:8501
 | <img src="docs/media/dashboard/runs.png"        alt="Runs → run detail (module metrics)" />   | <img src="docs/media/dashboard/lineage.png"     alt="Column-lineage Sankey + SQL changelog" /> |
 | <img src="docs/media/dashboard/healing.png"     alt="Healing → patch before/after diff" />     | <img src="docs/media/dashboard/performance.png" alt="Performance → cost-vs-data trends" />      |
 -->
-<p align="center">
-  <em>🖼️ Screenshot gallery coming soon — Fleet · Runs · Lineage · Healing (patch diff) · Performance · Quality.</em>
-</p>
-
-> 🎬 **Full walkthrough:** [video tour](TODO-VIDEO-URL) *(coming soon — host on YouTube / asciinema and link here; don't embed)*.
-
 ## Getting Started
 
 ### Installation
 
 ```bash
-pip install aqueduct-core[spark]
+pip install "aqueduct-core[spark]"
 ```
 
 > **Requirements:** Python 3.11+ · Java 17 for the `spark` extra (`JAVA_HOME` must point to it).
 > Every release is CI-tested against three pinned combos — **LTS** (Python 3.11 · Spark 4.1), **Latest** (Python 3.13 · Spark 4.1), **Legacy** (Python 3.12 · Spark 3.5). Live results in the [Compatibility Matrix](docs/compatibility.md).
 
-Compose extras as needed — `pip install aqueduct-core[spark,airflow,aws]`:
+Compose extras as needed — `pip install "aqueduct-core[spark,airflow,aws]"`:
 
 | Extra | Adds | Install when |
 |---|---|---|
