@@ -161,14 +161,12 @@ def show_diff(patch_id: str | None) -> None:
 
 def show_outputs() -> None:
     paths = {
-        "express": "data/output/express_orders.parquet",
-        "standard": "data/output/standard_orders.parquet",
-        "bulk": "data/output/bulk_orders.parquet",
+        "orders": "data/output/orders.parquet",
         "quarantine": "data/output/quarantine.parquet",
     }
     import pandas as pd
     t = Table(title="Output Row Counts", header_style="bold blue")
-    t.add_column("tier")
+    t.add_column("output")
     t.add_column("rows")
     any_found = False
     for tier, path in paths.items():

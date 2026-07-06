@@ -27,7 +27,7 @@ spark_config:
 agent:
   provider: "openai_compat"
   base_url: "${AQ_OLLAMA_URL:-http://localhost:11434}/v1"
-  model: "${AQ_OLLAMA_MODEL:-qwen2.5-coder:7b}"
+  model: "${AQ_OLLAMA_MODEL:-gemma3:4b}"
   timeout: ${AQ_AGENT_TIMEOUT:-12000.0}
   budget:
     max_reprompts: ${AQ_AGENT_MAX_REPROMPTS:-4}

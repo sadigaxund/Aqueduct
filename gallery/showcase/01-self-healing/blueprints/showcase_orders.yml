@@ -1,14 +1,8 @@
 # showcase_orders.yml
 # Order Processing Pipeline — Self-Healing Showcase
 #
-# Demonstrates the full Aqueduct stack:
-#   · Declarative YAML with Context Registry
-#   · Modular Arcades (product + customer enrichment)
-#   · Observability probes with report: stdout
-#   · Data quality assertions with quarantine spillway
-#   · Priority-based Junction routing
-#   · Lifecycle hooks (on_success / on_failure)
-#   · LLM self-healing loop (pre-planted bug)
+# The smallest useful demonstration of the healing loop:
+#   Ingress -> Channel (compute) -> Channel (bug) -> Assert -> Egress
 
 aqueduct: "1.0"
 id: showcase.self_healing.orders
@@ -20,11 +14,9 @@ context:
 
 modules:
 
-  # ── 1. Source ingestion ────────────────────────────────────────────
   - id: ingest_orders
     label: "Source — Orders Feed"
     type: Ingress
-    tags: [source, orders]
     config:
       format: csv
       path: "${ctx.data_dir}/input/orders.csv"
@@ -38,64 +30,21 @@ modules:
         order_date: date
         status: string
 
-  # ── 2. Source health probe ─────────────────────────────────────────
-  - id: observe_source
-    label: "Source Health"
-    type: Probe
-    attach_to: ingest_orders
+  - id: compute_totals
+    label: "Compute Order Totals"
+    type: Channel
     config:
-      report: stdout
-      signals:
-        - type: schema_snapshot
-        - type: row_count_estimate
+      op: sql
+      query: >
+        SELECT *, quantity * unit_price AS total_value
+        FROM __input__
 
-  # ── 3. Reference data — read once at parent level, joined by Arcades ─
-  - id: load_products
-    label: "Reference — Product Catalog"
-    type: Ingress
-    tags: [source, reference]
-    config:
-      format: csv
-      path: "${ctx.data_dir}/input/products.csv"
-      options: {header: "true", inferSchema: "true"}
-
-  - id: load_customers
-    label: "Reference — Customer Data"
-    type: Ingress
-    tags: [source, reference]
-    config:
-      format: csv
-      path: "${ctx.data_dir}/input/customers.csv"
-      options: {header: "true", inferSchema: "true"}
-
-  # ── 4. Arcade: product enrichment (join, not a nested Ingress) ──────
-  - id: enrich_products
-    label: "Enrich with Product Catalog"
-    type: Arcade
-    ref: ../arcades/product_enrichment.yml
-    context_override:
-      orders_ref: ingest_orders
-      products_ref: load_products
-    tags: [transform, enrichment]
-
-  # ── 5. Arcade: customer enrichment (join, not a nested Ingress) ─────
-  - id: enrich_customers
-    label: "Enrich with Customer Data"
-    type: Arcade
-    ref: ../arcades/customer_enrichment.yml
-    context_override:
-      orders_ref: enrich_products__join
-      customers_ref: load_customers
-    tags: [transform, enrichment]
-
-  # ── 6. Priority classification ─────────────────────────────────────
   # NOTE: References `total_val` which DOES NOT EXIST (deliberate bug).
-  # The correct column is `total_value`. Run with an agent configured and
-  # watch the healing loop fix it.
+  # The correct column, computed one step upstream, is `total_value`.
+  # Run with an agent configured and watch the healing loop fix it.
   - id: classify_priority
     label: "Classify Order Priority"
     type: Channel
-    tags: [transform, routing]
     config:
       op: sql
       query: >
@@ -107,11 +56,9 @@ modules:
           END AS priority_tier
         FROM __input__
 
-  # ── 7. Quality gate with quarantine spillway ───────────────────────
   - id: quality_gate
     label: "Data Quality Gate"
     type: Assert
-    tags: [quality, guard]
     config:
       rules:
         - id: strict_not_null
@@ -124,108 +71,36 @@ modules:
           on_fail: quarantine
           error_type: DataQualityViolation
 
-  # ── 8. Priority-based routing ──────────────────────────────────────
-  - id: route_by_priority
-    label: "Route by Priority Tier"
-    type: Junction
-    tags: [routing]
-    config:
-      mode: conditional
-      branches:
-        - id: express
-          condition: "priority_tier = 'express'"
-        - id: standard
-          condition: "priority_tier = 'standard'"
-        - id: bulk
-          condition: "priority_tier = 'bulk'"
-
-  # ── 9. Express output ──────────────────────────────────────────────
-  - id: store_express
-    label: "Express Orders"
+  - id: store_orders
+    label: "Classified Orders"
     type: Egress
-    tags: [output, express]
     config:
       format: parquet
-      path: "${ctx.data_dir}/output/express_orders.parquet"
+      path: "${ctx.data_dir}/output/orders.parquet"
       mode: overwrite
       coalesce: 1
 
-  # ── 10. Standard output ─────────────────────────────────────────────
-  - id: store_standard
-    label: "Standard Orders"
-    type: Egress
-    tags: [output, standard]
-    config:
-      format: parquet
-      path: "${ctx.data_dir}/output/standard_orders.parquet"
-      mode: overwrite
-      coalesce: 1
-
-  # ── 11. Bulk output ────────────────────────────────────────────────
-  - id: store_bulk
-    label: "Bulk Orders"
-    type: Egress
-    tags: [output, bulk]
-    config:
-      format: parquet
-      path: "${ctx.data_dir}/output/bulk_orders.parquet"
-      mode: overwrite
-      coalesce: 1
-
-  # ── 12. Quarantine sink ────────────────────────────────────────────
   - id: quarantine_storage
     label: "Quarantined Records"
     type: Egress
-    tags: [output, quarantine]
     config:
       format: parquet
       path: "${ctx.data_dir}/output/quarantine.parquet"
       mode: overwrite
       coalesce: 1
 
-# ── Edges ───────────────────────────────────────────────────────────
 edges:
   - from: ingest_orders
-    to: enrich_products
-  - from: load_products
-    to: enrich_products
-  - from: enrich_products
-    to: enrich_customers
-  - from: load_customers
-    to: enrich_customers
-  - from: enrich_customers
+    to: compute_totals
+  - from: compute_totals
     to: classify_priority
   - from: classify_priority
     to: quality_gate
   - from: quality_gate
-    to: route_by_priority
+    to: store_orders
   - from: quality_gate
     to: quarantine_storage
     port: spillway
-  - from: route_by_priority
-    to: store_express
-    port: express
-  - from: route_by_priority
-    to: store_standard
-    port: standard
-  - from: route_by_priority
-    to: store_bulk
-    port: bulk
-
-warnings:
-  suppress:
-    - perf_probe_sample_full_scan
-
-# ── Lifecycle hooks — fire on the run's terminal state ──────────────
-# hooks:
-#   on_success:
-#     - command: "echo '✓ ${blueprint.id} run ${run.id} complete'"
-#       timeout: 10
-#     - webhook: "${AQ_WEBHOOK_BASE:-http://localhost:9999}/hooks/success"
-#   on_failure:
-#     - command: "echo '✗ ${blueprint.id} run ${run.id} failed — healing loop engaged'"
-#       timeout: 10
-#     - webhook: "${AQ_WEBHOOK_BASE:-http://localhost:9999}/hooks/failure"
 
 # ── Self-healing agent ──────────────────────────────────────────────
 agent:
