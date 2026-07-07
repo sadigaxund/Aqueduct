@@ -14,6 +14,7 @@ stores:
 danger:
   allow_command_hooks: true
   allow_full_probe_actions: true
+  allow_multi_patch: true
 
 probes:
   max_sample_rows: 100
@@ -24,6 +25,8 @@ spark_config:
   spark.sql.adaptive.enabled: "true"
   spark.sql.adaptive.coalescePartitions.enabled: "true"
 
+# ── Local Ollama (default) — commented out in favor of DeepSeek below.
+#    Uncomment this block and comment the DeepSeek one to go back to local.
 agent:
   provider: "openai_compat"
   base_url: "${AQ_OLLAMA_URL:-http://localhost:11434}/v1"
@@ -34,6 +37,23 @@ agent:
     max_seconds: ${AQ_AGENT_MAX_SECONDS:-12000}
     max_tokens_total: ${AQ_AGENT_MAX_TOKENS:-20000}
     same_error_consecutive: 2
+
+# ── DeepSeek (direct, hosted API) ── requires DEEPSEEK_API_KEY in .env.
+#    Verify `model:` against DeepSeek's current model list before running —
+#    "deepseek-v4-flash" as named by the user; confirm the exact model id
+#    and base_url in DeepSeek's own API docs, this wasn't independently
+#    verified against a live endpoint.
+# agent:
+#   provider: "openai_compat"
+#   base_url: "${AQ_DEEPSEEK_URL:-https://api.deepseek.com}/v1"
+#   model: "${AQ_DEEPSEEK_MODEL:-deepseek-v4-flash}"
+#   api_key: "@aq.secret('DEEPSEEK_API_KEY')"
+#   timeout: ${AQ_AGENT_TIMEOUT:-120.0}
+#   budget:
+#     max_reprompts: ${AQ_AGENT_MAX_REPROMPTS:-4}
+#     max_seconds: ${AQ_AGENT_MAX_SECONDS:-600}
+#     max_tokens_total: ${AQ_AGENT_MAX_TOKENS:-20000}
+#     same_error_consecutive: 2
 
 warnings:
   suppress:

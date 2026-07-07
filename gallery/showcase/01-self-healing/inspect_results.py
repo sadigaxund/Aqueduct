@@ -187,7 +187,7 @@ def main() -> None:
     console.print()
     show_diff(patch_id)
     console.print()
-#    show_outputs()
+    show_outputs()
 
 
 if __name__ == "__main__":

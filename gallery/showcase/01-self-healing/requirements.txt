@@ -2,4 +2,5 @@
 # The blueprint itself runs with only aqueduct-core[spark].
 duckdb>=0.10
 pandas>=2.0
+pyarrow>=14.0
 rich>=13.0

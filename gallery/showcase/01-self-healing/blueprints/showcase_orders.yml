@@ -22,7 +22,7 @@ modules:
       path: "${ctx.data_dir}/input/orders.csv"
       options: {header: "true", inferSchema: "true"}
       schema_hint:
-        order_id: string
+        order_ref: string
         customer_id: string
         product_id: string
         quantity: integer
@@ -63,7 +63,7 @@ modules:
       rules:
         - id: strict_not_null
           type: not_null
-          column: order_id
+          column: order_ref
           on_fail: quarantine
         - id: valid_metrics
           type: sql_row
@@ -106,3 +106,4 @@ edges:
 agent:
   approval: auto
   confidence_threshold: 0.7
+  max_patches: 3

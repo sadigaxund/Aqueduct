@@ -23,9 +23,21 @@ quality_gate (Assert)
 
 ## What to run
 
+Aqueduct isn't installed yet? Set up a virtual environment and install it
+first — requires Python 3.11+ and Java 17 (`JAVA_HOME` pointed at it) for
+the `spark` extra:
+
+```bash
+python -m venv .venv && source .venv/bin/activate   # or: uv venv && source .venv/bin/activate
+pip install "aqueduct-core[spark]"                  # or: uv pip install "aqueduct-core[spark]"
+```
+
+Then run the showcase:
+
 ```bash
 cd gallery/showcase/01-self-healing
-cp .env.template .env   # optional — point at a real agent endpoint/model
+python populate_data.py   # generates data/input/orders.csv
+cp .env.template .env     # optional — point at a real agent endpoint/model
 aqueduct run blueprints/showcase_orders.yml
 ```
 
@@ -54,11 +66,10 @@ pip install -r requirements.txt   # duckdb + pandas + rich, one-time
 python inspect_results.py
 ```
 
-Shows the run's terminal status, the healing attempt history, the full
-PatchSpec the agent wrote (rationale, root cause, confidence, operations),
-and a real before/after diff of the blueprint (reconstructed from
+Shows the full PatchSpec the agent wrote (rationale, root cause, confidence,
+operations), a real before/after diff of the blueprint (reconstructed from
 `patches/backups/` — the snapshot Aqueduct writes before overwriting the
-file).
+file), and the output row counts once the patched run succeeds.
 
 Inspect the healing record:
 
