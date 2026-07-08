@@ -32,7 +32,8 @@
 
 A Spark job fails at 3 a.m. on a column rename upstream. Today that means a paged engineer scrolling a four-kilobyte JVM stack trace to find a one-line fix. Aqueduct turns it into a Git-diffable patch waiting for review in the morning.
 
-<img width="1920" height="1080" alt="Showcase1" src="https://github.com/user-attachments/assets/a9653dae-4f98-4128-bf6b-6fdac8eb92f7" /><br>
+
+<img width="1280" height="720" alt="ezgif-3d9a30cf90eb278e" src="https://github.com/user-attachments/assets/92acb8fb-80ad-4cac-b5bd-e00a114d22cb" />
 
 >
 > **Wake up to a pending patch — not a wall of Spark errors.**
