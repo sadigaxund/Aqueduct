@@ -4,6 +4,21 @@ Single reference for Spark behavior in Aqueduct — covers both blueprint author
 (compiler warnings, cost model) and internal implementation rules (contributor rules,
 pitfalls, transformation reference).
 
+**Contents:**
+[Compiler Warnings](#compiler-warnings) ·
+[Probe Signal Cost Model](#probe-signal-cost-model) ·
+[Read/Write Mode Defaults](#read-and-write-mode-defaults) ·
+[Table Addressing](#catalog-wiring) ·
+[Iceberg & Hudi](#iceberg-hudi) ·
+[Custom Python DataSources](#format-custom) ·
+[JDBC Ingress Parallelism](#jdbc-ingress-parallelism) ·
+[Core Spark Principles](#core-spark-principles) ·
+[Implementation Rules](#implementation-rules-do-not-violate) ·
+[Common Pitfalls](#common-pitfalls) ·
+[Transformation Reference](#transformation-reference) ·
+[Resource Tuning](#resource-tuning-for-production) ·
+[Caching Strategy](#caching-strategy)
+
 ---
 
 ## For Blueprint Authors

@@ -57,7 +57,7 @@ def test_patch_preview_text_gate2_pass(mock_g2, setup):
     assert "Patch P001" in result.output
     assert "rationale: test" in result.output
     assert "confidence: 95%" in result.output
-    assert "status:          pass" in result.output
+    assert "status: pass" in result.output
     assert "no downstream column-consumption regressions detected" in result.output
 
 @patch("aqueduct.patch.preview.run_lineage_gate")
@@ -82,7 +82,7 @@ def test_patch_preview_text_gate2_warn(mock_g2, setup):
     result = runner.invoke(cli, ["patch", "preview", str(patch_path), "--blueprint", str(bp_path)])
     
     assert result.exit_code == 0
-    assert "status:          warn" in result.output
+    assert "status: warn" in result.output
     assert "⚠ col1 missing" in result.output
 
 @patch("aqueduct.patch.preview.run_lineage_gate")
@@ -135,7 +135,7 @@ def test_patch_preview_gate3_fail_exit2(mock_g3, mock_g2, setup):
     ])
     
     assert result.exit_code == 2
-    assert "status:      fail" in result.output
+    assert "status: fail" in result.output
     assert "detail:      Runtime error" in result.output
 
 @patch("aqueduct.patch.apply._check_guardrails")

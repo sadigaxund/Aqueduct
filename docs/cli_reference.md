@@ -207,6 +207,21 @@ aqueduct run bp.yml \
 | `aqueduct studio [--config <f>] [--store-dir <d>]` | Launch the interactive read-only TUI (runs, ad-hoc SQL over the observability store, doctor, config, lineage). Requires the optional `tui` extra: `pip install aqueduct-core[tui]` |
 | `aqueduct dashboard [--config <f>] [--store-dir <d>] [--port 8501] [--no-browser]` | Launch the local, read-only **Streamlit** observability dashboard: fleet view (cross-blueprint runs / success-rate / heal-rate, trends), per-run module metrics, column-lineage Sankey, doctor, config. On-demand local viewer (like the Spark UI) — never a production server. Requires the optional `dashboard` extra: `pip install aqueduct-core[dashboard]`. A 🔄 Refresh button re-reads the store (manual; no background polling). |
 
+**`--chain --types` example** — tracing one column's per-hop transform, source to output:
+
+```
+$ aqueduct lineage pipelines/orders.yml --chain total_amount --types
+Column chain — blueprint: orders_pipeline  column: total_amount
+
+  ▸ apply_discount.total_amount  :: DECIMAL(10,2)
+      ← read_orders.total_amount  [passthrough]
+  │
+  ▸ cast_to_float.total_amount  :: DOUBLE  ⚠ type change
+  │    ← apply_discount.total_amount  [CAST]
+```
+
+Each `▸` line is one hop — the Channel module and output column, plus (with `--types`) the sqlglot-inferred SQL type; a `⚠ type change` marks a hop where the inferred type differs from the previous one, the fastest way to spot an unintended implicit cast before it reaches a downstream consumer. The `←` line underneath names the immediate source (table or upstream module) and the SQL op that produced this hop. Computed on demand at compile time (no Spark action, no store read); needs a Blueprint **file path**, not a blueprint id, since it re-parses and recompiles the YAML. `--format json` emits the same hops as structured records (`channel_id`, `output_column`, `source_table`, `source_column`, `output_type`, `transform_op`).
+
 ---
 
 ## Path Resolution Rule (1.1.0+)

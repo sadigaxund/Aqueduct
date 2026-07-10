@@ -14,6 +14,8 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 > - **[Production Guide](production_guide.md)** — Cluster deployment, security, Delta operations
 > - **[Roadmap](roadmap.md)** — Deferred features and future plans
 
+**Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Spark Integration](#10-deployment--spark-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
+
 ---
 
 # **1. Introduction**
@@ -78,6 +80,8 @@ These names are canonical and used consistently throughout the codebase, documen
 | **FailureContext** | The structured failure document assembled by the Surveyor when a pipeline run ends in error. Passed to the LLM self-healing loop. |
 | **PatchSpec** | The JSON document that describes a set of operations to apply to a Blueprint. Produced by the LLM agent or authored by hand. |
 | **ProvenanceMap** | A compile-time index of every resolved config value: where it came from (literal, context ref, env var, Arcade inheritance), the original expression, and the resolved value. |
+
+> **Three version spaces — do not conflate.** This document tracks three independent numbers: the **Blueprint grammar version** (`aqueduct: "1.0"` at the top of every Blueprint YAML — the schema contract a Blueprint declares against, currently frozen at 1.0), the **specs.md document version** (the `Version X.Y` header at the top of this file — bumped whenever a documented contract changes, currently tracking this section), and the **package version** (`aqueduct-core`'s PyPI release, in `pyproject.toml` — SemVer, independent release cadence). A specs.md version bump does not imply a package release, and a Blueprint's `aqueduct: "1.0"` does not change even when specs.md or the package version does.
 
 ---
 
@@ -1018,6 +1022,14 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 ```
 
 ## **8.7 Why it is reliable**
+
+A generated patch clears four gates, in order, before it is ever written into the Blueprint — first failure wins and the patch is discarded or escalated to human review:
+
+```
+✓ guardrails  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
+```
+
+Gate 1 (guardrails) is deterministic policy — `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence — enforced by `patch/apply.py::_check_guardrails`. Gate 2 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 3 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 4 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline; warn-only unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
 
 - **No silent mutations.** Every patch is a structured diff with a rationale and a confidence score. Low confidence escalates to human review.
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.

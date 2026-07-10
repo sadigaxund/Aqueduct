@@ -259,6 +259,8 @@ path. `blob_store.materialize()` transparently resolves blob paths to content on
 | `source_column` | VARCHAR | |
 | `captured_at`   | TIMESTAMPTZ | |
 
+**Per-hop transform trace, not just the stored graph.** `aqueduct lineage <blueprint.yml> --chain <column> --types` gives a *deeper* view than a `column_lineage` query — a vertical, per-hop trace showing the sqlglot-inferred SQL type at every Channel the column passes through, with a `⚠ type change` marker on any hop where the inferred type shifts. It is computed on demand from the compiled manifest (no store read, no Spark action) rather than read from this table, so it works even before a run has ever persisted a `column_lineage` row. See [CLI Reference](cli_reference.md) for a worked example.
+
 ### `channel_fingerprints`
 
 SQL-AST normalised fingerprint per `op: sql` Channel (Lineage v2). A
