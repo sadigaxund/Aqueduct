@@ -61,6 +61,22 @@ class TestMakeSignature:
         s2 = make_signature("e", "w", "field 'bar' is required")
         assert s1.hash == s2.hash
 
+    def test_backtick_quoted_identifiers_normalized(self):
+        # Spark 4's UNRESOLVED_COLUMN style: backtick-quoted qualified name.
+        s1 = make_signature("AnalysisException", "mod", "cannot resolve `i`.`bad_col1` given input columns")
+        s2 = make_signature("AnalysisException", "mod", "cannot resolve `i`.`bad_col2` given input columns")
+        assert s1.hash == s2.hash
+        assert "`x`" in s1.normalized_message
+
+    def test_backtick_and_regular_quotes_do_not_converge(self):
+        # Backtick and quote placeholders are visually distinct ('x' / "x" /
+        # `x`), so a backtick-quoted message and a plain-quoted message
+        # around the same identifier hash differently — verified behavior,
+        # not a requirement.
+        backtick = make_signature("e", "w", "cannot resolve `bad_col`")
+        single_quote = make_signature("e", "w", "cannot resolve 'bad_col'")
+        assert backtick.hash != single_quote.hash
+
     def test_path_normalized(self):
         s1 = make_signature("e", "w", "file /foo/bar/baz.yml not found")
         s2 = make_signature("e", "w", "file /other/path/thing.yml not found")

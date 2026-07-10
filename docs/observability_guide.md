@@ -130,7 +130,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `attempt_num`       | INTEGER NOT NULL    | 1-based |
 | `error_class`       | VARCHAR             | Mirrors `failure_contexts.error_class` when available |
 | `where_field`       | VARCHAR             | Pydantic location string for validation errors |
-| `normalized_message`| VARCHAR             | Normalised error text used to compute `signature_hash` |
+| `normalized_message`| VARCHAR             | Normalised error text used to compute `signature_hash` — digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics hash identically |
 | `signature_hash`    | VARCHAR             | Stable 16-char sha1 over `(error_class, where, normalized_message)` |
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
