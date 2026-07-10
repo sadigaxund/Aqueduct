@@ -26,7 +26,7 @@ Bare `aqueduct` (no subcommand) prints a branded version banner including the en
 
 ## Validate vs Doctor
 
-- **`aqueduct validate`** — Fast, static validation (schema + parsing). Ideal for CI/pre-commit.
+- **`aqueduct validate`** — Fast, static validation (schema + parsing). Ideal for CI/pre-commit. For a Blueprint with a `hooks:` block, it also runs the same static hook-graph walk `doctor` uses (cycles / chain-depth overflow / missing `blueprint:` targets) and reports problems as a suppressible **warning** (`[aqueduct:hook_cycle]`, added to `warnings.suppress`) — never a validation failure.
 - **`aqueduct doctor`** — Live connectivity checks (Spark, stores, agent, sources). Use before deploying.
 
 Both commands auto-detect file type based on the version header (`aqueduct:` vs `aqueduct_config:`).

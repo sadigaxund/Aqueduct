@@ -134,6 +134,28 @@ def validate(
                 })
                 if text:
                     click.echo(f"✓ {path}  [blueprint: {bp.id}  {len(bp.modules)} modules, {len(bp.edges)} edges]")
+
+                # Hook-cycle / depth / missing-target static check — same graph
+                # walk `aqueduct doctor` uses (`aqueduct/cli/hooks.py::static_hook_check`).
+                # Reported as a suppressible WARNING (rule_id `hook_cycle`), never
+                # a validation failure — a mis-wired hooks: block doesn't make the
+                # Blueprint itself invalid.
+                import warnings as _w_hooks
+
+                from aqueduct.cli.hooks import static_hook_check
+                from aqueduct.warnings import _DEFAULT_SUPPRESS
+                from aqueduct.warnings import emit as _aq_emit
+                _hook_suppress = set(_DEFAULT_SUPPRESS) | set(getattr(bp, "warning_suppress", []) or [])
+                with _w_hooks.catch_warnings(record=True) as _hook_caught:
+                    _w_hooks.simplefilter("always")
+                    hook_problems = static_hook_check(path)
+                    for _problem in hook_problems:
+                        _aq_emit("hook_cycle", _problem, suppress=_hook_suppress)
+                if hook_problems:
+                    file_results[-1]["hook_warnings"] = hook_problems
+                if text and hook_problems:
+                    from aqueduct.cli.style import emit_warnings
+                    emit_warnings(_hook_caught, label="hooks:")
             except ParseError as exc:
                 file_results.append({"path": str(path), "kind": "blueprint", "valid": False, "error": str(exc)})
                 any_fail = True

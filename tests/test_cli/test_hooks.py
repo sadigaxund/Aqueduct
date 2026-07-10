@@ -146,3 +146,83 @@ class TestStaticHookCheck:
         self._write(tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n")
         r = check_hooks(tmp_path / "a.yml")
         assert r.status == "warn" and "ghost" in r.detail
+
+
+class TestValidateHookCycle:
+    """`aqueduct validate` reuses `static_hook_check` — the same graph walk
+    `aqueduct doctor` runs — as a suppressible WARNING (rule_id `hook_cycle`),
+    never a validation failure (Phase 70)."""
+
+    def _write_valid_bp(self, path: Path, hooks_yaml: str = "") -> None:
+        path.write_text(
+            "aqueduct: '1.0'\nid: bp1\nname: BP\n"
+            "modules:\n"
+            "  - id: raw\n    label: R\n    type: Ingress\n"
+            "    config: {format: csv, path: d.csv}\n"
+            "  - id: out\n    label: O\n    type: Egress\n"
+            "    config: {format: parquet, path: o, coalesce: 1}\n"
+            "edges:\n  - from: raw\n    to: out\n"
+            f"{hooks_yaml}"
+        )
+
+    def test_hook_cycle_surfaces_as_warning_not_failure(self, tmp_path):
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
+        self._write_valid_bp(
+            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: b.yml\n",
+        )
+        self._write_valid_bp(
+            tmp_path / "b.yml", "hooks:\n  on_failure:\n    - blueprint: a.yml\n",
+        )
+        result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
+        assert result.exit_code == 0  # a hook cycle is a warning, not an invalid file
+        assert "[hook_cycle]" in result.output
+
+    def test_hook_missing_target_surfaces_as_warning(self, tmp_path):
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
+        self._write_valid_bp(
+            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
+        )
+        result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
+        assert result.exit_code == 0
+        assert "[hook_cycle]" in result.output
+        assert "ghost" in result.output
+
+    def test_no_hooks_no_warning(self, tmp_path):
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
+        self._write_valid_bp(tmp_path / "a.yml")
+        result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
+        assert result.exit_code == 0
+        assert "[hook_cycle]" not in result.output
+
+    def test_hook_cycle_suppressible_via_blueprint_warnings_block(self, tmp_path):
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
+        self._write_valid_bp(
+            tmp_path / "a.yml",
+            "hooks:\n  on_success:\n    - blueprint: ghost.yml\n"
+            "warnings:\n  suppress: [hook_cycle]\n",
+        )
+        result = CliRunner().invoke(cli, ["validate", str(tmp_path / "a.yml")])
+        assert result.exit_code == 0
+        assert "[hook_cycle]" not in result.output
+
+    def test_hook_cycle_present_in_json_output(self, tmp_path):
+        import json as _json
+
+        from click.testing import CliRunner
+
+        from aqueduct.cli import cli
+        self._write_valid_bp(
+            tmp_path / "a.yml", "hooks:\n  on_success:\n    - blueprint: ghost.yml\n",
+        )
+        result = CliRunner().invoke(cli, ["validate", "--format", "json", str(tmp_path / "a.yml")])
+        assert result.exit_code == 0
+        data = _json.loads(result.output)
+        assert any(f.get("hook_warnings") for f in data["files"])
