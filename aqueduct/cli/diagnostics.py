@@ -145,7 +145,12 @@ def validate(
                 from aqueduct.cli.hooks import static_hook_check
                 from aqueduct.warnings import _DEFAULT_SUPPRESS
                 from aqueduct.warnings import emit as _aq_emit
-                _hook_suppress = set(_DEFAULT_SUPPRESS) | set(getattr(bp, "warning_suppress", []) or [])
+                # Mirrors compiler.py's suppress merge (engine-level `_DEFAULT_SUPPRESS`,
+                # populated from `--suppress-warning` / `aqueduct.yml` at CLI startup,
+                # unioned with the Blueprint's own `warnings.suppress` block —
+                # `bp.warning_suppress` is a real parser.models.Blueprint field, not
+                # optional, so no getattr default needed).
+                _hook_suppress = set(_DEFAULT_SUPPRESS) | set(bp.warning_suppress)
                 with _w_hooks.catch_warnings(record=True) as _hook_caught:
                     _w_hooks.simplefilter("always")
                     hook_problems = static_hook_check(path)

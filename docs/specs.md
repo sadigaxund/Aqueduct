@@ -128,7 +128,7 @@ On the happy path the flow is linear: Parser → Compiler → Executor → Surve
 
 1. **Parse + Compile.** Parser validates YAML against the JSON Schema, builds the AST, resolves Tier 0 context refs. Compiler resolves Tier 1 (`@aq.*`) calls — secrets, Depot reads, dates — expands Arcades into a flat module list, and emits the Manifest plus `provenance_map` and `inputs_fingerprint`.
 2. **Execute.** The Executor topologically sorts the modules, inserts Probes after their `attach_to` targets, identifies independent connected components for `--parallel` mode, and runs each module through its handler. Per-module metrics and Probe signals are written to the observability store as they fire.
-3. **Surveyor + Agent loop (when triggered).** On failure, the Surveyor packages a FailureContext (error trace + provenance slice + recent signals + lineage), calls the configured LLM, and receives a PatchSpec. Patches are validated through gates (guardrails → compile-check → lineage → sandbox). The `apply_callback` writes the patch to disk, recompiles the Manifest, and the executor re-runs the pipeline.
+3. **Surveyor + Agent loop (when triggered).** On failure, the Surveyor packages a FailureContext (error trace + provenance slice + recent signals + lineage), calls the configured LLM, and receives a PatchSpec. Patches are validated through gates (guardrails → compile-check → lineage → sandbox → plan-regression). The `apply_callback` writes the patch to disk, recompiles the Manifest, and the executor re-runs the pipeline.
 
 ### **Why a Manifest? Why not run the YAML directly?**
 
@@ -920,12 +920,13 @@ When `same_error_consecutive` trips, the loop escalates: temperature is bumped a
 
 ### 6. Gate
 
-Before a patch touches the Blueprint, four gates run in order:
+Before a patch touches the Blueprint, five gates run in order:
 
 1. **Guardrails** — path and operation policy (deterministic, enforced before the LLM response is parsed)
 2. **Compile-check** — the patched dict must produce a valid Manifest
 3. **Lineage gate** — column-level diff catches broken references before Spark sees them
 4. **Sandbox gate** — sampled or full replay catches "parsed but produces nothing"
+5. **Plan-regression gate** — conditional: skipped until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan
 
 ### 7. Confirm and write
 
@@ -1023,13 +1024,13 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 
 ## **8.7 Why it is reliable**
 
-A generated patch clears four gates, in order, before it is ever written into the Blueprint — first failure wins and the patch is discarded or escalated to human review:
+A generated patch clears five gates, in order, before it is ever written into the Blueprint — first failure wins and the patch is discarded or escalated to human review:
 
 ```
-✓ guardrails  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
+✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
 ```
 
-Gate 1 (guardrails) is deterministic policy — `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence — enforced by `patch/apply.py::_check_guardrails`. Gate 2 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 3 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 4 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline; warn-only unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
+Gate 1 (guardrails) is deterministic policy — `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence — enforced by `patch/apply.py::_check_guardrails`. Gate 2 (compile-check, `patch/apply.py::apply_patch_file` — re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser. Gate 3 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 4 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 5 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline — conditional: it reports `skip` until a baseline `explain_snapshot` row exists for the blueprint, and is warn-only thereafter unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
 
 - **No silent mutations.** Every patch is a structured diff with a rationale and a confidence score. Low confidence escalates to human review.
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.
