@@ -1341,7 +1341,7 @@ def run_doctor(
             k: re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), m.group(0)), v)
             for k, v in wh.headers.items()
         }
-        results.append(check_webhook(wh.url, wh.method, rendered_headers, wh.timeout))
+        results.append(check_webhook(wh.url, wh.method, rendered_headers, wh.timeout, wh.health_probe))
     else:
         results.append(CheckResult("webhook", "skip", "not configured"))
 

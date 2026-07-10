@@ -845,6 +845,18 @@ class WebhookEndpointConfig(BaseModel):
         gt=0,
         description="Base backoff between retries; exponential (base * 2**(n-1)) when max_retries > 1.",
     )
+    health_probe: Literal["connect", "options", "full"] = Field(
+        default="options",
+        description=(
+            "How `aqueduct doctor` probes this endpoint. 'connect' = TCP/TLS "
+            "reachability only, no HTTP request sent. 'options' (default) = "
+            "an HTTP OPTIONS request; any response (including 405) counts as "
+            "reachable. 'full' = the old behaviour — a real POST/PUT/PATCH "
+            "with a synthetic 'doctor_probe' payload, which can trigger "
+            "consumer-side side effects on endpoints that react to any "
+            "request body."
+        ),
+    )
 
 
 class WebhooksConfig(BaseModel):

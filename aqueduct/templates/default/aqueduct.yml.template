@@ -470,6 +470,13 @@ webhooks:
   #                                        # the X-Aqueduct-Signature: sha256=<digest> header
   #   max_retries: 2                       # retries on 429/5xx/network (default 1; 0 disables)
   #   backoff_seconds: 2.0                 # base backoff; exponential when max_retries > 1
+  #   health_probe: options                # how `aqueduct doctor` probes this endpoint:
+  #                                         #   connect — TCP/TLS reachability only, no HTTP request sent
+  #                                         #   options — HTTP OPTIONS request (default); any response
+  #                                         #             (incl. 405) counts as reachable
+  #                                         #   full    — real POST/PUT/PATCH with a synthetic
+  #                                         #             'doctor_probe' payload (pre-2.1 behaviour) —
+  #                                         #             can trigger consumer-side side effects
   # Every delivery also carries an X-Aqueduct-Delivery: <uuid> header for receiver-side dedup.
 
 

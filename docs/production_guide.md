@@ -401,6 +401,8 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 - `secret:` — HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
 - `max_retries:` (default 1) / `backoff_seconds:` (default 2.0) — bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
 
+**`aqueduct doctor` webhook probe depth (`health_probe:`).** By default `doctor` probes each configured endpoint with an HTTP **OPTIONS** request (`health_probe: options`) — any response, including `405`, counts as reachable, without triggering endpoint-side logic tied to the real event body. Set `health_probe: connect` for a lighter TCP/TLS-only reachability check (no HTTP request sent at all — useful for endpoints that log/alert on *any* incoming request). Set `health_probe: full` to restore the pre-2.1 behaviour — a real POST/PUT/PATCH carrying a synthetic `{"event": "doctor_probe", ...}` payload — only if your receiver specifically needs to see a real request to validate parsing.
+
 ### `patches/rules.md`
 
 `patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt. Use it to encode project-specific repair rules:

@@ -47,6 +47,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct init` | Create a new project skeleton with templates, directories, and `.gitignore` |
 | `aqueduct doctor` | Check connectivity and configuration health |
 | `aqueduct doctor <file>` | Validate a specific blueprint or config file |
+| *(webhook check depth)* | Each configured `webhooks.*` endpoint's `health_probe:` field (`connect`/`options`/`full`, default `options`) controls how `doctor` probes it — see [Production Guide](production_guide.md) |
 | `aqueduct doctor --skip-spark` | Fast check without starting Spark |
 | `aqueduct doctor --preflight` | Full Spark session + storage validation. Also: verifies cloud Ingress/Egress objects (`s3a://`/`gs://`/`abfss://`) exist via Spark's Hadoop FileSystem; warns on a **Spark major.minor** vs client-pyspark mismatch; for `agent.provider: anthropic` proves the API key works (`GET /v1/models`, no tokens); **imports** each Python `udf_registry` entry (catches typos/missing deps); does a store **write+read** round-trip (write perms, not just connect); and for `jdbc:` sources attempts a real connect+auth (postgres via psycopg2). Default `doctor` only checks endpoint reachability. A standalone **Java** runtime check (detected JVM version + a pyspark-4-needs-Java-17 nudge) runs even without `--preflight`. |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
