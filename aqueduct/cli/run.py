@@ -1254,6 +1254,25 @@ def run(
 
         _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
 
+        def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
+            """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
+            heal-milestone hooks, mirroring the engine-level `webhooks:`
+            `on_patch_pending`/`on_ci_patch` vocabulary at the Blueprint.
+            Best-effort, never blocks the heal loop; never changes the exit
+            code (same contract as the terminal on_success/on_failure hooks).
+            """
+            entries = manifest.hooks.on_patch_pending if event == "on_patch_pending" else manifest.hooks.on_healed
+            if not entries:
+                return
+            from aqueduct.cli.hooks import run_hooks as _run_heal_hooks
+            _run_heal_hooks(
+                entries, event,
+                run_id=iter_run_id, status=hook_status,
+                blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
+                allow_command_hooks=cfg.danger.allow_command_hooks,
+                failure_ctx=ctx, session=session,
+            )
+
         def _render_module_summary(_result) -> None:
             """Print the per-module ✓/✗ status block for one execution result.
 
@@ -2025,6 +2044,7 @@ def run(
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
+                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
                 click.echo(
                     f"  ▸ Patch staged for human review → "
                     f"{_patch_store.location_label if _patch_store is not None else patches_dir}/pending/  "
@@ -2049,6 +2069,7 @@ def run(
                                       on_patch_pending_webhook=cfg.webhooks.on_patch_pending,
                                       source=_patch_source,
                                       patch_store=_patch_store, obs_store=_obs_store)
+                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
                 patch_staged_for_review = True
                 rel_bp = Path(blueprint).relative_to(_project_root) if Path(blueprint).is_relative_to(_project_root) else Path(blueprint)
                 click.echo(
@@ -2098,6 +2119,7 @@ def run(
                                       source=_patch_source,
                                       webhook_event="on_ci_patch",
                                       patch_store=_patch_store, obs_store=_obs_store)
+                _fire_heal_hook("on_patch_pending", iter_run_id=iteration_run_id, hook_status="pending", ctx=failure_ctx)
                 patch_staged_for_review = True
                 click.echo(
                     f"  ▸ CI patch staged → "
@@ -2256,6 +2278,10 @@ def run(
                         f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
                     )
+                    # on_healed hooks — patch applied AND the re-run succeeded.
+                    # Fires here (mid-loop) so it always runs before the outer
+                    # run's terminal on_success hooks below.
+                    _fire_heal_hook("on_healed", iter_run_id=iteration_run_id, hook_status="healed", ctx=failure_ctx)
                     # Opt-in (agent.regression_artifact): a SUCCESSFUL heal — patch
                     # applied AND the re-run just succeeded — may emit an .aqtest.yml
                     # CI regression guard for the patched module. Different job from
@@ -2356,6 +2382,7 @@ def run(
                 run_id=run_id, status="failure",
                 blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
+                failure_ctx=failure_ctx, session=session,
             )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
@@ -2398,6 +2425,7 @@ def run(
             run_id=run_id, status=result.status,
             blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
             allow_command_hooks=cfg.danger.allow_command_hooks,
+            session=session,
         ):
             _style_success("run complete")
     finally:

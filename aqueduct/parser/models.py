@@ -197,22 +197,43 @@ class HookEntry:
     """One lifecycle-hook action. `kind` ∈ {"blueprint", "webhook", "command"};
     `value` is the path / url-or-endpoint-map / command string verbatim from
     YAML — runtime variables (${run.id}, ${run.status}, ${blueprint.id}) are
-    interpolated by the CLI hook runner at fire time, NOT at parse time."""
+    interpolated by the CLI hook runner at fire time, NOT at parse time.
+
+    `when_error`: optional list of error-type names matched against
+    `FailureContext.error_type` / the exception class extracted from the
+    stack trace — same candidate set and exact-match semantics as
+    `GuardrailsConfig.heal_on_errors`. Empty = fires unconditionally
+    (backward-compatible default). Only meaningful on events that carry a
+    failure context (`on_failure`, `on_patch_pending`, `on_healed`) — the
+    schema rejects it on `on_success` entries.
+
+    `in_process`: opt-in for `blueprint:` entries only — parse+compile+
+    execute the target Blueprint in the same Python process, reusing the
+    live SparkSession, instead of spawning an `aqueduct run` subprocess.
+    """
     kind: str
     value: Any
     timeout: int = 300
+    when_error: tuple[str, ...] = ()
+    in_process: bool = False
 
 
 @dataclass(frozen=True)
 class Hooks:
-    """Blueprint lifecycle hooks (`hooks:` block). Run after the pipeline's
-    terminal state; never change the run's exit code. Distinct from the
+    """Blueprint lifecycle hooks (`hooks:` block). `on_success`/`on_failure`
+    run after the pipeline's terminal state; `on_patch_pending`/`on_healed`
+    fire mid-run at heal milestones (mirroring the engine-level `webhooks:`
+    vocabulary). Never change the run's exit code. Distinct from the
     engine-level `webhooks:` block in aqueduct.yml (ops-owned alerting)."""
     on_success: tuple[HookEntry, ...] = ()
     on_failure: tuple[HookEntry, ...] = ()
+    on_patch_pending: tuple[HookEntry, ...] = ()
+    on_healed: tuple[HookEntry, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.on_success or self.on_failure)
+        return bool(
+            self.on_success or self.on_failure or self.on_patch_pending or self.on_healed
+        )
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.10 — Reference Document**
+**Version 2.11 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -199,7 +199,7 @@ warnings:                              # optional — per-Blueprint compile-warn
   suppress:
     - perf_python_udf_row_at_a_time
 
-hooks:                                 # optional — lifecycle actions after the run's terminal state
+hooks:                                 # optional — lifecycle actions after terminal state / heal milestones
   on_success:
     - blueprint: blueprints/downstream.yml   # chain another Blueprint (fresh subprocess)
     - webhook: https://hooks.example/notify  # bare URL, or a map with url/method/headers/payload
@@ -207,19 +207,27 @@ hooks:                                 # optional — lifecycle actions after th
       timeout: 120
   on_failure:
     - command: "scripts/cleanup_partial.sh ${run.id}"
+      when_error: ["EmptyDataset"]           # optional — only fire for this error_type
+  on_patch_pending:
+    - webhook: https://hooks.example/patch-review
+  on_healed:
+    - blueprint: blueprints/notify_healed.yml
+      in_process: true                       # reuse this run's live SparkSession
 ```
 
 **Per-Blueprint compile-warning suppression (`warnings:`, 1.2).** `warnings.suppress` is a list of compiler-warning `rule_id`s (or the sentinel `"*"`) to silence for THIS Blueprint only — it covers all **compile-time** diagnostics: the modular rule registry (e.g. `file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) and the inline compiler checks (e.g. `perf_python_udf_row_at_a_time`, `perf_multi_consumer_no_cache`, `delivery_append_retry_dupes`). It is unioned with the engine-level `warnings.suppress` from `aqueduct.yml` (+ `--suppress-warning` flags) — either side suppressing a rule silences it. It does **not** affect engine/session-startup warnings, runtime (Probe/Assert) warnings, or the process-global default used by other Blueprints — a rule suppressed here stays visible everywhere else. For an **Arcade** sub-Blueprint, the parent Blueprint's `warnings.suppress` covers the whole expanded compilation unit (including the sub-Blueprint's modules); the sub-Blueprint's own `warnings:` block is valid YAML (it parses standalone) but is not consulted during expansion.
 
-**Lifecycle hooks (`hooks:`, 2.5).** `hooks.on_success` / `hooks.on_failure` run sequentially AFTER the pipeline reaches its terminal state — and **never change the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
+**Lifecycle hooks (`hooks:`, 2.5).** Four events: `on_success` / `on_failure` run sequentially AFTER the pipeline reaches its terminal state; `on_patch_pending` / `on_healed` fire MID-RUN at heal milestones, mirroring the engine-level `webhooks:` `on_patch_pending`/`on_ci_patch` vocabulary one level up, at the Blueprint. `on_patch_pending` fires every time a heal stages a patch for human or CI review (guardrail-blocked staging, `approval: human`, and `approval: ci`, all three staging sites). `on_healed` fires once a heal's re-run succeeds — patch applied AND the pipeline green again — and always runs BEFORE the outer run's terminal `on_success` hooks (it fires mid-loop, before the loop breaks out to the terminal report). No event **ever changes the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
 
 | Entry | Semantics | Gate |
 | :- | :- | :- |
-| `blueprint: <path>` | Chains another Blueprint as a fresh `aqueduct run` subprocess — own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). | none (declarative) |
+| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess — own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession — no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `spark_config` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
 | `webhook: <url \| map>` | Fires the same endpoint model as the engine-level `webhooks:` block — bare URL shorthand or full `{url, method, headers, payload}` with `${run_id}`/`${blueprint_id}` payload templating. Fire-and-forget, background thread. | none (declarative) |
 | `command: "<argv>"` | Arbitrary subprocess — shlex argv, **no shell**; only `${run.id}` / `${run.status}` / `${blueprint.id}` are interpolated. Per-entry `timeout:` (default 300 s). | `danger.allow_command_hooks: true` in **aqueduct.yml** — the gate is operator-owned engine config, so a Blueprint cannot self-authorize; ungated entries are skipped with `[hook_command_disabled]`. |
 
-Placement nuance — **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` — a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored — only the top-level Blueprint's hooks fire.
+**Per-entry error filter (`when_error:`)** — optional, on `on_failure` / `on_patch_pending` / `on_healed` entries only (these three events carry a failure context; `on_success` does not, and setting `when_error` there is a **schema error** at parse time). A list of error-type names matched against `FailureContext.error_type` (the Assert rule's `error_type` label) or the exception class name extracted from the stack trace — the exact same candidate set and exact-match semantics as `agent.guardrails.heal_on_errors`. Unset (the default) fires unconditionally — fully backward compatible. A non-matching entry is silently skipped (not a `[hook_failed]`) and does not stop the remaining entries of that event.
+
+Placement nuance — **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions plus the `when_error:` filter and `in_process:` execution mode. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` (subprocess mode) or an explicit in-memory chain (`in_process: true` — the env var is process-scoped and does not propagate in-process) — a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically across all four events. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored — only the top-level Blueprint's hooks fire.
 
 **Linear-edge sugar.** `edges:` may be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
 

@@ -339,6 +339,18 @@ class HookEntrySchema(BaseModel):
     webhook: str | dict[str, Any] | None = None
     command: str | None = None
     timeout: int = 300  # seconds — blueprint/command subprocesses
+    # Error-type filter (on_failure / on_patch_pending / on_healed only —
+    # HooksSchema rejects it on on_success entries, no failure context there).
+    # Matched against FailureContext.error_type / stack-trace exception class,
+    # same exact-match semantics as GuardrailsConfig.heal_on_errors. Empty =
+    # fires unconditionally (backward-compatible default).
+    when_error: list[str] = Field(default_factory=list)
+    # blueprint: entries only — parse+compile+execute the target Blueprint
+    # in-process, reusing the live SparkSession, instead of spawning an
+    # `aqueduct run` subprocess. Falls back to subprocess (with an info
+    # message) when the target's spark_config is non-empty (session config
+    # conflict risk).
+    in_process: bool = False
 
     @model_validator(mode="after")
     def _exactly_one_action(self) -> HookEntrySchema:
@@ -350,9 +362,17 @@ class HookEntrySchema(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _in_process_only_on_blueprint(self) -> HookEntrySchema:
+        if self.in_process and self.blueprint is None:
+            raise ValueError("hook entry: in_process: true is only valid on a blueprint: entry")
+        return self
+
 
 class HooksSchema(BaseModel):
-    """Blueprint lifecycle hooks — run AFTER the pipeline's terminal state.
+    """Blueprint lifecycle hooks. `on_success`/`on_failure` run AFTER the
+    pipeline's terminal state; `on_patch_pending`/`on_healed` fire mid-run
+    at heal milestones (mirroring the engine-level `webhooks:` vocabulary).
 
     Hooks never change the run's exit code; a failing hook is a warning and
     stops the remaining hooks of that event. Distinct from the engine-level
@@ -363,6 +383,19 @@ class HooksSchema(BaseModel):
 
     on_success: list[HookEntrySchema] = Field(default_factory=list)
     on_failure: list[HookEntrySchema] = Field(default_factory=list)
+    on_patch_pending: list[HookEntrySchema] = Field(default_factory=list)
+    on_healed: list[HookEntrySchema] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _when_error_needs_failure_context(self) -> HooksSchema:
+        # on_success has no failure context to filter on — reject rather
+        # than silently ignore (extra="forbid" strictness philosophy).
+        if any(e.when_error for e in self.on_success):
+            raise ValueError(
+                "hooks.on_success entries cannot set when_error — on_success "
+                "has no failure context to match against"
+            )
+        return self
 
 
 class BlueprintSchema(BaseModel):

@@ -41,7 +41,10 @@ def _hook_entry(h) -> HookEntry:
     for kind in ("blueprint", "webhook", "command"):
         v = getattr(h, kind)
         if v is not None:
-            return HookEntry(kind=kind, value=v, timeout=h.timeout)
+            return HookEntry(
+                kind=kind, value=v, timeout=h.timeout,
+                when_error=tuple(h.when_error), in_process=h.in_process,
+            )
     raise ParseError("hook entry has no action")  # unreachable — schema enforces exactly-one
 
 
@@ -413,6 +416,8 @@ def parse_dict(
         hooks=Hooks(
             on_success=tuple(_hook_entry(h) for h in validated.hooks.on_success),
             on_failure=tuple(_hook_entry(h) for h in validated.hooks.on_failure),
+            on_patch_pending=tuple(_hook_entry(h) for h in validated.hooks.on_patch_pending),
+            on_healed=tuple(_hook_entry(h) for h in validated.hooks.on_healed),
         ),
         base_dir=str(_bp_dir),
     )

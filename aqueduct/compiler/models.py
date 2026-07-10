@@ -120,13 +120,13 @@ class Manifest:
             "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
             "inputs_fingerprint": self.inputs_fingerprint,
             "hooks": {
-                "on_success": [
-                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
-                    for h in self.hooks.on_success
-                ],
-                "on_failure": [
-                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
-                    for h in self.hooks.on_failure
-                ],
+                event: [
+                    {
+                        "kind": h.kind, "value": h.value, "timeout": h.timeout,
+                        "when_error": list(h.when_error), "in_process": h.in_process,
+                    }
+                    for h in getattr(self.hooks, event)
+                ]
+                for event in ("on_success", "on_failure", "on_patch_pending", "on_healed")
             },
         }

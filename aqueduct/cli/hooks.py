@@ -1,11 +1,26 @@
-"""Blueprint lifecycle hooks — fire `hooks.on_success` / `hooks.on_failure`
-after a run reaches its terminal state.
+"""Blueprint lifecycle hooks — fire `hooks.on_success` / `hooks.on_failure` /
+`hooks.on_patch_pending` / `hooks.on_healed`.
+
+`on_success` / `on_failure` fire after a run reaches its terminal state.
+`on_patch_pending` / `on_healed` fire mid-run at heal milestones — the
+former when a heal stages a patch for human/CI review, the latter right
+after a heal's re-run succeeds (patch applied AND the pipeline is green
+again) — mirroring the engine-level `webhooks:` vocabulary
+(`on_patch_pending`/`on_ci_patch`) one level up, at the Blueprint.
 
 Entry types (parser guarantees exactly one per entry):
-  blueprint: <path>   Chain another Blueprint as a fresh `aqueduct run`
-                      subprocess — own session, run_id, and report (loose
-                      coupling by design; tight coupling belongs in ONE
-                      blueprint via Arcades / --parallel / `enabled:`).
+  blueprint: <path>   Chain another Blueprint. By default a fresh
+                      `aqueduct run` subprocess — own session, run_id, and
+                      report (loose coupling by design; tight coupling
+                      belongs in ONE blueprint via Arcades / --parallel /
+                      `enabled:`). `in_process: true` opts into parsing +
+                      compiling + executing the target in THIS process,
+                      reusing the live SparkSession (session reuse — no
+                      self-healing loop for the chained target; falls back
+                      to the subprocess path when the target's
+                      `spark_config` is non-empty, since merging two
+                      Blueprints' Spark configs into one live session isn't
+                      generally safe).
   webhook: <url|map>  Fire-and-forget POST via the same endpoint model as
                       the engine-level `webhooks:` block (payload templating
                       included) — `aqueduct.surveyor.webhook.fire_webhook`.
@@ -13,6 +28,13 @@ Entry types (parser guarantees exactly one per entry):
                       `danger.allow_command_hooks: true` in aqueduct.yml —
                       the gate is operator-owned engine config, so a
                       Blueprint (or an LLM patch) cannot self-authorize.
+
+`when_error:` (optional, on events with a failure context — on_failure /
+on_patch_pending / on_healed) filters entries to fire only when the run's
+error_type / stack-trace exception class matches one of the listed names —
+same exact-match candidate set as `GuardrailsConfig.heal_on_errors`. A
+non-matching entry is silently skipped (not a `[hook_failed]`) and does not
+stop the remaining entries of that event.
 
 Security model: fixed argv (shlex, never `shell=True`); interpolation is
 limited to ${run.id} / ${run.status} / ${blueprint.id}; per-entry timeout;
@@ -22,10 +44,12 @@ grammar has no operation that can address `hooks:`, so the self-healer
 cannot inject or alter hooks.
 
 Cycle guard: AQUEDUCT_HOOK_CHAIN carries the resolved ancestor blueprint
-paths (os.pathsep-joined) through `blueprint:` subprocesses. A hook whose
-target is already in the chain is refused ([hook_cycle]); chain depth is
-capped at 8 ([hook_depth]). `aqueduct doctor` runs the same walk statically
-via `static_hook_check`.
+paths (os.pathsep-joined) through `blueprint:` subprocesses. In-process
+chained hooks carry the same ancestry via an explicit in-memory chain (the
+env var is process-scoped and does not propagate across an in-process
+call). A hook whose target is already in the chain is refused
+([hook_cycle]); chain depth is capped at 8 ([hook_depth]). `aqueduct doctor`
+runs the same walk statically via `static_hook_check`.
 """
 
 from __future__ import annotations
@@ -35,6 +59,7 @@ import shlex
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -77,6 +102,37 @@ def _resolve_target(value: str, anchor: Path) -> Path:
     return p.resolve() if p.is_absolute() else (anchor.parent / p).resolve()
 
 
+def _error_candidates(failure_ctx: Any) -> set[str]:
+    """Same candidate set GuardrailsConfig.heal_on_errors matches against:
+    the Assert-rule error_type label, plus the exception class name
+    extracted from the stack trace for infra errors."""
+    from aqueduct.cli import _extract_stack_class
+
+    candidates: set[str] = set()
+    error_type = getattr(failure_ctx, "error_type", None)
+    if error_type:
+        candidates.add(error_type)
+    stack_class = _extract_stack_class(getattr(failure_ctx, "stack_trace", None))
+    if stack_class:
+        candidates.add(stack_class)
+    return candidates
+
+
+def _hook_matches_error(entry: HookEntry, failure_ctx: Any | None) -> bool:
+    """True when `entry` should fire given the run's failure context.
+
+    Unset `when_error` always fires (backward-compatible default). A set
+    `when_error` with no failure_ctx available fires too — the schema
+    blocks when_error on events without a failure context (on_success), so
+    this branch is a defensive fallback, not the expected path.
+    """
+    if not entry.when_error:
+        return True
+    if failure_ctx is None:
+        return True
+    return bool(_error_candidates(failure_ctx) & set(entry.when_error))
+
+
 def run_hooks(
     entries: Sequence[HookEntry],
     event: str,
@@ -86,8 +142,23 @@ def run_hooks(
     blueprint_id: str,
     blueprint_path: str,
     allow_command_hooks: bool,
+    failure_ctx: Any | None = None,
+    session: Any | None = None,
+    _chain: list[str] | None = None,
 ) -> bool:
     """Execute one event's hook entries sequentially.
+
+    Args:
+        failure_ctx: The run's FailureContext, when the event carries one
+            (on_failure / on_patch_pending / on_healed) — feeds `when_error`
+            matching. None for on_success (no failure context to filter on).
+        session: Live SparkSession, when the caller has one available —
+            enables `in_process: true` blueprint entries. None falls back to
+            the subprocess path for every blueprint entry regardless of
+            `in_process`.
+        _chain: Internal — explicit ancestor chain for recursive in-process
+            calls (the env-var chain is process-scoped and doesn't see
+            in-process calls). None reads the env var as before.
 
     Returns True when a hooks section was rendered (entries present) so the
     caller can close with a `run complete` footer. Never raises; never
@@ -98,15 +169,19 @@ def run_hooks(
     from aqueduct.cli.style import info as _info
     from aqueduct.cli.style import warn as _warn
 
-    _info(f"· hooks  ·  {event} ({len(entries)})")
+    matching = [h for h in entries if _hook_matches_error(h, failure_ctx)]
+    if not matching:
+        return False
+    _info(f"· hooks  ·  {event} ({len(matching)})")
     run_vars = {"run.id": run_id, "run.status": status, "blueprint.id": blueprint_id}
     bp_path = Path(blueprint_path).resolve()
-    chain = _chain_paths()
+    chain = _chain if _chain is not None else _chain_paths()
 
     def _ok(label: str, dur: float) -> None:
         icon = click.style("✓", fg="green")
         click.echo(f"  {icon} {label}    " + click.style(_fmt_dur(dur), dim=True))
 
+    entries = matching
     for i, h in enumerate(entries):
         argv: list[str] | None = None
         env = None
@@ -142,6 +217,18 @@ def run_hooks(
             if not target.exists():
                 _warn(f"[hook_failed] {label} — blueprint not found: {target}")
                 break
+
+            if h.in_process and session is not None:
+                handled = _run_in_process_blueprint_hook(
+                    target=target, label=f"in-process {h.value}", session=session,
+                    chain=chain, bp_path=bp_path, warn=_warn, ok=_ok,
+                    allow_command_hooks=allow_command_hooks,
+                )
+                if handled:
+                    continue
+                # Fell back to subprocess (target had a non-empty
+                # spark_config) — build the same argv as the default path.
+
             argv = [sys.executable, "-c", _RELAUNCH, "run", str(target)]
             env = {**os.environ, _CHAIN_ENV: os.pathsep.join([*chain, str(bp_path)])}
 
@@ -188,6 +275,97 @@ def run_hooks(
     return True
 
 
+def _run_in_process_blueprint_hook(
+    *,
+    target: Path,
+    label: str,
+    session: Any,
+    chain: list[str],
+    bp_path: Path,
+    warn: Any,
+    ok: Any,
+    allow_command_hooks: bool,
+) -> bool:
+    """Parse + compile + execute `target` in this process, reusing `session`.
+
+    No self-healing loop for the chained target — the heal loop lives in
+    `aqueduct run`'s CLI orchestration and is not (yet) reusable as a bare
+    library call; an in-process hook target that fails just reports
+    `[hook_failed]` like any other hook, same as a subprocess `aqueduct run`
+    would report a non-zero exit on failure. The target's OWN
+    `on_success`/`on_failure` hooks (not `on_patch_pending`/`on_healed` — no
+    heal loop ran) fire recursively afterwards, same-session, chain-guarded.
+
+    Returns True when the in-process path handled the entry (success or
+    failure — both terminal for this entry); False to signal "fall back to
+    the subprocess path" (only when the target's spark_config is non-empty).
+    """
+    from aqueduct.parser.parser import parse as _parse
+
+    try:
+        t_bp = _parse(str(target))
+    except Exception as exc:  # noqa: BLE001 — parse errors are reported as hook failures, not raised
+        warn(f"[hook_failed] {label} — parse error: {exc}")
+        return True
+
+    if t_bp.spark_config:
+        # Safe subset per design: two Blueprints' spark_config may conflict
+        # in a shared live session (e.g. differing shuffle partitions) —
+        # fall back to the isolated subprocess path instead of guessing at
+        # a merge policy. (No pyspark import needed on this branch — keeps
+        # the fallback usable on a [spark]-less install too.)
+        from aqueduct.cli.style import info as _info
+        _info(
+            f"[hook_inprocess_fallback] {label} — target sets spark_config, "
+            "falling back to subprocess (session config would conflict)"
+        )
+        return False
+
+    from aqueduct.compiler.compiler import compile as _compiler_compile
+    from aqueduct.executor import ExecuteError, get_executor
+    from aqueduct.executor.models import ExecutionStatus
+
+    try:
+        t_manifest = _compiler_compile(t_bp, blueprint_path=target)
+    except Exception as exc:  # noqa: BLE001 — compile errors are reported as hook failures, not raised
+        warn(f"[hook_failed] {label} — compile error: {exc}")
+        return True
+
+    execute_fn = get_executor("spark")
+    t_run_id = str(uuid.uuid4())
+    t0 = time.monotonic()
+    try:
+        t_result = execute_fn(t_manifest, session, run_id=t_run_id, store_dir=None, surveyor=None, depot=None)
+    except ExecuteError as exc:
+        warn(f"[hook_failed] {label} — {exc}")
+        return True
+    dur = time.monotonic() - t0
+
+    success = t_result.status == ExecutionStatus.SUCCESS
+    if success:
+        ok(label, dur)
+    else:
+        failing = next((r for r in t_result.module_results if r.status == ExecutionStatus.ERROR), None)
+        detail = f" — {failing.module_id}: {failing.error}" if failing is not None else ""
+        warn(f"[hook_failed] {label}{detail}  ·  {_fmt_dur(dur)}")
+
+    # Chain the target's own on_success/on_failure hooks — same session,
+    # explicit chain (env var doesn't see in-process calls).
+    new_chain = [*chain, str(bp_path)]
+    t_status = "success" if success else "failure"
+    t_event = "on_success" if success else "on_failure"
+    t_entries = t_bp.hooks.on_success if success else t_bp.hooks.on_failure
+    if t_entries:
+        run_hooks(
+            t_entries, t_event,
+            run_id=t_run_id, status=t_status,
+            blueprint_id=t_bp.id, blueprint_path=str(target),
+            allow_command_hooks=allow_command_hooks,
+            session=session, _chain=new_chain,
+        )
+    return True
+
+
 def static_hook_check(blueprint_path: Path) -> list[str]:
     """Doctor helper — walk `blueprint:` hook references without running.
 
@@ -210,7 +388,7 @@ def static_hook_check(blueprint_path: Path) -> list[str]:
             return []
         hooks = raw.get("hooks") or {}
         out: list[str] = []
-        for event in ("on_success", "on_failure"):
+        for event in ("on_success", "on_failure", "on_patch_pending", "on_healed"):
             for entry in hooks.get(event) or []:
                 if isinstance(entry, dict) and entry.get("blueprint"):
                     out.append(str(entry["blueprint"]))

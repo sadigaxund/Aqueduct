@@ -147,7 +147,7 @@ The nesting is display-only. Logs, the observability store, and the `failed_modu
 
 ### Run output: lifecycle hooks
 
-When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's entries run after the terminal footer, each with a `✓/⚠` line; a chained `blueprint:` hook streams its own full run output inline (it is a fresh `aqueduct run` subprocess). The section closes with a final `✓ run complete`:
+When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's entries run, each with a `✓/⚠` line. `on_success`/`on_failure` run after the terminal footer and close with a final `✓ run complete`; `on_patch_pending`/`on_healed` fire mid-run at heal milestones (staging a patch for review, and a heal's re-run succeeding) and print inline, without their own footer. A chained `blueprint:` hook streams its own full run output inline when it's a subprocess (the default); `in_process: true` instead reuses the caller's live SparkSession — no separate subprocess, no separate `aqueduct` invocation in the output:
 
 ```
 ✓ blueprint complete
@@ -157,7 +157,7 @@ When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's 
 ✓ run complete
 ```
 
-Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hook_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically).
+Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hook_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically across all four events). `when_error: [ErrorType, ...]` on `on_failure`/`on_patch_pending`/`on_healed` entries filters which entries fire for a given run — a non-matching entry is silently skipped (no `⚠` line, doesn't count against the "first failure stops the rest" rule).
 
 ### Config overrides (`-s` / `--set`)
 
