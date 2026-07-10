@@ -591,6 +591,24 @@ agent:
   # Per-blueprint override available via the Blueprint agent: block.
   # block_on_explain_regression: false
 
+  # ── Post-heal regression artifact ──────────────────────────────────────────
+  # When true, a SUCCESSFUL heal (patch applied AND the re-run succeeded)
+  # optionally emits an `.aqtest.yml` regression test for the patched module
+  # under `aqtests/` next to the Blueprint. This is a DIFFERENT job from the
+  # signature-memory heal cache above: the cache resolves the SAME failure
+  # RECURRING in production for zero tokens (acts AFTER recurrence); this
+  # artifact is a CI regression test that catches the fix being undone
+  # (a hand-edit, a SQL refactor, a revert) BEFORE the next production run —
+  # no failure, no heal, no tokens spent. Same reason you write a regression
+  # test after fixing any bug by hand. Generation is conservative: it silently
+  # no-ops (info log only) whenever the healed module/failure shape can't be
+  # expressed as a valid aqtest (module type not testable, no upstream
+  # schema_hint to synthesize fixture rows from, or a multi-module patch) —
+  # it never emits a broken test file. Never overwrites an existing file.
+  #   false (default) — no artifact is generated.
+  # Per-blueprint override available via the Blueprint agent: block.
+  # regression_artifact: false
+
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
   # Surveyor counts rows written to observability.db `healing_outcomes` within the last
   # 60 minutes for the running blueprint. When the count is reached, the next

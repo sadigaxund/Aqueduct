@@ -239,6 +239,15 @@ agent:
   #               ⚠ DANGER COMBO line at startup; use only on tiny trusted scopes.
   # sandbox_mode: sample
 
+  # regression_artifact: on a SUCCESSFUL heal (patch applied AND the re-run
+  # succeeded), optionally emit an `.aqtest.yml` regression test for the
+  # patched module under `aqtests/` next to this Blueprint — guards against
+  # the fix being silently undone later (hand-edit, SQL refactor, revert).
+  # Conservative: skips (info log, no file) when the healed module/failure
+  # shape can't be expressed as a valid aqtest. Never overwrites a file.
+  # Leave unset to inherit aqueduct.yml agent.regression_artifact (= false).
+  # regression_artifact: false
+
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
   # NOTE: all four lists live under the `guardrails:` key, not directly on `agent:`.

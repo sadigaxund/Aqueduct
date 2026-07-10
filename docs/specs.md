@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.9 — Reference Document**
+**Version 2.10 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1069,6 +1069,57 @@ persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
 failure analytics a record of real failures. Exit codes: `0` (no drift /
 baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
 undiffable).
+
+## **8.9 Post-Heal Regression Artifacts (opt-in, `agent.regression_artifact`)**
+
+A successful heal fixes today's failure. Nothing stops tomorrow's hand-edit,
+SQL refactor, or `git revert` from silently reintroducing the exact same root
+cause — and without a regression test, the pipeline won't find out until it
+fails in production again. This is a **different job** from the signature
+memory described in §8.1:
+
+| | Signature memory (heal cache) | Post-heal regression artifact |
+| :- | :- | :- |
+| **Triggers on** | The same failure **recurring** in production | A **successful** heal (patch applied AND the re-run succeeded) |
+| **Acts** | AFTER the failure recurs — zero-token patch replay | BEFORE the next run — a CI test run by `aqueduct test` |
+| **Guards against** | Re-solving a known failure with fresh tokens | The fix being **undone** (hand-edit, refactor, revert) |
+| **Failure required to fire?** | Yes — a real pipeline failure | No — catches reintroduction with **no failure and no heal** |
+
+The two are complementary — the same reason a human writes a regression test
+immediately after fixing a bug by hand, in addition to whatever runtime
+safety net already exists.
+
+**Behavior.** When `agent.regression_artifact: true` (default `false`; engine
+default in `aqueduct.yml`, per-blueprint override in the Blueprint `agent:`
+block — `null` inherits the engine value, same inheritance shape as
+`block_on_explain_regression`), a heal that reaches
+`healing_outcomes.run_success_after_patch = true` in `auto` mode's full-run
+validation path optionally emits an `.aqtest.yml` file under `aqtests/` next
+to the Blueprint — the same isolated-module test format `aqueduct test` already
+runs (§ see `docs/cli_reference.md`), auto-populated with a fixture reflecting
+the healed module and a smoke assertion. The test exists purely to fail loudly
+if the patched module ever throws again on the same input shape — i.e. if the
+fix is undone.
+
+**Generation is conservative — it never emits a broken test file.** Aqueduct
+only builds a `.aqtest.yml` when the patch shape maps cleanly onto one:
+
+- The patch touches exactly **one** module via `set_module_config_key` or
+  `replace_module_config` (multi-module or structural patches are skipped —
+  their regression risk isn't expressible as a single-module fixture test).
+- The patched module's type is one `aqueduct test` can run in isolation
+  (`Channel`, `Junction`, `Funnel`, `Assert` — Ingress/Egress are out of scope,
+  same limitation the test framework itself has).
+- Every direct upstream module supplying the patched module declares a
+  `schema_hint` Aqueduct can turn into one synthetic fixture row (Spark SQL
+  DDL type → a small in-domain dummy value; an unmapped type skips
+  generation).
+
+Any other shape — no schema_hint to synthesize from, an untestable module
+type, a multi-module patch — produces an **info-level skip message**, not a
+file. Generation never overwrites an existing file (uniquifies the filename
+instead) and never blocks or fails the heal itself — it is strictly
+best-effort after the heal has already succeeded.
 
 ---
 

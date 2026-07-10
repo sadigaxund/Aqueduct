@@ -185,6 +185,11 @@ class AgentSchema(BaseModel):
     #               check → apply → next execute() on real data. Most
     #               dangerous; requires danger.allow_skip_sandbox: true.
     sandbox_mode: Literal["sample", "preflight", "off"] = "sample"
+    # Opt-in post-heal regression artifact: on a SUCCESSFUL heal, optionally
+    # emit an `.aqtest.yml` for the patched module under `aqtests/` next to
+    # the Blueprint. None (default) inherits the engine `agent.regression_artifact`
+    # (= False). See aqueduct.yml.template for the full rationale.
+    regression_artifact: bool | None = None
 
 
 class ModuleSchema(BaseModel):

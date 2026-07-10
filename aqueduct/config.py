@@ -786,6 +786,25 @@ class AgentConnectionConfig(BaseModel):
             "exponential backoff, capped by the heal budget deadline."
         ),
     )
+    regression_artifact: bool = Field(
+        default=False,
+        description=(
+            "When True, a SUCCESSFUL heal (patch applied AND the re-run "
+            "succeeded) optionally emits an `.aqtest.yml` regression test for "
+            "the patched module under `aqtests/` next to the Blueprint, so a "
+            "later hand-edit/SQL refactor/revert that reintroduces the root "
+            "cause is caught by `aqueduct test` before the next production "
+            "run instead of by another heal. Complementary to signature-"
+            "memory heal-cache replay, not a replacement for it: the cache "
+            "resolves a RECURRING failure for zero tokens; this artifact is "
+            "a CI guard against the FIX being undone. Generation is "
+            "conservative — it silently no-ops (info log only) whenever the "
+            "healed failure/module shape can't be expressed as a valid "
+            "aqtest (e.g. non-testable module type, no upstream schema_hint "
+            "to synthesize fixture rows from, or a multi-module patch). "
+            "Default False. Per-blueprint override: agent.regression_artifact."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):

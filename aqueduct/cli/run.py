@@ -2256,6 +2256,32 @@ def run(
                         f"  {click.style('✓', fg='green', bold=True)} Agent patch validated and applied ({patch_count}/{max_patches}) → {blueprint}",
                         err=True,
                     )
+                    # Opt-in (agent.regression_artifact): a SUCCESSFUL heal — patch
+                    # applied AND the re-run just succeeded — may emit an .aqtest.yml
+                    # CI regression guard for the patched module. Different job from
+                    # the signature-memory heal cache above: this catches the fix
+                    # being undone later (hand-edit/SQL refactor/revert), not a
+                    # recurring production failure. Best-effort — never blocks heal.
+                    _regression_artifact = (
+                        manifest.agent.regression_artifact
+                        if manifest.agent.regression_artifact is not None
+                        else cfg.agent.regression_artifact
+                    )
+                    if _regression_artifact:
+                        from aqueduct.agent.regression_artifact import (
+                            generate as _gen_regression_artifact,
+                        )
+                        from aqueduct.cli.style import info as _ra_info
+                        try:
+                            _ra_result = _gen_regression_artifact(new_manifest, patch, failure_ctx, Path(blueprint))
+                            if _ra_result.written:
+                                click.echo(f"  ▸ regression test written → {_ra_result.path}", err=True)
+                            else:
+                                click.echo(_ra_info(f"regression artifact skipped: {_ra_result.skip_reason}"), err=True)
+                        except Exception as _ra_exc:
+                            # Best-effort: never let artifact generation break a
+                            # successful heal.
+                            click.echo(_ra_info(f"regression artifact generation failed: {_ra_exc}"), err=True)
                     result = result2
                     failure_ctx = failure_ctx2
                     break

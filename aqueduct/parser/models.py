@@ -117,6 +117,9 @@ class AgentConfig:
     # (full dataset, requires danger.allow_full_preflight), "off" (skip,
     # requires danger.allow_skip_sandbox).
     sandbox_mode: str = "sample"
+    # Opt-in post-heal regression artifact. None = inherit engine default
+    # (agent.regression_artifact in aqueduct.yml, False if also unset).
+    regression_artifact: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize agent policy fields for the manifest snapshot the LLM sees.
@@ -137,6 +140,7 @@ class AgentConfig:
             "confidence_threshold": self.confidence_threshold,
             "patch_validation": self.patch_validation,
             "block_on_explain_regression": self.block_on_explain_regression,
+            "regression_artifact": self.regression_artifact,
             "max_heal_attempts_per_hour": self.max_heal_attempts_per_hour,
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),
