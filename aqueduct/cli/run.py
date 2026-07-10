@@ -2272,10 +2272,11 @@ def run(
                             generate as _gen_regression_artifact,
                         )
                         from aqueduct.cli.style import info as _ra_info
+                        from aqueduct.cli.style import success as _ra_success
                         try:
                             _ra_result = _gen_regression_artifact(new_manifest, patch, failure_ctx, Path(blueprint))
                             if _ra_result.written:
-                                click.echo(f"  ▸ regression test written → {_ra_result.path}", err=True)
+                                click.echo(_ra_success(f"regression test written → {_ra_result.path}"), err=True)
                             else:
                                 click.echo(_ra_info(f"regression artifact skipped: {_ra_result.skip_reason}"), err=True)
                         except Exception as _ra_exc:
