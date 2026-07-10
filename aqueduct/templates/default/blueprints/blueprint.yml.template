@@ -65,14 +65,16 @@ spark_config:
 
 # ── Retry policy (blueprint-level default) ─────────────────────────────────────
 #
-# Applied to every module unless overridden by module-level on_failure.
+# Applied to every module unless overridden by a module-level `retry:` block
+# (2.8, see the Modules section below) or the self-healer's `on_failure` write.
 
 # retry_policy:
 #   max_attempts: 3
-#   backoff_strategy: exponential   # exponential | linear | fixed
-#   backoff_base_seconds: 5
-#   backoff_max_seconds: 120
-#   jitter: true
+#   backoff:                        # NOTE: nested block, not flat backoff_* keys
+#     strategy: exponential         # exponential | linear | fixed
+#     base_seconds: 5
+#     max_seconds: 120
+#     jitter: true
 #   deadline_seconds: 600           # null = no deadline
 #   on_exhaustion: abort            # abort | alert_only | trigger_agent
 #   transient_errors:               # only these are retried (empty = all errors)
@@ -80,6 +82,21 @@ spark_config:
 #     - ".*Task not serializable.*"
 #   non_transient_errors:           # these skip retry immediately
 #     - "AnalysisException"
+#
+# Per-module override (2.8) — set `retry:` on any module in the `modules:`
+# list below to override retry_policy for JUST that module. Any field left
+# unset inherits the blueprint-level value above (field-by-field, same shape
+# as agent.cascade tier inheritance). `backoff:` overrides as a WHOLE block
+# (set every sub-field or omit it — it never merges field-by-field):
+#
+#   modules:
+#     - id: flaky_jdbc_source
+#       type: Ingress
+#       label: "Flaky source"
+#       config: { format: jdbc, ... }
+#       retry:
+#         max_attempts: 6          # override — more attempts for this module
+#         # on_exhaustion, backoff, etc. inherit from retry_policy above
 
 
 # ── Compile-warning suppression (per-blueprint) ─────────────────────────────────

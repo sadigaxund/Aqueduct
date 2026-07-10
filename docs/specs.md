@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.8 — Reference Document**
+**Version 2.9 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -235,6 +235,30 @@ Every Module regardless of type shares these fields:
 | **depends_on** | Optional explicit upstream dependency list. |
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
 | **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output — via edges, `depends_on`, or Probe `attach_to` — is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
+| **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8) — see below. |
+
+### Per-module retry override (`retry:`, 2.8)
+
+`retry_policy:` (§10.1-adjacent top-level block) sets the blueprint-wide default retry behaviour. A module's own `retry:` block overrides it **field-by-field** — any field left unset inherits the blueprint-level value for that field (same per-field inheritance shape as agent cascade tiers, §8):
+
+```yaml
+retry_policy:
+  max_attempts: 3
+  on_exhaustion: trigger_agent
+
+modules:
+  - id: flaky_jdbc_source
+    type: Ingress
+    label: Flaky Source
+    config: { format: jdbc, ... }
+    retry:
+      max_attempts: 6        # override — this module gets more attempts
+      # on_exhaustion inherits "trigger_agent" from retry_policy above
+```
+
+Fields: `max_attempts`, `backoff` (whole-block override — set every backoff sub-field or omit the block entirely; a module `backoff:` does NOT merge field-by-field against the blueprint's `backoff:`), `transient_errors`, `non_transient_errors`, `on_exhaustion`, `deadline_seconds`. One caveat: `deadline_seconds: null`/omitted at module level always means "inherit" — there is no module-level way to explicitly clear a blueprint-level deadline back to "no deadline."
+
+This is distinct from `on_failure` (an internal field the self-healing agent writes via the `set_module_on_failure` / `replace_retry_policy` patch ops — a full RetryPolicy replacement, not merged against the blueprint policy). When both are present at runtime, `on_failure` (heal-time) wins over `retry:` (authoring-time) wins over the blueprint-level `retry_policy:`.
 
 ### Ports
 

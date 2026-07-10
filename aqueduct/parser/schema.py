@@ -39,6 +39,26 @@ class RetryPolicySchema(BaseModel):
     deadline_seconds: int | None = Field(default=None, gt=0, description="Retry deadline in seconds (> 0 if set)")
 
 
+class ModuleRetrySchema(BaseModel):
+    """Per-module retry policy override (module-level `retry:` block).
+
+    Every field defaults to ``None`` — a field left unset INHERITS the
+    blueprint-level ``retry_policy:`` value for that field. Same per-field
+    inheritance shape as agent cascade tiers (``aqueduct/agent/cascade.py``):
+    override on the module, inherit from the blueprint when unset.
+    ``backoff`` overrides as a whole block (not merged field-by-field) —
+    set it entirely or omit it entirely.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    max_attempts: int | None = Field(default=None, ge=1, description="Maximum retry attempts (>= 1); inherits blueprint retry_policy when unset")
+    backoff: BackoffSchema | None = Field(default=None, description="Whole-block override; inherits blueprint retry_policy.backoff when unset")
+    transient_errors: list[Any] | None = Field(default=None, description="Inherits blueprint retry_policy.transient_errors when unset")
+    non_transient_errors: list[str] | None = Field(default=None, description="Inherits blueprint retry_policy.non_transient_errors when unset")
+    on_exhaustion: Literal["trigger_agent", "abort", "alert_only"] | None = Field(default=None, description="Inherits blueprint retry_policy.on_exhaustion when unset")
+    deadline_seconds: int | None = Field(default=None, gt=0, description="Inherits blueprint retry_policy.deadline_seconds when unset (no module-level way to explicitly clear an inherited deadline)")
+
+
 class GuardrailsSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -178,6 +198,13 @@ class ModuleSchema(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     on_failure: dict[str, Any] | None = None
     on_failure_webhook: str | dict[str, Any] | None = None
+    # Per-module retry policy override — inherits blueprint-level retry_policy
+    # for any field left unset. Distinct from `on_failure` (an LLM-patch write
+    # target for a full-replacement RetryPolicy; see set_module_on_failure /
+    # replace_retry_policy patch ops). `retry:` is the Blueprint-authoring-time
+    # surface; when both are present at runtime, `on_failure` takes precedence
+    # (heal-time override over authoring-time override).
+    retry: ModuleRetrySchema | None = None
     spillway: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     checkpoint: bool = False

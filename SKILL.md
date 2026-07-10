@@ -104,7 +104,26 @@ expansion), `label` (REQUIRED — human name), `type` (required), `config`
 (type-specific). Optional: `description`, `tags`, `spillway` (downstream id for
 error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`),
 `enabled` (bool, default true; takes `${ctx.*}` so profiles can toggle it — a disabled
-module is skipped ⏭ at run time and the disable cascades to every downstream consumer).
+module is skipped ⏭ at run time and the disable cascades to every downstream consumer),
+`retry` (2.8 — per-module override of the top-level `retry_policy:`; see below).
+
+**`retry:` (2.8)** overrides the blueprint's `retry_policy:` **per field** — any
+field left unset inherits the blueprint value (same shape as `agent.cascade`
+tier inheritance):
+
+```yaml
+retry_policy: { max_attempts: 3, on_exhaustion: trigger_agent }
+modules:
+  - id: flaky_source
+    type: Ingress
+    label: "Flaky source"
+    config: { format: jdbc, ... }
+    retry: { max_attempts: 6 }   # on_exhaustion inherits "trigger_agent"
+```
+
+Fields: `max_attempts`, `backoff` (whole-block override — set every sub-field
+or omit the block, never merges field-by-field), `transient_errors`,
+`non_transient_errors`, `on_exhaustion`, `deadline_seconds`.
 
 > The single most common authoring error: **forgetting `label:`**. It is required on every module.
 

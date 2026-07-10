@@ -236,6 +236,38 @@ class TestModuleRetryPolicy:
         with pytest.raises(ExecuteError, match="invalid keys"):
             _module_retry_policy(module, _policy())
 
+    # ── Phase 70 — Blueprint-authored `module.retry` override ─────────────────
+
+    def test_module_retry_used_when_no_on_failure(self):
+        from aqueduct.executor.spark.executor import _module_retry_policy
+
+        manifest_policy = _policy(max_attempts=1)
+        module_retry = _policy(max_attempts=3)
+        module = _make_module("m", retry=module_retry)
+        result = _module_retry_policy(module, manifest_policy)
+        assert result is module_retry
+
+    def test_neither_on_failure_nor_retry_returns_manifest_policy(self):
+        from aqueduct.executor.spark.executor import _module_retry_policy
+
+        manifest_policy = _policy(max_attempts=5)
+        module = _make_module("m")
+        result = _module_retry_policy(module, manifest_policy)
+        assert result is manifest_policy
+
+    def test_on_failure_takes_precedence_over_module_retry(self):
+        """on_failure is an LLM-patch write target (heal-time override); it
+        beats the Blueprint-authored `retry:` block (authoring-time override)."""
+        from aqueduct.executor.spark.executor import _module_retry_policy
+
+        manifest_policy = _policy(max_attempts=1)
+        module_retry = _policy(max_attempts=3)
+        module = _make_module(
+            "m", retry=module_retry, on_failure={"max_attempts": 7},
+        )
+        result = _module_retry_policy(module, manifest_policy)
+        assert result.max_attempts == 7
+
 
 def _make_module(mid: str, **kwargs):
     from aqueduct.parser.models import Module

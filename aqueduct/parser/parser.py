@@ -236,6 +236,44 @@ def parse_dict(
                 out[k] = _anchor_path_value(out[k])
         return out
 
+    def _to_retry_policy(rp: Any) -> RetryPolicy:
+        """Convert a RetryPolicySchema (blueprint-level, all fields required
+        with defaults) into a RetryPolicy dataclass."""
+        return RetryPolicy(
+            max_attempts=rp.max_attempts,
+            backoff_strategy=rp.backoff.strategy,
+            backoff_base_seconds=rp.backoff.base_seconds,
+            backoff_max_seconds=rp.backoff.max_seconds,
+            jitter=rp.backoff.jitter,
+            on_exhaustion=rp.on_exhaustion,
+            transient_errors=tuple(rp.transient_errors),
+            non_transient_errors=tuple(rp.non_transient_errors),
+            deadline_seconds=rp.deadline_seconds,
+        )
+
+    # Computed early (before the module loop) so per-module `retry:` overrides
+    # can be merged against it field-by-field — same per-field inheritance
+    # shape as agent cascade tiers (aqueduct/agent/cascade.py): override on
+    # the module, inherit from the blueprint when unset.
+    retry_policy = _to_retry_policy(validated.retry_policy)
+
+    def _merge_module_retry(override: Any) -> RetryPolicy | None:
+        """Merge a ModuleRetrySchema against the blueprint-level retry_policy.
+        Returns None when the module declares no `retry:` block at all."""
+        if override is None:
+            return None
+        return RetryPolicy(
+            max_attempts=override.max_attempts if override.max_attempts is not None else retry_policy.max_attempts,
+            backoff_strategy=override.backoff.strategy if override.backoff is not None else retry_policy.backoff_strategy,
+            backoff_base_seconds=override.backoff.base_seconds if override.backoff is not None else retry_policy.backoff_base_seconds,
+            backoff_max_seconds=override.backoff.max_seconds if override.backoff is not None else retry_policy.backoff_max_seconds,
+            jitter=override.backoff.jitter if override.backoff is not None else retry_policy.jitter,
+            on_exhaustion=override.on_exhaustion if override.on_exhaustion is not None else retry_policy.on_exhaustion,
+            transient_errors=tuple(override.transient_errors) if override.transient_errors is not None else retry_policy.transient_errors,
+            non_transient_errors=tuple(override.non_transient_errors) if override.non_transient_errors is not None else retry_policy.non_transient_errors,
+            deadline_seconds=override.deadline_seconds if override.deadline_seconds is not None else retry_policy.deadline_seconds,
+        )
+
     def _coerce_enabled(raw: Any, module_id: str) -> bool:
         """`enabled:` — resolve ${ctx.*}/${ENV} then coerce to bool."""
         v = resolve_value(raw, ctx_map) if isinstance(raw, str) else raw
@@ -263,6 +301,7 @@ def parse_dict(
                 config=_anchor_paths(resolve_value(m.config, ctx_map), m.type),
                 on_failure=m.on_failure,
                 on_failure_webhook=m.on_failure_webhook,
+                retry=_merge_module_retry(m.retry),
                 checkpoint=m.checkpoint,
                 enabled=_coerce_enabled(m.enabled, m.id),
                 spillway=m.spillway,
@@ -300,18 +339,8 @@ def parse_dict(
         raise ParseError(str(exc)) from exc
 
     # ── 7. Assemble final Blueprint AST ───────────────────────────────────────
-    rp = validated.retry_policy
-    retry_policy = RetryPolicy(
-        max_attempts=rp.max_attempts,
-        backoff_strategy=rp.backoff.strategy,
-        backoff_base_seconds=rp.backoff.base_seconds,
-        backoff_max_seconds=rp.backoff.max_seconds,
-        jitter=rp.backoff.jitter,
-        on_exhaustion=rp.on_exhaustion,
-        transient_errors=tuple(rp.transient_errors),
-        non_transient_errors=tuple(rp.non_transient_errors),
-        deadline_seconds=rp.deadline_seconds,
-    )
+    # (retry_policy already computed above, before the module loop, so
+    # per-module `retry:` overrides could be merged against it.)
 
     try:
         agent = AgentConfig(

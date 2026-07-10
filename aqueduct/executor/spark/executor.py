@@ -234,15 +234,25 @@ def _write_checkpoint(
 
 
 def _module_retry_policy(module: Module, manifest_policy: RetryPolicy) -> RetryPolicy:
-    """Return per-module RetryPolicy if on_failure is set, else manifest-level policy."""
-    if not module.on_failure:
-        return manifest_policy
-    try:
-        return RetryPolicy(**module.on_failure)
-    except TypeError as exc:
-        raise ExecuteError(
-            f"Module {module.id!r} on_failure has invalid keys: {exc}"
-        ) from exc
+    """Effective RetryPolicy for one module.
+
+    Precedence: ``module.on_failure`` (an LLM-patch write target — full
+    RetryPolicy replacement via the ``set_module_on_failure`` /
+    ``replace_retry_policy`` ops, unaffected by the blueprint-level policy)
+    beats ``module.retry`` (Blueprint-authored `retry:` block, already
+    merged field-by-field against the blueprint-level retry_policy at parse
+    time) beats ``manifest_policy`` (blueprint-level, the default).
+    """
+    if module.on_failure:
+        try:
+            return RetryPolicy(**module.on_failure)
+        except TypeError as exc:
+            raise ExecuteError(
+                f"Module {module.id!r} on_failure has invalid keys: {exc}"
+            ) from exc
+    if module.retry is not None:
+        return module.retry
+    return manifest_policy
 
 
 def _module_checkpoint_enabled(module: Module, manifest: Manifest) -> bool:

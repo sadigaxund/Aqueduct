@@ -157,6 +157,12 @@ class Module:
     depends_on: tuple[str, ...] = ()
     on_failure: dict[str, Any] | None = None
     on_failure_webhook: str | dict[str, Any] | None = None
+    # Per-module retry policy override, already merged against the
+    # blueprint-level RetryPolicy at parse time (None = no per-module
+    # override; the blueprint-level `retry_policy` applies as-is). Distinct
+    # from `on_failure`, which is an LLM-patch write target for a full
+    # RetryPolicy replacement.
+    retry: RetryPolicy | None = None
     checkpoint: bool = False
     # Conditional execution (`enabled:` in YAML, resolved from ${ctx.*} at
     # parse time). The compiler cascade-disables downstream consumers and

@@ -74,6 +74,19 @@ class Manifest:
                     "depends_on": list(m.depends_on),
                     "enabled": m.enabled,
                     "disabled_reason": m.disabled_reason,
+                    "retry": (
+                        None if m.retry is None else {
+                            "max_attempts": m.retry.max_attempts,
+                            "backoff_strategy": m.retry.backoff_strategy,
+                            "backoff_base_seconds": m.retry.backoff_base_seconds,
+                            "backoff_max_seconds": m.retry.backoff_max_seconds,
+                            "jitter": m.retry.jitter,
+                            "on_exhaustion": m.retry.on_exhaustion,
+                            "transient_errors": list(m.retry.transient_errors),
+                            "non_transient_errors": list(m.retry.non_transient_errors),
+                            "deadline_seconds": m.retry.deadline_seconds,
+                        }
+                    ),
                 }
                 for m in self.modules
             ],
