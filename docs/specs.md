@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.7 — Reference Document**
+**Version 2.8 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1079,6 +1079,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `lineage` | OpenLineage emission config (`openlineage_url`, `openlineage_namespace`) |
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
 | `warnings` | Compiler/executor warning suppression rules |
+| `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
 | `spark_config` | Per-run Spark session configuration |
 
 ## **10.2 Environment Variables & .env**
@@ -1117,6 +1118,28 @@ directory** (2.0 — the earlier single-shared-file layout was removed; a
 - Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work — the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
 - **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect — but for conflict-free continuous monitoring, use Postgres.
 - *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores) — see `docs/roadmap.md`.
+
+### **10.4.2 Checkpoint Root Override (2.8)**
+
+`checkpoint: true` (module- or manifest-level, see §4) writes module output to
+Parquet for `--resume` support. By default this lands under the derived
+`<store_dir>/checkpoints/<run_id>/` directory — the same routing base used by
+the observability store (§10.4.1).
+
+`checkpoint_root` (top-level `aqueduct.yml` key) overrides that derived
+location entirely: when set, checkpoints for **both** a fresh run and a
+`--resume` reload live directly under `<checkpoint_root>/<run_id>/`, bypassing
+`store_dir` for this purpose only (observability signals still use
+`store_dir`). Use it to point checkpoints at faster local disk, or a directory
+explicitly shared between driver and workers on a Docker-based Spark
+Standalone cluster.
+
+**LOCAL FILESYSTEM PATHS ONLY.** A `checkpoint_root` value containing a remote
+URI scheme (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfss://`, ...) is rejected
+at config-load with an actionable error — remote checkpoint roots require
+Hadoop-FS-API bookkeeping that Aqueduct does not yet implement (tracked as
+"Remote-Filesystem Checkpoint Root" in `docs/roadmap.md`). A relative path is
+resolved against the project root (the `aqueduct.yml` directory).
 
 ## **10.5 Deployment Targets**
 

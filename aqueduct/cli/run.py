@@ -1032,6 +1032,15 @@ def run(
         _obs_routing_base = _lcr._obs_routing_base
         execute = _lcr.execute
 
+        # `checkpoint_root` (aqueduct.yml) overrides the derived
+        # `<store_dir>/checkpoints/` location. Config-load already rejected
+        # remote URI schemes; resolve a relative local path against the
+        # project root (CWD, post-chdir above) for consistency with other
+        # config-file path handling.
+        checkpoint_root_abs = (
+            Path(cfg.checkpoint_root).resolve() if cfg.checkpoint_root else None
+        )
+
         # ── Resolution preamble — surface the non-default inputs shaping this run
         # (dim info lines next to the `· env ·` notice). Keys only for --set:
         # values may embed secrets that were never registered for redaction.
@@ -1385,6 +1394,7 @@ def run(
                     manifest, session,
                     run_id=iteration_run_id,
                     store_dir=resolved_store_dir,
+                    checkpoint_root=checkpoint_root_abs,
                     surveyor=surveyor,
                     depot=depot,
                     resume_run_id=resume_run_id if patch_count == 0 else None,
@@ -2217,6 +2227,7 @@ def run(
                         new_manifest, session,
                         run_id=str(uuid.uuid4()),
                         store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
                         surveyor=surveyor,
                         depot=depot,
                     )

@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **`checkpoint_root` engine-config override.** New top-level `aqueduct.yml` key overrides the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (both a fresh run's checkpoint write and a `--resume` reload). LOCAL FILESYSTEM PATHS ONLY — a remote URI scheme (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfss://`, ...) is rejected at config-load with an actionable error pointing at the "Remote-Filesystem Checkpoint Root" roadmap item, instead of the previous silent `Path("s3://…")` mangling. (`aqueduct/config.py`, `aqueduct/cli/run.py`, `aqueduct/executor/spark/executor.py`; docs: specs.md §10.4.2, production_guide.md, roadmap.md, `aqueduct.yml.template`)
+
 ## [2.0.0] — 2026-06-30
 
 > ⚠️ **Breaking changes** (see **Removed** + **Changed**): the deprecated `agent.approval_mode` / `agent.aggressive_max_patches` / `danger.allow_aggressive_patching` keys and the `--allow-aggressive` flag now **error** instead of warning; the inert `stores.lineage` block is removed; and `engine: flink` is now **rejected** at config-load. A `2.0.0`-worthy batch.

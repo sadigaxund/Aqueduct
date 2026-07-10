@@ -1691,3 +1691,98 @@ class TestRegulatorTriggerAgentPropagation:
         result = execute(manifest, spark, surveyor=_ClosedSurveyor())
         assert result.status == "error"
         assert result.trigger_agent is True
+
+
+# ── checkpoint_root override (Phase 70) ─────────────────────────────────────
+
+def test_checkpoint_root_override_bypasses_store_dir(spark: SparkSession, tmp_path):
+    """checkpoint_root, when set, writes under <checkpoint_root>/<run_id>/
+    instead of the derived <store_dir>/checkpoints/<run_id>/ — even though
+    store_dir is also supplied (for observability signals)."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(4).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+    checkpoint_root = tmp_path / "fast-local-ckpts"
+
+    manifest = Manifest(
+        blueprint_id="test.ckpt_root_override",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    result = execute(
+        manifest, spark, run_id="run-ckpt-root", store_dir=store_dir,
+        checkpoint_root=checkpoint_root,
+    )
+    assert result.status == "success"
+
+    # Written under checkpoint_root, NOT store_dir/checkpoints.
+    assert (checkpoint_root / "run-ckpt-root" / "src" / "_aq_done").exists()
+    assert not (store_dir / "checkpoints").exists()
+
+
+def test_checkpoint_root_override_used_for_resume(spark: SparkSession, tmp_path):
+    """--resume reload honours checkpoint_root too — not just the initial write."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(3).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    store_dir = tmp_path / "store"
+    checkpoint_root = tmp_path / "ckpt-root"
+
+    manifest = Manifest(
+        blueprint_id="test.ckpt_root_resume",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    first = execute(
+        manifest, spark, run_id="run-A", store_dir=store_dir,
+        checkpoint_root=checkpoint_root,
+    )
+    assert first.status == "success"
+
+    # Resume must find the checkpoint under checkpoint_root, not store_dir.
+    second = execute(
+        manifest, spark, run_id="run-B", store_dir=store_dir,
+        checkpoint_root=checkpoint_root, resume_run_id="run-A",
+    )
+    assert second.status == "success"
+    src_result = next(r for r in second.module_results if r.module_id == "src")
+    assert src_result.status == "success"
+
+
+def test_checkpoint_root_resume_missing_raises(spark: SparkSession, tmp_path):
+    """Resuming a run_id with no checkpoints under checkpoint_root raises,
+    same contract as the store_dir-derived path."""
+    in_path = str(tmp_path / "in.parquet")
+    spark.range(2).write.parquet(in_path)
+    out_path = str(tmp_path / "out.parquet")
+    checkpoint_root = tmp_path / "ckpt-root-empty"
+
+    manifest = Manifest(
+        blueprint_id="test.ckpt_root_missing_resume",
+        modules=(
+            Module(id="src", type="Ingress", label="Src", config={"format": "parquet", "path": in_path}),
+            Module(id="sink", type="Egress", label="Sink", config={"format": "parquet", "path": out_path}),
+        ),
+        edges=(Edge(from_id="src", to_id="sink", port="main"),),
+        context={},
+        spark_config={},
+        checkpoint=True,
+    )
+    with pytest.raises(ExecuteError, match="has no checkpoints"):
+        execute(
+            manifest, spark, run_id="run-C", checkpoint_root=checkpoint_root,
+            resume_run_id="does-not-exist",
+        )
