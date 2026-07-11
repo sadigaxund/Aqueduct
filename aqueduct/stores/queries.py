@@ -1071,6 +1071,176 @@ def load_patch_file(patch_id: str, patches_root: str | Path = "") -> dict | None
     return None
 
 
+def patch_show(cfg: Any, patch_id: str, store_dir: str | None = None) -> dict | None:
+    """One patch's ``patch_index`` metadata (+ body, best-effort), or None.
+
+    Searches every discovered store for the patch_id (patch_index is small —
+    a full scan per store is cheap). The body load is best-effort local-dir
+    only (``load_patch_file``'s CWD/``patches/`` search) — object-store
+    backends surface metadata only until a body-fetch path is threaded
+    through here.
+    """
+    from aqueduct.patch import index as patch_index
+
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                row = patch_index.get(cur, patch_id)
+        except Exception:
+            continue
+        if row is not None:
+            body = load_patch_file(patch_id)
+            if body is not None:
+                row = {**row, "body": body}
+            return row
+    return None
+
+
+@dataclass(frozen=True)
+class BlueprintHistoryEvent:
+    """One entry in a blueprint's remediation timeline (``blueprint history``).
+
+    ``event_type`` is one of: ``heal_run_started``, ``patch_apply``,
+    ``patch_reject``, ``outcome``, ``manual_edit``.
+    """
+    timestamp: str
+    event_type: str
+    description: str
+    patch_id: str | None = None
+    confidence: float | None = None
+    run_id: str | None = None
+    git_sha: str | None = None
+
+
+def blueprint_history(cfg: Any, blueprint_id: str,
+                       store_dir: str | None = None) -> list[BlueprintHistoryEvent]:
+    """Store-side remediation timeline for one blueprint (no git).
+
+    Joins ``patch_index`` (status transitions: pending → applied/rejected)
+    with ``healing_outcomes`` (confidence + run_success_after_patch, matched
+    by ``patch_id``) and ``heal_attempts``/``run_records`` (heal run start
+    times). ``aqueduct blueprint history`` merges this with git commits
+    (``git_blueprint_commits``) for the full picture.
+    """
+    events: list[BlueprintHistoryEvent] = []
+    for h in discover_stores(cfg, store_dir=store_dir):
+        try:
+            with h.store.connect() as cur:
+                cur.execute(
+                    "SELECT patch_id, status, rationale, "
+                    "CAST(created_at AS VARCHAR), CAST(updated_at AS VARCHAR), run_id "
+                    "FROM patch_index WHERE blueprint_id = ? ORDER BY created_at",
+                    [blueprint_id],
+                )
+                patch_rows = cur.fetchall()
+                try:
+                    cur.execute(
+                        "SELECT patch_id, confidence, run_success_after_patch, applied_at "
+                        "FROM healing_outcomes WHERE patch_id IS NOT NULL"
+                    )
+                    outcome_by_patch = {r[0]: r for r in cur.fetchall()}
+                except Exception:
+                    outcome_by_patch = {}
+                try:
+                    cur.execute(
+                        "SELECT DISTINCT r.run_id, CAST(r.started_at AS VARCHAR) "
+                        "FROM run_records r JOIN heal_attempts ha ON ha.run_id = r.run_id "
+                        "WHERE r.blueprint_id = ?",
+                        [blueprint_id],
+                    )
+                    heal_starts = cur.fetchall()
+                except Exception:
+                    heal_starts = []
+        except Exception:
+            continue
+
+        for run_id, started_at in heal_starts:
+            events.append(BlueprintHistoryEvent(
+                timestamp=started_at or "", event_type="heal_run_started",
+                description=f"heal run started (run_id={run_id})", run_id=run_id,
+            ))
+
+        for patch_id, status, rationale, created_at, updated_at, run_id in patch_rows:
+            outcome = outcome_by_patch.get(patch_id)
+            confidence = outcome[1] if outcome else None
+            if status == PatchStore.APPLIED:
+                events.append(BlueprintHistoryEvent(
+                    timestamp=updated_at or created_at or "", event_type="patch_apply",
+                    description=f"patch applied: {rationale or patch_id}",
+                    patch_id=patch_id, confidence=confidence, run_id=run_id,
+                ))
+                if outcome is not None and outcome[2] is not None:
+                    ok = bool(outcome[2])
+                    events.append(BlueprintHistoryEvent(
+                        timestamp=outcome[3] or updated_at or created_at or "",
+                        event_type="outcome",
+                        description="run succeeded after patch" if ok else "run failed after patch",
+                        patch_id=patch_id, run_id=run_id,
+                    ))
+            elif status == PatchStore.REJECTED:
+                events.append(BlueprintHistoryEvent(
+                    timestamp=updated_at or created_at or "", event_type="patch_reject",
+                    description=f"patch rejected: {rationale or patch_id}",
+                    patch_id=patch_id, run_id=run_id,
+                ))
+
+    events.sort(key=lambda e: e.timestamp or "")
+    return events
+
+
+def git_blueprint_commits(blueprint_path: str | Path) -> list[dict[str, Any]]:
+    """Git commit history for one blueprint file (read-only, best-effort).
+
+    Shells out to ``git log --follow`` scoped to *blueprint_path* — mirrors
+    ``aqueduct patch log``'s commit parsing (an ``---aqueduct---`` trailer
+    block in the commit body marks a patch-authored commit; its absence marks
+    a manual edit). Returns ``[]`` when the path is not inside a git repo, git
+    is absent, or the file has no history — never raises.
+    """
+    import re
+    import subprocess
+
+    aq_block_re = re.compile(r"---aqueduct---(.*?)---", re.DOTALL)
+    aq_patch_line_re = re.compile(r"^\s*-\s+(\S+):", re.MULTILINE)
+
+    p = Path(blueprint_path)
+    try:
+        result = subprocess.run(
+            ["git", "log", "--follow", "--format=%h\x1f%cI\x1f%s\x1f%B\x1eENDCOMMIT",
+             "--", p.name],
+            capture_output=True, text=True, cwd=p.parent or Path.cwd(), timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if result.returncode != 0 or not result.stdout.strip():
+        return []
+
+    commits: list[dict[str, Any]] = []
+    for raw in result.stdout.strip().split("\x1eENDCOMMIT"):
+        raw = raw.strip()
+        if not raw:
+            continue
+        header, _, body = raw.partition("\n")
+        parts = header.split("\x1f")
+        if len(parts) < 3:
+            continue
+        sha, date, subject = parts[0], parts[1], parts[2]
+        full_body = (parts[3] if len(parts) > 3 else "") + "\n" + body
+        body_match = aq_block_re.search(full_body)
+        patch_ids = (
+            [m.group(1) for m in aq_patch_line_re.finditer(body_match.group(1))]
+            if body_match else []
+        )
+        commits.append({
+            "git_sha": sha,
+            "timestamp": date,
+            "subject": subject,
+            "patch_ids": patch_ids,
+            "manual_edit": not patch_ids,
+        })
+    return commits
+
+
 def gate_rejection_rates(cfg: Any, store_dir: str | None = None) -> dict[str, int]:
     """Gate rejection counts across fleet (from patch_simulation or heal_attempts)."""
     agg: dict[str, int] = {}
