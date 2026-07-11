@@ -53,9 +53,11 @@ OpenLineage adds **no** extra — `httpx` is already a base dep.)
 *runtime-capability* deps (vendor SDKs / store backends used while a pipeline
 runs). A small separate class is allowed for **developer/inspection tooling that
 never runs in the data path**: `dev` (pytest/black/ruff), `tui` (`textual`, for
-`aqueduct studio`), and `dashboard` (`streamlit`+`plotly`, for `aqueduct
+`aqueduct studio`), `dashboard` (`streamlit`+`plotly`, for `aqueduct
 dashboard` — a local, read-only, on-demand observability viewer like the Spark
-UI). These stay OUT of `all` and out of the runtime axes — a
+UI), and `mcp` (the `mcp` SDK, for `aqueduct mcp serve` — the local stdio MCP
+diagnostics server over the read-only tool registry). These stay OUT of `all`
+and out of the runtime axes — a
 pipeline never needs them, so bundling them into base/`all` would bloat headless
 Spark-driver / CI installs. This is the *only* sanctioned feature-named-extra
 category; it is not a loophole for runtime features (those still follow the axes).
@@ -320,6 +322,7 @@ keep working. Command families live in submodules:
 | `style.py` | The single user-facing output vocabulary: `error`/`success`/`warn`/`info` + `StyledLogFormatter` (see "CLI output speaks ONE vocabulary" rule) |
 | `project.py` | `init`, `completion`, `test` |
 | `blueprint.py` | `blueprint` group: `history` (Phase 73 — chronological remediation timeline for one blueprint; merges `stores/queries.py::blueprint_history` with `git_blueprint_commits`; also registered as the `blueprint_history` tool in `aqueduct/tools/`) |
+| `mcp.py` | `mcp` group: `serve` (Phase 74 — stdio MCP server over `aqueduct/tools/`; guards on `find_spec("mcp")` with an `[mcp]`-extra install hint, same pattern as `studio`/`textual`; the server itself lives in `aqueduct/mcp/server.py`) |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
 the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
@@ -351,7 +354,19 @@ The `studio` command lives in `cli/observability.py` and guards on
 Every handler is a thin wrapper over `stores/queries.py` (never inline SQL) —
 add a new tool by adding a query function there first, then a `_handler` +
 `register(Tool(...))` call in `registry.py`. This is the enumeration surface
-a future MCP server / agentic ToolBox will read from — see specs.md §8.10.
+the MCP server (below) and a future agentic ToolBox read from — see specs.md
+§8.10.
+
+### `aqueduct/mcp/` — stdio MCP server over the ToolRegistry (Phase 74)
+
+| Module | What it owns |
+|--------|--------------|
+| `server.py` | `build_tool_declarations()` (pure, SDK-free: registry Tools → MCP declaration dicts, `params_schema` passed through verbatim — fix a malformed schema in `tools/registry.py`, never translate here), `_build_server()` + `serve()` (lazy-import the `mcp` SDK — the `[mcp]` dev-tooling extra; stdio transport only). Invocation goes through `tools.call_tool()` ONLY (the redaction chokepoint); handler exceptions are re-raised with `redaction.redact()`-scrubbed messages so the SDK's structured `isError` result never leaks a secret. `--config` is injected into calls whose tool accepts `config_path` (client-set value wins). NO store write APIs anywhere in the module (a test greps for them). Omitted from the plain `coverage` job (`pyproject [tool.coverage.run] omit`) — covered by the `mcp-tests` CI job with the extra installed. |
+| `__init__.py` | Re-export shim (`serve`, `build_tool_declarations`); top-level `import aqueduct.mcp` must never pull the SDK |
+
+Package is named `aqueduct/mcp/` (not `mcp_`) — absolute imports mean an
+`import mcp` inside it still resolves the SDK; verified by a structural test
+plus the `sys.modules` check in `tests/test_mcp/test_server.py`.
 
 ## Git & Commit Conventions
 
@@ -501,6 +516,7 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 | `tools-tests` | `aqueduct/tools/**`, `aqueduct/stores/**`, `aqueduct/doctor/**`, or `tests/test_tools/**` | `pytest tests/test_tools/ -m "not spark"` |
+| `mcp-tests` | `aqueduct/mcp/**`, `aqueduct/tools/**`, or `tests/test_mcp/**` (installs the `mcp` extra) | `pytest tests/test_mcp/ -m "not spark"` |
 | `coverage` | `main` pushes + all PRs | `pytest --cov=aqueduct --cov-fail-under=68 -m "not spark"` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
