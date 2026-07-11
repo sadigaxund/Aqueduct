@@ -224,6 +224,7 @@ agent:
   #     deep_loop: true
   #     allow_defer: true
   #     api_key: "@aq.secret('ANTHROPIC_API_KEY')"  # per-tier key override
+  #     supports_tools: true  # per-tier override; None inherits agent.supports_tools
   #
   # Shorthand: a model LIST expands to a default-settings cascade.
   # Mutually exclusive with an explicit cascade: block.
@@ -270,6 +271,15 @@ agent:
   # shape can't be expressed as a valid aqtest. Never overwrites a file.
   # Leave unset to inherit aqueduct.yml agent.regression_artifact (= false).
   # regression_artifact: false
+
+  # mode (agentic heal, opt-in): oneshot (default) is today's single
+  # prompt → PatchSpec turn. agentic lets the model call READ-ONLY
+  # diagnostic tools (run/patch/lineage history, the Blueprint YAML, a live
+  # source schema, a small row sample) before answering — see docs/specs.md
+  # §8.12. Leave unset to inherit aqueduct.yml agent.mode (= oneshot).
+  # mode: oneshot
+  # max_tool_calls: 8       # agentic mode only — cap per heal attempt
+  # supports_tools: auto    # auto|true|false — tool-use capability probe
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.

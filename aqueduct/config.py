@@ -805,6 +805,40 @@ class AgentConnectionConfig(BaseModel):
             "Default False. Per-blueprint override: agent.regression_artifact."
         ),
     )
+    mode: Literal["oneshot", "agentic"] = Field(
+        default="oneshot",
+        description=(
+            "Phase 75 — 'oneshot' (default) is today's single-turn prompt→"
+            "PatchSpec loop, unchanged. 'agentic' lets the model call "
+            "read-only diagnostic tools (list_runs, run_detail, lineage, "
+            "patch_list/show, probe_signals, blueprint_history, "
+            "read_blueprint, get_source_schema, sample_rows) before "
+            "answering with a PatchSpec — see docs/specs.md §8.11. "
+            "Per-blueprint override: agent.mode."
+        ),
+    )
+    max_tool_calls: int = Field(
+        default=8,
+        ge=1,
+        description=(
+            "Hard cap on tool calls per heal attempt in agentic mode. "
+            "Exceeding it forces the model to answer with a PatchSpec on a "
+            "final no-tools turn. Per-blueprint override: agent.max_tool_calls."
+        ),
+    )
+    supports_tools: Literal["auto", True, False] = Field(
+        default="auto",
+        description=(
+            "Tool-use capability for the LLM endpoint. 'auto' (default) "
+            "resolves True without probing for provider: anthropic (known "
+            "tool-capable); for provider: openai_compat it is determined on "
+            "the first agentic-mode call (a rejected/ignored tools request "
+            "degrades to the oneshot path for the rest of the heal session, "
+            "emitting one [agent_tools_unsupported] warning). Set true/false "
+            "to skip the probe. Per-blueprint / per-cascade-tier override: "
+            "agent.supports_tools / cascade tier supports_tools."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):

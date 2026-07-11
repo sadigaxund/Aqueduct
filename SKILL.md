@@ -337,13 +337,16 @@ agent:
     allowed_paths: ["s3a://my-bucket/**"]
     forbidden_ops: [remove_module, insert_module]
   sandbox_mode: sample        # sample|preflight|off — how patches are pre-validated
+  mode: oneshot                # oneshot (default) | agentic — agentic lets the model call read-only diagnostic tools before answering
+  max_tool_calls: 8            # agentic mode only — hard cap on tool calls per heal attempt
+  supports_tools: auto         # auto|true|false — tool-use capability; anthropic resolves true w/o probing, openai_compat probes
   # connection (overrides engine aqueduct.yml defaults):
   provider: openai_compat     # anthropic | openai_compat
   base_url: "https://openrouter.ai/api/v1"
   model: "anthropic/claude-sonnet-4-6"
   api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file.
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`).
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
 Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.

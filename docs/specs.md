@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.13 — Reference Document**
+**Version 2.14 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1206,6 +1206,66 @@ patch history, run outcomes, probe signals — without ever granting it a
 write handle. Framing self-healing this way keeps the pipeline-definition
 domain's contract explicit and gives any domain added later the same shape
 to slot into, rather than a one-off extension of the patch grammar.
+
+## **8.12 Agentic Heal (opt-in, `agent.mode`)**
+
+By default (`agent.mode: oneshot`) a heal is a single prompt → PatchSpec
+turn (plus reprompts on an invalid response, §8.2) — exactly the flow this
+document describes elsewhere in §8. Setting `agent.mode: agentic` (engine
+`aqueduct.yml` default, per-blueprint override — same `None` = inherit
+shape as `agent.regression_artifact`) lets the model call **read-only**
+diagnostic tools before answering, so it can investigate the failure
+instead of guessing from the failure report alone.
+
+**Tool list.** Every tool registry entry (§8.10) except `doctor` (a
+health-probe, not a failure-diagnosis tool) — `list_runs`, `run_detail`,
+`lineage`, `patch_list`, `patch_show`, `probe_signals`,
+`blueprint_history` — plus three heal-context tools built for this mode:
+
+| Tool | Returns | Notes |
+| :- | :- | :- |
+| `read_blueprint` | The failing Blueprint's YAML source text | Size-capped (20,000 chars) |
+| `get_source_schema` | Live schema of an Ingress module's source | Metadata-only, zero Spark actions; `{"available": false, ...}` with no live Spark session (e.g. `aqueduct benchmark`/`aqueduct heal`) |
+| `sample_rows` | Up to 20 real rows from an Ingress module's source | `limit(n).collect()` — bounded, never a full scan; Ingress modules only; unavailable without a session |
+
+Every tool result — registry or heal-context — passes through
+`redaction.redact()` before it can enter a prompt, same as every other
+LLM-facing surface.
+
+**Caps.** `agent.max_tool_calls` (default 8, per-blueprint override) is a
+hard ceiling on tool calls **per heal attempt** — not per whole heal.
+Exceeding it withdraws tools from the next provider call, forcing the model
+to answer with a PatchSpec on that final no-tools turn. A reprompt turn
+(§8.2, on an invalid PatchSpec) gets its own fresh cap. The heal-cache
+signature (§8.6/memory) is unaffected — tools change the *path* to a patch,
+never the failure identity used for dedup/replay/coaching.
+
+**Provider support.** `agent.supports_tools` (`true` / `false` / `auto`,
+default `auto`) resolves per top-level default, with a per-blueprint and
+per-cascade-tier override (`cascade[].supports_tools`). `provider:
+anthropic` is known tool-capable — `auto` resolves `true` with no probe.
+`provider: openai_compat` probes on the first agentic-mode call of a heal
+session: if the endpoint rejects a tools-enabled request (or a 4xx response
+looks tools-related), the heal degrades to the oneshot path for the *rest
+of that heal* and emits one `[agent_tools_unsupported]` warning — never a
+ReAct/text-emulation fallback, and never a repeated probe per attempt.
+
+**Budget interaction.** Tool-call request/response tokens flow into the
+same `BudgetConfig`/`BudgetTracker` axes (§8's budget model) as every other
+provider call — a tool round-trip's tokens count toward
+`max_tokens_total` and its wall time toward `max_seconds` exactly like a
+oneshot turn's tokens/time would. `heal_attempts` (see
+`docs/observability_guide.md`) gains a per-attempt tool-call count and a
+per-call `tool_calls_json` log (name, args summary, duration, redacted
+result preview) so the diagnosis path is auditable after the fact, even in
+oneshot mode (`tool_calls: 0`, empty log).
+
+**Benchmark.** `aqueduct benchmark` threads `agent.mode` through the same
+engine-level resolution as `aqueduct heal` (no per-scenario Blueprint
+`agent:` block to merge), so a live A/B of oneshot vs agentic across the
+same scenarios/models is possible. Scenario runs never start Spark, so
+`get_source_schema`/`sample_rows` always report unavailable there — the
+registry tools (run/patch/lineage history) still work.
 
 ---
 
