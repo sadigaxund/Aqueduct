@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.12 — Reference Document**
+**Version 2.13 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1167,6 +1167,22 @@ package would register under (the same shape as `probe`'s
 loading ships, it will require explicit config allowlisting — a tool is CODE
 that runs on the driver, the same trust model as a probe plugin or UDF — so
 v1's tool surface stays closed to exactly the built-ins above.
+
+**MCP server (`aqueduct mcp serve`).** The registry is exposed over the
+Model Context Protocol as a **stdio, local-only** server: an MCP client
+(Claude Desktop, an IDE) spawns `aqueduct mcp serve` as a subprocess and
+speaks JSON-RPC over stdin/stdout — no network transport, no ports. Every
+registered tool becomes one MCP tool with its name, description, and
+`params_schema` handed through verbatim as the MCP declaration; invocation
+goes through the same redacted `call_tool()` path (results AND surfaced
+error messages are secret-scrubbed), and the same read-only contract holds —
+the server has no write tool and imports no store write API. Tool-handler
+failures return as structured MCP tool-call errors; they never terminate
+the server. `--config <aqueduct.yml>` scopes every tool call to one engine
+config (a client-supplied `config_path` argument wins). Requires the
+optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]` — a
+local, on-demand diagnostic surface (like `studio`/`dashboard`), never part
+of the data path.
 
 ## **8.11 Remediation Domains**
 

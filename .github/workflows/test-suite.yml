@@ -31,6 +31,7 @@ jobs:
       drift:     ${{ steps.filter.outputs.drift }}
       tui:       ${{ steps.filter.outputs.tui }}
       tools:     ${{ steps.filter.outputs.tools }}
+      mcp:       ${{ steps.filter.outputs.mcp }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -91,6 +92,10 @@ jobs:
               - 'aqueduct/stores/**'
               - 'aqueduct/doctor/**'
               - 'tests/test_tools/**'
+            mcp:
+              - 'aqueduct/mcp/**'
+              - 'aqueduct/tools/**'
+              - 'tests/test_mcp/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -217,6 +222,18 @@ jobs:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
       - run: pytest tests/test_tools/ -m "not spark"
+
+  mcp-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.mcp == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,mcp,llm]"
+      - run: pytest tests/test_mcp/ -m "not spark"
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
 
