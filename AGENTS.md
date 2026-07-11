@@ -189,7 +189,7 @@ modules.
 | `redis_.py` | Redis depot KV (high-QPS watermark reads) |
 | `object_store.py` | `ObjectStore` transport (local/fsspec `_Backend`) + `BlobStore` (zstd blobs) + `PatchStore` (patch lifecycle) + `make_blob_store`/`make_patch_store` factories |
 | `read.py` | Canonical backend-aware READ resolver (Phase 69): `resolve_duckdb_obs_path` (single source for the duckdb obs file — `cli._resolve_obs_db` delegates here) + `open_obs_read` (returns an `ObservabilityStore` for duckdb *or* postgres). All read commands must use it instead of raw `duckdb.connect` + hardcoded `.aqueduct/...` paths |
-| `queries.py` | The ONE read-time observability query layer (Phase 68) behind every viewer — `aqueduct studio` (via the `tui/data.py` re-export shim), the Streamlit dashboard, and `report --json`. Row dataclasses (`RunRow`, `RunDetail`, `LineageRow`, …) + `discover_stores`/`list_runs`/`run_detail`/`lineage`/`run_sql_readonly`. Backend-agnostic (`RelationalCursor`), no `textual`, no `pyspark`. New viewer query → add here, never inline SQL in a rendering surface |
+| `queries.py` | The ONE read-time observability query layer (Phase 68) behind every viewer — `aqueduct studio` (via the `tui/data.py` re-export shim), the Streamlit dashboard, `report --json`, and the `aqueduct/tools/` registry. Row dataclasses (`RunRow`, `RunDetail`, `LineageRow`, `BlueprintHistoryEvent`, …) + `discover_stores`/`list_runs`/`run_detail`/`lineage`/`run_sql_readonly`/`patch_show`/`blueprint_history`/`git_blueprint_commits` (Phase 73 — the last is the only function here that shells out to `git log`, read-only, never raises). Backend-agnostic (`RelationalCursor`), no `textual`, no `pyspark`. New viewer query → add here, never inline SQL in a rendering surface |
 
 ### `aqueduct/infra/` — Cross-layer infrastructure utilities (no domain logic)
 
@@ -319,6 +319,7 @@ keep working. Command families live in submodules:
 | `output.py` | Consolidated output funnel: `emit()` (structured ``--format``), `warn()` (diagnostic warnings) |
 | `style.py` | The single user-facing output vocabulary: `error`/`success`/`warn`/`info` + `StyledLogFormatter` (see "CLI output speaks ONE vocabulary" rule) |
 | `project.py` | `init`, `completion`, `test` |
+| `blueprint.py` | `blueprint` group: `history` (Phase 73 — chronological remediation timeline for one blueprint; merges `stores/queries.py::blueprint_history` with `git_blueprint_commits`; also registered as the `blueprint_history` tool in `aqueduct/tools/`) |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
 the 6 monkeypatched helpers (`_agent_usable`, `_resolve_obs_db`,
@@ -339,6 +340,18 @@ The `studio` command lives in `cli/observability.py` and guards on
 `importlib.util.find_spec("textual")` before importing `app.py`, printing an
 "install aqueduct-core[tui]" hint otherwise. `tui/__init__.py` must stay
 `textual`-free so `import aqueduct.tui.data` works on a base install.
+
+### `aqueduct/tools/` — internal, read-only diagnostics ToolRegistry (Phase 73)
+
+| Module | What it owns |
+|--------|--------------|
+| `registry.py` | `Tool` frozen dataclass (`read_only: bool = True`, structural — no tool receives a write handle), `REGISTRY`/`register()`/`get_tools()`, `call_tool()` (the one call path — applies `redaction.redact()` to every result), the built-in tools (`list_runs`, `run_detail`, `lineage`, `patch_list`, `patch_show`, `probe_signals`, `doctor`, `blueprint_history`), and the reserved `AQ_TOOLS_ENTRYPOINT_GROUP` constant (not resolved anywhere — mirrors `executor/probe_plugins.py::AQ_PROBE_ENTRYPOINT_GROUP`) |
+| `__init__.py` | Re-export shim: `Tool`, `REGISTRY`, `get_tools`, `call_tool`, `AQ_TOOLS_ENTRYPOINT_GROUP` |
+
+Every handler is a thin wrapper over `stores/queries.py` (never inline SQL) —
+add a new tool by adding a query function there first, then a `_handler` +
+`register(Tool(...))` call in `registry.py`. This is the enumeration surface
+a future MCP server / agentic ToolBox will read from — see specs.md §8.10.
 
 ## Git & Commit Conventions
 
@@ -487,6 +500,7 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `tui-tests` | `aqueduct/tui/**` or `tests/test_tui/**` | `pytest tests/test_tui/ -m "not spark"` |
 | `config-tests` | `aqueduct/config.py`, `redaction.py`, `secrets.py`, `warnings.py`, or their tests | `pytest tests/test_config.py ...` |
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
+| `tools-tests` | `aqueduct/tools/**`, `aqueduct/stores/**`, `aqueduct/doctor/**`, or `tests/test_tools/**` | `pytest tests/test_tools/ -m "not spark"` |
 | `coverage` | `main` pushes + all PRs | `pytest --cov=aqueduct --cov-fail-under=68 -m "not spark"` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
