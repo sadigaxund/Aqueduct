@@ -154,6 +154,11 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     escalated             BOOLEAN NOT NULL DEFAULT FALSE,
     stop_reason           VARCHAR,
     prompt_version        VARCHAR,
-    recorded_at           VARCHAR NOT NULL
+    recorded_at           VARCHAR NOT NULL,
+    -- Phase 75 — agentic mode. JSON array of {name, args_summary,
+    -- duration_ms, result_preview} for every tool call made during THIS
+    -- attempt (empty array in oneshot mode) — one JSON column rather than
+    -- new scalar columns per field, since the per-call shape is a list.
+    tool_calls_json       VARCHAR
 );
 """

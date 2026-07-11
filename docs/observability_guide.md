@@ -140,6 +140,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `stop_reason`       | VARCHAR             | Filled only on the loop's terminal row (UPDATE post-loop); NULL on intermediate rows |
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
+| `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
@@ -466,6 +467,22 @@ older rows really were lost.
 **What to do next** If the synthesis is still absent on a 1.1.0 run, that
 indicates the `apply_callback` path is bypassed — verify `_check_guardrails`
 fired by inspecting `gate_that_rejected`.
+
+**When** a heal ran in agentic mode (`agent.mode: agentic`) and you want to
+see which diagnostic tools the model actually consulted before answering.
+**What you learn** Which tools were called, in what order, how long each
+took, and a truncated (already-redacted) preview of what came back — the
+same detail the `-v` transcript renders live, persisted for post-hoc review.
+**What to do next** If the model kept calling the same tool without ever
+converging on a patch, tighten `agent.max_tool_calls` or add the missing
+context directly to `agent.prompt_context` instead of relying on the tool.
+
+```sql
+SELECT attempt_num, tool_calls_json
+FROM heal_attempts
+WHERE run_id = '<run_id>' AND tool_calls_json IS NOT NULL
+ORDER BY attempt_num;
+```
 
 ```sql
 SELECT ha.run_id,

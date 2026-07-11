@@ -570,11 +570,16 @@ class Surveyor:
         if self._observability is None:
             return
         import datetime as _dt
+        import json as _json
         import uuid as _uuid
         if prompt_version is None:
             from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
             prompt_version = _PROMPT_VERSION
         sig = getattr(attempt_record, "signature", None)
+        # Phase 75 — per-call tool telemetry, if any (transient _aq_tool_calls
+        # attached by loop.py's _fire_turn; absent/empty in oneshot mode).
+        tool_calls_log = getattr(attempt_record, "_aq_tool_calls", None) or []
+        tool_calls_json = _json.dumps(tool_calls_log, default=str) if tool_calls_log else None
         try:
             with self._observability.connect() as cur:
                 cur.execute(
@@ -583,8 +588,8 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, signature_hash, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, escalated, stop_reason,
-                     prompt_version, recorded_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_version, recorded_at, tool_calls_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -602,6 +607,7 @@ class Surveyor:
                         stop_reason,
                         prompt_version,
                         _dt.datetime.now(_dt.UTC).isoformat(),
+                        tool_calls_json,
                     ],
                 )
         except Exception:
