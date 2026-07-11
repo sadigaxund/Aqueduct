@@ -30,6 +30,7 @@ jobs:
       gallery:   ${{ steps.filter.outputs.gallery }}
       drift:     ${{ steps.filter.outputs.drift }}
       tui:       ${{ steps.filter.outputs.tui }}
+      tools:     ${{ steps.filter.outputs.tools }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -85,6 +86,11 @@ jobs:
             tui:
               - 'aqueduct/tui/**'
               - 'tests/test_tui/**'
+            tools:
+              - 'aqueduct/tools/**'
+              - 'aqueduct/stores/**'
+              - 'aqueduct/doctor/**'
+              - 'tests/test_tools/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -199,6 +205,18 @@ jobs:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark"
+
+  tools-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.tools == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: pytest tests/test_tools/ -m "not spark"
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
 

@@ -46,18 +46,45 @@ Checkpoints (`checkpoint: true` on a module or manifest) are written to a local-
 
 Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools.
 
-Candidate MCP tools:
+**Groundwork landed:** `aqueduct/tools/` (specs.md §8.10) is an internal,
+read-only **ToolRegistry** — `list_runs`, `run_detail`, `lineage`,
+`patch_list`, `patch_show`, `probe_signals`, `doctor`, `blueprint_history`.
+It is the enumeration surface an MCP server would expose, but no MCP
+transport exists yet — nothing here binds `call_tool()` to a socket/stdio
+server, and there is still no *write* tool (`patch_blueprint` below stays a
+candidate, not code).
+
+Remaining candidate MCP tools (write-capable — a materially different trust
+level from the read-only registry above, so deferred separately):
 
 | Tool name | Description |
 |---|---|
 | `patch_blueprint` | Accepts a run_id and optional module scope. Assembles the FailureContext, invokes the LLM loop, and returns the applied PatchSpec. |
-| `get_lineage` | Accepts a pipeline_id, module_id, and column name. Returns the upstream and downstream ColumnLineageGraph for that column. |
-| `get_flow_report` | Returns the Flow Report for a given run_id in structured JSON. |
 | `run_pipeline` | Submits a Blueprint for execution and streams RunRecord status events. |
 
 When Aqueduct operates as an MCP server, `approval` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
 
-**Status:** Architectural design only. No code.
+**Status:** Read-only tool registry landed. MCP transport + write tools: architectural design only, no code.
+
+---
+
+## Additional Remediation Domains
+
+specs.md §8.11 frames self-healing as operating in explicit "remediation
+domains," with the pipeline-definition domain (PatchSpec ops on the
+Blueprint) as the only one that exists today. Candidate future domains, each
+requiring its own typed operation grammar and validation gates before any
+code is written:
+
+- **Engine-config domain** — proposing changes to `aqueduct.yml` (retry
+  policy, resource sizing) rather than the Blueprint itself.
+- **Infra domain** — cluster/deployment-level remediation (e.g. bumping
+  executor memory on repeated OOM), well outside the current patch grammar's
+  scope and reach.
+
+**Status:** Conceptual. No grammar, no gates, no code — the domain framing
+exists so a future domain slots into the same shape instead of a one-off
+extension of PatchSpec.
 
 ---
 

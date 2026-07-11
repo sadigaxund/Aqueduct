@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.11 — Reference Document**
+**Version 2.12 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1128,6 +1128,68 @@ type, a multi-module patch — produces an **info-level skip message**, not a
 file. Generation never overwrites an existing file (uniquifies the filename
 instead) and never blocks or fails the heal itself — it is strictly
 best-effort after the heal has already succeeded.
+
+## **8.10 Diagnostics & the Tool Registry**
+
+`aqueduct/tools/` holds a single internal **ToolRegistry** — the enumeration
+surface a future MCP server and an agentic ToolBox will both read from. Every
+registered tool is:
+
+- **A thin wrapper over an existing read function.** No tool contains inline
+  SQL; each one calls `stores/queries.py` (the one read-time observability
+  query layer), `patch/index.py` (read paths), or `aqueduct doctor`'s check
+  runner.
+- **Structurally read-only.** A `Tool` carries `read_only: bool = True`;
+  there is no write tool in v1, and no handler ever receives a store's write
+  handle (`open_obs_write`, a mutating cursor, or `PatchStore.write_*`) — only
+  `open_obs_read` / `discover_stores` / read-side `patch_index` functions.
+- **Redacted before it leaves the registry.** Every result passes through the
+  same secret-redaction registry (`aqueduct/redaction.py`) the CLI console and
+  observability-store writes already use — an observability row's error blob
+  can embed a resolved secret, so `call_tool()` is the one call path that
+  applies `redact()`, and an individual handler cannot forget it.
+
+| Tool | Wraps | Purpose |
+| :- | :- | :- |
+| `list_runs` | `queries.list_runs` | Recent runs (limit / blueprint_id / status) |
+| `run_detail` | `queries.run_detail` | Module results + resource profile for one run |
+| `lineage` | `queries.lineage` | Column-level lineage for a blueprint/run |
+| `patch_list` | `queries.patch_list` | Patches across the fleet, filterable by status/blueprint |
+| `patch_show` | `patch/index.py` + `queries.load_patch_file` | One patch's metadata (+ body, best-effort) |
+| `probe_signals` | `queries.probe_signals` | Probe signal payloads for a blueprint |
+| `doctor` | `aqueduct.doctor.run_doctor` | Structured `CheckResult`s (supports `skip_spark`) |
+| `blueprint_history` | `queries.blueprint_history` + git (§8.11) | The remediation timeline below, as a tool |
+
+**Reserved extensibility seam — not implemented.** `AQ_TOOLS_ENTRYPOINT_GROUP
+= "aqueduct.tools"` names the setuptools entry-point group a custom-tool
+package would register under (the same shape as `probe`'s
+`AQ_PROBE_ENTRYPOINT_GROUP`). No code resolves it yet. When custom-tool
+loading ships, it will require explicit config allowlisting — a tool is CODE
+that runs on the driver, the same trust model as a probe plugin or UDF — so
+v1's tool surface stays closed to exactly the built-ins above.
+
+## **8.11 Remediation Domains**
+
+Aqueduct's self-healing operates in explicit **remediation domains** — a
+domain is the boundary of what a patch is allowed to touch. Today there is
+one: the **pipeline-definition domain**, where a `PatchSpec` op (§8.5) edits
+the Blueprint YAML that defines a pipeline. Every domain, present or future,
+follows the same principle:
+
+- **Declarative, typed operations** — a fixed, closed grammar of ops (never
+  freeform code generation; §1.4's "patch grammar over codegen" principle).
+- **Per-domain validation gates** — guardrails, lineage-impact, sandbox
+  replay, and plan-regression gates (§8.5) sit between "the LLM proposed a
+  patch" and "the patch is applied," scoped to what that domain can break.
+- **Never freeform code execution** — a domain's operations are data, not
+  code; the agent cannot ship an arbitrary script to remediate a failure.
+
+Diagnostics are domain-aware and read-only: the tool registry (§8.10) gives
+the agent (and any future MCP client) visibility into a domain's state —
+patch history, run outcomes, probe signals — without ever granting it a
+write handle. Framing self-healing this way keeps the pipeline-definition
+domain's contract explicit and gives any domain added later the same shape
+to slot into, rather than a one-off extension of the patch grammar.
 
 ---
 
