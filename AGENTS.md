@@ -74,7 +74,7 @@ category; it is not a loophole for runtime features (those still follow the axes
 - `aqueduct/executor/path_keys.py` — engine-agnostic path-field registry (imported by the parser)
 - `aqueduct/executor/probe_plugins.py` — engine-agnostic, **pyspark-free** custom-probe-signal resolver (`custom_signal_source`, `resolve_callable`, `AQ_PROBE_ENTRYPOINT_GROUP`). Lives at the top level (not under `spark/`) so the compiler (`wirer`) can validate `type: custom` signal shape and the Spark `probe.py` can resolve callables at runtime — same precedent as `path_keys.py`. Do not add `pyspark` imports here.
 - `aqueduct/executor/spark/` — all Spark code (`ingress`, `egress`, `channel`, `executor`, `junction`, `funnel`, `probe`, `session`, `udf`, `assert_`)
-- `aqueduct/executor/__init__.py` — `get_executor(manifest, config)` factory
+- `aqueduct/executor/__init__.py` — `get_executor(engine: str = "spark")` factory returning the engine's `execute()` function
 
 When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `pyspark` in `parser`, `compiler`, `surveyor`, `patch`, or `depot`.
 
