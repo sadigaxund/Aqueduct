@@ -26,7 +26,7 @@ Bare `aqueduct` (no subcommand) prints a branded version banner including the en
 
 ## Validate vs Doctor
 
-- **`aqueduct validate`** — Fast, static validation (schema + parsing). Ideal for CI/pre-commit.
+- **`aqueduct validate`** — Fast, static validation (schema + parsing). Ideal for CI/pre-commit. For a Blueprint with a `hooks:` block, it also runs the same static hook-graph walk `doctor` uses (cycles / chain-depth overflow / missing `blueprint:` targets) and reports problems as a suppressible **warning** (`[aqueduct:hook_cycle]`, added to `warnings.suppress`) — never a validation failure.
 - **`aqueduct doctor`** — Live connectivity checks (Spark, stores, agent, sources). Use before deploying.
 
 Both commands auto-detect file type based on the version header (`aqueduct:` vs `aqueduct_config:`).
@@ -47,6 +47,7 @@ Aqueduct automatically loads `.env` from the directory of the config or blueprin
 | `aqueduct init` | Create a new project skeleton with templates, directories, and `.gitignore` |
 | `aqueduct doctor` | Check connectivity and configuration health |
 | `aqueduct doctor <file>` | Validate a specific blueprint or config file |
+| *(webhook check depth)* | Each configured `webhooks.*` endpoint's `health_probe:` field (`connect`/`options`/`full`, default `options`) controls how `doctor` probes it — see [Production Guide](production_guide.md) |
 | `aqueduct doctor --skip-spark` | Fast check without starting Spark |
 | `aqueduct doctor --preflight` | Full Spark session + storage validation. Also: verifies cloud Ingress/Egress objects (`s3a://`/`gs://`/`abfss://`) exist via Spark's Hadoop FileSystem; warns on a **Spark major.minor** vs client-pyspark mismatch; for `agent.provider: anthropic` proves the API key works (`GET /v1/models`, no tokens); **imports** each Python `udf_registry` entry (catches typos/missing deps); does a store **write+read** round-trip (write perms, not just connect); and for `jdbc:` sources attempts a real connect+auth (postgres via psycopg2). Default `doctor` only checks endpoint reachability. A standalone **Java** runtime check (detected JVM version + a pyspark-4-needs-Java-17 nudge) runs even without `--preflight`. |
 | `aqueduct doctor --aqtest <file>` | Schema pre-flight on a `.aqtest.yml` (verifies blueprint ref + module IDs) |
@@ -146,7 +147,7 @@ The nesting is display-only. Logs, the observability store, and the `failed_modu
 
 ### Run output: lifecycle hooks
 
-When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's entries run after the terminal footer, each with a `✓/⚠` line; a chained `blueprint:` hook streams its own full run output inline (it is a fresh `aqueduct run` subprocess). The section closes with a final `✓ run complete`:
+When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's entries run, each with a `✓/⚠` line. `on_success`/`on_failure` run after the terminal footer and close with a final `✓ run complete`; `on_patch_pending`/`on_healed` fire mid-run at heal milestones (staging a patch for review, and a heal's re-run succeeding) and print inline, without their own footer. A chained `blueprint:` hook streams its own full run output inline when it's a subprocess (the default); `in_process: true` instead reuses the caller's live SparkSession — no separate subprocess, no separate `aqueduct` invocation in the output:
 
 ```
 ✓ blueprint complete
@@ -156,7 +157,7 @@ When the Blueprint declares `hooks:` (see specs.md §4.2), the matching event's 
 ✓ run complete
 ```
 
-Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hook_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically).
+Hook outcomes never change the run's exit code. `command:` entries require `danger.allow_command_hooks: true` in `aqueduct.yml` (skipped with `[hook_command_disabled]` otherwise); cyclic `blueprint:` chains are refused with `[hook_cycle]` (`aqueduct doctor` checks the chain statically across all four events). `when_error: [ErrorType, ...]` on `on_failure`/`on_patch_pending`/`on_healed` entries filters which entries fire for a given run — a non-matching entry is silently skipped (no `⚠` line, doesn't count against the "first failure stops the rest" rule).
 
 ### Config overrides (`-s` / `--set`)
 
@@ -205,6 +206,21 @@ aqueduct run bp.yml \
 | `aqueduct signal <signal_id> --blueprint <id>` | View or override Probe gates. `--blueprint` is required with the duckdb backend (unless `--store-dir` is given) — the override lives in that blueprint's routed store, `<base>/<blueprint_id>/observability.db`; ignored for postgres (one shared schema) |
 | `aqueduct studio [--config <f>] [--store-dir <d>]` | Launch the interactive read-only TUI (runs, ad-hoc SQL over the observability store, doctor, config, lineage). Requires the optional `tui` extra: `pip install aqueduct-core[tui]` |
 | `aqueduct dashboard [--config <f>] [--store-dir <d>] [--port 8501] [--no-browser]` | Launch the local, read-only **Streamlit** observability dashboard: fleet view (cross-blueprint runs / success-rate / heal-rate, trends), per-run module metrics, column-lineage Sankey, doctor, config. On-demand local viewer (like the Spark UI) — never a production server. Requires the optional `dashboard` extra: `pip install aqueduct-core[dashboard]`. A 🔄 Refresh button re-reads the store (manual; no background polling). |
+
+**`--chain --types` example** — tracing one column's per-hop transform, source to output:
+
+```
+$ aqueduct lineage pipelines/orders.yml --chain total_amount --types
+Column chain — blueprint: orders_pipeline  column: total_amount
+
+  ▸ apply_discount.total_amount  :: DECIMAL(10,2)
+      ← read_orders.total_amount  [passthrough]
+  │
+  ▸ cast_to_float.total_amount  :: DOUBLE  ⚠ type change
+  │    ← apply_discount.total_amount  [CAST]
+```
+
+Each `▸` line is one hop — the Channel module and output column, plus (with `--types`) the sqlglot-inferred SQL type; a `⚠ type change` marks a hop where the inferred type differs from the previous one, the fastest way to spot an unintended implicit cast before it reaches a downstream consumer. The `←` line underneath names the immediate source (table or upstream module) and the SQL op that produced this hop. Computed on demand at compile time (no Spark action, no store read); needs a Blueprint **file path**, not a blueprint id, since it re-parses and recompiles the YAML. `--format json` emits the same hops as structured records (`channel_id`, `output_column`, `source_table`, `source_column`, `output_type`, `transform_op`).
 
 ---
 

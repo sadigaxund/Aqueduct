@@ -74,6 +74,19 @@ class Manifest:
                     "depends_on": list(m.depends_on),
                     "enabled": m.enabled,
                     "disabled_reason": m.disabled_reason,
+                    "retry": (
+                        None if m.retry is None else {
+                            "max_attempts": m.retry.max_attempts,
+                            "backoff_strategy": m.retry.backoff_strategy,
+                            "backoff_base_seconds": m.retry.backoff_base_seconds,
+                            "backoff_max_seconds": m.retry.backoff_max_seconds,
+                            "jitter": m.retry.jitter,
+                            "on_exhaustion": m.retry.on_exhaustion,
+                            "transient_errors": list(m.retry.transient_errors),
+                            "non_transient_errors": list(m.retry.non_transient_errors),
+                            "deadline_seconds": m.retry.deadline_seconds,
+                        }
+                    ),
                 }
                 for m in self.modules
             ],
@@ -107,13 +120,13 @@ class Manifest:
             "provenance_map": self.provenance_map.to_dict() if self.provenance_map else None,
             "inputs_fingerprint": self.inputs_fingerprint,
             "hooks": {
-                "on_success": [
-                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
-                    for h in self.hooks.on_success
-                ],
-                "on_failure": [
-                    {"kind": h.kind, "value": h.value, "timeout": h.timeout}
-                    for h in self.hooks.on_failure
-                ],
+                event: [
+                    {
+                        "kind": h.kind, "value": h.value, "timeout": h.timeout,
+                        "when_error": list(h.when_error), "in_process": h.in_process,
+                    }
+                    for h in getattr(self.hooks, event)
+                ]
+                for event in ("on_success", "on_failure", "on_patch_pending", "on_healed")
             },
         }

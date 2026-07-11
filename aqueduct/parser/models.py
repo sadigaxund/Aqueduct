@@ -117,6 +117,9 @@ class AgentConfig:
     # (full dataset, requires danger.allow_full_preflight), "off" (skip,
     # requires danger.allow_skip_sandbox).
     sandbox_mode: str = "sample"
+    # Opt-in post-heal regression artifact. None = inherit engine default
+    # (agent.regression_artifact in aqueduct.yml, False if also unset).
+    regression_artifact: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize agent policy fields for the manifest snapshot the LLM sees.
@@ -137,6 +140,7 @@ class AgentConfig:
             "confidence_threshold": self.confidence_threshold,
             "patch_validation": self.patch_validation,
             "block_on_explain_regression": self.block_on_explain_regression,
+            "regression_artifact": self.regression_artifact,
             "max_heal_attempts_per_hour": self.max_heal_attempts_per_hour,
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),
@@ -157,6 +161,12 @@ class Module:
     depends_on: tuple[str, ...] = ()
     on_failure: dict[str, Any] | None = None
     on_failure_webhook: str | dict[str, Any] | None = None
+    # Per-module retry policy override, already merged against the
+    # blueprint-level RetryPolicy at parse time (None = no per-module
+    # override; the blueprint-level `retry_policy` applies as-is). Distinct
+    # from `on_failure`, which is an LLM-patch write target for a full
+    # RetryPolicy replacement.
+    retry: RetryPolicy | None = None
     checkpoint: bool = False
     # Conditional execution (`enabled:` in YAML, resolved from ${ctx.*} at
     # parse time). The compiler cascade-disables downstream consumers and
@@ -187,22 +197,43 @@ class HookEntry:
     """One lifecycle-hook action. `kind` ∈ {"blueprint", "webhook", "command"};
     `value` is the path / url-or-endpoint-map / command string verbatim from
     YAML — runtime variables (${run.id}, ${run.status}, ${blueprint.id}) are
-    interpolated by the CLI hook runner at fire time, NOT at parse time."""
+    interpolated by the CLI hook runner at fire time, NOT at parse time.
+
+    `when_error`: optional list of error-type names matched against
+    `FailureContext.error_type` / the exception class extracted from the
+    stack trace — same candidate set and exact-match semantics as
+    `GuardrailsConfig.heal_on_errors`. Empty = fires unconditionally
+    (backward-compatible default). Only meaningful on events that carry a
+    failure context (`on_failure`, `on_patch_pending`, `on_healed`) — the
+    schema rejects it on `on_success` entries.
+
+    `in_process`: opt-in for `blueprint:` entries only — parse+compile+
+    execute the target Blueprint in the same Python process, reusing the
+    live SparkSession, instead of spawning an `aqueduct run` subprocess.
+    """
     kind: str
     value: Any
     timeout: int = 300
+    when_error: tuple[str, ...] = ()
+    in_process: bool = False
 
 
 @dataclass(frozen=True)
 class Hooks:
-    """Blueprint lifecycle hooks (`hooks:` block). Run after the pipeline's
-    terminal state; never change the run's exit code. Distinct from the
+    """Blueprint lifecycle hooks (`hooks:` block). `on_success`/`on_failure`
+    run after the pipeline's terminal state; `on_patch_pending`/`on_healed`
+    fire mid-run at heal milestones (mirroring the engine-level `webhooks:`
+    vocabulary). Never change the run's exit code. Distinct from the
     engine-level `webhooks:` block in aqueduct.yml (ops-owned alerting)."""
     on_success: tuple[HookEntry, ...] = ()
     on_failure: tuple[HookEntry, ...] = ()
+    on_patch_pending: tuple[HookEntry, ...] = ()
+    on_healed: tuple[HookEntry, ...] = ()
 
     def __bool__(self) -> bool:
-        return bool(self.on_success or self.on_failure)
+        return bool(
+            self.on_success or self.on_failure or self.on_patch_pending or self.on_healed
+        )
 
 
 @dataclass(frozen=True)

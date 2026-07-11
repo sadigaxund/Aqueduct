@@ -49,6 +49,11 @@ _MAX_MESSAGE_CHARS = 240
 _DIGIT_RE = re.compile(r"\d+")
 _QUOTED_DOUBLE_RE = re.compile(r'"[^"]*"')
 _QUOTED_SINGLE_RE = re.compile(r"'[^']*'")
+# Spark 4 backtick-quoted identifiers, e.g. `` `i`.`bad_col` `` in
+# UNRESOLVED_COLUMN messages. Same collapse-to-placeholder treatment as the
+# quote rules above, so two typo'd column names hash to one signature instead
+# of spawning duplicate heal runs.
+_BACKTICK_RE = re.compile(r"`[^`]*`")
 _PATH_RE = re.compile(r"(?:/[\w.\-]+)+")
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _WS_RE = re.compile(r"\s+")
@@ -61,6 +66,7 @@ def _normalize_message(text: str) -> str:
     s = _ANSI_RE.sub("", text)
     s = _QUOTED_DOUBLE_RE.sub('"X"', s)
     s = _QUOTED_SINGLE_RE.sub("'X'", s)
+    s = _BACKTICK_RE.sub("`X`", s)
     s = _PATH_RE.sub("/PATH", s)
     s = _DIGIT_RE.sub("N", s)
     s = _WS_RE.sub(" ", s).strip().lower()

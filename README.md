@@ -100,6 +100,14 @@ Full details in the [References](#references).
 
 When a pipeline fails, Aqueduct does not throw a stack trace at an LLM and hope. Healing is a staged, auditable pipeline, and the model works inside a constrained grammar — it cannot write code, mutate files, or run shell commands.
 
+A generated patch clears **five gates** before it ever touches the Blueprint — guardrails (deterministic policy: allowed paths, forbidden ops, minimum confidence), compile-check (the patched Blueprint must still parse), lineage (does the patch break a downstream column consumer), sandbox (replay against representative data), and a plan-regression check — in that order, first failure wins:
+
+```
+✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
+```
+
+Every patch clears the pyramid before it touches the Blueprint (`aqueduct patch preview --sandbox` runs the same pyramid on demand, before you decide to apply).
+
 <kbd>
   
 <img width="1362" height="1410" alt="Figure 1: The Healing Flow" src="https://github.com/user-attachments/assets/29bd3782-ec31-4666-9cb3-3ee8690b38b2" />

@@ -37,6 +37,12 @@ from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
+# Matches any RFC3986-shaped URI scheme prefix (s3://, s3a://, gs://, hdfs://,
+# abfss://, postgresql://, ...). Used to reject remote URIs on LOCAL-PATH-ONLY
+# config fields (e.g. `checkpoint_root`) with an actionable error instead of
+# silently mangling the value through `pathlib.Path`.
+_URI_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+
 # ``ConfigError`` lives in ``aqueduct.errors`` (imported above) to break an
 # import cycle: config → agent.constants → agent.budget → config. Imported at
 # module scope so ``from aqueduct.config import ConfigError`` keeps working with
@@ -780,6 +786,25 @@ class AgentConnectionConfig(BaseModel):
             "exponential backoff, capped by the heal budget deadline."
         ),
     )
+    regression_artifact: bool = Field(
+        default=False,
+        description=(
+            "When True, a SUCCESSFUL heal (patch applied AND the re-run "
+            "succeeded) optionally emits an `.aqtest.yml` regression test for "
+            "the patched module under `aqtests/` next to the Blueprint, so a "
+            "later hand-edit/SQL refactor/revert that reintroduces the root "
+            "cause is caught by `aqueduct test` before the next production "
+            "run instead of by another heal. Complementary to signature-"
+            "memory heal-cache replay, not a replacement for it: the cache "
+            "resolves a RECURRING failure for zero tokens; this artifact is "
+            "a CI guard against the FIX being undone. Generation is "
+            "conservative — it silently no-ops (info log only) whenever the "
+            "healed failure/module shape can't be expressed as a valid "
+            "aqtest (e.g. non-testable module type, no upstream schema_hint "
+            "to synthesize fixture rows from, or a multi-module patch). "
+            "Default False. Per-blueprint override: agent.regression_artifact."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):
@@ -838,6 +863,18 @@ class WebhookEndpointConfig(BaseModel):
         default=2.0,
         gt=0,
         description="Base backoff between retries; exponential (base * 2**(n-1)) when max_retries > 1.",
+    )
+    health_probe: Literal["connect", "options", "full"] = Field(
+        default="options",
+        description=(
+            "How `aqueduct doctor` probes this endpoint. 'connect' = TCP/TLS "
+            "reachability only, no HTTP request sent. 'options' (default) = "
+            "an HTTP OPTIONS request; any response (including 405) counts as "
+            "reachable. 'full' = the old behaviour — a real POST/PUT/PATCH "
+            "with a synthetic 'doctor_probe' payload, which can trigger "
+            "consumer-side side effects on endpoints that react to any "
+            "request body."
+        ),
     )
 
 
@@ -937,10 +974,37 @@ class AqueductConfig(BaseModel):
     lineage: LineageConfig = Field(default_factory=LineageConfig)
     agent: AgentConnectionConfig = Field(default_factory=AgentConnectionConfig)
     warnings: WarningsConfig = Field(default_factory=lambda: WarningsConfig())
+    checkpoint_root: str | None = Field(
+        default=None,
+        description=(
+            "Local filesystem path overriding the derived "
+            "<store_dir>/checkpoints/ location for module checkpoint/resume "
+            "state. LOCAL PATHS ONLY — remote URI schemes (s3://, s3a://, "
+            "gs://, hdfs://, abfss://, ...) are rejected at config-load; see "
+            "docs/roadmap.md 'Remote-Filesystem Checkpoint Root'."
+        ),
+    )
     spark_config: dict[str, Any] = Field(
         default_factory=dict,
         description="Engine-level Spark conf merged with Blueprint spark_config (Blueprint wins)",
     )
+
+    @field_validator("checkpoint_root")
+    @classmethod
+    def _validate_checkpoint_root(cls, v: str | None) -> str | None:
+        if v is None or not v:
+            return v
+        if _URI_SCHEME_RE.match(v):
+            scheme = v.split("://", 1)[0]
+            raise ValueError(
+                f"checkpoint_root={v!r} uses a remote URI scheme ({scheme!r}://) "
+                "— checkpoint_root only supports local filesystem paths today. "
+                "Remote checkpoint roots (S3/GCS/HDFS/ABFSS) are tracked as a "
+                "roadmap item ('Remote-Filesystem Checkpoint Root' in "
+                "docs/roadmap.md). Use a local path, or omit checkpoint_root "
+                "to fall back to the derived <store_dir>/checkpoints/ default."
+            )
+        return v
 
 
 # ── Loader ────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.7 — Reference Document**
+**Version 2.11 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -13,6 +13,8 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 > - **[Observability Guide](observability_guide.md)** — Store schemas and diagnostic query cookbook
 > - **[Production Guide](production_guide.md)** — Cluster deployment, security, Delta operations
 > - **[Roadmap](roadmap.md)** — Deferred features and future plans
+
+**Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Spark Integration](#10-deployment--spark-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
 
 ---
 
@@ -79,6 +81,8 @@ These names are canonical and used consistently throughout the codebase, documen
 | **PatchSpec** | The JSON document that describes a set of operations to apply to a Blueprint. Produced by the LLM agent or authored by hand. |
 | **ProvenanceMap** | A compile-time index of every resolved config value: where it came from (literal, context ref, env var, Arcade inheritance), the original expression, and the resolved value. |
 
+> **Three version spaces — do not conflate.** This document tracks three independent numbers: the **Blueprint grammar version** (`aqueduct: "1.0"` at the top of every Blueprint YAML — the schema contract a Blueprint declares against, currently frozen at 1.0), the **specs.md document version** (the `Version X.Y` header at the top of this file — bumped whenever a documented contract changes, currently tracking this section), and the **package version** (`aqueduct-core`'s PyPI release, in `pyproject.toml` — SemVer, independent release cadence). A specs.md version bump does not imply a package release, and a Blueprint's `aqueduct: "1.0"` does not change even when specs.md or the package version does.
+
 ---
 
 # **3. System Architecture**
@@ -124,7 +128,7 @@ On the happy path the flow is linear: Parser → Compiler → Executor → Surve
 
 1. **Parse + Compile.** Parser validates YAML against the JSON Schema, builds the AST, resolves Tier 0 context refs. Compiler resolves Tier 1 (`@aq.*`) calls — secrets, Depot reads, dates — expands Arcades into a flat module list, and emits the Manifest plus `provenance_map` and `inputs_fingerprint`.
 2. **Execute.** The Executor topologically sorts the modules, inserts Probes after their `attach_to` targets, identifies independent connected components for `--parallel` mode, and runs each module through its handler. Per-module metrics and Probe signals are written to the observability store as they fire.
-3. **Surveyor + Agent loop (when triggered).** On failure, the Surveyor packages a FailureContext (error trace + provenance slice + recent signals + lineage), calls the configured LLM, and receives a PatchSpec. Patches are validated through gates (guardrails → compile-check → lineage → sandbox). The `apply_callback` writes the patch to disk, recompiles the Manifest, and the executor re-runs the pipeline.
+3. **Surveyor + Agent loop (when triggered).** On failure, the Surveyor packages a FailureContext (error trace + provenance slice + recent signals + lineage), calls the configured LLM, and receives a PatchSpec. Patches are validated through gates (guardrails → compile-check → lineage → sandbox → plan-regression). The `apply_callback` writes the patch to disk, recompiles the Manifest, and the executor re-runs the pipeline.
 
 ### **Why a Manifest? Why not run the YAML directly?**
 
@@ -195,7 +199,7 @@ warnings:                              # optional — per-Blueprint compile-warn
   suppress:
     - perf_python_udf_row_at_a_time
 
-hooks:                                 # optional — lifecycle actions after the run's terminal state
+hooks:                                 # optional — lifecycle actions after terminal state / heal milestones
   on_success:
     - blueprint: blueprints/downstream.yml   # chain another Blueprint (fresh subprocess)
     - webhook: https://hooks.example/notify  # bare URL, or a map with url/method/headers/payload
@@ -203,19 +207,27 @@ hooks:                                 # optional — lifecycle actions after th
       timeout: 120
   on_failure:
     - command: "scripts/cleanup_partial.sh ${run.id}"
+      when_error: ["EmptyDataset"]           # optional — only fire for this error_type
+  on_patch_pending:
+    - webhook: https://hooks.example/patch-review
+  on_healed:
+    - blueprint: blueprints/notify_healed.yml
+      in_process: true                       # reuse this run's live SparkSession
 ```
 
 **Per-Blueprint compile-warning suppression (`warnings:`, 1.2).** `warnings.suppress` is a list of compiler-warning `rule_id`s (or the sentinel `"*"`) to silence for THIS Blueprint only — it covers all **compile-time** diagnostics: the modular rule registry (e.g. `file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) and the inline compiler checks (e.g. `perf_python_udf_row_at_a_time`, `perf_multi_consumer_no_cache`, `delivery_append_retry_dupes`). It is unioned with the engine-level `warnings.suppress` from `aqueduct.yml` (+ `--suppress-warning` flags) — either side suppressing a rule silences it. It does **not** affect engine/session-startup warnings, runtime (Probe/Assert) warnings, or the process-global default used by other Blueprints — a rule suppressed here stays visible everywhere else. For an **Arcade** sub-Blueprint, the parent Blueprint's `warnings.suppress` covers the whole expanded compilation unit (including the sub-Blueprint's modules); the sub-Blueprint's own `warnings:` block is valid YAML (it parses standalone) but is not consulted during expansion.
 
-**Lifecycle hooks (`hooks:`, 2.5).** `hooks.on_success` / `hooks.on_failure` run sequentially AFTER the pipeline reaches its terminal state — and **never change the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
+**Lifecycle hooks (`hooks:`, 2.5).** Four events: `on_success` / `on_failure` run sequentially AFTER the pipeline reaches its terminal state; `on_patch_pending` / `on_healed` fire MID-RUN at heal milestones, mirroring the engine-level `webhooks:` `on_patch_pending`/`on_ci_patch` vocabulary one level up, at the Blueprint. `on_patch_pending` fires every time a heal stages a patch for human or CI review (guardrail-blocked staging, `approval: human`, and `approval: ci`, all three staging sites). `on_healed` fires once a heal's re-run succeeds — patch applied AND the pipeline green again — and always runs BEFORE the outer run's terminal `on_success` hooks (it fires mid-loop, before the loop breaks out to the terminal report). No event **ever changes the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
 
 | Entry | Semantics | Gate |
 | :- | :- | :- |
-| `blueprint: <path>` | Chains another Blueprint as a fresh `aqueduct run` subprocess — own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). | none (declarative) |
+| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess — own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession — no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `spark_config` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
 | `webhook: <url \| map>` | Fires the same endpoint model as the engine-level `webhooks:` block — bare URL shorthand or full `{url, method, headers, payload}` with `${run_id}`/`${blueprint_id}` payload templating. Fire-and-forget, background thread. | none (declarative) |
 | `command: "<argv>"` | Arbitrary subprocess — shlex argv, **no shell**; only `${run.id}` / `${run.status}` / `${blueprint.id}` are interpolated. Per-entry `timeout:` (default 300 s). | `danger.allow_command_hooks: true` in **aqueduct.yml** — the gate is operator-owned engine config, so a Blueprint cannot self-authorize; ungated entries are skipped with `[hook_command_disabled]`. |
 
-Placement nuance — **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` — a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored — only the top-level Blueprint's hooks fire.
+**Per-entry error filter (`when_error:`)** — optional, on `on_failure` / `on_patch_pending` / `on_healed` entries only (these three events carry a failure context; `on_success` does not, and setting `when_error` there is a **schema error** at parse time). A list of error-type names matched against `FailureContext.error_type` (the Assert rule's `error_type` label) or the exception class name extracted from the stack trace — the exact same candidate set and exact-match semantics as `agent.guardrails.heal_on_errors`. Unset (the default) fires unconditionally — fully backward compatible. A non-matching entry is silently skipped (not a `[hook_failed]`) and does not stop the remaining entries of that event.
+
+Placement nuance — **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions plus the `when_error:` filter and `in_process:` execution mode. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` (subprocess mode) or an explicit in-memory chain (`in_process: true` — the env var is process-scoped and does not propagate in-process) — a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically across all four events. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored — only the top-level Blueprint's hooks fire.
 
 **Linear-edge sugar.** `edges:` may be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
 
@@ -235,6 +247,30 @@ Every Module regardless of type shares these fields:
 | **depends_on** | Optional explicit upstream dependency list. |
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
 | **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output — via edges, `depends_on`, or Probe `attach_to` — is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
+| **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8) — see below. |
+
+### Per-module retry override (`retry:`, 2.8)
+
+`retry_policy:` (§10.1-adjacent top-level block) sets the blueprint-wide default retry behaviour. A module's own `retry:` block overrides it **field-by-field** — any field left unset inherits the blueprint-level value for that field (same per-field inheritance shape as agent cascade tiers, §8):
+
+```yaml
+retry_policy:
+  max_attempts: 3
+  on_exhaustion: trigger_agent
+
+modules:
+  - id: flaky_jdbc_source
+    type: Ingress
+    label: Flaky Source
+    config: { format: jdbc, ... }
+    retry:
+      max_attempts: 6        # override — this module gets more attempts
+      # on_exhaustion inherits "trigger_agent" from retry_policy above
+```
+
+Fields: `max_attempts`, `backoff` (whole-block override — set every backoff sub-field or omit the block entirely; a module `backoff:` does NOT merge field-by-field against the blueprint's `backoff:`), `transient_errors`, `non_transient_errors`, `on_exhaustion`, `deadline_seconds`. One caveat: `deadline_seconds: null`/omitted at module level always means "inherit" — there is no module-level way to explicitly clear a blueprint-level deadline back to "no deadline."
+
+This is distinct from `on_failure` (an internal field the self-healing agent writes via the `set_module_on_failure` / `replace_retry_policy` patch ops — a full RetryPolicy replacement, not merged against the blueprint policy). When both are present at runtime, `on_failure` (heal-time) wins over `retry:` (authoring-time) wins over the blueprint-level `retry_policy:`.
 
 ### Ports
 
@@ -892,12 +928,13 @@ When `same_error_consecutive` trips, the loop escalates: temperature is bumped a
 
 ### 6. Gate
 
-Before a patch touches the Blueprint, four gates run in order:
+Before a patch touches the Blueprint, five gates run in order:
 
 1. **Guardrails** — path and operation policy (deterministic, enforced before the LLM response is parsed)
 2. **Compile-check** — the patched dict must produce a valid Manifest
 3. **Lineage gate** — column-level diff catches broken references before Spark sees them
 4. **Sandbox gate** — sampled or full replay catches "parsed but produces nothing"
+5. **Plan-regression gate** — conditional: skipped until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan
 
 ### 7. Confirm and write
 
@@ -995,6 +1032,14 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 
 ## **8.7 Why it is reliable**
 
+A generated patch clears five gates, in order, before it is ever written into the Blueprint — first failure wins and the patch is discarded or escalated to human review:
+
+```
+✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
+```
+
+Gate 1 (guardrails) is deterministic policy — `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence — enforced by `patch/apply.py::_check_guardrails`. Gate 2 (compile-check, `patch/apply.py::apply_patch_file` — re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser. Gate 3 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 4 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 5 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline — conditional: it reports `skip` until a baseline `explain_snapshot` row exists for the blueprint, and is warn-only thereafter unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
+
 - **No silent mutations.** Every patch is a structured diff with a rationale and a confidence score. Low confidence escalates to human review.
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.
 - **No runaway loops.** Budgets bound wall-clock, tokens, and stuck-signature counts. A rolling rate-limit caps healing attempts per hour per blueprint.
@@ -1032,6 +1077,57 @@ persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
 failure analytics a record of real failures. Exit codes: `0` (no drift /
 baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
 undiffable).
+
+## **8.9 Post-Heal Regression Artifacts (opt-in, `agent.regression_artifact`)**
+
+A successful heal fixes today's failure. Nothing stops tomorrow's hand-edit,
+SQL refactor, or `git revert` from silently reintroducing the exact same root
+cause — and without a regression test, the pipeline won't find out until it
+fails in production again. This is a **different job** from the signature
+memory described in §8.1:
+
+| | Signature memory (heal cache) | Post-heal regression artifact |
+| :- | :- | :- |
+| **Triggers on** | The same failure **recurring** in production | A **successful** heal (patch applied AND the re-run succeeded) |
+| **Acts** | AFTER the failure recurs — zero-token patch replay | BEFORE the next run — a CI test run by `aqueduct test` |
+| **Guards against** | Re-solving a known failure with fresh tokens | The fix being **undone** (hand-edit, refactor, revert) |
+| **Failure required to fire?** | Yes — a real pipeline failure | No — catches reintroduction with **no failure and no heal** |
+
+The two are complementary — the same reason a human writes a regression test
+immediately after fixing a bug by hand, in addition to whatever runtime
+safety net already exists.
+
+**Behavior.** When `agent.regression_artifact: true` (default `false`; engine
+default in `aqueduct.yml`, per-blueprint override in the Blueprint `agent:`
+block — `null` inherits the engine value, same inheritance shape as
+`block_on_explain_regression`), a heal that reaches
+`healing_outcomes.run_success_after_patch = true` in `auto` mode's full-run
+validation path optionally emits an `.aqtest.yml` file under `aqtests/` next
+to the Blueprint — the same isolated-module test format `aqueduct test` already
+runs (§ see `docs/cli_reference.md`), auto-populated with a fixture reflecting
+the healed module and a smoke assertion. The test exists purely to fail loudly
+if the patched module ever throws again on the same input shape — i.e. if the
+fix is undone.
+
+**Generation is conservative — it never emits a broken test file.** Aqueduct
+only builds a `.aqtest.yml` when the patch shape maps cleanly onto one:
+
+- The patch touches exactly **one** module via `set_module_config_key` or
+  `replace_module_config` (multi-module or structural patches are skipped —
+  their regression risk isn't expressible as a single-module fixture test).
+- The patched module's type is one `aqueduct test` can run in isolation
+  (`Channel`, `Junction`, `Funnel`, `Assert` — Ingress/Egress are out of scope,
+  same limitation the test framework itself has).
+- Every direct upstream module supplying the patched module declares a
+  `schema_hint` Aqueduct can turn into one synthetic fixture row (Spark SQL
+  DDL type → a small in-domain dummy value; an unmapped type skips
+  generation).
+
+Any other shape — no schema_hint to synthesize from, an untestable module
+type, a multi-module patch — produces an **info-level skip message**, not a
+file. Generation never overwrites an existing file (uniquifies the filename
+instead) and never blocks or fails the heal itself — it is strictly
+best-effort after the heal has already succeeded.
 
 ---
 
@@ -1079,6 +1175,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `lineage` | OpenLineage emission config (`openlineage_url`, `openlineage_namespace`) |
 | `agent` | LLM connection defaults (provider, base_url, model, api_key, cascade, timeout, budget), CI webhook URL |
 | `warnings` | Compiler/executor warning suppression rules |
+| `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
 | `spark_config` | Per-run Spark session configuration |
 
 ## **10.2 Environment Variables & .env**
@@ -1117,6 +1214,28 @@ directory** (2.0 — the earlier single-shared-file layout was removed; a
 - Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work — the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
 - **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect — but for conflict-free continuous monitoring, use Postgres.
 - *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores) — see `docs/roadmap.md`.
+
+### **10.4.2 Checkpoint Root Override (2.8)**
+
+`checkpoint: true` (module- or manifest-level, see §4) writes module output to
+Parquet for `--resume` support. By default this lands under the derived
+`<store_dir>/checkpoints/<run_id>/` directory — the same routing base used by
+the observability store (§10.4.1).
+
+`checkpoint_root` (top-level `aqueduct.yml` key) overrides that derived
+location entirely: when set, checkpoints for **both** a fresh run and a
+`--resume` reload live directly under `<checkpoint_root>/<run_id>/`, bypassing
+`store_dir` for this purpose only (observability signals still use
+`store_dir`). Use it to point checkpoints at faster local disk, or a directory
+explicitly shared between driver and workers on a Docker-based Spark
+Standalone cluster.
+
+**LOCAL FILESYSTEM PATHS ONLY.** A `checkpoint_root` value containing a remote
+URI scheme (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfss://`, ...) is rejected
+at config-load with an actionable error — remote checkpoint roots require
+Hadoop-FS-API bookkeeping that Aqueduct does not yet implement (tracked as
+"Remote-Filesystem Checkpoint Root" in `docs/roadmap.md`). A relative path is
+resolved against the project root (the `aqueduct.yml` directory).
 
 ## **10.5 Deployment Targets**
 

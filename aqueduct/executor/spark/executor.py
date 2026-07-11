@@ -234,15 +234,25 @@ def _write_checkpoint(
 
 
 def _module_retry_policy(module: Module, manifest_policy: RetryPolicy) -> RetryPolicy:
-    """Return per-module RetryPolicy if on_failure is set, else manifest-level policy."""
-    if not module.on_failure:
-        return manifest_policy
-    try:
-        return RetryPolicy(**module.on_failure)
-    except TypeError as exc:
-        raise ExecuteError(
-            f"Module {module.id!r} on_failure has invalid keys: {exc}"
-        ) from exc
+    """Effective RetryPolicy for one module.
+
+    Precedence: ``module.on_failure`` (an LLM-patch write target — full
+    RetryPolicy replacement via the ``set_module_on_failure`` /
+    ``replace_retry_policy`` ops, unaffected by the blueprint-level policy)
+    beats ``module.retry`` (Blueprint-authored `retry:` block, already
+    merged field-by-field against the blueprint-level retry_policy at parse
+    time) beats ``manifest_policy`` (blueprint-level, the default).
+    """
+    if module.on_failure:
+        try:
+            return RetryPolicy(**module.on_failure)
+        except TypeError as exc:
+            raise ExecuteError(
+                f"Module {module.id!r} on_failure has invalid keys: {exc}"
+            ) from exc
+    if module.retry is not None:
+        return module.retry
+    return manifest_policy
 
 
 def _module_checkpoint_enabled(module: Module, manifest: Manifest) -> bool:
@@ -719,6 +729,7 @@ def execute(
     spark: SparkSession,
     run_id: str | None = None,
     store_dir: Path | None = None,
+    checkpoint_root: Path | None = None,
     surveyor: Any | None = None,
     depot: Any | None = None,
     resume_run_id: str | None = None,
@@ -740,6 +751,12 @@ def execute(
         spark:     Active SparkSession (caller owns lifecycle).
         run_id:    Optional run identifier; auto-generated UUID if omitted.
         store_dir: Optional path for observability signals (Probe I/O).
+        checkpoint_root: Optional override for the module checkpoint/resume
+                   root directory. When set, checkpoints are written under
+                   ``checkpoint_root/<run_id>/`` instead of the derived
+                   ``store_dir/checkpoints/<run_id>/``. LOCAL PATHS ONLY —
+                   validated at config-load (``aqueduct.yml``'s
+                   ``checkpoint_root`` key rejects remote URI schemes).
         surveyor:  Optional Surveyor instance used to evaluate Regulator gates.
                    When None, all active Regulators default to open (pass-through).
         depot:          Optional DepotStore for ``format: depot`` Egress writes and
@@ -774,19 +791,26 @@ def execute(
     if sampling is None:
         sampling = ProbeSampling()
 
-    # Checkpoint / resume paths (None when feature disabled)
+    # Checkpoint / resume paths (None when feature disabled).
+    # `checkpoint_root` (aqueduct.yml) overrides the derived
+    # `<store_dir>/checkpoints/` location entirely — when set, checkpoints
+    # live directly under `checkpoint_root/<run_id>/`.
+    checkpoints_base: Path | None = checkpoint_root if checkpoint_root else (
+        store_dir / "checkpoints" if store_dir else None
+    )
+
     checkpoint_dir: Path | None = None
     any_checkpoint = manifest.checkpoint or any(m.checkpoint for m in manifest.modules)
-    if store_dir and any_checkpoint:
-        checkpoint_dir = store_dir / "checkpoints" / run_id
+    if checkpoints_base and any_checkpoint:
+        checkpoint_dir = checkpoints_base / run_id
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         (checkpoint_dir / "_manifest_hash").write_text(
             _manifest_hash(manifest), encoding="utf-8"
         )
 
     resume_dir: Path | None = None
-    if store_dir and resume_run_id:
-        resume_dir = store_dir / "checkpoints" / resume_run_id
+    if checkpoints_base and resume_run_id:
+        resume_dir = checkpoints_base / resume_run_id
         if not resume_dir.exists():
             raise ExecuteError(
                 f"Resume run_id={resume_run_id!r} has no checkpoints at {resume_dir}"

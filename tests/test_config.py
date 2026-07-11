@@ -143,3 +143,48 @@ class TestConfigAqGuard:
         p = self._write(tmp_path, 'deployment:\n  env: ${AQ_CFG_ENV}\n')
         cfg = load_config(p)
         assert cfg.deployment.env == "cluster"
+
+
+class TestCheckpointRoot:
+    """checkpoint_root — local-path-only engine-config override (Phase 70)."""
+
+    def test_default_is_none(self):
+        assert AqueductConfig().checkpoint_root is None
+
+    def test_local_path_accepted(self):
+        cfg = AqueductConfig(checkpoint_root="/mnt/fast/checkpoints")
+        assert cfg.checkpoint_root == "/mnt/fast/checkpoints"
+
+    def test_relative_local_path_accepted(self):
+        cfg = AqueductConfig(checkpoint_root="my/checkpoints")
+        assert cfg.checkpoint_root == "my/checkpoints"
+
+    @pytest.mark.parametrize("uri", [
+        "s3://bucket/checkpoints",
+        "s3a://bucket/checkpoints",
+        "gs://bucket/checkpoints",
+        "hdfs://namenode/checkpoints",
+        "abfss://container@acct.dfs.core.windows.net/checkpoints",
+    ])
+    def test_remote_uri_scheme_rejected(self, uri):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="checkpoint_root"):
+            AqueductConfig(checkpoint_root=uri)
+
+    def test_remote_uri_error_points_at_roadmap(self):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="roadmap"):
+            AqueductConfig(checkpoint_root="s3a://bucket/checkpoints")
+
+    def test_load_config_yaml_key(self, tmp_path):
+        p = tmp_path / "aqueduct.yml"
+        p.write_text('checkpoint_root: "/mnt/shared/ckpts"\n', encoding="utf-8")
+        cfg = load_config(p)
+        assert cfg.checkpoint_root == "/mnt/shared/ckpts"
+
+    def test_load_config_yaml_remote_uri_rejected(self, tmp_path):
+        from aqueduct.config import ConfigError
+        p = tmp_path / "aqueduct.yml"
+        p.write_text('checkpoint_root: "s3a://bucket/ckpts"\n', encoding="utf-8")
+        with pytest.raises(ConfigError, match="checkpoint_root"):
+            load_config(p)

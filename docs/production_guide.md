@@ -211,7 +211,13 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
-**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`). When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning — the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning — the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+
+**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/` — e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the roadmap item above). Example:
+
+```yaml
+checkpoint_root: "/mnt/shared/aqueduct-checkpoints"
+```
 
 ---
 
@@ -395,6 +401,8 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 - `secret:` — HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
 - `max_retries:` (default 1) / `backoff_seconds:` (default 2.0) — bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
 
+**`aqueduct doctor` webhook probe depth (`health_probe:`).** By default `doctor` probes each configured endpoint with an HTTP **OPTIONS** request (`health_probe: options`) — any response, including `405`, counts as reachable, without triggering endpoint-side logic tied to the real event body. Set `health_probe: connect` for a lighter TCP/TLS-only reachability check (no HTTP request sent at all — useful for endpoints that log/alert on *any* incoming request). Set `health_probe: full` to restore the pre-2.1 behaviour — a real POST/PUT/PATCH carrying a synthetic `{"event": "doctor_probe", ...}` payload — only if your receiver specifically needs to see a real request to validate parsing.
+
 ### `patches/rules.md`
 
 `patches/rules.md` is a freeform Markdown file committed alongside Blueprints. Its content is appended verbatim after `agent.prompt_context` in the LLM system prompt. Use it to encode project-specific repair rules:
@@ -453,6 +461,20 @@ VACUUM delta.`s3://my-bucket/output/orders` RETAIN 168 HOURS;
 ```
 
 Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` will accumulate small files over time, degrading read performance significantly.
+
+### Retry idempotency — half-write exposure by module
+
+`retry_policy.max_attempts > 1` (blueprint- or module-level, see [specs.md §4](specs.md)) re-runs a failed pipeline. Whether a retry can produce duplicate or corrupted data depends entirely on the write mode of the Egress modules in the retried path:
+
+| Egress mode | Half-write exposure | Why |
+|---|---|---|
+| `format: delta`, any mode | **Safe** | Delta commits are atomic — a failed write never leaves a partial commit visible to readers; a retry either fully lands or fully doesn't. |
+| `parquet` / `csv`, `mode: overwrite` | **Safe-ish** | A retry rewrites the entire target from scratch, so a half-written file from the failed attempt is simply overwritten. Not atomic mid-write (a concurrent reader could see a torn file), but idempotent across retries. |
+| `parquet` / `csv`, `mode: append` | **NOT SAFE** | The failed attempt may have already appended some files before failing. A retry appends again — the rows already written are duplicated, not replaced. This is what the compiler's [`delivery_append_retry_dupes`](spark_guide.md#delivery-append-retry-dupes) warning flags. |
+| `format: jdbc`, `mode: append` | **NOT SAFE** | Same failure mode as parquet/csv append — a partially committed batch of rows leaves duplicates on retry. JDBC has no cross-statement atomicity guarantee here. |
+| `mode: merge` (Delta `MERGE INTO`) | **Idempotent by construction** | A MERGE keyed on a stable match condition re-applies safely — matched rows update in place, unmatched rows insert once, regardless of how many times the same batch is retried. |
+
+**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv/JDBC append. If you must retry a parquet/csv/JDBC-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink — it destroys history).
 
 ---
 

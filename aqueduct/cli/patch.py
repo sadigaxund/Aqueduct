@@ -191,7 +191,8 @@ def patch_preview(
     try:
         _check_guardrails(spec, bp_raw, provenance_map=None)
     except PatchError as exc:
-        click.echo(f"✗ guardrails gate blocked: {exc}", err=True)
+        from aqueduct.cli.style import error as _style_error
+        _style_error(f"guardrails gate blocked: {exc}")
         sys.exit(exit_codes.DATA_OR_RUNTIME)
 
     try:
@@ -279,18 +280,37 @@ def patch_preview(
         emit(report, fmt="json")
         sys.exit(exit_codes.SUCCESS if lineage_res.status != "fail" and (sandbox_res is None or sandbox_res.status == "pass" or sandbox_res.status == "skip") else exit_codes.DATA_OR_RUNTIME)
 
-    # Text report
+    # Text report — headers dim (structural), gate status lines use the
+    # shared ✓/✗/⚠/· vocabulary (style.py) so `patch preview`'s gate pyramid
+    # reads consistently with the rest of the CLI's output.
+    from aqueduct.cli.style import dim as _dim
+
+    def _gate_status_line(status: str) -> None:
+        from aqueduct.cli.style import error as _e
+        from aqueduct.cli.style import info as _i
+        from aqueduct.cli.style import success as _s
+        from aqueduct.cli.style import warn as _w
+        label = f"status: {status}"
+        if status == "pass":
+            _s(f"  {label}")
+        elif status == "fail":
+            _e(f"  {label}", err=False)
+        elif status == "warn":
+            _w(f"  {label}", err=False)
+        else:
+            _i(f"  {label}")
+
     click.echo(f"Patch {spec.patch_id}")
     click.echo(f"  rationale: {spec.rationale}")
     if spec.confidence is not None:
         click.echo(f"  confidence: {spec.confidence:.0%}")
     click.echo()
-    click.echo("── Blueprint diff ────────────────────────────────────────────")
+    click.echo(_dim("── Blueprint diff ────────────────────────────────────────────"))
     click.echo(diff if diff.strip() else "  (no textual change)")
 
     click.echo()
-    click.echo("── Lineage gate (live sqlglot) ───────────────────────────────")
-    click.echo(f"  status:          {lineage_res.status}")
+    click.echo(_dim("── Lineage gate (live sqlglot) ───────────────────────────────"))
+    _gate_status_line(lineage_res.status)
     click.echo(f"  touched modules: {', '.join(lineage_res.touched_modules) or '(none)'}")
     if lineage_res.warnings:
         for w in lineage_res.warnings:
@@ -301,8 +321,8 @@ def patch_preview(
 
     if sandbox_res is not None:
         click.echo()
-        click.echo("── Sandbox gate (replay) ─────────────────────────────────────")
-        click.echo(f"  status:      {sandbox_res.status}")
+        click.echo(_dim("── Sandbox gate (replay) ─────────────────────────────────────"))
+        _gate_status_line(sandbox_res.status)
         click.echo(f"  detail:      {sandbox_res.detail}")
         if sandbox_res.sample_rows is not None:
             click.echo(f"  sample_rows: {sandbox_res.sample_rows}")
@@ -317,8 +337,8 @@ def patch_preview(
 
     if explain_res is not None:
         click.echo()
-        click.echo("── Explain gate (plan regression) ────────────────────────────")
-        click.echo(f"  status:   {explain_res.status}")
+        click.echo(_dim("── Explain gate (plan regression) ────────────────────────────"))
+        _gate_status_line(explain_res.status)
         click.echo(f"  detail:   {explain_res.detail}")
         if explain_res.baseline_run_id:
             click.echo(f"  baseline: run {explain_res.baseline_run_id}")

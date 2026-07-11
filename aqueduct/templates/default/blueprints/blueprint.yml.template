@@ -65,14 +65,16 @@ spark_config:
 
 # ── Retry policy (blueprint-level default) ─────────────────────────────────────
 #
-# Applied to every module unless overridden by module-level on_failure.
+# Applied to every module unless overridden by a module-level `retry:` block
+# (2.8, see the Modules section below) or the self-healer's `on_failure` write.
 
 # retry_policy:
 #   max_attempts: 3
-#   backoff_strategy: exponential   # exponential | linear | fixed
-#   backoff_base_seconds: 5
-#   backoff_max_seconds: 120
-#   jitter: true
+#   backoff:                        # NOTE: nested block, not flat backoff_* keys
+#     strategy: exponential         # exponential | linear | fixed
+#     base_seconds: 5
+#     max_seconds: 120
+#     jitter: true
 #   deadline_seconds: 600           # null = no deadline
 #   on_exhaustion: abort            # abort | alert_only | trigger_agent
 #   transient_errors:               # only these are retried (empty = all errors)
@@ -80,6 +82,21 @@ spark_config:
 #     - ".*Task not serializable.*"
 #   non_transient_errors:           # these skip retry immediately
 #     - "AnalysisException"
+#
+# Per-module override (2.8) — set `retry:` on any module in the `modules:`
+# list below to override retry_policy for JUST that module. Any field left
+# unset inherits the blueprint-level value above (field-by-field, same shape
+# as agent.cascade tier inheritance). `backoff:` overrides as a WHOLE block
+# (set every sub-field or omit it — it never merges field-by-field):
+#
+#   modules:
+#     - id: flaky_jdbc_source
+#       type: Ingress
+#       label: "Flaky source"
+#       config: { format: jdbc, ... }
+#       retry:
+#         max_attempts: 6          # override — more attempts for this module
+#         # on_exhaustion, backoff, etc. inherit from retry_policy above
 
 
 # ── Compile-warning suppression (per-blueprint) ─────────────────────────────────
@@ -102,16 +119,33 @@ spark_config:
 
 # ── Lifecycle hooks ─────────────────────────────────────────────────────────────
 #
-# Run sequentially AFTER the pipeline's terminal state; hook outcomes never
-# change the run's exit code (a failing hook warns and skips the event's
-# remaining hooks). Exactly one action per entry:
-#   blueprint: <path>   chain another blueprint (fresh `aqueduct run` subprocess,
-#                       own run_id/report) — cycle-guarded, ungated
+# on_success / on_failure run sequentially AFTER the pipeline's terminal
+# state. on_patch_pending / on_healed fire MID-RUN at heal milestones —
+# on_patch_pending when a heal stages a patch for human/CI review,
+# on_healed right after a heal's re-run succeeds (patch applied AND the
+# pipeline is green again) — mirroring the engine-level `webhooks:`
+# on_patch_pending/on_ci_patch vocabulary one level up, at the Blueprint.
+# on_healed always fires before the outer run's terminal on_success hooks.
+# Hook outcomes never change the run's exit code (a failing hook warns and
+# skips the event's remaining hooks). Exactly one action per entry:
+#   blueprint: <path>   chain another blueprint — by default a fresh
+#                       `aqueduct run` subprocess (own run_id/report);
+#                       `in_process: true` parses+compiles+executes the
+#                       target in THIS process instead, reusing the live
+#                       SparkSession (no self-healing loop for the target;
+#                       falls back to the subprocess path when the target
+#                       sets its own spark_config). Cycle-guarded, ungated.
 #   webhook: <url|map>  same endpoint model as aqueduct.yml `webhooks:`
 #                       (url shorthand, or url/method/headers/payload) — ungated
 #   command: "<argv>"   subprocess (shlex, no shell); interpolates ${run.id},
 #                       ${run.status}, ${blueprint.id} only. REQUIRES
 #                       danger.allow_command_hooks: true in aqueduct.yml.
+#
+# when_error: [ErrorType, ...] — optional, on on_failure/on_patch_pending/
+# on_healed entries only (on_success has no failure to match against —
+# rejected at parse time). Fires only when the run's error_type / stack-
+# trace exception class matches one of the listed names — same matching as
+# agent.guardrails.heal_on_errors. Unset = fires unconditionally (default).
 
 # hooks:
 #   on_success:
@@ -121,6 +155,12 @@ spark_config:
 #   on_failure:
 #     - webhook: https://hooks.example/alert
 #     - command: "scripts/cleanup_partial.sh ${run.id}"
+#       when_error: ["EmptyDataset"]  # only fire for this Assert error_type
+#   on_patch_pending:
+#     - webhook: https://hooks.example/patch-review
+#   on_healed:
+#     - blueprint: blueprints/notify_healed.yml
+#       in_process: true              # reuse this run's SparkSession
 
 
 # ── Checkpointing ──────────────────────────────────────────────────────────────
@@ -221,6 +261,15 @@ agent:
   #               Combining off + max_patches > 1 prints a
   #               ⚠ DANGER COMBO line at startup; use only on tiny trusted scopes.
   # sandbox_mode: sample
+
+  # regression_artifact: on a SUCCESSFUL heal (patch applied AND the re-run
+  # succeeded), optionally emit an `.aqtest.yml` regression test for the
+  # patched module under `aqtests/` next to this Blueprint — guards against
+  # the fix being silently undone later (hand-edit, SQL refactor, revert).
+  # Conservative: skips (info log, no file) when the healed module/failure
+  # shape can't be expressed as a valid aqtest. Never overwrites a file.
+  # Leave unset to inherit aqueduct.yml agent.regression_artifact (= false).
+  # regression_artifact: false
 
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.

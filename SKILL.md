@@ -61,7 +61,7 @@ retry_policy: { max_attempts: 3 }     # optional
 warnings:                             # optional — per-blueprint compile-warning suppression
   suppress: [perf_python_udf_row_at_a_time]   # rule_ids from AQ-WARN output, or "*" for all
 
-hooks:                                # optional — lifecycle actions after the run ends
+hooks:                                # optional — lifecycle actions / heal-milestone actions
   on_success:
     - blueprint: blueprints/next.yml  # chain another blueprint (fresh subprocess) — ungated
     - webhook: https://hooks.example  # url shorthand or {url, method, headers, payload} — ungated
@@ -69,6 +69,12 @@ hooks:                                # optional — lifecycle actions after the
       timeout: 120                    # per-entry seconds (default 300)
   on_failure:
     - command: "scripts/cleanup.sh ${run.id}"
+      when_error: ["EmptyDataset"]    # optional — only fire for this error_type
+  on_patch_pending:                   # fires when a heal stages a patch for review
+    - webhook: https://hooks.example/patch-review
+  on_healed:                          # fires when a heal's re-run succeeds
+    - blueprint: blueprints/notify_healed.yml
+      in_process: true                # reuse this run's live SparkSession, no subprocess
 ```
 
 **`warnings:` (1.2)** silences compile-time warnings (e.g.
@@ -80,14 +86,27 @@ blueprints. On an Arcade sub-blueprint, its own `warnings:` block parses fine
 but is ignored — only the parent blueprint's suppress list applies to the
 expanded compilation unit.
 
-**`hooks:` (2.5)** run sequentially after the run's terminal state and NEVER
-change the exit code (a failing hook warns + skips the event's remaining
-hooks). Exactly one of `blueprint:`/`webhook:`/`command:` per entry.
-`command:` interpolates only `${run.id}`/`${run.status}`/`${blueprint.id}`
-(shlex argv, no shell) and requires `danger.allow_command_hooks: true` in
-aqueduct.yml — the blueprint cannot self-authorize it. Chained `blueprint:`
-hooks are cycle-guarded (`AQUEDUCT_HOOK_CHAIN`, depth cap 8; `aqueduct doctor`
-checks the chain statically). Engine-level `webhooks:` in aqueduct.yml stays
+**`hooks:` (2.5)** — four events. `on_success`/`on_failure` run sequentially
+after the run's terminal state; `on_patch_pending`/`on_healed` fire MID-RUN
+at heal milestones (mirrors the engine-level `webhooks:` `on_patch_pending`/
+`on_ci_patch` vocabulary). `on_healed` always fires before the outer run's
+terminal `on_success` hooks. NEVER changes the exit code (a failing hook
+warns + skips the event's remaining hooks). Exactly one of
+`blueprint:`/`webhook:`/`command:` per entry. `command:` interpolates only
+`${run.id}`/`${run.status}`/`${blueprint.id}` (shlex argv, no shell) and
+requires `danger.allow_command_hooks: true` in aqueduct.yml — the blueprint
+cannot self-authorize it. `blueprint:` entries may set `in_process: true` to
+parse+compile+execute the target in-process, reusing the caller's live
+SparkSession, instead of spawning an `aqueduct run` subprocess — falls back
+to subprocess (with an info message) when the target sets its own
+`spark_config`. `when_error: [ErrorType, ...]` on `on_failure`/
+`on_patch_pending`/`on_healed` entries filters by the run's error_type /
+stack-trace exception class (same matching as `agent.guardrails.
+heal_on_errors`); unset = fires unconditionally; setting it on `on_success`
+is a schema error (no failure context there). Chained `blueprint:` hooks are
+cycle-guarded (`AQUEDUCT_HOOK_CHAIN` for subprocess mode, an explicit
+in-memory chain for `in_process: true`; depth cap 8; `aqueduct doctor` checks
+the chain statically). Engine-level `webhooks:` in aqueduct.yml stays
 separate — ops-owned alerting that fires regardless of blueprint hooks. On an
 Arcade sub-blueprint, `hooks:` is ignored — only the top-level blueprint's fire.
 
@@ -104,7 +123,26 @@ expansion), `label` (REQUIRED — human name), `type` (required), `config`
 (type-specific). Optional: `description`, `tags`, `spillway` (downstream id for
 error rows), `depends_on` (explicit upstream list), `checkpoint` (bool, for `--resume`),
 `enabled` (bool, default true; takes `${ctx.*}` so profiles can toggle it — a disabled
-module is skipped ⏭ at run time and the disable cascades to every downstream consumer).
+module is skipped ⏭ at run time and the disable cascades to every downstream consumer),
+`retry` (2.8 — per-module override of the top-level `retry_policy:`; see below).
+
+**`retry:` (2.8)** overrides the blueprint's `retry_policy:` **per field** — any
+field left unset inherits the blueprint value (same shape as `agent.cascade`
+tier inheritance):
+
+```yaml
+retry_policy: { max_attempts: 3, on_exhaustion: trigger_agent }
+modules:
+  - id: flaky_source
+    type: Ingress
+    label: "Flaky source"
+    config: { format: jdbc, ... }
+    retry: { max_attempts: 6 }   # on_exhaustion inherits "trigger_agent"
+```
+
+Fields: `max_attempts`, `backoff` (whole-block override — set every sub-field
+or omit the block, never merges field-by-field), `transient_errors`,
+`non_transient_errors`, `on_exhaustion`, `deadline_seconds`.
 
 > The single most common authoring error: **forgetting `label:`**. It is required on every module.
 

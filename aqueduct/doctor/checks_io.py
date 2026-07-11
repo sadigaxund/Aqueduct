@@ -64,36 +64,89 @@ def check_observability(observability_db: Path) -> CheckResult:
         return CheckResult("observability", "fail", f"{observability_db}: {exc}", _ms(t))
 
 
-def check_webhook(url: str, method: str = "POST", headers: dict[str, str] | None = None, timeout: int = 10) -> CheckResult:
-    """Send a probe request to the webhook URL.
+def _check_webhook_connect(url: str, timeout: int) -> CheckResult:
+    """TCP/TLS reachability only — no HTTP request line is ever sent.
 
-    Accepts any HTTP response (even 4xx/5xx) as "reachable" — the endpoint
-    exists.  Only network-level errors (DNS, connection refused, TLS) count
-    as failures.
+    Opens a raw socket to host:port (TLS-wrapped for https) and closes it.
+    The lightest-weight probe: proves the endpoint is network-reachable
+    without touching the application layer at all.
     """
+    import socket
+    import ssl
+    from urllib.parse import urlsplit
+
+    t = time.monotonic()
+    parts = urlsplit(url)
+    host = parts.hostname
+    if not host:
+        return CheckResult("webhook", "fail", f"{url}: could not parse host", _ms(t))
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            if parts.scheme == "https":
+                ctx = ssl.create_default_context()
+                with ctx.wrap_socket(sock, server_hostname=host):
+                    pass
+        return CheckResult("webhook", "ok", f"{host}:{port} → TCP/TLS reachable (connect only, no request sent)", _ms(t))
+    except OSError as exc:
+        return CheckResult("webhook", "fail", f"{url}: {exc}", _ms(t))
+    except Exception as exc:
+        return CheckResult("webhook", "fail", f"{url}: unexpected error: {exc}", _ms(t))
+
+
+def check_webhook(
+    url: str,
+    method: str = "POST",
+    headers: dict[str, str] | None = None,
+    timeout: int = 10,
+    health_probe: str = "options",
+) -> CheckResult:
+    """Probe the webhook URL. Depth is controlled by ``health_probe``
+    (`WebhookEndpointConfig.health_probe`):
+
+      connect  — TCP/TLS reachability only, no HTTP request sent.
+      options  — an HTTP OPTIONS request (default). Any HTTP response
+                 (including 405) counts as "reachable" — same status
+                 semantics as ``full``.
+      full     — the original behaviour: a real POST/PUT/PATCH with a
+                 synthetic 'doctor_probe' payload. Can trigger consumer-side
+                 side effects on endpoints that react to any request body.
+
+    In all HTTP-request modes, any response < 500 is "reachable" (`ok`);
+    500+ is a `warn` (endpoint exists, responded with a server error).
+    Only network-level errors (DNS, connection refused, TLS) are `fail`.
+    """
+    if health_probe == "connect":
+        return _check_webhook_connect(url, timeout)
+
     import httpx
     t = time.monotonic()
-    probe_payload = {"event": "doctor_probe", "source": "aqueduct doctor"}
     rendered_headers = {"Content-Type": "application/json", **(headers or {})}
+
+    if health_probe == "options":
+        probe_method, kwargs = "OPTIONS", {}
+    else:  # "full" — original real-request behaviour
+        probe_method = method
+        kwargs = {"json": {"event": "doctor_probe", "source": "aqueduct doctor"}}
 
     try:
         resp = httpx.request(
-            method, url,
-            json=probe_payload,
+            probe_method, url,
             headers=rendered_headers,
             timeout=timeout,
+            **kwargs,
         )
         status = resp.status_code
         if status < 500:
             return CheckResult(
                 "webhook", "ok",
-                f"{method} {url} → HTTP {status}",
+                f"{probe_method} {url} → HTTP {status}",
                 _ms(t),
             )
         else:
             return CheckResult(
                 "webhook", "warn",
-                f"{method} {url} → HTTP {status} (server error — endpoint exists but responded with error)",
+                f"{probe_method} {url} → HTTP {status} (server error — endpoint exists but responded with error)",
                 _ms(t),
             )
     except httpx.RequestError as exc:
