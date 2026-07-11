@@ -577,6 +577,40 @@ ORDER BY times_hit DESC
 LIMIT 10;
 ```
 
+### Blueprint remediation timeline
+
+**When:** a blueprint has been through several heal cycles and hand-edits,
+and you need one chronological answer to "what actually happened to this
+pipeline definition" — did a patch fix it, did someone revert the fix by
+hand, is there a pending patch waiting on review.
+
+**What you learn:** `aqueduct blueprint history <id|blueprint.yml>` joins
+`patch_index` (status transitions) with `healing_outcomes`
+(`run_success_after_patch`, confidence) and, when a blueprint **file path**
+is given and the file is git-tracked, the file's git commit history — a
+commit carrying no `---aqueduct---` trailer (the same trailer `aqueduct
+patch commit`/`import` write) is shown as a manual edit.
+
+```
+$ aqueduct blueprint history pipelines/orders.yml
+
+Blueprint history — orders_pipeline
+
+  · 2026-01-01 00:00:00  heal_run_started   heal run started (run_id=run1)
+  ✓ 2026-01-01 00:02:00  patch_apply        patch applied: fix null check  confidence=0.90  [a1b2c3d]
+  ✓ 2026-01-01 00:03:00  outcome            run succeeded after patch
+  ⚠ 2026-01-05 09:12:00  manual_edit        manual edit: tweak retry count
+```
+
+**What to do next:** a `manual_edit` shortly after a `patch_apply` for the
+same failure signature is the classic "the fix got reverted by hand"
+pattern — cross-check with `aqueduct patch log <blueprint.yml>` (git-only
+view) or `aqueduct report --trend <column> --blueprint <id>` to see whether
+the original failure mode is trending back. `--format json` gives the same
+event list as structured records for scripting. This command also backs the
+`blueprint_history` diagnostics tool (`aqueduct/tools/`, specs.md §8.10) —
+the same query logic, callable without the CLI.
+
 ### Column lineage
 
 ```sql
@@ -597,6 +631,7 @@ columns or aggregation tables:
 | `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
+| `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes) — `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
@@ -625,6 +660,7 @@ read‑only connection on Postgres.
 | Column lineage             | `aqueduct lineage <blueprint.yml>`        |
 | Override a Probe signal    | `aqueduct signal <signal_id> --value false` |
 | Heal a failed run          | `aqueduct heal <run_id>`                  |
+| Remediation timeline for a blueprint | `aqueduct blueprint history <blueprint.yml>` |
 
 **Tip:** DuckDB files are stable; point any DuckDB client at them for
 custom dashboards. The `_resolve_obs_db()` helper inside the CLI walks the

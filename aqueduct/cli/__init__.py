@@ -969,6 +969,7 @@ if __name__ == "__main__":
 
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
+from .blueprint import blueprint_group, blueprint_history_cmd  # noqa: E402,F401
 from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401
