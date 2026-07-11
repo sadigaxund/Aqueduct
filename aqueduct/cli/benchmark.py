@@ -148,6 +148,12 @@ def benchmark(
     resolved_timeout = eng.timeout  # None = unbounded read (connect still bounded)
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
+    # Phase 75 — benchmark has no Blueprint agent: block to merge (each
+    # scenario carries its own), so mode/tool-use resolve from the engine
+    # default only, same as `aqueduct heal`.
+    resolved_mode = eng.mode
+    resolved_max_tool_calls = eng.max_tool_calls
+    resolved_supports_tools = eng.supports_tools
 
     model_list = list(models) if models else ([resolved_model] if resolved_model else None)
     if not model_list:
@@ -206,6 +212,9 @@ def benchmark(
             engine_prompt_context=resolved_engine_prompt_context,
             workers=workers,
             budget=_budget,
+            mode=resolved_mode,
+            max_tool_calls=resolved_max_tool_calls,
+            supports_tools=resolved_supports_tools,
         )
     except KeyboardInterrupt:
         # Per-pair results persist to benchmark.duckdb inside run_scenario

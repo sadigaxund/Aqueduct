@@ -144,6 +144,12 @@ def heal(
     resolved_timeout = eng.timeout
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
+    # Phase 75 — `aqueduct heal` has no Blueprint-level agent: block to merge
+    # (it works from the observability store's failure_contexts, not a live
+    # Blueprint parse), so mode/tool-use resolve from the engine default only.
+    resolved_mode = eng.mode
+    resolved_max_tool_calls = eng.max_tool_calls
+    resolved_supports_tools = eng.supports_tools
 
     # ── Register agent API key for redaction ─────────────────────────────────
     if resolved_api_key:
@@ -270,6 +276,38 @@ def heal(
 
     _transcript.header(1, resolved_max_reprompts, resolve="llm")
 
+    # Phase 75 — agentic mode: build a ToolBox from the reconstructed manifest
+    # dict (no live Spark session here — `heal` reads from the observability
+    # store, not a running pipeline — so session-bound tools report
+    # "unavailable", same as a benchmark/scenario run).
+    _toolbox = None
+    if resolved_mode == "agentic":
+        from types import SimpleNamespace
+
+        from aqueduct.agent.toolbox import ToolBox
+        _manifest_dict: dict = {}
+        try:
+            _manifest_dict = json.loads(_manifest_str) if _manifest_str else {}
+        except Exception:
+            _manifest_dict = {}
+        _toolbox_manifest = SimpleNamespace(
+            modules=tuple(
+                SimpleNamespace(id=m.get("id"), type=m.get("type"))
+                for m in (_manifest_dict.get("modules") or []) if isinstance(m, dict)
+            ),
+            base_dir=_manifest_dict.get("base_dir", "") if isinstance(_manifest_dict, dict) else "",
+        )
+        _toolbox = ToolBox(
+            manifest=_toolbox_manifest,
+            failure_ctx=failure_ctx,
+            obs_store=None,
+            patch_store=None,
+            base_dir=_toolbox_manifest.base_dir,
+            spark_session=None,
+            config_path=config_path,
+            store_dir=store_dir,
+        )
+
     # Wire deterministic apply-gate guardrail check INTO the loop so
     # rejections feed back as reprompts (same as `aqueduct run` self-heal). No
     # live blueprint path here — heal-from-store reconstructs the minimal dict
@@ -305,6 +343,10 @@ def heal(
             allow_defer=_allow_defer,
             apply_callback=_apply_cb,
             on_attempt=_on_attempt,
+            toolbox=_toolbox,
+            mode=resolved_mode,
+            max_tool_calls=resolved_max_tool_calls,
+            supports_tools=resolved_supports_tools,
         ),
     )
     patch = agent_result.patch
