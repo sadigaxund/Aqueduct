@@ -72,7 +72,11 @@ logger = logging.getLogger(__name__)
 #       type-mismatch message is the CURRENT declared value (re-proposing it
 #       is a no-op); `actual` is what Spark inferred. field-not-found lists
 #       real columns — align the key to one of them, never re-type it.
-PROMPT_VERSION = "1.5"
+# 1.6 — schema_hint rule reworded: no literal `defer_to_human` token in the
+#       static template (leaked the op name when allow_defer=False strips it
+#       from the schema — Phase 41 invariant: the model can't produce an op
+#       it doesn't know exists).
+PROMPT_VERSION = "1.6"
 
 
 @dataclass

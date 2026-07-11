@@ -41,4 +41,14 @@ def test_system_prompt_includes_schema_hint_field_not_found_rule(tmp_path: Path)
 def test_prompt_version_bumped_for_schema_hint_rule():
     # This rule change touches _SYSTEM_PROMPT_TEMPLATE body, so per the
     # PROMPT_VERSION bump policy (AGENTS.md) it must be reflected here.
-    assert PROMPT_VERSION == "1.5"
+    assert PROMPT_VERSION == "1.6"
+
+
+def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):
+    # Regression: the rule text must not contain the literal op token —
+    # when allow_defer=False the op is stripped from the schema, and the
+    # model must not learn an op it isn't offered (Phase 41 invariant).
+    patches_dir = tmp_path / "patches"
+    patches_dir.mkdir()
+    system_prompt = _build_system_prompt(patches_dir, allow_defer=False)
+    assert "defer_to_human" not in system_prompt
