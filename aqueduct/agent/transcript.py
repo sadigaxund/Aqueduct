@@ -186,6 +186,10 @@ class TranscriptWriter:
             cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
             if cost:
                 parts.append(cost)
+        # Phase 75 — agentic-mode tool-call count (0 / absent in oneshot mode).
+        n_tools = getattr(rec, "tool_calls", 0) or 0
+        if n_tools:
+            parts.append(f"{n_tools} tool call{'s' if n_tools != 1 else ''}")
         if rec.escalated:
             parts.append("escalated")
         self._emit(f"{self._RAIL}   · " + " · ".join(parts))
@@ -214,6 +218,15 @@ class TranscriptWriter:
             cost = _cost_str(rec.tokens_in, rec.tokens_out, model)
             if cost:
                 self._emit(f"{sub}{cost}")
+
+        # Phase 75 — one line per tool call this attempt: name, args summary,
+        # duration, truncated (already-redacted) result preview.
+        for call in (getattr(rec, "_aq_tool_calls", None) or ()):
+            name = call.get("name", "?")
+            args = call.get("args_summary", "")
+            dur = call.get("duration_ms", 0)
+            preview = call.get("result_preview", "")
+            self._emit(f"{sub}tool: {name}({args}) · {dur}ms → {preview}")
 
         # Raw model output verbatim \u2014 the core of -v: lets the user see exactly
         # what the model returned (especially when it would not parse) and decide
