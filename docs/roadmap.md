@@ -42,22 +42,47 @@ Checkpoints (`checkpoint: true` on a module or manifest) are written to a local-
 
 ---
 
-## MCP (Model Context Protocol) Readiness
+## MCP: Write-Capable Tools
 
-Aqueduct's LLM loop is architected to be exposed as an **MCP Server**. This will allow any MCP-compatible agent (Claude Desktop, Cursor, etc.) to discover and invoke Aqueduct capabilities directly as tools.
+**Shipped (no longer roadmap):** the read-only diagnostics ToolRegistry
+(`aqueduct/tools/`, specs.md §8.10) and its stdio MCP transport —
+`aqueduct mcp serve` (optional `[mcp]` extra) exposes `list_runs`,
+`run_detail`, `lineage`, `patch_list`, `patch_show`, `probe_signals`,
+`doctor`, and `blueprint_history` to any MCP client, redacted and
+structurally read-only.
 
-Candidate MCP tools:
+What remains deferred is the **write-capable** tool set — a materially
+different trust level (an MCP client that can mutate pipelines, not just
+inspect them), needing its own approval-gate design before any code:
 
 | Tool name | Description |
 |---|---|
 | `patch_blueprint` | Accepts a run_id and optional module scope. Assembles the FailureContext, invokes the LLM loop, and returns the applied PatchSpec. |
-| `get_lineage` | Accepts a pipeline_id, module_id, and column name. Returns the upstream and downstream ColumnLineageGraph for that column. |
-| `get_flow_report` | Returns the Flow Report for a given run_id in structured JSON. |
 | `run_pipeline` | Submits a Blueprint for execution and streams RunRecord status events. |
 
-When Aqueduct operates as an MCP server, `approval` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI.
+When write tools ship, `approval` in the agent config applies to the tool caller — `auto` approves patches immediately, `human` holds them for the user to confirm in the MCP client UI. Non-stdio transports (network/SSE) are similarly deferred — the current server is deliberately local-only.
 
-**Status:** Architectural design only. No code.
+**Status:** Read-only registry + stdio server shipped. Write tools + network transport: architectural design only, no code.
+
+---
+
+## Additional Remediation Domains
+
+specs.md §8.11 frames self-healing as operating in explicit "remediation
+domains," with the pipeline-definition domain (PatchSpec ops on the
+Blueprint) as the only one that exists today. Candidate future domains, each
+requiring its own typed operation grammar and validation gates before any
+code is written:
+
+- **Engine-config domain** — proposing changes to `aqueduct.yml` (retry
+  policy, resource sizing) rather than the Blueprint itself.
+- **Infra domain** — cluster/deployment-level remediation (e.g. bumping
+  executor memory on repeated OOM), well outside the current patch grammar's
+  scope and reach.
+
+**Status:** Conceptual. No grammar, no gates, no code — the domain framing
+exists so a future domain slots into the same shape instead of a one-off
+extension of PatchSpec.
 
 ---
 

@@ -97,12 +97,15 @@ dev = [
     "ruff>=0.4.0",
 ]
 # Dev-tooling extras (NOT runtime capabilities) for the local observability
-# viewers — `aqueduct studio` (textual TUI) and `aqueduct dashboard` (Streamlit).
-# Deliberately kept out of [all] and out of the two-axis runtime extras — see the
-# documented carve-out in AGENTS.md "Packaging & Extras Policy". Both are local,
-# read-only, on-demand dev tools (like the Spark UI) — never required at runtime.
+# viewers — `aqueduct studio` (textual TUI), `aqueduct dashboard` (Streamlit),
+# and `aqueduct mcp serve` (the stdio MCP diagnostics server over the read-only
+# tool registry). Deliberately kept out of [all] and out of the two-axis runtime
+# extras — see the documented carve-out in AGENTS.md "Packaging & Extras Policy".
+# All are local, read-only, on-demand dev tools (like the Spark UI) — never
+# required at runtime.
 tui = ["textual>=0.50"]
 dashboard = ["streamlit>=1.50", "plotly>=5.18"]
+mcp = ["mcp>=1.9"]
 
 [project.urls]
 Homepage = "https://github.com/sadigaxund/Aqueduct"
@@ -178,4 +181,7 @@ omit = [
     # the plain `coverage` job's `-m "not spark"` run.
     "aqueduct/tui/app.py",
     "aqueduct/dashboard/app.py",
+    # MCP stdio server — covered by the mcp-tests job with the [mcp] extra;
+    # the plain coverage job has no mcp sdk so its serve() paths can't run.
+    "aqueduct/mcp/server.py",
 ]
