@@ -39,9 +39,9 @@ def create_delta_table():
 
     if major >= 4:
         if major == 4 and minor == 1:
-            delta_pkg = "io.delta:delta-spark_4.1_2.13:4.2.0"
+            delta_pkg = "io.delta:delta-spark_4.1_2.13:4.3.1"
         elif major == 4 and minor == 0:
-            delta_pkg = "io.delta:delta-spark_4.0_2.13:4.2.0"
+            delta_pkg = "io.delta:delta-spark_4.0_2.13:4.3.1"
         else:
             delta_pkg = "io.delta:delta-spark_2.13:4.0.1"
     else:

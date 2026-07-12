@@ -6,10 +6,11 @@
 # incompatible with this script's one-blueprint-per-snippet assumption).
 #
 # Usage:
-#   ./scripts/run_snippets.sh [-v] [-vv] [SNIPPETS_DIR]
+#   ./scripts/run_snippets.sh [-v] [-vv] [-f PATTERN] [SNIPPETS_DIR]
 #
-#   -v    Show populate/generate, aqueduct-run, and inspect output inline
-#   -vv   Show everything inline including pip-install
+#   -v         Show populate/generate, aqueduct-run, and inspect output inline
+#   -vv        Show everything inline including pip-install
+#   -f PATTERN Only run snippets whose name contains PATTERN (e.g. -f 28)
 #
 # SNIPPETS_DIR defaults to gallery/snippets/ relative to the repo root.
 # The script resolves the repo root from its own location, so it works from any cwd.
@@ -21,16 +22,18 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 VERBOSE=0
 SNIPPETS_DIR=""
+FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v) VERBOSE=1; shift ;;
         -vv) VERBOSE=2; shift ;;
         -vvv) VERBOSE=3; shift ;;
+        -f|--filter) FILTER="$2"; shift 2 ;;
         --) shift; SNIPPETS_DIR="${1:-}"; break ;;
         -*)
             echo "Unknown flag: $1"
-            echo "Usage: $0 [-v] [-vv] [SNIPPETS_DIR]"
+            echo "Usage: $0 [-v] [-vv] [-f PATTERN] [SNIPPETS_DIR]"
             exit 1
             ;;
         *) SNIPPETS_DIR="$1"; shift ;;
@@ -128,7 +131,7 @@ export TMPDIR="$PIP_TMPDIR"
 _pip_ok() { "$VENV/bin/python" -c "import pandas, pyarrow, rich, pyspark" 2>/dev/null; }
 
 if [[ ! -d "$VENV" ]] || ! _pip_ok; then
-    [[ -d "$VENV" ]] && echo -e "${YELLOW}Venv incomplete — reinstalling...${RESET}"
+    [[ -d "$VENV" ]] && echo -e "${YELLOW}Venv version mismatch — recreating...${RESET}"
     [[ ! -d "$VENV" ]] && echo -e "${CYAN}Creating Python 3.12 venv (first run only)...${RESET}"
     python3.12 -m venv "$VENV"
     # shellcheck source=/dev/null
@@ -203,6 +206,10 @@ fi
 # ---------------------------------------------------------------------------
 for snippet_path in "$WORK_DIR/snippets"/*/; do
     SNIPPET_NAME="$(basename "$snippet_path")"
+
+    if [[ -n "$FILTER" && "$SNIPPET_NAME" != *"$FILTER"* ]]; then
+        continue
+    fi
 
     if is_skipped "$SNIPPET_NAME"; then
         echo -e "${YELLOW}SKIP${RESET}  $SNIPPET_NAME"
@@ -285,7 +292,7 @@ if (( ${#FAILURES[@]} > 0 )); then
         echo ""
         echo -e "  ${RED}FAILED${RESET} $snippet / $step"
         if [[ -f "$log" ]]; then
-            grep -v '^$' "$log" | tail -5 | sed 's/^/    /'
+            cat "$log" | sed 's/^/    /'
         fi
     done
     echo ""
@@ -305,7 +312,7 @@ if [[ "$IN_CI" == "true" && -n "${GITHUB_STEP_SUMMARY:-}" && ${#FAILURES[@]} -gt
             echo ""
             echo '```'
             if [[ -f "$log" ]]; then
-                grep -v '^$' "$log" | tail -10
+                cat "$log"
             fi
             echo '```'
             echo "</details>"
