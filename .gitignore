@@ -89,6 +89,7 @@ Thumbs.db
 .understand-anything/
 .cursor/
 .antigravity/
+*-lock.json
 .cursorignore
 .cursorindexingignore
 .prompts/

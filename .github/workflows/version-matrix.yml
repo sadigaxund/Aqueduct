@@ -22,7 +22,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,postgres,redis]"
-      - run: pytest -m "not spark and not integration and not agent" --no-cov -q
+      - run: |
+          set +e
+          pytest -m "not spark and not integration and not agent" --no-cov -q --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Unit Tests"
+          exit $rc
 
   # Gallery snippets — full end-to-end runs of every shipped example against a
   # real local Spark. Moved here from test-suite.yml (2026-07-03): these are
@@ -136,6 +141,10 @@ jobs:
           echo "fail_count=$FAIL_COUNT" >> $GITHUB_OUTPUT
           exit $EXIT_CODE
         continue-on-error: true
+
+      - name: Generate report
+        if: always()
+        run: python scripts/ci-summary.py ${{ env.RESULTS_DIR }}/${{ matrix.combo }}.xml --name "${{ matrix.combo }} (${{ matrix.python }}/pyspark ${{ matrix.pyspark }})"
 
       - name: Save result artifact
         run: |

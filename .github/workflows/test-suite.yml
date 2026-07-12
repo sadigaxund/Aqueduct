@@ -109,7 +109,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis,postgres]"
-      - run: pytest tests/test_parser/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_parser/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Parser"
+          exit $rc
 
   compiler-tests:
     needs: changes
@@ -121,7 +126,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_compiler/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_compiler/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Compiler"
+          exit $rc
 
   surveyor-tests:
     needs: changes
@@ -133,7 +143,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_surveyor/ tests/test_benchmark_store.py -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_surveyor/ tests/test_benchmark_store.py -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Surveyor"
+          exit $rc
 
   agent-tests:
     needs: changes
@@ -145,7 +160,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_agent/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_agent/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Agent"
+          exit $rc
 
   patch-tests:
     needs: changes
@@ -157,7 +177,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_patch/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_patch/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Patch"
+          exit $rc
 
   drift-tests:
     needs: changes
@@ -169,7 +194,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_drift/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_drift/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Drift"
+          exit $rc
 
   cli-tests:
     needs: changes
@@ -185,7 +215,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm,redis]"
-      - run: pytest tests/test_cli/
+      - run: |
+          set +e
+          pytest tests/test_cli/ --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "CLI"
+          exit $rc
 
   tui-tests:
     needs: changes
@@ -197,7 +232,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,tui]"
-      - run: pytest tests/test_tui/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_tui/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "TUI"
+          exit $rc
 
   config-tests:
     needs: changes
@@ -209,7 +249,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis,postgres]"
-      - run: pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_config.py tests/test_parser/test_config.py tests/test_redaction.py tests/test_secrets.py tests/test_warnings.py -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Config"
+          exit $rc
 
   tools-tests:
     needs: changes
@@ -221,7 +266,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,llm,redis]"
-      - run: pytest tests/test_tools/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_tools/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Tools"
+          exit $rc
 
   mcp-tests:
     needs: changes
@@ -233,7 +283,12 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev,mcp,llm]"
-      - run: pytest tests/test_mcp/ -m "not spark"
+      - run: |
+          set +e
+          pytest tests/test_mcp/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "MCP"
+          exit $rc
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
 
@@ -257,7 +312,12 @@ jobs:
       # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
       # derived from the installed pyspark version); tests self-skip for any
       # datasource with no build for this Spark line (e.g. Iceberg on 4.1).
-      - run: pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark
+      - run: |
+          set +e
+          pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Executor"
+          exit $rc
         env:
           AQ_LAKEHOUSE: "1"
 
@@ -285,7 +345,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm]"
-      - run: pytest tests/test_gallery.py
+      - run: |
+          set +e
+          pytest tests/test_gallery.py --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Gallery"
+          exit $rc
 
   # ── Store integration layer — needs PG + Redis ───────────────────────
 
@@ -331,7 +396,12 @@ jobs:
         env:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
           AQ_REDIS_URL: "redis://localhost:6379/15"
-        run: pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py -m integration
+        run: |
+          set +e
+          pytest tests/test_stores/ tests/test_depot/ tests/test_benchmark_store.py -m integration --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Stores"
+          exit $rc
 
   # ── Coverage — dedicated job, decoupled from Spark to avoid session flakiness ──
   # Runs the full suite under coverage with spark-marked tests DESELECTED
@@ -364,4 +434,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - run: pip install -e ".[dev,spark,llm,redis,stores]"
-      - run: pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=68 -m "not spark"
+      - run: |
+          set +e
+          pytest --cov=aqueduct --cov-report=term-missing --cov-fail-under=68 -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Coverage"
+          exit $rc
