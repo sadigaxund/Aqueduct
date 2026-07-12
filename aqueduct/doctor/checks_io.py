@@ -20,6 +20,103 @@ from typing import Any
 from aqueduct.doctor.base import CheckResult, _ms
 
 
+def check_capabilities(
+    blueprint_path: Path,
+    engine: str = "spark",
+    *,
+    context_override: dict[str, Any] | None = None,
+) -> list[CheckResult]:
+    """Phase 78 — version-constrained capability check for a compiled blueprint.
+
+    ``aqueduct/compiler/capability_check.py`` already blocks UNSUPPORTED
+    leaves at compile time (a hard CompileError). What compile-time CANNOT
+    know is which dependency versions are actually installed — that is this
+    check's job: parse+compile the blueprint, walk its modules to the
+    capability leaves they touch (reusing
+    ``aqueduct.compiler.capability_check.leaves_for_module``, the same
+    mapping the compile gate uses), and for every leaf whose engine
+    ``Capability.requires`` names a dependency, compare the installed
+    version (via ``importlib.metadata``) against the declared specifier.
+
+    Skips gracefully when a named dependency isn't installed at all
+    (consistent with ``--skip-spark``) — that is reported by other checks
+    (spark/cloudpickle), not duplicated here.
+    """
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    from aqueduct.compiler.capability_check import leaves_for_module
+    from aqueduct.compiler.compiler import compile as _compile
+    from aqueduct.executor.capabilities import get_capabilities, version_satisfies
+    from aqueduct.parser.parser import parse
+
+    t = time.monotonic()
+    try:
+        bp = parse(str(blueprint_path), cli_overrides=context_override or {})
+        manifest = _compile(bp, blueprint_path=blueprint_path, engine=engine)
+    except Exception as exc:  # noqa: BLE001 — doctor checks never raise
+        return [CheckResult(
+            "capabilities", "skip",
+            f"blueprint did not parse/compile — see other checks: {exc}",
+            _ms(t),
+            group="validation",
+        )]
+
+    try:
+        caps = get_capabilities(engine)
+    except KeyError:
+        return [CheckResult(
+            "capabilities", "skip", f"no capability declaration registered for engine {engine!r}",
+            _ms(t), group="validation",
+        )]
+
+    results: list[CheckResult] = []
+    version_cache: dict[str, str | None] = {}
+
+    for module in manifest.modules:
+        if not getattr(module, "enabled", True):
+            continue
+        for leaf_id in leaves_for_module(module):
+            cap = caps.verdict(leaf_id)
+            if not cap.requires:
+                continue
+            for dep, spec in cap.requires.items():
+                if dep not in version_cache:
+                    try:
+                        version_cache[dep] = _pkg_version(dep)
+                    except PackageNotFoundError:
+                        version_cache[dep] = None
+                installed = version_cache[dep]
+                name = f"capabilities:{module.id}:{leaf_id}"
+                if installed is None:
+                    results.append(CheckResult(
+                        name, "skip",
+                        f"{dep!r} not installed — cannot verify {leaf_id!r} requires {dep}{spec}",
+                        group="validation",
+                    ))
+                    continue
+                if version_satisfies(installed, spec):
+                    results.append(CheckResult(
+                        name, "ok",
+                        f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, installed {installed}",
+                        group="validation",
+                    ))
+                else:
+                    hint = f" {cap.hint}" if cap.hint else ""
+                    results.append(CheckResult(
+                        name, "fail",
+                        f"module {module.id!r} uses {leaf_id!r} — requires {dep}{spec}, "
+                        f"installed {installed}.{hint}",
+                        group="validation",
+                    ))
+
+    if not results:
+        results.append(CheckResult(
+            "capabilities", "ok", "no version-constrained capabilities used", _ms(t), group="validation",
+        ))
+    return results
+
+
 def check_config(config_path: Path | None) -> CheckResult:
     """Load and schema-validate aqueduct.yml."""
     from aqueduct.config import ConfigError, load_config
