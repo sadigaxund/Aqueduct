@@ -459,6 +459,19 @@ Warning lifecycle / placement: **engine/config** warnings print above the `▶` 
 
 Drift to watch for (grep these before a commit that touches `cli/`): raw `print(` or `click.echo(click.style(...))` with hand-rolled colour in a command, `logger.warning` carrying no `rule_id`, a reintroduced `%(levelname)s:` / raw `WARNING:` log format, bare-int `sys.exit`. The consolidated output funnel lives in `cli/output.py` — compose through `emit()` / `warn()`, not raw `click.echo` / `style.*`.
 
+## Docs writing style (user-facing prose)
+
+Applies to README, CONTRIBUTING, and `docs/` prose (not SKILL.md — LLM-facing;
+not code blocks or literal CLI output examples). Keep the register plain, dry,
+technical:
+
+- No em/en dashes in prose — use a colon, comma, period, or parentheses.
+- No negative-parallelism triads ("no X, no Y, no Z") — state it positively.
+- No "-ing" significance tack-ons ("...ensuring consistency"), no AI-vocabulary
+  filler (crucial, seamless, robust, leverage, delve, landscape, showcase).
+- Prefer "is/has" over "serves as / boasts / features".
+- Headings in sentence case; bold sparingly, never mechanically per-list-item.
+
 ## Audit Guide
 
 Two audit surfaces exist; both check for violations of the prevention rules above. Run one after a phase completes or before a release. Gaps found in audits feed back into this document.
