@@ -340,13 +340,16 @@ agent:
   mode: oneshot                # oneshot (default) | agentic — agentic lets the model call read-only diagnostic tools before answering
   max_tool_calls: 8            # agentic mode only — hard cap on tool calls per heal attempt
   supports_tools: auto         # auto|true|false — tool-use capability; anthropic resolves true w/o probing, openai_compat probes
+  progressive: false           # true = chained multi-patch healing — a candidate that fixes bug #1 but leaves bug #2 failing
+                                # folds into an accumulating patch instead of being discarded; requires sandbox_mode != off
+  max_chain: 3                 # hard cap on links in a progressive chain (independent of max_reprompts)
   # connection (overrides engine aqueduct.yml defaults):
   provider: openai_compat     # anthropic | openai_compat
   base_url: "https://openrouter.ai/api/v1"
   model: "anthropic/claude-sonnet-4-6"
   api_key: "@aq.secret('OPENAI_API_KEY')"  # optional; per-tier cascade override also supported
 ```
-`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`).
+`approval` values: `disabled` (never heal) · `human` (stage patch for review) · `auto` (apply validated patch; with `max_patches > 1` enables the multi-patch loop) · `ci` (stage + webhook). Engine-level defaults for provider/model/base_url/api_key/mode/max_tool_calls/supports_tools/progressive/max_chain live in `aqueduct.yml`; the Blueprint `agent:` block overrides them. API key precedence (highest first): per-cascade-tier `api_key` → blueprint `agent.api_key` → engine `agent.api_key` → env var (`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`). Prefer `@aq.secret('NAME')` or `${ENV_VAR}` over a plaintext literal in any config file. `supports_tools` also has a per-cascade-tier override (`cascade[].supports_tools`). `progressive: true` (`agent.approval: auto`, non-cascade path) chains multi-patch healing across DIFFERENT-module failures instead of re-diagnosing the same first bug every attempt — see `docs/specs.md` §8.13; `max_patches` semantics are unchanged.
 
 ## Engine config (`aqueduct.yml`) — NOT the Blueprint
 Separate file. Configures deployment target, Spark, stores, secrets, webhooks, and engine-level agent connection. Author it only when asked; Blueprints reference its results. Key blocks: `deployment` (engine/target/master_url/env), `spark_config`, `stores` (observability/depots/blob/benchmark + backend), `agent` (provider/base_url/model/api_key/cascade defaults), `danger` (allow_multi_patch, allow_full_probe_actions). Engine `agent.cascade` provides a project-wide default; a Blueprint's `agent.cascade` (or `model: [list]` shorthand) overrides it. See `aqueduct/templates/default/aqueduct.yml.template`.
@@ -422,3 +425,12 @@ Adding `agent.cascade:` (a list of tiers, tried in the order you list them) swit
 A tier inherits a flat `agent.*` field only when it leaves that field unset; a field the
 tier sets is its own key (so `--set agent.timeout` raises the solo/flat default and every
 inheriting tier, but not a tier that declares its own `timeout:`).
+
+## Diagnostics
+
+A failing run isn't a dead end — it's inspectable through the same read-only
+diagnostics tools the self-healer itself uses. Two access paths: MCP clients
+(Claude Desktop, an IDE) can query it directly via `aqueduct mcp serve`;
+otherwise the CLI equivalents cover the same ground — `aqueduct report`,
+`aqueduct runs`, `aqueduct lineage`, `aqueduct blueprint history`, and
+`aqueduct doctor`. See `docs/specs.md` §8.10 for the full tool registry.

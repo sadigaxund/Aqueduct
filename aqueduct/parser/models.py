@@ -132,6 +132,12 @@ class AgentConfig:
     # Tool-use capability override — True/False/"auto". None = inherit engine
     # default (agent.supports_tools in aqueduct.yml, "auto" if also unset).
     supports_tools: bool | str | None = None
+    # Progressive (chained) multi-patch healing. None = inherit engine
+    # default (agent.progressive in aqueduct.yml, False if also unset).
+    progressive: bool | None = None
+    # Hard cap on links in a progressive chain. None = inherit engine
+    # default (agent.max_chain in aqueduct.yml, 3 if also unset).
+    max_chain: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize agent policy fields for the manifest snapshot the LLM sees.
@@ -154,6 +160,8 @@ class AgentConfig:
             "block_on_explain_regression": self.block_on_explain_regression,
             "regression_artifact": self.regression_artifact,
             "mode": self.mode,
+            "progressive": self.progressive,
+            "max_chain": self.max_chain,
             "max_heal_attempts_per_hour": self.max_heal_attempts_per_hour,
             "guardrails": {
                 "forbidden_ops": list(self.guardrails.forbidden_ops),

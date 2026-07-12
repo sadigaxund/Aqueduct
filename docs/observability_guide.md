@@ -141,6 +141,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `prompt_version`    | VARCHAR             | `aqueduct.agent.PROMPT_VERSION` at attempt time |
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
 | `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
+| `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
 
 Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run — no manual migration needed.
 
@@ -501,6 +502,26 @@ fixed the pipeline.
 **What you learn** `stop_reason='solved'` means a parseable PatchSpec was
 returned, **not** that the patched pipeline succeeded.
 **What to do next** Cross-check `run_success_after_patch` for the truth.
+
+**When** a heal ran with `agent.progressive: true` and you want to see how
+many links the chain walked and which modules it diagnosed, in order.
+**What you learn** The chain's per-link trail — module diagnosed, attempts
+spent on that link, whether it advanced. A chain that never advances past
+link 1 despite `max_chain > 1` usually means the model isn't producing a
+patch that changes which module fails next (check `gate_that_rejected` on
+those rows too).
+**What to do next** If the chain repeatedly hits `chain_link` gaps (e.g.
+link 1 then link 3 with no link 2), the missing link's own reprompt loop
+never persisted a row — check for an exception in the `on_attempt` hook.
+
+```sql
+SELECT chain_link, MIN(attempt_num) AS first_attempt, MAX(attempt_num) AS last_attempt,
+       COUNT(*) AS attempts_in_link, where_field AS module
+FROM heal_attempts
+WHERE run_id = '<run_id>' AND chain_link IS NOT NULL
+GROUP BY chain_link, where_field
+ORDER BY chain_link;
+```
 
 ```sql
 SELECT ha.run_id,

@@ -34,6 +34,33 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 - **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger` — lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
 - **Secrets providers**: `env` (built-in, no SDK needed), `aws` (`aqueduct-core[aws]`), `gcp` (`aqueduct-core[gcp]`), `azure` (`aqueduct-core[azure]`). All tested against the matrix above.
 
+## Spark Connect
+
+Aqueduct is **not tested or supported against `spark.remote(...)` (Spark
+Connect) sessions.** The engine assumes a classic driver-embedded
+`SparkSession` with a local JVM gateway (py4j). The table below documents
+today's *actual* behavior if a Connect session were substituted — produced by
+running `skills/aqskill-audit-connect.md`'s detection commands against the
+tree and tracing each hit's exception path. This is a snapshot of current
+incompatibilities, not a roadmap; no Connect support is scheduled (see
+`docs/roadmap.md` if that changes).
+
+| Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
+|---|---|---|---|
+| `aqueduct/executor/spark/channel.py:320-350` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config — forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Degrades gracefully.** `df.rdd.getNumPartitions()` is now guarded — on a Connect `DataFrame` (`.rdd` is not implemented in Connect) the boundary is skipped and a `[runtime_metrics_boundary_skipped]` warning fires; the transform result flows through unchanged | Graceful — metrics boundary silently skipped, warning surfaced, module still runs |
+| `aqueduct/executor/spark/probe.py:426` (`_partition_stats`) | `type: partition_stats` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629) — the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful — signal silently omitted, warning surfaced |
+| `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful — byte-count metrics come back `None` (not collected) rather than 0; no crash |
+| `aqueduct/patch/explain_gate.py:50-90` (`_formatted_plan`/`capture_plan_snapshot`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades gracefully.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback raise, caught by the outer `try/except`, returning `""`. `capture_plan_snapshot` now stamps `plan_available: False` on empty-plan captures, and `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session — gate skipped") instead of comparing all-zero "after" counts against a real baseline | Graceful — gate reports skip/unavailable, not a false regression |
+| `aqueduct/executor/spark/warnings/jar_availability.py:34-60` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades honestly.** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); `_loaded_jar_names` now returns `None` (inspection failed) rather than `[]` (genuinely no JARs). `check()` distinguishes the two — when a Blueprint declares a JAR-requiring format and inspection is unavailable, it emits a "could not verify JAR availability" note instead of staying silent | Graceful — surfaces an honest "could not verify" note when relevant, rather than a false all-clear |
+| `aqueduct/doctor/__init__.py:825-841` (cloud-URI `--preflight` check) | `aqueduct doctor --preflight` existence check for `s3a://`/`gs://`/`abfss://` Ingress/Egress paths, reusing Spark's own Hadoop `FileSystem` credentials | **Degrades gracefully.** `spark._jvm` / `_jsc.hadoopConfiguration()` raise; caught by the function's own `except Exception as exc: return CheckResult(name, "warn", ...)` — doctor reports a `warn`, not a crash | Graceful — surfaces as a doctor warning with the exception text |
+
+**Works today, verified not a false positive:**
+
+- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts) — this is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration — there is no `addSparkListener` call anywhere in the tree (verified by grep).
+- `aqueduct/surveyor/error_extraction.py`'s lazy `py4j.protocol.Py4JJavaError` import — the import succeeds under Connect (py4j still ships with pyspark) but the `isinstance` check simply never matches a `SparkConnectGrpcException`; already falls through to the generic error path by design.
+
+**Summary:** 6 verified call sites reach into JVM/py4j-only internals; all 6 now degrade gracefully (clean skip, `None`/`warn`/`skip` result, or an honest "could not verify" note) — none crash and none produce a misleading all-clear or a false regression. This is a hardening of failure-mode *honesty*, not Spark Connect support: Connect sessions remain untested/unsupported (see intro above); the guards only ensure that when one is substituted anyway, the engine degrades legibly instead of aborting a module or reporting a spurious signal.
+
 ## Production pinning
 
 For deployments, pin transitively to lock the cloudpickle + jvm + Java + python combination:

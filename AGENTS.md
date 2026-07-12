@@ -354,8 +354,8 @@ The `studio` command lives in `cli/observability.py` and guards on
 Every handler is a thin wrapper over `stores/queries.py` (never inline SQL) —
 add a new tool by adding a query function there first, then a `_handler` +
 `register(Tool(...))` call in `registry.py`. This is the enumeration surface
-the MCP server (below) and a future agentic ToolBox read from — see specs.md
-§8.10.
+the MCP server (below) and the agentic-heal ToolBox (`agent/toolbox.py`)
+both read from — see specs.md §8.10.
 
 ### `aqueduct/mcp/` — stdio MCP server over the ToolRegistry (Phase 74)
 

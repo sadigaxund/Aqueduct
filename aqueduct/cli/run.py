@@ -553,6 +553,8 @@ class _SurveyorSetupResult:
     resolved_agent_mode: str | None
     resolved_agent_max_tool_calls: int | None
     resolved_agent_supports_tools: object | None
+    resolved_agent_progressive: bool | None
+    resolved_agent_max_chain: int | None
     resolved_sandbox_master_url: str | None
     surveyor: object
     _obs_store: object
@@ -771,7 +773,22 @@ def _setup_surveyor(
     resolved_agent_mode = _rac.mode
     resolved_agent_max_tool_calls = _rac.max_tool_calls
     resolved_agent_supports_tools = _rac.supports_tools
+    # Phase 77 — progressive (chained) multi-patch healing, same inheritance
+    # shape as mode/supports_tools above.
+    resolved_agent_progressive = _rac.progressive
+    resolved_agent_max_chain = _rac.max_chain
     resolved_sandbox_master_url = cfg.agent.sandbox_master_url
+
+    # ── Progressive healing requires per-link sandbox validation ─────────────
+    if resolved_agent_progressive:
+        from aqueduct.agent.progressive import require_sandbox_for_progressive
+        from aqueduct.errors import ConfigError as _ConfigError
+        _prog_sandbox_mode = manifest.agent.sandbox_mode if manifest.agent else "sample"
+        try:
+            require_sandbox_for_progressive(resolved_agent_progressive, _prog_sandbox_mode)
+        except _ConfigError as _prog_exc:
+            click.echo(f"✗ {_prog_exc}", err=True)
+            sys.exit(exit_codes.CONFIG_ERROR)
 
     # ── Self-healing reachability pre-check (upfront) ────────────────────────────
     # Surface a misconfigured agent at startup rather than only at heal time. Gated
@@ -873,6 +890,8 @@ def _setup_surveyor(
         resolved_agent_mode=resolved_agent_mode,
         resolved_agent_max_tool_calls=resolved_agent_max_tool_calls,
         resolved_agent_supports_tools=resolved_agent_supports_tools,
+        resolved_agent_progressive=resolved_agent_progressive,
+        resolved_agent_max_chain=resolved_agent_max_chain,
         resolved_sandbox_master_url=resolved_sandbox_master_url,
         surveyor=surveyor,
         _obs_store=_obs_store,
@@ -1250,6 +1269,8 @@ def run(
         resolved_agent_mode = _ssr.resolved_agent_mode
         resolved_agent_max_tool_calls = _ssr.resolved_agent_max_tool_calls
         resolved_agent_supports_tools = _ssr.resolved_agent_supports_tools
+        resolved_agent_progressive = _ssr.resolved_agent_progressive
+        resolved_agent_max_chain = _ssr.resolved_agent_max_chain
         resolved_sandbox_master_url = _ssr.resolved_sandbox_master_url
         surveyor = _ssr.surveyor
         _obs_store = _ssr._obs_store
@@ -1267,6 +1288,10 @@ def run(
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
         _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
+        # One-shot flag for the [agent_progressive_scope] warning — the static
+        # scope conditions (approval mode, cascade) never change mid-run, so
+        # repeating the warning every heal iteration would be noise.
+        _progressive_scope_warned = False
 
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
             """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
@@ -1886,6 +1911,231 @@ def run(
                     store_dir=store_dir,
                 )
 
+            # ── Progressive (chained) multi-patch healing ───────────────────────
+            # Opt-in (agent.progressive), scoped to effective_mode == "auto" and
+            # the single-model (non-cascade) path — cascade/replay progressive
+            # interaction is deferred (see docs/specs.md §8.13). A candidate that
+            # passes its own sandbox validation but leaves the pipeline failing
+            # is NOT discarded here: if the new failure is at a DIFFERENT module,
+            # it folds into an accumulating multi-op patch instead of throwing
+            # the fix away and re-diagnosing the SAME first bug next iteration
+            # (see module docstring in aqueduct/agent/progressive.py for the
+            # recorded failure this fixes). Nothing is written to the Blueprint
+            # until the combined patch passes the pipeline end-to-end.
+            #
+            # No-silent-no-ops rule (AGENTS.md): when the user set
+            # `agent.progressive: true` but a scope condition disables it, say
+            # so — a flag that silently does nothing lies to the user. The two
+            # static conditions (approval mode, cascade) warn ONCE per run with
+            # a rule_id; a replay-cache hit is an info note (nothing was lost —
+            # the cached patch served this failure for zero tokens, the chain
+            # simply had no work to do).
+            if resolved_agent_progressive and not (
+                effective_mode == "auto"
+                and not _cascade_tiers
+                and _replay_result is None
+            ):
+                if _replay_result is not None:
+                    from aqueduct.cli.style import info as _prog_info
+                    _prog_info(
+                        "progressive chain not started — replay-cache hit served "
+                        "this failure (0 tokens); nothing to chain",
+                        err=True,
+                    )
+                elif not _progressive_scope_warned:
+                    _progressive_scope_warned = True
+                    from aqueduct.cli.output import warn as _output_warn
+                    if effective_mode != "auto":
+                        _scope_reason = (
+                            f"requires agent.approval: auto (effective mode is "
+                            f"{effective_mode!r} — human/ci modes stage single "
+                            "patches, chaining is not applied)"
+                        )
+                    else:
+                        _scope_reason = (
+                            "not available with cascade tiers configured "
+                            "(agent.cascade) — cascade-mode chaining is deferred, "
+                            "see docs/specs.md §8.13"
+                        )
+                    _output_warn(
+                        "agent_progressive_scope",
+                        f"agent.progressive: true is set but progressive healing "
+                        f"is skipped for this run — {_scope_reason}. Falling back "
+                        "to the standard heal loop.",
+                    )
+            if (
+                resolved_agent_progressive
+                and effective_mode == "auto"
+                and not _cascade_tiers
+                and _replay_result is None
+            ):
+                from aqueduct.agent import AgentRunConfig as _ProgAgentRunConfig
+                from aqueduct.agent import generate_agent_patch as _prog_generate_patch
+                from aqueduct.agent.progressive import run_progressive_chain
+
+                def _prog_diagnose(link_failure_ctx, link_index):
+                    _link_budget = _resolve_budget(
+                        getattr(cfg.agent, "budget", None),
+                        max_reprompts=resolved_agent_max_reprompts,
+                    )
+
+                    def _prog_on_attempt(rec, _link_index=link_index):
+                        rec.chain_link = _link_index
+                        _on_attempt(rec)
+
+                    _link_toolbox = None
+                    if resolved_agent_mode == "agentic":
+                        from aqueduct.agent.toolbox import ToolBox
+                        _link_toolbox = ToolBox(
+                            manifest=manifest, failure_ctx=link_failure_ctx,
+                            obs_store=_obs_store, patch_store=_patch_store,
+                            base_dir=manifest.base_dir,
+                            spark_session=session if engine == "spark" else None,
+                            config_path=config_path, store_dir=store_dir,
+                        )
+                    return _prog_generate_patch(
+                        agent_cfg=_ProgAgentRunConfig(
+                            failure_ctx=link_failure_ctx,
+                            model=resolved_agent_model,
+                            patches_dir=patches_dir,
+                            provider=resolved_agent_provider,
+                            base_url=resolved_agent_base_url,
+                            api_key=resolved_agent_api_key,
+                            provider_options=resolved_agent_provider_options,
+                            timeout=resolved_agent_timeout,
+                            max_reprompts=resolved_agent_max_reprompts,
+                            engine_prompt_context=resolved_agent_engine_prompt_context,
+                            blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
+                            last_apply_error=None,
+                            guardrails=manifest.agent.guardrails if manifest.agent else None,
+                            budget=_link_budget,
+                            allow_defer=manifest.agent.allow_defer if manifest.agent else False,
+                            deep_loop=False,
+                            validate_callback=None,
+                            on_attempt=_prog_on_attempt,
+                            on_token=_on_token if _use_stream else None,
+                            apply_callback=_apply_cb,
+                            memory_coaching=_memory_cfg.coaching if _memory_cfg is not None else True,
+                            retry_max_retries=cfg.agent.retry.max_retries,
+                            retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
+                            obs_store=_obs_store,
+                            toolbox=_link_toolbox,
+                            mode=resolved_agent_mode,
+                            max_tool_calls=resolved_agent_max_tool_calls,
+                            supports_tools=resolved_agent_supports_tools,
+                        ),
+                    )
+
+                def _prog_apply_and_execute(combined_patch):
+                    import warnings as _prog_wsup
+
+                    from aqueduct.warnings import AqueductWarning as _ProgAqWarn
+                    with _prog_wsup.catch_warnings():
+                        _prog_wsup.simplefilter("ignore", _ProgAqWarn)
+                        _nm = _aqcli._apply_patch_in_memory(
+                            combined_patch, Path(blueprint), depot, profile, cli_overrides or {},
+                        )
+                    if _nm is None:
+                        return None, None, None
+                    try:
+                        _r2 = execute(
+                            _nm, session, run_id=str(uuid.uuid4()),
+                            store_dir=resolved_store_dir, checkpoint_root=checkpoint_root_abs,
+                            surveyor=surveyor, depot=depot,
+                        )
+                    except ExecuteError as exc:
+                        _r2 = ExecutionResult(
+                            blueprint_id=manifest.blueprint_id, run_id=str(uuid.uuid4()),
+                            status=ExecutionStatus.ERROR,
+                            module_results=(ModuleResult(module_id="_executor", status=ExecutionStatus.ERROR, error=str(exc)),),
+                        )
+                    _patch_ok = _r2.status == ExecutionStatus.SUCCESS
+                    _fctx2 = surveyor.record(_r2, patched=_patch_ok)
+                    return _nm, _r2, _fctx2
+
+                _resolved_max_chain = resolved_agent_max_chain or 3
+                click.echo(
+                    click.style(
+                        f"⚠ {failure_ctx.failed_module} failed → progressive self-healing "
+                        f"(chain cap {_resolved_max_chain})",
+                        fg="yellow",
+                    ),
+                    err=True,
+                )
+                _chain = run_progressive_chain(
+                    initial_failure_ctx=failure_ctx,
+                    diagnose=_prog_diagnose,
+                    apply_and_execute=_prog_apply_and_execute,
+                    max_chain=_resolved_max_chain,
+                )
+                for _link in _chain.links:
+                    _adv_note = (
+                        "advanced" if _link.advanced
+                        else f"stuck ({_link.stuck_reason})"
+                    )
+                    click.echo(
+                        f"  · link {_link.link_index}: {_link.failure_module} → "
+                        f"{'patch candidate' if _link.patch else 'no patch'} → {_adv_note}",
+                        err=True,
+                    )
+                patch_count += 1
+                if _chain.status == "solved" and _chain.combined_patch is not None:
+                    _aqcli._write_patch_to_blueprint(
+                        _chain.combined_patch, Path(blueprint), patches_dir, failure_ctx, mode="auto",
+                        obs_store=_obs_store, patch_store=_patch_store,
+                    )
+                    click.echo(
+                        click.style(
+                            f"  ✓ progressive chain solved ({_chain.link_count} link(s), "
+                            f"{patch_count}/{max_patches}) → {blueprint}",
+                            fg="green", bold=True,
+                        ),
+                        err=True,
+                    )
+                    _fire_heal_hook("on_healed", iter_run_id=iteration_run_id, hook_status="healed", ctx=failure_ctx)
+                    surveyor.record_healing_outcome(
+                        run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                        parent_run_id=run_id,
+                        failure_category=_chain.combined_patch.category, model=resolved_agent_model,
+                        patch_id=_chain.combined_patch.patch_id, confidence=_chain.combined_patch.confidence,
+                        patch_applied=True, run_success_after_patch=True,
+                        failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash,
+                        resolution="llm",
+                    )
+                    result = _chain.final_result
+                    failure_ctx = _chain.final_failure_ctx or failure_ctx
+                    break
+                else:
+                    last_apply_error = (
+                        f"Progressive chain ended without solving the pipeline "
+                        f"(status={_chain.status}, {_chain.link_count} link(s))"
+                    )
+                    click.echo(
+                        click.style(
+                            f"  ✗ progressive chain did not solve the pipeline "
+                            f"(status={_chain.status}, {patch_count}/{max_patches})",
+                            fg="red", bold=True,
+                        ),
+                        err=True,
+                    )
+                    if _chain.combined_patch is not None:
+                        _aqcli._stage_failed_patch(
+                            manifest.agent.on_heal_failure, _chain.combined_patch, patches_dir, failure_ctx, cfg,
+                            click, obs_store=_obs_store, patch_store=_patch_store,
+                        )
+                        surveyor.record_healing_outcome(
+                            run_id=iteration_run_id, failed_module=failure_ctx.failed_module,
+                            parent_run_id=run_id,
+                            failure_category=_chain.combined_patch.category, model=resolved_agent_model,
+                            patch_id=_chain.combined_patch.patch_id, confidence=_chain.combined_patch.confidence,
+                            patch_applied=False, run_success_after_patch=False,
+                            failure_signature=_sig_exact.hash, failure_signature_coarse=_sig_coarse.hash,
+                            resolution="llm",
+                        )
+                    if manifest.agent.on_heal_failure == "abort":
+                        break
+                    continue  # try next outer multi-patch attempt (fresh chain from the original Blueprint)
+
             # Phase 45: a validated replay candidate substitutes the LLM call
             # entirely — downstream staging/validation/archival treats it like
             # any agent patch (with source="replay" + resolution="replayed").
@@ -2342,14 +2592,17 @@ def run(
                         from aqueduct.cli.style import success as _ra_success
                         try:
                             _ra_result = _gen_regression_artifact(new_manifest, patch, failure_ctx, Path(blueprint))
+                            # style.* status functions print directly and return
+                            # None — never wrap them in click.echo (stray blank
+                            # line + message on the wrong stream).
                             if _ra_result.written:
-                                click.echo(_ra_success(f"regression test written → {_ra_result.path}"), err=True)
+                                _ra_success(f"regression test written → {_ra_result.path}")
                             else:
-                                click.echo(_ra_info(f"regression artifact skipped: {_ra_result.skip_reason}"), err=True)
+                                _ra_info(f"regression artifact skipped: {_ra_result.skip_reason}", err=True)
                         except Exception as _ra_exc:
                             # Best-effort: never let artifact generation break a
                             # successful heal.
-                            click.echo(_ra_info(f"regression artifact generation failed: {_ra_exc}"), err=True)
+                            _ra_info(f"regression artifact generation failed: {_ra_exc}", err=True)
                     result = result2
                     failure_ctx = failure_ctx2
                     break

@@ -141,7 +141,7 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
                       "provider_options",
                       "timeout", "max_reprompts", "engine_prompt_context",
                       "blueprint_prompt_context", "mode", "max_tool_calls",
-                      "supports_tools")
+                      "supports_tools", "progressive", "max_chain")
 
     bp = blueprint_agent
     eng = engine_agent
@@ -169,6 +169,14 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     )
     r.supports_tools = (
         bp.supports_tools if bp and bp.supports_tools is not None else eng.supports_tools
+    )
+    # Progressive (chained) multi-patch healing — same `is not None`
+    # inheritance shape as mode/supports_tools above.
+    r.progressive = (
+        bp.progressive if bp and bp.progressive is not None else eng.progressive
+    )
+    r.max_chain = (
+        bp.max_chain if bp and bp.max_chain is not None else eng.max_chain
     )
     return r
 

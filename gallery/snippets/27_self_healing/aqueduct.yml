@@ -22,3 +22,13 @@ agent:
   memory:
     replay: true
     coaching: true
+  # regression_artifact: true
+  # Opt-in (default false). When a heal succeeds (patch applied AND the
+  # re-run passes) in `auto` mode's full-run validation path, emit an
+  # .aqtest.yml regression test under aqtests/ pinned to today's fix — so a
+  # future hand-edit/refactor/revert that reintroduces the same root cause
+  # is caught by `aqueduct test`, not by the pipeline failing in production
+  # again. Complementary to the signature-memory heal cache (§8.1): that
+  # guards against re-solving a KNOWN failure; this guards against the FIX
+  # being undone with no failure and no heal to trigger on. See
+  # docs/specs.md §8.9.

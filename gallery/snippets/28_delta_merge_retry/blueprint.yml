@@ -1,9 +1,17 @@
 # blueprint.yml
-# Delta MERGE Egress with RetryPolicy.
+# Delta MERGE Egress with RetryPolicy, plus a per-module retry: override.
 
 aqueduct: "1.0"
 id: delta_merge_retry
 name: "Delta MERGE + Retry"
+
+# Blueprint-level default — inherited by every module that doesn't set its
+# own module-level `retry:` block (or leaves a field unset within one).
+retry_policy:
+  max_attempts: 2
+  backoff:
+    strategy: exponential
+    base_seconds: 2
 
 modules:
   - id: updates
@@ -13,6 +21,13 @@ modules:
       format: csv
       path: data/input/updates.csv
       options: {header: "true", inferSchema: "true"}
+    # Per-module retry: override (Blueprint-authoring-time surface, distinct
+    # from the module-level `on_failure:` block below — that one is the
+    # LLM-patch write target for heal-time replacement). Every field left
+    # unset here inherits the blueprint-level retry_policy: above; only
+    # max_attempts is overridden — backoff still inherits exponential/2s.
+    retry:
+      max_attempts: 5
 
   - id: merged_output
     label: "Delta MERGE Target"

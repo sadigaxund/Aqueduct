@@ -13,9 +13,12 @@ renamed or shaded jar — but the warning is a hint, not an error.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from aqueduct.models import ModuleType
+
+logger = logging.getLogger(__name__)
 
 RULE_ID = "jar_availability"
 
@@ -31,12 +34,20 @@ _FORMAT_JAR_FRAGMENTS: dict[str, list[str] | None] = {
 }
 
 
-def _loaded_jar_names(spark: Any) -> list[str]:
+def _loaded_jar_names(spark: Any) -> list[str] | None:
+    """Return loaded JAR names, or `None` if the JVM couldn't be inspected.
+
+    `None` (inspection failed — e.g. `spark.sparkContext` raises on a Spark
+    Connect session, which exposes no `_jsc`) must stay distinguishable from
+    `[]` (inspection succeeded, genuinely zero JARs loaded). Collapsing both
+    to `[]` made the missing-driver warning a permanent no-op under Connect —
+    "no JARs loaded" reads identically to "couldn't check."
+    """
     try:
         sc = spark.sparkContext
         jsc = getattr(sc, "_jsc", None)
         if jsc is None:
-            return []
+            return None
         jars = jsc.sc().listJars()
         # listJars returns a Scala Seq — iterate to coerce to Python strings
         out: list[str] = []
@@ -49,8 +60,14 @@ def _loaded_jar_names(spark: Any) -> list[str]:
                 break
             out.append(str(it.next()))
         return out
-    except Exception:
-        return []
+    except Exception as exc:
+        # Broad by design: JVM introspection via py4j internals
+        # (sparkContext._jsc) can fail for many reasons across session types
+        # (Connect has no sparkContext at all, older/newer py4j surfaces
+        # differ) — any failure here means "couldn't inspect," not a real
+        # error to propagate through a session-startup diagnostic.
+        logger.debug("jar inspection unavailable: %s", exc)
+        return None
 
 
 def _formats_in_blueprint(manifest: Any) -> dict[str, list[str]]:
@@ -85,6 +102,22 @@ def check(manifest: Any, spark: Any) -> list[str]:
     out: list[str] = []
     jars = _loaded_jar_names(spark)
     fmts = _formats_in_blueprint(manifest)
+
+    if jars is None:
+        # Could not inspect the JVM's loaded JARs at all (e.g. Spark Connect —
+        # no `sparkContext`/`_jsc`). Say so instead of silently reporting
+        # "all clear" — a real missing driver would otherwise never surface.
+        needs_jar = [fmt for fmt in fmts if _FORMAT_JAR_FRAGMENTS.get(fmt) is not None]
+        if needs_jar or fmts.get("jdbc"):
+            fmt_list = ", ".join(sorted(set(needs_jar) | ({"jdbc"} if fmts.get("jdbc") else set())))
+            out.append(
+                f"Could not verify JAR availability for format(s) {fmt_list} on "
+                "this Spark session (JVM introspection unavailable — e.g. Spark "
+                "Connect). If a required driver JAR is missing, the connector "
+                "will fail at first read/write with no advance warning from "
+                "this check."
+            )
+        return out
 
     for fmt, module_ids in fmts.items():
         fragments = _FORMAT_JAR_FRAGMENTS.get(fmt)
