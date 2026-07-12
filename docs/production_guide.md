@@ -1,10 +1,10 @@
 # Aqueduct Production Guide
 
-**Deploying Aqueduct pipelines on Spark clusters — configuration, security, maintenance.**
+**Deploying Aqueduct pipelines on Spark clusters: configuration, security, maintenance.**
 
 ---
 
-## Deployment Environments
+## Deployment environments
 
 Aqueduct supports three deployment environments, declared under the `deployment:` block in `aqueduct.yml`:
 
@@ -32,15 +32,15 @@ Aqueduct has no built-in scheduler. `aqueduct run` is a one-shot CLI command des
 
 ---
 
-## Spark Cluster Configuration
+## Spark cluster configuration
 
 Aqueduct creates a `SparkSession` on the driver. Cluster connection is controlled via the `deployment:` and `spark_config:` blocks in `aqueduct.yml`.
 
 The `target` field is validated against `master_url` at config-load. A
 mismatch raises a `ConfigError` naming both values and the expected shape.
-`databricks` is a fully wired **remote‑submit** target — the engine packages
+`databricks` is a fully wired **remote‑submit** target, the engine packages
 the blueprint, uploads to DBFS, submits via the Databricks Jobs API, and
-polls to completion. `emr` and `dataproc` are rejected — they require a
+polls to completion. `emr` and `dataproc` are rejected, they require a
 packaging/submit layer planned for a future release.
 
 ```yaml
@@ -57,9 +57,9 @@ spark_config:
 
 `spark_config` keys are forwarded verbatim to `SparkSession.builder.config()`. Blueprint-level `spark_config` overrides engine-level keys on conflict.
 
-**Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `spark_config` — standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
+**Catalog wiring (`table:` addressing).** When Blueprint modules use `table:` instead of `path:`, Spark resolves the `catalog.schema.table` identifier through the session's configured catalog. The catalog connection lives entirely in `spark_config`, standard Spark properties like `spark.sql.catalog.*`, no Aqueduct-specific config. See the [Spark Guide](spark_guide.md#catalog-wiring) for examples.
 
-`table:` and `path:` are **mutually exclusive** on both Ingress and Egress — setting both raises a parse error.
+`table:` and `path:` are **mutually exclusive** on both Ingress and Egress, setting both raises a parse error.
 
 Environment variable substitution works inside config values:
 
@@ -86,7 +86,7 @@ deployment:
 ```
 
 The session runs in‑process inside the driver JVM. No external connectivity
-needed — `aqueduct doctor` always reports `ok`.
+needed: `aqueduct doctor` always reports `ok`.
 
 #### standalone
 
@@ -117,7 +117,7 @@ on the node to locate the ResourceManager. Set `HADOOP_CONF_DIR` (or
 export HADOOP_CONF_DIR=/etc/hadoop/conf
 ```
 
-`aqueduct doctor` warns if neither env var is set — the session will fail at
+`aqueduct doctor` warns if neither env var is set, the session will fail at
 startup without them. The doctor does **not** build a SparkSession (that would
 trigger a full YARN negotiation); use `--preflight` for a real session test.
 
@@ -137,7 +137,7 @@ spark_config:
 
 `master_url` must start with `k8s://`. The doctor parses the API server
 host:port from the URL and TCP‑probes it (port defaults to 443). It also warns
-if no `spark.kubernetes.*` keys are present in `spark_config` — at minimum a
+if no `spark.kubernetes.*` keys are present in `spark_config`, at minimum a
 namespace and container image are normally required.
 
 Credentials come from the pod's service account (no `@aq.secret()` needed when
@@ -146,13 +146,13 @@ submission, add a kubeconfig path under `spark_config`.
 
 ### Write-mode features
 
-**`mode: overwrite_partitions`** — two strategies for atomically replacing a subset
+**`mode: overwrite_partitions`**: two strategies for atomically replacing a subset
 of a table:
 
 | Strategy | Config | Behaviour |
 |---|---|---|
-| `replaceWhere` | `replace_where: "<predicate>"` (e.g. `"event_date = '2025-01-01'"`) | Delta `replaceWhere` — atomically replaces rows matching the predicate |
-| Dynamic partition overwrite | `partition_by: ["col"]` + `mode: overwrite_partitions` | Spark dynamic partition overwrite — replaces only partitions in the output DataFrame |
+| `replaceWhere` | `replace_where: "<predicate>"` (e.g. `"event_date = '2025-01-01'"`) | Delta `replaceWhere`: atomically replaces rows matching the predicate |
+| Dynamic partition overwrite | `partition_by: ["col"]` + `mode: overwrite_partitions` | Spark dynamic partition overwrite: replaces only partitions in the output DataFrame |
 
 When neither `replace_where` nor `partition_by` is set, falls back to plain `overwrite`.
 
@@ -161,7 +161,7 @@ When neither `replace_where` nor `partition_by` is set, falls back to plain `ove
 importable on the driver; `aqueduct doctor` verifies importability. As with
 UDFs, the class body is opaque to Aqueduct.
 
-**`on_new_columns`** — schema-drift contract (`allow` | `fail` | `alert`) on
+**`on_new_columns`**: schema-drift contract (`allow` | `fail` | `alert`) on
 Ingress and Egress (see the [Spark Guide](spark_guide.md) for the policy table).
 
 **Iceberg / Hudi / Delta maintenance.** The Egress `maintenance:` block runs
@@ -173,13 +173,13 @@ the blueprint `spark_config`.
 
 ---
 
-## Path Conventions
+## Path conventions
 
 **Rule: all I/O paths in production Blueprints must be cloud/HDFS URIs, never local filesystem paths.**
 
 Local paths (`data/yellow/*.parquet`) are relative to the working directory of the driver process. In a container or remote driver, that directory contains no data.
 
-**Correct pattern — context refs resolved from environment variables:**
+**Correct pattern: context refs resolved from environment variables:**
 
 ```yaml
 context:
@@ -211,9 +211,9 @@ agent:
 
 In `cluster` or `cloud` mode, `aqueduct doctor` warns when a Blueprint contains paths without a URI scheme.
 
-**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning — the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
+**Checkpoints require a driver+worker-visible filesystem.** `checkpoint: true` writes module checkpoints under the local observability store directory (`.aqueduct/observability/<blueprint_id>/checkpoints/<run_id>/`) by default. When Spark workers run in containers or on remote hosts that don't share the driver's filesystem (Docker-based Standalone, k8s), the checkpoint write fails per-module and degrades to a `runtime_checkpoint_write_failed` warning, the run still succeeds, but the recompute-avoidance benefit (and `--resume` for that module) is lost. Either mount the project directory into the worker containers so the path resolves on both sides, or drop `checkpoint: true` and accept the recompute (for small data the cost is negligible). A remote checkpoint root (`s3a://`) is a roadmap item (see `roadmap.md`).
 
-**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/` — e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the roadmap item above). Example:
+**`checkpoint_root` override (2.8).** Set the top-level `checkpoint_root` key in `aqueduct.yml` to point checkpoints at a directory other than the derived `<store_dir>/checkpoints/`, e.g. a volume explicitly mounted into every worker container, or faster local disk on a single-node deployment. Local filesystem paths only; a `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` value is rejected at config-load (see the roadmap item above). Example:
 
 ```yaml
 checkpoint_root: "/mnt/shared/aqueduct-checkpoints"
@@ -221,9 +221,9 @@ checkpoint_root: "/mnt/shared/aqueduct-checkpoints"
 
 ---
 
-## Observability State Persistence
+## Observability state persistence
 
-`observability.db` (DuckDB) runs on the driver — always correct. Spark workers never access it.
+`observability.db` (DuckDB) runs on the driver: always correct. Spark workers never access it.
 
 | Deployment | Driver persistence | Action required |
 |---|---|---|
@@ -255,11 +255,11 @@ stores:
   blob:          { backend: s3, path: "s3://my-bucket/aqueduct" }   # needs [object-store]
 ```
 
-The `blob` object store carries the two opaque artefact families that are not relational rows — observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed) — a Depot is now required for incremental state.
+The `blob` object store carries the two opaque artefact families that are not relational rows, observability blobs (fat `manifest_json` / `stack_trace` / `provenance_json`) and the patch lifecycle (`pending`/`applied`/`rejected`). With `backend: s3` (or `gcs` / `adls`) they land in object storage; the patch *bodies* sit there while their status lives in the `patch_index` table, so the heal cache works without a local `patches/` directory. **Incremental Channels** persist their watermark to the Depot only (the local sidecar was removed), a Depot is now required for incremental state.
 
-> **Storage-integrity guardrail.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset, Aqueduct warns at startup that externalised blobs (manifests, stack traces, provenance) will land on the driver's local disk. Set `stores.blob.backend: local` explicitly to silence the warning — you've made an informed choice about where blobs live. Unrelated configurations never trigger it.
+> **Storage-integrity guardrail.** If `stores.observability.backend` is remote (postgres) but `stores.blob.backend` is left unset, Aqueduct warns at startup that externalised blobs (manifests, stack traces, provenance) will land on the driver's local disk. Set `stores.blob.backend: local` explicitly to silence the warning, you've made an informed choice about where blobs live. Unrelated configurations never trigger it.
 
-> `stores.lineage` was **removed** in 2.0 — `column_lineage` lives in the `observability` store. Use `stores.depots:` for depot mounts.
+> `stores.lineage` was **removed** in 2.0: `column_lineage` lives in the `observability` store. Use `stores.depots:` for depot mounts.
 
 The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory for a single invocation (useful for per-run isolation in CI / Kubernetes Jobs).
 
@@ -267,10 +267,10 @@ The `aqueduct run --store-dir <path>` CLI flag overrides the parent directory fo
 
 Per-pipeline DuckDB files are the right default: zero setup, single-writer is fine because one pipeline runs at a time, and the file sits next to the project. You have outgrown them when any of these become true:
 
-- **Fleet questions** — "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
-- **Many pipelines** — dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
-- **Ephemeral drivers** — Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
-- **Concurrent access** — a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
+- **Fleet questions**: "which of my N pipelines healed last night", "heal-rate trend across all blueprints" require querying N separate `.db` files; with Postgres every pipeline writes to one database (the engine creates `observability` / `depots` schemas per store automatically).
+- **Many pipelines**: dozens of per-pipeline files under `.aqueduct/observability/*/` get awkward to back up, retain, and dashboard.
+- **Ephemeral drivers**: Kubernetes Jobs / CI runners lose local files on every restart; a network DSN removes the PVC requirement above entirely.
+- **Concurrent access**: a dashboard or `aqueduct runs` polling while a run is writing hits DuckDB's single-writer lock; Postgres MVCC does not care.
 
 The switch is one config change (plus `pip install aqueduct-core[postgres]`):
 
@@ -285,7 +285,7 @@ stores:
       path: "postgresql://aq:${PGPASSWORD}@pg.internal:5432/aqueduct"
 ```
 
-Tables are created on the first run — no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
+Tables are created on the first run, no migration step is required to start. Old per-pipeline DuckDB history is not imported automatically; it stays queryable in place (`duckdb .aqueduct/observability/<blueprint_id>/observability.db`). If you want the history in Postgres, DuckDB's `postgres` extension can copy it table-by-table:
 
 ```sql
 -- inside `duckdb .aqueduct/observability/<blueprint_id>/observability.db`
@@ -296,11 +296,11 @@ INSERT INTO pg.observability.healing_outcomes  SELECT * FROM healing_outcomes;
 -- repeat for failure_contexts, heal_attempts, probe_signals, module_metrics, …
 ```
 
-Run the new-backend pipeline once first so the target tables exist, and mind schema drift: columns added by newer Aqueduct versions (e.g. `healing_outcomes.failure_signature`) may not exist in old DuckDB files — list columns explicitly if the `SELECT *` shapes differ.
+Run the new-backend pipeline once first so the target tables exist, and mind schema drift: columns added by newer Aqueduct versions (e.g. `healing_outcomes.failure_signature`) may not exist in old DuckDB files, list columns explicitly if the `SELECT *` shapes differ.
 
 ---
 
-## LLM Service Configuration
+## LLM service configuration
 
 In production, LLM inference runs as a remote HTTP service.
 
@@ -324,13 +324,13 @@ agent:
   approval: human
 ```
 
-Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`. As of 1.9, `agent.api_key` can be configured per blueprint or per cascade tier — always use `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A project-wide cascade default can live in `aqueduct.yml` under `agent.cascade` (useful for fleets of blueprints sharing a heal policy); each Blueprint's own `agent.cascade` overrides it.
+Inject API keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) via Kubernetes Secrets or your secrets manager. Never commit keys to Blueprint YAML or `aqueduct.yml`. As of 1.9, `agent.api_key` can be configured per blueprint or per cascade tier, always use `@aq.secret('KEY')` or `${ENV_VAR}`, never a plaintext literal (which triggers an `insecure_api_key` warning and is redacted from logs/LLM payloads). A project-wide cascade default can live in `aqueduct.yml` under `agent.cascade` (useful for fleets of blueprints sharing a heal policy); each Blueprint's own `agent.cascade` overrides it.
 
 ---
 
-## Danger Settings
+## Danger settings
 
-Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning — these warnings cannot be suppressed via `warnings.suppress`.
+Certain features are disabled by default because they have destructive or expensive side-effects. They are grouped under a `danger:` block in `aqueduct.yml`. All keys default to `false`. If any key is set to `true`, Aqueduct prints a startup warning, these warnings cannot be suppressed via `warnings.suppress`.
 
 ```yaml
 danger:
@@ -344,7 +344,7 @@ danger:
 
 ---
 
-## Patch Lifecycle in Production
+## Patch lifecycle in production
 
 The patch lifecycle differs between development and production.
 
@@ -355,7 +355,7 @@ pipeline fails → LLM generates patch → patch written to patches/pending/
 → human reviews → aqueduct patch apply → Blueprint updated → re-run
 ```
 
-`approval: auto` is acceptable locally — git provides rollback.
+`approval: auto` is acceptable locally: git provides rollback.
 
 **Production (recommended):**
 
@@ -371,7 +371,7 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 → CI/CD validates → human approves → merge → redeploy
 ```
 
-**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct stages the patch and fires a POST to `agent.ci_webhook_url`. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider and ships no versioned GitHub Action — you wire a short workflow you own.
+**`approval: ci`:** When set, instead of writing to `patches/pending/`, Aqueduct stages the patch and fires a POST to `agent.ci_webhook_url`. The receiving CI system creates the branch and PR. Aqueduct does not couple to any git provider and ships no versioned GitHub Action, you wire a short workflow you own.
 
 **CI webhook payload schema.** The `on_patch_pending` POST body carries:
 
@@ -385,23 +385,23 @@ pipeline fails → webhook fires (alert to Slack/PagerDuty)
 | `root_cause`, `rationale`, `category`, `confidence` | string | Diagnostic extras (optional to consume) |
 | `patch_path` | string | Where the body was staged |
 
-The patch **body** (a PatchSpec JSON) additionally carries an `_aq_meta` block (`run_id`, `blueprint_id`, `failed_module`, `applied_at`, `approval_mode`, `prompt_version`, `failure_signature`). The receiver obtains the body — from a run artifact or `aqueduct patch pull <patch_id> --blueprint <bp>` — then applies + commits it:
+The patch **body** (a PatchSpec JSON) additionally carries an `_aq_meta` block (`run_id`, `blueprint_id`, `failed_module`, `applied_at`, `approval_mode`, `prompt_version`, `failure_signature`). The receiver obtains the body, from a run artifact or `aqueduct patch pull <patch_id> --blueprint <bp>`, then applies + commits it:
 
 ```bash
 aqueduct patch import received-patch.json --blueprint pipeline.yml
 # → applies the patch, then `git commit` with a structured ---aqueduct--- trailer
 ```
 
-`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml) — a snippet you own, not a maintained Action.
+`patch import` is the **one CI command**: it is `patch apply` + `patch commit` in a single atomic step (use `--no-commit` to stage only). A copy-paste example workflow wiring `import` + `gh pr create` lives at [`docs/templates/ci-heal-workflow.yml`](templates/ci-heal-workflow.yml), a snippet you own, not a maintained Action.
 
 **`on_patch_pending` webhook:** When a patch is staged (`approval: human`), Aqueduct fires `agent.webhooks.on_patch_pending` so teams receive a Slack/PagerDuty notification.
 
-**Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact — that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:
+**Webhook hardening.** All webhook deliveries run in a daemon thread (never block or fail a run), redact registered `@aq.secret()` values from the body (headers/URL are left intact, that is how you authenticate to the endpoint), and carry an `X-Aqueduct-Delivery: <uuid>` header for receiver-side dedup. Two opt-in fields on any endpoint:
 
-- `secret:` — HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
-- `max_retries:` (default 1) / `backoff_seconds:` (default 2.0) — bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
+- `secret:`: HMAC-SHA256-signs the exact request body and sends `X-Aqueduct-Signature: sha256=<digest>`. The receiver recomputes the digest over the raw body with the shared secret to verify authenticity + integrity (the Stripe/GitHub pattern). Use this for a generic receiver that must trust the payload; Slack/PagerDuty incoming-webhook URLs already carry their own secret and don't need it.
+- `max_retries:` (default 1) / `backoff_seconds:` (default 2.0), bounded retry on transient `429`/`5xx`/network errors, exponential when `max_retries > 1`.
 
-**`aqueduct doctor` webhook probe depth (`health_probe:`).** By default `doctor` probes each configured endpoint with an HTTP **OPTIONS** request (`health_probe: options`) — any response, including `405`, counts as reachable, without triggering endpoint-side logic tied to the real event body. Set `health_probe: connect` for a lighter TCP/TLS-only reachability check (no HTTP request sent at all — useful for endpoints that log/alert on *any* incoming request). Set `health_probe: full` to restore the pre-2.1 behaviour — a real POST/PUT/PATCH carrying a synthetic `{"event": "doctor_probe", ...}` payload — only if your receiver specifically needs to see a real request to validate parsing.
+**`aqueduct doctor` webhook probe depth (`health_probe:`).** By default `doctor` probes each configured endpoint with an HTTP **OPTIONS** request (`health_probe: options`), any response, including `405`, counts as reachable, without triggering endpoint-side logic tied to the real event body. Set `health_probe: connect` for a lighter TCP/TLS-only reachability check (no HTTP request sent at all, useful for endpoints that log/alert on *any* incoming request). Set `health_probe: full` to restore the pre-2.1 behaviour, a real POST/PUT/PATCH carrying a synthetic `{"event": "doctor_probe", ...}` payload, only if your receiver specifically needs to see a real request to validate parsing.
 
 ### `patches/rules.md`
 
@@ -420,7 +420,7 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 | Directory | Commit to git? | Notes |
 |---|---|---|
 | `patches/applied/` | **Yes** | Audit trail |
-| `patches/pending/` | No (`.gitignore`) | Ephemeral — human review staging area |
+| `patches/pending/` | No (`.gitignore`) | Ephemeral: human review staging area |
 | `patches/rejected/` | No (`.gitignore`) | Ephemeral |
 | `patches/rules.md` | **Yes** | Project-specific LLM repair rules |
 
@@ -430,20 +430,20 @@ No code change needed to add a rule. Edit the file, commit it, rules apply on ne
 
 ---
 
-## Security Considerations
+## Security considerations
 
 | Concern | Mitigation |
 |---|---|
 | API keys in Blueprint YAML | Never. Use `${ENV_VAR}` refs. Inject via K8s Secrets / Vault. |
 | LLM modifying paths beyond guardrails | Set `agent.guardrails.allowed_paths` to cloud URI patterns. |
-| `auto` mode with `max_patches > 1` in production | Requires `danger.allow_multi_patch: true` — do not set in prod config. |
+| `auto` mode with `max_patches > 1` in production | Requires `danger.allow_multi_patch: true`: do not set in prod config. |
 | `observability.db` exposure | Contains resolved config and error details. Restrict filesystem access. |
 | Patch tampering | Planned: patch signature verification for `auto` multi-patch mode. |
 | `danger.*` settings in shared config | Never commit `danger.*: true` to a shared/prod `aqueduct.yml`. |
 
 ---
 
-## Delta Lake Operational Notes
+## Delta Lake operational notes
 
 When using `format: delta` Egress modules in production, Aqueduct handles reads and writes but does **not** run Delta maintenance operations. These must be scheduled externally:
 
@@ -462,23 +462,23 @@ VACUUM delta.`s3://my-bucket/output/orders` RETAIN 168 HOURS;
 
 Without `OPTIMIZE`, incremental pipelines using `mode: append` or `mode: merge` will accumulate small files over time, degrading read performance significantly.
 
-### Retry idempotency — half-write exposure by module
+### Retry idempotency: half-write exposure by module
 
 `retry_policy.max_attempts > 1` (blueprint- or module-level, see [specs.md §4](specs.md)) re-runs a failed pipeline. Whether a retry can produce duplicate or corrupted data depends entirely on the write mode of the Egress modules in the retried path:
 
 | Egress mode | Half-write exposure | Why |
 |---|---|---|
-| `format: delta`, any mode | **Safe** | Delta commits are atomic — a failed write never leaves a partial commit visible to readers; a retry either fully lands or fully doesn't. |
+| `format: delta`, any mode | **Safe** | Delta commits are atomic: a failed write never leaves a partial commit visible to readers; a retry either fully lands or fully doesn't. |
 | `parquet` / `csv`, `mode: overwrite` | **Safe-ish** | A retry rewrites the entire target from scratch, so a half-written file from the failed attempt is simply overwritten. Not atomic mid-write (a concurrent reader could see a torn file), but idempotent across retries. |
-| `parquet` / `csv`, `mode: append` | **NOT SAFE** | The failed attempt may have already appended some files before failing. A retry appends again — the rows already written are duplicated, not replaced. This is what the compiler's [`delivery_append_retry_dupes`](spark_guide.md#delivery-append-retry-dupes) warning flags. |
-| `format: jdbc`, `mode: append` | **NOT SAFE** | Same failure mode as parquet/csv append — a partially committed batch of rows leaves duplicates on retry. JDBC has no cross-statement atomicity guarantee here. |
-| `mode: merge` (Delta `MERGE INTO`) | **Idempotent by construction** | A MERGE keyed on a stable match condition re-applies safely — matched rows update in place, unmatched rows insert once, regardless of how many times the same batch is retried. |
+| `parquet` / `csv`, `mode: append` | **NOT SAFE** | The failed attempt may have already appended some files before failing. A retry appends again, the rows already written are duplicated, not replaced. This is what the compiler's [`delivery_append_retry_dupes`](spark_guide.md#delivery-append-retry-dupes) warning flags. |
+| `format: jdbc`, `mode: append` | **NOT SAFE** | Same failure mode as parquet/csv append: a partially committed batch of rows leaves duplicates on retry. JDBC has no cross-statement atomicity guarantee here. |
+| `mode: merge` (Delta `MERGE INTO`) | **Idempotent by construction** | A MERGE keyed on a stable match condition re-applies safely, matched rows update in place, unmatched rows insert once, regardless of how many times the same batch is retried. |
 
-**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv/JDBC append. If you must retry a parquet/csv/JDBC-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink — it destroys history).
+**Guidance:** if a pipeline needs transactional, retry-safe appends, use Delta (`format: delta`, `mode: append` or `mode: merge`) rather than parquet/csv/JDBC append. If you must retry a parquet/csv/JDBC-append pipeline, prefer `max_attempts: 1` with orchestrator-level retry handling that can dedup downstream, or switch the sink to `mode: overwrite` for full-refresh outputs only (never on an incremental sink, it destroys history).
 
 ---
 
-## Remote-Submit Targets
+## Remote-submit targets
 
 `emr` and `dataproc` are **rejected at config‑load** in the current
 release. Setting `deployment.target` to either of these two values raises
@@ -521,13 +521,13 @@ deployment:
 4. The local CLI polls `GET /api/2.1/jobs/runs/get` with exponential backoff (5s → 60s cap)
 5. On success, exit `0`; on failure, exit `DATA_OR_RUNTIME(2)` with remote driver logs printed
 
-**Doctor check.** `aqueduct doctor` includes a `remote-target` check — it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking — `run_doctor` continues to subsequent checks).
+**Doctor check.** `aqueduct doctor` includes a `remote-target` check, it verifies the workspace URL is reachable and a `DATABRICKS_TOKEN` is set. Status: `fail` (non-blocking, `run_doctor` continues to subsequent checks).
 
 ### EMR / Dataproc
 
 Deferred. These targets raise `NotImplementedError` at runtime. They will reuse the existing `aws` / `gcp` extras for their submit clients when implemented.
 
-## Production Readiness Checklist
+## Production readiness checklist
 
 Before promoting a Blueprint to production:
 

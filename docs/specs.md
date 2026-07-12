@@ -1,6 +1,6 @@
-# Aqueduct — Blueprint & Engine Reference
+# Aqueduct: Blueprint & Engine Reference
 
-**Version 2.15 — Reference Document**
+**Version 2.15: Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -8,11 +8,11 @@
 Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Probe · Regulator · Spillway · Arcade · Surveyor
 
 > **Document map:** This document covers the Blueprint format, engine architecture, module types, and self-healing agent. Companion docs cover specific areas:
-> - **[CLI Reference](cli_reference.md)** — All commands and flags
-> - **[Spark Guide](spark_guide.md)** — Compiler warnings, performance, tuning
-> - **[Observability Guide](observability_guide.md)** — Store schemas and diagnostic query cookbook
-> - **[Production Guide](production_guide.md)** — Cluster deployment, security, Delta operations
-> - **[Roadmap](roadmap.md)** — Deferred features and future plans
+> - **[CLI Reference](cli_reference.md)**: All commands and flags
+> - **[Spark Guide](spark_guide.md)**: Compiler warnings, performance, tuning
+> - **[Observability Guide](observability_guide.md)**: Store schemas and diagnostic query cookbook
+> - **[Production Guide](production_guide.md)**: Cluster deployment, security, Delta operations
+> - **[Roadmap](roadmap.md)**: Deferred features and future plans
 
 **Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Spark Integration](#10-deployment--spark-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
 
@@ -20,40 +20,40 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 
 # **1. Introduction**
 
-## **1.1 Purpose of This Document**
+## **1.1 Purpose of this document**
 
-This document is the complete system design and implementation reference for Aqueduct — an intelligent, declarative Spark pipeline engine with integrated LLM-driven self-healing. It covers every component, design decision, data contract, configuration schema, and runtime behaviour.
+This document is the complete system design and implementation reference for Aqueduct, an intelligent, declarative Spark pipeline engine with integrated LLM-driven self-healing. It covers every component, design decision, data contract, configuration schema, and runtime behaviour.
 
-## **1.2 What Aqueduct Is**
+## **1.2 What Aqueduct is**
 
-Aqueduct is a control plane for Apache Spark. It does not replace Spark — it wraps it. Engineers and LLM agents author pipelines as YAML Blueprint files. Aqueduct parses, validates, compiles, plans, and executes those Blueprints as Spark jobs, monitoring them continuously and autonomously patching failures when they occur.
+Aqueduct is a control plane for Apache Spark. It does not replace Spark, it wraps it. Engineers and LLM agents author pipelines as YAML Blueprint files. Aqueduct parses, validates, compiles, plans, and executes those Blueprints as Spark jobs, monitoring them continuously and autonomously patching failures when they occur.
 
-The name is deliberate: a Roman aqueduct is precision-engineered infrastructure for carrying flow reliably across vast distances, planned on actual blueprints (forma), and built to strict tolerances. Aqueduct the software carries data flow with the same philosophy — structured, observable, and resilient.
+The name is deliberate: a Roman aqueduct is precision-engineered infrastructure for carrying flow reliably across vast distances, planned on actual blueprints (forma), and built to strict tolerances. Aqueduct the software carries data flow with the same philosophy, structured, observable, and resilient.
 
-## **1.3 Primary Users**
+## **1.3 Primary users**
 
-- Data engineers (code-first) — author and maintain Blueprints, review patches, configure retry policies.
-- LLM agents — primary runtime operators; diagnose failures, propose and apply Patches autonomously.
-- Platform operators — deploy and configure the engine, manage deployment targets and credentials.
+- Data engineers (code-first): author and maintain Blueprints, review patches, configure retry policies.
+- LLM agents: primary runtime operators; diagnose failures, propose and apply Patches autonomously.
+- Platform operators: deploy and configure the engine, manage deployment targets and credentials.
 
-## **1.4 Design Principles**
+## **1.4 Design principles**
 
 These principles govern every design decision in the system. When two requirements conflict, the higher principle wins.
 
 | Principle | Description |
 | :- | :- |
-| **P1 — LLM-first observability** | Every failure must carry enough structured context for an agent to diagnose and patch without additional queries. |
-| **P2 — Blueprint as truth** | The Blueprint is the single source of truth. Nothing about a pipeline exists outside the Blueprint and its derived Manifest. |
-| **P3 — Performance non-regression** | Aqueduct adds no hidden Spark actions. Any action beyond the pipeline's own Egress writes is the result of a user-configured Probe, Assert, or incremental watermark. |
-| **P4 — Static resolution first** | Any value that can be resolved at parse time must be. Runtime resolution is explicit, opt-in, and visually distinct in Blueprint syntax. |
-| **P5 — Patch grammar over codegen** | The LLM agent operates within a structured Patch grammar, not free-form code generation. Every patch is schema-valid, auditable, and reversible. |
-| **P6 — Passive-by-default gates** | Flow control constructs (Regulators, Spillways) do not exist in the execution path unless explicitly wired. Unwired gates compile away entirely. |
-| **P7 — Pure Spark type system** | Aqueduct owns no type system. All types are Spark DDL strings. Semantic constraints are annotations, not types. |
-| **P8 — Provenance-aware LLM context** | Every value the LLM reasons about is backed by a compile-time provenance index. The agent never receives raw Blueprint YAML to reverse-engineer — it receives resolved values tagged with their origin. |
+| **P1: LLM-first observability** | Every failure must carry enough structured context for an agent to diagnose and patch without additional queries. |
+| **P2: Blueprint as truth** | The Blueprint is the single source of truth. Nothing about a pipeline exists outside the Blueprint and its derived Manifest. |
+| **P3: Performance non-regression** | Aqueduct adds no hidden Spark actions. Any action beyond the pipeline's own Egress writes is the result of a user-configured Probe, Assert, or incremental watermark. |
+| **P4: Static resolution first** | Any value that can be resolved at parse time must be. Runtime resolution is explicit, opt-in, and visually distinct in Blueprint syntax. |
+| **P5: Patch grammar over codegen** | The LLM agent operates within a structured Patch grammar, not free-form code generation. Every patch is schema-valid, auditable, and reversible. |
+| **P6: Passive-by-default gates** | Flow control constructs (Regulators, Spillways) do not exist in the execution path unless explicitly wired. Unwired gates compile away entirely. |
+| **P7: Pure Spark type system** | Aqueduct owns no type system. All types are Spark DDL strings. Semantic constraints are annotations, not types. |
+| **P8: Provenance-aware LLM context** | Every value the LLM reasons about is backed by a compile-time provenance index. The agent never receives raw Blueprint YAML to reverse-engineer, it receives resolved values tagged with their origin. |
 
 ---
 
-# **2. Naming Glossary**
+# **2. Naming glossary**
 
 These names are canonical and used consistently throughout the codebase, documentation, logs, and LLM prompts.
 
@@ -71,7 +71,7 @@ These names are canonical and used consistently throughout the codebase, documen
 | **Junction** | Module type: splits one incoming DataFrame into multiple downstream branches (fan-out). |
 | **Funnel** | Module type: merges multiple upstream DataFrames into one (fan-in). |
 | **Probe** | Module type: non-blocking observability tap attached to a Module's output edge. Zero Spark actions by default. |
-| **Regulator** | Module type: trigger gate. Passive by default — if nothing is wired to it, it does not exist in the execution path. |
+| **Regulator** | Module type: trigger gate. Passive by default, if nothing is wired to it, it does not exist in the execution path. |
 | **Spillway** | The error output port present on every Module. Routes row-level errors to a designated downstream Module. |
 | **Arcade** | Module type: an encapsulated, reusable sub-pipeline embedded as a single Module in a parent Blueprint. Expanded at compile time. |
 | **Surveyor** | The runtime supervisor process. Monitors pipeline execution, evaluates health signals, manages retry policy, triggers LLM self-healing. |
@@ -81,42 +81,42 @@ These names are canonical and used consistently throughout the codebase, documen
 | **PatchSpec** | The JSON document that describes a set of operations to apply to a Blueprint. Produced by the LLM agent or authored by hand. |
 | **ProvenanceMap** | A compile-time index of every resolved config value: where it came from (literal, context ref, env var, Arcade inheritance), the original expression, and the resolved value. |
 
-> **Three version spaces — do not conflate.** This document tracks three independent numbers: the **Blueprint grammar version** (`aqueduct: "1.0"` at the top of every Blueprint YAML — the schema contract a Blueprint declares against, currently frozen at 1.0), the **specs.md document version** (the `Version X.Y` header at the top of this file — bumped whenever a documented contract changes, currently tracking this section), and the **package version** (`aqueduct-core`'s PyPI release, in `pyproject.toml` — SemVer, independent release cadence). A specs.md version bump does not imply a package release, and a Blueprint's `aqueduct: "1.0"` does not change even when specs.md or the package version does.
+> **Three version spaces: do not conflate.** This document tracks three independent numbers: the **Blueprint grammar version** (`aqueduct: "1.0"` at the top of every Blueprint YAML, the schema contract a Blueprint declares against, currently frozen at 1.0), the **specs.md document version** (the `Version X.Y` header at the top of this file, bumped whenever a documented contract changes, currently tracking this section), and the **package version** (`aqueduct-core`'s PyPI release, in `pyproject.toml`, SemVer, independent release cadence). A specs.md version bump does not imply a package release, and a Blueprint's `aqueduct: "1.0"` does not change even when specs.md or the package version does.
 
 ---
 
-# **3. System Architecture**
+# **3. System architecture**
 
-## **3.1 High-Level Overview**
+## **3.1 High-level overview**
 
 Aqueduct has four processing layers and three persistent stores. Each layer has a defined input/output contract and can be developed and tested independently.
 
 | Layer | Input | Output | Responsibility |
 | :- | :- | :- | :- |
-| 1 — Parser | Blueprint YAML | Validated AST | Schema validation, Context Tier 0 resolution, cycle detection, Arcade loading |
-| 2 — Compiler | AST + Context map | Manifest (JSON) | Interpolate `${ctx.*}` refs, resolve `@aq.*` functions, expand Arcades, wire Probes and Spillways |
-| 3 — Executor | Manifest | RunRecord + metrics | Topological sort, submit Spark jobs, attach SparkListener, stream events to Observability Store |
-| 4 — Surveyor | Live run signals | HealthEvents + Patches | Monitor health, apply retry policy, invoke LLM loop, apply approved Patches |
+| 1: Parser | Blueprint YAML | Validated AST | Schema validation, Context Tier 0 resolution, cycle detection, Arcade loading |
+| 2: Compiler | AST + Context map | Manifest (JSON) | Interpolate `${ctx.*}` refs, resolve `@aq.*` functions, expand Arcades, wire Probes and Spillways |
+| 3: Executor | Manifest | RunRecord + metrics | Topological sort, submit Spark jobs, attach SparkListener, stream events to Observability Store |
+| 4: Surveyor | Live run signals | HealthEvents + Patches | Monitor health, apply retry policy, invoke LLM loop, apply approved Patches |
 
-## **3.2 Persistent Stores**
+## **3.2 Persistent stores**
 
 | Store | Description |
 | :- | :- |
 | **Observability Store** | Append-only log of all runtime signals: Probe readings, stage metrics, errors. Per-pipeline routing (1.1.0+): `.aqueduct/observability/<blueprint_id>/observability.db`. |
 | **Column Lineage** | Column lineage graphs and Flow Reports live in the `column_lineage` table **inside the observability store** (no separate store). The former `stores.lineage` config option has been **removed**; a legacy block in `aqueduct.yml` raises a `ConfigError` (2.0). |
-| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default — transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
-| **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle — the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
-| **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store — rows are not tied to a real `run_id`. |
+| **Depot (KV Store)** | Persistent key-value store for pipeline state across runs: watermarks, last-run metadata. Configured under `stores.depots` (a name-keyed map of mounts; a `default` mount always exists). Keys are **per-blueprint isolated** by default, transparently prefixed with `blueprint_id`, so blueprints don't collide on a shared depot; opt a mount into cross-blueprint sharing with `shared: true` (read via `@aq.depot.<name>.get`). Incremental Channels persist their watermark to the Depot (if configured); without a Depot the watermark is lost between runs and every run re-scans all source data. The compiler emits `perf_incremental_watermark_scan` when an incremental Channel has no upstream cache/checkpoint, because computing `MAX(watermark_column)` on the output requires a second full scan. |
+| **Object Store** (1.3+) | Transport for driver-side **blobs** and the **patch lifecycle**, configured under `stores.blob`. A single backend (`local` default, or `s3` / `gcs` / `adls` via one `fsspec` handle, the `object-store` extra, folded into `[stores]`) serves two semantic stores: a **BlobStore** (zstd-externalised `manifest_json` / `stack_trace` / `provenance_json`) and a **PatchStore** (the `pending` / `applied` / `rejected` patch directories). The `local` backend is byte-identical to the historical on-disk layout, so the git-diff review workflow is unchanged; the cloud backends let a run on an ephemeral pod leave no local-FS artefacts under its cwd. |
+| **Benchmark Store** (1.3+) | Stores scenario benchmark results (`benchmark_results` table), leaderboard aggregates, and regression gate history. Configurable under `stores.benchmark` with a `local` DuckDB default or `postgres` backend in a dedicated `benchmark` schema. Separate from the observability store, rows are not tied to a real `run_id`. |
 
 > **Storage-integrity warning:** When `stores.observability.backend` is remote
 > (Postgres/Redis) but `stores.blob.backend` is left at its default (`local`,
-> unset), Aqueduct emits a non-suppressible `AqueductWarning` — externalised
+> unset), Aqueduct emits a non-suppressible `AqueductWarning`, externalised
 > blobs (manifests, stack traces, provenance) will be written to the driver's
 > local disk instead of the remote backend. Set `stores.blob.backend` explicitly
 > to silence it (either to `local` to acknowledge, or to a cloud backend like
 > `s3`/`gcs`/`adls`).
 
-## **3.3 Component Interaction Flow**
+## **3.3 Component interaction flow**
 
 ```
 Blueprint.yml → Parser → Validated AST → Compiler → Manifest (JSON) → Executor → RunRecord → Surveyor → Flow Report
@@ -126,37 +126,37 @@ Blueprint.yml → Parser → Validated AST → Compiler → Manifest (JSON) → 
 
 On the happy path the flow is linear: Parser → Compiler → Executor → Surveyor.
 
-1. **Parse + Compile.** Parser validates YAML against the JSON Schema, builds the AST, resolves Tier 0 context refs. Compiler resolves Tier 1 (`@aq.*`) calls — secrets, Depot reads, dates — expands Arcades into a flat module list, and emits the Manifest plus `provenance_map` and `inputs_fingerprint`.
+1. **Parse + Compile.** Parser validates YAML against the JSON Schema, builds the AST, resolves Tier 0 context refs. Compiler resolves Tier 1 (`@aq.*`) calls, secrets, Depot reads, dates, expands Arcades into a flat module list, and emits the Manifest plus `provenance_map` and `inputs_fingerprint`.
 2. **Execute.** The Executor topologically sorts the modules, inserts Probes after their `attach_to` targets, identifies independent connected components for `--parallel` mode, and runs each module through its handler. Per-module metrics and Probe signals are written to the observability store as they fire.
 3. **Surveyor + Agent loop (when triggered).** On failure, the Surveyor packages a FailureContext (error trace + provenance slice + recent signals + lineage), calls the configured LLM, and receives a PatchSpec. Patches are validated through gates (guardrails → compile-check → lineage → sandbox → plan-regression). The `apply_callback` writes the patch to disk, recompiles the Manifest, and the executor re-runs the pipeline.
 
 ### **Why a Manifest? Why not run the YAML directly?**
 
-The compile step is not cosmetic — the Executor consumes the Manifest, never the raw YAML. Several Blueprint constructs cannot be resolved at execution time:
+The compile step is not cosmetic: the Executor consumes the Manifest, never the raw YAML. Several Blueprint constructs cannot be resolved at execution time:
 
 | Blueprint construct | Why resolve at compile, not run |
 | :- | :- |
 | `${ctx.foo}` Tier 0 context refs | Substitution must happen before any module sees its config to ensure consistency. |
-| `@aq.date.today()`, `@aq.run.timestamp()` Tier 1 calls | Resolving at execution time would tie the value to the moment each module ran — two modules calling `today()` at different stages of a 4-hour pipeline could see different dates. |
+| `@aq.date.today()`, `@aq.run.timestamp()` Tier 1 calls | Resolving at execution time would tie the value to the moment each module ran, two modules calling `today()` at different stages of a 4-hour pipeline could see different dates. |
 | `@aq.secret('KEY')` | One network round-trip per run, not one per module per worker thread. |
 | `@aq.depot.get('watermark')` | A single DuckDB read at compile time prevents race conditions with runtime writes. |
 | Arcade `ref: arcades/foo.yml` | Sub-Blueprints are expanded inline so the executor sees a single flat module list. |
-| Macros `{{ macros.* }}` | Spark SQL cannot parse `{{ }}` placeholders — expansion must happen before Spark sees the query. |
+| Macros `{{ macros.* }}` | Spark SQL cannot parse `{{ }}` placeholders, expansion must happen before Spark sees the query. |
 | Passive Regulators | Regulators with no wired signal input are compiled away entirely. |
 
 The Manifest also carries the **ProvenanceMap** (per-config-key audit trail recording where every value came from) and **`inputs_fingerprint`** (compile-time snapshot of Ingress file metadata for the LLM to distinguish data-drift bugs from code bugs).
 
-**`base_dir`** — the top-level Blueprint file's own directory (empty string when compiled from an in-memory dict with no file). Every executor-side user-code import site — Assert `type: custom`'s `fn:`, Probe `type: custom`'s `module:`/`entry:`, `udf_registry`'s Python `module:`, and Egress/Ingress `format: custom`'s `class:` — resolves its dotted path against `base_dir` first (a sibling `.py` file next to the Blueprint), falling back to a normal `import` for installed packages. This exists because the `aqueduct` console-script entry point never puts the Blueprint's directory on `sys.path` (unlike `python -m`/`python -c`), so a bare `import` of a sibling file used to fail unless the user manually mutated `sys.path`. For an Arcade sub-Blueprint, callable refs still resolve against the **top-level** Blueprint's `base_dir`, not the arcade's own directory (one Manifest per compilation unit).
+**`base_dir`**: the top-level Blueprint file's own directory (empty string when compiled from an in-memory dict with no file). Every executor-side user-code import site, Assert `type: custom`'s `fn:`, Probe `type: custom`'s `module:`/`entry:`, `udf_registry`'s Python `module:`, and Egress/Ingress `format: custom`'s `class:`, resolves its dotted path against `base_dir` first (a sibling `.py` file next to the Blueprint), falling back to a normal `import` for installed packages. This exists because the `aqueduct` console-script entry point never puts the Blueprint's directory on `sys.path` (unlike `python -m`/`python -c`), so a bare `import` of a sibling file used to fail unless the user manually mutated `sys.path`. For an Arcade sub-Blueprint, callable refs still resolve against the **top-level** Blueprint's `base_dir`, not the arcade's own directory (one Manifest per compilation unit).
 
 ---
 
-# **4. Blueprint Format**
+# **4. Blueprint format**
 
-## **4.1 File Format & Versioning**
+## **4.1 File format & versioning**
 
-Blueprints are YAML files. The format is versioned — the `aqueduct` field selects the JSON Schema version. Unknown fields at any level are hard errors. This guarantees Blueprints are always valid input for LLM patch generation.
+Blueprints are YAML files. The format is versioned, the `aqueduct` field selects the JSON Schema version. Unknown fields at any level are hard errors. This guarantees Blueprints are always valid input for LLM patch generation.
 
-## **4.2 Top-Level Structure**
+## **4.2 Top-level structure**
 
 ```yaml
 aqueduct: "1.0"                        # schema version — required
@@ -215,23 +215,23 @@ hooks:                                 # optional — lifecycle actions after te
       in_process: true                       # reuse this run's live SparkSession
 ```
 
-**Per-Blueprint compile-warning suppression (`warnings:`, 1.2).** `warnings.suppress` is a list of compiler-warning `rule_id`s (or the sentinel `"*"`) to silence for THIS Blueprint only — it covers all **compile-time** diagnostics: the modular rule registry (e.g. `file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) and the inline compiler checks (e.g. `perf_python_udf_row_at_a_time`, `perf_multi_consumer_no_cache`, `delivery_append_retry_dupes`). It is unioned with the engine-level `warnings.suppress` from `aqueduct.yml` (+ `--suppress-warning` flags) — either side suppressing a rule silences it. It does **not** affect engine/session-startup warnings, runtime (Probe/Assert) warnings, or the process-global default used by other Blueprints — a rule suppressed here stays visible everywhere else. For an **Arcade** sub-Blueprint, the parent Blueprint's `warnings.suppress` covers the whole expanded compilation unit (including the sub-Blueprint's modules); the sub-Blueprint's own `warnings:` block is valid YAML (it parses standalone) but is not consulted during expansion.
+**Per-Blueprint compile-warning suppression (`warnings:`, 1.2).** `warnings.suppress` is a list of compiler-warning `rule_id`s (or the sentinel `"*"`) to silence for THIS Blueprint only, it covers all **compile-time** diagnostics: the modular rule registry (e.g. `file_format_no_repartition`, `jdbc_missing_partition`, `kafka_checkpoint_stale`) and the inline compiler checks (e.g. `perf_python_udf_row_at_a_time`, `perf_multi_consumer_no_cache`, `delivery_append_retry_dupes`). It is unioned with the engine-level `warnings.suppress` from `aqueduct.yml` (+ `--suppress-warning` flags), either side suppressing a rule silences it. It does **not** affect engine/session-startup warnings, runtime (Probe/Assert) warnings, or the process-global default used by other Blueprints, a rule suppressed here stays visible everywhere else. For an **Arcade** sub-Blueprint, the parent Blueprint's `warnings.suppress` covers the whole expanded compilation unit (including the sub-Blueprint's modules); the sub-Blueprint's own `warnings:` block is valid YAML (it parses standalone) but is not consulted during expansion.
 
-**Lifecycle hooks (`hooks:`, 2.5).** Four events: `on_success` / `on_failure` run sequentially AFTER the pipeline reaches its terminal state; `on_patch_pending` / `on_healed` fire MID-RUN at heal milestones, mirroring the engine-level `webhooks:` `on_patch_pending`/`on_ci_patch` vocabulary one level up, at the Blueprint. `on_patch_pending` fires every time a heal stages a patch for human or CI review (guardrail-blocked staging, `approval: human`, and `approval: ci`, all three staging sites). `on_healed` fires once a heal's re-run succeeds — patch applied AND the pipeline green again — and always runs BEFORE the outer run's terminal `on_success` hooks (it fires mid-loop, before the loop breaks out to the terminal report). No event **ever changes the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
+**Lifecycle hooks (`hooks:`, 2.5).** Four events: `on_success` / `on_failure` run sequentially AFTER the pipeline reaches its terminal state; `on_patch_pending` / `on_healed` fire MID-RUN at heal milestones, mirroring the engine-level `webhooks:` `on_patch_pending`/`on_ci_patch` vocabulary one level up, at the Blueprint. `on_patch_pending` fires every time a heal stages a patch for human or CI review (guardrail-blocked staging, `approval: human`, and `approval: ci`, all three staging sites). `on_healed` fires once a heal's re-run succeeds, patch applied AND the pipeline green again, and always runs BEFORE the outer run's terminal `on_success` hooks (it fires mid-loop, before the loop breaks out to the terminal report). No event **ever changes the run's exit code** (a failing hook emits `⚠ [hook_failed]` and skips the event's remaining hooks). Each entry sets **exactly one** action:
 
 | Entry | Semantics | Gate |
 | :- | :- | :- |
-| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess — own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession — no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `spark_config` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
-| `webhook: <url \| map>` | Fires the same endpoint model as the engine-level `webhooks:` block — bare URL shorthand or full `{url, method, headers, payload}` with `${run_id}`/`${blueprint_id}` payload templating. Fire-and-forget, background thread. | none (declarative) |
-| `command: "<argv>"` | Arbitrary subprocess — shlex argv, **no shell**; only `${run.id}` / `${run.status}` / `${blueprint.id}` are interpolated. Per-entry `timeout:` (default 300 s). | `danger.allow_command_hooks: true` in **aqueduct.yml** — the gate is operator-owned engine config, so a Blueprint cannot self-authorize; ungated entries are skipped with `[hook_command_disabled]`. |
+| `blueprint: <path>` | Chains another Blueprint. By default a fresh `aqueduct run` subprocess, own session, run_id, and report. Loose coupling by design: the child's failure is one `hook_failed` warning, not a parent failure. Tightly-coupled work belongs in ONE Blueprint (Arcades / `--parallel` / `enabled:`). `in_process: true` opts into parsing+compiling+executing the target in the SAME process, reusing the caller's live SparkSession, no self-healing loop for the chained target (a failure is still just `[hook_failed]`); falls back to the subprocess path with an info message when the target Blueprint sets its own `spark_config` (merging two Blueprints' Spark configs into one live session isn't generally safe). | none (declarative) |
+| `webhook: <url \| map>` | Fires the same endpoint model as the engine-level `webhooks:` block, bare URL shorthand or full `{url, method, headers, payload}` with `${run_id}`/`${blueprint_id}` payload templating. Fire-and-forget, background thread. | none (declarative) |
+| `command: "<argv>"` | Arbitrary subprocess: shlex argv, **no shell**; only `${run.id}` / `${run.status}` / `${blueprint.id}` are interpolated. Per-entry `timeout:` (default 300 s). | `danger.allow_command_hooks: true` in **aqueduct.yml**: the gate is operator-owned engine config, so a Blueprint cannot self-authorize; ungated entries are skipped with `[hook_command_disabled]`. |
 
-**Per-entry error filter (`when_error:`)** — optional, on `on_failure` / `on_patch_pending` / `on_healed` entries only (these three events carry a failure context; `on_success` does not, and setting `when_error` there is a **schema error** at parse time). A list of error-type names matched against `FailureContext.error_type` (the Assert rule's `error_type` label) or the exception class name extracted from the stack trace — the exact same candidate set and exact-match semantics as `agent.guardrails.heal_on_errors`. Unset (the default) fires unconditionally — fully backward compatible. A non-matching entry is silently skipped (not a `[hook_failed]`) and does not stop the remaining entries of that event.
+**Per-entry error filter (`when_error:`)**: optional, on `on_failure` / `on_patch_pending` / `on_healed` entries only (these three events carry a failure context; `on_success` does not, and setting `when_error` there is a **schema error** at parse time). A list of error-type names matched against `FailureContext.error_type` (the Assert rule's `error_type` label) or the exception class name extracted from the stack trace, the exact same candidate set and exact-match semantics as `agent.guardrails.heal_on_errors`. Unset (the default) fires unconditionally, fully backward compatible. A non-matching entry is silently skipped (not a `[hook_failed]`) and does not stop the remaining entries of that event.
 
-Placement nuance — **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions plus the `when_error:` filter and `in_process:` execution mode. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` (subprocess mode) or an explicit in-memory chain (`in_process: true` — the env var is process-scoped and does not propagate in-process) — a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically across all four events. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored — only the top-level Blueprint's hooks fire.
+Placement nuance: **`webhooks:` (aqueduct.yml) vs `hooks:` (Blueprint)**: the engine-level `webhooks:` block is ops-owned alerting that fires regardless of what any Blueprint declares (and includes heal-loop events `on_patch_pending` / `on_ci_patch`); `hooks:` travel with the pipeline, are versioned and code-reviewed with it, and add `blueprint:`/`command:` actions plus the `when_error:` filter and `in_process:` execution mode. Both use the same endpoint model for webhooks. Safety: no patch-grammar operation can address `hooks:`, so the LLM self-healer cannot inject or alter them. **Cycle guard**: chained `blueprint:` hooks carry ancestry in `AQUEDUCT_HOOK_CHAIN` (subprocess mode) or an explicit in-memory chain (`in_process: true`, the env var is process-scoped and does not propagate in-process), a hook targeting an ancestor (or itself) is refused with `[hook_cycle]`, chain depth caps at 8 (`[hook_depth]`), and `aqueduct doctor` performs the same walk statically across all four events. When a hooks section ran, the CLI closes with a final `✓ run complete` footer after the per-hook `✓/⚠` lines. For an Arcade sub-Blueprint, `hooks:` parses but is ignored, only the top-level Blueprint's hooks fire.
 
-**Linear-edge sugar.** `edges:` may be omitted entirely. When it is — and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert) — the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
+**Linear-edge sugar.** `edges:` may be omitted entirely. When it is, and every module is a single-input/single-output type (Ingress, Channel, Egress, Assert), the Compiler chains the modules in declaration order, injecting `main`-port edges marked `injected: true` in the Manifest. If the Blueprint omits `edges:` while using a fan-out (Junction), fan-in (Funnel), sub-pipeline (Arcade), tap (Probe), or gate (Regulator) module, compilation fails with an error: those ports are ambiguous in a flat chain, so they must be wired explicitly. A single-module Blueprint needs no edges.
 
-## **4.3 Module Schema — Common Fields**
+## **4.3 Module schema: common fields**
 
 Every Module regardless of type shares these fields:
 
@@ -246,12 +246,12 @@ Every Module regardless of type shares these fields:
 | **spillway** | Optional downstream Module ID to receive error-port output. |
 | **depends_on** | Optional explicit upstream dependency list. |
 | **checkpoint** | Optional boolean. When true, output DataFrame is saved as Parquet for `--resume`. |
-| **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output — via edges, `depends_on`, or Probe `attach_to` — is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
-| **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8) — see below. |
+| **enabled** | Optional boolean (default `true`); accepts `${ctx.*}` / `${ENV}` so context profiles can toggle it (coerced from true/false/1/0/yes/no/on/off). A disabled module still compiles but is skipped (⏭) at run time, and the disable **cascades**: every module consuming its output, via edges, `depends_on`, or Probe `attach_to`, is disabled too, transitively and uniformly (a join or union missing one input does not run partially). A disabled Arcade disables all its expanded children. Disabled modules are excluded from compile-time warnings. If the cascade disables every module, compilation fails. |
+| **retry** | Optional. Per-module override of the top-level `retry_policy:` block (2.8), see below. |
 
 ### Per-module retry override (`retry:`, 2.8)
 
-`retry_policy:` (§10.1-adjacent top-level block) sets the blueprint-wide default retry behaviour. A module's own `retry:` block overrides it **field-by-field** — any field left unset inherits the blueprint-level value for that field (same per-field inheritance shape as agent cascade tiers, §8):
+`retry_policy:` (§10.1-adjacent top-level block) sets the blueprint-wide default retry behaviour. A module's own `retry:` block overrides it **field-by-field**, any field left unset inherits the blueprint-level value for that field (same per-field inheritance shape as agent cascade tiers, §8):
 
 ```yaml
 retry_policy:
@@ -268,9 +268,9 @@ modules:
       # on_exhaustion inherits "trigger_agent" from retry_policy above
 ```
 
-Fields: `max_attempts`, `backoff` (whole-block override — set every backoff sub-field or omit the block entirely; a module `backoff:` does NOT merge field-by-field against the blueprint's `backoff:`), `transient_errors`, `non_transient_errors`, `on_exhaustion`, `deadline_seconds`. One caveat: `deadline_seconds: null`/omitted at module level always means "inherit" — there is no module-level way to explicitly clear a blueprint-level deadline back to "no deadline."
+Fields: `max_attempts`, `backoff` (whole-block override: set every backoff sub-field or omit the block entirely; a module `backoff:` does NOT merge field-by-field against the blueprint's `backoff:`), `transient_errors`, `non_transient_errors`, `on_exhaustion`, `deadline_seconds`. One caveat: `deadline_seconds: null`/omitted at module level always means "inherit", there is no module-level way to explicitly clear a blueprint-level deadline back to "no deadline."
 
-This is distinct from `on_failure` (an internal field the self-healing agent writes via the `set_module_on_failure` / `replace_retry_policy` patch ops — a full RetryPolicy replacement, not merged against the blueprint policy). When both are present at runtime, `on_failure` (heal-time) wins over `retry:` (authoring-time) wins over the blueprint-level `retry_policy:`.
+This is distinct from `on_failure` (an internal field the self-healing agent writes via the `set_module_on_failure` / `replace_retry_policy` patch ops, a full RetryPolicy replacement, not merged against the blueprint policy). When both are present at runtime, `on_failure` (heal-time) wins over `retry:` (authoring-time) wins over the blueprint-level `retry_policy:`.
 
 ### Ports
 
@@ -283,7 +283,7 @@ This is distinct from `on_failure` (an internal field the self-healing agent wri
 
 ### Typed spillway routing (`error_types`)
 
-A spillway edge may declare an `error_types` filter — a typed catch block. Only quarantined rows whose `_aq_error_type` label matches flow down that edge:
+A spillway edge may declare an `error_types` filter, a typed catch block. Only quarantined rows whose `_aq_error_type` label matches flow down that edge:
 
 ```yaml
 edges:
@@ -295,13 +295,13 @@ edges:
       - SchemaError
 ```
 
-The label comes from the Assert rule's `error_type` field (falling back to the rule name — `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation — zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
+The label comes from the Assert rule's `error_type` field (falling back to the rule name, `freshness`, `sql_row`, `custom`) or `SpillwayCondition` for Channel `spillway_condition` rows. Multiple spillway edges from one module act as separate catch blocks; an edge without `error_types` is a catch-all; rows matching no edge are dropped. The filter is a lazy Spark transformation, zero extra actions. `error_types` on a non-spillway edge is a parse error, and `aqueduct doctor` warns when a filter entry matches no label declared in the Blueprint.
 
-> **⚠ `spillway_condition` without a spillway edge is dead code.** If a Channel sets `spillway_condition` but has no corresponding edge with `port: spillway`, the condition is silently ignored — all rows (including those matching the condition) flow to the main stream. The executor logs a warning at run time. This is not a compile error because the config alone is valid; it only becomes meaningful once wired.
+> **⚠ `spillway_condition` without a spillway edge is dead code.** If a Channel sets `spillway_condition` but has no corresponding edge with `port: spillway`, the condition is silently ignored, all rows (including those matching the condition) flow to the main stream. The executor logs a warning at run time. This is not a compile error because the config alone is valid; it only becomes meaningful once wired.
 
 Every spillway row carries the system columns `_aq_error_module`, `_aq_error_type`, `_aq_error_msg`, `_aq_error_ts` (Assert rows additionally `_aq_error_rule`).
 
-## **4.4 Module Types — Full Specification**
+## **4.4 Module types: full specification**
 
 ### Ingress
 
@@ -322,13 +322,13 @@ Every spillway row carries the system columns `_aq_error_module`, `_aq_error_typ
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config` — see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
-| **table** | Catalog table identifier (`catalog.schema.table`) — passthrough to an external catalog. Read via `spark.read.table(table)`. The catalog is configured entirely through `spark_config` (e.g. `spark.sql.catalog.*` keys), external to Aqueduct. Mutually exclusive with `path:` — if both are set the engine raises an error. When `table:` is set, `format:` is not required. |
+| **format** | Spark data source format. Supports: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc, kafka. `iceberg`/`hudi` require the matching `spark.jars.packages` and (Iceberg) a `spark.sql.catalog.*` in `spark_config`, see the Spark Guide. `format: custom` + `class:` registers a user Python DataSource (Spark 4.0+, see below). The `dataframe` format (Arcade cross-pipeline reference) is documented on the roadmap and not yet implemented. Not required when `table:` is set and mutual-exclusive with `table:` (set one or the other). |
+| **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. Read via `spark.read.table(table)`. The catalog is configured entirely through `spark_config` (e.g. `spark.sql.catalog.*` keys), external to Aqueduct. Mutually exclusive with `path:`, if both are set the engine raises an error. When `table:` is set, `format:` is not required. |
 | **path** | Source path or URL. Context Registry references allowed. Optional for `format: custom` and the pathless formats (jdbc/kafka/depot). Mutually exclusive with `table:`. |
 | **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass. |
 | **partition_filters** | Optional SQL predicate for manual partition pruning. |
 | **schema_hint** | Optional. Flat dict `{col: type}` or nested `{mode: strict\|additive\|subset, columns: [{name, type}]}`. |
-| **time_travel** | Optional (Delta/Iceberg). Pin a historical snapshot: `{version: N}` (`versionAsOf`) or `{timestamp: "..."}` (`timestampAsOf`). Mutually exclusive. Metadata-only — no Spark action. Only supported with `path:`-based reads (format-based DataFrameReader options). For `table:`-addressed reads, use a Channel with `TIMESTAMP AS OF` SQL syntax instead. |
+| **time_travel** | Optional (Delta/Iceberg). Pin a historical snapshot: `{version: N}` (`versionAsOf`) or `{timestamp: "..."}` (`timestampAsOf`). Mutually exclusive. Metadata-only, no Spark action. Only supported with `path:`-based reads (format-based DataFrameReader options). For `table:`-addressed reads, use a Channel with `TIMESTAMP AS OF` SQL syntax instead. |
 | **on_new_columns** | Optional schema-drift contract: `allow` (default behaviour, explicit), `fail` (raise if the source has columns outside the baseline), `alert` (warn, then proceed). Baseline = `known_columns` or, failing that, `schema_hint` names; with neither it is skipped. |
 | **known_columns** | Optional explicit baseline column list for `on_new_columns`. |
 | **options** | Passed directly to Spark DataFrameReader.option(k,v). |
@@ -387,11 +387,11 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 | `select` | No | Yes | `df.select(*columns)` |
 | `rename` | No | Yes | `df.withColumnRenamed()` per column |
 | `cast` | No | Yes | `df.withColumn(col, col.cast(type))` |
-| `sort` | No | Yes | `df.orderBy(*exprs)` — deferred until action |
+| `sort` | No | Yes | `df.orderBy(*exprs)`: deferred until action |
 | `union` | No | No (multi) | `unionByName` across all upstreams |
-| `repartition` | No | Yes | Full shuffle — increase partitions or rebalance |
-| `coalesce` | No | Yes | No shuffle — shrink partition count |
-| `cache` | Yes | Yes | `df.persist(StorageLevel)` — triggers materialisation |
+| `repartition` | No | Yes | Full shuffle: increase partitions or rebalance |
+| `coalesce` | No | Yes | No shuffle: shrink partition count |
+| `cache` | Yes | Yes | `df.persist(StorageLevel)`: triggers materialisation |
 
 ### Egress
 
@@ -408,25 +408,25 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
 
 | Config field | Description |
 | :- | :- |
-| **format** | Spark write format. Standard: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc. `iceberg`/`hudi` need the matching `spark.jars.packages` (and an Iceberg catalog) — see the Spark Guide. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
-| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`), `overwrite_partitions` (idempotent partition-scoped overwrite — see below). |
-| **table** | Catalog table identifier (`catalog.schema.table`) — passthrough to an external catalog. When set, writes via `df.write.<mode>.saveAsTable(table)` instead of `.save(path)`. Supported for all write modes including `overwrite`, `append`, `error`, `overwrite_partitions`. Mutually exclusive with `path:` — if both are set the engine raises an error. For `mode: merge`, `table` is the Delta merge target (takes precedence over `path`, existing behaviour). `register_as_table` is meaningless when `table:` is set (the catalog table is already the direct write target). |
+| **format** | Spark write format. Standard: parquet, delta, iceberg, hudi, csv, json, orc, avro, jdbc. `iceberg`/`hudi` need the matching `spark.jars.packages` (and an Iceberg catalog), see the Spark Guide. Pseudo-format `depot` writes a KV entry to the Depot instead of data (requires `key` + `value` or `value_expr`). |
+| **mode** | Write mode: `overwrite`, `append`, `error` (default; alias `errorifexists`), `ignore`, `merge` (Delta `MERGE INTO`, requires `merge_key`), `overwrite_partitions` (idempotent partition-scoped overwrite, see below). |
+| **table** | Catalog table identifier (`catalog.schema.table`): passthrough to an external catalog. When set, writes via `df.write.<mode>.saveAsTable(table)` instead of `.save(path)`. Supported for all write modes including `overwrite`, `append`, `error`, `overwrite_partitions`. Mutually exclusive with `path:`, if both are set the engine raises an error. For `mode: merge`, `table` is the Delta merge target (takes precedence over `path`, existing behaviour). `register_as_table` is meaningless when `table:` is set (the catalog table is already the direct write target). |
 | **path** | Output path or URL. Mutually exclusive with `table:`. For `mode: merge`, `table` may be used instead of `path`. |
 | **partition_by** | Columns to partition the output by. |
 | **merge_key** | Required for `mode: merge`. Column name or list of columns for the upsert match. |
 | **class** | For `format: custom`. Fully-qualified `module.Class` pointing at a `pyspark.sql.datasource.DataSource` subclass (Spark 4.0+). |
 | **replace_where** | For `mode: overwrite_partitions` (Delta). A predicate that is atomically replaced (Delta `replaceWhere`). Resolved at compile time, so it may embed `@aq.date.*` / `${ctx.*}` for `--execution-date` backfills. |
-| **merge_schema** | Optional (Delta/Iceberg). `true` sets `mergeSchema` — new DataFrame columns are added to the target schema instead of failing the write. |
-| **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema` — replaces the target schema entirely (`mode: overwrite` only). |
+| **merge_schema** | Optional (Delta/Iceberg). `true` sets `mergeSchema`: new DataFrame columns are added to the target schema instead of failing the write. |
+| **overwrite_schema** | Optional (Delta). `true` sets `overwriteSchema`: replaces the target schema entirely (`mode: overwrite` only). |
 | **on_new_columns** | Optional schema-drift contract comparing the incoming DataFrame against the existing target: `allow` (absorb new columns via `mergeSchema`), `fail` (raise if the data adds columns the target lacks), `alert` (warn, then absorb). No-op on first write or `mode: merge`. |
 | **options** | Passed directly to Spark DataFrameWriter.option(). |
 
-**`mode: overwrite_partitions`** is the idempotent-backfill primitive — re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
+**`mode: overwrite_partitions`** is the idempotent-backfill primitive: re-running for the same logical date replaces only that date's data instead of the whole table. Two strategies:
 
-- **`replace_where: <predicate>`** (Delta) — atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
-- **no `replace_where`** — Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`** — without it the engine refuses (a plain `overwrite` would wipe the whole table).
+- **`replace_where: <predicate>`** (Delta): atomically replaces exactly the rows matching the predicate. The cleanest backfill: `replace_where: "event_date = '@aq.date.today()'"` with `--execution-date 2026-06-01` rewrites only that day.
+- **no `replace_where`**: Spark **dynamic** partition overwrite (`partitionOverwriteMode=dynamic`): only partitions present in the written DataFrame are replaced; untouched partitions are preserved. **Requires `partition_by`**, without it the engine refuses (a plain `overwrite` would wipe the whole table).
 
-**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. `class:` resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**), falling back to a normal import. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer — never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
+**Custom Python DataSource (`format: custom`, Spark 4.0+).** Both Ingress and Egress accept `format: custom` with a `class:` pointer to an importable `pyspark.sql.datasource.DataSource` subclass. `class:` resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint, see **§3, `base_dir`**), falling back to a normal import. The class is imported, validated, registered with the session, then used by its own `name()`. `aqueduct doctor` verifies the class is importable and a valid subclass before a run. As with UDFs and custom probes, the Blueprint carries only a pointer, never an inline code body. Requires Spark 4.0+ (the `spark.dataSource` registry); the engine raises a clear error on older Spark.
 
 ### Junction (Fan-out)
 
@@ -472,15 +472,15 @@ Upstream Modules are referenced by their id directly in SQL FROM clauses. Aquedu
       - type: schema_snapshot      # schema_snapshot | row_count_estimate | null_rates | sample_rows | value_distribution | distinct_count | data_freshness | partition_stats | threshold | custom
 ```
 
-Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list — one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`. A Probe is not a data-flow node — an `edges:` entry with a Probe as `from:` on any port other than `signal` is a `CompileError` (Probes are excluded from the executor's topo-sort node set, so such an edge has no module to route data to).
+Probes are non-blocking observability taps. They do not execute on the Spark critical path. `attach_to` is a module-level field (Probes attach by reference, not by edges); `config.signals` is a list, one entry per signal, each with a `type` and type-specific options. Default signals are zero-cost (SparkListener). Sample-based signals (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`) require explicit opt-in via `danger.allow_full_probe_actions`. A Probe is not a data-flow node, an `edges:` entry with a Probe as `from:` on any port other than `signal` is a `CompileError` (Probes are excluded from the executor's topo-sort node set, so such an edge has no module to route data to).
 
-**`report: stdout` (2.4).** Per-Probe opt-in terminal output: each signal's result also prints under the Probe's row in the post-run summary — dim `↳` lines, single-value payloads on one line, dict/tabular payloads one line per entry, the block capped at 10 lines unless `-v`. Purely additive: every signal is still persisted to `probe_signals` exactly as without it, and the printed lines are informational notes, never counted in the runtime warning roll-up. Sampling governance and `danger.allow_full_probe_actions` gating apply unchanged — `report` changes where results are shown, not what is collected.
+**`report: stdout` (2.4).** Per-Probe opt-in terminal output: each signal's result also prints under the Probe's row in the post-run summary, dim `↳` lines, single-value payloads on one line, dict/tabular payloads one line per entry, the block capped at 10 lines unless `-v`. Purely additive: every signal is still persisted to `probe_signals` exactly as without it, and the printed lines are informational notes, never counted in the runtime warning roll-up. Sampling governance and `danger.allow_full_probe_actions` gating apply unchanged, `report` changes where results are shown, not what is collected.
 
 **Sampling governance.** The `probes:` block in `aqueduct.yml` controls how much data sample-based signals read:
 
 | Key | Default | Role | Effect |
 |---|---|---|---|
-| `max_sample_rows` | `100` | **Cap** | Ceiling on `sample_rows` `n` — a per-probe `n:` above the cap is clamped; below the cap is honoured. |
+| `max_sample_rows` | `100` | **Cap** | Ceiling on `sample_rows` `n`: a per-probe `n:` above the cap is clamped; below the cap is honoured. |
 | `default_sample_fraction` | `0.1` | **Default** | Fleet-wide default for signals that use `fraction` (`null_rates`, `value_distribution`, `distinct_count`, `data_freshness`, `row_count_estimate: sample`). A per-probe `fraction:` in the Blueprint overrides this. |
 
 These sit alongside `danger.allow_full_probe_actions` (whether full actions are allowed at all) and `metrics.use_observe` (observe overhead) as the three-part probe-cost-governance family.
@@ -499,14 +499,14 @@ signals:
     plugin: p99_latency               # setuptools entry-point group "aqueduct.probe_signals"
 ```
 
-The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer — never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own — the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt). The `module:` pointer resolves against the Manifest's `base_dir` before falling back to a normal import — see **§3, `base_dir`**.
+The callable forms resolve to `fn(df, sig_cfg) -> {"estimate", "metadata", "passed"}`. Like all signals the payload lands in `probe_signals` (`signal_type = custom`); a `passed` verdict is read by a downstream Regulator exactly like `threshold`. **The blueprint only carries a pointer, never an inline code body** (same rule as UDFs), so custom code stays in a packaged, importable module and is never surfaced to the healing LLM. Callables run on the **driver** as trusted code: the engine cannot enforce zero-cost observability for them, so a callable doing a full `.collect()`/`.count()` is the author's cost to own, the compiler emits a `custom_probe_driver_code` warning for pointer/plugin signals (inline SQL is exempt). The `module:` pointer resolves against the Manifest's `base_dir` before falling back to a normal import, see **§3, `base_dir`**.
 
-**Inline-SQL form — `sql` vs `passed_when`:** the two keys play different roles, so they are named differently. `sql` computes a **scalar metric** (any single-value Spark SQL aggregate over the probed DataFrame) and stores it as `estimate` for trending (`report --trend`/`--profile`). `passed_when` is an **optional boolean** that becomes the `passed` gate verdict (like `threshold`). Provide either or both:
-- **`sql` only** → record-only: captures the metric every run, never gates (a Regulator reading it stays open — an absent `passed` key is treated as open).
+**Inline-SQL form: `sql` vs `passed_when`:** the two keys play different roles, so they are named differently. `sql` computes a **scalar metric** (any single-value Spark SQL aggregate over the probed DataFrame) and stores it as `estimate` for trending (`report --trend`/`--profile`). `passed_when` is an **optional boolean** that becomes the `passed` gate verdict (like `threshold`). Provide either or both:
+- **`sql` only** → record-only: captures the metric every run, never gates (a Regulator reading it stays open, an absent `passed` key is treated as open).
 - **`passed_when` only** → gate-only: one Spark action, no recorded metric.
 - **both** → records *and* gates; note these are **two separate Spark actions**, so the aggregate is scanned twice.
 
-Each is passed verbatim to `df.selectExpr(...)`, so any single-scalar Spark expression works (`percentile`, `approx_count_distinct`, `SUM(CASE WHEN …)/COUNT(*)`, etc.). For multi-value output, cross-table joins, or non-SQL logic, use the callable form. **Avoid duplicating a shared subquery** across `sql` and `passed_when` with a macro — macros expand inside probe config at compile time:
+Each is passed verbatim to `df.selectExpr(...)`, so any single-scalar Spark expression works (`percentile`, `approx_count_distinct`, `SUM(CASE WHEN …)/COUNT(*)`, etc.). For multi-value output, cross-table joins, or non-SQL logic, use the callable form. **Avoid duplicating a shared subquery** across `sql` and `passed_when` with a macro, macros expand inside probe config at compile time:
 
 ```yaml
 macros:
@@ -529,7 +529,7 @@ See the [Observability Guide](observability_guide.md) for full signal reference 
     on_block: skip                 # skip | abort | trigger_agent
 ```
 
-Regulators are passive — they compile away entirely if no signal edge is wired to them.
+Regulators are passive: they compile away entirely if no signal edge is wired to them.
 
 ### Arcade (Sub-pipeline)
 
@@ -579,7 +579,7 @@ Arcades are expanded at compile time into a flat module list. Module IDs are nam
 
 Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zero action), `not_null`, `min_rows`, `max_rows`, `null_rate`, `freshness`, `sql`, `sql_row`, `spillway_rate`, `custom`.
 
-**`type: custom`** points `fn:` at an importable `module.callable` — `fn(df) -> {"passed": bool, "message"?: str, "quarantine_df"?: DataFrame}`. Same pointer-only rule as UDFs/custom probes: no inline code body. `fn`'s module resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**), falling back to a normal import.
+**`type: custom`** points `fn:` at an importable `module.callable`, `fn(df) -> {"passed": bool, "message"?: str, "quarantine_df"?: DataFrame}`. Same pointer-only rule as UDFs/custom probes: no inline code body. `fn`'s module resolves against the Manifest's `base_dir` first (a sibling `.py` file next to the Blueprint, see **§3, `base_dir`**), falling back to a normal import.
 
 #### Quarantine eligibility
 
@@ -589,7 +589,7 @@ Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zer
 |------|-------------|-----|
 | 1. Logical | Failure is per-row attributable: ∃ boolean predicate `P(row)` with `bad ⟺ P(row)` | Quarantine splits rows; aggregate rules have no per-row split |
 | 2. Semantic | Removing `P`-rows makes the rule pass AND serves its intent (a per-row contract) | A population-gate breach IS the signal; quarantining nulls when `null_rate` trips masks what you're measuring |
-| 3. Performance | `P` is already computed in a row-wise pass | No extra Spark action — the zero-cost-observability rule |
+| 3. Performance | `P` is already computed in a row-wise pass | No extra Spark action: the zero-cost-observability rule |
 
 **Verdict table:**
 
@@ -599,11 +599,11 @@ Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zer
 | `sql_row` | ✅ | Per-row SQL expression; semantic contract; row-wise pass |
 | `custom` | ✅ | User-supplied predicate; any contract; row-wise pass |
 | `freshness` | ✅ | Per-row `col >= cutoff`; freshness contract; row-wise pass |
-| `null_rate` | ❌ | Gate 1 passes but Gate 2: population-gate — quarantining all nulls at 25% > 20% masks the signal. Gate 3: today it uses `df.sample().agg()`, not a full scan — deriving quarantine would force a full scan + filter/split. For per-row null filtering use `not_null`. |
-| `min_rows` | ❌ | Gate 1: aggregate — no per-row `P(row)` exists |
+| `null_rate` | ❌ | Gate 1 passes but Gate 2: population-gate, quarantining all nulls at 25% > 20% masks the signal. Gate 3: today it uses `df.sample().agg()`, not a full scan, deriving quarantine would force a full scan + filter/split. For per-row null filtering use `not_null`. |
+| `min_rows` | ❌ | Gate 1: aggregate: no per-row `P(row)` exists |
 | `max_rows` | ❌ | Gate 1: aggregate |
 | `sql` | ❌ | Gate 1: aggregate |
-| `spillway_rate` | ❌ | Not a row rule — it measures the quarantine rate itself |
+| `spillway_rate` | ❌ | Not a row rule: it measures the quarantine rate itself |
 | `schema_match` | ❌ | Gate 1: metadata check, not row-level |
 
 `not_null` and `freshness` additionally require a `spillway` edge when `on_fail: quarantine` (compiler-enforced), same as `sql_row` and `custom`.
@@ -616,11 +616,11 @@ Assert rules are batched into 1-2 Spark actions. Rule types: `schema_match` (zer
 
 | Tier | Syntax | Resolved at | Performance cost |
 | :- | :- | :- | :- |
-| Tier 0 — Static | `${ctx.namespace.key}` | Parse time | Zero — substituted before Manifest is written |
-| Tier 1 — Runtime function | `@aq.fn(args)` | Pre-job (Compiler) | Driver-only, milliseconds |
-| Tier 2 — UDF | `udf_id` in `udfs:` list | Spark execution | Distributed — operates on DataFrame columns |
+| Tier 0: Static | `${ctx.namespace.key}` | Parse time | Zero: substituted before Manifest is written |
+| Tier 1: Runtime function | `@aq.fn(args)` | Pre-job (Compiler) | Driver-only, milliseconds |
+| Tier 2: UDF | `udf_id` in `udfs:` list | Spark execution | Distributed: operates on DataFrame columns |
 
-## **5.2 Tier 0 — Static Context**
+## **5.2 Tier 0: Static Context**
 
 ```yaml
 context:
@@ -642,7 +642,7 @@ Resolution order (highest priority wins):
 ### Env-var overrides (`AQUEDUCT_CTX_*`)
 
 Any environment variable prefixed `AQUEDUCT_CTX_` overrides the context key
-obtained by stripping the prefix and **lowercasing the rest** — so
+obtained by stripping the prefix and **lowercasing the rest**, so
 `AQUEDUCT_CTX_ENV=prod aqueduct run blueprint.yml` is equivalent to
 `--ctx env=prod`, and `AQUEDUCT_CTX_BATCH_SIZE=500` overrides a top-level
 `batch_size` key. This is the override hook for CI pipelines, Airflow, and
@@ -653,7 +653,7 @@ Two rules to keep in mind:
 
 - **Only top-level (dot-free) keys are addressable.** Nested context keys
   flatten to dot-notation (`params.batch_size`), and environment-variable
-  names cannot contain dots — underscores are *not* translated to dots, so
+  names cannot contain dots: underscores are *not* translated to dots, so
   `AQUEDUCT_CTX_PARAMS_BATCH_SIZE` defines a new `params_batch_size` key
   rather than overriding `params.batch_size`. Keys you want overridable from
   the environment should live at the top level of `context:` (underscores in
@@ -666,7 +666,7 @@ Two rules to keep in mind:
   independent mechanisms and compose: a substituted default is still
   replaceable by an `AQUEDUCT_CTX_*` override or `--ctx`.
 
-## **5.3 Tier 1 — Runtime Functions (`@aq.*`)**
+## **5.3 Tier 1: Runtime Functions (`@aq.*`)**
 
 | Function | Description |
 | :- | :- |
@@ -678,45 +678,45 @@ Two rules to keep in mind:
 | `@aq.run.id()` | Auto-generated UUID for this pipeline run. |
 | `@aq.run.timestamp()` | ISO-8601 timestamp of compilation. |
 | `@aq.run.prev_id()` | Run ID of the previous pipeline execution (reads `_last_run_id` from Depot). |
-| `@aq.env('KEY')` | Read environment variable. Fails fast when absent — unlike `${VAR:-default}` which supports a fallback. |
+| `@aq.env('KEY')` | Read environment variable. Fails fast when absent, unlike `${VAR:-default}` which supports a fallback. |
 | `@aq.secret('KEY')` | Read from AWS/GCP/Azure secrets manager or environment fallback. |
 | `@aq.depot.get('key')` | Read from the default Depot KV store at compile time. `@aq.depot.<name>.get('key')` reads a named mount (see the Depot glossary entry + Observability Guide). |
 | `@aq.blueprint.id()` | This Blueprint's `id`. |
 | `@aq.blueprint.name()` | This Blueprint's `name`. |
-| `@aq.blueprint.dir()` | Absolute directory of the Blueprint file — the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
+| `@aq.blueprint.dir()` | Absolute directory of the Blueprint file: the safe "relative-to-this-pipeline" anchor for output paths (e.g. `path: @aq.blueprint.dir()/out`). |
 | `@aq.blueprint.path()` | Absolute path of the Blueprint file. |
-| `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`) — branch paths/behaviour by environment. |
+| `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`), branch paths/behaviour by environment. |
 | `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `databricks`). |
-| `@aq.version()` | The Aqueduct engine version — useful for stamping outputs. |
+| `@aq.version()` | The Aqueduct engine version: useful for stamping outputs. |
 
-> `@aq.blueprint.* / @aq.deployment.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host — those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.blueprint.dir()` as the stable anchor instead.
+> `@aq.blueprint.* / @aq.deployment.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host, those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.blueprint.dir()` as the stable anchor instead.
 
-### 5.3.1 Resolution scopes — *where* each `@aq.*` resolves
+### 5.3.1 Resolution scopes: *where* each `@aq.*` resolves
 
 The config and Blueprints resolve at **different times**, and a scope is usable
 only where it exists:
 
 | Resolution point | Allowed syntax | Why |
 | :- | :- | :- |
-| **`aqueduct.yml`** (engine config) | `${ENV}`, `${VAR:-default}`, `@aq.secret('KEY')` only | Loaded first, standalone — no Blueprint and no run exist yet, so per-pipeline / per-run scopes have nothing to resolve against. |
-| **Blueprint compile** (per run — `context`, module `config`, blueprint-level `agent:` / `retry_policy:` / `spark_config:`, …) | **All `@aq.*`** — `date`, `run`, `blueprint`, `deployment`, `depot`, `secret`, `env`, `version` | The single point where the whole stack is in scope: deployment (from the loaded config) ⊃ blueprint (id/path) ⊃ run (run_id), plus the depot built from config. |
+| **`aqueduct.yml`** (engine config) | `${ENV}`, `${VAR:-default}`, `@aq.secret('KEY')` only | Loaded first, standalone: no Blueprint and no run exist yet, so per-pipeline / per-run scopes have nothing to resolve against. |
+| **Blueprint compile** (per run: `context`, module `config`, blueprint-level `agent:` / `retry_policy:` / `spark_config:`, …) | **All `@aq.*`**: `date`, `run`, `blueprint`, `deployment`, `depot`, `secret`, `env`, `version` | The single point where the whole stack is in scope: deployment (from the loaded config) ⊃ blueprint (id/path) ⊃ run (run_id), plus the depot built from config. |
 
 The model is **override-downstream, not propagate-uphill**: one config is shared
 by many Blueprints, and one Blueprint by many runs; values flow config → blueprint
 → run, and each lower layer overrides what it inherits. There is no path back
-*up* — a Blueprint cannot inject per-run values into `aqueduct.yml`, because the
+*up*: a Blueprint cannot inject per-run values into `aqueduct.yml`, because the
 config is fully resolved *before* any Blueprint is parsed.
 
 Consequently, a non-secret `@aq.*` (e.g. `@aq.run.id()`, `@aq.blueprint.id()`) in
-`aqueduct.yml` is a **hard error** — those scopes do not exist at config-load
+`aqueduct.yml` is a **hard error**: those scopes do not exist at config-load
 time; use them inside the Blueprint. Per-pipeline store isolation (a depot / obs
-store per Blueprint) needs no `@aq` in config — the backend handles it
+store per Blueprint) needs no `@aq` in config, the backend handles it
 automatically, keyed on `blueprint_id`.
 
 ## **5.4 UDF Registry**
 
 UDFs are registered from importable code, not inline source. Two execution
-models — `lang: python` (default) and `lang: java`/`scala` (JAR-backed).
+models: `lang: python` (default) and `lang: java`/`scala` (JAR-backed).
 
 **Python UDFs** point at an importable module + function:
 
@@ -731,12 +731,12 @@ udf_registry:
 
 The driver imports `module` and looks up `entry` (a plain Python callable),
 registering it with `spark.udf.register`. `module` resolves against the Manifest's
-`base_dir` first (a sibling `.py` file next to the Blueprint — see **§3, `base_dir`**),
+`base_dir` first (a sibling `.py` file next to the Blueprint, see **§3, `base_dir`**),
 falling back to a normal import from `PYTHONPATH` / an installed package. Python UDFs
-execute row-at-a-time via the JVM bridge — for high-volume Channels prefer native Spark SQL.
+execute row-at-a-time via the JVM bridge: for high-volume Channels prefer native Spark SQL.
 
 **Parameterized (context-aware) Python UDFs.** Add a `params:` map and `entry`
-becomes a **factory** — `entry(**params) -> callable` — so one importable
+becomes a **factory** (`entry(**params) -> callable`), so one importable
 function is reused across blueprints and environments with different settings:
 
 ```yaml
@@ -752,13 +752,13 @@ udf_registry:
 ```
 
 Param values support `${ctx.*}`/`${ENV}` (Tier 0) and `@aq.*` including
-`@aq.secret()` (Tier 1) — they are fully resolved at compile time, so the
+`@aq.secret()` (Tier 1): they are fully resolved at compile time, so the
 factory receives concrete values, never tokens. The factory must return a plain
 callable (or a Spark UDF object). Omitting `params:` keeps the static behaviour
-above (no factory call). UDF **bodies** remain out of scope for self-healing —
+above (no factory call). UDF **bodies** remain out of scope for self-healing,
 `params` change *configuration*, not code.
 
-**Java/Scala UDFs** point at a JAR + class — pure JVM bytecode, no Python
+**Java/Scala UDFs** point at a JAR + class, pure JVM bytecode, no Python
 serialization:
 
 ```yaml
@@ -800,7 +800,7 @@ All observability is governed by one rule: **no Spark actions may be added to th
 
 # **7. Lineage**
 
-## **7.1 Two Lineage Layers**
+## **7.1 Two lineage layers**
 
 | Layer | Computed at | Purpose |
 | :- | :- | :- |
@@ -816,7 +816,7 @@ Structural lineage is computed at compile time (in `aqueduct/compiler/lineage.py
 
 ### Channel SQL fingerprints
 
-Each `op: sql` Channel also gets a **normalised AST fingerprint** — sqlglot
+Each `op: sql` Channel also gets a **normalised AST fingerprint**, sqlglot
 canonicalises the query (formatting/comment/keyword-case insensitive) and the
 SHA-256 of the canonical form is recorded in `channel_fingerprints`. The table
 is a *changelog*: a new row appears only when a Channel's SQL changes
@@ -829,7 +829,7 @@ and when" without storing one row per run.
 source→output, annotating each hop with an sqlglot-inferred SQL `output_type`
 and a `transform_op` (`passthrough` | `rename` | `CAST` | `CONCAT` | a function
 name | `literal` | `expression`) and flagging type changes. It is computed **on
-demand** from the compiled Manifest — nothing extra is persisted and no Spark
+demand** from the compiled Manifest: nothing extra is persisted and no Spark
 action runs. This is a human debugging tool ("why is this column a string now",
 rename-impact, type-drift); it is **not** part of the healing loop, which
 already reads full SQL from the manifest. sqlglot resolves ~90% of SparkSQL
@@ -837,17 +837,17 @@ expressions; the rest fall back to `output_type=UNKNOWN`.
 
 ## **7.3 Runtime Flow Report**
 
-Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds. `aqueduct report --trend <column> --blueprint <id>` adds a **cross-run** view of one column's null-rate and type history — a read-side aggregate over `probe_signals` (no extra table).
+Generated post-run from Probe signals. Shows per-column, per-Module status (OK / Degraded / Error) with null rates, row estimates, schema snapshots, and thresholds. `aqueduct report --trend <column> --blueprint <id>` adds a **cross-run** view of one column's null-rate and type history, a read-side aggregate over `probe_signals` (no extra table).
 
-## **7.4 OpenLineage Emission (1.2)**
+## **7.4 OpenLineage emission (1.2)**
 
-When `lineage.openlineage_url` is set, the Surveyor emits **OpenLineage** RunEvents to an OpenLineage-compatible backend (Marquez, DataHub, Atlan): `START` on run begin, `COMPLETE` on success, `FAIL` on terminal failure (with an `errorMessage` run facet). Delivery uses the same async daemon-thread pattern as webhooks — non-blocking, best-effort, zero hot-path cost; the blueprint result is authoritative and a dropped event is logged, never raised. Events POST to `<openlineage_url>/api/v1/lineage`.
+When `lineage.openlineage_url` is set, the Surveyor emits **OpenLineage** RunEvents to an OpenLineage-compatible backend (Marquez, DataHub, Atlan): `START` on run begin, `COMPLETE` on success, `FAIL` on terminal failure (with an `errorMessage` run facet). Delivery uses the same async daemon-thread pattern as webhooks, non-blocking, best-effort, zero hot-path cost; the blueprint result is authoritative and a dropped event is logged, never raised. Events POST to `<openlineage_url>/api/v1/lineage`.
 
-Each event maps Ingress modules → input datasets and Egress modules → output datasets. The **output datasets carry the column-level `columnLineage` facet** — built from the same compile-time lineage rows that populate `column_lineage` (`compiler.lineage.compute_lineage_rows`), so field-to-field arrows render downstream. sqlglot resolves ~90% of SparkSQL; unresolved columns fall back to `UNKNOWN`. The Aqueduct `run_id` is mapped to a deterministic UUIDv5 (`run`/`runId` correlate across START and COMPLETE/FAIL).
+Each event maps Ingress modules → input datasets and Egress modules → output datasets. The **output datasets carry the column-level `columnLineage` facet**, built from the same compile-time lineage rows that populate `column_lineage` (`compiler.lineage.compute_lineage_rows`), so field-to-field arrows render downstream. sqlglot resolves ~90% of SparkSQL; unresolved columns fall back to `UNKNOWN`. The Aqueduct `run_id` is mapped to a deterministic UUIDv5 (`run`/`runId` correlate across START and COMPLETE/FAIL).
 
-**v1 limitations to be aware of:** (1) the `columnLineage` facet is the union of all Channel lineage rows attached to each Egress output — exact for the common single-Egress pipeline, over-broad for multi-Egress Blueprints (transitive per-output resolution is future work). (2) Input/output datasets use the configured `openlineage_namespace`, not a per-storage-system namespace (e.g. `s3://bucket`), so datasets won't auto-correlate with other tools writing the same physical table under a storage-system namespace.
+**v1 limitations to be aware of:** (1) the `columnLineage` facet is the union of all Channel lineage rows attached to each Egress output, exact for the common single-Egress pipeline, over-broad for multi-Egress Blueprints (transitive per-output resolution is future work). (2) Input/output datasets use the configured `openlineage_namespace`, not a per-storage-system namespace (e.g. `s3://bucket`), so datasets won't auto-correlate with other tools writing the same physical table under a storage-system namespace.
 
-**Config — top-level `lineage:` block:**
+**Config (top-level `lineage:` block):**
 
 ```yaml
 lineage:
@@ -859,23 +859,23 @@ lineage:
 
 ---
 
-# **8. Self-Healing & LLM Agent Loop**
+# **8. Self-healing & LLM agent loop**
 
-## **8.1 Design Philosophy**
+## **8.1 Design philosophy**
 
-The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations — valid, schema-checked modifications to the Blueprint. This constraint makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer.
+The LLM agent operates within a grammar, not in free-form code generation mode. It can only propose structured PatchSpec operations, valid, schema-checked modifications to the Blueprint. This constraint makes every agent action auditable, reversible, Git-diffable, and explainable to a human reviewer.
 
-**Model-agnostic design.** The PatchSpec grammar is deliberately narrow — 14 schema-checked operations with no code generation — so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
+**Model-agnostic design.** The PatchSpec grammar is deliberately narrow, 14 schema-checked operations with no code generation, so the agent works reliably across model sizes. A 7B parameter local model handles ~70% of production failures (path typos, format mismatches, column renames, simple SQL fixes) in a single attempt. Larger models unlock `agent.deep_loop` (in-conversation sandbox feedback) and multi-model cascading for complex cases like OOM tuning and multi-module restructures. The deterministic guardrails, gate pyramid, and structured prompt apply the same safety guarantees regardless of model size.
 
-**Solo vs cascade.** With a single `agent.model:`, healing runs **solo** — one model, the flat `agent.*` connection (`model`, `base_url`, `timeout`, `budget`, …). Configuring `agent.cascade:` switches to **cascade** mode: a list of tiers tried in the order you define them.
+**Solo vs cascade.** With a single `agent.model:`, healing runs **solo**, one model, the flat `agent.*` connection (`model`, `base_url`, `timeout`, `budget`, …). Configuring `agent.cascade:` switches to **cascade** mode: a list of tiers tried in the order you define them.
 
-**Multi-model cascade.** When `agent.cascade:` is configured (at either engine level in `aqueduct.yml` or blueprint level), Aqueduct tries the tiers strictly in the order you define them — it does **not** reorder by price or capability. The usual convention is to list the cheapest/fastest model first and escalate to a stronger one, but that ordering is the author's responsibility, not the engine's. A blueprint's `agent.cascade` (or its `model: [list]` shorthand) fully overrides the engine default. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`; a tier whose provider is simply unreachable (`api_error`) escalates to the next tier and only aborts on the final tier. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `api_key`, `timeout`, `deep_loop`, and `allow_defer`. **A tier's own fields override the flat `agent.*` only by inheritance, not merge:** a field the tier leaves unset inherits the solo/flat value; a field the tier sets is an independent key that wins for that tier (so `--set agent.timeout` raises the flat default + every inheriting tier, but does **not** reach a tier that declares its own `timeout:`). A tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade: each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block); this shorthand is only available in Blueprints (not at engine level). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
+**Multi-model cascade.** When `agent.cascade:` is configured (at either engine level in `aqueduct.yml` or blueprint level), Aqueduct tries the tiers strictly in the order you define them, it does **not** reorder by price or capability. The usual convention is to list the cheapest/fastest model first and escalate to a stronger one, but that ordering is the author's responsibility, not the engine's. A blueprint's `agent.cascade` (or its `model: [list]` shorthand) fully overrides the engine default. Escalation triggers on `stuck_signature`, `exhausted_attempts`, or `deferred`; a tier whose provider is simply unreachable (`api_error`) escalates to the next tier and only aborts on the final tier. Each tier has its own budget (`max_reprompts`, `max_seconds`) and can override `provider`, `base_url`, `api_key`, `timeout`, `deep_loop`, and `allow_defer`. **A tier's own fields override the flat `agent.*` only by inheritance, not merge:** a field the tier leaves unset inherits the solo/flat value; a field the tier sets is an independent key that wins for that tier (so `--set agent.timeout` raises the flat default + every inheriting tier, but does **not** reach a tier that declares its own `timeout:`). A tier's budget reuses the top-level `agent.budget` axes with `max_reprompts` / `max_seconds` swapped for the tier's own values. `max_tokens_total` spans the WHOLE cascade: each tier receives the remaining allowance, and the cascade stops with `budget_tokens_exceeded` when it is spent. A defer on a non-final tier escalates (its diagnosis is discarded); a defer on the final tier is staged for human review. The producing tier's model and 0-based index are persisted on `healing_outcomes.model` / `model_cascade_position`. Shorthand: `agent.model: [cheap, expensive]` expands to a default-settings cascade (mutually exclusive with an explicit `cascade:` block); this shorthand is only available in Blueprints (not at engine level). `aqueduct doctor <blueprint>` checks each tier's credentials/endpoint ahead of time.
 
-**Signature memory.** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature — `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module — and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING` — no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs as few-shot examples — exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache — it measures model skill.
+**Signature memory.** Aqueduct never solves the same failure twice. Every pipeline failure hashes into a stable signature, `(error_class, failed_module, normalized_message)` plus a coarse variant that drops the module, and every staged or archived patch carries the signature of the failure it fixed (`_aq_meta.failure_signature`). Before any LLM call, two zero-token paths are consulted: **pending-patch reuse** (a patch for the same signature already awaits review → surface it and stop, `stop_reason: cached`, exit `HEAL_PENDING`, no token burn while a review is pending) and **exact replay** (an archived patch already fixed this signature, confirmed via `healing_outcomes.run_success_after_patch` → re-validate it through the normal gate pyramid with zero tokens, `stop_reason: replayed`; in human/ci mode it is re-staged with `_aq_meta.source: replay`; a gate failure falls through to the LLM in the same iteration). When the LLM is called, **signature-matched coaching** retrieves past (failure → validated fix) pairs as few-shot examples, exact-hash matches first, then coarse-hash, then same error class, then chronological fill. Config: `agent.memory: {replay: true, coaching: true}` (both default on; disable `replay` when re-running gates costs more than fresh tokens). Outcomes record `failure_signature` and `resolution` (`llm` / `cached` / `replayed`); `aqueduct runs --heal-coverage` reports the fraction of heals resolved with zero tokens. Benchmark never consults the cache, it measures model skill.
 
-As of 1.2, the heal cache resolves through SQL queries against the **`patch_index`** observability table (status + signature + body `object_key`) rather than scanning the `patches/` directory — identical behaviour, but backend-blind, so the cache works when patch bodies live on s3/gcs/adls (the replay path fetches the one body it needs from the PatchStore by `object_key`). Patch bodies are written through the PatchStore (`pending` / `applied` / `rejected`) and every status transition is recorded in `patch_index`; local-checkout commands (`patch apply` / `patch reject`) stay on the filesystem but flip the index status so the cache stays consistent.
+As of 1.2, the heal cache resolves through SQL queries against the **`patch_index`** observability table (status + signature + body `object_key`) rather than scanning the `patches/` directory, identical behaviour, but backend-blind, so the cache works when patch bodies live on s3/gcs/adls (the replay path fetches the one body it needs from the PatchStore by `object_key`). Patch bodies are written through the PatchStore (`pending` / `applied` / `rejected`) and every status transition is recorded in `patch_index`; local-checkout commands (`patch apply` / `patch reject`) stay on the filesystem but flip the index status so the cache stays consistent.
 
-## **8.2 The Healing Flow**
+## **8.2 The healing flow**
 
 ```
 Pipeline failure → Capture → Memory (cached patch? replay?) → Prune → Generate → Reprompt → Gate → Confirm and write
@@ -883,7 +883,7 @@ Pipeline failure → Capture → Memory (cached patch? replay?) → Prune → Ge
 
 ### 1. Capture
 
-Transient errors retry first (per `retry_policy.max_attempts`). Non-transient failures — schema drift, missing columns, bad paths, OOM — trigger the agent. The Surveyor assembles a self-contained failure package:
+Transient errors retry first (per `retry_policy.max_attempts`). Non-transient failures, schema drift, missing columns, bad paths, OOM, trigger the agent. The Surveyor assembles a self-contained failure package:
 
 - Compiled module config
 - ProvenanceMap (where every config value came from)
@@ -907,7 +907,7 @@ A ContextPruner trims the package to the failure's blast radius. Pruning rules:
 
 ### 4. Generate
 
-The LLM responds with a structured PatchSpec — a list of typed operations that map one-to-one to Blueprint edits. Anything else is rejected.
+The LLM responds with a structured PatchSpec, a list of typed operations that map one-to-one to Blueprint edits. Anything else is rejected.
 
 ### 5. Reprompt
 
@@ -930,17 +930,17 @@ When `same_error_consecutive` trips, the loop escalates: temperature is bumped a
 
 Before a patch touches the Blueprint, five gates run in order:
 
-1. **Guardrails** — path and operation policy (deterministic, enforced before the LLM response is parsed)
-2. **Compile-check** — the patched dict must produce a valid Manifest
-3. **Lineage gate** — column-level diff catches broken references before Spark sees them
-4. **Sandbox gate** — sampled or full replay catches "parsed but produces nothing"
-5. **Plan-regression gate** — conditional: skipped until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan
+1. **Guardrails**: path and operation policy (deterministic, enforced before the LLM response is parsed)
+2. **Compile-check**: the patched dict must produce a valid Manifest
+3. **Lineage gate**: column-level diff catches broken references before Spark sees them
+4. **Sandbox gate**: sampled or full replay catches "parsed but produces nothing"
+5. **Plan-regression gate**: conditional: skipped until a baseline `explain_snapshot` exists for the blueprint, then warns (or blocks, with `agent.block_on_explain_regression: true`) on a worse post-patch Spark plan
 
 ### 7. Confirm and write
 
 Only after every gate passes does the patch run against the real pipeline. The on-disk Blueprint is rewritten only if the full re-run succeeds. Failed patches stage to `patches/pending/` for inspection.
 
-## **8.3 Approval Modes**
+## **8.3 Approval modes**
 
 | Mode | Who applies the patch | When it changes the Blueprint |
 | :- | :- | :- |
@@ -953,7 +953,7 @@ Low-confidence patches and any guardrail violation auto-escalate to human review
 
 **Config key.** `agent.approval` is the config key. Values: `disabled`, `human`, `auto`, `ci`.
 
-**`ci` mode — the CI kit (1.2).** In `ci` mode the patch is staged and the `on_patch_pending` webhook fires a POST to `agent.ci_webhook_url`. The engine ships **no** long-running receiver and **no** versioned GitHub Action — a CI runner you own receives the payload, obtains the patch body (a run artefact, or `aqueduct patch pull`), and applies + commits it in one step:
+**`ci` mode: the CI kit (1.2).** In `ci` mode the patch is staged and the `on_patch_pending` webhook fires a POST to `agent.ci_webhook_url`. The engine ships **no** long-running receiver and **no** versioned GitHub Action, a CI runner you own receives the payload, obtains the patch body (a run artefact, or `aqueduct patch pull`), and applies + commits it in one step:
 
 ```bash
 aqueduct patch import received-patch.json --blueprint pipeline.yml
@@ -961,15 +961,15 @@ aqueduct patch import received-patch.json --blueprint pipeline.yml
 
 `patch import` is `patch apply` + `patch commit` atomically (`--no-commit` stages only), writing a structured `---aqueduct---` commit trailer that `aqueduct patch log` / `rollback` read back. The webhook payload schema (envelope keys `patch_id` / `run_id` / `blueprint_id` / `failed_module` / `source` plus the body's `_aq_meta`) and a copy-paste example workflow wiring `import` + `gh pr create` are documented in the **[Production Guide](production_guide.md)**.
 
-## **8.4 Sandbox Modes**
+## **8.4 Sandbox modes**
 
 | Mode | Sample size | Egress writes | Danger gate |
 | :- | :- | :- | :- |
-| `sample` (default) | 1000 rows per Ingress | dropped | — |
+| `sample` (default) | 1000 rows per Ingress | dropped | n/a |
 | `preflight` | full dataset | dropped | `danger.allow_full_preflight: true` |
 | `off` | no replay | writes for real | `danger.allow_skip_sandbox: true` |
 
-## **8.5 Patch Grammar**
+## **8.5 Patch grammar**
 
 A PatchSpec is a JSON document with the following structure:
 
@@ -989,17 +989,17 @@ A PatchSpec is a JSON document with the following structure:
 
 Supported operations: `set_module_config_key`, `replace_module_config`, `replace_context_value`, `replace_module_label`, `insert_module`, `remove_module`, `add_probe`, `replace_edge`, `set_module_on_failure`, `replace_retry_policy`, `add_arcade_ref`, `defer_to_human`, `set_spark_config`, `replace_macro`.
 
-`defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true` — when false (default), the op is hidden from the LLM prompt.
+`defer_to_human` signals an unhealable failure. It makes zero Blueprint changes and terminates the loop with `stop_reason='deferred'`. The payload carries `diagnosis`, `suggestions`, and `confidence_reason` for human review. Opt-in via `agent.allow_defer: true`, when false (default), the op is hidden from the LLM prompt.
 
-`set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize — seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
+`set_spark_config` sets a single key in the Blueprint `spark_config:` block. Covers OOM, shuffle fetch failures, Kryo buffer overflow, dynamic allocation thrashing, GC issues, and driver MaxResultSize, seven of the 20 most common Spark errors. Auto-creates the `spark_config` block if absent. Recommended default: add to `guardrails.forbidden_ops` to require human review before auto-apply.
 
-`replace_macro` replaces the body of an **existing** macro in the Blueprint `macros:` block — the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
+`replace_macro` replaces the body of an **existing** macro in the Blueprint `macros:` block, the one place bad SQL was previously unreachable, since the agent is told to preserve `{{ macros.* }}` references rather than inline them. Replace-only: unknown macro names are rejected at apply time (also catches name hallucinations). Re-expansion runs through the normal compile + lineage gates, so parameter mismatches and broken columns in *any* consuming module are caught before the patch lands. Because one macro change affects every module referencing it, the recommended default is to add `replace_macro` to `guardrails.forbidden_ops` so it always gets human review.
 
 **`deep_loop`:** when `agent.deep_loop: true`, sandbox/lineage/explain gates run inside the LLM conversation so the model sees rejection feedback and retries in-context before `apply_callback` runs. Default false preserves the current post-hoc gate behavior.
 
 ### Metadata field tolerance
 
-PatchSpec is **strict on operations, lenient on metadata.** Operation-level fields (`op`, `module_id`, `key`, `value`, `config`, …) mutate the Blueprint, so each Op model enforces `extra="forbid"` — a typo there bounces the patch. Top-level metadata fields (`rationale`, `root_cause`, `confidence`, `category`, `patch_id`) are descriptive only; the parser tolerates casing variants and synonym aliases so cheap models don't burn reprompt budget on cosmetics:
+PatchSpec is **strict on operations, lenient on metadata.** Operation-level fields (`op`, `module_id`, `key`, `value`, `config`, …) mutate the Blueprint, so each Op model enforces `extra="forbid"`, a typo there bounces the patch. Top-level metadata fields (`rationale`, `root_cause`, `confidence`, `category`, `patch_id`) are descriptive only; the parser tolerates casing variants and synonym aliases so cheap models don't burn reprompt budget on cosmetics:
 
 | Common LLM variant | Normalised to |
 |---|---|
@@ -1010,9 +1010,9 @@ PatchSpec is **strict on operations, lenient on metadata.** Operation-level fiel
 | `Confidence`, `score` | `confidence` |
 | `Category`, `failure_category`, `failureCategory` | `category` |
 
-Anything else that doesn't fit a known top-level field is moved into `misc: dict[str, Any]` rather than rejected — the LLM's stray `"examples"`, `"notes"`, or `"verified_by"` field is preserved for post-mortem visibility but does not participate in mutation. The `misc` field is persisted alongside the patch in `patches/applied/*.json`.
+Anything else that doesn't fit a known top-level field is moved into `misc: dict[str, Any]` rather than rejected, the LLM's stray `"examples"`, `"notes"`, or `"verified_by"` field is preserved for post-mortem visibility but does not participate in mutation. The `misc` field is persisted alongside the patch in `patches/applied/*.json`.
 
-## **8.6 FailureContext Structure**
+## **8.6 FailureContext structure**
 
 ```json
 {
@@ -1032,23 +1032,23 @@ Anything else that doesn't fit a known top-level field is moved into `misc: dict
 
 ## **8.7 Why it is reliable**
 
-A generated patch clears five gates, in order, before it is ever written into the Blueprint — first failure wins and the patch is discarded or escalated to human review:
+A generated patch clears five gates, in order, before it is ever written into the Blueprint, first failure wins and the patch is discarded or escalated to human review:
 
 ```
 ✓ guardrails  →  ✓ compile-check  →  ✓ lineage  →  ✓ sandbox  →  ✓ plan-regression  →  patch applied
 ```
 
-Gate 1 (guardrails) is deterministic policy — `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence — enforced by `patch/apply.py::_check_guardrails`. Gate 2 (compile-check, `patch/apply.py::apply_patch_file` — re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser. Gate 3 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 4 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 5 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline — conditional: it reports `skip` until a baseline `explain_snapshot` row exists for the blueprint, and is warn-only thereafter unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
+Gate 1 (guardrails) is deterministic policy: `agent.guardrails.forbidden_ops`, `allowed_paths`, minimum confidence, enforced by `patch/apply.py::_check_guardrails`. Gate 2 (compile-check, `patch/apply.py::apply_patch_file`, re-parses the patched Blueprint) rejects any PatchSpec whose operations produce a Blueprint that no longer passes the Parser. Gate 3 (lineage, `patch/preview.py::run_lineage_gate`) checks whether the patch breaks a downstream column consumer via live `sqlglot` analysis. Gate 4 (sandbox, `patch/preview.py::run_sandbox_gate`) replays the patched Blueprint against representative data (a per-Ingress row sample by default, no live writes). Gate 5 (plan regression, `patch/explain_gate.py::run_explain_gate`) compares the post-patch Spark plan's Exchange/Broadcast shape against the last known-good baseline, conditional: it reports `skip` until a baseline `explain_snapshot` row exists for the blueprint, and is warn-only thereafter unless `agent.block_on_explain_regression: true`. `aqueduct patch preview --sandbox` runs the same pyramid on demand, before an operator decides whether to apply.
 
 - **No silent mutations.** Every patch is a structured diff with a rationale and a confidence score. Low confidence escalates to human review.
 - **No production data corruption.** The sandbox validates patches against representative data before they reach live writes.
 - **No runaway loops.** Budgets bound wall-clock, tokens, and stuck-signature counts. A rolling rate-limit caps healing attempts per hour per blueprint.
 - **No black-box decisions.** Every LLM turn persists with the gate that rejected it, a stable error signature, and the prompt version.
 
-## **8.8 Proactive Drift Detection (`aqueduct drift`)**
+## **8.8 Proactive drift detection (`aqueduct drift`)**
 
-Self-healing has two arms. `run`'s heal is the **reactive arm** — it fixes a
-pipeline *after* it fails. `aqueduct drift` is the **proactive arm** — a
+Self-healing has two arms. `run`'s heal is the **reactive arm**, it fixes a
+pipeline *after* it fails. `aqueduct drift` is the **proactive arm**, a
 standalone, schedulable command that catches an upstream schema change and heals
 it *before* the pipeline ever runs. Schedule it ahead of the batch (e.g. cron,
 30 min before the nightly job); `run` itself is untouched.
@@ -1058,7 +1058,7 @@ Per Ingress, `drift`:
 1. Reads the **live source schema metadata-only** (`df.schema`, zero Spark
    actions; parquet/delta from the footer/`_delta_log`, JDBC via a `LIMIT 0`
    probe).
-2. Diffs against a **self-owned baseline** — the last-seen schema in
+2. Diffs against a **self-owned baseline**: the last-seen schema in
    `drift_checks`. No baseline yet ⇒ it stores the current schema and exits
    cleanly (no Probe dependency).
 3. **Classifies** each change: a *dropped* or *type-changed* column is
@@ -1071,67 +1071,67 @@ Per Ingress, `drift`:
    through the **same agent + apply gate** as a real failure, staging a patch or
    firing the `ci` webhook.
 
-Scope is **schema drift only** — value-distribution / data-quality drift is out
+Scope is **schema drift only**: value-distribution / data-quality drift is out
 of scope (a noisier, separate concern). The synthetic FailureContext is **not**
 persisted to `failure_contexts`; the audit lands in `drift_checks`, keeping
 failure analytics a record of real failures. Exit codes: `0` (no drift /
 baseline set), `HEAL_PENDING` (patch staged), `DATA_OR_RUNTIME` (source
 undiffable).
 
-## **8.9 Post-Heal Regression Artifacts (opt-in, `agent.regression_artifact`)**
+## **8.9 Post-heal regression artifacts (opt-in, `agent.regression_artifact`)**
 
 A successful heal fixes today's failure. Nothing stops tomorrow's hand-edit,
 SQL refactor, or `git revert` from silently reintroducing the exact same root
-cause — and without a regression test, the pipeline won't find out until it
+cause: and without a regression test, the pipeline won't find out until it
 fails in production again. This is a **different job** from the signature
 memory described in §8.1:
 
 | | Signature memory (heal cache) | Post-heal regression artifact |
 | :- | :- | :- |
 | **Triggers on** | The same failure **recurring** in production | A **successful** heal (patch applied AND the re-run succeeded) |
-| **Acts** | AFTER the failure recurs — zero-token patch replay | BEFORE the next run — a CI test run by `aqueduct test` |
+| **Acts** | AFTER the failure recurs: zero-token patch replay | BEFORE the next run: a CI test run by `aqueduct test` |
 | **Guards against** | Re-solving a known failure with fresh tokens | The fix being **undone** (hand-edit, refactor, revert) |
-| **Failure required to fire?** | Yes — a real pipeline failure | No — catches reintroduction with **no failure and no heal** |
+| **Failure required to fire?** | Yes: a real pipeline failure | No: catches reintroduction with **no failure and no heal** |
 
-The two are complementary — the same reason a human writes a regression test
+The two are complementary: the same reason a human writes a regression test
 immediately after fixing a bug by hand, in addition to whatever runtime
 safety net already exists.
 
 **Behavior.** When `agent.regression_artifact: true` (default `false`; engine
 default in `aqueduct.yml`, per-blueprint override in the Blueprint `agent:`
-block — `null` inherits the engine value, same inheritance shape as
+block: `null` inherits the engine value, same inheritance shape as
 `block_on_explain_regression`), a heal that reaches
 `healing_outcomes.run_success_after_patch = true` in `auto` mode's full-run
 validation path optionally emits an `.aqtest.yml` file under `aqtests/` next
-to the Blueprint — the same isolated-module test format `aqueduct test` already
+to the Blueprint: the same isolated-module test format `aqueduct test` already
 runs (§ see `docs/cli_reference.md`), auto-populated with a fixture reflecting
 the healed module and a smoke assertion. The test exists purely to fail loudly
-if the patched module ever throws again on the same input shape — i.e. if the
+if the patched module ever throws again on the same input shape, i.e. if the
 fix is undone.
 
-**Generation is conservative — it never emits a broken test file.** Aqueduct
+**Generation is conservative: it never emits a broken test file.** Aqueduct
 only builds a `.aqtest.yml` when the patch shape maps cleanly onto one:
 
 - The patch touches exactly **one** module via `set_module_config_key` or
-  `replace_module_config` (multi-module or structural patches are skipped —
+  `replace_module_config` (multi-module or structural patches are skipped,
   their regression risk isn't expressible as a single-module fixture test).
 - The patched module's type is one `aqueduct test` can run in isolation
-  (`Channel`, `Junction`, `Funnel`, `Assert` — Ingress/Egress are out of scope,
+  (`Channel`, `Junction`, `Funnel`, `Assert`: Ingress/Egress are out of scope,
   same limitation the test framework itself has).
 - Every direct upstream module supplying the patched module declares a
   `schema_hint` Aqueduct can turn into one synthetic fixture row (Spark SQL
   DDL type → a small in-domain dummy value; an unmapped type skips
   generation).
 
-Any other shape — no schema_hint to synthesize from, an untestable module
-type, a multi-module patch — produces an **info-level skip message**, not a
+Any other shape: no schema_hint to synthesize from, an untestable module
+type, a multi-module patch: produces an **info-level skip message**, not a
 file. Generation never overwrites an existing file (uniquifies the filename
-instead) and never blocks or fails the heal itself — it is strictly
+instead) and never blocks or fails the heal itself, it is strictly
 best-effort after the heal has already succeeded.
 
 ## **8.10 Diagnostics & the Tool Registry**
 
-`aqueduct/tools/` holds a single internal **ToolRegistry** — the enumeration
+`aqueduct/tools/` holds a single internal **ToolRegistry**: the enumeration
 surface both the MCP server (below) and the agentic-heal ToolBox (§8.12)
 read from. Every registered tool is:
 
@@ -1141,11 +1141,11 @@ read from. Every registered tool is:
   runner.
 - **Structurally read-only.** A `Tool` carries `read_only: bool = True`;
   there is no write tool in v1, and no handler ever receives a store's write
-  handle (`open_obs_write`, a mutating cursor, or `PatchStore.write_*`) — only
+  handle (`open_obs_write`, a mutating cursor, or `PatchStore.write_*`), only
   `open_obs_read` / `discover_stores` / read-side `patch_index` functions.
 - **Redacted before it leaves the registry.** Every result passes through the
   same secret-redaction registry (`aqueduct/redaction.py`) the CLI console and
-  observability-store writes already use — an observability row's error blob
+  observability-store writes already use: an observability row's error blob
   can embed a resolved secret, so `call_tool()` is the one call path that
   applies `redact()`, and an individual handler cannot forget it.
 
@@ -1160,32 +1160,32 @@ read from. Every registered tool is:
 | `doctor` | `aqueduct.doctor.run_doctor` | Structured `CheckResult`s (supports `skip_spark`) |
 | `blueprint_history` | `queries.blueprint_history` + git (§8.11) | The remediation timeline below, as a tool |
 
-**Reserved extensibility seam — not implemented.** `AQ_TOOLS_ENTRYPOINT_GROUP
+**Reserved extensibility seam: not implemented.** `AQ_TOOLS_ENTRYPOINT_GROUP
 = "aqueduct.tools"` names the setuptools entry-point group a custom-tool
 package would register under (the same shape as `probe`'s
 `AQ_PROBE_ENTRYPOINT_GROUP`). No code resolves it yet. When custom-tool
-loading ships, it will require explicit config allowlisting — a tool is CODE
-that runs on the driver, the same trust model as a probe plugin or UDF — so
+loading ships, it will require explicit config allowlisting, a tool is CODE
+that runs on the driver, the same trust model as a probe plugin or UDF, so
 v1's tool surface stays closed to exactly the built-ins above.
 
 **MCP server (`aqueduct mcp serve`).** The registry is exposed over the
 Model Context Protocol as a **stdio, local-only** server: an MCP client
 (Claude Desktop, an IDE) spawns `aqueduct mcp serve` as a subprocess and
-speaks JSON-RPC over stdin/stdout — no network transport, no ports. Every
+speaks JSON-RPC over stdin/stdout: no network transport, no ports. Every
 registered tool becomes one MCP tool with its name, description, and
 `params_schema` handed through verbatim as the MCP declaration; invocation
 goes through the same redacted `call_tool()` path (results AND surfaced
-error messages are secret-scrubbed), and the same read-only contract holds —
+error messages are secret-scrubbed), and the same read-only contract holds,
 the server has no write tool and imports no store write API. Tool-handler
 failures return as structured MCP tool-call errors; they never terminate
 the server. `--config <aqueduct.yml>` scopes every tool call to one engine
 config (a client-supplied `config_path` argument wins). Requires the
-optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]` — a
+optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]`, a
 local, on-demand diagnostic surface (like `studio`/`dashboard`), never part
 of the data path.
 
 **MCP is for external clients only.** The internal heal LLM (§8.12's
-agentic mode) never speaks MCP — its tool calls go straight through the
+agentic mode) never speaks MCP: its tool calls go straight through the
 provider API request as native tool-use blocks (`ToolBox` calls
 `tools.call_tool()` in-process, same redaction chokepoint, zero IPC). MCP
 is the transport `aqueduct mcp serve` exposes to an *external* MCP client
@@ -1193,75 +1193,75 @@ is the transport `aqueduct mcp serve` exposes to an *external* MCP client
 outside the heal loop; the two paths share the registry and the
 redaction guarantee but never share a process boundary or a protocol.
 
-## **8.11 Remediation Domains**
+## **8.11 Remediation domains**
 
-Aqueduct's self-healing operates in explicit **remediation domains** — a
+Aqueduct's self-healing operates in explicit **remediation domains**, a
 domain is the boundary of what a patch is allowed to touch. Today there is
 one: the **pipeline-definition domain**, where a `PatchSpec` op (§8.5) edits
 the Blueprint YAML that defines a pipeline. Every domain, present or future,
 follows the same principle:
 
-- **Declarative, typed operations** — a fixed, closed grammar of ops (never
+- **Declarative, typed operations**: a fixed, closed grammar of ops (never
   freeform code generation; §1.4's "patch grammar over codegen" principle).
-- **Per-domain validation gates** — guardrails, lineage-impact, sandbox
+- **Per-domain validation gates**: guardrails, lineage-impact, sandbox
   replay, and plan-regression gates (§8.5) sit between "the LLM proposed a
   patch" and "the patch is applied," scoped to what that domain can break.
-- **Never freeform code execution** — a domain's operations are data, not
+- **Never freeform code execution**: a domain's operations are data, not
   code; the agent cannot ship an arbitrary script to remediate a failure.
 
 Diagnostics are domain-aware and read-only: the tool registry (§8.10) gives
-the agent (and any future MCP client) visibility into a domain's state —
-patch history, run outcomes, probe signals — without ever granting it a
+the agent (and any future MCP client) visibility into a domain's state,
+patch history, run outcomes, probe signals: without ever granting it a
 write handle. Framing self-healing this way keeps the pipeline-definition
 domain's contract explicit and gives any domain added later the same shape
 to slot into, rather than a one-off extension of the patch grammar.
 
-## **8.12 Agentic Heal (opt-in, `agent.mode`)**
+## **8.12 Agentic heal (opt-in, `agent.mode`)**
 
 By default (`agent.mode: oneshot`) a heal is a single prompt → PatchSpec
-turn (plus reprompts on an invalid response, §8.2) — exactly the flow this
+turn (plus reprompts on an invalid response, §8.2), exactly the flow this
 document describes elsewhere in §8. Setting `agent.mode: agentic` (engine
-`aqueduct.yml` default, per-blueprint override — same `None` = inherit
+`aqueduct.yml` default, per-blueprint override: same `None` = inherit
 shape as `agent.regression_artifact`) lets the model call **read-only**
 diagnostic tools before answering, so it can investigate the failure
 instead of guessing from the failure report alone.
 
 **Tool list.** Every tool registry entry (§8.10) except `doctor` (a
-health-probe, not a failure-diagnosis tool) — `list_runs`, `run_detail`,
+health-probe, not a failure-diagnosis tool): `list_runs`, `run_detail`,
 `lineage`, `patch_list`, `patch_show`, `probe_signals`,
-`blueprint_history` — plus three heal-context tools built for this mode:
+`blueprint_history`: plus three heal-context tools built for this mode:
 
 | Tool | Returns | Notes |
 | :- | :- | :- |
 | `read_blueprint` | The failing Blueprint's YAML source text | Size-capped (20,000 chars) |
 | `get_source_schema` | Live schema of an Ingress module's source | Metadata-only, zero Spark actions; `{"available": false, ...}` with no live Spark session (e.g. `aqueduct benchmark`/`aqueduct heal`) |
-| `sample_rows` | Up to 20 real rows from an Ingress module's source | `limit(n).collect()` — bounded, never a full scan; Ingress modules only; unavailable without a session |
+| `sample_rows` | Up to 20 real rows from an Ingress module's source | `limit(n).collect()`: bounded, never a full scan; Ingress modules only; unavailable without a session |
 
-Every tool result — registry or heal-context — passes through
+Every tool result: registry or heal-context: passes through
 `redaction.redact()` before it can enter a prompt, same as every other
 LLM-facing surface.
 
 **Caps.** `agent.max_tool_calls` (default 8, per-blueprint override) is a
-hard ceiling on tool calls **per heal attempt** — not per whole heal.
+hard ceiling on tool calls **per heal attempt**, not per whole heal.
 Exceeding it withdraws tools from the next provider call, forcing the model
 to answer with a PatchSpec on that final no-tools turn. A reprompt turn
 (§8.2, on an invalid PatchSpec) gets its own fresh cap. The heal-cache
-signature (§8.6/memory) is unaffected — tools change the *path* to a patch,
+signature (§8.6/memory) is unaffected: tools change the *path* to a patch,
 never the failure identity used for dedup/replay/coaching.
 
 **Provider support.** `agent.supports_tools` (`true` / `false` / `auto`,
 default `auto`) resolves per top-level default, with a per-blueprint and
 per-cascade-tier override (`cascade[].supports_tools`). `provider:
-anthropic` is known tool-capable — `auto` resolves `true` with no probe.
+anthropic` is known tool-capable: `auto` resolves `true` with no probe.
 `provider: openai_compat` probes on the first agentic-mode call of a heal
 session: if the endpoint rejects a tools-enabled request (or a 4xx response
 looks tools-related), the heal degrades to the oneshot path for the *rest
-of that heal* and emits one `[agent_tools_unsupported]` warning — never a
+of that heal* and emits one `[agent_tools_unsupported]` warning, never a
 ReAct/text-emulation fallback, and never a repeated probe per attempt.
 
 **Budget interaction.** Tool-call request/response tokens flow into the
 same `BudgetConfig`/`BudgetTracker` axes (§8's budget model) as every other
-provider call — a tool round-trip's tokens count toward
+provider call: a tool round-trip's tokens count toward
 `max_tokens_total` and its wall time toward `max_seconds` exactly like a
 oneshot turn's tokens/time would. `heal_attempts` (see
 `docs/observability_guide.md`) gains a per-attempt tool-call count and a
@@ -1273,20 +1273,20 @@ oneshot mode (`tool_calls: 0`, empty log).
 engine-level resolution as `aqueduct heal` (no per-scenario Blueprint
 `agent:` block to merge), so a live A/B of oneshot vs agentic across the
 same scenarios/models is possible. Scenario runs never start Spark, so
-`get_source_schema`/`sample_rows` always report unavailable there — the
+`get_source_schema`/`sample_rows` always report unavailable there: the
 registry tools (run/patch/lineage history) still work.
 
-## **8.13 Progressive (Chained) Multi-Patch Healing (opt-in, `agent.progressive`)**
+## **8.13 Progressive (chained) multi-patch healing (opt-in, `agent.progressive`)**
 
 **Motivation.** The pre-existing `max_patches > 1` loop re-diagnoses the
 SAME first failure on every attempt: its `full_run` validation applies a
-candidate patch in memory, re-runs the pipeline, and — when the re-run
-still fails — discards the candidate and re-executes against the
+candidate patch in memory, re-runs the pipeline, and, when the re-run
+still fails: discards the candidate and re-executes against the
 *original, unpatched* Blueprint. With two or more independent bugs, the
 model can diagnose bug #1 correctly on every single attempt and it is
 thrown away every time, because the pipeline still fails downstream at bug
 #2 and nothing carries bug #1's fix forward. `agent.progressive` (default
-`False`, engine `aqueduct.yml` + per-blueprint override — same `None` =
+`False`, engine `aqueduct.yml` + per-blueprint override: same `None` =
 inherit shape as `agent.regression_artifact`/`agent.mode`) fixes this
 independently of `max_patches`, whose semantics stay **unchanged**: N
 independent retries of the same failure.
@@ -1305,13 +1305,13 @@ failure surfaced:
   rationale (`human`/`ci` mode), per `agent.on_heal_failure`.
 
 Each link's diagnosis (oneshot or agentic, per `agent.mode`) and heal-cache
-lookup (§8's memory model) operate independently — a link's failure has
+lookup (§8's memory model) operate independently: a link's failure has
 its own error signature (§8.6), so one link may be satisfied by a
 zero-token cache replay while the next link runs a fresh LLM call.
 
 **Disk invariant.** Nothing is written to the Blueprint until the FULL
 accumulated patch passes the pipeline end-to-end. There is never a
-partial/half-correct Blueprint on disk mid-chain — every intermediate
+partial/half-correct Blueprint on disk mid-chain: every intermediate
 apply is the existing in-memory apply path (`_apply_patch_in_memory`),
 re-applied against the *original* on-disk Blueprint with the growing
 operation list, never against a previously-written file.
@@ -1319,7 +1319,7 @@ operation list, never against a previously-written file.
 **Chain cap.** `agent.max_chain` (default `3`, same inheritance shape) is
 a hard ceiling on the number of links, independent of each link's own
 `max_reprompts`/budget ceiling. A chain that exhausts `max_chain` without
-solving the pipeline ends with `chain_cap_exceeded` — same
+solving the pipeline ends with `chain_cap_exceeded`: same
 discard/stage-per-approval handling as a stuck chain.
 
 **Gates.** Each link's validation IS its advancement test: the existing
@@ -1327,24 +1327,24 @@ in-memory apply + full pipeline re-run (the same gate `full_run` patch
 validation already performs for a single patch, just invoked once per
 link against the growing accumulated patch). The final combined multi-op
 patch that solves the pipeline still runs the standard gate pyramid before
-being written — no gate is skipped, only the *per-bug* diagnosis loop is
+being written: no gate is skipped, only the *per-bug* diagnosis loop is
 new.
 
 **Approval composes once.** Because nothing hits disk mid-chain, `agent.
-approval: auto` applies the combined patch after the final full-run pass —
+approval: auto` applies the combined patch after the final full-run pass,
 one write, not N. `human`/`ci` modes stage exactly ONE combined patch
 (with each link's rationale folded into the staged patch's `rationale`
 field) instead of cycling through N separate pending-patch reviews.
 
 **Sandbox requirement.** Progressive healing refuses to run with
-`agent.sandbox_mode: off` — a `ConfigError` at heal-start with an
+`agent.sandbox_mode: off`: a `ConfigError` at heal-start with an
 actionable message. Each link's advancement test depends on validating a
 candidate before it is folded into the chain; without sandbox validation
 there is no safe way to tell "advanced" from "about to compound a wrong
 fix." `sample` (default) or `preflight` are required.
 
 **Observability.** `heal_attempts` (see `docs/observability_guide.md`)
-gains a `chain_link` column — the 1-based link index an attempt belongs
+gains a `chain_link` column: the 1-based link index an attempt belongs
 to, `NULL` for a normal (non-progressive) heal attempt. `attempt_num`
 still carries the reprompt sequence *within* one link; `chain_link` is an
 orthogonal axis. Token totals aggregate across all links into the single
@@ -1353,21 +1353,21 @@ orthogonal axis. Token totals aggregate across all links into the single
 **Scope note.** The current implementation wires progressive diagnosis
 into the single-model (`agent.approval: auto`, non-cascade) heal path.
 Multi-model cascade (§8's cascade model) interaction with progressive
-chaining is deferred — a cascade tier's escalation semantics and a chain
+chaining is deferred: a cascade tier's escalation semantics and a chain
 link's advancement semantics are two independent axes that have not yet
 been reconciled; see `docs/roadmap.md`.
 
 ---
 
-# **9. Type System**
+# **9. Type system**
 
-## **9.1 Principle: Aqueduct Owns No Types**
+## **9.1 Principle: Aqueduct owns no types**
 
-All column types throughout Aqueduct — in `schema_hint` declarations, UDF `return_type` fields, column assertions, and the Flow Report — use Spark DDL type strings verbatim. Aqueduct does not define its own type system and does not wrap or alias Spark types.
+All column types throughout Aqueduct: in `schema_hint` declarations, UDF `return_type` fields, column assertions, and the Flow Report, use Spark DDL type strings verbatim. Aqueduct does not define its own type system and does not wrap or alias Spark types.
 
 This guarantees complete compatibility and eliminates any translation layer between Aqueduct's type references and what Spark executes.
 
-## **9.2 Accepted Aliases**
+## **9.2 Accepted aliases**
 
 For `schema_hint` and assertions, common aliases are normalized:
 
@@ -1384,9 +1384,9 @@ For `schema_hint` and assertions, common aliases are normalized:
 
 ---
 
-# **10. Deployment & Spark Integration**
+# **10. Deployment & Spark integration**
 
-## **10.1 Engine Configuration File**
+## **10.1 Engine configuration file**
 
 Aqueduct reads a project-level `aqueduct.yml` configuration file from the working directory (or path specified by `--config` flag). This file sets deployment target, store backends, agent config, and engine defaults.
 
@@ -1406,48 +1406,48 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 | `checkpoint_root` | Local filesystem path overriding the derived `<store_dir>/checkpoints/` location for module checkpoint/resume state (2.8) |
 | `spark_config` | Per-run Spark session configuration |
 
-## **10.2 Environment Variables & .env**
+## **10.2 Environment variables & .env**
 
 - Aqueduct automatically loads `.env` from the directory of the config or blueprint file.
 - Override with `-e KEY=VAL` (highest precedence) or `--env-file <path>`.
 - Disable entirely with `AQ_NO_ENV_FILE=1`.
 
-**Config overrides (`-s/--set`, 1.2).** `aqueduct run -s agent.approval=human -s stores.observability.backend=postgres …` sets dotted-path keys in the loaded `aqueduct.yml` config in memory for that invocation — repeatable, applied after the file is read and before validation. Distinct from `--ctx` (which sets Blueprint Context Registry values, not engine config). Values are parsed as YAML scalars (`true`/`123`/strings).
+**Config overrides (`-s/--set`, 1.2).** `aqueduct run -s agent.approval=human -s stores.observability.backend=postgres …` sets dotted-path keys in the loaded `aqueduct.yml` config in memory for that invocation, repeatable, applied after the file is read and before validation. Distinct from `--ctx` (which sets Blueprint Context Registry values, not engine config). Values are parsed as YAML scalars (`true`/`123`/strings).
 
-## **10.3 SparkSession Lifecycle**
+## **10.3 SparkSession lifecycle**
 
 - The Executor creates one SparkSession per pipeline run.
 - Session configuration from the Blueprint `spark_config` block is merged with engine defaults (Blueprint takes precedence).
 - On self-healing patch and resume: the SparkSession is preserved if the failure was application-level; recycled if JVM/network-level.
-- On run completion or abort, the one-shot CLI relies on process-exit teardown to release the JVM — it deliberately does **not** call `session.stop()`, because `getOrCreate()` may have returned a shared/long-lived cluster (or test) session that other code still depends on. Short-lived helper commands that create a throwaway session (`doctor`, scaffolding) do stop theirs.
+- On run completion or abort, the one-shot CLI relies on process-exit teardown to release the JVM, it deliberately does **not** call `session.stop()`, because `getOrCreate()` may have returned a shared/long-lived cluster (or test) session that other code still depends on. Short-lived helper commands that create a throwaway session (`doctor`, scaffolding) do stop theirs.
 
-## **10.4 Path Resolution (1.1.0+)**
+## **10.4 Path resolution (1.1.0+)**
 
 Every relative path inside a YAML file resolves to **that YAML file's parent directory**, never the CWD of the `aqueduct` command. See [CLI Reference](cli_reference.md) for details.
 
 ### **10.4.1 Observability store routing (DuckDB)**
 
 `stores.observability.path` (DuckDB backend) is always a **routing base
-directory** (2.0 — the earlier single-shared-file layout was removed; a
+directory** (2.0: the earlier single-shared-file layout was removed; a
 `.db`-suffixed path is now a config-load error):
 
 | `path` value | Layout | Parallelism |
 | :- | :- | :- |
-| *(unset — default)* | **Per-blueprint routing** — each blueprint writes its own file at `.aqueduct/observability/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel — separate files |
-| A directory, e.g. `/mnt/aqueduct/obs` | **Location-only routing** — same per-blueprint split, but under your directory: `<dir>/<blueprint_id>/observability.db` | ✅ Safe — separate files, custom location |
-| ~~A file, e.g. `/mnt/aqueduct/obs.db`~~ | **Removed in 2.0** — DuckDB is single-writer, so one shared file was never parallel-safe, and a custom basename split reads from writes. Config load fails with a pointer here. | Use **Postgres** for one shared concurrent store |
+| *(unset: default)* | **Per-blueprint routing**: each blueprint writes its own file at `.aqueduct/observability/<blueprint_id>/observability.db` | ✅ Safe to run different blueprints in parallel, separate files |
+| A directory, e.g. `/mnt/aqueduct/obs` | **Location-only routing**: same per-blueprint split, but under your directory: `<dir>/<blueprint_id>/observability.db` | ✅ Safe: separate files, custom location |
+| ~~A file, e.g. `/mnt/aqueduct/obs.db`~~ | **Removed in 2.0**: DuckDB is single-writer, so one shared file was never parallel-safe, and a custom basename split reads from writes. Config load fails with a pointer here. | Use **Postgres** for one shared concurrent store |
 
 **Caveats:**
-- DuckDB takes an **exclusive lock** per file. Launching the *same* blueprint twice concurrently (one routed file) will block/fail — rare, but real.
-- Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work — the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
-- **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect — but for conflict-free continuous monitoring, use Postgres.
-- *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores) — see `docs/roadmap.md`.
+- DuckDB takes an **exclusive lock** per file. Launching the *same* blueprint twice concurrently (one routed file) will block/fail, rare, but real.
+- Want **one merged store for every blueprint** (shared file semantics)? Use the **Postgres** backend (MVCC, concurrent writers). Cross-blueprint *reads* over routed DuckDB files already work, the fleet commands (`report`, `runs`) aggregate across `<base>/*/observability.db`.
+- **Reading while running:** `aqueduct report`/`runs`/`dashboard` open short-lived read-only connections, so they don't block writers; a file mid-write is momentarily skipped by the fleet view. You do **not** need to stop pipelines to inspect, but for conflict-free continuous monitoring, use Postgres.
+- *Planned:* dynamic templating in the path (e.g. `.aqueduct/obs-@aq.date.month().db` for time-partitioned stores), see `docs/roadmap.md`.
 
-### **10.4.2 Checkpoint Root Override (2.8)**
+### **10.4.2 Checkpoint root override (2.8)**
 
 `checkpoint: true` (module- or manifest-level, see §4) writes module output to
 Parquet for `--resume` support. By default this lands under the derived
-`<store_dir>/checkpoints/<run_id>/` directory — the same routing base used by
+`<store_dir>/checkpoints/<run_id>/` directory: the same routing base used by
 the observability store (§10.4.1).
 
 `checkpoint_root` (top-level `aqueduct.yml` key) overrides that derived
@@ -1460,12 +1460,12 @@ Standalone cluster.
 
 **LOCAL FILESYSTEM PATHS ONLY.** A `checkpoint_root` value containing a remote
 URI scheme (`s3://`, `s3a://`, `gs://`, `hdfs://`, `abfss://`, ...) is rejected
-at config-load with an actionable error — remote checkpoint roots require
+at config-load with an actionable error: remote checkpoint roots require
 Hadoop-FS-API bookkeeping that Aqueduct does not yet implement (tracked as
 "Remote-Filesystem Checkpoint Root" in `docs/roadmap.md`). A relative path is
 resolved against the project root (the `aqueduct.yml` directory).
 
-## **10.5 Deployment Targets**
+## **10.5 Deployment targets**
 
 The `deployment.target` field selects the Spark cluster type. Aqueduct validates
 that `master_url` matches the declared `target` at config-load (for
@@ -1474,15 +1474,15 @@ reachability and configuration guidance.
 
 | Target | Status | Required `master_url` shape | Doctor checks |
 | :- | :- | :- | :- |
-| **local** | Supported (in-cluster) | Starts with `"local"` (e.g. `local[*]`) | In-process session — always ok |
+| **local** | Supported (in-cluster) | Starts with `"local"` (e.g. `local[*]`) | In-process session: always ok |
 | **standalone** | Supported (in-cluster) | Starts with `"spark://"` (e.g. `spark://host:7077`) | TCP probe to master host:port |
 | **yarn** | Supported (in-cluster) | Exactly `"yarn"` | Warns if `HADOOP_CONF_DIR` / `YARN_CONF_DIR` env var is unset |
 | **kubernetes** | Supported (in-cluster) | Starts with `"k8s://"` (e.g. `k8s://https://apiserver:443`) | TCP probe to API server host:port; warns if no `spark.kubernetes.*` keys in `spark_config` |
 | **databricks** | Supported (remote-submit) | N/A (remote-submit) | Requires `deployment.databricks` block; TCP probe to workspace URL |
-| **emr** | Deferred | — | Rejected at config-load with a "not yet supported" error |
-| **dataproc** | Deferred | — | Rejected at config-load with a "not yet supported" error |
+| **emr** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
+| **dataproc** | Deferred | n/a | Rejected at config-load with a "not yet supported" error |
 
-`databricks` is a fully wired **remote-submit** target — the engine packages the
+`databricks` is a fully wired **remote-submit** target, the engine packages the
 blueprint, uploads it to DBFS, submits via the Databricks Jobs API, polls to
 completion, and fetches logs. `emr` / `dataproc` are **remote-submit** targets
 planned for a future release; in the current release they are rejected with a
@@ -1491,11 +1491,11 @@ planned for a future release; in the current release they are rejected with a
 See the **[Production Guide](production_guide.md)** for per-target cluster setup,
 required env vars, `spark_config` keys, and the production readiness checklist.
 
-## **10.6 `aqueduct test` — Isolated Module Testing**
+## **10.6 `aqueduct test`: Isolated module testing**
 
-`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The session always runs on `local[*]` — `deployment.master_url` is deliberately ignored for cluster-pointed configs.
+`aqueduct test <test_file.yml>` runs Channel, Junction, Funnel, and Assert modules against inline data with no external I/O. Ingress and Egress are never executed. The session always runs on `local[*]`, `deployment.master_url` is deliberately ignored for cluster-pointed configs.
 
-## **10.7 Orchestrator Integration Contract**
+## **10.7 Orchestrator integration contract**
 
 Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wrap `aqueduct run` and consume two stable surfaces: the **exit-code contract** and the **patch CLI JSON**. Both are part of the v1.0 stability guarantee.
 
@@ -1508,29 +1508,29 @@ Aqueduct stays orchestrator-agnostic. Schedulers (Airflow, Dagster, Prefect) wra
 | 4 | VALIDATION_GATE | Patch rejected by validation |
 | 5 | USAGE_ERROR | Invalid command usage |
 
-## **10.8 Remote-Submit Targets**
+## **10.8 Remote-submit targets**
 
 `emr` and `dataproc` are **rejected at config‑load** in the current release.
 Setting `deployment.target` to either of these values raises a `ConfigError`.
 `databricks` is the sole supported remote‑submit target (see §10.5).
 
-**Config.** Each remote target adds a nested optional block under ``deployment`` — e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
+**Config.** Each remote target adds a nested optional block under ``deployment``, e.g. ``deployment.databricks: {workspace_url, cluster_id, ...}``. Credentials flow through ``@aq.secret(...)`` / environment variables, never plaintext in the block.
 
-Self‑healing is **disabled** on all remote‑submit targets — ``aqueduct run``
+Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
 ---
 
-# **11. Engine Scope & Boundaries**
+# **11. Engine scope & boundaries**
 
-## **11.1 What Aqueduct Is**
+## **11.1 What Aqueduct is**
 
 - A **batch processing engine** for Apache Spark. Every pipeline run is finite.
 - A **declarative control plane**. Engineers describe *what* the pipeline does, not *how* Spark executes it.
 - An **LLM-integrated operations tool**. Self-healing, patch lifecycle, and FailureContext are core.
 
-## **11.2 What Aqueduct Is Not**
+## **11.2 What Aqueduct is not**
 
 | Out of scope | Recommended alternative |
 | :- | :- |

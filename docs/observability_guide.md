@@ -5,7 +5,7 @@
 This guide combines schema reference and practical diagnostic queries for
 Aqueduct's observability, lineage, depot, and benchmark stores.
 
-## Filesystem Layout (1.1.0+ — per-pipeline)
+## Filesystem layout (1.1.0+: per-pipeline)
 
 Aqueduct routes observability artefacts per blueprint so multiple pipelines
 sharing a project directory cannot stomp on each other's `run_id` namespace
@@ -34,7 +34,7 @@ sidecar (`watermarks/`) and the `schema_snapshot` sidecar (`snapshots/`) were
 removed: watermarks are persisted to the Depot only, and `schema_snapshot`
 payloads live solely in `probe_signals`. The `blobs/` directory and the patch
 lifecycle (`patches/`) are now written through a pluggable **object store**
-(`stores.blob`) — `local` (default, the layout above) or `s3` / `gcs` / `adls`
+(`stores.blob`): `local` (default, the layout above) or `s3` / `gcs` / `adls`
 so a cluster pod leaves no local-FS artefacts. The `patch_index` table is the
 relational truth for the object-store patch lifecycle.
 
@@ -59,7 +59,7 @@ Each store is independently pluggable in `aqueduct.yml`:
 
 > **Blob integrity warning:** When `stores.observability.backend` is remote
 > (Postgres) but `stores.blob.backend` is left at its default (`local`, unset),
-> Aqueduct emits a non‑suppressible `AqueductWarning` — externalised blobs
+> Aqueduct emits a non‑suppressible `AqueductWarning`: externalised blobs
 > (manifests, stack traces, provenance) are written to the driver's local disk
 > instead of the remote backend. Set `stores.blob.backend` explicitly to silence
 > it (to `local` to acknowledge, or to a cloud backend).
@@ -71,10 +71,10 @@ DuckDB files are stable and safe to query with any DuckDB CLI / library.
 
 ---
 
-## Schema Reference
+## Schema reference
 
 Columns marked were added in 1.1.0 via idempotent additive
-`ALTER` migrations — pre-existing stores upgrade in place; rows written
+`ALTER` migrations: pre-existing stores upgrade in place; rows written
 before the migration have `NULL` in those columns.
 
 ### `observability.db`
@@ -104,8 +104,8 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `failed_module`     | VARCHAR NOT NULL    | Module where the failure surfaced |
 | `error_message`     | VARCHAR NOT NULL    | Full error string |
 | `stack_trace`       | VARCHAR             | Used as the prompt fallback when structured extraction fails |
-| `manifest_json`     | VARCHAR             | Blob path or inline JSON — compiled Manifest at failure |
-| `provenance_json`   | VARCHAR             | Blob path or inline JSON — ProvenanceMap slice for the failed module |
+| `manifest_json`     | VARCHAR             | Blob path or inline JSON: compiled Manifest at failure |
+| `provenance_json`   | VARCHAR             | Blob path or inline JSON: ProvenanceMap slice for the failed module |
 | `started_at`        | TIMESTAMPTZ NOT NULL | |
 | `finished_at`       | TIMESTAMPTZ NOT NULL | |
 | `error_class`       | VARCHAR             | Spark 4.0 error condition (e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`) or JVM throwable class name |
@@ -114,13 +114,13 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `suggested_columns` | JSON                | Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
 | `object_name`       | VARCHAR             | Offending column / table / object |
 
-The structured fields populate from `_extract_structured_error()` —
+The structured fields populate from `_extract_structured_error()`:
 best-effort, lazy-imported. When extraction returned None the row carries
 NULL on these columns and the LLM prompt falls back to the raw stack trace.
 
 #### `heal_attempts` (1.1.0+)
 
-One row per LLM turn inside the unified reprompt loop — finer-grained than
+One row per LLM turn inside the unified reprompt loop, finer-grained than
 `healing_outcomes` (which collapses an entire healing session to one row).
 
 | Column              | Type                | Notes |
@@ -130,7 +130,7 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `attempt_num`       | INTEGER NOT NULL    | 1-based |
 | `error_class`       | VARCHAR             | Mirrors `failure_contexts.error_class` when available |
 | `where_field`       | VARCHAR             | Pydantic location string for validation errors |
-| `normalized_message`| VARCHAR             | Normalised error text used to compute `signature_hash` — digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics hash identically |
+| `normalized_message`| VARCHAR             | Normalised error text used to compute `signature_hash`, digits, quoted (`'…'`/`"…"`) values, backtick-quoted identifiers (`` `col` ``, Spark 4 `UNRESOLVED_COLUMN` style), and filesystem paths are collapsed to placeholders so failures differing only in specifics hash identically |
 | `signature_hash`    | VARCHAR             | Stable 16-char sha1 over `(error_class, where, normalized_message)` |
 | `tokens_in`         | INTEGER NOT NULL    | Prompt tokens; 0 when provider does not report usage |
 | `tokens_out`        | INTEGER NOT NULL    | Completion tokens |
@@ -143,12 +143,12 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
 | `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
 
-Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run — no manual migration needed.
+Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed.
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
 `progress_stalled`, `api_error`, `deferred`. `solved` describes LLM loop termination
-only (a parseable PatchSpec returned) — it does NOT mean the heal fixed
+only (a parseable PatchSpec returned): it does NOT mean the heal fixed
 the pipeline. Join `healing_outcomes.run_success_after_patch` for that.
 
 Two values are added outside the loop vocabulary: `cached` and
@@ -173,8 +173,8 @@ without calling the LLM at all.
 | `applied_at`              | VARCHAR | ISO-8601 |
 | `prompt_version`          | VARCHAR | From `aqueduct.agent.PROMPT_VERSION` |
 | `failure_signature`       | VARCHAR | exact signature hash of the pipeline failure this heal addressed (16-char sha1 of error class + module + normalized message) |
-| `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message) — enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
-| `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows — treat as `llm` (`COALESCE(resolution,'llm')`) |
+| `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
+| `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
 | `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
@@ -201,7 +201,7 @@ per `patch_id`; `status` moves `pending` → `applied` | `rejected`. The patch
 metadata (`signature`, `signature_coarse`, `error_class`, `where_field`,
 `normalized_message`, `rationale`, `ops`) for the heal cache to resolve
 pending-reuse, coaching retrieval, and prompt history **without reading a body**
-— only zero-token replay fetches the body. Backend-blind: the same SQL serves
+, only zero-token replay fetches the body. Backend-blind: the same SQL serves
 local-disk, s3, gcs, and adls patch stores, replacing the former `os.scandir`
 over the `patches/` directory.
 
@@ -224,14 +224,14 @@ Per-module I/O metrics (`records_read`, `bytes_read`, `records_written`,
 modules by duration (heaviest first) with each module's share of total time and
 bytes; `aqueduct report --profile --blueprint <id> --last N` trends per-module
 duration across the last N runs and flags a module whose latest run is >1.5× its
-window average (a slowdown). Pure read-side over this table — no extra Spark
+window average (a slowdown). Pure read-side over this table, no extra Spark
 action, no `$` conversion (raw resource units, map to cost yourself).
 
 #### `maintenance_metrics`
 
 Post-write maintenance timings per module. The two columns are **engine-generic
 slots**: `optimize_ms` is the compaction-class op, `vacuum_ms` the cleanup-class
-op — Delta `OPTIMIZE`/`VACUUM`, Iceberg `rewrite_data_files`/`expire_snapshots`,
+op: Delta `OPTIMIZE`/`VACUUM`, Iceberg `rewrite_data_files`/`expire_snapshots`,
 or Hudi `run_compaction`/`run_clean`, depending on the Egress `format`.
 
 #### `probe_signals`
@@ -263,7 +263,7 @@ path. `blob_store.materialize()` transparently resolves blob paths to content on
 | `source_column` | VARCHAR | |
 | `captured_at`   | TIMESTAMPTZ | |
 
-**Per-hop transform trace, not just the stored graph.** `aqueduct lineage <blueprint.yml> --chain <column> --types` gives a *deeper* view than a `column_lineage` query — a vertical, per-hop trace showing the sqlglot-inferred SQL type at every Channel the column passes through, with a `⚠ type change` marker on any hop where the inferred type shifts. It is computed on demand from the compiled manifest (no store read, no Spark action) rather than read from this table, so it works even before a run has ever persisted a `column_lineage` row. See [CLI Reference](cli_reference.md) for a worked example.
+**Per-hop transform trace, not just the stored graph.** `aqueduct lineage <blueprint.yml> --chain <column> --types` gives a *deeper* view than a `column_lineage` query, a vertical, per-hop trace showing the sqlglot-inferred SQL type at every Channel the column passes through, with a `⚠ type change` marker on any hop where the inferred type shifts. It is computed on demand from the compiled manifest (no store read, no Spark action) rather than read from this table, so it works even before a run has ever persisted a `column_lineage` row. See [CLI Reference](cli_reference.md) for a worked example.
 
 ### `channel_fingerprints`
 
@@ -271,7 +271,7 @@ SQL-AST normalised fingerprint per `op: sql` Channel (Lineage v2). A
 **changelog, not a run-log**: one row per *distinct* fingerprint per
 `(blueprint_id, channel_id)`. A run whose Channel SQL is unchanged only bumps
 `last_seen`/`last_run_id` (via `ON CONFLICT`), so the table grows with the
-number of times the SQL semantically changed — not with the number of runs.
+number of times the SQL semantically changed, not with the number of runs.
 The fingerprint is formatting/comment/keyword-case insensitive (sqlglot
 canonicalisation), so a pure reformat does **not** create a new row while a
 real predicate/column change does.
@@ -289,7 +289,7 @@ real predicate/column change does.
 
 PK `(blueprint_id, channel_id, fingerprint)`.
 
-**Diagnostic — did a Channel's SQL change, and when?**
+**Diagnostic: did a Channel's SQL change, and when?**
 ```sql
 SELECT channel_id, fingerprint, first_seen, last_seen
 FROM channel_fingerprints
@@ -301,12 +301,12 @@ newest row is when the new version first ran.
 
 > **`report --trend <column>` adds no table.** The cross-run column-quality
 > trend is a **read-side aggregate** over `probe_signals` (`null_rates` +
-> `schema_snapshot` payloads unrolled at query time) — deliberately *not*
+> `schema_snapshot` payloads unrolled at query time), deliberately *not*
 > persisted, to avoid duplicating data the probes already store.
 
 ### `drift_checks`
 
-Audit log for `aqueduct drift` — one row per Ingress per drift run. Created
+Audit log for `aqueduct drift`: one row per Ingress per drift run. Created
 lazily by the `drift` command (not at every `run`). The **baseline is
 self-owned**: the most recent row's `live_schema` for an `(blueprint_id,
 module_id)` is the baseline the next check diffs against, so drift needs **no
@@ -325,7 +325,7 @@ module_id)` is the baseline the next check diffs against, so drift needs **no
 | `benign_changes`   | JSON    | List of added columns |
 | `patch_id`         | VARCHAR | Staged patch id when a breaking drift was healed |
 
-**Diagnostic — which sources drifted and got a patch?**
+**Diagnostic: which sources drifted and got a patch?**
 ```sql
 SELECT module_id, checked_at, status, patch_id
 FROM drift_checks
@@ -334,14 +334,14 @@ ORDER BY checked_at DESC;
 ```
 
 > Predicted-drift FailureContexts are driven through the agent **in memory** and
-> are **not** written to `failure_contexts` — that table stays a record of real
+> are **not** written to `failure_contexts`: that table stays a record of real
 > run failures, so failure analytics are never skewed by predictions.
 
 ### `<scenarios_dir>/.aqueduct/benchmark.duckdb`
 
 #### `benchmark_results`
 
-One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in its own store (DuckDB file or, with `stores.benchmark.backend: postgres`, the `benchmark` Postgres schema) — disjoint from observability rows, no `run_id` foreign key. `aqueduct benchmark-stats` aggregates it into a model leaderboard, hardest-scenario ranking, and a by-day pass-rate trend (all computed from the latest row per `(scenario, model)`); `aqueduct benchmark-diff` compares the two most recent runs per pair.
+One row per `(scenario_id, model, prompt_version)` benchmark execution. Lives in its own store (DuckDB file or, with `stores.benchmark.backend: postgres`, the `benchmark` Postgres schema), disjoint from observability rows, no `run_id` foreign key. `aqueduct benchmark-stats` aggregates it into a model leaderboard, hardest-scenario ranking, and a by-day pass-rate trend (all computed from the latest row per `(scenario, model)`); `aqueduct benchmark-diff` compares the two most recent runs per pair.
 
 | Column                | Type                | Notes |
 |-----------------------|---------------------|-------|
@@ -378,7 +378,7 @@ default: the engine transparently prefixes every key with `<blueprint_id>:`, so
 two blueprints sharing a physical depot never collide (you'll see rows like
 `sales:watermark`, `orders:watermark`). Configure mounts under `stores.depots`
 (a name-keyed map); set `shared: true` on a mount for deliberate cross-blueprint
-sharing (raw, unprefixed keys) — read those via `@aq.depot.<name>.get(...)`. For
+sharing (raw, unprefixed keys): read those via `@aq.depot.<name>.get(...)`. For
 parallel writers on a shared mount, use postgres/redis (concurrent), not a single
 DuckDB file.
 
@@ -412,7 +412,7 @@ WHERE r.run_id = '<run_id>';
 
 **When** the structured-error block is unexpectedly NULL on a Spark failure.
 **What you learn** Whether the executor actually handed the live exception
-to the Surveyor (1.1.0 wired this — pre-1.1.0 rows are NULL by design).
+to the Surveyor (1.1.0 wired this: pre-1.1.0 rows are NULL by design).
 **What to do next** If `module_results` shows `error` but all five
 structured fields are NULL on a post-1.1.0 run, check that the executor
 populated `ModuleResult.exception` for that module type.
@@ -424,7 +424,7 @@ populated `ModuleResult.exception` for that module type.
 rejected the attempt, and whether escalation kicked in.
 **What to do next** Repeated `signature_hash` rows mean the model is stuck;
 a row with `gate_that_rejected='apply'` means the patch parsed but failed
-guardrails — fix the guardrail policy or add prompt context.
+guardrails: fix the guardrail policy or add prompt context.
 
 ```sql
 SELECT attempt_num,
@@ -468,13 +468,13 @@ ORDER BY h.recorded_at;
 1.1.0 CLI synthesises one `healing_outcomes` row per rejected attempt;
 older rows really were lost.
 **What to do next** If the synthesis is still absent on a 1.1.0 run, that
-indicates the `apply_callback` path is bypassed — verify `_check_guardrails`
+indicates the `apply_callback` path is bypassed: verify `_check_guardrails`
 fired by inspecting `gate_that_rejected`.
 
 **When** a heal ran in agentic mode (`agent.mode: agentic`) and you want to
 see which diagnostic tools the model actually consulted before answering.
 **What you learn** Which tools were called, in what order, how long each
-took, and a truncated (already-redacted) preview of what came back — the
+took, and a truncated (already-redacted) preview of what came back, the
 same detail the `-v` transcript renders live, persisted for post-hoc review.
 **What to do next** If the model kept calling the same tool without ever
 converging on a patch, tighten `agent.max_tool_calls` or add the missing
@@ -505,14 +505,14 @@ returned, **not** that the patched pipeline succeeded.
 
 **When** a heal ran with `agent.progressive: true` and you want to see how
 many links the chain walked and which modules it diagnosed, in order.
-**What you learn** The chain's per-link trail — module diagnosed, attempts
+**What you learn** The chain's per-link trail, module diagnosed, attempts
 spent on that link, whether it advanced. A chain that never advances past
 link 1 despite `max_chain > 1` usually means the model isn't producing a
 patch that changes which module fails next (check `gate_that_rejected` on
 those rows too).
 **What to do next** If the chain repeatedly hits `chain_link` gaps (e.g.
 link 1 then link 3 with no link 2), the missing link's own reprompt loop
-never persisted a row — check for an exception in the `on_attempt` hook.
+never persisted a row: check for an exception in the `on_attempt` hook.
 
 ```sql
 SELECT chain_link, MIN(attempt_num) AS first_attempt, MAX(attempt_num) AS last_attempt,
@@ -540,7 +540,7 @@ LIMIT 20;
 
 **When** you want the LLM bill for one heal session.
 **What you learn** Total tokens, LLM wall time, attempt count.
-**What to do next** Pair with `BudgetConfig.max_tokens_total` —
+**What to do next** Pair with `BudgetConfig.max_tokens_total`,
 consistently bumping into the cap is a signal to tighten prompts.
 
 ```sql
@@ -621,13 +621,13 @@ LIMIT 10;
 
 **When:** a blueprint has been through several heal cycles and hand-edits,
 and you need one chronological answer to "what actually happened to this
-pipeline definition" — did a patch fix it, did someone revert the fix by
+pipeline definition": did a patch fix it, did someone revert the fix by
 hand, is there a pending patch waiting on review.
 
 **What you learn:** `aqueduct blueprint history <id|blueprint.yml>` joins
 `patch_index` (status transitions) with `healing_outcomes`
 (`run_success_after_patch`, confidence) and, when a blueprint **file path**
-is given and the file is git-tracked, the file's git commit history — a
+is given and the file is git-tracked, the file's git commit history, a
 commit carrying no `---aqueduct---` trailer (the same trailer `aqueduct
 patch commit`/`import` write) is shown as a manual edit.
 
@@ -644,11 +644,11 @@ Blueprint history — orders_pipeline
 
 **What to do next:** a `manual_edit` shortly after a `patch_apply` for the
 same failure signature is the classic "the fix got reverted by hand"
-pattern — cross-check with `aqueduct patch log <blueprint.yml>` (git-only
+pattern: cross-check with `aqueduct patch log <blueprint.yml>` (git-only
 view) or `aqueduct report --trend <column> --blueprint <id>` to see whether
 the original failure mode is trending back. `--format json` gives the same
 event list as structured records for scripting. This command also backs the
-`blueprint_history` diagnostics tool (`aqueduct/tools/`, specs.md §8.10) —
+`blueprint_history` diagnostics tool (`aqueduct/tools/`, specs.md §8.10):
 the same query logic, callable without the CLI.
 
 ### Column lineage
@@ -662,7 +662,7 @@ WHERE output_column = 'my_column';
 
 ### Fleet query layer (`stores/queries.py`)
 
-Computed at read‑time from the observability store — no extra write‑side
+Computed at read‑time from the observability store, no extra write‑side
 columns or aggregation tables:
 
 | Function | Returns | Description |
@@ -671,21 +671,21 @@ columns or aggregation tables:
 | `runs_over_time` | `list[DayCount]` | Daily run counts over a configurable window (`days` default 30) |
 | `failure_categories` | `dict[str, int]` | Count of failures grouped by `error_class` |
 | `heal_coverage` | `dict[str, int]` | Heals resolved by the signature memory cache (`memory`) vs the LLM (`agent`), per blueprint |
-| `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes) — `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
+| `blueprint_history` | `list[BlueprintHistoryEvent]` | One blueprint's store-side remediation timeline (heal run starts, patch apply/reject, outcomes), `aqueduct blueprint history` merges this with `git_blueprint_commits` for the full picture |
 
 DuckDB: the functions iterate discovered per‑pipeline files. Postgres: a single
 schema‑scoped query. Both backends return the same shape.
 
 ### Read‑only viewers
 
-Two local, on‑demand observability viewers — neither runs in the data path:
+Two local, on‑demand observability viewers: neither runs in the data path:
 
 | Viewer | Command | Extra | Description |
 |---|---|---|---|
 | Dashboard | `aqueduct dashboard` | `dashboard` (Streamlit + Plotly) | Fleet overview: cross‑blueprint runs, success/heal rates, per‑run module metrics, column‑lineage Sankey, doctor, config. Manual refresh; no background polling. |
 | Studio | `aqueduct studio` | `tui` (Textual) | Interactive TUI: run list, ad‑hoc SQL over the observability store, doctor, config, lineage. |
 
-Both are read‑only — they issue `SET read_only = true` on DuckDB and use a
+Both are read‑only: they issue `SET read_only = true` on DuckDB and use a
 read‑only connection on Postgres.
 
 ---

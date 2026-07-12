@@ -1,6 +1,6 @@
 # Compatibility Matrix
 
-The combinations below are what Aqueduct is tested against in CI. Anything outside this range is **not** supported — it may work, but will not get bug fixes, and version pin errors at install time are intentional.
+The combinations below are what Aqueduct is tested against in CI. Anything outside this range is **not** supported, it may work, but will not get bug fixes, and version pin errors at install time are intentional.
 
 <!-- COMPAT_RESULTS_START -->
 ## Latest run
@@ -16,22 +16,22 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 
 | Feature | Python 3.11 | Python 3.12 | Python 3.13 |
 |---|---|---|---|
-| Core engine (Parser, Compiler, Executor, Surveyor) | ✅ | ✅ | ⚠ (cloudpickle monkeypatch required — see notes) |
+| Core engine (Parser, Compiler, Executor, Surveyor) | ✅ | ✅ | ⚠ (cloudpickle monkeypatch required: see notes) |
 | Spark 4.0 (`pyspark>=4.0,<5.0`) | ✅ | ✅ | ⚠ |
-| Spark 3.x (`pyspark==3.5.8`) | ⚠ — tested via Legacy CI combo | ⚠ — tested via Legacy CI combo | ❌ |
+| Spark 3.x (`pyspark==3.5.8`) | ⚠: tested via Legacy CI combo | ⚠: tested via Legacy CI combo | ❌ |
 | Delta Lake (`delta-spark>=4.0,<5.0` for Spark 4.x; `delta-spark==3.3.0` for Spark 3.5) | ✅ | ✅ | ⚠ |
 | Custom Python DataSource (`format: custom`) | ✅ | ✅ | ⚠ |
 | Iceberg / Hudi | planned | planned | planned |
 
 ## Notes
 
-- **`pyspark>=4.0,<5.0`** is hard-pinned in `pyproject.toml`. The Legacy CI combo installs PySpark 3.5.8 explicitly by bypassing the pin — this is safe for testing but not recommended for production, where the pin is intentional. Widening the range would require runtime version gates throughout the executor — deliberately out of scope.
-- **Custom Python DataSource (`format: custom`) needs Spark 4.0+** — it uses the `spark.dataSource` registry introduced in Spark 4.0. Since the supported floor is already 4.0+ this affects no supported install; on the unsupported Legacy 3.5 lane the engine raises a clear `RuntimeError` (a per-feature capability gate, not a hard requirement bump). All other features run across the full supported matrix.
-- **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle` — the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
+- **`pyspark>=4.0,<5.0`** is hard-pinned in `pyproject.toml`. The Legacy CI combo installs PySpark 3.5.8 explicitly by bypassing the pin, this is safe for testing but not recommended for production, where the pin is intentional. Widening the range would require runtime version gates throughout the executor, deliberately out of scope.
+- **Custom Python DataSource (`format: custom`) needs Spark 4.0+**, it uses the `spark.dataSource` registry introduced in Spark 4.0. Since the supported floor is already 4.0+ this affects no supported install; on the unsupported Legacy 3.5 lane the engine raises a clear `RuntimeError` (a per-feature capability gate, not a hard requirement bump). All other features run across the full supported matrix.
+- **Python 3.13 + PySpark 4.0** needs a system-installed `cloudpickle>=3.0`; the bundled cloudpickle 2.x in current PySpark recurses or segfaults during UDF serialization. Aqueduct monkeypatches at startup when both conditions hold. See `aqueduct/executor/spark/udf.py::_patch_pyspark_cloudpickle`, the patch self-deprecates once upstream PySpark ships cloudpickle ≥ 3.
 - **LLM providers**: Anthropic (default) and any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, NVIDIA NIM, together.ai, Groq). Per-provider quirks documented in `gallery/aqscenarios/README.md`.
 - **Stores**: DuckDB embedded (default), Postgres (`aqueduct-core[postgres]`), Redis (`aqueduct-core[redis]`). All tested against the matrix above.
-- **Remote-submit targets**: Databricks Jobs API (`aqueduct-core[databricks]` — optional `databricks-sdk>=0.30`; the submitter works with raw `httpx` as well). EMR / Dataproc deferred. See the [Production Guide](production_guide.md) for per-target setup.
-- **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger` — lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
+- **Remote-submit targets**: Databricks Jobs API (`aqueduct-core[databricks]`, optional `databricks-sdk>=0.30`; the submitter works with raw `httpx` as well). EMR / Dataproc deferred. See the [Production Guide](production_guide.md) for per-target setup.
+- **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger`, lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
 - **Secrets providers**: `env` (built-in, no SDK needed), `aws` (`aqueduct-core[aws]`), `gcp` (`aqueduct-core[gcp]`), `azure` (`aqueduct-core[azure]`). All tested against the matrix above.
 
 ## Spark Connect
@@ -39,7 +39,7 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 Aqueduct is **not tested or supported against `spark.remote(...)` (Spark
 Connect) sessions.** The engine assumes a classic driver-embedded
 `SparkSession` with a local JVM gateway (py4j). The table below documents
-today's *actual* behavior if a Connect session were substituted — produced by
+today's *actual* behavior if a Connect session were substituted, produced by
 running `skills/aqskill-audit-connect.md`'s detection commands against the
 tree and tracing each hit's exception path. This is a snapshot of current
 incompatibilities, not a roadmap; no Connect support is scheduled (see
@@ -47,19 +47,19 @@ incompatibilities, not a roadmap; no Connect support is scheduled (see
 
 | Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
 |---|---|---|---|
-| `aqueduct/executor/spark/channel.py:320-350` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config — forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Degrades gracefully.** `df.rdd.getNumPartitions()` is now guarded — on a Connect `DataFrame` (`.rdd` is not implemented in Connect) the boundary is skipped and a `[runtime_metrics_boundary_skipped]` warning fires; the transform result flows through unchanged | Graceful — metrics boundary silently skipped, warning surfaced, module still runs |
-| `aqueduct/executor/spark/probe.py:426` (`_partition_stats`) | `type: partition_stats` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629) — the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful — signal silently omitted, warning surfaced |
-| `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful — byte-count metrics come back `None` (not collected) rather than 0; no crash |
-| `aqueduct/patch/explain_gate.py:50-90` (`_formatted_plan`/`capture_plan_snapshot`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades gracefully.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback raise, caught by the outer `try/except`, returning `""`. `capture_plan_snapshot` now stamps `plan_available: False` on empty-plan captures, and `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session — gate skipped") instead of comparing all-zero "after" counts against a real baseline | Graceful — gate reports skip/unavailable, not a false regression |
-| `aqueduct/executor/spark/warnings/jar_availability.py:34-60` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades honestly.** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); `_loaded_jar_names` now returns `None` (inspection failed) rather than `[]` (genuinely no JARs). `check()` distinguishes the two — when a Blueprint declares a JAR-requiring format and inspection is unavailable, it emits a "could not verify JAR availability" note instead of staying silent | Graceful — surfaces an honest "could not verify" note when relevant, rather than a false all-clear |
-| `aqueduct/doctor/__init__.py:825-841` (cloud-URI `--preflight` check) | `aqueduct doctor --preflight` existence check for `s3a://`/`gs://`/`abfss://` Ingress/Egress paths, reusing Spark's own Hadoop `FileSystem` credentials | **Degrades gracefully.** `spark._jvm` / `_jsc.hadoopConfiguration()` raise; caught by the function's own `except Exception as exc: return CheckResult(name, "warn", ...)` — doctor reports a `warn`, not a crash | Graceful — surfaces as a doctor warning with the exception text |
+| `aqueduct/executor/spark/channel.py:320-350` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config: forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Degrades gracefully.** `df.rdd.getNumPartitions()` is now guarded: on a Connect `DataFrame` (`.rdd` is not implemented in Connect) the boundary is skipped and a `[runtime_metrics_boundary_skipped]` warning fires; the transform result flows through unchanged | Graceful: metrics boundary silently skipped, warning surfaced, module still runs |
+| `aqueduct/executor/spark/probe.py:426` (`_partition_stats`) | `type: partition_stats` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629), the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful: signal silently omitted, warning surfaced |
+| `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful: byte-count metrics come back `None` (not collected) rather than 0; no crash |
+| `aqueduct/patch/explain_gate.py:50-90` (`_formatted_plan`/`capture_plan_snapshot`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades gracefully.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback raise, caught by the outer `try/except`, returning `""`. `capture_plan_snapshot` now stamps `plan_available: False` on empty-plan captures, and `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session, gate skipped") instead of comparing all-zero "after" counts against a real baseline | Graceful: gate reports skip/unavailable, not a false regression |
+| `aqueduct/executor/spark/warnings/jar_availability.py:34-60` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades honestly.** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); `_loaded_jar_names` now returns `None` (inspection failed) rather than `[]` (genuinely no JARs). `check()` distinguishes the two, when a Blueprint declares a JAR-requiring format and inspection is unavailable, it emits a "could not verify JAR availability" note instead of staying silent | Graceful: surfaces an honest "could not verify" note when relevant, rather than a false all-clear |
+| `aqueduct/doctor/__init__.py:825-841` (cloud-URI `--preflight` check) | `aqueduct doctor --preflight` existence check for `s3a://`/`gs://`/`abfss://` Ingress/Egress paths, reusing Spark's own Hadoop `FileSystem` credentials | **Degrades gracefully.** `spark._jvm` / `_jsc.hadoopConfiguration()` raise; caught by the function's own `except Exception as exc: return CheckResult(name, "warn", ...)`, doctor reports a `warn`, not a crash | Graceful: surfaces as a doctor warning with the exception text |
 
 **Works today, verified not a false positive:**
 
-- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts) — this is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration — there is no `addSparkListener` call anywhere in the tree (verified by grep).
-- `aqueduct/surveyor/error_extraction.py`'s lazy `py4j.protocol.Py4JJavaError` import — the import succeeds under Connect (py4j still ships with pyspark) but the `isinstance` check simply never matches a `SparkConnectGrpcException`; already falls through to the generic error path by design.
+- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts), this is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration, there is no `addSparkListener` call anywhere in the tree (verified by grep).
+- `aqueduct/surveyor/error_extraction.py`'s lazy `py4j.protocol.Py4JJavaError` import: the import succeeds under Connect (py4j still ships with pyspark) but the `isinstance` check simply never matches a `SparkConnectGrpcException`; already falls through to the generic error path by design.
 
-**Summary:** 6 verified call sites reach into JVM/py4j-only internals; all 6 now degrade gracefully (clean skip, `None`/`warn`/`skip` result, or an honest "could not verify" note) — none crash and none produce a misleading all-clear or a false regression. This is a hardening of failure-mode *honesty*, not Spark Connect support: Connect sessions remain untested/unsupported (see intro above); the guards only ensure that when one is substituted anyway, the engine degrades legibly instead of aborting a module or reporting a spurious signal.
+**Summary:** 6 verified call sites reach into JVM/py4j-only internals; all 6 now degrade gracefully (clean skip, `None`/`warn`/`skip` result, or an honest "could not verify" note), none crash and none produce a misleading all-clear or a false regression. This is a hardening of failure-mode *honesty*, not Spark Connect support: Connect sessions remain untested/unsupported (see intro above); the guards only ensure that when one is substituted anyway, the engine degrades legibly instead of aborting a module or reporting a spurious signal.
 
 ## Production pinning
 
@@ -70,11 +70,11 @@ pip install aqueduct-core[spark]==1.2.2
 pip freeze > requirements.txt
 ```
 
-Python ecosystem doesn't lock by default — that's a `pip` reality, not an Aqueduct constraint.
+Python ecosystem doesn't lock by default: that's a `pip` reality, not an Aqueduct constraint.
 
 ## Out of scope
 
-- **Spark 3.x** — tested via the Legacy CI combo (PySpark 3.5.8 + Delta 3.3.0) but not officially supported. The `pyproject.toml` pin remains `>=4.0,<5.0`; the Legacy lane is a compatibility signal only.
-- **Python 3.10 and earlier** — drops dataclass `kw_only`, several typing features we use.
-- **Python 3.14** — not yet released; will be tested when it stabilises.
-- **Flink executor** — aspirational, tracked in `TODOs.md` Deferred block.
+- **Spark 3.x**: tested via the Legacy CI combo (PySpark 3.5.8 + Delta 3.3.0) but not officially supported. The `pyproject.toml` pin remains `>=4.0,<5.0`; the Legacy lane is a compatibility signal only.
+- **Python 3.10 and earlier**: drops dataclass `kw_only`, several typing features we use.
+- **Python 3.14**: not yet released; will be tested when it stabilises.
+- **Flink executor**: aspirational, tracked in `TODOs.md` Deferred block.
