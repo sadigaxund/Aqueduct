@@ -2592,14 +2592,17 @@ def run(
                         from aqueduct.cli.style import success as _ra_success
                         try:
                             _ra_result = _gen_regression_artifact(new_manifest, patch, failure_ctx, Path(blueprint))
+                            # style.* status functions print directly and return
+                            # None — never wrap them in click.echo (stray blank
+                            # line + message on the wrong stream).
                             if _ra_result.written:
-                                click.echo(_ra_success(f"regression test written → {_ra_result.path}"), err=True)
+                                _ra_success(f"regression test written → {_ra_result.path}")
                             else:
-                                click.echo(_ra_info(f"regression artifact skipped: {_ra_result.skip_reason}"), err=True)
+                                _ra_info(f"regression artifact skipped: {_ra_result.skip_reason}", err=True)
                         except Exception as _ra_exc:
                             # Best-effort: never let artifact generation break a
                             # successful heal.
-                            click.echo(_ra_info(f"regression artifact generation failed: {_ra_exc}"), err=True)
+                            _ra_info(f"regression artifact generation failed: {_ra_exc}", err=True)
                     result = result2
                     failure_ctx = failure_ctx2
                     break
