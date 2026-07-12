@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- **Spark Connect compatibility audit.** New `skills/aqskill-audit-connect.md` (detection commands, exception-path tracing method, known-legitimate exceptions) plus a verified "Spark Connect" section in `docs/compatibility.md` documenting today's behavior — no runtime changes, no Connect support added. Six call sites reach into JVM/py4j-only internals (`spark._jvm`, `spark._jsc`, `df.rdd`, `df._jdf`, `sparkContext._jsc`); four degrade gracefully behind existing `try/except` guards, one (`patch/explain_gate.py`'s Gate 4 plan-regression check) degrades to a *misleading* result (empty plan text reads as a spurious regression rather than "unavailable"), and one (`channel.py`'s opt-in `metrics_boundary: true` config) breaks outright via an unguarded `df.rdd.getNumPartitions()`. `DataFrame.observe()`/`Observation` (row-count metrics) verified as already Connect-native — no `SparkListener` registration exists anywhere in the tree despite comments referencing it. (`skills/aqskill-audit-connect.md`, `docs/compatibility.md`)
+
 ## [2.0.3] — 2026-07-12
 
 ### Fixed

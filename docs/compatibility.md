@@ -34,6 +34,33 @@ The combinations below are what Aqueduct is tested against in CI. Anything outsi
 - **Airflow**: `aqueduct-core[airflow]` (requires `apache-airflow>=2.7`). Tested against Python 3.11 + 3.12 only (Airflow's own compatibility ceiling). Provides `AqueductOperator`, `AqueductPatchSensor`, and `AqueductPatchTrigger` — lazy-imported from `aqueduct.integrations.airflow`. DAG import does not pull pyspark.
 - **Secrets providers**: `env` (built-in, no SDK needed), `aws` (`aqueduct-core[aws]`), `gcp` (`aqueduct-core[gcp]`), `azure` (`aqueduct-core[azure]`). All tested against the matrix above.
 
+## Spark Connect
+
+Aqueduct is **not tested or supported against `spark.remote(...)` (Spark
+Connect) sessions.** The engine assumes a classic driver-embedded
+`SparkSession` with a local JVM gateway (py4j). The table below documents
+today's *actual* behavior if a Connect session were substituted — produced by
+running `skills/aqskill-audit-connect.md`'s detection commands against the
+tree and tracing each hit's exception path. This is a snapshot of current
+incompatibilities, not a roadmap; no Connect support is scheduled (see
+`docs/roadmap.md` if that changes).
+
+| Call site | Feature it powers | Behavior under Connect | Fallback / current mitigation |
+|---|---|---|---|
+| `aqueduct/executor/spark/channel.py:330` (`_apply_metrics_boundary`) | `metrics_boundary: true` Channel config — forces a `repartition()` boundary so `SparkListener`-derived stage metrics attribute correctly per-Channel | **Breaks.** `df.rdd.getNumPartitions()` raises on a Connect `DataFrame` (`.rdd` is not implemented in Connect); the call is unguarded at this call site and propagates as an unhandled exception, failing the module | None today — opt-in config, only reachable when a Blueprint sets `metrics_boundary: true` |
+| `aqueduct/executor/spark/probe.py:426` (`_partition_stats`) | `type: partition_stats` Probe signal | **Degrades.** Same `df.rdd.getNumPartitions()` call, but the dispatch loop in `execute_probe` wraps every signal in a per-signal `try/except` (probe.py:629) — the signal is skipped, a `runtime_probe_signal_error` warning fires, and the pipeline continues | Graceful — signal silently omitted, warning surfaced |
+| `aqueduct/executor/spark/metrics.py:101-104` (`_hadoop_fs_bytes`) | Byte-count metrics (`bytes_read`/`bytes_written`) for cloud/HDFS paths (s3a://, gs://, hdfs://, etc.) | **Degrades.** `spark._jvm` / `spark._jsc.hadoopConfiguration()` raise `AttributeError` on a Connect session; the whole function body is wrapped in `try/except Exception: return None` | Graceful — byte-count metrics come back `None` (not collected) rather than 0; no crash |
+| `aqueduct/patch/explain_gate.py:50-66` (`_formatted_plan`, Gate 4) | Post-patch physical-plan regression detection (`Exchange`/`BroadcastExchange`/`BatchEvalPython` node counts vs. baseline) | **Degrades to a false signal.** `df._jdf` does not exist on a Connect `DataFrame`; both the primary path and its own fallback (`df._jdf.queryExecution().toString()`) raise, caught by the outer `try/except`, returning `""`. `_count_markers("")` yields `(0, 0, 0)` for every module — Gate 4 would compare a real baseline against all-zero "after" counts, which reads as a large *regression* rather than "plan unavailable." Gate 4 is warn-only by default (`agent.block_on_explain_regression` gates whether this blocks) | None — this is the one site where "degrades" is worse than "no data": it produces spurious regression warnings, not silence |
+| `aqueduct/executor/spark/warnings/jar_availability.py:34-41` (`_loaded_jar_names`) | `jar_availability` compiler/session-startup warning (missing JDBC/Kafka/Delta/Iceberg/Hudi driver JARs) | **Degrades silently (false negative).** `spark.sparkContext._jsc` raises on Connect (`sparkContext` itself is not exposed by a Connect `SparkSession`); wrapped in `except Exception: return []`, so the function reports "no JARs loaded" and the warning never fires — even when a required driver really is missing | None — the check becomes a permanent no-op under Connect, not a crash |
+| `aqueduct/doctor/__init__.py:825-841` (cloud-URI `--preflight` check) | `aqueduct doctor --preflight` existence check for `s3a://`/`gs://`/`abfss://` Ingress/Egress paths, reusing Spark's own Hadoop `FileSystem` credentials | **Degrades gracefully.** `spark._jvm` / `_jsc.hadoopConfiguration()` raise; caught by the function's own `except Exception as exc: return CheckResult(name, "warn", ...)` — doctor reports a `warn`, not a crash | Graceful — surfaces as a doctor warning with the exception text |
+
+**Works today, verified not a false positive:**
+
+- `DataFrame.observe()` / `pyspark.sql.Observation` (`aqueduct/executor/spark/metrics.py::observe_df`, used for `records_written` row counts) — this is the Connect-native Observation API, not `SparkListener`. Comments elsewhere in the codebase describing "SparkListener stage metrics" refer to the mechanism this API replaced for zero-cost row counting, not to a live listener registration — there is no `addSparkListener` call anywhere in the tree (verified by grep).
+- `aqueduct/surveyor/error_extraction.py`'s lazy `py4j.protocol.Py4JJavaError` import — the import succeeds under Connect (py4j still ships with pyspark) but the `isinstance` check simply never matches a `SparkConnectGrpcException`; already falls through to the generic error path by design.
+
+**Summary:** 6 verified call sites reach into JVM/py4j-only internals; 4 degrade gracefully (existing try/except already absorbs the failure), 1 produces a misleading result (explain-plan Gate 4 reads as false regressions rather than "unavailable"), and 1 breaks outright (opt-in `metrics_boundary` Channel config, unguarded). None were found to silently corrupt data — the failure modes are either a clean skip, a `None`/`warn` result, or an unhandled exception that aborts the affected module/gate (surfaced through the normal failure path, not swallowed past detection).
+
 ## Production pinning
 
 For deployments, pin transitively to lock the cloudpickle + jvm + Java + python combination:
