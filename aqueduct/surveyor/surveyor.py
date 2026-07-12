@@ -32,6 +32,7 @@ from aqueduct.surveyor.ddl import (
     _DDL,
     _EXPLAIN_SNAPSHOT_DDL,
     _HEAL_ATTEMPTS_DDL,
+    _HEAL_ATTEMPTS_MIGRATIONS,
     _SIGNAL_OVERRIDES_DDL,
 )
 from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
@@ -202,6 +203,11 @@ class Surveyor:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
+            # In-place column migrations for pre-existing databases —
+            # CREATE TABLE IF NOT EXISTS never adds columns to an existing
+            # table (see the schema-evolution rule in ddl.py).
+            for _migration in _HEAL_ATTEMPTS_MIGRATIONS:
+                cur.execute(_migration)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.

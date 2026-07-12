@@ -162,3 +162,13 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     tool_calls_json       VARCHAR
 );
 """
+
+# Schema-evolution rule: `CREATE TABLE IF NOT EXISTS` is a no-op on an
+# existing table — it NEVER adds columns. A new column must therefore land
+# in BOTH places: the CREATE above (fresh installs) AND this migrations
+# tuple (existing installs), as an idempotent `ADD COLUMN IF NOT EXISTS`
+# (supported by DuckDB and Postgres alike). Executed right after the CREATE
+# on every Surveyor init.
+_HEAL_ATTEMPTS_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS tool_calls_json VARCHAR",
+)

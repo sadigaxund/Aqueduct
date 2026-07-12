@@ -142,6 +142,8 @@ One row per LLM turn inside the unified reprompt loop — finer-grained than
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
 | `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
 
+Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run — no manual migration needed.
+
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
 `progress_stalled`, `api_error`, `deferred`. `solved` describes LLM loop termination

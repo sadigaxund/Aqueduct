@@ -138,3 +138,67 @@ def test_heal_attempts_no_duplicate_on_stop_reason(manifest, tmp_path):
     
     conn.close()
     surveyor.stop()
+
+
+def test_heal_attempts_column_migration_on_existing_db(manifest, tmp_path):
+    """Regression: a pre-upgrade obs DB (heal_attempts WITHOUT tool_calls_json)
+    must gain the column on Surveyor init — CREATE TABLE IF NOT EXISTS alone
+    never adds columns to an existing table, so without the ALTER migration
+    every heal-attempt INSERT fails silently on upgraded installs."""
+    # Simulate the pre-Phase-75 schema: same table, no tool_calls_json.
+    conn = duckdb.connect(str(tmp_path / "observability.db"))
+    conn.execute(
+        """
+        CREATE TABLE heal_attempts (
+            id                    VARCHAR PRIMARY KEY,
+            run_id                VARCHAR NOT NULL,
+            attempt_num           INTEGER NOT NULL,
+            error_class           VARCHAR,
+            where_field           VARCHAR,
+            normalized_message    VARCHAR,
+            signature_hash        VARCHAR,
+            tokens_in             INTEGER NOT NULL DEFAULT 0,
+            tokens_out            INTEGER NOT NULL DEFAULT 0,
+            latency_ms            INTEGER NOT NULL DEFAULT 0,
+            gate_that_rejected    VARCHAR,
+            escalated             BOOLEAN NOT NULL DEFAULT FALSE,
+            stop_reason           VARCHAR,
+            prompt_version        VARCHAR,
+            recorded_at           VARCHAR NOT NULL
+        )
+        """
+    )
+    conn.close()
+
+    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor.start("run-migration")
+
+    mock_record = MagicMock()
+    mock_record.attempt_num = 1
+    mock_record.tokens_in = 10
+    mock_record.tokens_out = 20
+    mock_record.latency_ms = 30
+    mock_record.gate_that_rejected = None
+    mock_record.escalated = False
+    mock_record.signature = MagicMock(error_class="ErrClass", hash="h1")
+    mock_record.signature.where = "src"
+    mock_record.signature.normalized_message = "normalized msg"
+    mock_record._aq_tool_calls = [{"name": "get_source_schema", "duration_ms": 5}]
+
+    surveyor.record_heal_attempt(run_id="run-migration", attempt_record=mock_record, stop_reason=None)
+
+    conn = duckdb.connect(str(tmp_path / "observability.db"))
+    cols = {
+        r[0]
+        for r in conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'heal_attempts'"
+        ).fetchall()
+    }
+    assert "tool_calls_json" in cols
+    rows = conn.execute("SELECT attempt_num, tool_calls_json FROM heal_attempts").fetchall()
+    conn.close()
+    surveyor.stop()
+
+    assert len(rows) == 1
+    assert rows[0][0] == 1
+    assert "get_source_schema" in rows[0][1]
