@@ -281,6 +281,14 @@ agent:
   # max_tool_calls: 8       # agentic mode only — cap per heal attempt
   # supports_tools: auto    # auto|true|false — tool-use capability probe
 
+  # progressive (chained multi-patch healing, opt-in): a candidate patch that
+  # fixes one bug but leaves the pipeline failing at a DIFFERENT module folds
+  # into an accumulating patch instead of being thrown away — max_patches
+  # semantics are unchanged. Requires sandbox_mode != off. Leave unset to
+  # inherit aqueduct.yml agent.progressive (= false). See docs/specs.md §8.13.
+  # progressive: false
+  # max_chain: 3             # hard cap on chain links; only meaningful with progressive: true
+
   # LLM Guardrails — per-blueprint restrictions on what the LLM may patch.
   # Violations → patch staged for human review instead of applied automatically.
   # NOTE: all four lists live under the `guardrails:` key, not directly on `agent:`.

@@ -159,7 +159,14 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     -- duration_ms, result_preview} for every tool call made during THIS
     -- attempt (empty array in oneshot mode) — one JSON column rather than
     -- new scalar columns per field, since the per-call shape is a list.
-    tool_calls_json       VARCHAR
+    tool_calls_json       VARCHAR,
+    -- Phase 77 — progressive (chained) multi-patch healing. 1-based link
+    -- index within the chain this attempt belongs to; NULL for a normal
+    -- (non-progressive) heal attempt. `attempt_num` already carries the
+    -- reprompt sequence WITHIN one link, so this is a distinct axis, not a
+    -- reuse of an existing column — see AGENTS.md's schema-evolution rule
+    -- below for why a new column (not a repurposed one) is correct here.
+    chain_link            INTEGER
 );
 """
 
@@ -171,4 +178,5 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
 # on every Surveyor init.
 _HEAL_ATTEMPTS_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS tool_calls_json VARCHAR",
+    "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS chain_link INTEGER",
 )

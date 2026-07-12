@@ -586,6 +586,12 @@ class Surveyor:
         # attached by loop.py's _fire_turn; absent/empty in oneshot mode).
         tool_calls_log = getattr(attempt_record, "_aq_tool_calls", None) or []
         tool_calls_json = _json.dumps(tool_calls_log, default=str) if tool_calls_log else None
+        # Phase 77 — chain link index, stamped by the progressive
+        # orchestrator's on_attempt wrapper. isinstance-guarded (not a bare
+        # getattr) so an unconfigured mock attribute in a caller's test
+        # double never reaches the DB driver as a non-serializable value.
+        _chain_link_raw = getattr(attempt_record, "chain_link", None)
+        chain_link = _chain_link_raw if isinstance(_chain_link_raw, int) else None
         try:
             with self._observability.connect() as cur:
                 cur.execute(
@@ -594,8 +600,8 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, signature_hash, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, escalated, stop_reason,
-                     prompt_version, recorded_at, tool_calls_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_version, recorded_at, tool_calls_json, chain_link)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -614,6 +620,7 @@ class Surveyor:
                         prompt_version,
                         _dt.datetime.now(_dt.UTC).isoformat(),
                         tool_calls_json,
+                        chain_link,
                     ],
                 )
         except Exception:

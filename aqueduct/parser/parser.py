@@ -378,6 +378,8 @@ def parse_dict(
             mode=validated.agent.mode,
             max_tool_calls=validated.agent.max_tool_calls,
             supports_tools=validated.agent.supports_tools,
+            progressive=validated.agent.progressive,
+            max_chain=validated.agent.max_chain,
         )
     except (ValueError, ParseError) as exc:
         raise ParseError(f"agent config resolution failed: {exc}") from exc

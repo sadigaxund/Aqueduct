@@ -1,6 +1,6 @@
 # Aqueduct — Blueprint & Engine Reference
 
-**Version 2.14 — Reference Document**
+**Version 2.15 — Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1266,6 +1266,87 @@ engine-level resolution as `aqueduct heal` (no per-scenario Blueprint
 same scenarios/models is possible. Scenario runs never start Spark, so
 `get_source_schema`/`sample_rows` always report unavailable there — the
 registry tools (run/patch/lineage history) still work.
+
+## **8.13 Progressive (Chained) Multi-Patch Healing (opt-in, `agent.progressive`)**
+
+**Motivation.** The pre-existing `max_patches > 1` loop re-diagnoses the
+SAME first failure on every attempt: its `full_run` validation applies a
+candidate patch in memory, re-runs the pipeline, and — when the re-run
+still fails — discards the candidate and re-executes against the
+*original, unpatched* Blueprint. With two or more independent bugs, the
+model can diagnose bug #1 correctly on every single attempt and it is
+thrown away every time, because the pipeline still fails downstream at bug
+#2 and nothing carries bug #1's fix forward. `agent.progressive` (default
+`False`, engine `aqueduct.yml` + per-blueprint override — same `None` =
+inherit shape as `agent.regression_artifact`/`agent.mode`) fixes this
+independently of `max_patches`, whose semantics stay **unchanged**: N
+independent retries of the same failure.
+
+**Chain semantics.** On a candidate patch that validates in memory but
+still leaves the pipeline failing, the chain checks *where* the new
+failure surfaced:
+
+- **Different module than the one just patched** → the candidate is
+  folded into an accumulating multi-op `PatchSpec` (operations
+  concatenated in link order) and the *next* link diagnoses the new
+  failure. The chain **advances**.
+- **Same module again** → the chain is **stuck** and ends. The accumulated
+  patch (including the just-generated candidate) is discarded (`auto`
+  mode) or staged for human/CI review with per-link evidence in its
+  rationale (`human`/`ci` mode), per `agent.on_heal_failure`.
+
+Each link's diagnosis (oneshot or agentic, per `agent.mode`) and heal-cache
+lookup (§8's memory model) operate independently — a link's failure has
+its own error signature (§8.6), so one link may be satisfied by a
+zero-token cache replay while the next link runs a fresh LLM call.
+
+**Disk invariant.** Nothing is written to the Blueprint until the FULL
+accumulated patch passes the pipeline end-to-end. There is never a
+partial/half-correct Blueprint on disk mid-chain — every intermediate
+apply is the existing in-memory apply path (`_apply_patch_in_memory`),
+re-applied against the *original* on-disk Blueprint with the growing
+operation list, never against a previously-written file.
+
+**Chain cap.** `agent.max_chain` (default `3`, same inheritance shape) is
+a hard ceiling on the number of links, independent of each link's own
+`max_reprompts`/budget ceiling. A chain that exhausts `max_chain` without
+solving the pipeline ends with `chain_cap_exceeded` — same
+discard/stage-per-approval handling as a stuck chain.
+
+**Gates.** Each link's validation IS its advancement test: the existing
+in-memory apply + full pipeline re-run (the same gate `full_run` patch
+validation already performs for a single patch, just invoked once per
+link against the growing accumulated patch). The final combined multi-op
+patch that solves the pipeline still runs the standard gate pyramid before
+being written — no gate is skipped, only the *per-bug* diagnosis loop is
+new.
+
+**Approval composes once.** Because nothing hits disk mid-chain, `agent.
+approval: auto` applies the combined patch after the final full-run pass —
+one write, not N. `human`/`ci` modes stage exactly ONE combined patch
+(with each link's rationale folded into the staged patch's `rationale`
+field) instead of cycling through N separate pending-patch reviews.
+
+**Sandbox requirement.** Progressive healing refuses to run with
+`agent.sandbox_mode: off` — a `ConfigError` at heal-start with an
+actionable message. Each link's advancement test depends on validating a
+candidate before it is folded into the chain; without sandbox validation
+there is no safe way to tell "advanced" from "about to compound a wrong
+fix." `sample` (default) or `preflight` are required.
+
+**Observability.** `heal_attempts` (see `docs/observability_guide.md`)
+gains a `chain_link` column — the 1-based link index an attempt belongs
+to, `NULL` for a normal (non-progressive) heal attempt. `attempt_num`
+still carries the reprompt sequence *within* one link; `chain_link` is an
+orthogonal axis. Token totals aggregate across all links into the single
+`healing_outcomes` row the combined patch produces.
+
+**Scope note.** The current implementation wires progressive diagnosis
+into the single-model (`agent.approval: auto`, non-cascade) heal path.
+Multi-model cascade (§8's cascade model) interaction with progressive
+chaining is deferred — a cascade tier's escalation semantics and a chain
+link's advancement semantics are two independent axes that have not yet
+been reconciled; see `docs/roadmap.md`.
 
 ---
 

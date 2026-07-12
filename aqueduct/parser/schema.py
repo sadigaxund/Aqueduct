@@ -207,6 +207,13 @@ class AgentSchema(BaseModel):
     # above for the same field's per-tier meaning. None inherits the engine
     # `agent.supports_tools` (default "auto").
     supports_tools: Literal["auto", True, False] | None = None
+    # Progressive (chained) multi-patch healing — opt-in, separate from
+    # `max_patches`. None (default) inherits the engine `agent.progressive`
+    # (= False). See docs/specs.md §8.13.
+    progressive: bool | None = None
+    # Hard cap on links in a progressive chain. None (default) inherits the
+    # engine `agent.max_chain` (= 3).
+    max_chain: int | None = Field(default=None, ge=1)
 
 
 class ModuleSchema(BaseModel):

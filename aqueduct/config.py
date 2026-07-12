@@ -839,6 +839,36 @@ class AgentConnectionConfig(BaseModel):
             "agent.supports_tools / cascade tier supports_tools."
         ),
     )
+    progressive: bool = Field(
+        default=False,
+        description=(
+            "Progressive (chained) multi-patch healing. Opt-in, separate "
+            "from `max_patches` (whose semantics stay UNCHANGED — N "
+            "independent retries of the SAME failure). When True, a "
+            "candidate patch that passes its own validation but still "
+            "leaves the pipeline failing is NOT discarded if the new "
+            "failure surfaces at a DIFFERENT module than the one just "
+            "patched — it is folded into an accumulating multi-op patch "
+            "and the next link diagnoses the new failure. Same module "
+            "again = stuck, chain ends. Nothing is written to the "
+            "Blueprint until the full accumulated patch passes the "
+            "pipeline end-to-end — see docs/specs.md §8.13. Requires "
+            "`agent.sandbox_mode` other than 'off' (refused at heal-start "
+            "otherwise — each link's advancement test IS the sandbox "
+            "gate). Default False. Per-blueprint override: agent.progressive."
+        ),
+    )
+    max_chain: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Hard cap on the number of links in a progressive healing "
+            "chain — independent of each link's own reprompt/budget "
+            "ceiling (`max_reprompts`/`budget`). Only meaningful when "
+            "`agent.progressive: true`. Default 3. Per-blueprint override: "
+            "agent.max_chain."
+        ),
+    )
 
 
 class WebhookEndpointConfig(BaseModel):
