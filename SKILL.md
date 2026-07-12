@@ -425,3 +425,12 @@ Adding `agent.cascade:` (a list of tiers, tried in the order you list them) swit
 A tier inherits a flat `agent.*` field only when it leaves that field unset; a field the
 tier sets is its own key (so `--set agent.timeout` raises the solo/flat default and every
 inheriting tier, but not a tier that declares its own `timeout:`).
+
+## Diagnostics
+
+A failing run isn't a dead end — it's inspectable through the same read-only
+diagnostics tools the self-healer itself uses. Two access paths: MCP clients
+(Claude Desktop, an IDE) can query it directly via `aqueduct mcp serve`;
+otherwise the CLI equivalents cover the same ground — `aqueduct report`,
+`aqueduct runs`, `aqueduct lineage`, `aqueduct blueprint history`, and
+`aqueduct doctor`. See `docs/specs.md` §8.10 for the full tool registry.

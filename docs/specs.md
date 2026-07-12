@@ -1132,8 +1132,8 @@ best-effort after the heal has already succeeded.
 ## **8.10 Diagnostics & the Tool Registry**
 
 `aqueduct/tools/` holds a single internal **ToolRegistry** — the enumeration
-surface a future MCP server and an agentic ToolBox will both read from. Every
-registered tool is:
+surface both the MCP server (below) and the agentic-heal ToolBox (§8.12)
+read from. Every registered tool is:
 
 - **A thin wrapper over an existing read function.** No tool contains inline
   SQL; each one calls `stores/queries.py` (the one read-time observability
@@ -1183,6 +1183,15 @@ config (a client-supplied `config_path` argument wins). Requires the
 optional `mcp` dev-tooling extra: `pip install aqueduct-core[mcp]` — a
 local, on-demand diagnostic surface (like `studio`/`dashboard`), never part
 of the data path.
+
+**MCP is for external clients only.** The internal heal LLM (§8.12's
+agentic mode) never speaks MCP — its tool calls go straight through the
+provider API request as native tool-use blocks (`ToolBox` calls
+`tools.call_tool()` in-process, same redaction chokepoint, zero IPC). MCP
+is the transport `aqueduct mcp serve` exposes to an *external* MCP client
+(Claude Desktop, an IDE) that wants the same read-only registry from
+outside the heal loop; the two paths share the registry and the
+redaction guarantee but never share a process boundary or a protocol.
 
 ## **8.11 Remediation Domains**
 
