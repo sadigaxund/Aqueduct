@@ -32,6 +32,7 @@ Manifest reaches the Executor; all config values are used verbatim.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from pyspark.sql import SparkSession
@@ -41,6 +42,8 @@ if TYPE_CHECKING:
 
 from aqueduct.errors import AqueductError
 from aqueduct.models import Module
+
+logger = logging.getLogger(__name__)
 
 _SINGLE_INPUT_ALIAS = "__input__"
 
@@ -317,17 +320,37 @@ def _execute_union(
 
 # ── Metrics boundary ─────────────────────────────────────────────────────────
 
-def _apply_metrics_boundary(df: DataFrame, cfg: dict) -> DataFrame:
+def _apply_metrics_boundary(df: DataFrame, cfg: dict, module_id: str = "") -> DataFrame:
     """If metrics_boundary: true, insert a repartition to force a Spark stage cut.
 
     df.rdd.getNumPartitions() reads the planned partition count from the query
     plan — no Spark action triggered. The repartition(n) on top forces the
     optimizer to materialise a shuffle boundary, giving SparkListener accurate
     per-stage recordsWritten metrics for this Channel's output.
+
+    The RDD API (``df.rdd``) is not implemented on Spark Connect sessions —
+    it raises there. Guard it so metrics_boundary degrades to a skipped
+    no-op (with a warning) instead of aborting the module; the transform
+    result itself flows through unchanged.
     """
     if not cfg.get("metrics_boundary"):
         return df
-    n = df.rdd.getNumPartitions()
+    try:
+        n = df.rdd.getNumPartitions()
+    except Exception as exc:
+        # Broad by design: Connect DataFrames raise PySparkNotImplementedError
+        # for .rdd on some pyspark versions and AttributeError on others (the
+        # RDD API is simply absent under Connect) — no single exception type
+        # is reliable across the supported pyspark range, so any failure here
+        # means "partition count unavailable," not a real error to propagate.
+        logger.warning(
+            "[runtime_metrics_boundary_skipped] Channel %r: metrics_boundary "
+            "skipped — partition count unavailable on this session type "
+            "(RDD API missing): %s",
+            module_id,
+            exc,
+        )
+        return df
     return df.repartition(n if n > 0 else 1)
 
 
@@ -378,12 +401,12 @@ def execute_channel(
                     f"[{module.id}] op=sql requires a non-empty 'query'"
                 )
         result = _run_sql(module.id, query, upstream_dfs, spark)
-        return _apply_metrics_boundary(result, cfg)
+        return _apply_metrics_boundary(result, cfg, module.id)
 
     # ── Multi-upstream ops ────────────────────────────────────────────────────
     if op in _MULTI_INPUT_OPS:
         result = _execute_union(module.id, list(upstream_dfs.values()), cfg)
-        return _apply_metrics_boundary(result, cfg)
+        return _apply_metrics_boundary(result, cfg, module.id)
 
     # ── Single-upstream ops ───────────────────────────────────────────────────
     if len(upstream_dfs) > 1:
@@ -415,6 +438,6 @@ def execute_channel(
         # unreachable — _ALL_OPS guard above catches unknowns
         raise ChannelError(f"[{module.id}] unhandled op {op!r}")
 
-    return _apply_metrics_boundary(result, cfg)
+    return _apply_metrics_boundary(result, cfg, module.id)
 
 
