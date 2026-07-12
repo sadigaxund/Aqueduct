@@ -4,9 +4,17 @@ Demonstrates the Probe `report: stdout` config option. When set, each
 signal's result prints as dim `↳` note lines under the Probe's row in the
 post-run summary.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```
 

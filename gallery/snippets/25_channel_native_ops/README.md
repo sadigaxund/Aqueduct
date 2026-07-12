@@ -2,6 +2,12 @@
 
 Demonstrates native Channel operations — no SQL, no UDFs.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Operations shown
 
 | Op | What it does |
@@ -38,5 +44,7 @@ Useful when you need to measure a single op's I/O cost in isolation.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```

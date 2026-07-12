@@ -5,6 +5,12 @@ Demonstrates two features:
 1. **Java UDF reference** — wiring a JVM-language UDF in the Blueprint
 2. **Parallel execution** — disconnected DAG components run concurrently
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Java UDF Contract
 
 ```yaml
@@ -29,6 +35,8 @@ With `--parallel`, the two disconnected components run simultaneously
 
 ```bash
 # Runs out of the box — uses a simple column alias instead of the JAR'd UDF:
+python populate_data.py
+
 aqueduct run blueprint.yml
 
 # Inspect both outputs:

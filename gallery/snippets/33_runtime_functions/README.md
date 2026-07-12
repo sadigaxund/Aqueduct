@@ -2,6 +2,12 @@
 
 Demonstrates Aqueduct's built-in runtime functions — resolved at compile time.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Available functions
 
 | Call | Returns |
@@ -27,6 +33,8 @@ compilation** (not in `aqueduct.yml`). They work in any string config position
 **How to Run**
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python -c "import pandas; print(pandas.read_parquet('data/output/items.parquet'))"
 ```

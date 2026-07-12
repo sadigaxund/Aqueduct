@@ -19,6 +19,10 @@ Demonstrates how to use Delta Lake's **Time Travel** and **Versioning** features
 
 ## Setup
 
+```bash
+pip install -r requirements.txt
+```
+
 Delta Lake tables have a special directory structure (`_delta_log`). You can't just use a single file; you need a proper Delta table.
 
 1. **Populate the Table**:

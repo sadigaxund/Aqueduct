@@ -4,6 +4,12 @@ Demonstrates `checkpoint: true` on a module. When a downstream module
 fails and the pipeline retries, the checkpointed module is **skipped**
 during re-execution — its prior output is reused.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## What it shows
 
 - `checkpoint: true` — marks a module whose output is persisted across
@@ -41,6 +47,8 @@ the retry doesn't redo the expensive work.
 ## Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 
 # To test resume, add a deliberate failure downstream,

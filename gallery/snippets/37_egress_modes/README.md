@@ -2,6 +2,12 @@
 
 Compares all 5 supported write modes from the same input data.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Modes
 
 | Mode | First run | Second run |
@@ -16,6 +22,8 @@ Compares all 5 supported write modes from the same input data.
 
 ```bash
 # First run — all 5 modes create their targets
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 

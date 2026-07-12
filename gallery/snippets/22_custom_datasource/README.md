@@ -6,6 +6,12 @@ Read from a user-defined `pyspark.sql.datasource.DataSource` via `format: custom
 > registry) does not exist on earlier Spark. On older Spark the engine raises a
 > clear error.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 `datasource.py` defines `MyDataSource` (a `DataSource` subclass). The blueprint
 points at it by fully-qualified name:

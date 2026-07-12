@@ -4,6 +4,10 @@ Demonstrates how to read data from a relational database (SQLite or PostgreSQL) 
 
 ## Setup
 
+```bash
+pip install -r requirements.txt
+```
+
 This snippet supports both local **SQLite** (for zero-dependency testing) and **PostgreSQL**.
 
 1. **Populate the Database**:

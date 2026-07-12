@@ -9,9 +9,17 @@ Compares all three Junction modes — **conditional**, **broadcast**, and
 | **broadcast** | Every row is copied to every port. | `broadcast_A.parquet`, `broadcast_B.parquet` (6 rows each, identical) |
 | **partition** | Rows are routed by matching `partition_key` column value — `status=NEW` to port 0, `status=PENDING` to port 1. Unmatched rows are dropped. | `partition_A.parquet` (2 rows, NEW), `partition_B.parquet` (2 rows, PENDING) |
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 ```

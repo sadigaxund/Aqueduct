@@ -2,6 +2,12 @@
 
 Demonstrates how to perform relational joins between multiple data sources in an Aqueduct pipeline.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Multiple Ingress Sources
 This snippet shows a multi-input DAG (Directed Acyclic Graph) where two independent CSV sources are fed into a single processing channel.
 
@@ -14,12 +20,17 @@ While this example uses a **LEFT JOIN**, Spark SQL supports all standard variant
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

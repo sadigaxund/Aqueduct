@@ -2,6 +2,12 @@
 
 Demonstrates how to merge multiple DataFrames and fill data gaps using the `coalesce` mode in a Funnel.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Coalesce Merge
 The `Funnel` module in `coalesce` mode performs a row-aligned merge across multiple inputs:
 1. It assigns a synthetic row ID to each input DataFrame.
@@ -15,12 +21,17 @@ The `Funnel` module in `coalesce` mode performs a row-aligned merge across multi
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

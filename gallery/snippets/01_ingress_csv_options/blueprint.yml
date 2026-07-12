@@ -1,6 +1,3 @@
-# blueprint.yml
-# Showing header, inferSchema, and custom delimiters for CSV sources.
-
 aqueduct: "1.0"
 id: csv_ingress_demo
 name: "CSV Ingress Snippet"
@@ -19,10 +16,10 @@ modules:
   - id: output_save
     label: "Save Result"
     type: Egress
-    config:
+    config: 
       format: parquet
-      path: data/output/output.parquet
       mode: overwrite
+      path: data/output/output.parquet
 
 edges:
   - from: yellow_taxi_csv

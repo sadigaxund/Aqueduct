@@ -2,6 +2,12 @@
 
 Demonstrates all 9 built-in probe signal types.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Signals
 
 | Signal | What it captures |
@@ -31,6 +37,8 @@ Results are stored in the `probe_signals` table in the observability store.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```
 

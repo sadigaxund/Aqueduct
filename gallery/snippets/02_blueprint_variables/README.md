@@ -3,6 +3,12 @@
 Demonstrates `${ctx.*}` — Aqueduct's static variable system, resolved at parse
 time before Spark ever sees the Blueprint.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 
 The `context:` block defines reusable values substituted into any string
@@ -30,6 +36,8 @@ Resolution priority (highest first):
 
 ```bash
 # Default "dev" — filter is "region = 'dev'" → zero rows match
+python populate_data.py
+
 aqueduct run blueprint.yml
 
 # Override env — filter becomes "region = 'US'" → 3 rows

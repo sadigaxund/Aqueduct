@@ -4,10 +4,18 @@ Demonstrates the `enabled:` module attribute. Every module accepts `enabled:`
 (default `true`) — a bool or a `${ctx.*}`/`${ENV}` expression, so a context
 profile can toggle whole pipeline sections.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How to Run
 
 ```bash
 # Default — premium_enrich is disabled (AQ_PREMIUM=false):
+python populate_data.py
+
 aqueduct run blueprint.yml
 
 # Enable premium branch:

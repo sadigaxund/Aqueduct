@@ -2,6 +2,12 @@
 
 Demonstrates how to use the `Assert` module's built-in quarantine feature to safely route "bad" records away from your main pipeline.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Quarantine
 Unlike a simple `filter` which silently drops data, or a standard `Assert` which aborts the entire pipeline, the **Quarantine** pattern allows you to:
 1. Define a row-level rule (e.g., `amount > 0`).
@@ -11,12 +17,17 @@ Unlike a simple `filter` which silently drops data, or a standard `Assert` which
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

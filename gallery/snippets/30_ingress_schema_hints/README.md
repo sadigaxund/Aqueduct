@@ -3,6 +3,12 @@
 Demonstrates `schema_hint` on Ingress — override Spark's inferred column types
 when reading structured files.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Why schema hints?
 
 Spark's `inferSchema` is convenient but sometimes gets it wrong:
@@ -84,5 +90,7 @@ aborts with a clear schema-mismatch error.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```

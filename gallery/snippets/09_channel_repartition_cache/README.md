@@ -2,6 +2,12 @@
 
 Demonstrates how to optimize Spark execution by controlling data distribution and persistence.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Operations
 
 ### 1. Repartition
@@ -17,12 +23,17 @@ The `cache` operation persists a DataFrame in memory (and disk if memory is full
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

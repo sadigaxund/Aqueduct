@@ -2,6 +2,12 @@
 
 Demonstrates Aqueduct's LLM-driven self-healing agent.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 
 The blueprint has a deliberate error — `total * 1.1` references a column
@@ -17,6 +23,8 @@ When the pipeline fails:
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml          # fails with column-not-found
 aqueduct heal blueprint.yml         # agent analyses and proposes fix
 aqueduct patch list                 # see staged patches

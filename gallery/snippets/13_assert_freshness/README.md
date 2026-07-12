@@ -2,6 +2,12 @@
 
 Demonstrates Aqueduct's ability to natively handle data freshness as both a global health metric and a row-level filter.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Native Quarantine
 Previously, `freshness` was a global "all-or-nothing" check. With the latest engine updates, the `freshness` rule now supports **Native Quarantine**:
 

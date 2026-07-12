@@ -3,6 +3,12 @@
 Demonstrates writing partitioned data and reading back only the
 partitions you need.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## What it shows
 
 - `partition_by: ["month"]` on Egress — writes data into
@@ -15,6 +21,8 @@ partitions you need.
 
 ```bash
 # Write the partitioned dataset + read back US-only rows
+python populate_data.py
+
 aqueduct run blueprint.yml
 
 # Inspect the partition layout

@@ -2,6 +2,12 @@
 
 Demonstrates **Delta MERGE** Egress (upsert by `order_id`) with a **RetryPolicy**.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concepts
 
 | Feature | What it does |

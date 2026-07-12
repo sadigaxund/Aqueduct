@@ -14,6 +14,10 @@ Aqueduct allows you to specify a `fraction` (e.g., `0.1` for 10%):
 
 ## Setup
 
+```bash
+pip install -r requirements.txt
+```
+
 1. **Generate Test Data**:
    ```bash
    python populate_data.py

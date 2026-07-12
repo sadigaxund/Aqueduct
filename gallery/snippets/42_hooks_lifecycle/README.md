@@ -4,10 +4,18 @@ Demonstrates `hooks.on_success` and `hooks.on_failure` — sequential actions
 fired after the run's terminal state — plus two Hooks-v2 additions:
 `when_error:` filtering and `in_process: true` blueprint chaining.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How to Run
 
 ```bash
 # The webhook endpoint won't exist (localhost:9999), but command: will write:
+python populate_data.py
+
 aqueduct run blueprint.yml
 cat data/output/hook_signal.txt  # → 'ok'
 

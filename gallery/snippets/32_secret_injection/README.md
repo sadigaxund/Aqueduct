@@ -2,6 +2,12 @@
 
 Demonstrates injecting secrets into Blueprints without hardcoding them in YAML.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 
 This snippet uses **YAML-level env resolution** (`${PIPELINE_SALT:-demo_salt}`)
@@ -36,6 +42,8 @@ secrets:
 
 ```bash
 # Works without any env var (falls back to "demo_salt"):
+python populate_data.py
+
 aqueduct run blueprint.yml
 python3 inspect_results.py
 

@@ -2,6 +2,12 @@
 
 Demonstrates the common ETL pattern of deduplicating records by a unique ID while keeping the most recent entry based on a timestamp.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Window Functions
 This snippet uses the **SQL Window Function** `ROW_NUMBER()` to:
 1. **Partition** the data by `user_id`.
@@ -12,12 +18,17 @@ This is significantly more robust than a simple `DISTINCT` or `GROUP BY`, as it 
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

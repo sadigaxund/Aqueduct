@@ -3,6 +3,12 @@
 Demonstrates **SQL Macros**: reusable SQL fragments resolved at **compile time**.
 The Manifest the executor runs is plain SQL — no macro syntax ever reaches Spark.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept
 
 Two macros are declared at the top of `blueprint.yml`:
@@ -16,12 +22,17 @@ they expand inline, so the same predicate logic stays defined once and reused.
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

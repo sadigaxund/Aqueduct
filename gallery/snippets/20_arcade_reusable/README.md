@@ -4,6 +4,12 @@ Demonstrates the **Arcade**: a reusable sub-Blueprint, namespaced and inlined at
 compile time. Write a pipeline fragment once, instantiate it many times with
 different inputs.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept
 
 `arcades/region_filter.yml` is a self-contained mini-pipeline that declares
@@ -23,12 +29,17 @@ try deleting `region:` from one instance and run `aqueduct validate blueprint.ym
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

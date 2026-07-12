@@ -3,6 +3,12 @@
 Demonstrates how to merge multiple data streams into one and then send the
 combined stream to two independent downstream consumers.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concepts
 
 ### 1. Union (Merging)
@@ -20,6 +26,8 @@ Fan-out is zero-cost: Spark evaluates the upstream only once.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 ```

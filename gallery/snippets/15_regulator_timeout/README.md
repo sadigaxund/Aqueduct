@@ -2,6 +2,12 @@
 
 Demonstrates how to use a `Regulator` as a time-bound gate that waits for an external signal before automatically proceeding.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept: Time-Bound Gates
 A **Regulator** usually evaluates a signal (from a `Probe` or a manual override) and immediately decides whether to `open` or `close` the gate. 
 
@@ -18,12 +24,17 @@ By adding `timeout_seconds`, you transform the Regulator into a **polling gate**
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

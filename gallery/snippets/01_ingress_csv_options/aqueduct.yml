@@ -4,7 +4,6 @@ warnings:
   suppress:
     - "*"
 
-# aqueduct.yml
 deployment:
   engine: spark
   target: local
@@ -14,3 +13,4 @@ stores:
   observability:
     backend: duckdb
     path: .aqueduct
+

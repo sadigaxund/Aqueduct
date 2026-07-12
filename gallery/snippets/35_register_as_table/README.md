@@ -3,6 +3,12 @@
 Demonstrates `register_as_table` on Egress — write your output AND publish
 it to the Spark catalog so it's queryable by name in the same session.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 
 ```yaml
@@ -29,6 +35,8 @@ session duration.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```
 

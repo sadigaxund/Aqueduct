@@ -15,6 +15,10 @@ A **Probe** is a non-invasive module that "taps" into a data stream.
 
 ## Setup
 
+```bash
+pip install -r requirements.txt
+```
+
 1. **Generate Test Data**:
    ```bash
    python populate_data.py

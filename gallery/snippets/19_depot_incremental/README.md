@@ -3,6 +3,12 @@
 Demonstrates **watermark-based incremental processing** backed by the **Depot**
 KV store — process only new rows each run, no streaming engine required.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Concept
 
 The `new_events` Channel sets `materialize: incremental` with

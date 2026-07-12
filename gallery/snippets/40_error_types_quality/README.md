@@ -10,6 +10,12 @@ Demonstrates three features in one snippet:
 3. **`tags` on modules** — string list used for filtering and scoped
    search in the observability store.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Data quality rules
 
 | Rule | SQL | error_type | Rows | Route |
@@ -21,6 +27,8 @@ Demonstrates three features in one snippet:
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 ```

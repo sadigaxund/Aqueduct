@@ -39,6 +39,11 @@ p99_latency = "myorg.aq_probes:p99_latency"
 > signals. Inline SQL does not trigger it.
 
 ## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ```bash
 python populate_data.py
 ```

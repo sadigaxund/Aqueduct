@@ -3,6 +3,12 @@
 Demonstrates the **Spillway** pattern: a Channel that routes invalid records
 to a separate output without breaking the pipeline.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## What's a Spillway?
 
 A `Channel` can have a `spillway_condition` — a SQL expression that identifies
@@ -27,6 +33,8 @@ that throws under ANSI mode.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 ```

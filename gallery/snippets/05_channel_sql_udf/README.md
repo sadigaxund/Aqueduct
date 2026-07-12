@@ -2,6 +2,12 @@
 
 Demonstrates how to extend Spark SQL with custom Python logic using **User Defined Functions (UDFs)**.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Key Features
 - **SQL Channel**: Uses standard SQL syntax to transform data.
 - **Python UDF**: Registers a native Python function (`logic.py`) that can be called directly within the SQL query.
@@ -9,12 +15,17 @@ Demonstrates how to extend Spark SQL with custom Python logic using **User Defin
 
 ## How to Run
 
-1. **Execute the Pipeline**:
+1. **Generate test data**:
+   ```bash
+   python populate_data.py
+   ```
+
+2. **Execute the Pipeline**:
    ```bash
    aqueduct run blueprint.yml
    ```
 
-2. **Inspect Results**:
+3. **Inspect Results**:
    ```bash
    python inspect_results.py
    ```

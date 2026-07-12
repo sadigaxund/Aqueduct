@@ -2,6 +2,12 @@
 
 Demonstrates `@aq.depot.get()` — Aqueduct's cross-run KV store.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## How it works
 
 The depot is an implicit per-blueprint KV store (backed by DuckDB). After each
@@ -55,6 +61,8 @@ read it with `@aq.depot.get('last_watermark')`.
 
 ```bash
 # First run — processes all 6 rows
+python populate_data.py
+
 aqueduct run blueprint.yml
 python -c "import pandas; print(pandas.read_parquet('data/output/events.parquet'))"
 

@@ -2,6 +2,12 @@
 
 Compares all three Funnel merge modes from the same two inputs.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Modes
 
 | Mode | Behaviour | Row count (this data) |
@@ -21,6 +27,8 @@ Compares all three Funnel merge modes from the same two inputs.
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 python inspect_results.py
 ```

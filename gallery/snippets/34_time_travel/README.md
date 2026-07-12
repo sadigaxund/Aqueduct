@@ -25,6 +25,10 @@ and the latest version (4 rows).
 ## Setup
 
 ```bash
+pip install -r requirements.txt
+```
+
+```bash
 python populate_delta.py   # creates data/delta_events with 3 versions
 ```
 

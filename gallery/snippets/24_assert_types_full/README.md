@@ -2,6 +2,12 @@
 
 Demonstrates all Assert rule types in a single pipeline.
 
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Rules shown
 
 | Rule | Behaviour |
@@ -37,5 +43,7 @@ Other `on_fail` values: `abort` (default), `quarantine`, `trigger_agent`,
 ## How to Run
 
 ```bash
+python populate_data.py
+
 aqueduct run blueprint.yml
 ```
