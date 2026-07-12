@@ -5,6 +5,11 @@ aqueduct: "1.0"
 id: delta_merge_retry
 name: "Delta MERGE + Retry"
 
+spark_config:
+  spark.jars.packages: "io.delta:delta-spark_4.1_2.13:4.2.0"
+  spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
+  spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
 # Blueprint-level default — inherited by every module that doesn't set its
 # own module-level `retry:` block (or leaves a field unset within one).
 retry_policy:

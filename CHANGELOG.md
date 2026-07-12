@@ -16,6 +16,8 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+## [2.0.4] — 2026-07-12
+
 ### Fixed
 - **Spark Connect failure-mode honesty (3 fixes).** Follow-up to the compatibility audit below — hardens the three call sites it flagged as unguarded/misleading, without adding any Connect support. (1) `channel.py::_apply_metrics_boundary` now guards `df.rdd.getNumPartitions()`; on a session without the RDD API (e.g. Connect) the metrics boundary is skipped with a `[runtime_metrics_boundary_skipped]` warning instead of aborting the module — the transform result still flows through unchanged. (2) `patch/explain_gate.py`'s Gate 4: `capture_plan_snapshot` now stamps `plan_available: False` when plan-text capture returns empty (both `_jdf` paths failed); `run_explain_gate` reports `status="skip"` ("plan capture unavailable on this session — gate skipped") instead of comparing all-zero "after" counts against a real baseline, which previously read as a spurious plan regression. (3) `warnings/jar_availability.py::_loaded_jar_names` now returns `None` when JVM introspection fails (e.g. `sparkContext` unavailable under Connect), distinguishable from `[]` (genuinely no JARs loaded); `check()` emits a "could not verify JAR availability" note when a JAR-requiring format is declared and inspection failed, instead of silently reporting an all-clear. `docs/compatibility.md`'s Spark Connect table updated to reflect all three sites now degrading gracefully. (`aqueduct/executor/spark/channel.py`, `aqueduct/patch/explain_gate.py`, `aqueduct/executor/spark/warnings/jar_availability.py`, `docs/compatibility.md`; tests: `tests/test_executor/test_channel_metrics_boundary_guard.py`, `tests/test_patch/test_explain_gate.py`, `tests/test_executor/test_jar_availability_warning.py`)
 

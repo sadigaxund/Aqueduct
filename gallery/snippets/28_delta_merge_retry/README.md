@@ -19,19 +19,19 @@ target at heal time; when both are present on a module, `on_failure:` wins).
 Each field on `retry:` defaults to unset, inheriting the corresponding
 `retry_policy:` field — set only what you want to diverge.
 
-A `populate_delta.py` script creates the initial Delta table from `orders.csv`.
+`populate_data.py` creates the CSV input files and bootstraps the initial Delta table.
 Then `aqueduct run` applies the MERGE with update/insert rows from `updates.csv`.
 Subsequent runs with different `updates.csv` content will upsert again.
 
 ## How to Run
 
 ```bash
-# Step 1: create the initial Delta table
-python populate_delta.py
+# Step 1: create CSVs and initial Delta table
+python populate_data.py
 
 # Step 2: merge updates into it
 aqueduct run blueprint.yml
-python -c "import pandas; df=pandas.read_parquet('data/output/delta_orders'); print(df)"
+python inspect_results.py
 
 # Modify updates.csv with new data, then run step 2 again:
 aqueduct run blueprint.yml   # merges: updates existing, inserts new
