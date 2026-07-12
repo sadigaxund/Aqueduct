@@ -32,6 +32,7 @@ jobs:
       tui:       ${{ steps.filter.outputs.tui }}
       tools:     ${{ steps.filter.outputs.tools }}
       mcp:       ${{ steps.filter.outputs.mcp }}
+      capabilities: ${{ steps.filter.outputs.capabilities }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -96,6 +97,14 @@ jobs:
               - 'aqueduct/mcp/**'
               - 'aqueduct/tools/**'
               - 'tests/test_mcp/**'
+            capabilities:
+              - 'aqueduct/executor/capabilities.py'
+              - 'aqueduct/executor/capability_leaves.py'
+              - 'aqueduct/executor/channel_ops.py'
+              - 'aqueduct/executor/spark/capabilities.py'
+              - 'aqueduct/compiler/capability_check.py'
+              - 'aqueduct/doctor/**'
+              - 'tests/test_capabilities/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -271,6 +280,23 @@ jobs:
           pytest tests/test_tools/ -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "Tools"
+          exit $rc
+
+  capabilities-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.capabilities == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: |
+          set +e
+          pytest tests/test_capabilities/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Capabilities"
           exit $rc
 
   mcp-tests:

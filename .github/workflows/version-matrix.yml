@@ -33,9 +33,18 @@ jobs:
   # real local Spark. Moved here from test-suite.yml (2026-07-03): these are
   # compat checks, not per-push unit checks. The suite keeps the fast
   # parse/compile `gallery-tests` guard for branch pushes.
+  #
+  # CANARY LANE (Phase 78): `pip install -e ".[dev,spark,llm]"` below installs
+  # UNPINNED latest dependency versions — the opposite of the `compat` job's
+  # 3 pinned combos. It exists to catch a breaking upstream release early
+  # (e.g. it once pulled unreleased pandas 3.0/numpy 2.5 and broke snippet 28)
+  # without blocking `main`. `continue-on-error: true` makes a failure here
+  # a red job annotation, not a workflow failure — see docs/compatibility.md
+  # "Promised vs canary lanes".
   snippets:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -48,6 +57,11 @@ jobs:
       - run: pip install -e ".[dev,spark,llm]"
       - run: bash scripts/run_snippets.sh
 
+  # PROMISE LANES (Phase 78): the 3 pinned combos below (LTS / Latest / Legacy)
+  # are the versions Aqueduct is actually tested against and supports — see
+  # docs/compatibility.md. A failure here MUST fail this workflow (no
+  # job-or-step-level continue-on-error) — contrast with the unpinned
+  # `snippets` canary lane above, which is early-warning only.
   compat:
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -140,13 +154,20 @@ jobs:
           FAIL_COUNT=$(grep -c "^FAILED " "$LOGFILE" || true)
           echo "fail_count=$FAIL_COUNT" >> $GITHUB_OUTPUT
           exit $EXIT_CODE
-        continue-on-error: true
+        # Phase 78: NO continue-on-error — this is a PROMISE lane. A test
+        # failure on a pinned combo must fail the job (and therefore the
+        # workflow), matching "promised = CI-enforced" in
+        # docs/compatibility.md. The steps below still run via `if: always()`
+        # so the compat-results table and compatibility.md stay up to date
+        # even when a combo fails — only the job's pass/fail conclusion (the
+        # thing that blocks) changes.
 
       - name: Generate report
         if: always()
         run: python scripts/ci-summary.py ${{ env.RESULTS_DIR }}/${{ matrix.combo }}.xml --name "${{ matrix.combo }} (${{ matrix.python }}/pyspark ${{ matrix.pyspark }})"
 
       - name: Save result artifact
+        if: always()
         run: |
           cat > ${{ env.RESULTS_DIR }}/${{ matrix.combo }}.json << JSONEOF
           {
@@ -163,6 +184,7 @@ jobs:
           JSONEOF
 
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.combo }}
