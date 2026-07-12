@@ -41,6 +41,9 @@ if TYPE_CHECKING:
     from pyspark.sql import Column, DataFrame
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.channel_ops import ALL_OPS as _ALL_OPS
+from aqueduct.executor.channel_ops import MULTI_INPUT_OPS as _MULTI_INPUT_OPS
+from aqueduct.executor.channel_ops import SQL_OPS as _SQL_OPS
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -50,14 +53,6 @@ _SINGLE_INPUT_ALIAS = "__input__"
 _VALID_JOIN_TYPES = frozenset(
     {"inner", "left", "right", "full", "semi", "anti", "cross"}
 )
-
-_SQL_OPS = frozenset({"sql", "join"})
-_SINGLE_INPUT_OPS = frozenset(
-    {"deduplicate", "filter", "select", "rename", "cast", "sort", "repartition", "coalesce", "cache"}
-)
-_MULTI_INPUT_OPS = frozenset({"union"})
-
-_ALL_OPS = _SQL_OPS | _SINGLE_INPUT_OPS | _MULTI_INPUT_OPS
 
 
 class ChannelError(AqueductError):
