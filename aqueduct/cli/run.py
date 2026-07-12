@@ -1288,6 +1288,10 @@ def run(
         last_apply_error: str | None = None  # fed back to LLM on next multi-patch iteration
 
         _replay_tried: set[str] = set()  # patch_ids already replayed this run — multi-patch loop guard
+        # One-shot flag for the [agent_progressive_scope] warning — the static
+        # scope conditions (approval mode, cascade) never change mid-run, so
+        # repeating the warning every heal iteration would be noise.
+        _progressive_scope_warned = False
 
         def _fire_heal_hook(event: str, *, iter_run_id: str, hook_status: str, ctx) -> None:
             """Fire `hooks.on_patch_pending` / `hooks.on_healed` — mid-run
@@ -1918,6 +1922,47 @@ def run(
             # (see module docstring in aqueduct/agent/progressive.py for the
             # recorded failure this fixes). Nothing is written to the Blueprint
             # until the combined patch passes the pipeline end-to-end.
+            #
+            # No-silent-no-ops rule (AGENTS.md): when the user set
+            # `agent.progressive: true` but a scope condition disables it, say
+            # so — a flag that silently does nothing lies to the user. The two
+            # static conditions (approval mode, cascade) warn ONCE per run with
+            # a rule_id; a replay-cache hit is an info note (nothing was lost —
+            # the cached patch served this failure for zero tokens, the chain
+            # simply had no work to do).
+            if resolved_agent_progressive and not (
+                effective_mode == "auto"
+                and not _cascade_tiers
+                and _replay_result is None
+            ):
+                if _replay_result is not None:
+                    from aqueduct.cli.style import info as _prog_info
+                    _prog_info(
+                        "progressive chain not started — replay-cache hit served "
+                        "this failure (0 tokens); nothing to chain",
+                        err=True,
+                    )
+                elif not _progressive_scope_warned:
+                    _progressive_scope_warned = True
+                    from aqueduct.cli.output import warn as _output_warn
+                    if effective_mode != "auto":
+                        _scope_reason = (
+                            f"requires agent.approval: auto (effective mode is "
+                            f"{effective_mode!r} — human/ci modes stage single "
+                            "patches, chaining is not applied)"
+                        )
+                    else:
+                        _scope_reason = (
+                            "not available with cascade tiers configured "
+                            "(agent.cascade) — cascade-mode chaining is deferred, "
+                            "see docs/specs.md §8.13"
+                        )
+                    _output_warn(
+                        "agent_progressive_scope",
+                        f"agent.progressive: true is set but progressive healing "
+                        f"is skipped for this run — {_scope_reason}. Falling back "
+                        "to the standard heal loop.",
+                    )
             if (
                 resolved_agent_progressive
                 and effective_mode == "auto"
