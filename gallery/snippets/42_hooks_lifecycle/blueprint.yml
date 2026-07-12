@@ -13,6 +13,11 @@ description: |
   exit code — a failing hook warns and stops the remaining hooks of
   that event.
 
+  Also demonstrates two Hooks-v2 additions: a when_error: filter (only
+  fire an on_failure entry when the error_type matches) and an
+  in_process: true blueprint: hook (reuse the live SparkSession instead
+  of spawning a fresh `aqueduct run` subprocess).
+
 modules:
 
   - id: raw_data
@@ -52,8 +57,22 @@ hooks:
     - command: touch data/output/hook_signal_ok.txt
     - blueprint: chained/chain_target.yml
       timeout: 60
+    # in_process: true — parse+compile+execute chain_target.yml in THIS
+    # process, reusing the live SparkSession instead of spawning a fresh
+    # `aqueduct run` subprocess. Only valid on a blueprint: entry; falls
+    # back to the subprocess path (with an info message) if the target
+    # sets its own spark_config.
+    - blueprint: chained/chain_target.yml
+      in_process: true
+      timeout: 60
     - webhook: "http://localhost:9999/hooks/success"
   on_failure:
     - command: mkdir -p data/output
     - command: touch data/output/hook_signal_failed.txt
+    # when_error: only fires this entry when FailureContext.error_type (or
+    # the exception class name) matches one of the listed labels — same
+    # exact-match semantics as agent.guardrails.heal_on_errors. A
+    # non-matching failure silently skips this entry (not a [hook_failed]).
+    - command: touch data/output/hook_signal_empty_dataset.txt
+      when_error: ["EmptyDataset"]
     - webhook: "http://localhost:9999/hooks/failure"

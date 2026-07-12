@@ -27,6 +27,17 @@ the retry doesn't redo the expensive work.
 > `tags: [key: value]` and `description: "..."` fields for documentation
 > and filtering. These appear in the observability store and the dashboard.
 
+> **`checkpoint_root:` override (aqueduct.yml):** By default checkpoints
+> land under `<store_dir>/checkpoints/<run_id>/`. Set the top-level
+> `checkpoint_root:` key in `aqueduct.yml` to point them at a different
+> directory instead — e.g. faster local disk, or a volume explicitly
+> mounted into every worker container. **Local filesystem paths only** —
+> `s3://`/`s3a://`/`gs://`/`hdfs://`/`abfss://` values are rejected at
+> config-load (remote checkpoint roots are a roadmap item). Example:
+> ```yaml
+> checkpoint_root: "/mnt/fast-local/aqueduct-checkpoints"
+> ```
+
 ## Run
 
 ```bash
