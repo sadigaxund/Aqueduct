@@ -113,6 +113,7 @@ def compile(
             compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date,
             deployment_env=getattr(_dep, "env", None),
             deployment_target=getattr(_dep, "target", None),
+            engine=getattr(_dep, "engine", None) or "spark",
         )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)
@@ -513,6 +514,7 @@ def _do_compile(
             secrets_resolver=cfg.secrets.resolver,
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
+            engine=getattr(cfg.deployment, "engine", "spark"),
             _verbose=verbose,
             _defer=True,  # emit after the run header (tier-2 blueprint warnings)
         )

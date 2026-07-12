@@ -6,6 +6,7 @@ Pipeline:
     → [2] Arcade expansion (flat module list)
     → [3] Probe / Spillway validation
     → [4] Passive Regulator compile-away
+    → [5] Engine capability gate (Phase 78 — see capability_check.py)
     → Manifest (JSON-ready)
 
 The Compiler does NOT:
@@ -24,6 +25,12 @@ from typing import Any
 
 import yaml
 
+from aqueduct.compiler.capability_check import (
+    RULE_ID_IGNORED,
+    check_capabilities,
+    format_ignored_warning,
+    format_unsupported_error,
+)
 from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
@@ -42,6 +49,7 @@ from aqueduct.compiler.wirer import (
     validate_spillway_edges,
 )
 from aqueduct.errors import CompileError
+from aqueduct.executor.capabilities import Support
 from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
@@ -88,6 +96,7 @@ def compile(  # noqa: A001
     deployment_target: str | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
+    engine: str = "spark",
 ) -> Manifest:
     """Compile a parsed Blueprint into a fully-resolved Manifest.
 
@@ -97,12 +106,19 @@ def compile(  # noqa: A001
                         expansion (sub-Blueprint paths are relative to this file).
         run_id:         Optional run UUID. Auto-generated if not provided.
         depot:          Optional Depot connection for @aq.depot.get() resolution.
+        engine:         Execution engine name (Phase 78 capability gate — see
+                        ``aqueduct/executor/capabilities.py``). Defaults to
+                        "spark", matching ``aqueduct.executor.get_executor``'s
+                        default and today's only supported engine
+                        (``aqueduct.config.EngineConfig.engine``).
 
     Returns:
         A frozen Manifest ready for the Executor.
 
     Raises:
-        CompileError: On any Tier 1 resolution, expansion, or wiring failure.
+        CompileError: On any Tier 1 resolution, expansion, wiring, or
+            capability-gate failure (a module uses a grammar leaf the target
+            engine declares UNSUPPORTED).
     """
     registry = AqFunctions(
         run_id=run_id,
@@ -597,6 +613,24 @@ def compile(  # noqa: A001
         # compilation unit carries the parent's (see Manifest.base_dir doc).
         base_dir=blueprint.base_dir,
     )
+
+    # ── 9. Engine capability gate (Phase 78) ──────────────────────────────────
+    # UNSUPPORTED leaves are a hard CompileError; IGNORED_WITH_WARNING leaves
+    # are a suppressible warning. Version-constrained SUPPORTED leaves are NOT
+    # checked here (compile-time cannot know the installed dependency
+    # versions) — that is `aqueduct/doctor/`'s job. Spark declares
+    # default-ALLOW for the entire grammar today, so this is a no-op for
+    # every existing blueprint.
+    _cap_problems = check_capabilities(manifest, engine=engine)
+    _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
+    if _unsupported:
+        _msgs = "; ".join(format_unsupported_error(p, engine) for p in _unsupported)
+        raise CompileError(f"Engine capability gate failed: {_msgs}")
+    if not warnings_silence_all:
+        from aqueduct.warnings import emit as _emit_cap
+        for _p in _cap_problems:
+            if _p.support == Support.IGNORED_WITH_WARNING:
+                _emit_cap(RULE_ID_IGNORED, format_ignored_warning(_p, engine), suppress=_supp)
 
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
     # `_supp` (section 7) already carries engine-level ∪ per-Blueprint suppress.
