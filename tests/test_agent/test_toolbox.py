@@ -6,8 +6,9 @@ tools must degrade to a structured "unavailable" result, never raise).
 
 from __future__ import annotations
 
+import sys
 import types
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -115,10 +116,9 @@ class TestSessionBoundTools:
             def collect(self):
                 return fake_rows[: self._n]
 
-        with patch(
-            "aqueduct.executor.spark.ingress.read_ingress",
-            return_value=_FakeDF(),
-        ):
+        mock_ingress = MagicMock()
+        mock_ingress.read_ingress.return_value = _FakeDF()
+        with patch.dict("sys.modules", {"aqueduct.executor.spark.ingress": mock_ingress}):
             result = tb.call("sample_rows", {"module_id": "src", "n": 999})
         assert result["available"] is True
         assert result["n"] == 20
