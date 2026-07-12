@@ -78,7 +78,14 @@ def _count_markers(plan: str) -> tuple[int, int, int]:
 
 
 def capture_plan_snapshot(df: Any) -> dict[str, Any]:
-    """Capture per-module plan signal — returns dict ready for Surveyor."""
+    """Capture per-module plan signal — returns dict ready for Surveyor.
+
+    ``plan_available`` distinguishes "plan capture failed" (e.g. both the
+    `_jdf` paths in `_formatted_plan` raised — Spark Connect has no `_jdf`)
+    from "plan captured, zero markers found." Without this flag, an empty
+    plan reads as (0, 0, 0) counts, which the gate would compare against a
+    real baseline as a spurious regression rather than "unavailable."
+    """
     plan = _formatted_plan(df)
     exch, udf, bcast = _count_markers(plan)
     return {
@@ -86,6 +93,7 @@ def capture_plan_snapshot(df: Any) -> dict[str, Any]:
         "python_udf_count": udf,
         "broadcast_count": bcast,
         "plan_text": plan,
+        "plan_available": bool(plan),
     }
 
 
@@ -125,11 +133,17 @@ def run_explain_gate(
 
     modules = touched_modules or sorted(set(baseline_by_module) & set(after_by_module))
     baseline_run_ids: set[str] = set()
+    unavailable_modules: list[str] = []
 
     for mid in modules:
         before = baseline_by_module.get(mid)
         after = after_by_module.get(mid)
         if not before or not after:
+            continue
+        # plan_available defaults to True — older explain_snapshot rows (or
+        # test fixtures) predate this flag and should still be compared.
+        if after.get("plan_available", True) is False:
+            unavailable_modules.append(mid)
             continue
         if before.get("run_id"):
             baseline_run_ids.add(before["run_id"])
@@ -160,11 +174,23 @@ def run_explain_gate(
                 detail=f"module {mid!r} lost {b_bcast - a_bcast} broadcast hint(s)",
             ))
 
-    if result.regressions:
+    compared = len(modules) - len(unavailable_modules)
+    if unavailable_modules and compared == 0:
+        # Every touched module's plan capture failed (e.g. Spark Connect —
+        # `_jdf` doesn't exist there) — comparing all-zero "after" counts
+        # against a real baseline would read as a false regression. Report
+        # unavailability honestly instead of comparing zeros.
+        result.status = "skip"
+        result.detail = "plan capture unavailable on this session — gate skipped"
+    elif result.regressions:
         result.status = "warn"
         result.detail = f"{len(result.regressions)} plan regression(s) detected"
     else:
-        result.detail = f"no plan regression across {len(modules)} module(s)"
+        result.detail = f"no plan regression across {compared} module(s)"
+        if unavailable_modules:
+            result.detail += (
+                f" ({len(unavailable_modules)} skipped — plan capture unavailable)"
+            )
 
     if baseline_run_ids:
         result.baseline_run_id = sorted(baseline_run_ids)[0]
