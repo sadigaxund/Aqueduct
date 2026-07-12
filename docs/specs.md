@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.15: Reference Document**
+**Version 2.16: Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1519,6 +1519,24 @@ Setting `deployment.target` to either of these values raises a `ConfigError`.
 Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
+
+## **10.9 Engine capability framework (2.16)**
+
+The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design, `deployment.engine` selects which engine actually runs a compiled Manifest (today, always `spark`). Not every engine is guaranteed to implement every grammar leaf, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced instead of a runtime surprise.
+
+**Verdicts.** Every engine declares, for each grammar leaf, one of three verdicts:
+
+- `supported`: the engine runs this leaf. Optionally carries a `requires` version constraint (e.g. `format: custom` requires `pyspark>=4.0`).
+- `unsupported`: the engine cannot run this leaf at all.
+- `ignored_with_warning`: the engine accepts the leaf but it has no effect.
+
+**Default posture.** Spark declares default-`supported` for the grammar, it implements almost all of it today, with a short list of targeted overrides for the genuinely unsupported or version-gated leaves. A future engine (e.g. a DuckDB engine) starts from default-`unsupported` instead and earns leaves one at a time as it implements them, this is a structural safety net: a new engine that forgets to declare a leaf refuses it rather than silently mis-running it.
+
+**Compile gate.** `aqueduct/compiler/capability_check.py` runs as the last step of `compile()` (see §3, the compiler pipeline). A module using an `unsupported` leaf fails compilation with a `CompileError` naming the module, the leaf, the engine, and the capability's hint. A module using an `ignored_with_warning` leaf gets a suppressible warning under rule_id `engine_key_ignored`, following the same `warnings.suppress` mechanism as every other compiler warning (see §4.2). A `requires` version constraint does **not** fail compilation, compile-time has no way to know which dependency versions are actually installed in the running environment.
+
+**Doctor check.** `aqueduct doctor` validates the version constraint that compile cannot: `aqueduct/doctor/checks_io.py::check_capabilities` walks a compiled blueprint's used capabilities and, for each with a `requires` constraint, compares the installed dependency version (via `importlib.metadata`) against the declared specifier, reporting `ok`, `fail`, or `skip` (dependency not installed) per capability. See `docs/compatibility.md` for the Spark engine's currently-declared version constraints.
+
+**Anti-drift.** The full canonical set of grammar leaves is derived, not hand-maintained, by walking the actual grammar (`aqueduct/executor/capability_leaves.py`): module types and pydantic schema fields come from `aqueduct/parser/schema.py` introspection, Channel ops/Egress modes/Junction and Funnel fan modes come from named constants next to their dispatch code, and a small hand-curated set covers cross-cutting feature flags and the handful of formats with a dedicated code path. A closure test (`tests/test_capabilities/test_closure.py`) fails the build if any derived leaf lacks an explicit verdict in a registered engine's table, or if a table declares a verdict for a leaf that no longer exists.
 
 ---
 

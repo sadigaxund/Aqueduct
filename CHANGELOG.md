@@ -16,6 +16,10 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Added
+- Engine capability framework (Phase 78): every engine declares, per grammar leaf (module config fields, Channel ops, Egress write modes, Junction/Funnel fan modes, feature flags), whether it is `supported` (optionally version-gated), `unsupported`, or `ignored_with_warning`. The full leaf set is derived from the actual grammar (`aqueduct/executor/capability_leaves.py`), not hand-listed, and a closure test fails the build if a new leaf lacks an explicit verdict in a registered engine's table. Spark declares default-`supported` for (almost) the whole grammar today (`aqueduct/executor/spark/capabilities.py`); a future engine starts default-`unsupported` instead. Wired in as the last step of `compile()` (`aqueduct/compiler/capability_check.py` — `CompileError` on an unsupported leaf, suppressible warning `engine_key_ignored` otherwise) and as a new `aqueduct doctor` check (`check_capabilities`) that validates version-gated capabilities against what's actually installed. See `docs/specs.md` §10.9.
+- `.github/workflows/version-matrix.yml`: split the compat-matrix job contract into promised lanes (the 3 pinned combos — now actually blocking on failure) and one unpinned canary lane (`snippets`, `continue-on-error: true` — early-warning only, does not fail the workflow).
+
 ## [2.0.4] — 2026-07-12
 
 ### Fixed

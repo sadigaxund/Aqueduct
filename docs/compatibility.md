@@ -2,6 +2,19 @@
 
 The combinations below are what Aqueduct is tested against in CI. Anything outside this range is **not** supported, it may work, but will not get bug fixes, and version pin errors at install time are intentional.
 
+## Promised vs canary lanes
+
+`.github/workflows/version-matrix.yml` runs two kinds of lane, with different failure contracts:
+
+- **Promised lanes** (the `compat` job's 3 pinned combos below: LTS, Latest, Legacy) are CI-enforced. A failure on any of these fails the workflow, this is the range the "Latest run" table reports.
+- **Canary lane** (the `snippets` job) installs unpinned, latest dependency versions on every push to `main`. It exists to surface a breaking upstream release (a new pandas/numpy/pyspark point release) before it becomes a promised-lane failure. It runs with `continue-on-error: true`, a canary failure is a red job annotation, not a workflow failure, and does not change the support matrix below.
+
+If the canary lane is red, treat it as an early warning: the failure is not yet in the promised range and does not block a release by itself, but it is worth triaging before the next pinned-version bump would inherit it.
+
+## Engine capability framework (2.16)
+
+Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all, see `docs/specs.md` §10.9 for the full contract.
+
 <!-- COMPAT_RESULTS_START -->
 ## Latest run
 

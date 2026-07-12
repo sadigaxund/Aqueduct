@@ -75,8 +75,14 @@ category; it is not a loophole for runtime features (those still follow the axes
 - `aqueduct/executor/models.py` — engine-agnostic (`ExecutionResult`, `ModuleResult`)
 - `aqueduct/executor/path_keys.py` — engine-agnostic path-field registry (imported by the parser)
 - `aqueduct/executor/probe_plugins.py` — engine-agnostic, **pyspark-free** custom-probe-signal resolver (`custom_signal_source`, `resolve_callable`, `AQ_PROBE_ENTRYPOINT_GROUP`). Lives at the top level (not under `spark/`) so the compiler (`wirer`) can validate `type: custom` signal shape and the Spark `probe.py` can resolve callables at runtime — same precedent as `path_keys.py`. Do not add `pyspark` imports here.
-- `aqueduct/executor/spark/` — all Spark code (`ingress`, `egress`, `channel`, `executor`, `junction`, `funnel`, `probe`, `session`, `udf`, `assert_`)
+- `aqueduct/executor/channel_ops.py` — engine-agnostic, **pyspark-free** Channel op-name registry (`SQL_OPS`, `SINGLE_INPUT_OPS`, `MULTI_INPUT_OPS`, `ALL_OPS`). `spark/channel.py` imports pyspark at module level, so its op constants had to be hoisted here — same precedent as `path_keys.py`/`probe_plugins.py` — so the capability-leaf walker (below) can read them without a Spark install.
+- `aqueduct/executor/capabilities.py` — engine-agnostic, **pyspark-free** capability model (Phase 78): `Support` (`SUPPORTED`/`UNSUPPORTED`/`IGNORED_WITH_WARNING`), frozen `Capability` (verdict + optional `requires` version constraint + `hint`), frozen `EngineCapabilities` (one engine's leaf-id → `Capability` table, `.verdict()`), `CAPABILITY_REGISTRY`/`register()`/`get_capabilities()`, `all_leaves_default()` (build a table with one default verdict), and a minimal PEP440-lite specifier parser/evaluator (`validate_specifier`, `version_satisfies`) — `packaging` is not a declared dependency, so this stays hand-rolled rather than importing `packaging.specifiers`.
+- `aqueduct/executor/capability_leaves.py` — engine-agnostic, **pyspark-free** grammar leaf walker (Phase 78): `all_leaves()` derives the canonical capability-leaf-id set by introspecting `parser/schema.py` pydantic models (module types + nested config blocks) and reading the op/mode/format constants next to their dispatch code (`channel_ops.py`, `spark/egress.py`'s `SUPPORTED_MODES`/`ON_NEW_COLUMNS_POLICIES`, `spark/junction.py`'s `VALID_MODES`, `spark/funnel.py`'s `VALID_MODES`). `INGRESS_FORMATS`/`EGRESS_FORMATS`/`FEATURE_FLAGS` are the hand-curated exceptions (not schema-derivable — see the module docstring for why). This is the anti-drift core: a new schema field / op / mode automatically becomes a leaf that every registered engine must give a verdict for (enforced by `tests/test_capabilities/test_closure.py`).
+- `aqueduct/executor/spark/capabilities.py` — the Spark engine's capability declaration (`SPARK = EngineCapabilities(...)`, registered on import). Pure data — **pyspark-free** despite living under `spark/` (like `egress.py`/`junction.py`/`funnel.py`, it only carries a `TYPE_CHECKING` pyspark import via its dependencies, never a top-level one). Declares default-`SUPPORTED` (`all_leaves_default`) plus targeted version-gated overrides mined from `docs/compatibility.md`; a future engine starts from default-`UNSUPPORTED` instead.
+- `aqueduct/executor/spark/` — all Spark code (`ingress`, `egress`, `channel`, `executor`, `junction`, `funnel`, `probe`, `session`, `udf`, `assert_`, `capabilities`)
 - `aqueduct/executor/__init__.py` — `get_executor(engine: str = "spark")` factory returning the engine's `execute()` function
+
+**Adding a grammar leaf requires a capability verdict.** Any new module-type field, Channel op, Egress write mode, Junction/Funnel fan mode, or feature flag becomes a capability leaf automatically (`aqueduct/executor/capability_leaves.py::all_leaves()`) or, for the hand-curated categories (`INGRESS_FORMATS`/`EGRESS_FORMATS`/`FEATURE_FLAGS`), needs one line added there. Either way, every registered engine's `EngineCapabilities` table (today, just `aqueduct/executor/spark/capabilities.py`) must carry an explicit verdict for it — `tests/test_capabilities/test_closure.py` fails the build otherwise. See `docs/specs.md` §10.9.
 
 When adding a Spark feature: code in `aqueduct/executor/spark/`. Do not import `pyspark` in `parser`, `compiler`, `surveyor`, `patch`, or `depot`.
 
@@ -225,7 +231,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 |--------|--------------|
 | `__init__.py` | Spark/network cluster + blueprint-source checks + `run_doctor` |
 | `base.py` | `CheckResult` dataclass |
-| `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario |
+| `checks_io.py` | Leaf connectivity checks: config, depot, observability, webhook, agent, secrets, store-backend, aqtest, aqscenario, capabilities (Phase 78 — version-constrained capability check, see `aqueduct/executor/capabilities.py`) |
 
 ### `aqueduct/executor/spark/` — Spark execution
 
@@ -250,7 +256,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 
 | Module | What it owns |
 |--------|--------------|
-| `compiler.py` | Main orchestrator — 8-step pipeline: Tier 1 resolution, Arcade expansion, Probe/Spillway validation, Regulator compile-away, Manifest assembly |
+| `compiler.py` | Main orchestrator — pipeline: Tier 1 resolution, Arcade expansion, Probe/Spillway validation, Regulator compile-away, engine capability gate (Phase 78), Manifest assembly |
 | `models.py` | `Manifest` frozen dataclass + `to_dict()` serialization |
 | `expander.py` | Arcade → flat namespaced module list, edge rewiring, depth-limited recursion (max 10) |
 | `lineage.py` | `sqlglot`-based column-level lineage extraction (compile-time only, zero Spark actions) |
@@ -258,6 +264,7 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 | `provenance.py` | ValueProvenance, ModuleProvenance, ProvenanceMap — tracks source of every resolved config value |
 | `runtime.py` | `AqFunctions` registry + `_DISPATCH` table — resolves `@aq.*` Tier 1 tokens via `ast.literal_eval` |
 | `wirer.py` | Probe attach_to validation, spillway edge validation, Regulator compile-away bypass logic |
+| `capability_check.py` | Phase 78 — the last compile step: `check_capabilities(manifest, engine)` maps used modules to capability leaves (`leaves_for_module`, reused by the doctor check) and looks up the target `EngineCapabilities` table; `UNSUPPORTED` → `CompileError`, `IGNORED_WITH_WARNING` → suppressible warning (`engine_key_ignored`). Version-gated `SUPPORTED` leaves are NOT checked here (doctor's job) |
 | `warnings/` | Modular compiler warning rules — one file per check, registered in `RULES` list |
 
 ### `aqueduct/parser/` — Blueprint YAML → validated AST
@@ -530,6 +537,7 @@ push to `feat/**` or `phase/**`, and PRs into `main`/`feat/**`/`phase/**`.
 | `stores-tests` | `aqueduct/stores/**`, `tests/test_stores/**`, `tests/test_depot/**` (PG + Redis services) | `pytest ... -m integration` |
 | `tools-tests` | `aqueduct/tools/**`, `aqueduct/stores/**`, `aqueduct/doctor/**`, or `tests/test_tools/**` | `pytest tests/test_tools/ -m "not spark"` |
 | `mcp-tests` | `aqueduct/mcp/**`, `aqueduct/tools/**`, or `tests/test_mcp/**` (installs the `mcp` extra) | `pytest tests/test_mcp/ -m "not spark"` |
+| `capabilities-tests` | `aqueduct/executor/capabilities.py`, `capability_leaves.py`, `channel_ops.py`, `spark/capabilities.py`, `aqueduct/compiler/capability_check.py`, `aqueduct/doctor/**`, or `tests/test_capabilities/**` | `pytest tests/test_capabilities/ -m "not spark"` |
 | `coverage` | `main` pushes + all PRs | `pytest --cov=aqueduct --cov-fail-under=68 -m "not spark"` |
 
 **Branch workflow**: push a change touching only `aqueduct/agent/` → only
