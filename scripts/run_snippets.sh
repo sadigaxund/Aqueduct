@@ -6,10 +6,11 @@
 # incompatible with this script's one-blueprint-per-snippet assumption).
 #
 # Usage:
-#   ./scripts/run_snippets.sh [-v] [-vv] [SNIPPETS_DIR]
+#   ./scripts/run_snippets.sh [-v] [-vv] [-f PATTERN] [SNIPPETS_DIR]
 #
-#   -v    Show populate/generate, aqueduct-run, and inspect output inline
-#   -vv   Show everything inline including pip-install
+#   -v         Show populate/generate, aqueduct-run, and inspect output inline
+#   -vv        Show everything inline including pip-install
+#   -f PATTERN Only run snippets whose name contains PATTERN (e.g. -f 28)
 #
 # SNIPPETS_DIR defaults to gallery/snippets/ relative to the repo root.
 # The script resolves the repo root from its own location, so it works from any cwd.
@@ -21,16 +22,18 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 VERBOSE=0
 SNIPPETS_DIR=""
+FILTER=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -v) VERBOSE=1; shift ;;
         -vv) VERBOSE=2; shift ;;
         -vvv) VERBOSE=3; shift ;;
+        -f|--filter) FILTER="$2"; shift 2 ;;
         --) shift; SNIPPETS_DIR="${1:-}"; break ;;
         -*)
             echo "Unknown flag: $1"
-            echo "Usage: $0 [-v] [-vv] [SNIPPETS_DIR]"
+            echo "Usage: $0 [-v] [-vv] [-f PATTERN] [SNIPPETS_DIR]"
             exit 1
             ;;
         *) SNIPPETS_DIR="$1"; shift ;;
@@ -204,6 +207,10 @@ fi
 for snippet_path in "$WORK_DIR/snippets"/*/; do
     SNIPPET_NAME="$(basename "$snippet_path")"
 
+    if [[ -n "$FILTER" && "$SNIPPET_NAME" != *"$FILTER"* ]]; then
+        continue
+    fi
+
     if is_skipped "$SNIPPET_NAME"; then
         echo -e "${YELLOW}SKIP${RESET}  $SNIPPET_NAME"
         gh_summary_row "$SNIPPET_NAME" "SKIP" ""
@@ -275,6 +282,22 @@ done
 # ---------------------------------------------------------------------------
 echo -e "Done — ${GREEN}${PASS_COUNT} passed${RESET}  ${RED}${FAIL_COUNT} failed${RESET}  ${YELLOW}${SKIP_COUNT} skipped${RESET}"
 
+# Extract the root-cause error line(s) from a log — shows the actual exception
+# message, not the Java stack trace bottom.
+extract_error_summary() {
+    local log="$1" max_lines="${2:-5}"
+    if [[ ! -f "$log" ]]; then return; fi
+    # Look for Py4J/pyspark exception messages, "Error:" headers, or "Caused by:"
+    local found
+    found=$(grep -E '(pyspark\.sql\.utils|py4j\.protocol|Py4JJavaError|Caused by:|Exception:|^Error: |^ERROR |SparkException|AnalysisException|StreamingQueryException)' "$log" | head -3 || true)
+    if [[ -n "$found" ]]; then
+        echo "$found"
+    else
+        # Fallback: last non-empty lines
+        grep -v '^$' "$log" | tail -"$max_lines"
+    fi
+}
+
 if (( ${#FAILURES[@]} > 0 )); then
     echo ""
     echo -e "${RED}${BOLD}=== FAILURES ===${RESET}"
@@ -285,7 +308,7 @@ if (( ${#FAILURES[@]} > 0 )); then
         echo ""
         echo -e "  ${RED}FAILED${RESET} $snippet / $step"
         if [[ -f "$log" ]]; then
-            grep -v '^$' "$log" | tail -5 | sed 's/^/    /'
+            extract_error_summary "$log" 5 | sed 's/^/    /'
         fi
     done
     echo ""
@@ -305,7 +328,7 @@ if [[ "$IN_CI" == "true" && -n "${GITHUB_STEP_SUMMARY:-}" && ${#FAILURES[@]} -gt
             echo ""
             echo '```'
             if [[ -f "$log" ]]; then
-                grep -v '^$' "$log" | tail -10
+                extract_error_summary "$log" 20
             fi
             echo '```'
             echo "</details>"
