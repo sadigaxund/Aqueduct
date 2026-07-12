@@ -32,6 +32,7 @@ from aqueduct.surveyor.ddl import (
     _DDL,
     _EXPLAIN_SNAPSHOT_DDL,
     _HEAL_ATTEMPTS_DDL,
+    _HEAL_ATTEMPTS_MIGRATIONS,
     _SIGNAL_OVERRIDES_DDL,
 )
 from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
@@ -202,6 +203,11 @@ class Surveyor:
             cur.execute(_SIGNAL_OVERRIDES_DDL)
             cur.execute(_EXPLAIN_SNAPSHOT_DDL)
             cur.execute(_HEAL_ATTEMPTS_DDL)
+            # In-place column migrations for pre-existing databases —
+            # CREATE TABLE IF NOT EXISTS never adds columns to an existing
+            # table (see the schema-evolution rule in ddl.py).
+            for _migration in _HEAL_ATTEMPTS_MIGRATIONS:
+                cur.execute(_migration)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
             # scanning the patches/ directory.
@@ -570,11 +576,16 @@ class Surveyor:
         if self._observability is None:
             return
         import datetime as _dt
+        import json as _json
         import uuid as _uuid
         if prompt_version is None:
             from aqueduct.agent import PROMPT_VERSION as _PROMPT_VERSION
             prompt_version = _PROMPT_VERSION
         sig = getattr(attempt_record, "signature", None)
+        # Phase 75 — per-call tool telemetry, if any (transient _aq_tool_calls
+        # attached by loop.py's _fire_turn; absent/empty in oneshot mode).
+        tool_calls_log = getattr(attempt_record, "_aq_tool_calls", None) or []
+        tool_calls_json = _json.dumps(tool_calls_log, default=str) if tool_calls_log else None
         try:
             with self._observability.connect() as cur:
                 cur.execute(
@@ -583,8 +594,8 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, signature_hash, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, escalated, stop_reason,
-                     prompt_version, recorded_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_version, recorded_at, tool_calls_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -602,6 +613,7 @@ class Surveyor:
                         stop_reason,
                         prompt_version,
                         _dt.datetime.now(_dt.UTC).isoformat(),
+                        tool_calls_json,
                     ],
                 )
         except Exception:

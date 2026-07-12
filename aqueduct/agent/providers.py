@@ -10,11 +10,12 @@ This module owns:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,78 @@ _RETRYABLE_STATUS = RETRYABLE_PROVIDER_STATUS
 _retry_after_seconds = retry_after_seconds
 
 _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+
+# Phase 75 — rule_id for the one-time degrade warning when supports_tools:
+# auto probes an openai_compat endpoint and it rejects/can't handle `tools`.
+_AGENT_TOOLS_UNSUPPORTED_RULE = "agent_tools_unsupported"
+
+# Defensive ceiling on tool-conversation round-trips within ONE heal attempt,
+# independent of (and slightly above) max_tool_calls — guards against a
+# provider that keeps emitting tool_use even after tools were withdrawn from
+# the payload on the forced final turn.
+_TOOL_LOOP_HARD_CEILING = 32
+
+
+@dataclass
+class ToolCallState:
+    """Mutable per-attempt state for agentic tool-use (Phase 75).
+
+    Passed BY REFERENCE into ``_call_agent``/``_call_anthropic``/
+    ``_call_openai_compat`` so they can report the tool-call count and
+    capability-probe outcome back to the caller without changing
+    ``_call_agent``'s stable ``(text, tokens_in, tokens_out)`` return shape —
+    every existing call site and test mock that doesn't pass a ``tool_state``
+    keeps working unchanged.
+    """
+
+    tool_calls_used: int = 0
+    # None = not yet probed this heal session; True/False once known.
+    supported: bool | None = None
+    # Set once, the turn capability was determined unsupported (drives the
+    # single [agent_tools_unsupported] warning — never repeated per attempt).
+    degraded_reason: str | None = None
+    warned: bool = False
+    # Phase 75 — per-call telemetry for the transcript's verbose tool-call
+    # lines: [{"name", "args_summary", "duration_ms", "result_preview"}, ...].
+    # Reset per attempt by the caller (loop.py), unlike `supported`/`warned`.
+    tool_call_log: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _tool_args_summary(args: dict[str, Any], max_len: int = 80) -> str:
+    try:
+        s = ", ".join(f"{k}={v!r}" for k, v in args.items())
+    except Exception:
+        s = str(args)
+    return s if len(s) <= max_len else s[:max_len] + "…"
+
+
+def _tool_result_preview(result: Any, max_len: int = 160) -> str:
+    s = str(result)
+    return s if len(s) <= max_len else s[:max_len] + "…"
+
+
+def _looks_like_tools_rejection(exc: Exception) -> bool:
+    """True when an HTTP error plausibly means 'this endpoint doesn't support tools'.
+
+    Best-effort text sniff on the status/response body — different
+    OpenAI-compatible servers phrase this differently (unknown field, 400
+    bad request, unsupported parameter). False positives just mean an
+    unrelated 4xx is misattributed to tool-capability once per heal session;
+    the loop still degrades safely to the working oneshot path either way.
+    """
+    import httpx
+
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return False
+    status = exc.response.status_code
+    if status < 400 or status >= 500:
+        return False
+    body = ""
+    try:
+        body = exc.response.text.lower()
+    except Exception:
+        body = ""
+    return any(kw in body for kw in ("tool", "function_call", "functions"))
 
 
 def _post_with_retry(
@@ -116,6 +189,14 @@ class _ProviderConfig:
     # Phase 46 — transient-error retry (429/503/529), from agent.retry config.
     retry_max_retries: int = 2
     retry_backoff_seconds: float = 2.0
+    # Phase 75 — agentic tool-use. `toolbox` is None in oneshot mode (default)
+    # — every tool-related branch below is skipped, byte-identical to
+    # pre-Phase-75 behaviour. `supports_tools` is the resolved True/False/"auto"
+    # (cascade tier > blueprint > engine); "auto" resolves True without probing
+    # for provider="anthropic", probes on first call for "openai_compat".
+    toolbox: Any = None
+    max_tool_calls: int = 8
+    supports_tools: bool | str = "auto"
 
 
 def _format_llm_error_hint(
@@ -172,6 +253,7 @@ def _call_agent(
     temperature_override: float | None = None,
     deadline: float | None = None,
     on_token: Callable[[str, str], None] | None = None,
+    tool_state: ToolCallState | None = None,
 ) -> tuple[str, int, int]:
     """Call the LLM provider; return (text, tokens_in, tokens_out).
 
@@ -183,8 +265,21 @@ def _call_agent(
     the budget's ``max_seconds`` mid-call. When set, it replaces the static
     ``cfg.timeout`` for this single call.
 
-    Token counts come from the provider response when reported; 0 otherwise.
+    Token counts come from the provider response when reported; 0 otherwise
+    — Phase 75: when ``cfg.toolbox`` is set (agentic mode), token counts
+    accumulate across every tool round-trip within this one attempt, and
+    ``tool_state`` (mutated in place, never returned — keeps this function's
+    3-tuple return unchanged for every existing caller/mock) reports how many
+    tool calls were made and whether the endpoint turned out to support tools.
     """
+    tools_enabled = (
+        cfg.toolbox is not None
+        and cfg.supports_tools is not False
+        # Once a prior attempt in this heal session proved the endpoint
+        # tool-incapable (openai_compat probe failure), stop advertising
+        # tools in the prompt too — the API call already stopped sending them.
+        and not (tool_state is not None and tool_state.supported is False)
+    )
     system_prompt = _build_system_prompt(
         patches_dir,
         cfg.engine_prompt_context,
@@ -194,11 +289,14 @@ def _call_agent(
         failure_ctx=cfg.failure_ctx,
         coaching=cfg.coaching,
         obs_store=cfg.obs_store,
+        tools_enabled=tools_enabled,
     )
 
     # Scrub registered @aq.secret() values from anything leaving the process.
     system_prompt = _redact(system_prompt)
     messages = _redact(messages)
+
+    tools_decl = cfg.toolbox.declarations() if tools_enabled else None
 
     if cfg.provider == "openai_compat":
         return _call_openai_compat(
@@ -210,6 +308,11 @@ def _call_agent(
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
             on_token=on_token,
+            tools=tools_decl,
+            toolbox=cfg.toolbox if tools_enabled else None,
+            max_tool_calls=cfg.max_tool_calls,
+            supports_tools=cfg.supports_tools,
+            tool_state=tool_state,
         )
     else:
         return _call_anthropic(
@@ -223,7 +326,23 @@ def _call_agent(
             max_retries=cfg.retry_max_retries,
             backoff_seconds=cfg.retry_backoff_seconds,
             on_token=on_token,
+            tools=tools_decl,
+            toolbox=cfg.toolbox if tools_enabled else None,
+            max_tool_calls=cfg.max_tool_calls,
+            tool_state=tool_state,
         )
+
+
+def _anthropic_tools_payload(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ToolBox declarations → Anthropic Messages API tool-use format."""
+    return [
+        {
+            "name": t["name"],
+            "description": t["description"],
+            "input_schema": t["params_schema"],
+        }
+        for t in tools
+    ]
 
 
 def _call_anthropic(
@@ -240,6 +359,10 @@ def _call_anthropic(
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
     on_token: Callable[[str, str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    toolbox: Any = None,
+    max_tool_calls: int = 8,
+    tool_state: ToolCallState | None = None,
 ) -> tuple[str, int, int]:
     import httpx
 
@@ -274,6 +397,20 @@ def _call_anthropic(
         "anthropic-version": ANTHROPIC_API_VERSION,
         "content-type": "application/json",
     }
+
+    # Phase 75 — tool-use is out of scope for the streaming path (SSE tool_use
+    # deltas add real complexity for no user-visible benefit — the live
+    # transcript sink is a run/heal TTY affordance, agentic mode is not yet
+    # exposed there). Anthropic is known tool-capable (no probe needed); a
+    # streaming call from an agentic-mode heal simply proceeds tool-free.
+    if tools and toolbox is not None and on_token is None:
+        return _call_anthropic_with_tools(
+            messages, payload, headers, url,
+            tools=tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
+            tool_state=tool_state, effective_timeout=effective_timeout,
+            max_retries=max_retries, backoff_seconds=backoff_seconds,
+        )
+
     # Streaming path — only when a live-token sink is supplied (the non-streaming
     # POST below stays the default so existing callers/tests are unaffected).
     if on_token is not None:
@@ -310,6 +447,128 @@ def _call_anthropic(
     return text, int(usage.get("input_tokens", 0) or 0), int(usage.get("output_tokens", 0) or 0)
 
 
+def _call_anthropic_with_tools(
+    messages: list[dict[str, Any]],
+    base_payload: dict[str, Any],
+    headers: dict[str, str],
+    url: str,
+    *,
+    tools: list[dict[str, Any]],
+    toolbox: Any,
+    max_tool_calls: int,
+    tool_state: ToolCallState | None,
+    effective_timeout: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> tuple[str, int, int]:
+    """Multi-turn Anthropic tool-use conversation for ONE heal attempt.
+
+    Loops assistant ``tool_use`` → user ``tool_result`` until the model
+    answers with text-only content (the PatchSpec JSON), or ``max_tool_calls``
+    is exceeded — at which point ``tools`` is dropped from the payload,
+    forcing a final no-tools turn (design item 2's hard cap). The exchange is
+    LOCAL to this attempt: the caller's ``messages`` list is never mutated —
+    a fresh reprompt attempt starts its own tool conversation from scratch.
+    """
+    import httpx
+
+    anthropic_tools = _anthropic_tools_payload(tools)
+    convo = list(messages)
+    ti_total = to_total = 0
+    tools_withdrawn = False
+
+    for _ in range(_TOOL_LOOP_HARD_CEILING):
+        payload = dict(base_payload)
+        payload["messages"] = convo
+        if not tools_withdrawn:
+            payload["tools"] = anthropic_tools
+
+        with httpx.Client() as client:
+            def _do_post(read_timeout: float, _payload=payload) -> httpx.Response:
+                return client.post(
+                    url, headers=headers, json=_payload,
+                    timeout=min(effective_timeout, read_timeout),
+                )
+            response = _post_with_retry(
+                _do_post, total_seconds=effective_timeout,
+                max_retries=max_retries, backoff_seconds=backoff_seconds,
+            )
+            data = response.json()
+
+        usage = data.get("usage") or {}
+        ti_total += int(usage.get("input_tokens", 0) or 0)
+        to_total += int(usage.get("output_tokens", 0) or 0)
+
+        content = data.get("content") or []
+        if not content:
+            raise AqueductError(
+                "Anthropic returned empty content block. "
+                "The model may have refused the request or been interrupted."
+            )
+
+        tool_uses = [b for b in content if b.get("type") == "tool_use"]
+        if not tool_uses:
+            text_blocks = [b.get("text") for b in content if b.get("type") == "text"]
+            text = "".join(t for t in text_blocks if t)
+            if not text:
+                raise AqueductError(
+                    "Anthropic returned null/empty text in content block. "
+                    "The model may have refused the request or been interrupted."
+                )
+            if tool_state is not None:
+                tool_state.supported = True
+            return text, ti_total, to_total
+
+        # Assistant's tool_use turn goes back into the conversation verbatim,
+        # followed by one tool_result per tool_use block (Anthropic requires
+        # a result for every tool_use id in the SAME user turn).
+        convo = [*convo, {"role": "assistant", "content": content}]
+        tool_results: list[dict[str, Any]] = []
+        for block in tool_uses:
+            if tool_state is not None:
+                tool_state.tool_calls_used += 1
+            _name = block.get("name", "")
+            _args = block.get("input") or {}
+            _t0 = time.monotonic()
+            result = toolbox.call(_name, _args)
+            if tool_state is not None:
+                tool_state.tool_call_log.append({
+                    "name": _name,
+                    "args_summary": _tool_args_summary(_args),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    "result_preview": _tool_result_preview(result),
+                })
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.get("id"),
+                "content": json.dumps(result, default=str),
+            })
+        convo = [*convo, {"role": "user", "content": tool_results}]
+
+        if tool_state is not None and tool_state.tool_calls_used >= max_tool_calls:
+            tools_withdrawn = True  # next turn is forced no-tools (final answer)
+
+    raise AqueductError(
+        f"Anthropic tool-use conversation exceeded {_TOOL_LOOP_HARD_CEILING} "
+        "round-trips without a final answer."
+    )
+
+
+def _openai_tools_payload(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """ToolBox declarations → OpenAI ``tools`` (function-calling) format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t["description"],
+                "parameters": t["params_schema"],
+            },
+        }
+        for t in tools
+    ]
+
+
 def _call_openai_compat(
     messages: list[dict[str, Any]],
     model: str,
@@ -324,6 +583,11 @@ def _call_openai_compat(
     max_retries: int = 2,
     backoff_seconds: float = 2.0,
     on_token: Callable[[str, str], None] | None = None,
+    tools: list[dict[str, Any]] | None = None,
+    toolbox: Any = None,
+    max_tool_calls: int = 8,
+    supports_tools: bool | str = "auto",
+    tool_state: ToolCallState | None = None,
 ) -> tuple[str, int, int]:
     """Call any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, etc.)."""
     import httpx
@@ -360,6 +624,22 @@ def _call_openai_compat(
     effective_read = float(deadline if deadline is not None else timeout)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
+    # Phase 75 — tool-use is out of scope for the streaming path (see the
+    # matching note in _call_anthropic). Also skipped when a prior call in
+    # this heal session already proved the endpoint tool-incapable
+    # (tool_state.supported is False) — no repeated probe-and-degrade churn.
+    if (
+        tools and toolbox is not None and on_token is None
+        and not (tool_state is not None and tool_state.supported is False)
+    ):
+        return _call_openai_compat_with_tools(
+            messages, payload, headers, url,
+            tools=tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
+            supports_tools=supports_tools, tool_state=tool_state,
+            effective_read=effective_read, max_retries=max_retries,
+            backoff_seconds=backoff_seconds,
+        )
+
     # Streaming path — only when a live-token sink is supplied (the non-streaming
     # POST below stays the default so existing callers/tests are unaffected).
     if on_token is not None:
@@ -392,6 +672,161 @@ def _call_openai_compat(
         )
     usage = data.get("usage") or {}
     return text, int(usage.get("prompt_tokens", 0) or 0), int(usage.get("completion_tokens", 0) or 0)
+
+
+def _call_openai_compat_with_tools(
+    messages: list[dict[str, Any]],
+    base_payload: dict[str, Any],
+    headers: dict[str, str],
+    url: str,
+    *,
+    tools: list[dict[str, Any]],
+    toolbox: Any,
+    max_tool_calls: int,
+    supports_tools: bool | str,
+    tool_state: ToolCallState | None,
+    effective_read: float,
+    max_retries: int,
+    backoff_seconds: float,
+) -> tuple[str, int, int]:
+    """Multi-turn OpenAI-compatible tool-use conversation for ONE heal attempt.
+
+    ``supports_tools: "auto"`` probes on the FIRST call: if the endpoint
+    responds with a 4xx that looks tools-related (``_looks_like_tools_rejection``),
+    the SAME turn is retried once WITHOUT the ``tools`` field,
+    ``tool_state.supported`` is set False, and the caller degrades to the
+    plain oneshot path for the rest of THIS heal session (no repeated probing
+    — see the guard in ``_call_openai_compat``). This is the one sanctioned
+    degrade path — no ReAct/text-emulation fallback (explicitly out of scope).
+    """
+    import httpx
+
+    openai_tools = _openai_tools_payload(tools)
+    # base_payload["messages"] is [system_msg, *original_messages] — split
+    # once so each turn can rebuild [system_msg, *convo] as convo grows.
+    system_msgs = [m for m in base_payload["messages"] if m.get("role") == "system"]
+    convo = list(messages)
+    ti_total = to_total = 0
+    tools_withdrawn = False
+    probed = False
+
+    client = httpx.Client()
+    try:
+        return _run_openai_tool_loop(
+            client, url, headers, base_payload, system_msgs, convo,
+            openai_tools=openai_tools, toolbox=toolbox, max_tool_calls=max_tool_calls,
+            tool_state=tool_state, effective_read=effective_read,
+            max_retries=max_retries, backoff_seconds=backoff_seconds,
+            ti_total=ti_total, to_total=to_total,
+            tools_withdrawn=tools_withdrawn, probed=probed,
+        )
+    finally:
+        client.close()
+
+
+def _run_openai_tool_loop(
+    client: Any, url: str, headers: dict[str, str], base_payload: dict[str, Any],
+    system_msgs: list[dict[str, Any]], convo: list[dict[str, Any]],
+    *, openai_tools: list[dict[str, Any]], toolbox: Any, max_tool_calls: int,
+    tool_state: ToolCallState | None, effective_read: float,
+    max_retries: int, backoff_seconds: float,
+    ti_total: int, to_total: int, tools_withdrawn: bool, probed: bool,
+) -> tuple[str, int, int]:
+    import httpx
+
+    for _ in range(_TOOL_LOOP_HARD_CEILING):
+        payload = dict(base_payload)
+        payload["messages"] = system_msgs + convo
+        if not tools_withdrawn:
+            payload["tools"] = openai_tools
+            payload["tool_choice"] = "auto"
+
+        def _do_post(read_timeout: float, _payload=payload) -> httpx.Response:
+            return client.post(
+                url, json=_payload, headers=headers,
+                timeout=httpx.Timeout(
+                    connect=15.0, read=min(effective_read, read_timeout),
+                    write=30.0, pool=5.0,
+                ),
+            )
+
+        try:
+            response = _post_with_retry(
+                _do_post, total_seconds=effective_read,
+                max_retries=max_retries, backoff_seconds=backoff_seconds,
+            )
+        except Exception as exc:
+            if not probed and not tools_withdrawn and _looks_like_tools_rejection(exc):
+                # First-call capability probe failed — degrade for the rest
+                # of this heal session and retry THIS turn tools-free.
+                probed = True
+                tools_withdrawn = True
+                if tool_state is not None:
+                    tool_state.supported = False
+                    tool_state.degraded_reason = str(exc)
+                    if not tool_state.warned:
+                        tool_state.warned = True
+                        logger.warning(
+                            "[%s] endpoint rejected a tools-enabled request "
+                            "(%s) — degrading to the oneshot path for the "
+                            "rest of this heal.",
+                            _AGENT_TOOLS_UNSUPPORTED_RULE, exc,
+                        )
+                continue
+            raise
+        data = response.json()
+        probed = True
+
+        usage = data.get("usage") or {}
+        ti_total += int(usage.get("prompt_tokens", 0) or 0)
+        to_total += int(usage.get("completion_tokens", 0) or 0)
+
+        choice_msg = (data.get("choices") or [{}])[0].get("message") or {}
+        tool_calls = choice_msg.get("tool_calls") or []
+        if not tool_calls:
+            text = choice_msg.get("content")
+            if text is None:
+                raise AqueductError(
+                    "LLM returned null/empty content from OpenAI-compatible "
+                    "endpoint. The model may have refused the request, hit "
+                    "a content filter, or been interrupted mid-generation."
+                )
+            if tool_state is not None and tool_state.supported is None:
+                tool_state.supported = True
+            return text, ti_total, to_total
+
+        convo = [*convo, {"role": "assistant", "content": choice_msg.get("content"), "tool_calls": tool_calls}]
+        for tc in tool_calls:
+            if tool_state is not None:
+                tool_state.tool_calls_used += 1
+            fn = tc.get("function") or {}
+            name = fn.get("name", "")
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            _t0 = time.monotonic()
+            result = toolbox.call(name, args)
+            if tool_state is not None:
+                tool_state.tool_call_log.append({
+                    "name": name,
+                    "args_summary": _tool_args_summary(args),
+                    "duration_ms": int((time.monotonic() - _t0) * 1000),
+                    "result_preview": _tool_result_preview(result),
+                })
+            convo = [*convo, {
+                "role": "tool",
+                "tool_call_id": tc.get("id"),
+                "content": json.dumps(result, default=str),
+            }]
+
+        if tool_state is not None and tool_state.tool_calls_used >= max_tool_calls:
+            tools_withdrawn = True  # next turn is forced no-tools (final answer)
+
+    raise AqueductError(
+        f"OpenAI-compatible tool-use conversation exceeded "
+        f"{_TOOL_LOOP_HARD_CEILING} round-trips without a final answer."
+    )
 
 
 def _iter_sse_data(resp: Any):

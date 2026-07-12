@@ -457,6 +457,70 @@ assertions:
         assert result.violated_guardrails == ["replace_module_config"]
 
 
+# ── Phase 75 — agentic mode benchmark plumbing ──────────────────────────────
+
+class TestRunScenarioAgenticMode:
+    """Minimal benchmark plumbing (design item 6): agent.mode: agentic must be
+    threadable through run_scenario/run_benchmark for a live A/B, with a
+    ToolBox built from the scenario's own compiled Manifest. No live LLM
+    call — generate_agent_patch is mocked."""
+
+    def test_agentic_mode_builds_toolbox_and_completes(self, tmp_path):
+        sc = _write_scenario(tmp_path)
+        scenario = load_scenario(sc)
+
+        from aqueduct.patch.grammar import PatchSpec
+        patch_obj = PatchSpec(
+            patch_id="fix-agentic", rationale="test", root_cause="rc",
+            operations=[{"op": "set_module_config_key", "module_id": "src", "key": "path", "value": "y.csv"}],
+        )
+        mock_result = MagicMock()
+        mock_result.patch = patch_obj
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+
+        captured_kwargs = {}
+
+        def _fake_generate_agent_patch(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_result
+
+        with patch("aqueduct.agent.generate_agent_patch", side_effect=_fake_generate_agent_patch):
+            result = run_scenario(
+                scenario, model="claude-3", patches_dir=tmp_path / "patches",
+                mode="agentic", max_tool_calls=5,
+            )
+
+        assert isinstance(result, ScenarioResult)
+        assert captured_kwargs["mode"] == "agentic"
+        assert captured_kwargs["max_tool_calls"] == 5
+        # A ToolBox must have been built (not None) for an agentic-mode run.
+        from aqueduct.agent.toolbox import ToolBox
+        assert isinstance(captured_kwargs["toolbox"], ToolBox)
+        # Scenarios never start Spark — session-bound tools must degrade.
+        assert captured_kwargs["toolbox"].spark_session is None
+
+    def test_oneshot_mode_default_builds_no_toolbox(self, tmp_path):
+        sc = _write_scenario(tmp_path)
+        scenario = load_scenario(sc)
+
+        mock_result = MagicMock()
+        mock_result.patch = None
+        mock_result.attempts = 1
+        mock_result.reprompt_errors = []
+
+        captured_kwargs = {}
+
+        def _fake_generate_agent_patch(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_result
+
+        with patch("aqueduct.agent.generate_agent_patch", side_effect=_fake_generate_agent_patch):
+            run_scenario(scenario, model="claude-3", patches_dir=tmp_path / "patches")
+
+        assert captured_kwargs["mode"] == "oneshot"
+        assert captured_kwargs["toolbox"] is None
+
 
 # ── format_benchmark_table ────────────────────────────────────────────────────
 
@@ -1066,7 +1130,7 @@ class TestPhase35StructuredPropagation:
         )
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
-        ctx, _bp = _build_failure_ctx(scenario)
+        ctx, _bp, _manifest = _build_failure_ctx(scenario)
         assert ctx.error_class == "X"
         assert ctx.object_name == "y"
         assert ctx.suggested_columns == ("a", "b")
@@ -1078,7 +1142,7 @@ class TestPhase35StructuredPropagation:
 
         sc_path = _write_scenario(tmp_path, _scenario_with_structured(""))
         scenario = load_scenario(sc_path)
-        ctx, _bp = _build_failure_ctx(scenario)
+        ctx, _bp, _manifest = _build_failure_ctx(scenario)
         assert ctx.error_class is None
         assert ctx.root_exception is None
         assert ctx.sql_state is None
@@ -1094,7 +1158,7 @@ class TestPhase35StructuredPropagation:
         )
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
-        ctx, _bp = _build_failure_ctx(scenario)
+        ctx, _bp, _manifest = _build_failure_ctx(scenario)
         assert ctx.suggested_columns == ("single",)
 
     def test_structured_value_not_dict_coerced_to_empty(self, tmp_path):
@@ -1106,7 +1170,7 @@ class TestPhase35StructuredPropagation:
         sc_path = _write_scenario(tmp_path, body)
         scenario = load_scenario(sc_path)
         # Must not raise.
-        ctx, _bp = _build_failure_ctx(scenario)
+        ctx, _bp, _manifest = _build_failure_ctx(scenario)
         assert ctx.error_class is None
         assert ctx.root_exception is None
         assert ctx.sql_state is None

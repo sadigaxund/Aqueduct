@@ -91,6 +91,10 @@ class CascadeTierSchema(BaseModel):
     max_seconds: int | None = Field(default=None, ge=1)
     deep_loop: bool | None = None
     allow_defer: bool | None = None
+    # Phase 75 — per-tier tool-use capability override. None inherits the
+    # top-level `agent.supports_tools` (default "auto"). "auto" resolves True
+    # for `anthropic` without probing; `openai_compat` probes on first call.
+    supports_tools: Literal["auto", True, False] | None = None
 
 
 class AgentSchema(BaseModel):
@@ -190,6 +194,19 @@ class AgentSchema(BaseModel):
     # the Blueprint. None (default) inherits the engine `agent.regression_artifact`
     # (= False). See aqueduct.yml.template for the full rationale.
     regression_artifact: bool | None = None
+    # Phase 75 — oneshot (default) is today's single-turn prompt→PatchSpec
+    # loop unchanged. agentic lets the model call read-only diagnostic tools
+    # (aqueduct/agent/toolbox.py) before answering with a PatchSpec. None
+    # (default) inherits the engine `agent.mode` (= "oneshot").
+    mode: Literal["oneshot", "agentic"] | None = None
+    # Hard cap on tool calls per heal attempt in agentic mode. Exceeding it
+    # forces a final no-tools turn so the model must answer with a PatchSpec.
+    # None inherits the engine `agent.max_tool_calls` (default 8).
+    max_tool_calls: int | None = Field(default=None, ge=1)
+    # Per-blueprint tool-use capability override — see CascadeTierSchema
+    # above for the same field's per-tier meaning. None inherits the engine
+    # `agent.supports_tools` (default "auto").
+    supports_tools: Literal["auto", True, False] | None = None
 
 
 class ModuleSchema(BaseModel):

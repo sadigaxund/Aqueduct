@@ -140,7 +140,8 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
         __slots__ = ("provider", "base_url", "model", "api_key", "cascade",
                       "provider_options",
                       "timeout", "max_reprompts", "engine_prompt_context",
-                      "blueprint_prompt_context")
+                      "blueprint_prompt_context", "mode", "max_tool_calls",
+                      "supports_tools")
 
     bp = blueprint_agent
     eng = engine_agent
@@ -159,6 +160,16 @@ def resolve_agent_connection(engine_agent, blueprint_agent=None):
     r.cascade = _bp_cascade if _bp_cascade else _eng_cascade
     r.engine_prompt_context = eng.prompt_context
     r.blueprint_prompt_context = bp.prompt_context if bp else None
+    # Phase 75 — same `is not None` inheritance shape as regression_artifact:
+    # these are tri-state (None must mean "inherit"), so `or` merge is wrong
+    # (a blueprint explicitly setting supports_tools: false is falsy but valid).
+    r.mode = bp.mode if bp and bp.mode is not None else eng.mode
+    r.max_tool_calls = (
+        bp.max_tool_calls if bp and bp.max_tool_calls is not None else eng.max_tool_calls
+    )
+    r.supports_tools = (
+        bp.supports_tools if bp and bp.supports_tools is not None else eng.supports_tools
+    )
     return r
 
 

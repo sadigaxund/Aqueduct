@@ -74,6 +74,21 @@ _OP_LEVEL_FIELDS_AT_ROOT = (
 # Hard-coded minimal valid PatchSpec used as positive anchor in the escalated
 # reprompt template. Mirrors the example in the system prompt so the model
 # sees a consistent shape on both turns.
+# Phase 75 — agentic-mode addendum. Only rendered into the system prompt when
+# tools are actually offered this turn (see `tools_enabled` in
+# _build_system_prompt) — a oneshot-mode heal never sees this text, so its
+# prompt is byte-identical to pre-Phase-75 behaviour.
+_TOOLS_SECTION = """
+## Tools available (agentic mode)
+Before answering, you MAY call read-only diagnostic tools to investigate the
+failure further — recent runs, run detail, column lineage, patch history,
+probe signals, the full Blueprint YAML, a live source schema, or a small
+sample of real rows. None of them can modify anything; use as many turns as
+you need, but each tool call counts against a per-heal cap, after which you
+must answer with the PatchSpec JSON even without tools. When you have enough
+information, answer with ONLY the PatchSpec JSON — no prose, no tool call.
+"""
+
 _PATCH_SKELETON = """\
 {
   "patch_id": "fix-<short-slug>",
@@ -105,7 +120,7 @@ A blueprint has failed. You will receive a structured failure report describing:
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
 
 Your task: produce a PatchSpec JSON that fixes the root cause.
-
+{tools_section}
 ## PatchSpec Schema
 {patch_schema}
 
@@ -619,6 +634,7 @@ def _build_system_prompt(
     failure_ctx: Any = None,
     coaching: bool = True,
     obs_store: Any = None,
+    tools_enabled: bool = False,
 ) -> str:
     raw_schema = PatchSpec.model_json_schema()
 
@@ -721,6 +737,7 @@ def _build_system_prompt(
         previous_patches_section=prev_section,
         custom_context_section=custom_context_section,
         defer_rules=defer_rules,
+        tools_section=_TOOLS_SECTION if tools_enabled else "",
     )
 
 
@@ -734,6 +751,7 @@ def build_prompt(
     allow_defer: bool = False,
     coaching: bool = True,
     obs_store: Any = None,
+    tools_enabled: bool = False,
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -747,6 +765,9 @@ def build_prompt(
             rules in the prompt (Phase 41).
         obs_store: Observability store backing the patch_index — sources the
             coaching + history sections (Phase 53). None → those sections empty.
+        tools_enabled: When True, includes the agentic-mode tools addendum
+            (Phase 75) — matches what the model sees when ``agent.mode:
+            agentic`` and tool-use is resolved supported for this call.
 
     Returns:
         {"system": <system prompt>, "user": <user prompt>}
@@ -759,6 +780,7 @@ def build_prompt(
             failure_ctx=failure_ctx,
             coaching=coaching,
             obs_store=obs_store,
+            tools_enabled=tools_enabled,
         ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }

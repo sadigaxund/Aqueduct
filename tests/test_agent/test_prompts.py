@@ -41,7 +41,8 @@ def test_system_prompt_includes_schema_hint_field_not_found_rule(tmp_path: Path)
 def test_prompt_version_bumped_for_schema_hint_rule():
     # This rule change touches _SYSTEM_PROMPT_TEMPLATE body, so per the
     # PROMPT_VERSION bump policy (AGENTS.md) it must be reflected here.
-    assert PROMPT_VERSION == "1.6"
+    # Phase 75 bumped 1.6 -> 1.7 for the agentic-mode tools addendum.
+    assert PROMPT_VERSION == "1.7"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

@@ -550,6 +550,9 @@ class _SurveyorSetupResult:
     resolved_agent_engine_prompt_context: str | None
     resolved_agent_blueprint_prompt_context: str | None
     resolved_agent_cascade: object | None
+    resolved_agent_mode: str | None
+    resolved_agent_max_tool_calls: int | None
+    resolved_agent_supports_tools: object | None
     resolved_sandbox_master_url: str | None
     surveyor: object
     _obs_store: object
@@ -763,6 +766,11 @@ def _setup_surveyor(
     resolved_agent_engine_prompt_context = _rac.engine_prompt_context
     resolved_agent_blueprint_prompt_context = _rac.blueprint_prompt_context
     resolved_agent_cascade = _rac.cascade
+    # Phase 75 — agentic mode + tool-use capability, same engine←blueprint
+    # inheritance shape as every other resolved_agent_* field above.
+    resolved_agent_mode = _rac.mode
+    resolved_agent_max_tool_calls = _rac.max_tool_calls
+    resolved_agent_supports_tools = _rac.supports_tools
     resolved_sandbox_master_url = cfg.agent.sandbox_master_url
 
     # ── Self-healing reachability pre-check (upfront) ────────────────────────────
@@ -862,6 +870,9 @@ def _setup_surveyor(
         resolved_agent_engine_prompt_context=resolved_agent_engine_prompt_context,
         resolved_agent_blueprint_prompt_context=resolved_agent_blueprint_prompt_context,
         resolved_agent_cascade=resolved_agent_cascade,
+        resolved_agent_mode=resolved_agent_mode,
+        resolved_agent_max_tool_calls=resolved_agent_max_tool_calls,
+        resolved_agent_supports_tools=resolved_agent_supports_tools,
         resolved_sandbox_master_url=resolved_sandbox_master_url,
         surveyor=surveyor,
         _obs_store=_obs_store,
@@ -1236,6 +1247,9 @@ def run(
         resolved_agent_engine_prompt_context = _ssr.resolved_agent_engine_prompt_context
         resolved_agent_blueprint_prompt_context = _ssr.resolved_agent_blueprint_prompt_context
         resolved_agent_cascade = _ssr.resolved_agent_cascade
+        resolved_agent_mode = _ssr.resolved_agent_mode
+        resolved_agent_max_tool_calls = _ssr.resolved_agent_max_tool_calls
+        resolved_agent_supports_tools = _ssr.resolved_agent_supports_tools
         resolved_sandbox_master_url = _ssr.resolved_sandbox_master_url
         surveyor = _ssr.surveyor
         _obs_store = _ssr._obs_store
@@ -1853,6 +1867,25 @@ def run(
                     except Exception as exc:
                         return False, f"Validation error: {exc}"
 
+            # Phase 75 — agentic mode: build a per-heal ToolBox when this
+            # blueprint (or the engine default) opted in. `session` is the
+            # live SparkSession from this `run` invocation, so
+            # get_source_schema/sample_rows work for real here (unlike
+            # `aqueduct heal`'s from-store reconstruction, which has none).
+            _toolbox = None
+            if resolved_agent_mode == "agentic":
+                from aqueduct.agent.toolbox import ToolBox
+                _toolbox = ToolBox(
+                    manifest=manifest,
+                    failure_ctx=failure_ctx,
+                    obs_store=_obs_store,
+                    patch_store=_patch_store,
+                    base_dir=manifest.base_dir,
+                    spark_session=session if engine == "spark" else None,
+                    config_path=config_path,
+                    store_dir=store_dir,
+                )
+
             # Phase 45: a validated replay candidate substitutes the LLM call
             # entirely — downstream staging/validation/archival treats it like
             # any agent patch (with source="replay" + resolution="replayed").
@@ -1887,6 +1920,10 @@ def run(
                     retry_max_retries=cfg.agent.retry.max_retries,
                     retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                     obs_store=_obs_store,
+                    toolbox=_toolbox,
+                    mode=resolved_agent_mode,
+                    max_tool_calls=resolved_agent_max_tool_calls,
+                    supports_tools=resolved_agent_supports_tools,
                 )
             else:
                 agent_result = generate_agent_patch(
@@ -1915,6 +1952,10 @@ def run(
                         retry_max_retries=cfg.agent.retry.max_retries,
                         retry_backoff_seconds=cfg.agent.retry.backoff_seconds,
                         obs_store=_obs_store,
+                        toolbox=_toolbox,
+                        mode=resolved_agent_mode,
+                        max_tool_calls=resolved_agent_max_tool_calls,
+                        supports_tools=resolved_agent_supports_tools,
                     ),
                 )
             patch = agent_result.patch

@@ -609,6 +609,30 @@ agent:
   # Per-blueprint override available via the Blueprint agent: block.
   # regression_artifact: false
 
+  # ── Agentic heal (tool-use loop) ────────────────────────────────────────────
+  # oneshot (default) is today's single prompt → PatchSpec turn, unchanged.
+  # agentic lets the model call READ-ONLY diagnostic tools (recent runs, run
+  # detail, column lineage, patch history, probe signals, the full Blueprint
+  # YAML, a live source schema, a small row sample) before answering — see
+  # docs/specs.md §8.12. Per-blueprint override available via the Blueprint
+  # agent: block.
+  # mode: oneshot
+  #
+  # Hard cap on tool calls PER HEAL ATTEMPT (a reprompt turn gets its own
+  # fresh cap). Exceeding it forces the model to answer with a PatchSpec on a
+  # final no-tools turn. Per-blueprint override available.
+  # max_tool_calls: 8
+  #
+  # Tool-use capability for the LLM endpoint: auto | true | false.
+  #   auto (default) — anthropic resolves true with no probe (known
+  #     tool-capable); openai_compat probes on the first agentic-mode call —
+  #     a rejected/ignored tools request degrades to the oneshot path for the
+  #     rest of that heal session and emits one [agent_tools_unsupported]
+  #     warning (never a repeated probe, never a ReAct/text-emulation
+  #     fallback).
+  # Per-blueprint AND per-cascade-tier override available (cascade[].supports_tools).
+  # supports_tools: auto
+
   # ── Spend-cap on LLM healing attempts ──────────────────────────────────────
   # Surveyor counts rows written to observability.db `healing_outcomes` within the last
   # 60 minutes for the running blueprint. When the count is reached, the next

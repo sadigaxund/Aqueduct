@@ -62,6 +62,14 @@ def generate_cascade_patch(
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
     obs_store: Any = None,
+    # Phase 75 — agentic mode. `toolbox` is shared across every tier (same
+    # failure, same manifest — a fresh ToolBox per tier would just repeat
+    # identical construction). `supports_tools` is the top-level default;
+    # a tier's own `supports_tools` (on CascadeTierConfig) overrides it.
+    toolbox: Any = None,
+    mode: str = "oneshot",
+    max_tool_calls: int = 8,
+    supports_tools: bool | str = "auto",
     # ── Callbacks shared across all tiers ───────────────────────────
     apply_callback: Callable | None = None,
     validate_callback: Callable | None = None,
@@ -158,6 +166,12 @@ def generate_cascade_patch(
                 retry_max_retries=retry_max_retries,
                 retry_backoff_seconds=retry_backoff_seconds,
                 obs_store=obs_store,
+                toolbox=toolbox,
+                mode=mode,
+                max_tool_calls=max_tool_calls,
+                supports_tools=(
+                    tier.supports_tools if tier.supports_tools is not None else supports_tools
+                ),
             ),
         )
 

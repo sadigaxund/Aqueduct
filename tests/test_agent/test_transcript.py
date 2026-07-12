@@ -21,6 +21,7 @@ def _rec(**kwargs) -> AttemptRecord:
         "gate_that_rejected": None,
         "escalated": False,
         "model_cascade_position": None,
+        "tool_calls": 0,
     }
     defaults.update(kwargs)
     return AttemptRecord(**defaults)
@@ -98,6 +99,40 @@ class TestTranscriptWriterVerbose:
         assert "turn 5" in output
         assert "invalid patch (schema)" in output
         assert "stuck-detection escalated" in output
+
+
+class TestTranscriptWriterToolCalls:
+    """Phase 75 — agentic-mode tool-call rendering."""
+
+    def test_terse_shows_tool_call_count(self):
+        lines: list[str] = []
+        tw = TranscriptWriter(verbose=False, write=lines.append)
+        rec = _rec(attempt_num=1, tokens_in=100, tokens_out=50, tool_calls=3)
+        tw.write(rec, None, model="claude-x")
+        output = " ".join(lines)
+        assert "3 tool calls" in output
+
+    def test_terse_omits_tool_call_count_when_zero(self):
+        lines: list[str] = []
+        tw = TranscriptWriter(verbose=False, write=lines.append)
+        rec = _rec(attempt_num=1, tokens_in=100, tokens_out=50, tool_calls=0)
+        tw.write(rec, None, model="claude-x")
+        output = " ".join(lines)
+        assert "tool call" not in output
+
+    def test_verbose_renders_one_line_per_tool_call(self):
+        lines: list[str] = []
+        tw = TranscriptWriter(verbose=True, write=lines.append)
+        rec = _rec(attempt_num=1, tokens_in=100, tokens_out=50, tool_calls=2)
+        rec._aq_tool_calls = [
+            {"name": "read_blueprint", "args_summary": "", "duration_ms": 5, "result_preview": "{'available': True}"},
+            {"name": "list_runs", "args_summary": "limit=5", "duration_ms": 12, "result_preview": "[...]"},
+        ]
+        tw.write(rec, None, model="claude-x")
+        output = "\n".join(lines)
+        assert "tool: read_blueprint()" in output
+        assert "tool: list_runs(limit=5)" in output
+        assert "12ms" in output
 
 
 class TestTranscriptWriterSummary:

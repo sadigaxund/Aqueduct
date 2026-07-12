@@ -154,6 +154,21 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     escalated             BOOLEAN NOT NULL DEFAULT FALSE,
     stop_reason           VARCHAR,
     prompt_version        VARCHAR,
-    recorded_at           VARCHAR NOT NULL
+    recorded_at           VARCHAR NOT NULL,
+    -- Phase 75 — agentic mode. JSON array of {name, args_summary,
+    -- duration_ms, result_preview} for every tool call made during THIS
+    -- attempt (empty array in oneshot mode) — one JSON column rather than
+    -- new scalar columns per field, since the per-call shape is a list.
+    tool_calls_json       VARCHAR
 );
 """
+
+# Schema-evolution rule: `CREATE TABLE IF NOT EXISTS` is a no-op on an
+# existing table — it NEVER adds columns. A new column must therefore land
+# in BOTH places: the CREATE above (fresh installs) AND this migrations
+# tuple (existing installs), as an idempotent `ADD COLUMN IF NOT EXISTS`
+# (supported by DuckDB and Postgres alike). Executed right after the CREATE
+# on every Surveyor init.
+_HEAL_ATTEMPTS_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS tool_calls_json VARCHAR",
+)
