@@ -14,6 +14,19 @@ concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
 
+# ENVIRONMENT LOCK (Phase 78). Every job in this workflow runs on python 3.11 and
+# is a REPRODUCIBLE lane: it must install the same dependency tree today and in six
+# months, not whatever PyPI published this morning. pip reads $PIP_CONSTRAINT for
+# every `pip install` below, so no install line changes — the constraints file only
+# fixes the version of what the pyproject RANGES resolve to (the ranges stay ranges;
+# aqueduct-core is a published library and must not pin). Regenerate the file with
+# `bash scripts/lock.sh`.
+#
+# The unpinned CANARY lane lives in version-matrix.yml (`snippets`) and deliberately
+# does NOT set this — see the comments there before touching it.
+env:
+  PIP_CONSTRAINT: ${{ github.workspace }}/requirements/ci-py311.txt
+
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -66,6 +79,7 @@ jobs:
               - 'tests/test_depot/**'
             cli:
               - 'aqueduct/cli/**'
+              - 'aqueduct/dev/**'
               - 'tests/test_cli/**'
             config:
               - 'aqueduct/config.py'
@@ -100,11 +114,14 @@ jobs:
             capabilities:
               - 'aqueduct/executor/capabilities.py'
               - 'aqueduct/executor/capability_leaves.py'
+              - 'aqueduct/executor/capability_tooling.py'
               - 'aqueduct/executor/config_leaves.py'
               - 'aqueduct/executor/channel_ops.py'
               - 'aqueduct/executor/spark/capabilities.py'
+              - 'aqueduct/cli/dev.py'
               - 'aqueduct/compiler/capability_check.py'
               - 'aqueduct/config.py'
+              - 'aqueduct/errors.py'
               - 'aqueduct/doctor/**'
               - 'tests/test_capabilities/**'
 
@@ -296,8 +313,8 @@ jobs:
       - run: pip install -e ".[dev]"
       # Every capability leaf must carry an explicit per-engine verdict. This
       # fails if a new schema/config key landed without one (run
-      # `python scripts/capabilities.py sync`, then declare each verdict).
-      - run: python scripts/capabilities.py check
+      # `aqueduct dev capabilities sync`, then declare each verdict).
+      - run: aqueduct dev capabilities check
       - run: |
           set +e
           pytest tests/test_capabilities/ -m "not spark" --junitxml=results.xml

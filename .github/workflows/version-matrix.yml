@@ -9,9 +9,15 @@ env:
   RESULTS_DIR: /tmp/compat-results
 
 jobs:
+  # REPRODUCIBLE LANE (Phase 78): python 3.11 + the committed environment lock
+  # (requirements/ci-py311.txt, via $PIP_CONSTRAINT). Same dependency tree every
+  # run — this lane must not go red because of what PyPI published this morning.
+  # Contrast with the `snippets` canary below, which resolves fresh ON PURPOSE.
   unit-tests:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
+    env:
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements/ci-py311.txt
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -41,6 +47,12 @@ jobs:
   # without blocking `main`. `continue-on-error: true` makes a failure here
   # a red job annotation, not a workflow failure — see docs/compatibility.md
   # "Promised vs canary lanes".
+  #
+  # DO NOT SET $PIP_CONSTRAINT ON THIS JOB. The environment lock added in Phase 78
+  # (requirements/ci-py311.txt) pins every OTHER lane precisely so this one can stay
+  # free: resolving fresh is what makes the canary go red first when upstream drifts,
+  # and that early warning IS the feature. Constraining it would silently delete the
+  # only lane that watches upstream. It is unpinned on purpose, not by omission.
   snippets:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -62,6 +74,14 @@ jobs:
   # docs/compatibility.md. A failure here MUST fail this workflow (no
   # job-or-step-level continue-on-error) — contrast with the unpinned
   # `snippets` canary lane above, which is early-warning only.
+  #
+  # These lanes are REPRODUCIBLE, so they also install under the environment lock:
+  # $PIP_CONSTRAINT points at requirements/compat-py<matrix.python>.txt (one file
+  # per interpreter — a single lock cannot serve three pythons). Those files
+  # deliberately carry NO pyspark/delta-spark pin: the matrix owns that axis (the
+  # Legacy combo installs pyspark 3.5.8 explicitly, which a pinned constraint would
+  # collide with). Everything else is locked, so a promise lane cannot go red merely
+  # because a transitive dep released this morning — that job belongs to the canary.
   compat:
     if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
@@ -101,6 +121,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+    env:
+      # One lock per interpreter; see the PROMISE LANES comment above.
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements/compat-py${{ matrix.python }}.txt
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
