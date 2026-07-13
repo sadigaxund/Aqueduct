@@ -12,9 +12,22 @@ for the reference engine) with ONE EXPLICIT ROW PER LEAF — no default-verdict
 sweep exists anywhere in this module, deliberately. ``load_declaration()``
 hard-validates it at registration: an unknown leaf id, an illegal verdict, a
 malformed version specifier, a missing row, or a row still parked on the
-``UNDECLARED`` sentinel is an ``EnginePluginError`` (a build failure), never a
-silent pass. A third-party engine author therefore ships reviewable data, not
-Python, and cannot register a half-declared engine.
+``UNDECLARED`` sentinel is a ``CapabilityDeclarationError`` (a build failure),
+never a silent pass. A third-party engine author therefore ships reviewable
+data, not Python, and cannot register a half-declared engine.
+
+Two error types, two different states — kept apart on purpose (they were once
+conflated, and the resulting message told a developer who had just added a
+schema key to "reinstall the package", which fixes nothing):
+
+  - ``EnginePluginError`` — the ``aqueduct.engines`` entry point failed to
+    IMPORT. The plugin is broken or half-installed; an install-time problem,
+    and the message says reinstall.
+  - ``CapabilityDeclarationError`` — the declaration is incomplete or invalid.
+    A dev-time build failure; the message names the offending leaves and tells
+    you to run ``aqueduct dev capabilities sync`` and declare a verdict.
+
+Callers that need to tell them apart branch by TYPE, never by message text.
 
 That verbosity is the whole point. The previous design derived the engine's
 table from ``all_leaves_default(walker_leaves, SUPPORTED)`` — the SAME walker
@@ -62,7 +75,24 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from aqueduct.errors import EnginePluginError, UnknownEngineError
+from aqueduct.errors import CapabilityDeclarationError, EnginePluginError, UnknownEngineError
+
+# The ACTUAL fix for an incomplete/invalid declaration. Note what it is NOT:
+# reinstall advice. Reinstalling the package cannot fill in a verdict a human
+# has not decided yet — that advice belongs to EnginePluginError (a broken or
+# half-installed plugin), and gluing the two together is what made the old
+# message useless for the far more common first-party case.
+_SYNC_ADVICE = (
+    "Run `aqueduct dev capabilities sync` to append every missing leaf to each "
+    "engine's capabilities.yml as 'undeclared', then replace each with a real "
+    "verdict for that engine. `aqueduct dev capabilities check` reports the "
+    "remaining gaps without writing."
+)
+_SCAFFOLD_ADVICE = (
+    "Run `aqueduct dev capabilities scaffold --engine <name>` to generate a "
+    "complete declaration (every leaf present, every verdict 'undeclared'), then "
+    "replace each row with a real verdict."
+)
 
 
 class Support(StrEnum):
@@ -207,14 +237,21 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
     guarantee was therefore vacuously true. Two independent sources — the
     walker (code) and the YAML (data) — are what make it real.
 
-    Validated, all as ``EnginePluginError`` (an ``AqueductError``; an engine
-    author is a user of this seam, so never a bare builtin):
+    Validated, all as ``CapabilityDeclarationError`` (an ``AqueductError``; an
+    engine author is a user of this seam, so never a bare builtin):
       - the file parses and has ``engine:`` + ``leaves:``
       - every row's leaf id EXISTS in ``leaf_ids`` (no orphans/typos)
       - every row's verdict is a legal ``Support`` value
       - every ``requires`` specifier is well-formed
       - every leaf in ``leaf_ids`` HAS a row (no silent omission), and no row
         is left at the ``UNDECLARED`` sentinel
+
+    Deliberately NOT ``EnginePluginError``: that means "the entry point failed
+    to load — the plugin is broken or half-installed", whose fix is a reinstall.
+    An incomplete/invalid declaration is a DEV-time build failure (a developer
+    added a schema key; every engine now owes it a verdict) and reinstalling
+    fixes nothing. Two different states, two different types — callers branch by
+    TYPE, never by matching the message.
 
     Row shorthand: a bare string is the verdict (``channel.op.filter:
     supported``). A mapping carries the full ``Capability`` (``support:`` plus
@@ -226,44 +263,58 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
     try:
         raw = yaml.safe_load(p.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
-        raise EnginePluginError(
+        raise CapabilityDeclarationError(
             f"capability declaration {p} could not be read/parsed: "
-            f"{type(exc).__name__}: {exc}"
+            f"{type(exc).__name__}: {exc}",
+            path=str(p),
         ) from exc
 
     if not isinstance(raw, dict) or "engine" not in raw or "leaves" not in raw:
-        raise EnginePluginError(
+        raise CapabilityDeclarationError(
             f"capability declaration {p} must be a mapping with 'engine:' and "
-            "'leaves:' keys."
+            "'leaves:' keys. " + _SCAFFOLD_ADVICE,
+            path=str(p),
         )
     engine = raw["engine"]
     rows = raw["leaves"]
     if not isinstance(rows, dict):
-        raise EnginePluginError(f"capability declaration {p}: 'leaves:' must be a mapping.")
+        raise CapabilityDeclarationError(
+            f"capability declaration {p}: 'leaves:' must be a mapping.",
+            engine=str(engine),
+            path=str(p),
+        )
 
     table: dict[str, Capability] = {}
     undeclared: list[str] = []
     for leaf_id, row in rows.items():
         if leaf_id not in leaf_ids:
-            raise EnginePluginError(
+            raise CapabilityDeclarationError(
                 f"capability declaration {p} (engine {engine!r}) declares a verdict for "
                 f"{leaf_id!r}, which is not a real capability leaf. It was likely renamed "
-                f"or removed from the grammar/config schema. Run "
-                f"`python scripts/capabilities.py sync` to reconcile."
+                f"or removed from the grammar/config schema. " + _SYNC_ADVICE,
+                engine=str(engine),
+                path=str(p),
+                leaves=[leaf_id],
             )
         if isinstance(row, str):
             row = {"support": row}
         if not isinstance(row, dict) or "support" not in row:
-            raise EnginePluginError(
+            raise CapabilityDeclarationError(
                 f"capability declaration {p}: leaf {leaf_id!r} must be a verdict string or "
-                "a mapping with a 'support:' key."
+                "a mapping with a 'support:' key.",
+                engine=str(engine),
+                path=str(p),
+                leaves=[leaf_id],
             )
         try:
             support = Support(row["support"])
         except ValueError:
-            raise EnginePluginError(
+            raise CapabilityDeclarationError(
                 f"capability declaration {p}: leaf {leaf_id!r} has invalid verdict "
-                f"{row['support']!r}. Legal verdicts: {[s.value for s in Support]}."
+                f"{row['support']!r}. Legal verdicts: {[s.value for s in Support]}.",
+                engine=str(engine),
+                path=str(p),
+                leaves=[leaf_id],
             ) from None
         if support is Support.UNDECLARED:
             undeclared.append(leaf_id)
@@ -275,8 +326,11 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
                 hint=row.get("hint"),
             )
         except ValueError as exc:  # malformed `requires` specifier
-            raise EnginePluginError(
-                f"capability declaration {p}: leaf {leaf_id!r}: {exc}"
+            raise CapabilityDeclarationError(
+                f"capability declaration {p}: leaf {leaf_id!r}: {exc}",
+                engine=str(engine),
+                path=str(p),
+                leaves=[leaf_id],
             ) from exc
 
     missing = sorted(leaf_ids - set(rows))
@@ -288,13 +342,14 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
             parts.append(
                 f"{len(undeclared)} leaf/leaves are still UNDECLARED: {sorted(undeclared)[:10]}"
             )
-        raise EnginePluginError(
+        raise CapabilityDeclarationError(
             f"capability declaration {p} (engine {engine!r}) is incomplete — "
             + "; ".join(parts)
             + ". Every capability leaf needs an explicit per-engine verdict "
-            "(supported | unsupported | ignored_with_warning). Run "
-            "`python scripts/capabilities.py sync` to append the missing leaves as "
-            "'undeclared', then replace each with a real verdict."
+            "(supported | unsupported | ignored_with_warning). " + _SYNC_ADVICE,
+            engine=str(engine),
+            path=str(p),
+            leaves=sorted(set(missing) | set(undeclared)),
         )
 
     return EngineCapabilities(engine=engine, table=table)
@@ -349,6 +404,11 @@ def load_engines() -> None:
             broken or half-installed third-party engine plugin surfaces as a
             clean Aqueduct error naming the failing entry point and its cause,
             never as a bare ImportError escaping out of `aqueduct.yml` loading.
+        CapabilityDeclarationError: an engine module imported fine but its
+            capability declaration is incomplete/invalid. Propagates UNCHANGED
+            (see the re-raise below) — re-wrapping it as an EnginePluginError
+            would bury the leaf names under "reinstall the package", which is
+            exactly the conflation this split exists to undo.
     """
     global _engines_loaded
     if _engines_loaded:
@@ -358,6 +418,14 @@ def load_engines() -> None:
     for ep in importlib.metadata.entry_points(group=AQ_ENGINES_ENTRYPOINT_GROUP):
         try:
             ep.load()
+        except CapabilityDeclarationError:
+            # The module IMPORTED — it just declared its capabilities badly.
+            # That is a dev-time build failure with its own type and its own
+            # fix (`aqueduct dev capabilities sync`, then declare a verdict).
+            # Re-raise it unchanged: wrapping it in the EnginePluginError below
+            # would replace the offending leaf names with reinstall advice that
+            # cannot possibly fix it.
+            raise
         except Exception as exc:
             # Deliberately broad: an engine plugin is third-party code and can
             # fail to import for any reason (missing transitive dep, syntax

@@ -19,7 +19,7 @@ is still parked on the ``UNDECLARED`` sentinel. Spark saying "I support these
 261 things" explicitly is the point; "Spark supports everything by
 assumption" is what was broken.
 
-Adding a leaf: the build breaks, ``python scripts/capabilities.py sync``
+Adding a leaf: the build breaks, ``aqueduct dev capabilities sync``
 appends it to every engine's YAML as ``undeclared``, and a human replaces
 that with a real verdict. Do not reintroduce a default sweep to make the
 break go away — the break IS the feature.

@@ -7,7 +7,7 @@
 # walker (code) are two INDEPENDENT sources, so they can actually disagree.
 #
 # Workflow: add a schema/config key -> build breaks -> run
-#   python scripts/capabilities.py sync
+#   aqueduct dev capabilities sync
 # which appends the new leaf here as `undeclared` -> a human replaces that with
 # a real verdict for this engine.
 #

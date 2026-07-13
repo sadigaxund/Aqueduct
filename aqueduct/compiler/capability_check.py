@@ -20,7 +20,10 @@ An engine with no registered capability declaration fails closed:
 ``get_capabilities()`` raises ``UnknownEngineError`` (a ``CompileError``
 subclass) rather than degrading to an empty problem list — see
 ``aqueduct/executor/capabilities.py``. A plugin whose ``aqueduct.engines``
-entry point fails to import raises ``EnginePluginError`` from the same place.
+entry point fails to import raises ``EnginePluginError`` from the same place, and
+an engine whose ``capabilities.yml`` is incomplete/invalid raises
+``CapabilityDeclarationError`` (a different state with a different fix — see
+``aqueduct/errors.py``).
 """
 
 from __future__ import annotations
@@ -114,7 +117,11 @@ def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityP
             of the capability gate is to fail closed, and a future
             default-UNSUPPORTED engine (e.g. DuckDB) must not be waved through
             just because its declaration failed to load.
-        EnginePluginError: an ``aqueduct.engines`` entry point failed to import.
+        EnginePluginError: an ``aqueduct.engines`` entry point failed to import
+            (the plugin is broken or half-installed).
+        CapabilityDeclarationError: a registered engine's capability declaration
+            is incomplete or invalid (a dev-time build failure — run
+            ``aqueduct dev capabilities sync`` and declare a verdict).
     """
     caps: EngineCapabilities = get_capabilities(engine)
 

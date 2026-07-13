@@ -47,7 +47,11 @@ def check_capabilities(
 
     from aqueduct.compiler.capability_check import leaves_for_module
     from aqueduct.compiler.compiler import compile as _compile
-    from aqueduct.errors import UnknownEngineError
+    from aqueduct.errors import (
+        CapabilityDeclarationError,
+        EnginePluginError,
+        UnknownEngineError,
+    )
     from aqueduct.executor.capabilities import get_capabilities, version_satisfies
     from aqueduct.parser.parser import parse
 
@@ -80,6 +84,16 @@ def check_capabilities(
         # "blueprint did not parse/compile". UnknownEngineError subclasses
         # CompileError, so ordering matters — this clause must come first.
         return [_unregistered_engine_result(exc)]
+    except (CapabilityDeclarationError, EnginePluginError) as exc:
+        # Also caught by TYPE, ahead of the broad handler: an engine whose
+        # declaration is incomplete/invalid, or whose plugin failed to import,
+        # is not a blueprint problem either. Reporting it as "blueprint did not
+        # parse/compile" would send the user hunting through their YAML for a
+        # bug that is in the engine's capability table (or its install). The
+        # exception's own message already carries the right fix for its state.
+        return [CheckResult(
+            "capabilities", "fail", str(exc), _ms(t), group="validation",
+        )]
     except Exception as exc:  # noqa: BLE001 — doctor checks never raise
         return [CheckResult(
             "capabilities", "skip",

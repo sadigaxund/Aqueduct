@@ -49,12 +49,49 @@ class UnknownEngineError(CompileError):
 
 
 class EnginePluginError(AqueductError):
-    """Raised when an ``aqueduct.engines`` entry point fails to load (Phase 78).
+    """Raised when an ``aqueduct.engines`` entry point fails to LOAD (Phase 78).
 
     A broken or half-installed third-party engine plugin must surface as a clean
     Aqueduct error naming the entry point and its underlying cause, never as a
-    bare ``ImportError`` escaping out of ``aqueduct.yml`` loading.
+    bare ``ImportError`` escaping out of ``aqueduct.yml`` loading. This is an
+    INSTALL-time problem — the package is broken or half-present — so the message
+    ends with reinstall/uninstall advice.
+
+    It is deliberately NOT the error for "the engine's capability declaration is
+    incomplete or invalid" — that is ``CapabilityDeclarationError`` below. Those
+    are different states with different fixes, and reinstalling never fixes the
+    second one. Callers distinguish them by TYPE, never by message substring.
     """
+
+
+class CapabilityDeclarationError(AqueductError):
+    """Raised when an engine's capability declaration (``capabilities.yml``) is
+    incomplete or invalid (Phase 78).
+
+    A DEV-time build failure, not an install problem: a leaf has no row, a row is
+    still parked on the ``undeclared`` sentinel, a row names a leaf that does not
+    exist, a verdict is illegal, or a ``requires`` specifier is malformed. The
+    usual trigger is a first-party developer adding a schema/config key — every
+    registered engine now owes that new leaf a verdict. Reinstalling the package
+    fixes nothing; running ``aqueduct dev capabilities sync`` (or ``scaffold``
+    for a brand-new engine) and declaring a verdict per engine does.
+
+    ``leaves`` carries the offending leaf ids, so a caller can report them
+    without re-parsing the message.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        engine: str = "",
+        path: str = "",
+        leaves: list[str] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.engine = engine
+        self.path = path
+        self.leaves = list(leaves or [])
 
 
 class ConfigError(AqueductError):

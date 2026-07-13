@@ -151,10 +151,13 @@ class DeploymentConfig(BaseModel):
             load_engines,
         )
 
-        # EnginePluginError (a broken third-party engine plugin) is an
-        # AqueductError and deliberately propagates as-is — it names the
-        # failing entry point, which is more actionable than anything this
-        # layer could add.
+        # EnginePluginError (a broken third-party engine plugin) and
+        # CapabilityDeclarationError (an engine's capabilities.yml is
+        # incomplete/invalid) are both AqueductErrors and deliberately
+        # propagate as-is — each names its own culprit (the failing entry
+        # point / the undeclared leaves) and carries its own fix, which is
+        # more actionable than anything this layer could add. They are
+        # distinguished by TYPE, never by message text.
         load_engines()
         if self.engine not in CAPABILITY_REGISTRY:
             registered = sorted(CAPABILITY_REGISTRY)
