@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.16: Reference Document**
+**Version 2.18: Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1520,9 +1520,18 @@ Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
-## **10.9 Engine capability framework (2.16)**
+## **10.9 Engine capability framework (2.17) & the executor contract (2.18)**
 
-The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design, `deployment.engine` selects which engine actually runs a compiled Manifest (today, always `spark`). Not every engine is guaranteed to implement every grammar leaf, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced instead of a runtime surprise.
+The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design, `deployment.engine` selects which engine actually runs a compiled Manifest (today, `spark`). Not every engine is guaranteed to implement every grammar leaf, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced instead of a runtime surprise.
+
+**Registration.** An engine registers itself through the `aqueduct.engines` setuptools entry-point group (`pyproject.toml`'s `[project.entry-points."aqueduct.engines"]` table maps an engine name to a module, e.g. `spark = "aqueduct.executor.spark.engine"`). Importing that module registers the engine's capability declaration as a side effect. `aqueduct/executor/capabilities.py::load_engines()` resolves and imports every entry point in the group exactly once per process, and `get_capabilities()` calls it before looking an engine up. Core never imports an engine's package by name: a new engine (e.g. DuckDB) ships its own entry point and needs no edit to `aqueduct/compiler/`, `aqueduct/config.py`, or any other core module to become a valid `deployment.engine` value. `deployment.engine` is validated against the set of registered engines at config-load time, not a fixed list of literals.
+
+**Fail closed.** `get_capabilities()` raises `UnknownEngineError` (an `AqueductError`, subclassing `CompileError`) for an engine with no registered capability declaration: an unknown name, a typo, or an engine whose package/extra is not installed. The message names the engine and lists what is registered. The compile-time gate and the doctor capability check both let this propagate rather than degrading to an empty result: a misconfigured or unregistered engine is a loud, actionable failure, never a silently-skipped gate. Callers that must tell an unregistered engine apart from an ordinary compile failure do it by exception type, not by matching on the message.
+
+Two adjacent failure modes get their own diagnosis:
+
+- **No engines registered at all.** An empty registry means aqueduct's own entry points are invisible to `importlib.metadata`, in practice a stale install whose metadata predates the entry-point declaration. Since engine validation is fail-closed, that state would otherwise hard-fail every `aqueduct.yml` load with a misleading "Registered engines: []". The error says what it actually is: reinstall the package.
+- **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading.
 
 **Verdicts.** Every engine declares, for each grammar leaf, one of three verdicts:
 
@@ -1537,6 +1546,20 @@ The Blueprint grammar (module types, Channel ops, Egress write modes, feature fl
 **Doctor check.** `aqueduct doctor` validates the version constraint that compile cannot: `aqueduct/doctor/checks_io.py::check_capabilities` walks a compiled blueprint's used capabilities and, for each with a `requires` constraint, compares the installed dependency version (via `importlib.metadata`) against the declared specifier, reporting `ok`, `fail`, or `skip` (dependency not installed) per capability. See `docs/compatibility.md` for the Spark engine's currently-declared version constraints.
 
 **Anti-drift.** The full canonical set of grammar leaves is derived, not hand-maintained, by walking the actual grammar (`aqueduct/executor/capability_leaves.py`): module types and pydantic schema fields come from `aqueduct/parser/schema.py` introspection, Channel ops/Egress modes/Junction and Funnel fan modes come from named constants next to their dispatch code, and a small hand-curated set covers cross-cutting feature flags and the handful of formats with a dedicated code path. A closure test (`tests/test_capabilities/test_closure.py`) fails the build if any derived leaf lacks an explicit verdict in a registered engine's table, or if a table declares a verdict for a leaf that no longer exists.
+
+**`ExecutorProtocol` — the execution contract.** Registering a capability declaration says what an engine supports; `ExecutorProtocol` (`aqueduct/executor/protocol.py`) says how core actually talks to it. Every engine registers exactly one `ExecutorProtocol` instance, alongside its `EngineCapabilities`, as an import side effect of its `aqueduct.engines` entry-point module. The contract has three parts:
+
+- `execute`: `(manifest, ...) -> ExecutionResult`. A compiled `Manifest` in, a frozen `ExecutionResult` out; engine-specific optional kwargs (session handle, checkpoint root, parallelism, sampling, ...) are a per-engine extension point, not part of the uniform contract.
+- `extract_error`: an engine exception (or `None`) mapped to a `FailureContext` field dict (`error_class`, `root_exception`, `sql_state`, `suggested_columns`, `object_name`). Required — an engine that omits it cannot register. Without an extractor, `FailureContext.error_class`/`root_exception` stay silently `None` for every failure on that engine and the healing LLM loses the structured root-cause block.
+- `prompt_rules`: a `PromptRules` pack — the engine-specific half of the healing system prompt: `persona` (the prompt's opening line), `root_cause_note` (what the engine's structured root-cause block contains, the prose counterpart of `extract_error`'s output), `rules` (the engine's rule bullets: its error idioms, its engine-flavored advice, its API and config references), and `defer` (a `DeferRules`: the engine's slice of the defer-to-human section, which names the infrastructure it can actually fail on and the languages its UDFs are written in). All are required except `DeferRules.extra_bullets`, where "this engine has no extra defer category" is a complete answer.
+
+The healing system prompt is **composed**, not monolithic. The engine-independent scaffold (the PatchSpec schema, the op-selection table, the provenance rules, the output contract, the generic defer categories, the coaching and history sections) lives in the agent layer and holds no engine-specific text. At prompt-build time the agent pulls the target engine's `PromptRules` pack through this registry and renders it into the scaffold's engine slots. The agent layer imports no engine specifics, and the engine layer imports nothing from the agent layer. A new engine therefore ships its own healing persona and rules with its executor: it cannot inherit another engine's advice by accident, and it cannot register with none at all.
+
+Note that the scaffold is not one string: parts of the prompt (the defer-to-human section) are assembled at request time and only shown under certain settings. The anti-bleed guard therefore greps the **composed prompt** for a non-Spark engine across every combination of those settings, not the source constants. A guard that scans one template constant misses every fragment built around it.
+
+Both requirements are enforced structurally, not by convention: `ExecutorProtocol.__post_init__` raises `EnginePluginError` at construction time if `execute`, `extract_error`, or the `PromptRules` pack is missing or incomplete. `get_executor(engine)` (`aqueduct/executor/__init__.py`) and `get_protocol(engine)` (`aqueduct/executor/protocol.py`) resolve through the same `load_engines()`-backed registry `get_capabilities()` uses, and raise the same `UnknownEngineError` for an unregistered engine. Every failure on this seam is an `AqueductError`, never a bare builtin.
+
+The Spark engine's `ExecutorProtocol` (`aqueduct/executor/spark/engine.py`) wires today's existing behavior through the seam rather than reimplementing it: `extract_error` delegates to the existing structured Spark/Py4J error extraction, and its `PromptRules` pack (`aqueduct/executor/spark/prompt_rules.py`) carries the Spark persona and rules verbatim from the pre-split prompt, so the composed Spark prompt is unchanged. Constructing the protocol object never imports `pyspark` — only calling `execute(...)` does, deferred to call time.
 
 ---
 

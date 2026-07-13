@@ -114,9 +114,9 @@ The multi-model cascade tags every in-memory `AttemptRecord` with its 0-based ti
 
 ## Flink execution engine
 
-The `executor/__init__.py` factory has a `flink` stub that raises `NotImplementedError`. Flink support is not actively planned, the engine is designed for Spark batch pipelines.
+The engine portfolio is Spark and DuckDB. `deployment.engine` is validated against the engines actually registered through the `aqueduct.engines` entry-point group (`aqueduct/executor/capabilities.py`), so `engine: flink` fails at config-load with a `ConfigError` listing the registered engines rather than a special-cased stub.
 
-**Status:** Deferred indefinitely.
+**Status:** Out of scope. A Flink engine would be a separate project taken up on demand, not a planned addition.
 
 ---
 

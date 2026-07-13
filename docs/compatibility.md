@@ -90,4 +90,4 @@ Python ecosystem doesn't lock by default: that's a `pip` reality, not an Aqueduc
 - **Spark 3.x**: tested via the Legacy CI combo (PySpark 3.5.8 + Delta 3.3.0) but not officially supported. The `pyproject.toml` pin remains `>=4.0,<5.0`; the Legacy lane is a compatibility signal only.
 - **Python 3.10 and earlier**: drops dataclass `kw_only`, several typing features we use.
 - **Python 3.14**: not yet released; will be tested when it stabilises.
-- **Flink executor**: aspirational, tracked in `TODOs.md` Deferred block.
+- **Flink executor**: out of scope. The engine portfolio is Spark and DuckDB; Flink would be a separate project taken up on demand, not a planned addition.
