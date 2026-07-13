@@ -47,13 +47,39 @@ def check_capabilities(
 
     from aqueduct.compiler.capability_check import leaves_for_module
     from aqueduct.compiler.compiler import compile as _compile
+    from aqueduct.errors import UnknownEngineError
     from aqueduct.executor.capabilities import get_capabilities, version_satisfies
     from aqueduct.parser.parser import parse
 
     t = time.monotonic()
+
+    def _unregistered_engine_result(exc: UnknownEngineError) -> CheckResult:
+        # Two distinct diagnoses, told apart by TYPE + the exception's own
+        # `engines` list — never by matching on the message text:
+        #   - empty registry  -> aqueduct's entry points are invisible (stale
+        #     install); the exception message already carries the reinstall hint.
+        #   - non-empty       -> the engine name itself is unknown (typo, or the
+        #     engine's package/extra is not installed).
+        if exc.no_engines_registered:
+            return CheckResult(
+                "capabilities", "fail", str(exc), _ms(t), group="validation",
+            )
+        return CheckResult(
+            "capabilities", "fail",
+            f"engine {engine!r} is not registered — its package/extra is not "
+            f"installed. Registered engines: {exc.engines}",
+            _ms(t), group="validation",
+        )
+
     try:
         bp = parse(str(blueprint_path), cli_overrides=context_override or {})
         manifest = _compile(bp, blueprint_path=blueprint_path, engine=engine)
+    except UnknownEngineError as exc:
+        # Caught by TYPE, before the broader handlers below: an unregistered
+        # engine is NOT a blueprint problem, so it must not be reported as
+        # "blueprint did not parse/compile". UnknownEngineError subclasses
+        # CompileError, so ordering matters — this clause must come first.
+        return [_unregistered_engine_result(exc)]
     except Exception as exc:  # noqa: BLE001 — doctor checks never raise
         return [CheckResult(
             "capabilities", "skip",
@@ -64,11 +90,13 @@ def check_capabilities(
 
     try:
         caps = get_capabilities(engine)
-    except KeyError:
-        return [CheckResult(
-            "capabilities", "skip", f"no capability declaration registered for engine {engine!r}",
-            _ms(t), group="validation",
-        )]
+    except UnknownEngineError as exc:
+        # With registration going through the aqueduct.engines entry-point
+        # group, this is unreachable for a shipped engine (the compile()
+        # call above would already have raised for an unregistered engine) —
+        # kept as a defensive fail rather than a silent skip in case a
+        # future caller invokes this check without going through compile().
+        return [_unregistered_engine_result(exc)]
 
     results: list[CheckResult] = []
     version_cache: dict[str, str | None] = {}

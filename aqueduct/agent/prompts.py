@@ -109,14 +109,30 @@ _PATCH_SKELETON = """\
 
 # ── Template strings ─────────────────────────────────────────────────────
 
+# Phase 78 Step 2 — this template is the ENGINE-INDEPENDENT scaffold. Anything
+# that names an execution engine, its exception vocabulary, or engine-flavored
+# advice is supplied by the engine through
+# `ExecutorProtocol.prompt_rules` (a `PromptRules` pack — see
+# `aqueduct/executor/protocol.py`; Spark's pack lives in
+# `aqueduct/executor/spark/prompt_rules.py`) and lands in the three
+# `{engine_*}` slots below. The agent layer imports no engine specifics; the
+# executor layer imports nothing from the agent layer.
+#
+# The slots are:
+#   {engine_persona}          — the opening line
+#   {engine_root_cause_note}  — what the engine's structured root-cause block holds
+#   {engine_rules}            — engine-specific bullets inside "Other rules"
+#
+# Slot VALUES are `.format()` arguments, not part of this format string, so
+# they carry literal braces (no `{{`/`}}` doubling) — unlike the text here.
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are an expert Apache Spark blueprint repair agent for the Aqueduct blueprint engine.
+{engine_persona}
 
 A blueprint has failed. You will receive a structured failure report describing:
 - What the blueprint does (human-readable summary)
 - The failing module and its resolved configuration
 - A "Value provenance" section showing exactly where each config value comes from in the Blueprint source
-- The error message and either a structured root-cause block (Spark error class + offending column + suggestions) OR a raw stack trace if structured extraction was unavailable
+- The error message and either a structured root-cause block ({engine_root_cause_note}) OR a raw stack trace if structured extraction was unavailable
 - Previous patch attempts (if any) — do NOT repeat a fix that was already tried
 
 Your task: produce a PatchSpec JSON that fixes the root cause.
@@ -152,10 +168,7 @@ The provenance section tells you the `source_type` of each config value. Pick th
 - Use only module IDs and field names that appear in the failure report.
 - Prefer the simplest fix: correct a config value before adding new modules.
 - SQL query wrong → `set_module_config_key` with key="query".
-- SQL Channel queries reference upstream module IDs as Spark temp view names (e.g. `FROM yellow_process__ingress`). NEVER use `${{ctx.*}}` inside a SQL query string.
-- If a Channel fails with unexpected column names (e.g. AnalysisException: cannot resolve column), check whether an upstream Ingress has the wrong `format` — Spark can silently misread Parquet as CSV. Fix the Ingress `format`, not the Channel SQL.
-- If `error_class` is `PREDICTED_SCHEMA_DRIFT`, the upstream SOURCE physically changed (a column was added, dropped, or renamed) — the format/header rule above does NOT apply. Do NOT change the Ingress `format`, `header`, or `options`; the provenance shows these are intentional authored values, and a real source change is not fixed by reinterpreting the file. Instead update the downstream Channel SQL / `schema_hint` to match the new column set, or make NO change if a dropped column is genuinely gone and unused.
-- `schema_hint type mismatch on 'X': expected 'A', actual 'B'` — read this literally: `expected` is the schema_hint value ALREADY declared in the Blueprint for field X (re-proposing it is a no-op, not a fix); `actual` is the type Spark inferred from the real data. The fix is `set_module_config_key` (or the appropriate provenance-driven op) changing the schema_hint for X to `actual` — NOT re-setting it to `expected`. If `actual` is clearly wrong for the field's domain (e.g. a numeric id column inferred as `string` because of a corrupt row), this is a genuine data problem outside Blueprint control — defer to a human if deferral is permitted (see the deferral rules), otherwise state that in `root_cause` and make no change.
+{engine_rules}
 - `schema_hint field 'X' not found in source schema. Available columns: [...]` — the message lists every real column in the source. The fix is aligning the schema_hint key to a real column from that list (a rename) or removing the stale entry from schema_hint — never re-typing or re-declaring the missing key under its old name.
 
 ## Required output — complete example
@@ -635,7 +648,27 @@ def _build_system_prompt(
     coaching: bool = True,
     obs_store: Any = None,
     tools_enabled: bool = False,
+    engine: str = "spark",
 ) -> str:
+    """Compose the healing system prompt: generic scaffold + the engine's pack.
+
+    Args:
+        engine: The execution engine this heal targets (``deployment.engine``).
+            Its ``PromptRules`` pack is pulled through the ``aqueduct.engines``
+            registry (Phase 78 Step 2) and rendered into the scaffold's
+            ``{engine_*}`` slots. Defaults to ``"spark"``, matching
+            ``aqueduct.executor.get_executor`` / ``compile()``.
+
+    Raises:
+        UnknownEngineError: ``engine`` has no registered ``ExecutorProtocol``.
+    """
+    # Imported here (not at module scope) so `import aqueduct.agent` does not
+    # eagerly resolve the engine entry-point group — the agent layer depends on
+    # the executor's protocol seam, never on a specific engine's package.
+    from aqueduct.executor.protocol import get_protocol
+
+    engine_rules_pack = get_protocol(engine).prompt_rules
+
     raw_schema = PatchSpec.model_json_schema()
 
     # Phase 41: when allow_defer is False, hide DeferToHumanOp from the
@@ -664,18 +697,27 @@ def _build_system_prompt(
 
     # Phase 41: defer rules — only shown when allow_defer is True so the
     # model doesn't see an easy way out on normal heals.
+    #
+    # Phase 78 Step 2: this section is assembled HERE, at runtime, not inside
+    # _SYSTEM_PROMPT_TEMPLATE — so a guard that only greps the template constant
+    # cannot see it. The engine-flavored parts (which infrastructure an engine
+    # can actually fail on, which languages its UDFs are written in, and any
+    # whole category that exists only for it) come from the engine's
+    # DeferRules; the categories themselves are engine-independent and stay
+    # here. See tests/test_agent/test_prompt_composition.py, which greps the
+    # COMPOSED prompt for a non-Spark engine.
     defer_rules = ""
     if allow_defer:
+        _defer = engine_rules_pack.defer
         defer_rules = (
             "\n\n### When to defer to a human\n"
             "Use `defer_to_human` when NO PatchSpec operation can fix the root cause:\n"
             "- **Infrastructure failures**: checkpoint corruption, S3 consistency, "
-            "Hive metastore locks, cluster config — these are not Blueprint-level fixes.\n"
+            f"{_defer.infra_examples}, cluster config — these are not Blueprint-level fixes.\n"
             "- **Upstream schema changes** requiring human judgment: ambiguous column "
             "renames, new required columns with unclear defaults.\n"
-            "- **UDF body bugs**: PatchSpec cannot modify Python/Scala UDF code.\n"
-            "- **Error class has no module-config knob**: the failure is in Spark "
-            "internals, not Blueprint fields.\n"
+            f"- **UDF body bugs**: PatchSpec cannot modify {_defer.udf_languages} UDF code.\n"
+            f"{_defer.extra_bullets}"
             "\n"
             "When deferring, include:\n"
             "- `diagnosis`: detailed explanation of why this cannot be patched automatically\n"
@@ -738,6 +780,9 @@ def _build_system_prompt(
         custom_context_section=custom_context_section,
         defer_rules=defer_rules,
         tools_section=_TOOLS_SECTION if tools_enabled else "",
+        engine_persona=engine_rules_pack.persona,
+        engine_root_cause_note=engine_rules_pack.root_cause_note,
+        engine_rules=engine_rules_pack.rules,
     )
 
 
@@ -752,6 +797,7 @@ def build_prompt(
     coaching: bool = True,
     obs_store: Any = None,
     tools_enabled: bool = False,
+    engine: str = "spark",
 ) -> dict[str, str]:
     """Return the system and user prompts without calling the LLM.
 
@@ -768,6 +814,9 @@ def build_prompt(
         tools_enabled: When True, includes the agentic-mode tools addendum
             (Phase 75) — matches what the model sees when ``agent.mode:
             agentic`` and tool-use is resolved supported for this call.
+        engine: The execution engine this heal targets — selects the
+            ``PromptRules`` pack composed into the system prompt (Phase 78
+            Step 2).
 
     Returns:
         {"system": <system prompt>, "user": <user prompt>}
@@ -781,6 +830,7 @@ def build_prompt(
             coaching=coaching,
             obs_store=obs_store,
             tools_enabled=tools_enabled,
+            engine=engine,
         ),
         "user": _build_user_prompt(failure_ctx, patches_dir, guardrails=guardrails),
     }

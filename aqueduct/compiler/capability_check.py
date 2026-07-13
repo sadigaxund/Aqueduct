@@ -15,6 +15,12 @@ are actually installed at run time. That check belongs to
 Since Spark declares default-ALLOW for (almost) the entire grammar today
 (``aqueduct/executor/spark/capabilities.py``), this gate is a no-op for every
 existing blueprint — see ``tests/test_capabilities/test_gate_noop.py``.
+
+An engine with no registered capability declaration fails closed:
+``get_capabilities()`` raises ``UnknownEngineError`` (a ``CompileError``
+subclass) rather than degrading to an empty problem list — see
+``aqueduct/executor/capabilities.py``. A plugin whose ``aqueduct.engines``
+entry point fails to import raises ``EnginePluginError`` from the same place.
 """
 
 from __future__ import annotations
@@ -99,16 +105,18 @@ def leaves_for_module(module: Any) -> list[str]:
 def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityProblem]:
     """Return every capability problem (UNSUPPORTED or IGNORED_WITH_WARNING).
 
-    Never raises for a missing engine registration — callers that want a
-    hard failure on an unknown engine should check ``get_capabilities``
-    themselves; this function degrades to "no problems found" so a
-    misconfigured/plugin engine name never blocks compilation with an
-    unrelated error.
+    Raises:
+        UnknownEngineError: ``engine`` has no registered capability declaration
+            (see ``aqueduct.executor.capabilities.get_capabilities``). A
+            ``CompileError`` subclass, so ``compile()``'s existing error
+            contract is unchanged. An unknown/misspelled engine is a hard
+            compile-time failure, not a silently-empty result — the whole point
+            of the capability gate is to fail closed, and a future
+            default-UNSUPPORTED engine (e.g. DuckDB) must not be waved through
+            just because its declaration failed to load.
+        EnginePluginError: an ``aqueduct.engines`` entry point failed to import.
     """
-    try:
-        caps: EngineCapabilities = get_capabilities(engine)
-    except KeyError:
-        return []
+    caps: EngineCapabilities = get_capabilities(engine)
 
     problems: list[CapabilityProblem] = []
     for module in getattr(manifest, "modules", ()):

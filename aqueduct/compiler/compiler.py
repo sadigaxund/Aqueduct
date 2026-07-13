@@ -620,7 +620,11 @@ def compile(  # noqa: A001
     # checked here (compile-time cannot know the installed dependency
     # versions) — that is `aqueduct/doctor/`'s job. Spark declares
     # default-ALLOW for the entire grammar today, so this is a no-op for
-    # every existing blueprint.
+    # every existing blueprint. `check_capabilities` itself raises
+    # `UnknownEngineError` (a CompileError subclass) for an unregistered
+    # `engine` — fail-closed, see
+    # `aqueduct/executor/capabilities.py::get_capabilities` — so no separate
+    # try/except is needed here.
     _cap_problems = check_capabilities(manifest, engine=engine)
     _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
     if _unsupported:

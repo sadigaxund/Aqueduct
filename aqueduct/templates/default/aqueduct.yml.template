@@ -22,7 +22,8 @@ aqueduct_config: "1.0"
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 deployment:
-  # engine: execution engine. Currently supported: spark.
+  # engine: execution engine. Validated against the engines registered
+  # through the aqueduct.engines entry-point group — currently: spark.
   engine: spark
 
   # target: deployment target. Validated against master_url at config-load;

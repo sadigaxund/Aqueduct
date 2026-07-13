@@ -183,6 +183,9 @@ class _ProviderConfig:
     # (or coaching=False) falls back to the chronological patch-history section.
     failure_ctx: Any = None
     coaching: bool = True
+    # Phase 78 Step 2 — target execution engine; selects the PromptRules pack
+    # composed into the healing system prompt.
+    engine: str = "spark"
     # Phase 53 — observability store backing the patch_index, used by the system
     # prompt's coaching + history sections (replaces the patches/ dir scan).
     obs_store: Any = None
@@ -290,6 +293,7 @@ def _call_agent(
         coaching=cfg.coaching,
         obs_store=cfg.obs_store,
         tools_enabled=tools_enabled,
+        engine=cfg.engine,
     )
 
     # Scrub registered @aq.secret() values from anything leaving the process.

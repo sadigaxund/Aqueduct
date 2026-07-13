@@ -144,6 +144,9 @@ def heal(
     resolved_timeout = eng.timeout
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
+    # Phase 78 Step 2 — the execution engine this heal targets; selects the
+    # engine's PromptRules pack composed into the healing system prompt.
+    resolved_engine = getattr(cfg.deployment, "engine", "spark") or "spark"
     # Phase 75 — `aqueduct heal` has no Blueprint-level agent: block to merge
     # (it works from the observability store's failure_contexts, not a live
     # Blueprint parse), so mode/tool-use resolve from the engine default only.
@@ -252,7 +255,10 @@ def heal(
         _guardrails_for_prompt = None
 
     if print_prompt:
-        prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context, guardrails=_guardrails_for_prompt)
+        prompt = build_prompt(
+            failure_ctx, patches_path, resolved_engine_prompt_context,
+            guardrails=_guardrails_for_prompt, engine=resolved_engine,
+        )
         _print_prompt(prompt, print_prompt)
         return
 
@@ -331,6 +337,7 @@ def heal(
             failure_ctx=failure_ctx,
             model=resolved_model,
             patches_dir=patches_path,
+            engine=resolved_engine,
             provider=resolved_provider or "anthropic",
             base_url=resolved_base_url,
             api_key=resolved_api_key,

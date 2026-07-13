@@ -116,6 +116,13 @@ Changelog = "https://github.com/sadigaxund/Aqueduct/blob/main/CHANGELOG.md"
 [project.scripts]
 aqueduct = "aqueduct.cli:cli"
 
+# Phase 78 Step 1 — engine registration seam. Each execution engine registers
+# its capability declaration (and, in a future step, its ExecutorProtocol)
+# by declaring itself here — core never imports an engine module by name.
+# aqueduct.executor.capabilities.load_engines() resolves this group.
+[project.entry-points."aqueduct.engines"]
+spark = "aqueduct.executor.spark.engine"
+
 [tool.hatch.build.targets.wheel]
 packages = ["aqueduct"]
 

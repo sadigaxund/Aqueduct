@@ -8,25 +8,28 @@ without a Spark installation.
 
 from __future__ import annotations
 
-_SUPPORTED_ENGINES = ("spark",)
-
 
 def get_executor(engine: str = "spark"):
-    """Return the execute() function for the requested engine.
+    """Return the ``execute()`` function for the requested engine.
+
+    Phase 78 Step 2: resolves through the ``aqueduct.engines`` entry-point
+    registry + ``ExecutorProtocol`` (``aqueduct/executor/protocol.py``)
+    instead of a hardcoded Spark-only branch — the same fail-closed
+    registration seam ``aqueduct.executor.capabilities.get_capabilities()``
+    already uses, so a future engine (e.g. DuckDB) needs no edit here.
 
     Args:
-        engine: Execution engine name.  Currently only ``"spark"`` is supported.
+        engine: Execution engine name — must be registered via the
+            ``aqueduct.engines`` entry-point group.
 
     Raises:
-        ValueError: Engine is unknown.
+        UnknownEngineError: Engine has no registered ``ExecutorProtocol``
+            (unknown name, or nothing registered at all — see
+            ``aqueduct.executor.protocol.get_protocol``).
     """
-    if engine == "spark":
-        from aqueduct.executor.spark.executor import execute as spark_execute
-        return spark_execute
-    raise ValueError(
-        f"Unknown execution engine: {engine!r}. "
-        f"Supported: {', '.join(_SUPPORTED_ENGINES)}"
-    )
+    from aqueduct.executor.protocol import get_protocol
+
+    return get_protocol(engine).execute
 
 
 def __getattr__(name: str):

@@ -143,6 +143,9 @@ class AgentRunConfig:
     on_token: Callable[[str, str], None] | None = None  # live SSE sink: (kind, text)
     model_cascade_position: int | None = None
     memory_coaching: bool = True
+    # Phase 78 Step 2 — the execution engine this heal targets. Selects the
+    # engine's PromptRules pack composed into the healing system prompt.
+    engine: str = "spark"
     retry_max_retries: int = 2
     retry_backoff_seconds: float = 2.0
     obs_store: ObservabilityStore | None = None
@@ -404,6 +407,7 @@ def generate_agent_patch(
     on_token: Callable[[str, str], None] | None = None,
     model_cascade_position: int | None = None,
     memory_coaching: bool = True,
+    engine: str = "spark",
     retry_max_retries: int = 2,
     retry_backoff_seconds: float = 2.0,
     obs_store: ObservabilityStore | None = None,
@@ -455,6 +459,7 @@ def generate_agent_patch(
         on_token = agent_cfg.on_token
         model_cascade_position = agent_cfg.model_cascade_position
         memory_coaching = agent_cfg.memory_coaching
+        engine = agent_cfg.engine
         retry_max_retries = agent_cfg.retry_max_retries
         retry_backoff_seconds = agent_cfg.retry_backoff_seconds
         obs_store = agent_cfg.obs_store
@@ -501,6 +506,7 @@ def generate_agent_patch(
         allow_defer=allow_defer,
         failure_ctx=failure_ctx,
         coaching=memory_coaching,
+        engine=engine,
         retry_max_retries=retry_max_retries,
         retry_backoff_seconds=retry_backoff_seconds,
         obs_store=obs_store,

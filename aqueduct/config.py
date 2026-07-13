@@ -98,9 +98,13 @@ class DatabricksDeployConfig(BaseModel):
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    engine: Literal["spark", "flink"] = Field(
+    engine: str = Field(
         default="spark",
-        description="Execution engine.  Currently supported: spark.  Planned: flink.",
+        description=(
+            "Execution engine. Validated against the engines registered "
+            "through the aqueduct.engines entry-point group (see "
+            "docs/specs.md §10.9) — today just spark."
+        ),
     )
     target: Literal[
         "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
@@ -119,17 +123,52 @@ class DeploymentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_target_master_url(self) -> DeploymentConfig:
-        """Enforce target ↔ master_url consistency for in-cluster Spark targets.
+        """Validate ``engine`` and enforce target ↔ master_url consistency.
+
+        ``engine`` is checked against the engines actually registered through
+        the ``aqueduct.engines`` entry-point group (Phase 78 Step 1,
+        ``aqueduct/executor/capabilities.py::load_engines``) rather than a
+        fixed ``Literal`` — a new engine (e.g. DuckDB) becomes valid the
+        moment it ships its entry point, with no edit here. An unregistered
+        name (a typo, or an engine whose extra isn't installed) is a
+        ``ConfigError`` naming the registered engines, not a bare pydantic
+        ``ValidationError``.
+
+        The EMPTY-registry state gets its own message. Engine validation is
+        fail-closed, so a stale install (one whose dist-info predates the
+        entry-point declaration) would otherwise hard-fail every
+        ``aqueduct.yml`` load with an alarming, misleading "Registered
+        engines: []". That is a packaging problem, not a config problem, and
+        says so: reinstall.
 
         Remote-submit targets (databricks / emr / dataproc) are rejected with
-        a forward pointer to Phase 64.
+        a forward pointer to Phase 64. Target/master_url consistency is only
+        meaningful for the spark engine today.
         """
-        if self.engine != "spark":
-            if self.engine == "flink":
+        from aqueduct.executor.capabilities import (
+            CAPABILITY_REGISTRY,
+            NO_ENGINES_HINT,
+            load_engines,
+        )
+
+        # EnginePluginError (a broken third-party engine plugin) is an
+        # AqueductError and deliberately propagates as-is — it names the
+        # failing entry point, which is more actionable than anything this
+        # layer could add.
+        load_engines()
+        if self.engine not in CAPABILITY_REGISTRY:
+            registered = sorted(CAPABILITY_REGISTRY)
+            if not registered:
                 raise ConfigError(
-                    "engine: flink is not yet supported (see docs/roadmap.md). "
-                    "Use engine: spark."
+                    f"cannot validate deployment.engine={self.engine!r}: {NO_ENGINES_HINT}"
                 )
+            raise ConfigError(
+                f"deployment.engine={self.engine!r} is not a registered engine. "
+                f"Registered engines: {registered}. Install the "
+                "matching extra (e.g. aqueduct-core[spark]) or fix the typo."
+            )
+
+        if self.engine != "spark":
             return self
 
         target = self.target

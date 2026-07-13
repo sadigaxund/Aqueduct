@@ -375,10 +375,17 @@ def _load_engine_config(
     # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
 
     # ── Executor resolve ──────────────────────────────────────────────────────
+    # Phase 78 Step 2: get_executor() resolves through the aqueduct.engines
+    # registry (ExecutorProtocol) and raises UnknownEngineError (an
+    # AqueductError) for an unregistered engine — kept alongside
+    # NotImplementedError/ValueError so any pre-registration-seam caller that
+    # still raises those (or a future engine that does) reports the same
+    # clean CONFIG_ERROR exit instead of an unhandled crash.
     try:
+        from aqueduct.errors import AqueductError
         from aqueduct.executor import get_executor
         execute = get_executor(engine)
-    except (NotImplementedError, ValueError) as exc:
+    except (NotImplementedError, ValueError, AqueductError) as exc:
         _err(f"engine error: {exc}")
         _sys.exit(exit_codes.CONFIG_ERROR)
 
@@ -2000,6 +2007,7 @@ def run(
                             failure_ctx=link_failure_ctx,
                             model=resolved_agent_model,
                             patches_dir=patches_dir,
+                            engine=engine,
                             provider=resolved_agent_provider,
                             base_url=resolved_agent_base_url,
                             api_key=resolved_agent_api_key,
@@ -2150,6 +2158,7 @@ def run(
                     tiers=list(_cascade_tiers),
                     failure_ctx=failure_ctx,
                     patches_dir=patches_dir,
+                    engine=engine,
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
                     api_key=resolved_agent_api_key,
@@ -2183,6 +2192,7 @@ def run(
                         failure_ctx=failure_ctx,
                         model=resolved_agent_model,
                         patches_dir=patches_dir,
+                        engine=engine,
                         provider=resolved_agent_provider,
                         base_url=resolved_agent_base_url,
                         api_key=resolved_agent_api_key,
