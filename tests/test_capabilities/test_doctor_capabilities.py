@@ -76,7 +76,15 @@ def test_bad_blueprint_path_skips_not_raises(tmp_path):
     assert results[0].status == "skip"
 
 
-def test_unknown_engine_skips_not_raises():
+def test_unknown_engine_fails_not_raises():
+    """Unknown engine -> a doctor `fail` (not a raised exception, not a silent skip).
+
+    Registration now goes through the `aqueduct.engines` entry-point group
+    (Phase 78 Step 1) — an engine with no registered capability declaration
+    fails closed (`CompileError` from `get_capabilities`), caught here and
+    surfaced as an actionable `fail`.
+    """
     results = check_capabilities(_PLAIN_SNIPPET, engine="nonexistent-engine")
     assert len(results) == 1
-    assert results[0].status == "skip"
+    assert results[0].status == "fail"
+    assert "nonexistent-engine" in results[0].detail

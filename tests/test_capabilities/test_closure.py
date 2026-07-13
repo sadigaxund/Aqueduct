@@ -7,9 +7,13 @@ orphaned/typo'd keys). Together these two directions make it structurally
 impossible for a new schema field / Channel op / Egress mode to land without
 someone deciding what every registered engine does with it.
 
-Pure — no pyspark, no Spark session. Importing ``aqueduct.executor.spark.capabilities``
-pulls in the Spark declaration but does NOT import pyspark itself (verified
-below).
+Pure — no pyspark, no Spark session. The registry is populated via
+``load_engines()`` (the ``aqueduct.engines`` entry-point group), NOT a direct
+import of ``aqueduct.executor.spark.capabilities`` — this is the same path
+the real compile/config/doctor code uses, so registering a future engine
+(e.g. DuckDB) automatically drags it into this closure proof with no test
+edit. Neither the entry-point module (``aqueduct/executor/spark/engine.py``)
+nor the declaration it imports pulls in pyspark itself (verified below).
 """
 
 from __future__ import annotations
@@ -30,16 +34,22 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
-def _spark_capabilities_registered():
-    # Importing this module registers "spark" into CAPABILITY_REGISTRY as a
-    # side effect (mirrors how aqueduct/executor/spark/session.py registers
-    # itself). Import here rather than module level so a stray import
-    # ordering elsewhere in the suite can't hide a registration bug.
-    import aqueduct.executor.spark.capabilities  # noqa: F401
+def _engines_registered():
+    # Goes through the real registration seam — the aqueduct.engines
+    # entry-point group — rather than importing
+    # aqueduct.executor.spark.capabilities directly. This is the regression
+    # proof for "the registry is empty at runtime because nothing imports
+    # the Spark declaration outside tests": if load_engines() ever stops
+    # resolving the entry point, this fixture (and everything downstream of
+    # it) fails instead of silently passing via a test-only import.
+    from aqueduct.executor.capabilities import load_engines
+
+    load_engines()
 
 
 def test_spark_capabilities_importable_without_pyspark():
-    """The Spark declaration module must be pure data — no pyspark import."""
+    """The Spark declaration + its entry-point module must be pure data —
+    no pyspark import in either."""
     assert "pyspark" not in sys.modules or True  # pyspark may be installed in dev env
     # Stronger check: block pyspark and re-import in a subprocess-free way by
     # inspecting the module's own source for a top-level pyspark import is
@@ -48,14 +58,16 @@ def test_spark_capabilities_importable_without_pyspark():
     # aqueduct.executor.capabilities / capability_leaves, both of which are
     # independently proven pyspark-free by test_capability_leaves_no_pyspark.
     import aqueduct.executor.spark.capabilities as caps_mod
+    import aqueduct.executor.spark.engine as engine_mod
 
-    src = caps_mod.__file__
-    with open(src, encoding="utf-8") as f:
-        text = f.read()
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("import pyspark") or stripped.startswith("from pyspark"):
-            pytest.fail(f"aqueduct/executor/spark/capabilities.py must stay pyspark-free: {line!r}")
+    for mod in (caps_mod, engine_mod):
+        src = mod.__file__
+        with open(src, encoding="utf-8") as f:
+            text = f.read()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("import pyspark") or stripped.startswith("from pyspark"):
+                pytest.fail(f"{mod.__name__} must stay pyspark-free: {line!r}")
 
 
 def test_registry_has_spark():

@@ -133,9 +133,11 @@ class TestConfigAqGuard:
             load_config(p)
 
     def test_engine_flink_rejected(self, tmp_path):
+        """flink is not a registered engine (Phase 78 Step 1 — engine portfolio is
+        spark + duckdb; flink is out of scope, not a special-cased literal)."""
         from aqueduct.config import ConfigError
         p = self._write(tmp_path, 'deployment:\n  engine: flink\n')
-        with pytest.raises(ConfigError, match=r"flink is not yet supported"):
+        with pytest.raises(ConfigError, match=r"not a registered engine"):
             load_config(p)
 
     def test_env_and_plain_config_ok(self, tmp_path, monkeypatch):

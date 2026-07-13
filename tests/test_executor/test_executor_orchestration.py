@@ -1624,15 +1624,19 @@ class TestGetExecutor:
         fn = get_executor("spark")
         assert callable(fn)
 
-    def test_unknown_engine_raises_value_error(self):
+    def test_unknown_engine_raises_unknown_engine_error(self):
+        from aqueduct.errors import UnknownEngineError
         from aqueduct.executor import get_executor
         # Flink stub was removed during the audit pass — no special-cased
         # NotImplementedError branch. Any non-spark engine, including the
         # former-aspiration "flink" string, falls through to the generic
-        # unknown-engine error.
-        with pytest.raises(ValueError, match="Unknown execution engine"):
+        # unknown-engine error. Phase 78 Step 2: get_executor() now resolves
+        # through the aqueduct.engines registry (ExecutorProtocol), so an
+        # unknown engine raises the taxonomy error (UnknownEngineError), not
+        # a bare ValueError.
+        with pytest.raises(UnknownEngineError, match="unknown engine 'beam'"):
             get_executor("beam")
-        with pytest.raises(ValueError, match="Unknown execution engine"):
+        with pytest.raises(UnknownEngineError, match="unknown engine 'flink'"):
             get_executor("flink")
 
 

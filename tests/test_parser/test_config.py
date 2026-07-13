@@ -213,14 +213,11 @@ def test_metrics_config_extra_keys_forbidden(tmp_path):
         load_config(path)
 
 def test_deployment_config_literal_validation(tmp_path):
-    """DeploymentConfig fields (engine, target, env) reject invalid Literal values"""
+    """DeploymentConfig fields (target, env) reject invalid Literal values; engine
+    is validated against the registered-engines set, not a Literal (Phase 78 Step 1)
+    — see test_engine_not_registered_rejected below."""
     path = tmp_path / "invalid_lit.yml"
-    
-    # Invalid engine
-    path.write_text("deployment:\n  engine: turbo-pascal")
-    with pytest.raises(ConfigError, match="validation error"):
-        load_config(path)
-        
+
     # Invalid target
     path.write_text("deployment:\n  target: the-moon")
     with pytest.raises(ConfigError, match="validation error"):
@@ -230,6 +227,26 @@ def test_deployment_config_literal_validation(tmp_path):
     path.write_text("deployment:\n  env: void")
     with pytest.raises(ConfigError, match="validation error"):
         load_config(path)
+
+
+def test_engine_not_registered_rejected(tmp_path):
+    """deployment.engine is validated against the aqueduct.engines entry-point
+    registry (Phase 78 Step 1), not a fixed Literal — an unregistered name
+    raises a clean ConfigError naming the registered engines, not a bare
+    pydantic ValidationError."""
+    path = tmp_path / "bad_engine.yml"
+    path.write_text("deployment:\n  engine: turbo-pascal")
+    with pytest.raises(ConfigError, match="not a registered engine") as excinfo:
+        load_config(path)
+    assert "spark" in str(excinfo.value)
+
+
+def test_engine_spark_registered_ok(tmp_path):
+    """deployment.engine: spark validates via the real aqueduct.engines entry point."""
+    path = tmp_path / "good_engine.yml"
+    path.write_text("deployment:\n  engine: spark")
+    cfg = load_config(path)
+    assert cfg.deployment.engine == "spark"
 
 
 # ── Target ↔ master_url validation tests ──────────────────────────────────────
@@ -334,10 +351,12 @@ def test_target_default_master_url_passes(tmp_path):
 
 
 def test_target_validation_rejects_flink_engine(tmp_path):
-    """engine: flink is rejected at config-load regardless of target↔master_url."""
+    """engine: flink is rejected at config-load — it is not a registered engine
+    (Phase 78 Step 1: engine names are validated against the aqueduct.engines
+    entry-point registry, not a fixed Literal; flink is out of scope)."""
     path = tmp_path / "cfg.yml"
     path.write_text("deployment:\n  engine: flink\n  target: databricks\n  master_url: local[*]")
-    with pytest.raises(ConfigError, match=r"flink is not yet supported"):
+    with pytest.raises(ConfigError, match=r"not a registered engine"):
         load_config(path)
 
 
