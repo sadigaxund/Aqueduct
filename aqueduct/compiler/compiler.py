@@ -133,6 +133,7 @@ def compile(  # noqa: A001
         blueprint_path=blueprint_path,
         deployment_env=deployment_env,
         deployment_target=deployment_target,
+        deployment_engine=engine,
         base_dir=str(blueprint_path.parent) if blueprint_path else None,
     )
 
