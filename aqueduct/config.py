@@ -1186,6 +1186,73 @@ def _validate_store_backends(stores_cfg: StoresConfig) -> None:
                 )
 
 
+def _warn_ignored_config_keys(cfg: AqueductConfig) -> None:
+    """Config-leaf governance (Phase 78 Step 3) — warn on keys the target
+    engine ignores.
+
+    Runs at CONFIG RESOLUTION, once ``cfg.deployment.engine`` is known and
+    already validated as a registered engine (``DeploymentConfig.
+    _validate_target_master_url``, above). Walks only the leaves the user
+    EXPLICITLY set (``config_leaves.explicitly_set_config_leaves`` —
+    untouched defaults never warn) and emits the SAME suppressible
+    ``engine_key_ignored`` rule id the compile-time blueprint gate uses
+    (``aqueduct/compiler/capability_check.py``), through the same
+    ``aqueduct.warnings.emit`` machinery.
+
+    Deliberately WARN, never ERROR — unlike the blueprint gate, where
+    UNSUPPORTED is a hard CompileError. A config key that means nothing on
+    the current engine must not break loading ``aqueduct.yml``: the same
+    file has to stay valid across engines (a user's test overrides, or one
+    shared config used by multiple deployment profiles, must not hard-fail
+    just because one engine ignores one key). Both non-SUPPORTED verdicts
+    (``IGNORED_WITH_WARNING`` and ``UNSUPPORTED``) are treated the same way
+    here — a config leaf has no compile-time "this can never work" state,
+    only "this engine does nothing with it".
+
+    "Warn, never error" governs the VERDICT, not the machinery: an ignored key
+    warns instead of raising, but a genuine bug in this code path (an
+    AttributeError from a walker change, say) must still surface. Only
+    ``UnknownEngineError`` is swallowed, and only because it is already
+    impossible here — ``DeploymentConfig`` validated ``deployment.engine``
+    against the same registry before this runs, so the sole way to reach it is
+    a registry mutated between validation and here (a test double). A blanket
+    ``except Exception`` would hide real defects in ``get_capabilities()`` and
+    the leaf walkers behind a silently-absent warning, which is the same class
+    of silent no-op this whole gate exists to eliminate.
+
+    Lazy imports (not module-level) to avoid a circular import: ``aqueduct.
+    executor.config_leaves`` imports ``aqueduct.config`` at module scope to
+    introspect ``AqueductConfig``, so this module cannot import it back at
+    module scope. Same precedent as ``DeploymentConfig.
+    _validate_target_master_url``'s lazy ``aqueduct.executor.capabilities``
+    import.
+    """
+    from aqueduct.compiler.capability_check import RULE_ID_IGNORED
+    from aqueduct.errors import UnknownEngineError
+    from aqueduct.executor.capabilities import Support, get_capabilities
+    from aqueduct.executor.config_leaves import explicitly_set_config_leaves
+    from aqueduct.warnings import emit as _emit
+
+    try:
+        caps = get_capabilities(cfg.deployment.engine)
+    except UnknownEngineError:
+        return  # unreachable via load_config() — see docstring
+
+    suppress = set(cfg.warnings.suppress)
+    for leaf_id in sorted(explicitly_set_config_leaves(cfg)):
+        cap = caps.verdict(leaf_id)
+        if cap.support == Support.SUPPORTED:
+            continue
+        hint = f" {cap.hint}" if cap.hint else ""
+        _emit(
+            RULE_ID_IGNORED,
+            f"aqueduct.yml sets {leaf_id!r}, which engine "
+            f"{cfg.deployment.engine!r} ignores (accepted but has no "
+            f"effect).{hint}",
+            suppress=suppress,
+        )
+
+
 def _validate_secrets_backend(secrets_cfg: SecretsConfig) -> None:
     """Fail fast at config-load if the configured secrets provider's SDK is missing.
 
@@ -1406,6 +1473,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # case (no secrets) at one YAML parse and one validation.
     if not _AQ_SECRET_RE.search(pass1_text):
         _validate_store_backends(cfg_pass1.stores)
+        _warn_ignored_config_keys(cfg_pass1)
         return cfg_pass1
 
     pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
@@ -1434,4 +1502,5 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             raise ConfigError(_format_config_error(resolved, exc)) from exc
 
     _validate_store_backends(cfg.stores)
+    _warn_ignored_config_keys(cfg)
     return cfg

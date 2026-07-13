@@ -1,0 +1,310 @@
+# Spark engine capability declaration — DATA, not code.
+#
+# One explicit row per capability leaf. There is NO default-verdict sweep:
+# a leaf with no row here (or one left at `undeclared`) is a BUILD FAILURE at
+# engine registration (aqueduct/executor/capabilities.py::load_declaration).
+# That is what makes the closure guarantee real: this file (data) and the leaf
+# walker (code) are two INDEPENDENT sources, so they can actually disagree.
+#
+# Workflow: add a schema/config key -> build breaks -> run
+#   python scripts/capabilities.py sync
+# which appends the new leaf here as `undeclared` -> a human replaces that with
+# a real verdict for this engine.
+#
+# Verdicts: supported | unsupported | ignored_with_warning | undeclared
+# A bare string is the verdict. A mapping carries `support:` plus optional
+# `requires:` (dependency version constraints, checked by `aqueduct doctor`)
+# and `hint:` (actionable text shown to the user when the leaf is refused).
+
+engine: spark
+
+leaves:
+  agent.field.allow_defer: supported
+  agent.field.api_key: supported
+  agent.field.approval_mode: supported
+  agent.field.base_url: supported
+  agent.field.block_on_explain_regression: supported
+  agent.field.cascade: supported
+  agent.field.confidence_threshold: supported
+  agent.field.deep_loop: supported
+  agent.field.guardrails: supported
+  agent.field.max_chain: supported
+  agent.field.max_heal_attempts_per_hour: supported
+  agent.field.max_patches: supported
+  agent.field.max_reprompts: supported
+  agent.field.max_tool_calls: supported
+  agent.field.mode: supported
+  agent.field.model: supported
+  agent.field.on_heal_failure: supported
+  agent.field.on_pending_patches: supported
+  agent.field.patch_validation: supported
+  agent.field.progressive: supported
+  agent.field.prompt_context: supported
+  agent.field.provider: supported
+  agent.field.provider_options: supported
+  agent.field.regression_artifact: supported
+  agent.field.sandbox_mode: supported
+  agent.field.supports_tools: supported
+  agent.field.timeout: supported
+  agent_cascade_tier.field.allow_defer: supported
+  agent_cascade_tier.field.api_key: supported
+  agent_cascade_tier.field.base_url: supported
+  agent_cascade_tier.field.deep_loop: supported
+  agent_cascade_tier.field.max_reprompts: supported
+  agent_cascade_tier.field.max_seconds: supported
+  agent_cascade_tier.field.max_tokens: supported
+  agent_cascade_tier.field.model: supported
+  agent_cascade_tier.field.provider: supported
+  agent_cascade_tier.field.provider_options: supported
+  agent_cascade_tier.field.supports_tools: supported
+  agent_cascade_tier.field.timeout: supported
+  agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.forbidden_ops: supported
+  agent_guardrails.field.heal_on_errors: supported
+  agent_guardrails.field.never_heal_errors: supported
+  backoff.field.base_seconds: supported
+  backoff.field.jitter: supported
+  backoff.field.max_seconds: supported
+  backoff.field.strategy: supported
+  channel.op.cache: supported
+  channel.op.cast: supported
+  channel.op.coalesce: supported
+  channel.op.deduplicate: supported
+  channel.op.filter: supported
+  channel.op.join: supported
+  channel.op.rename: supported
+  channel.op.repartition: supported
+  channel.op.select: supported
+  channel.op.sort: supported
+  channel.op.sql: supported
+  channel.op.union: supported
+  config.agent.api_key: supported
+  config.agent.base_url: supported
+  config.agent.block_on_explain_regression: supported
+  config.agent.budget.max_reprompts: supported
+  config.agent.budget.max_seconds: supported
+  config.agent.budget.max_tokens_total: supported
+  config.agent.budget.progress_stalled_window: supported
+  config.agent.budget.same_error_consecutive: supported
+  config.agent.budget.same_signature_overall: supported
+  config.agent.cascade: supported
+  config.agent.ci_webhook_url: supported
+  config.agent.max_chain: supported
+  config.agent.max_heal_attempts_per_hour: supported
+  config.agent.max_reprompts: supported
+  config.agent.max_tool_calls: supported
+  config.agent.memory.coaching: supported
+  config.agent.memory.replay: supported
+  config.agent.mode: supported
+  config.agent.model: supported
+  config.agent.patch_validation: supported
+  config.agent.progressive: supported
+  config.agent.prompt_context: supported
+  config.agent.provider: supported
+  config.agent.provider_options: supported
+  config.agent.regression_artifact: supported
+  config.agent.retry.backoff_seconds: supported
+  config.agent.retry.max_retries: supported
+  config.agent.sandbox_master_url: supported
+  config.agent.supports_tools: supported
+  config.agent.timeout: supported
+  config.aqueduct_config: supported
+  config.checkpoint_root: supported
+  config.danger.allow_command_hooks: supported
+  config.danger.allow_full_preflight: supported
+  config.danger.allow_full_probe_actions: supported
+  config.danger.allow_multi_patch: supported
+  config.danger.allow_skip_sandbox: supported
+  config.deployment.databricks.cluster_id: supported
+  config.deployment.databricks.libraries: supported
+  config.deployment.databricks.max_concurrent_runs: supported
+  config.deployment.databricks.new_cluster: supported
+  config.deployment.databricks.workspace_url: supported
+  config.deployment.engine: supported
+  config.deployment.env: supported
+  config.deployment.master_url: supported
+  config.deployment.target: supported
+  config.lineage.openlineage_namespace: supported
+  config.lineage.openlineage_url: supported
+  config.metrics.use_observe: supported
+  config.probes.default_sample_fraction: supported
+  config.probes.max_sample_rows: supported
+  config.secrets.provider: supported
+  config.secrets.region: supported
+  config.secrets.resolver: supported
+  config.spark_config: supported
+  config.stores.benchmark.backend: supported
+  config.stores.benchmark.gate_on_regression: supported
+  config.stores.benchmark.path: supported
+  config.stores.benchmark.persist: supported
+  config.stores.blob.backend: supported
+  config.stores.blob.path: supported
+  config.stores.depots: supported
+  config.stores.observability.backend: supported
+  config.stores.observability.path: supported
+  config.warnings.suppress: supported
+  config.webhooks.on_ci_patch.backoff_seconds: supported
+  config.webhooks.on_ci_patch.headers: supported
+  config.webhooks.on_ci_patch.health_probe: supported
+  config.webhooks.on_ci_patch.max_retries: supported
+  config.webhooks.on_ci_patch.method: supported
+  config.webhooks.on_ci_patch.payload: supported
+  config.webhooks.on_ci_patch.secret: supported
+  config.webhooks.on_ci_patch.timeout: supported
+  config.webhooks.on_ci_patch.url: supported
+  config.webhooks.on_failure.backoff_seconds: supported
+  config.webhooks.on_failure.headers: supported
+  config.webhooks.on_failure.health_probe: supported
+  config.webhooks.on_failure.max_retries: supported
+  config.webhooks.on_failure.method: supported
+  config.webhooks.on_failure.payload: supported
+  config.webhooks.on_failure.secret: supported
+  config.webhooks.on_failure.timeout: supported
+  config.webhooks.on_failure.url: supported
+  config.webhooks.on_patch_pending.backoff_seconds: supported
+  config.webhooks.on_patch_pending.headers: supported
+  config.webhooks.on_patch_pending.health_probe: supported
+  config.webhooks.on_patch_pending.max_retries: supported
+  config.webhooks.on_patch_pending.method: supported
+  config.webhooks.on_patch_pending.payload: supported
+  config.webhooks.on_patch_pending.secret: supported
+  config.webhooks.on_patch_pending.timeout: supported
+  config.webhooks.on_patch_pending.url: supported
+  config.webhooks.on_success.backoff_seconds: supported
+  config.webhooks.on_success.headers: supported
+  config.webhooks.on_success.health_probe: supported
+  config.webhooks.on_success.max_retries: supported
+  config.webhooks.on_success.method: supported
+  config.webhooks.on_success.payload: supported
+  config.webhooks.on_success.secret: supported
+  config.webhooks.on_success.timeout: supported
+  config.webhooks.on_success.url: supported
+  edge.field.error_types: supported
+  edge.field.from_id: supported
+  edge.field.port: supported
+  edge.field.to: supported
+  egress.format.custom:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md."
+  egress.format.delta:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+  egress.format.depot: supported
+  egress.format.hudi: supported
+  egress.format.iceberg: supported
+  egress.mode.append: supported
+  egress.mode.error: supported
+  egress.mode.errorifexists: supported
+  egress.mode.ignore: supported
+  egress.mode.merge: supported
+  egress.mode.overwrite: supported
+  egress.mode.overwrite_partitions: supported
+  egress.on_new_columns.alert: supported
+  egress.on_new_columns.allow: supported
+  egress.on_new_columns.fail: supported
+  feature.broadcast_junction: supported
+  feature.checkpoint: supported
+  feature.custom_datasource:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "Custom Python DataSource requires pyspark>=4.0. See docs/compatibility.md."
+  feature.delta_time_travel:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+  feature.delta_write:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+  feature.java_udf: supported
+  feature.metrics_boundary: supported
+  feature.parallel_mode: supported
+  feature.python_udf: supported
+  feature.spillway: supported
+  funnel.mode.coalesce: supported
+  funnel.mode.union: supported
+  funnel.mode.union_all: supported
+  funnel.mode.zip: supported
+  hook_entry.field.blueprint: supported
+  hook_entry.field.command: supported
+  hook_entry.field.in_process: supported
+  hook_entry.field.timeout: supported
+  hook_entry.field.webhook: supported
+  hook_entry.field.when_error: supported
+  hooks.field.on_failure: supported
+  hooks.field.on_healed: supported
+  hooks.field.on_patch_pending: supported
+  hooks.field.on_success: supported
+  ingress.format.csv: supported
+  ingress.format.custom:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md."
+  ingress.format.delta:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+  ingress.format.depot: supported
+  ingress.format.jdbc: supported
+  ingress.format.kafka: supported
+  junction.mode.broadcast: supported
+  junction.mode.conditional: supported
+  junction.mode.partition: supported
+  module.field.attach_to: supported
+  module.field.checkpoint: supported
+  module.field.config: supported
+  module.field.context_override: supported
+  module.field.depends_on: supported
+  module.field.description: supported
+  module.field.enabled: supported
+  module.field.id: supported
+  module.field.label: supported
+  module.field.on_failure: supported
+  module.field.on_failure_webhook: supported
+  module.field.ref: supported
+  module.field.retry: supported
+  module.field.spillway: supported
+  module.field.tags: supported
+  module.field.type: supported
+  module.type.Arcade: supported
+  module.type.Assert: supported
+  module.type.Channel: supported
+  module.type.Egress: supported
+  module.type.Funnel: supported
+  module.type.Ingress: supported
+  module.type.Junction: supported
+  module.type.Probe: supported
+  module.type.Regulator: supported
+  module_retry.field.backoff: supported
+  module_retry.field.deadline_seconds: supported
+  module_retry.field.max_attempts: supported
+  module_retry.field.non_transient_errors: supported
+  module_retry.field.on_exhaustion: supported
+  module_retry.field.transient_errors: supported
+  retry_policy.field.backoff: supported
+  retry_policy.field.deadline_seconds: supported
+  retry_policy.field.max_attempts: supported
+  retry_policy.field.non_transient_errors: supported
+  retry_policy.field.on_exhaustion: supported
+  retry_policy.field.transient_errors: supported
+  udf.field.class_name: supported
+  udf.field.deterministic: supported
+  udf.field.entry: supported
+  udf.field.id: supported
+  udf.field.jar: supported
+  udf.field.label: supported
+  udf.field.lang: supported
+  udf.field.module: supported
+  udf.field.params: supported
+  udf.field.path: supported
+  udf.field.return_type: supported
+  warnings.field.suppress: supported

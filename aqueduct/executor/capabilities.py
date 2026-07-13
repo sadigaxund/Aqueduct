@@ -6,6 +6,25 @@ not every engine implements every grammar leaf. This module is the vocabulary
 an engine uses to declare, for each leaf, whether it is supported, unsupported,
 or supported-with-a-warning — optionally gated by a dependency version.
 
+**Declarations are DATA, not code.** Each engine ships a YAML capability
+declaration next to its package (``aqueduct/executor/spark/capabilities.yml``
+for the reference engine) with ONE EXPLICIT ROW PER LEAF — no default-verdict
+sweep exists anywhere in this module, deliberately. ``load_declaration()``
+hard-validates it at registration: an unknown leaf id, an illegal verdict, a
+malformed version specifier, a missing row, or a row still parked on the
+``UNDECLARED`` sentinel is an ``EnginePluginError`` (a build failure), never a
+silent pass. A third-party engine author therefore ships reviewable data, not
+Python, and cannot register a half-declared engine.
+
+That verbosity is the whole point. The previous design derived the engine's
+table from ``all_leaves_default(walker_leaves, SUPPORTED)`` — the SAME walker
+the closure test compared the registry against — so the two sides could never
+disagree, every new grammar/config leaf was auto-swept into SUPPORTED, and the
+advertised guarantee ("a new schema key without a per-engine verdict fails the
+build") was vacuously true. Two independent sources — the walker (code) and
+the YAML (data) — are what make the closure test able to fail at all. Keep
+them independent; do not reintroduce a default sweep.
+
 Consumers:
   - ``aqueduct/compiler/capability_check.py`` — compile-time gate: UNSUPPORTED
     leaves become a ``CompileError``; ``IGNORED_WITH_WARNING`` leaves become a
@@ -41,16 +60,26 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
+from pathlib import Path
 
 from aqueduct.errors import EnginePluginError, UnknownEngineError
 
 
 class Support(StrEnum):
-    """Verdict an engine assigns to one grammar leaf."""
+    """Verdict an engine assigns to one grammar leaf.
+
+    ``UNDECLARED`` is a real sentinel, NOT a synonym for ``UNSUPPORTED``.
+    "Nobody has decided yet" and "we decided this engine cannot do it" are
+    different states, and conflating them is exactly how the capability
+    closure guarantee silently became a tautology (see the module docstring's
+    anti-drift note). An ``UNDECLARED`` row is a BUILD FAILURE at engine
+    registration — it can never reach the compile-time gate or the runtime.
+    """
 
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
     IGNORED_WITH_WARNING = "ignored_with_warning"
+    UNDECLARED = "undeclared"
 
 
 # Minimal PEP 440-lite specifier grammar: one or more comma-separated clauses,
@@ -156,25 +185,119 @@ class EngineCapabilities:
     def verdict(self, leaf_id: str) -> Capability:
         """Return this engine's Capability for ``leaf_id``.
 
-        Leaves with no explicit entry default to UNSUPPORTED — an engine must
-        opt IN to supporting a leaf (or opt in wholesale via
-        ``all_leaves_default(Support.SUPPORTED)``). This is the default-deny
-        posture every future engine starts from; Spark overrides it with
-        default-ALLOW because it implements (almost) the entire grammar today.
+        By construction every REAL leaf has an explicit row: ``load_declaration()``
+        refuses to register an engine whose YAML omits one or leaves it
+        ``UNDECLARED``. So this fallback only fires for an id that is not a real
+        capability leaf at all, and it fails closed (UNSUPPORTED) rather than
+        waving an unrecognised id through.
         """
         return self.table.get(leaf_id, Capability(support=Support.UNSUPPORTED))
 
 
-def all_leaves_default(leaf_ids: frozenset[str], default: Support) -> dict[str, Capability]:
-    """Build a leaf-id -> Capability table with every leaf set to ``default``.
+def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabilities:
+    """Load + HARD-VALIDATE one engine's YAML capability declaration.
 
-    Lets an engine declare its baseline posture in one line:
-      - Spark: ``all_leaves_default(ALL_LEAVES, Support.SUPPORTED)`` then
-        layer targeted UNSUPPORTED/version-gated overrides on top.
-      - A future engine: ``all_leaves_default(ALL_LEAVES, Support.UNSUPPORTED)``
-        then layer targeted SUPPORTED overrides on top as it earns them.
+    This is the forcing function. There is deliberately NO default-verdict
+    sweep anywhere in this module: an engine must state a verdict for every
+    single leaf, one row each. The previous design (``all_leaves_default(
+    walker_leaves, SUPPORTED)``) derived the engine's table from the SAME
+    walker the closure test compared it against, so the two sides could never
+    disagree and every new grammar/config leaf was auto-swept into SUPPORTED.
+    The "adding a schema key without a per-engine verdict is a build failure"
+    guarantee was therefore vacuously true. Two independent sources — the
+    walker (code) and the YAML (data) — are what make it real.
+
+    Validated, all as ``EnginePluginError`` (an ``AqueductError``; an engine
+    author is a user of this seam, so never a bare builtin):
+      - the file parses and has ``engine:`` + ``leaves:``
+      - every row's leaf id EXISTS in ``leaf_ids`` (no orphans/typos)
+      - every row's verdict is a legal ``Support`` value
+      - every ``requires`` specifier is well-formed
+      - every leaf in ``leaf_ids`` HAS a row (no silent omission), and no row
+        is left at the ``UNDECLARED`` sentinel
+
+    Row shorthand: a bare string is the verdict (``channel.op.filter:
+    supported``). A mapping carries the full ``Capability`` (``support:`` plus
+    optional ``requires:`` / ``hint:``).
     """
-    return {leaf_id: Capability(support=default) for leaf_id in leaf_ids}
+    import yaml
+
+    p = Path(path)
+    try:
+        raw = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise EnginePluginError(
+            f"capability declaration {p} could not be read/parsed: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if not isinstance(raw, dict) or "engine" not in raw or "leaves" not in raw:
+        raise EnginePluginError(
+            f"capability declaration {p} must be a mapping with 'engine:' and "
+            "'leaves:' keys."
+        )
+    engine = raw["engine"]
+    rows = raw["leaves"]
+    if not isinstance(rows, dict):
+        raise EnginePluginError(f"capability declaration {p}: 'leaves:' must be a mapping.")
+
+    table: dict[str, Capability] = {}
+    undeclared: list[str] = []
+    for leaf_id, row in rows.items():
+        if leaf_id not in leaf_ids:
+            raise EnginePluginError(
+                f"capability declaration {p} (engine {engine!r}) declares a verdict for "
+                f"{leaf_id!r}, which is not a real capability leaf. It was likely renamed "
+                f"or removed from the grammar/config schema. Run "
+                f"`python scripts/capabilities.py sync` to reconcile."
+            )
+        if isinstance(row, str):
+            row = {"support": row}
+        if not isinstance(row, dict) or "support" not in row:
+            raise EnginePluginError(
+                f"capability declaration {p}: leaf {leaf_id!r} must be a verdict string or "
+                "a mapping with a 'support:' key."
+            )
+        try:
+            support = Support(row["support"])
+        except ValueError:
+            raise EnginePluginError(
+                f"capability declaration {p}: leaf {leaf_id!r} has invalid verdict "
+                f"{row['support']!r}. Legal verdicts: {[s.value for s in Support]}."
+            ) from None
+        if support is Support.UNDECLARED:
+            undeclared.append(leaf_id)
+            continue
+        try:
+            table[leaf_id] = Capability(
+                support=support,
+                requires=row.get("requires"),
+                hint=row.get("hint"),
+            )
+        except ValueError as exc:  # malformed `requires` specifier
+            raise EnginePluginError(
+                f"capability declaration {p}: leaf {leaf_id!r}: {exc}"
+            ) from exc
+
+    missing = sorted(leaf_ids - set(rows))
+    if missing or undeclared:
+        parts = []
+        if missing:
+            parts.append(f"{len(missing)} leaf/leaves have NO row: {missing[:10]}")
+        if undeclared:
+            parts.append(
+                f"{len(undeclared)} leaf/leaves are still UNDECLARED: {sorted(undeclared)[:10]}"
+            )
+        raise EnginePluginError(
+            f"capability declaration {p} (engine {engine!r}) is incomplete — "
+            + "; ".join(parts)
+            + ". Every capability leaf needs an explicit per-engine verdict "
+            "(supported | unsupported | ignored_with_warning). Run "
+            "`python scripts/capabilities.py sync` to append the missing leaves as "
+            "'undeclared', then replace each with a real verdict."
+        )
+
+    return EngineCapabilities(engine=engine, table=table)
 
 
 CAPABILITY_REGISTRY: dict[str, EngineCapabilities] = {}

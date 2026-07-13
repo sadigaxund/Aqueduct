@@ -1,86 +1,58 @@
-"""Spark engine capability declaration (Phase 78) — declaration only.
+"""Spark engine capability declaration (Phase 78) — loader only.
 
-This file makes NO changes to any existing Spark executor module; it is a
-pure data declaration that must stay importable without ``pyspark``
-installed (it is read by the compile-time capability gate, which runs
-before any Spark session exists, and by the closure test).
+The declaration itself is DATA: ``capabilities.yml`` next to this file, one
+explicit row per capability leaf (261 today — 160 Blueprint-grammar leaves +
+101 engine-config leaves). This module only loads and registers it. It makes
+NO changes to any Spark executor module and must stay importable without
+``pyspark`` installed (it is read by the compile-time capability gate, which
+runs before any Spark session exists, and by the closure test).
 
-Spark implements almost the entire grammar today, so it declares
-default-ALLOW (``all_leaves_default(..., Support.SUPPORTED)``) and layers a
-small number of targeted overrides on top — leaves that are genuinely
-UNSUPPORTED, or SUPPORTED-but-version-gated. Every ``requires`` constraint
-below is mined from currently-documented claims (``docs/compatibility.md``,
-``aqueduct/executor/spark/session.py``, ``aqueduct/executor/spark/udf.py``)
-— this file does not invent new version claims. A future engine (e.g. a
-DuckDB engine) starts from ``all_leaves_default(..., Support.UNSUPPORTED)``
-instead and earns leaves one at a time — the opposite default posture.
+**There is no default-verdict sweep, deliberately.** Spark used to declare
+``all_leaves_default(all_leaves(), Support.SUPPORTED)`` — derived from the
+SAME walker the closure test compared it against. Two sides, one source: they
+could never disagree, every new grammar/config leaf was auto-swept into
+SUPPORTED, and the advertised guarantee ("a new schema key without a
+per-engine verdict fails the build") was a tautology that could not fail.
+Now the walker (code) and ``capabilities.yml`` (data) are independent, and
+``load_declaration()`` hard-fails registration on any leaf that has no row or
+is still parked on the ``UNDECLARED`` sentinel. Spark saying "I support these
+261 things" explicitly is the point; "Spark supports everything by
+assumption" is what was broken.
+
+Adding a leaf: the build breaks, ``python scripts/capabilities.py sync``
+appends it to every engine's YAML as ``undeclared``, and a human replaces
+that with a real verdict. Do not reintroduce a default sweep to make the
+break go away — the break IS the feature.
+
+Version-gated leaves (``requires:`` in the YAML — ``format: custom`` needing
+pyspark>=4.0, the Delta-backed leaves needing delta-spark) are mined from
+currently-documented claims (``docs/compatibility.md``, ``session.py``,
+``udf.py``); the data file invents no new version claims. Compile cannot check
+them (it does not know the runtime environment) — that is ``aqueduct doctor``'s
+job.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from aqueduct.executor.capabilities import (
     CAPABILITY_REGISTRY,  # noqa: F401 — re-exported for convenience
-    Capability,
-    EngineCapabilities,
-    Support,
-    all_leaves_default,
+    load_declaration,
     register,
 )
 from aqueduct.executor.capability_leaves import all_leaves
+from aqueduct.executor.config_leaves import all_config_leaves
 
-_ALL_LEAVES = all_leaves()
+DECLARATION_PATH = Path(__file__).with_name("capabilities.yml")
 
-_TABLE: dict[str, Capability] = all_leaves_default(_ALL_LEAVES, Support.SUPPORTED)
+# The full governed leaf set: Blueprint grammar ∪ engine config (aqueduct.yml).
+# Passed to load_declaration() purely as the CHECKLIST the YAML is validated
+# against — never as a source of default verdicts.
+_ALL_LEAVES = all_leaves() | all_config_leaves()
 
-# ── Targeted overrides — version-gated SUPPORTED leaves ────────────────────
-# Compile cannot fail these (it doesn't know the runtime environment); the
-# `requires` constraint is checked at doctor time (aqueduct/doctor/).
-
-# format: custom (Python DataSource, `spark.dataSource` registry) needs
-# Spark 4.0+ — see docs/compatibility.md "Custom Python DataSource" note and
-# pyproject.toml's `pyspark>=4.0,<5.0` pin. On the unsupported Legacy 3.5
-# lane the engine raises a clear RuntimeError at runtime (per-feature gate,
-# not a hard requirement bump) — that is exactly what this Capability models.
-_TABLE["ingress.format.custom"] = Capability(
-    support=Support.SUPPORTED,
-    requires={"pyspark": ">=4.0"},
-    hint="format: custom requires pyspark>=4.0 (the spark.dataSource registry). "
-    "See docs/compatibility.md.",
-)
-_TABLE["egress.format.custom"] = Capability(
-    support=Support.SUPPORTED,
-    requires={"pyspark": ">=4.0"},
-    hint="format: custom requires pyspark>=4.0 (the spark.dataSource registry). "
-    "See docs/compatibility.md.",
-)
-_TABLE["feature.custom_datasource"] = Capability(
-    support=Support.SUPPORTED,
-    requires={"pyspark": ">=4.0"},
-    hint="Custom Python DataSource requires pyspark>=4.0. See docs/compatibility.md.",
-)
-
-# Delta-backed features need the delta-spark package installed
-# (pyproject.toml `spark` extra: `delta-spark>=4.0,<5.0`).
-for _leaf in (
-    "ingress.format.delta",
-    "egress.format.delta",
-    "feature.delta_write",
-    "feature.delta_time_travel",
-):
-    _TABLE[_leaf] = Capability(
-        support=Support.SUPPORTED,
-        requires={"delta-spark": ">=4.0"},
-        hint="Delta Lake features require the delta-spark package "
-        "(aqueduct-core[spark] extra). See docs/compatibility.md.",
-    )
-
-# java_udf — lang: java/scala UDFs load a JAR; nothing pyspark-version-gated,
-# but they need a JVM classpath entry, not a pip-installable dependency, so
-# no `requires` (doctor cannot check a JAR the way it checks a pip package).
-# Left as plain SUPPORTED (the default) — no override needed.
-
-SPARK = EngineCapabilities(engine="spark", table=_TABLE)
+SPARK = load_declaration(DECLARATION_PATH, _ALL_LEAVES)
 
 register(SPARK)
 
-__all__ = ["SPARK"]
+__all__ = ["DECLARATION_PATH", "SPARK"]
