@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.18: Reference Document**
+**Version 2.20: Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1520,7 +1520,7 @@ Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
-## **10.9 Engine capability framework (2.17) & the executor contract (2.18)**
+## **10.9 Engine capability framework (2.17), the executor contract (2.18), config-leaf governance (2.19) & explicit verdict tables (2.20)**
 
 The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design, `deployment.engine` selects which engine actually runs a compiled Manifest (today, `spark`). Not every engine is guaranteed to implement every grammar leaf, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced instead of a runtime surprise.
 
@@ -1533,19 +1533,38 @@ Two adjacent failure modes get their own diagnosis:
 - **No engines registered at all.** An empty registry means aqueduct's own entry points are invisible to `importlib.metadata`, in practice a stale install whose metadata predates the entry-point declaration. Since engine validation is fail-closed, that state would otherwise hard-fail every `aqueduct.yml` load with a misleading "Registered engines: []". The error says what it actually is: reinstall the package.
 - **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading.
 
-**Verdicts.** Every engine declares, for each grammar leaf, one of three verdicts:
+**Verdicts.** Every engine declares, for each grammar leaf, one of these verdicts:
 
 - `supported`: the engine runs this leaf. Optionally carries a `requires` version constraint (e.g. `format: custom` requires `pyspark>=4.0`).
 - `unsupported`: the engine cannot run this leaf at all.
 - `ignored_with_warning`: the engine accepts the leaf but it has no effect.
+- `undeclared`: nobody has decided yet. A sentinel, not a verdict: it is a **build failure** at engine registration, and it is what the sync tool (below) writes for a newly-discovered leaf. It is deliberately distinct from `unsupported`, "we have not decided" and "we decided the engine cannot do it" are different states, and conflating them is what broke the guarantee once already.
 
-**Default posture.** Spark declares default-`supported` for the grammar, it implements almost all of it today, with a short list of targeted overrides for the genuinely unsupported or version-gated leaves. A future engine (e.g. a DuckDB engine) starts from default-`unsupported` instead and earns leaves one at a time as it implements them, this is a structural safety net: a new engine that forgets to declare a leaf refuses it rather than silently mis-running it.
+**Declarations are data, one explicit row per leaf.** Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`) with one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Spark's has 261 rows (160 Blueprint-grammar leaves + 101 engine-config leaves), all `supported`, seven of them version-gated. There is **no default-verdict sweep**: an engine states "I support these 261 things", never "I support everything by assumption". A third-party engine author therefore ships reviewable data rather than Python.
+
+`load_declaration()` hard-validates the file at registration and raises `EnginePluginError` on: a row for a leaf that does not exist (a typo or a stale rename), an illegal verdict string, a malformed version specifier, a leaf with **no row at all**, or a row still parked on `undeclared`. An engine cannot register half-declared.
+
+**Starting a new engine.** `python scripts/capabilities.py scaffold --engine <name>` writes that engine a complete `capabilities.yml` with every leaf present and every verdict set to `undeclared`. The engine will not register until each row is a real decision, so the author is walked through the entire grammar and config surface one leaf at a time. The scaffold is generated from the walkers, so it cannot go stale the way a checked-in template would, and it deliberately does not copy Spark's table: doing so would hand a new engine ~261 `supported` rows, a silent claim to implement the whole grammar, which is the blindness this framework exists to prevent. Read Spark's declaration as a reference; do not clone it.
+
+> **Corrected in 2.19.** Earlier revisions of this section claimed a new schema key without a per-engine verdict fails the build. **It did not.** Spark's table was generated by `all_leaves_default(all_leaves(), SUPPORTED)`, derived from the *same* walker the closure test compared it against, so the two sides could never disagree: every new grammar or config leaf was silently swept into `supported` and the closure test passed regardless. The guarantee was a tautology. It is now real because the walker (code) and the declaration (data) are independent sources that can actually disagree, and the closure test compares them.
 
 **Compile gate.** `aqueduct/compiler/capability_check.py` runs as the last step of `compile()` (see §3, the compiler pipeline). A module using an `unsupported` leaf fails compilation with a `CompileError` naming the module, the leaf, the engine, and the capability's hint. A module using an `ignored_with_warning` leaf gets a suppressible warning under rule_id `engine_key_ignored`, following the same `warnings.suppress` mechanism as every other compiler warning (see §4.2). A `requires` version constraint does **not** fail compilation, compile-time has no way to know which dependency versions are actually installed in the running environment.
 
 **Doctor check.** `aqueduct doctor` validates the version constraint that compile cannot: `aqueduct/doctor/checks_io.py::check_capabilities` walks a compiled blueprint's used capabilities and, for each with a `requires` constraint, compares the installed dependency version (via `importlib.metadata`) against the declared specifier, reporting `ok`, `fail`, or `skip` (dependency not installed) per capability. See `docs/compatibility.md` for the Spark engine's currently-declared version constraints.
 
-**Anti-drift.** The full canonical set of grammar leaves is derived, not hand-maintained, by walking the actual grammar (`aqueduct/executor/capability_leaves.py`): module types and pydantic schema fields come from `aqueduct/parser/schema.py` introspection, Channel ops/Egress modes/Junction and Funnel fan modes come from named constants next to their dispatch code, and a small hand-curated set covers cross-cutting feature flags and the handful of formats with a dedicated code path. A closure test (`tests/test_capabilities/test_closure.py`) fails the build if any derived leaf lacks an explicit verdict in a registered engine's table, or if a table declares a verdict for a leaf that no longer exists.
+**Anti-drift.** The canonical leaf set is derived, not hand-maintained, by walking the real grammar and the real engine config: module types and pydantic schema fields come from `aqueduct/parser/schema.py` introspection, Channel ops/Egress modes/Junction and Funnel fan modes come from named constants next to their dispatch code, and a small hand-curated set covers cross-cutting feature flags and the handful of formats with a dedicated code path (`aqueduct/executor/capability_leaves.py`); every `aqueduct.yml` key comes from `AqueductConfig` introspection (`aqueduct/executor/config_leaves.py`, see the config-leaf governance section below).
+
+The closure test (`tests/test_capabilities/test_closure.py`) compares that derived set against each engine's YAML **read straight from disk**, and fails the build if a derived leaf has no row, if a row is still `undeclared`, or if a row names a leaf that no longer exists. Reading the YAML rather than the loaded registry is what keeps the two sources independent: comparing the registry against the walker its table was built from is precisely the tautology described above.
+
+**The developer workflow when a leaf is added:**
+
+1. Add a field to `parser/schema.py` or `config.py` (or a Channel op, write mode, fan mode, feature flag).
+2. The build breaks: engine registration raises `EnginePluginError`, and the closure test names the offending leaf.
+3. Run `python scripts/capabilities.py sync`, which appends the new leaf to **every** engine's YAML as `undeclared`. The build stays red, `undeclared` is not a verdict.
+4. A human replaces each `undeclared` with a real verdict for that engine.
+5. The build passes.
+
+`python scripts/capabilities.py check` reports drift without writing (CI-friendly), and `python scripts/capabilities.py docs` regenerates the engine matrix in `docs/compatibility.md` from the declarations, so the published matrix is derived from the same data the engine enforces rather than hand-maintained.
 
 **`ExecutorProtocol` — the execution contract.** Registering a capability declaration says what an engine supports; `ExecutorProtocol` (`aqueduct/executor/protocol.py`) says how core actually talks to it. Every engine registers exactly one `ExecutorProtocol` instance, alongside its `EngineCapabilities`, as an import side effect of its `aqueduct.engines` entry-point module. The contract has three parts:
 
@@ -1560,6 +1579,12 @@ Note that the scaffold is not one string: parts of the prompt (the defer-to-huma
 Both requirements are enforced structurally, not by convention: `ExecutorProtocol.__post_init__` raises `EnginePluginError` at construction time if `execute`, `extract_error`, or the `PromptRules` pack is missing or incomplete. `get_executor(engine)` (`aqueduct/executor/__init__.py`) and `get_protocol(engine)` (`aqueduct/executor/protocol.py`) resolve through the same `load_engines()`-backed registry `get_capabilities()` uses, and raise the same `UnknownEngineError` for an unregistered engine. Every failure on this seam is an `AqueductError`, never a bare builtin.
 
 The Spark engine's `ExecutorProtocol` (`aqueduct/executor/spark/engine.py`) wires today's existing behavior through the seam rather than reimplementing it: `extract_error` delegates to the existing structured Spark/Py4J error extraction, and its `PromptRules` pack (`aqueduct/executor/spark/prompt_rules.py`) carries the Spark persona and rules verbatim from the pre-split prompt, so the composed Spark prompt is unchanged. Constructing the protocol object never imports `pyspark` — only calling `execute(...)` does, deferred to call time.
+
+**Config-leaf governance.** Everything above governs the BLUEPRINT grammar. `aqueduct.yml` — the engine config, not the Blueprint — has its own leaf set: every `AqueductConfig` pydantic field, derived the same way (`aqueduct/executor/config_leaves.py::all_config_leaves()`, walking the actual `aqueduct/config.py` models, never hand-listed), namespaced `config.*` (`config.deployment.master_url`, `config.stores.observability.backend`, `config.agent.sandbox_master_url`, ...). A field typed as a list or dict of sub-models (`stores.depots`, `agent.cascade`) is one atomic leaf, not enumerated per dynamic key. These leaves fold into the SAME closure test as the grammar leaves — a registered engine's `EngineCapabilities` table must carry an explicit verdict for the union of both sets, and `all_config_leaves()` is unioned into Spark's default-`supported` leaf set, so the reference engine needs no per-key config override.
+
+Without this, a key that means nothing on a given engine — `deployment.master_url` on a single-node engine, say — was a silent no-op: accepted, validated, and then ignored with no signal to the user. The gate closes that hole by checking, at config-resolution time, every leaf the user *explicitly set* (via pydantic's `model_fields_set` at each nesting level — untouched defaults never warn) against the target engine's verdict for it.
+
+The one deliberate asymmetry with the blueprint gate: **config-leaf verdicts always warn, never error.** The blueprint gate raises `CompileError` for an `unsupported` leaf because a Blueprint is written for a specific pipeline and engine; `aqueduct.yml` is not — the same file is expected to stay valid across engines, deployment profiles, and test overrides. Hard-failing config load over one ignored key would make that impossible. So a config leaf resolving to anything other than `supported` (`ignored_with_warning` or `unsupported`) emits one suppressible warning, `engine_key_ignored` — the SAME rule id and suppression machinery the compile-time blueprint gate uses (`aqueduct.yml`'s own `warnings.suppress`) — and loading proceeds. `aqueduct/config.py::load_config()` runs this check once `deployment.engine` is validated as a registered engine, immediately before returning the resolved `AqueductConfig`.
 
 ---
 

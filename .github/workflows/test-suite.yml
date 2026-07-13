@@ -100,9 +100,11 @@ jobs:
             capabilities:
               - 'aqueduct/executor/capabilities.py'
               - 'aqueduct/executor/capability_leaves.py'
+              - 'aqueduct/executor/config_leaves.py'
               - 'aqueduct/executor/channel_ops.py'
               - 'aqueduct/executor/spark/capabilities.py'
               - 'aqueduct/compiler/capability_check.py'
+              - 'aqueduct/config.py'
               - 'aqueduct/doctor/**'
               - 'tests/test_capabilities/**'
 
@@ -292,6 +294,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e ".[dev]"
+      # Every capability leaf must carry an explicit per-engine verdict. This
+      # fails if a new schema/config key landed without one (run
+      # `python scripts/capabilities.py sync`, then declare each verdict).
+      - run: python scripts/capabilities.py check
       - run: |
           set +e
           pytest tests/test_capabilities/ -m "not spark" --junitxml=results.xml
