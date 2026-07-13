@@ -80,28 +80,28 @@ def _engines_registered():
     # resolving the entry point, the registry-dependent tests below fail
     # instead of silently passing via a test-only import.
     #
-    # EnginePluginError is caught rather than allowed to error every test in
-    # the file: an incomplete declaration (a leaf with no verdict) makes
+    # CapabilityDeclarationError is caught rather than allowed to error every
+    # test in the file: an incomplete declaration (a leaf with no verdict) makes
     # registration raise, and if that escaped here it would bury the ONE thing
     # a developer needs to see — the clean "leaf X has no verdict, run sync"
     # diff from the YAML-vs-walker closure tests, which read the declaration
     # straight from disk and do not need the registry at all.
     # `test_engine_registration_succeeds` below still asserts the failure
     # loudly, so a broken registration is never silently tolerated.
-    from aqueduct.errors import EnginePluginError
+    from aqueduct.errors import CapabilityDeclarationError
     from aqueduct.executor.capabilities import load_engines
 
     try:
         load_engines()
-    except EnginePluginError:
+    except CapabilityDeclarationError:
         pass
 
 
 def test_engine_registration_succeeds():
     """Registration must actually work — the counterpart to the fixture's
     tolerant catch above. An incomplete declaration makes `load_engines()`
-    raise `EnginePluginError` (naming the leaf + the sync command), so this is
-    where a missing verdict surfaces as a hard, loud failure."""
+    raise `CapabilityDeclarationError` (naming the leaf + the sync command), so
+    this is where a missing verdict surfaces as a hard, loud failure."""
     from aqueduct.executor.capabilities import load_engines
 
     load_engines()
@@ -151,7 +151,7 @@ def test_every_leaf_has_a_verdict(decl_path):
          SUPPORTED and the test still passed.
       2. It still collects and reports a clean diff even when the planted leaf
          makes engine REGISTRATION itself blow up (load_declaration raises
-         EnginePluginError on an incomplete table) — so the failure a developer
+         CapabilityDeclarationError on an incomplete table) — so the failure a developer
          sees names the offending leaf instead of an import error.
     """
     rows = _declared_rows(decl_path)
@@ -163,7 +163,7 @@ def test_every_leaf_has_a_verdict(decl_path):
         f"{len(undeclared)} are still UNDECLARED {undeclared[:10]}.\n"
         "A new schema field / Channel op / Egress mode / aqueduct.yml config key landed "
         "without a per-engine capability verdict. Run "
-        "`python scripts/capabilities.py sync` to append the missing leaves as "
+        "`aqueduct dev capabilities sync` to append the missing leaves as "
         "`undeclared`, then replace each with a real verdict "
         "(supported | unsupported | ignored_with_warning)."
     )
@@ -326,24 +326,25 @@ def test_closure_fails_on_a_planted_leaf_with_no_verdict(monkeypatch, planted):
 )
 def test_registration_hard_fails_on_a_planted_leaf(planted):
     """The other arm: loading an engine declaration that is missing a verdict
-    for a real leaf raises EnginePluginError (an AqueductError), naming the
-    leaf. Registration cannot succeed with a half-declared engine."""
-    from aqueduct.errors import EnginePluginError
+    for a real leaf raises CapabilityDeclarationError (an AqueductError), naming
+    the leaf. Registration cannot succeed with a half-declared engine."""
+    from aqueduct.errors import CapabilityDeclarationError
     from aqueduct.executor.capabilities import load_declaration
     from aqueduct.executor.spark.capabilities import DECLARATION_PATH
 
     governed = _all_governed_leaves() | {planted}
-    with pytest.raises(EnginePluginError) as exc:
+    with pytest.raises(CapabilityDeclarationError) as exc:
         load_declaration(DECLARATION_PATH, governed)
     assert planted in str(exc.value)
-    assert "scripts/capabilities.py sync" in str(exc.value)
+    assert planted in exc.value.leaves  # structured, not just in the prose
+    assert "aqueduct dev capabilities sync" in str(exc.value)
 
 
 def test_registration_rejects_an_undeclared_row(tmp_path):
     """The UNDECLARED sentinel is a build failure, not a synonym for
     UNSUPPORTED. `sync` parks new leaves there precisely so the build stays
     red until a human decides."""
-    from aqueduct.errors import EnginePluginError
+    from aqueduct.errors import CapabilityDeclarationError
     from aqueduct.executor.capabilities import load_declaration
 
     leaves = frozenset({"feature.a", "feature.b"})
@@ -352,12 +353,12 @@ def test_registration_rejects_an_undeclared_row(tmp_path):
         "engine: toy\nleaves:\n  feature.a: supported\n  feature.b: undeclared\n",
         encoding="utf-8",
     )
-    with pytest.raises(EnginePluginError, match="UNDECLARED|undeclared"):
+    with pytest.raises(CapabilityDeclarationError, match="UNDECLARED|undeclared"):
         load_declaration(decl, leaves)
 
 
 def test_registration_rejects_unknown_leaf_and_bad_verdict(tmp_path):
-    from aqueduct.errors import EnginePluginError
+    from aqueduct.errors import CapabilityDeclarationError
     from aqueduct.executor.capabilities import load_declaration
 
     leaves = frozenset({"feature.a"})
@@ -367,17 +368,17 @@ def test_registration_rejects_unknown_leaf_and_bad_verdict(tmp_path):
         "engine: toy\nleaves:\n  feature.a: supported\n  feature.ghost: supported\n",
         encoding="utf-8",
     )
-    with pytest.raises(EnginePluginError, match="not a real capability leaf"):
+    with pytest.raises(CapabilityDeclarationError, match="not a real capability leaf"):
         load_declaration(orphan, leaves)
 
     bad = tmp_path / "bad.yml"
     bad.write_text("engine: toy\nleaves:\n  feature.a: sorta_supported\n", encoding="utf-8")
-    with pytest.raises(EnginePluginError, match="invalid verdict"):
+    with pytest.raises(CapabilityDeclarationError, match="invalid verdict"):
         load_declaration(bad, leaves)
 
 
 def test_scaffold_generates_a_complete_all_undeclared_table(tmp_path):
-    """`scripts/capabilities.py scaffold --engine X` is the entry point for a NEW
+    """`aqueduct dev capabilities scaffold --engine X` is the entry point for a NEW
     engine: a COMPLETE table generated from the walker, every row `undeclared`.
 
     The two properties that matter, both asserted here:
@@ -387,15 +388,16 @@ def test_scaffold_generates_a_complete_all_undeclared_table(tmp_path):
         which is exactly what copying Spark's table would do (~261 `supported`
         rows = a silent claim to support the whole grammar).
     """
-    import subprocess
+    from click.testing import CliRunner
+
+    from aqueduct.cli import cli
 
     out = tmp_path / "capabilities.yml"
-    proc = subprocess.run(
-        [sys.executable, str(_REPO / "scripts" / "capabilities.py"),
-         "scaffold", "--engine", "toyengine", "--out", str(out)],
-        cwd=str(_REPO), capture_output=True, text=True, timeout=120,
+    result = CliRunner().invoke(
+        cli,
+        ["dev", "capabilities", "scaffold", "--engine", "toyengine", "--out", str(out)],
     )
-    assert proc.returncode == 0, proc.stderr
+    assert result.exit_code == 0, result.output
 
     rows = _declared_rows(out)
     governed = _all_governed_leaves()
@@ -407,10 +409,10 @@ def test_scaffold_generates_a_complete_all_undeclared_table(tmp_path):
     )
 
     # And that scaffold is unregisterable until a human decides each row.
-    from aqueduct.errors import EnginePluginError
+    from aqueduct.errors import CapabilityDeclarationError
     from aqueduct.executor.capabilities import load_declaration
 
-    with pytest.raises(EnginePluginError, match="UNDECLARED|undeclared"):
+    with pytest.raises(CapabilityDeclarationError, match="UNDECLARED|undeclared"):
         load_declaration(out, governed)
 
     header = out.read_text(encoding="utf-8")
