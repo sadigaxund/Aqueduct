@@ -294,7 +294,7 @@ Ports: `main` (default DataFrame), `spillway` (error rows — from Channel/Asser
 
 ## Context Registry (3 tiers)
 - **Tier 0 static** `${ctx.ns.key}` — substituted at parse time. Define under `context:`. Override order: CLI `--ctx k=v` > `AQUEDUCT_CTX_*` env > `context_profiles` (`--profile`) > `context:` defaults. Env interpolation: `${ENV_VAR:-default}`.
-- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/name()/dir()/path()`, `@aq.deployment.env()/target()`, `@aq.version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
+- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/name()/dir()/path()`, `@aq.deployment.env()/target()/engine()`, `@aq.version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
 - **Tier 2 UDFs** — distributed column functions (below).
 
 `context_profiles:` promote envs: `dev: { tables.orders_raw: "s3://dev/..." }`.

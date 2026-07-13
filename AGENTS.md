@@ -79,6 +79,7 @@ category; it is not a loophole for runtime features (those still follow the axes
 - `aqueduct/executor/capabilities.py` — engine-agnostic, **pyspark-free** capability model (Phase 78): `Support` (`SUPPORTED`/`UNSUPPORTED`/`IGNORED_WITH_WARNING`), frozen `Capability` (verdict + optional `requires` version constraint + `hint`), frozen `EngineCapabilities` (one engine's leaf-id → `Capability` table, `.verdict()`), `CAPABILITY_REGISTRY`/`register()`/`get_capabilities()`, `load_declaration()` (load + HARD-VALIDATE an engine's YAML declaration; there is deliberately **no** default-verdict sweep — see the rule below), and a minimal PEP440-lite specifier parser/evaluator (`validate_specifier`, `version_satisfies`) — `packaging` is not a declared dependency, so this stays hand-rolled rather than importing `packaging.specifiers`. Phase 78 Step 1 adds `load_engines()` — idempotently resolves the `aqueduct.engines` setuptools entry-point group (`AQ_ENGINES_ENTRYPOINT_GROUP`), the seam a future engine (DuckDB) registers through with zero core edits. `get_capabilities()` calls it before the registry lookup and raises `UnknownEngineError` (a `CompileError` subclass in `aqueduct/errors.py`, not a `KeyError`) for an unregistered engine — the framework fails closed instead of degrading to a silent no-op gate. Two error-taxonomy rules apply here and must not be regressed: (a) callers distinguish "unregistered engine" from "blueprint failed to compile" by exception TYPE (`UnknownEngineError`, whose `.engines` list also flags the empty-registry/stale-install case via `.no_engines_registered`), NEVER by matching the message text; (b) a failing `aqueduct.engines` entry point raises `EnginePluginError` (an `AqueductError`) naming the entry point, so a broken third-party engine plugin never escapes as a bare `ImportError` from `aqueduct.yml` loading. Because engine validation is fail-closed, the empty-registry state carries its own actionable message (`NO_ENGINES_HINT` — entry points invisible, reinstall) instead of "Registered engines: []".
 - `aqueduct/executor/capability_leaves.py` — engine-agnostic, **pyspark-free** grammar leaf walker (Phase 78): `all_leaves()` derives the canonical capability-leaf-id set by introspecting `parser/schema.py` pydantic models (module types + nested config blocks) and reading the op/mode/format constants next to their dispatch code (`channel_ops.py`, `spark/egress.py`'s `SUPPORTED_MODES`/`ON_NEW_COLUMNS_POLICIES`, `spark/junction.py`'s `VALID_MODES`, `spark/funnel.py`'s `VALID_MODES`). `INGRESS_FORMATS`/`EGRESS_FORMATS`/`FEATURE_FLAGS` are the hand-curated exceptions (not schema-derivable — see the module docstring for why). This is the anti-drift core: a new schema field / op / mode automatically becomes a leaf that every registered engine must give a verdict for (enforced by `tests/test_capabilities/test_closure.py`).
 - `aqueduct/executor/config_leaves.py` — engine-agnostic, **pyspark-free** ENGINE-CONFIG leaf walker (Phase 78 Step 3): `all_config_leaves()` derives the canonical `config.*` leaf-id set by introspecting `aqueduct/config.py`'s `AqueductConfig` pydantic models (recursing into nested `BaseModel` fields; a `list[Model]`/`dict[str, Model]` field like `stores.depots`/`agent.cascade` is one atomic leaf, not enumerated per key). `explicitly_set_config_leaves(cfg)` walks an actual validated config INSTANCE via `model_fields_set` at each nesting level, returning only the leaves the user explicitly wrote — `aqueduct/config.py::load_config()` calls this at config-resolution time, once `deployment.engine` is known, and emits a suppressible `engine_key_ignored` warning (same rule id and `aqueduct.warnings.emit` machinery as the blueprint gate) for any explicitly-set leaf whose verdict isn't `SUPPORTED` — WARN, never ERROR (the same `aqueduct.yml` must stay valid across engines). Closes the gap left by Step 0's leaf walker (`capability_leaves.py` covers Blueprint grammar only, not `aqueduct.yml`). Imports `aqueduct.config` at module level; `config.py` imports this module back only lazily (inside `load_config()`), avoiding a circular import.
+- `aqueduct/executor/capability_tooling.py` — engine-agnostic, **pyspark-free** capability-declaration tooling (Phase 78): `governed_leaves()` (grammar ∪ config), `discover_declarations()` (every `capabilities.yml` this install governs — resolved from the `aqueduct.engines` entry points via `find_spec`, WITHOUT importing an engine module, because an engine with an incomplete table cannot be imported), `check()`/`sync()`/`scaffold()`/`render_matrix()`/`write_matrix()`. Returns values; the CLI (`aqueduct/cli/dev.py`) does all rendering. This is the code behind `aqueduct dev capabilities …`; `scripts/capabilities.py` only forwards to it.
 - `aqueduct/executor/spark/capabilities.py` + `capabilities.yml` — the Spark engine's capability declaration. The **YAML is the declaration** (one explicit row per leaf — 261 today: 160 grammar + 101 config — each `supported`/`unsupported`/`ignored_with_warning`/`undeclared`, plus optional `requires` + `hint`); the `.py` only loads and registers it via `load_declaration()`. **pyspark-free** despite living under `spark/`. There is NO default-verdict sweep: an engine states what it supports leaf by leaf. A new engine ships its own `capabilities.yml` — data, not Python.
 - `aqueduct/executor/protocol.py` — engine-agnostic, **pyspark-free** `ExecutorProtocol` + `PromptRules` (Phase 78 Step 2): a frozen dataclass (`engine`, `execute`, `extract_error`, `prompt_rules`) an engine registers via `register_protocol()` as an import side effect of its `aqueduct.engines` entry-point module, mirroring `capabilities.py`'s `EngineCapabilities`/`CAPABILITY_REGISTRY` pattern. `__post_init__` raises `EnginePluginError` (an `AqueductError` — an engine-plugin author is a user of this seam, so the error-taxonomy rule applies; never a bare builtin) if `execute`, `extract_error`, or the `PromptRules` pack is missing/incomplete — the structural guarantee that an engine cannot register without an error extractor (exception → `FailureContext` fields) or a prompt-rules pack. `PromptRules` (`persona`, `root_cause_note`, `rules`, all required non-empty) is the engine's half of the healing system prompt; see the composition rule below. `get_protocol(engine)` calls `capabilities.load_engines()` before its registry lookup and raises `UnknownEngineError` for an unregistered engine, same fail-closed posture as `get_capabilities()`. See `docs/specs.md` §10.9.
 - `aqueduct/executor/spark/engine.py` — the Spark engine's `aqueduct.engines` entry-point target (Phase 78 Step 1 built the registration seam; Step 2 fills in the `ExecutorProtocol`). Importing it registers, as import side effects, `spark/capabilities.py`'s declaration AND its `ExecutorProtocol` (the `SPARK` module constant) — both **pyspark-free**. `execute`/`extract_error` are thin wrappers deferring the actual `pyspark` import to call time; `extract_error` delegates to the existing `aqueduct.surveyor.error_extraction._extract_structured_error` — a refactor (naming existing behavior through the new seam), not new behavior. `load_executor()` is kept as a Step-1-compatible lazy accessor equivalent to `get_protocol("spark").execute`. The dependency direction is one-way: this module imports NOTHING from `aqueduct/agent/` — Spark's healing prompt-rules pack lives beside it in `aqueduct/executor/spark/prompt_rules.py`. Core never imports a `spark.*` module by name — this is the seam `load_engines()` resolves.
@@ -90,12 +91,16 @@ category; it is not a loophole for runtime features (those still follow the axes
 
 The workflow when you add one:
 
-1. Add the field/op/mode. **The build breaks** — engine registration raises `EnginePluginError` naming the leaf, and `tests/test_capabilities/test_closure.py` fails.
-2. `python scripts/capabilities.py sync` — appends the new leaf to **every** engine's `capabilities.yml` as `undeclared`. Build stays red: `undeclared` is a sentinel, **not** a verdict, and is explicitly distinct from `unsupported`.
+1. Add the field/op/mode. **The build breaks** — engine registration raises `CapabilityDeclarationError` naming the leaf, and `tests/test_capabilities/test_closure.py` fails.
+2. `aqueduct dev capabilities sync` — appends the new leaf to **every** engine's `capabilities.yml` as `undeclared`. Build stays red: `undeclared` is a sentinel, **not** a verdict, and is explicitly distinct from `unsupported`.
 3. Replace each `undeclared` with a real verdict (`supported` | `unsupported` | `ignored_with_warning`, plus optional `requires`/`hint`).
-4. Build passes. If the verdict is version-gated or refused, `python scripts/capabilities.py docs` regenerates the matrix in `docs/compatibility.md`.
+4. Build passes. If the verdict is version-gated or refused, `aqueduct dev capabilities docs` regenerates the matrix in `docs/compatibility.md`.
 
-**Starting a NEW engine:** `python scripts/capabilities.py scaffold --engine <name>` generates its complete `capabilities.yml` with every leaf `undeclared`. The engine cannot register until each row is a real decision. Do **not** copy Spark's `capabilities.yml` — that inherits ~261 `supported` rows, i.e. a silent claim to support the entire grammar. Read it as a reference; never clone it.
+**Starting a NEW engine:** `aqueduct dev capabilities scaffold --engine <name>` generates its complete `capabilities.yml` with every leaf `undeclared`. The engine cannot register until each row is a real decision. Do **not** copy Spark's `capabilities.yml` — that inherits ~261 `supported` rows, i.e. a silent claim to support the entire grammar. Read it as a reference; never clone it.
+
+**The capability tooling SHIPS — it is not a repo script.** The implementation lives in `aqueduct/executor/capability_tooling.py` and is exposed as `aqueduct dev capabilities scaffold|sync|check|docs` (`aqueduct/cli/dev.py`). `scripts/` is not in the wheel (`packages = ["aqueduct"]`), so a third-party engine author who `pip install`s aqueduct would otherwise have no way to generate the table their engine cannot register without. `scripts/capabilities.py` is a thin wrapper that forwards to the same CLI — do not grow a second implementation there, and do not add capability logic to `scripts/`.
+
+**Two capability error types, never conflated.** `EnginePluginError` = the `aqueduct.engines` entry point failed to IMPORT (broken/half-installed plugin; the message says reinstall). `CapabilityDeclarationError` = the declaration is incomplete/invalid (a leaf with no row, an `undeclared` row, an orphaned row, an illegal verdict, a malformed `requires`) — a dev-time build failure whose fix is `aqueduct dev capabilities sync` + a verdict, never a reinstall. `load_engines()`'s broad `except Exception` re-raises `CapabilityDeclarationError` unchanged for exactly this reason. Callers branch by TYPE (`aqueduct/doctor/checks_io.py` does), never by message substring.
 
 **Never make the break go away with a default.** `all_leaves_default()` — a helper that filled every leaf with one default verdict — is why this guarantee was previously a lie: it derived each engine's table from the SAME walker the closure test compared it against, so the two could never disagree and every new leaf was silently swept into `supported`. A planted schema key passed the build. The closure test now compares the walker (code) against each engine's YAML (data) read from disk — two independent sources — and `tests/test_capabilities/test_closure.py::test_declaration_has_no_default_sweep` fails the build if any such sweep returns.
 
@@ -128,6 +133,105 @@ When adding an LLM provider: add `_call_<provider>()` in `aqueduct/agent/provide
 - **After every planning session** → update TODOs.md with agreed phases.
 - **After every phase completion** → mark phase done in TODOs.md; add entry to CHANGELOG.md.
 - **When adding a stub** → add to Active Stubs with file + line + acceptance criteria.
+
+## Maintenance playbook — "I am adding X, what breaks and what do I update?"
+
+The Change-Trigger Matrix below is the exhaustive lookup table. This section is the
+short version for the five changes that break the build on purpose: what you will
+SEE, the command you run, and the decision only a human can make. If the two ever
+disagree, the matrix wins.
+
+### Adding a grammar leaf or an `aqueduct.yml` config key
+
+**What you see.** The build goes red in two places at once: engine registration
+raises `CapabilityDeclarationError` naming the leaf, and
+`tests/test_capabilities/test_closure.py` fails with the same name. Nothing you can
+do to `parser/schema.py` or `config.py` makes it green.
+
+**What you run.** `aqueduct dev capabilities sync` (shipped command, not a repo
+script). It appends the new leaf to **every** registered engine's `capabilities.yml`
+as `undeclared`. `aqueduct dev capabilities check` reports what is still open
+without writing; that is what CI runs.
+
+**What you decide.** The build stays red after `sync`, deliberately. `undeclared` is
+a sentinel meaning "nobody has decided yet", and it is NOT a synonym for
+`unsupported` ("we decided this engine cannot do it"). Conflating those two is what
+made the closure guarantee a tautology once already. Replace each `undeclared` with
+a real verdict per engine: `supported` (optionally with `requires:` for a version
+floor and `hint:`), `unsupported`, or `ignored_with_warning`.
+
+**Do not** copy another engine's verdicts to make the red go away. Spark declares
+261 `supported` rows because Spark implements 261 things; pasting them into a new
+engine is a silent claim to implement all of them, which is precisely the failure
+this framework exists to catch. Read Spark's table; never clone it.
+
+### Adding or bumping a dependency
+
+**What you see.** Nothing breaks immediately, which is exactly why this one is easy
+to get wrong: an unpinned CI lane will keep resolving fresh and can go red weeks
+later, on a commit that did not touch dependencies.
+
+**What you run.** Widen or add the range in `pyproject.toml`, then `bash
+scripts/lock.sh`, then commit **both** the `pyproject.toml` change and the
+regenerated `requirements/*.txt`.
+
+**What you decide.** Nothing, if you keep the two tiers straight:
+
+- **Library dependencies stay RANGES.** `aqueduct-core` is published to PyPI. An
+  exact pin in `pyproject.toml` would make it uninstallable next to a user's own
+  stack. Never pin there.
+- **The CI/dev environment is LOCKED.** `requirements/ci-py311.txt` (and one
+  `requirements/compat-py3.NN.txt` per compat interpreter) are pip *constraints*
+  files: they add nothing to an install, they only fix the version of whatever the
+  ranges resolve to. The reproducible lanes set `PIP_CONSTRAINT` to them, so they
+  install the same tree in six months as today.
+- **The canary lane ignores the lock, on purpose.** `version-matrix.yml`'s
+  `snippets` job sets no constraint. It resolves fresh so an upstream release that
+  breaks Aqueduct shows up there first, as a red annotation on a
+  `continue-on-error` lane, instead of arriving later as a mystery flake in a lane
+  that is supposed to be reproducible. Adding `PIP_CONSTRAINT` to the canary looks
+  like a tidy-up and deletes the only early-warning signal in CI. `tests/test_meta_ci.py`
+  fails the build if anyone does.
+
+### Adding an engine
+
+1. `aqueduct dev capabilities scaffold --engine <name>` writes a complete
+   `capabilities.yml` with every leaf `undeclared`. Work through it leaf by leaf.
+2. Implement the `ExecutorProtocol` (`aqueduct/executor/protocol.py`): `execute`
+   (Manifest → `ExecutionResult`), `extract_error` (engine exception →
+   `FailureContext` fields), and a `PromptRules` pack (the engine's half of the
+   healing prompt). All three are required; `__post_init__` raises
+   `EnginePluginError` if any is missing, so an engine cannot register without an
+   error extractor or with another engine's healing advice.
+3. Declare an `aqueduct.engines` entry point pointing at the module that registers
+   both, as an import side effect. Core never imports an engine by name.
+
+The two errors you will meet here are different states and must not be conflated:
+`EnginePluginError` = the entry point failed to import (broken/half-installed
+package; reinstall). `CapabilityDeclarationError` = the declaration is incomplete or
+invalid (run `sync`, declare a verdict; reinstalling fixes nothing).
+
+### Changing the healing prompt
+
+Bump `PROMPT_VERSION` (`aqueduct/agent/loop.py`) when the **composed** system prompt
+changes: the engine-independent scaffold, any engine's `PromptRules` pack, the op
+table, the schema-derived rules, or the worked example. Anything the LLM sees on a
+successful turn.
+
+Do NOT bump when text merely MOVES between the scaffold and an engine's pack and the
+composed output is byte-identical (that is a refactor), or for failure-path tooling
+(reprompt templates, parser recovery passes, validation-error formatting). Bumping
+for those pollutes the `prompt_version` correlation in `healing_outcomes` /
+`benchmark_results` and makes a parser tweak look like a prompt regression.
+
+### Changing a documented contract
+
+A new or renamed `aqueduct.yml` key, a new `stores.*` backend or persistent table, an
+`agent.approval` mode, an exit code, a patch op, a CLI contract: update
+`docs/specs.md` **in the same commit** and bump its `Version X.Y` header. specs.md is
+the engine reference; it goes stale silently because the matrix routes most work to
+the dedicated guides. Grammar / `agent:` block / provider wiring also updates
+`SKILL.md`, or authoring LLMs get stale contracts.
 
 ## Change-Trigger Matrix
 
@@ -350,6 +454,7 @@ keep working. Command families live in submodules:
 | `style.py` | The single user-facing output vocabulary: `error`/`success`/`warn`/`info` + `StyledLogFormatter` (see "CLI output speaks ONE vocabulary" rule) |
 | `project.py` | `init`, `completion`, `test` |
 | `blueprint.py` | `blueprint` group: `history` (Phase 73 — chronological remediation timeline for one blueprint; merges `stores/queries.py::blueprint_history` with `git_blueprint_commits`; also registered as the `blueprint_history` tool in `aqueduct/tools/`) |
+| `dev.py` | `dev` group: `capabilities` sub-group (`scaffold`, `sync`, `check`, `docs`) — the SHIPPED engine-authoring tooling (Phase 78). Logic lives in `aqueduct/executor/capability_tooling.py`; this module is rendering + exit codes only |
 | `mcp.py` | `mcp` group: `serve` (Phase 74 — stdio MCP server over `aqueduct/tools/`; guards on `find_spec("mcp")` with an `[mcp]`-extra install hint, same pattern as `studio`/`textual`; the server itself lives in `aqueduct/mcp/server.py`) |
 
 **Rules:** submodules import the group + non-patched helpers from `aqueduct.cli`;
@@ -384,6 +489,17 @@ add a new tool by adding a query function there first, then a `_handler` +
 `register(Tool(...))` call in `registry.py`. This is the enumeration surface
 the MCP server (below) and the agentic-heal ToolBox (`agent/toolbox.py`)
 both read from — see specs.md §8.10.
+
+### `aqueduct/dev/` — extension-seam scaffolds (`aqueduct dev scaffold`, Phase 78)
+
+| Module | What it owns |
+|--------|--------------|
+| `scaffolds.py` | `render(kind, …) -> Scaffold` + `write()` for the five bring-your-own-code seams (`probe`, `assert`, `udf`, `datasource`, `secrets`). Stubs are generated FROM the live contracts — pydantic `model_fields` for config keys, the real `AssertRuleType`/`AssertOnFailAction` enums, `probe_plugins.custom_signal_source()` to classify the emitted signal, `load_resolver_fn`'s annotated type, and the INSTALLED pyspark `DataSource`'s methods-that-raise-NotImplementedError — never from template strings. The two contracts with no introspectable object (Probe `fn(df, sig_cfg)`, Assert `fn(df)`) are stated as constants here and PINNED against the real call sites by `tests/test_cli/test_cli_dev_scaffold.py`. Ships in the wheel: an extension author has a `pip install`, not a checkout. |
+| `__init__.py` | Re-export shim (`KINDS`, `Scaffold`, `render`, `write`) |
+
+Rendering lives in `aqueduct/cli/dev.py`; generators return values. Adding a seam →
+add a generator here + its acceptance test (the stub must load through that seam's
+REAL loader, never a string comparison).
 
 ### `aqueduct/mcp/` — stdio MCP server over the ToolRegistry (Phase 74)
 

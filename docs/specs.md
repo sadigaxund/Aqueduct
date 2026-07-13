@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.20: Reference Document**
+**Version 2.21: Reference Document**
 
 *Self-healing LLM-integrated pipelines for Apache Spark*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -687,6 +687,7 @@ Two rules to keep in mind:
 | `@aq.blueprint.path()` | Absolute path of the Blueprint file. |
 | `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`), branch paths/behaviour by environment. |
 | `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `databricks`). |
+| `@aq.deployment.engine()` | The execution engine this Manifest is compiled for (`deployment.engine`, e.g. `spark`): stamp it into an output path or a tag when the same Blueprint runs on more than one engine. |
 | `@aq.version()` | The Aqueduct engine version: useful for stamping outputs. |
 
 > `@aq.blueprint.* / @aq.deployment.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host, those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.blueprint.dir()` as the stable anchor instead.
@@ -1520,7 +1521,7 @@ Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
-## **10.9 Engine capability framework (2.17), the executor contract (2.18), config-leaf governance (2.19) & explicit verdict tables (2.20)**
+## **10.9 Engine capability framework (2.17), the executor contract (2.18), config-leaf governance (2.19), explicit verdict tables (2.20) & the shipped authoring tool (2.21)**
 
 The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design, `deployment.engine` selects which engine actually runs a compiled Manifest (today, `spark`). Not every engine is guaranteed to implement every grammar leaf, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced instead of a runtime surprise.
 
@@ -1531,7 +1532,8 @@ The Blueprint grammar (module types, Channel ops, Egress write modes, feature fl
 Two adjacent failure modes get their own diagnosis:
 
 - **No engines registered at all.** An empty registry means aqueduct's own entry points are invisible to `importlib.metadata`, in practice a stale install whose metadata predates the entry-point declaration. Since engine validation is fail-closed, that state would otherwise hard-fail every `aqueduct.yml` load with a misleading "Registered engines: []". The error says what it actually is: reinstall the package.
-- **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading.
+- **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading. The plugin is broken or half-present, so the message ends in reinstall advice.
+- **An incomplete or invalid declaration.** A `capabilities.yml` with a leaf that has no row, a row still on `undeclared`, a row naming a leaf that does not exist, an illegal verdict, or a malformed version specifier raises `CapabilityDeclarationError` (an `AqueductError`). This is a dev-time build failure, typically a developer who has just added a schema key that every engine now owes a verdict for, so reinstalling the package fixes nothing. The message names the offending leaves (also carried on the exception as `.leaves`) and gives the fix that works: run `aqueduct dev capabilities sync`, then declare a verdict per engine. These two states are distinguished by exception type, never by matching message text.
 
 **Verdicts.** Every engine declares, for each grammar leaf, one of these verdicts:
 
@@ -1542,9 +1544,9 @@ Two adjacent failure modes get their own diagnosis:
 
 **Declarations are data, one explicit row per leaf.** Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`) with one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Spark's has 261 rows (160 Blueprint-grammar leaves + 101 engine-config leaves), all `supported`, seven of them version-gated. There is **no default-verdict sweep**: an engine states "I support these 261 things", never "I support everything by assumption". A third-party engine author therefore ships reviewable data rather than Python.
 
-`load_declaration()` hard-validates the file at registration and raises `EnginePluginError` on: a row for a leaf that does not exist (a typo or a stale rename), an illegal verdict string, a malformed version specifier, a leaf with **no row at all**, or a row still parked on `undeclared`. An engine cannot register half-declared.
+`load_declaration()` hard-validates the file at registration and raises `CapabilityDeclarationError` on: a row for a leaf that does not exist (a typo or a stale rename), an illegal verdict string, a malformed version specifier, a leaf with **no row at all**, or a row still parked on `undeclared`. An engine cannot register half-declared.
 
-**Starting a new engine.** `python scripts/capabilities.py scaffold --engine <name>` writes that engine a complete `capabilities.yml` with every leaf present and every verdict set to `undeclared`. The engine will not register until each row is a real decision, so the author is walked through the entire grammar and config surface one leaf at a time. The scaffold is generated from the walkers, so it cannot go stale the way a checked-in template would, and it deliberately does not copy Spark's table: doing so would hand a new engine ~261 `supported` rows, a silent claim to implement the whole grammar, which is the blindness this framework exists to prevent. Read Spark's declaration as a reference; do not clone it.
+**Starting a new engine.** The tooling ships in the package, so an engine author needs nothing but `pip install aqueduct-core`: `aqueduct dev capabilities scaffold --engine <name>` writes that engine a complete `capabilities.yml` with every leaf present and every verdict set to `undeclared`. The engine will not register until each row is a real decision, so the author is walked through the entire grammar and config surface one leaf at a time. The scaffold is generated from the walkers, so it cannot go stale the way a checked-in template would, and it deliberately does not copy Spark's table: doing so would hand a new engine ~261 `supported` rows, a silent claim to implement the whole grammar, which is the blindness this framework exists to prevent. Read Spark's declaration as a reference; do not clone it.
 
 > **Corrected in 2.19.** Earlier revisions of this section claimed a new schema key without a per-engine verdict fails the build. **It did not.** Spark's table was generated by `all_leaves_default(all_leaves(), SUPPORTED)`, derived from the *same* walker the closure test compared it against, so the two sides could never disagree: every new grammar or config leaf was silently swept into `supported` and the closure test passed regardless. The guarantee was a tautology. It is now real because the walker (code) and the declaration (data) are independent sources that can actually disagree, and the closure test compares them.
 
@@ -1559,12 +1561,14 @@ The closure test (`tests/test_capabilities/test_closure.py`) compares that deriv
 **The developer workflow when a leaf is added:**
 
 1. Add a field to `parser/schema.py` or `config.py` (or a Channel op, write mode, fan mode, feature flag).
-2. The build breaks: engine registration raises `EnginePluginError`, and the closure test names the offending leaf.
-3. Run `python scripts/capabilities.py sync`, which appends the new leaf to **every** engine's YAML as `undeclared`. The build stays red, `undeclared` is not a verdict.
+2. The build breaks: engine registration raises `CapabilityDeclarationError`, and the closure test names the offending leaf.
+3. Run `aqueduct dev capabilities sync`, which appends the new leaf to **every** engine's YAML as `undeclared`. The build stays red, `undeclared` is not a verdict.
 4. A human replaces each `undeclared` with a real verdict for that engine.
 5. The build passes.
 
-`python scripts/capabilities.py check` reports drift without writing (CI-friendly), and `python scripts/capabilities.py docs` regenerates the engine matrix in `docs/compatibility.md` from the declarations, so the published matrix is derived from the same data the engine enforces rather than hand-maintained.
+`aqueduct dev capabilities check` reports drift without writing (CI-friendly, and the `capabilities-tests` job runs it), and `aqueduct dev capabilities docs` regenerates the engine matrix in `docs/compatibility.md` from the declarations, so the published matrix is derived from the same data the engine enforces rather than hand-maintained.
+
+**The tool is part of the product (2.21).** The four commands above live in the installed package (`aqueduct/executor/capability_tooling.py`, exposed through `aqueduct/cli/dev.py`), not in the repository's `scripts/` directory, which is not in the wheel. An engine can only register once every one of its 261 leaves carries a verdict, so a third-party author who cannot generate the table cannot ship an engine at all: hand-writing 261 rows does not scale, and copying Spark's declaration hands the new engine 261 `supported` rows, which is the blind inheritance the framework exists to prevent. `scripts/capabilities.py` is kept only as a thin wrapper that forwards to the same code, so there is exactly one implementation.
 
 **`ExecutorProtocol` — the execution contract.** Registering a capability declaration says what an engine supports; `ExecutorProtocol` (`aqueduct/executor/protocol.py`) says how core actually talks to it. Every engine registers exactly one `ExecutorProtocol` instance, alongside its `EngineCapabilities`, as an import side effect of its `aqueduct.engines` entry-point module. The contract has three parts:
 
