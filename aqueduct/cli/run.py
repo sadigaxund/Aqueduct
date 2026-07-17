@@ -328,8 +328,10 @@ def _load_engine_config(
     # 2.0: the duckdb observability path is a routing DIRECTORY only (config
     # load rejects `.db`-suffixed paths) — per-blueprint files always live at
     # `<base>/<blueprint_id>/observability.db`. `--store-dir` bypasses routing.
+    from aqueduct.config import DEFAULT_OBS_ROUTING_ROOT
+
     _using_default_obs_path = False
-    _obs_routing_base = ".aqueduct/observability"
+    _obs_routing_base = DEFAULT_OBS_ROUTING_ROOT
     if store_dir_abs:
         resolved_store_dir = store_dir_abs
     else:
@@ -869,15 +871,28 @@ def _setup_surveyor(
     _patch_store = surveyor.patch_store()
 
     # ── Engine session ────────────────────────────────────────────────────────────
+    # Built THROUGH THE PROTOCOL REGISTRY, not a per-engine branch. The old
+    # `if engine == "spark": make_spark_session() else: raise NotImplementedError`
+    # meant the CLI could never reach any engine but Spark regardless of which
+    # handlers existed; `get_protocol(engine).make_session(SessionSpec(...))`
+    # dispatches by contract. An engine registered without a session factory
+    # raises a clean EnginePluginError (naming the engine) via session_factory(),
+    # the AqueductError replacement for the bare NotImplementedError.
+    from aqueduct.executor.protocol import SessionSpec, get_protocol
     merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-    if engine == "spark":
-        from aqueduct.executor.spark.session import make_spark_session
-        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
-    else:
-        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
+    _protocol = get_protocol(engine)
+    session = _protocol.session_factory()(
+        SessionSpec(
+            blueprint_id=manifest.blueprint_id,
+            engine_config=merged_spark_config,
+            master_url=master_url,
+            quiet_startup=not verbose,
+        )
+    )
 
     import atexit
-    atexit.register(session.stop)
+    _close_session = _protocol.session_closer()
+    atexit.register(lambda: _close_session(session))
 
     return _SurveyorSetupResult(
         resolved_store_dir=resolved_store_dir,
@@ -1318,7 +1333,7 @@ def run(
                 run_id=iter_run_id, status=hook_status,
                 blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=ctx, session=session,
+                failure_ctx=ctx, session=session, engine=engine,
             )
 
         def _render_module_summary(_result) -> None:
@@ -2688,7 +2703,7 @@ def run(
                 run_id=run_id, status="failure",
                 blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=failure_ctx, session=session,
+                failure_ctx=failure_ctx, session=session, engine=engine,
             )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
@@ -2731,7 +2746,7 @@ def run(
             run_id=run_id, status=result.status,
             blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
             allow_command_hooks=cfg.danger.allow_command_hooks,
-            session=session,
+            session=session, engine=engine,
         ):
             _style_success("run complete")
     finally:

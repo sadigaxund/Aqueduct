@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 # Side effect: registers "spark" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
 # Pure data (pyspark-free) — see that module's docstring.
 import aqueduct.executor.spark.capabilities  # noqa: F401
-from aqueduct.executor.protocol import ExecutorProtocol, register_protocol
+from aqueduct.executor.protocol import ExecutorProtocol, SessionSpec, register_protocol
 from aqueduct.executor.spark.prompt_rules import SPARK_PROMPT_RULES
 
 if TYPE_CHECKING:
@@ -84,11 +84,49 @@ def _extract_error(exc: BaseException | None) -> dict[str, Any] | None:
     return _extract_structured_error(exc)
 
 
+def _make_session(spec: SessionSpec) -> Any:
+    """``ExecutorProtocol.make_session`` for Spark — lazy ``pyspark`` import.
+
+    Thin translation from the engine-agnostic ``SessionSpec`` to the existing
+    ``make_spark_session(...)`` call the CLI used to make inline. Behaviour is
+    unchanged: the CLI's old
+    ``make_spark_session(manifest.blueprint_id, merged_spark_config,
+    master_url=master_url, quiet_startup=not verbose)`` maps field-for-field
+    onto the spec. The lazy import (inside the body) keeps this module —
+    and the ``ExecutorProtocol`` object below — importable without ``pyspark``.
+    ``make_spark_session`` is imported by name so a test patching
+    ``aqueduct.executor.spark.session.make_spark_session`` still intercepts it.
+    """
+    from aqueduct.executor.spark.session import make_spark_session
+
+    return make_spark_session(
+        spec.blueprint_id,
+        spec.engine_config,
+        master_url=spec.master_url or "local[*]",
+        quiet=spec.quiet,
+        quiet_startup=spec.quiet_startup,
+    )
+
+
+def _close_session(session: Any) -> None:
+    """``ExecutorProtocol.close_session`` for Spark.
+
+    Preserves the CLI's prior teardown exactly: it registered ``session.stop``
+    with ``atexit``, a raw stop (NOT ``stop_spark_session``'s ``AQ_TESTING``
+    guard, which belongs to short-lived commands like ``doctor``/``test`` that
+    may share the fixture session). Keeping the raw stop here means the
+    ``aqueduct run`` teardown is byte-for-byte what it was.
+    """
+    session.stop()
+
+
 SPARK = ExecutorProtocol(
     engine="spark",
     execute=_execute,
     extract_error=_extract_error,
     prompt_rules=SPARK_PROMPT_RULES,
+    make_session=_make_session,
+    close_session=_close_session,
 )
 register_protocol(SPARK)
 

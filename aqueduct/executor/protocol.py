@@ -75,7 +75,7 @@ per-engine imports anywhere in core.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from aqueduct.errors import EnginePluginError, UnknownEngineError
@@ -85,6 +85,54 @@ if TYPE_CHECKING:
 
 # engine exception (or None) -> FailureContext field dict (or None).
 ErrorExtractor = Callable[[BaseException | None], "dict[str, Any] | None"]
+
+
+@dataclass(frozen=True)
+class SessionSpec:
+    """The engine-agnostic request for constructing an execution session.
+
+    ``ExecutorProtocol.execute`` takes an already-built engine handle
+    (a ``SparkSession``, a ``duckdb`` connection, ...) as its second argument.
+    Who builds that handle, and how it is torn down, used to be hardcoded in
+    ``aqueduct/cli/run.py`` behind ``if engine == "spark": make_spark_session()
+    else: raise NotImplementedError`` — so the CLI could not reach any engine
+    but Spark regardless of what handlers existed. ``make_session`` /
+    ``close_session`` (below) move that construction behind the protocol; this
+    is the generic input they take.
+
+    The fields are the UNION of what the registered engines actually need to
+    build a session, NOT Spark's constructor signature verbatim — an engine
+    reads the fields it understands and ignores the rest (DuckDB is a
+    single-process ``:memory:`` connection and needs none of ``master_url`` /
+    ``quiet`` / ``quiet_startup``, but the same ``aqueduct.yml`` and CLI flags
+    stay valid on both engines).
+
+    Attributes:
+        blueprint_id: Used as the session's app/label where an engine has one
+            (Spark app name). Always available (every Manifest has one).
+        engine_config: The engine's own config bag — Spark's merged
+            ``spark_config`` (``{**cfg.spark_config, **manifest.spark_config}``)
+            for the Spark engine; ``{}`` (ignored) for DuckDB this stage. A
+            future ``duckdb_config`` would be read from here.
+        master_url: Cluster/connection URL for engines that submit to one
+            (Spark). Meaningless and ignored for a single-node engine.
+        quiet: Full log suppression during and after session startup (health
+            checks / ``doctor``).
+        quiet_startup: Suppress only the engine's startup banner, leaving the
+            runtime log level unchanged. The clean default for ``aqueduct run``.
+    """
+
+    blueprint_id: str
+    engine_config: dict[str, Any] = field(default_factory=dict)
+    master_url: str = ""
+    quiet: bool = False
+    quiet_startup: bool = False
+
+
+# (session spec) -> engine session handle (SparkSession, duckdb connection, ...).
+SessionFactory = Callable[["SessionSpec"], Any]
+# (engine session handle) -> None. Tears down what SessionFactory built.
+SessionCloser = Callable[[Any], None]
 
 
 @dataclass(frozen=True)
@@ -218,6 +266,20 @@ class ExecutorProtocol:
             is a silent quality regression, not an acceptable default.
         prompt_rules: The engine's ``PromptRules`` pack (see above). Required
             for the same reason.
+        make_session: ``(SessionSpec) -> session`` — builds the engine handle
+            ``execute`` runs against (a ``SparkSession``, a ``duckdb``
+            connection, ...). Like ``execute``, must defer its engine runtime
+            import to call time so constructing the protocol object never
+            requires the engine's dependency. OPTIONAL at registration (default
+            ``None``): an engine used only for the compile-time capability gate,
+            or a lightweight test double, has no session to build. A real
+            ``aqueduct run`` on the engine needs it — the CLI resolves it
+            through ``session_factory()`` below, which raises a clean
+            ``EnginePluginError`` (never ``NotImplementedError``) if the engine
+            reached the run path without one.
+        close_session: ``(session) -> None`` — tears down what ``make_session``
+            built. OPTIONAL (default ``None`` = no teardown needed); resolved
+            through ``session_closer()``.
 
     A registration failure raises ``EnginePluginError`` (an ``AqueductError``),
     never a bare builtin: an engine-plugin author hitting one of these guards
@@ -229,6 +291,33 @@ class ExecutorProtocol:
     execute: Callable[..., ExecutionResult]
     extract_error: ErrorExtractor
     prompt_rules: PromptRules
+    # Session lifecycle — optional at registration, resolved (with a clean
+    # error) at the CLI run path. See the attribute docs above for why these
+    # are not enforced in __post_init__ the way execute/extract_error are.
+    make_session: SessionFactory | None = None
+    close_session: SessionCloser | None = None
+
+    def session_factory(self) -> SessionFactory:
+        """Return ``make_session`` or raise a clean error if the engine has none.
+
+        Called on the real ``aqueduct run`` path. An engine that registered
+        without a session factory (a test double, or a compile-only engine)
+        reaching here is an ``EnginePluginError`` naming the engine — the
+        replacement for the old ``NotImplementedError`` hardcoded in the CLI,
+        which named nothing and was not an ``AqueductError``.
+        """
+        if self.make_session is None:
+            raise EnginePluginError(
+                f"engine {self.engine!r}: no session factory registered — this engine's "
+                "ExecutorProtocol has make_session=None, so `aqueduct run` cannot build a "
+                "session for it. A runnable engine must supply make_session (and normally "
+                "close_session) in its aqueduct.engines entry-point module."
+            )
+        return self.make_session
+
+    def session_closer(self) -> SessionCloser:
+        """Return ``close_session`` or a no-op if the engine declared none."""
+        return self.close_session or (lambda _session: None)
 
     def __post_init__(self) -> None:
         if not self.engine:
@@ -301,6 +390,9 @@ __all__ = [
     "ErrorExtractor",
     "ExecutorProtocol",
     "PromptRules",
+    "SessionSpec",
+    "SessionFactory",
+    "SessionCloser",
     "PROTOCOL_REGISTRY",
     "register_protocol",
     "get_protocol",
