@@ -28,11 +28,11 @@ from typing import Any
 
 import duckdb
 
-from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+from aqueduct.config import DEFAULT_OBS_DB_FILENAME, DEFAULT_OBS_ROUTING_ROOT
 from aqueduct.executor.models import ExecutionStatus
 from aqueduct.stores.object_store import PatchStore
 
-_DEFAULT_OBS_ROOT = ".aqueduct/observability"
+_DEFAULT_OBS_ROOT = DEFAULT_OBS_ROUTING_ROOT
 
 
 # ── Single-store row shapes ─────────────────────────────────────────────────

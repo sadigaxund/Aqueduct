@@ -37,6 +37,16 @@ from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
+# The default observability ROUTING directory (not a `.db` file — config load
+# rejects `.db`-suffixed `stores.observability.path` values; per-blueprint
+# files always live at `<this>/<blueprint_id>/observability.db`). Single
+# source of truth for the three call sites that previously each hardcoded
+# this literal independently: `aqueduct/cli/run.py` (`_obs_routing_base`),
+# `aqueduct/stores/queries.py` (`_DEFAULT_OBS_ROOT`), and
+# `aqueduct/stores/read.py` (`_OBS_ROUTING_ROOT`). Pure DRY — no behavior
+# change; the value is unchanged.
+DEFAULT_OBS_ROUTING_ROOT: str = ".aqueduct/observability"
+
 # Matches any RFC3986-shaped URI scheme prefix (s3://, s3a://, gs://, hdfs://,
 # abfss://, postgresql://, ...). Used to reject remote URIs on LOCAL-PATH-ONLY
 # config fields (e.g. `checkpoint_root`) with an actionable error instead of
