@@ -91,7 +91,9 @@ def test_unknown_engine_raises_unknown_engine_error_not_silent_empty():
     with pytest.raises(UnknownEngineError, match="unknown engine 'flink'") as excinfo:
         get_capabilities("flink")
     assert excinfo.value.engine == "flink"
-    assert excinfo.value.engines == ["spark"]
+    # Phase 78 Stage A registered a second real engine (duckdb); this
+    # asserts the full sorted registered-engines list, not a Spark-only one.
+    assert excinfo.value.engines == ["duckdb", "spark"]
     assert excinfo.value.no_engines_registered is False
 
     manifest = compile_bp(parse(_PLAIN_SNIPPET), blueprint_path=_PLAIN_SNIPPET, engine="spark")
