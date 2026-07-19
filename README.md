@@ -97,7 +97,26 @@ Three promises, each enforced by machinery rather than review discipline:
 - Nothing that can change your results is ever silently ignored. The engine honors it, warns about it, or refuses to compile.
 - Healed blueprints record which engine produced each patch. Deploy a DuckDB-healed blueprint to Spark and the compiler tells you.
 
-The two engines do not promise identical values, and Aqueduct does not pretend they do. SQL dialects genuinely differ. Your `Assert` rules run on both engines, so the properties you care about are the properties that get checked. That is your portability contract.
+The two engines do not promise identical values, and Aqueduct does not pretend they do. SQL dialects genuinely differ; the known differences are cataloged in the [Compatibility Matrix](docs/compatibility.md). Your `Assert` rules run on both engines, so the properties you care about are the properties that get checked. That is your portability contract.
+
+### Polyglot pipelines
+
+Engines can also mix inside one blueprint. Set `engine:` on a module and everything downstream inherits it until another module overrides:
+
+```yaml
+modules:
+  - id: extract        # heavy join across two warehouses
+    type: Channel
+    engine: spark
+    config: { op: sql, query: "..." }
+
+  - id: aggregate      # small result, no cluster needed
+    type: Channel
+    engine: duckdb
+    config: { op: sql, query: "SELECT region, sum(amount) FROM extract GROUP BY region" }
+```
+
+The compiler partitions the DAG into engine islands and inserts a handoff at each boundary. The handoff materializes data as parquet at a configurable location, visible in observability like any other module, with bytes and duration recorded. Each handoff point is announced at compile time, because the extra I/O is a real cost you should see before the run. If an island fails, a rerun picks up the already-materialized upstream data instead of recomputing it. Two independent flows with different engines run side by side with no handoff at all.
 
 ## What you get
 
@@ -108,6 +127,7 @@ The two engines do not promise identical values, and Aqueduct does not pretend t
 | **Engine capability gate** | Unsupported features fail at compile time with a named capability, never mid-run | [Compatibility Matrix](docs/compatibility.md) |
 | **Portable types** | One type vocabulary across engines; ambiguous spellings rejected at parse time | [Spec §9](docs/specs.md) |
 | **Heal provenance** | Blueprints record which engine healed them; cross-engine deploys warn at compile | [Spec §8.14](docs/specs.md) |
+| **Polyglot pipelines** | Per-module engine choice; automatic, observable handoff at engine boundaries | [Spec](docs/specs.md) |
 | **Observability store** | Runs, failures, heal attempts, metrics in queryable DuckDB/Postgres | [Observability Guide](docs/observability_guide.md) |
 | **Column lineage** | Compile-time, zero engine actions; powers the patch lineage gate | [Spec §7](docs/specs.md) |
 | **Data quality** | Inline `Assert` rules + Spillway quarantine: bad rows are routed to a typed error sink instead of being dropped | [Spec §4.4](docs/specs.md) |
@@ -197,6 +217,7 @@ Review it, then `aqueduct patch apply`, or let `auto` mode validate and apply it
 - **Loops are bounded.** A multi-axis budget caps wall-clock time, tokens, reprompts, and stuck-signature windows. A rolling rate limit caps heals per hour per blueprint.
 - **Decisions are auditable.** Every LLM turn is recorded with the gate that rejected it, a stable error signature, and the prompt version. One run id joins every iteration of a heal.
 - **Efficient.** Healing stops on the first successful patch. Structured error extraction replaces multi-kilobyte traces with a short root-cause block. Cheap lineage and sandbox checks reject bad patches in seconds, before any full-pipeline replay.
+- **Reach beyond the blueprint, with the same discipline.** Healing extends past pipeline definitions into engine and session config (allowlisted keys only) and dependency declarations, each behind its own gate. Config patches are validated against a per-engine allowlist and replayed in the sandbox. Dependency fixes are declared and validated, then delivered for redeploy rather than live-installed. Data mutation stays off by default: the agent never touches your data without an explicit opt-in and per-action human approval.
 
 For the stage-by-stage detail, see the [Blueprint & Engine Spec](docs/specs.md).
 
