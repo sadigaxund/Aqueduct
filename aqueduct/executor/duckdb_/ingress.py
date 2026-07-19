@@ -189,25 +189,33 @@ def _enforce_on_new_columns(
 
 # DuckDB relation column types (rel.types) are duckdb.typing.DuckDBPyType
 # objects; str() gives the canonical DuckDB type name (e.g. "BIGINT",
-# "VARCHAR"). Common Spark-vocabulary aliases are normalised so a schema_hint
-# written for Spark's simpleString() vocabulary (e.g. "string", "long") also
-# validates on DuckDB without the author needing two Blueprints.
-_TYPE_ALIASES: dict[str, str] = {
-    "string": "varchar",
-    "long": "bigint",
-    "integer": "integer",
-    "int": "integer",
-    "bool": "boolean",
-    "short": "smallint",
-    "byte": "tinyint",
-    "double": "double",
-    "float": "float",
-}
+# "VARCHAR", "INTEGER[]", "STRUCT(x INTEGER)"). schema_hint field types are
+# rendered through the Arrow type hub (Phase 80 work package 3) to DuckDB's
+# own spelling before comparison, so a schema_hint written against the hub
+# vocabulary (e.g. "array<int>", "timestamp_ntz") — or against Spark's
+# simpleString() vocabulary via the hub's own familiar aliases ("string",
+# "long") — validates on DuckDB without the author needing two Blueprints.
+# Replaces the old ``_TYPE_ALIASES`` 9-entry scalar-only dict. Only the
+# HINT's expected type goes through the hub — ``rel.types``' own ``str(dtype)``
+# representation is ALREADY an unambiguous, concrete DuckDB spelling (never a
+# Blueprint-authored spelling), so it is only lower-cased, never re-parsed
+# through the hub: parsing it would route a genuinely-native ``"TIMESTAMP"``
+# through the hub's bare-``timestamp`` AMBIGUITY resolution (see
+# ``typehub.py``'s ``timestamp`` branch), silently reinterpreting a real,
+# concrete DuckDB column type as ``timestamp_tz`` instead of comparing it
+# as what it already, unambiguously, is.
+def _normalize_actual_type(t: str) -> str:
+    return str(t).strip().lower()
 
 
-def _normalize_type(t: str) -> str:
-    lower = t.lower()
-    return _TYPE_ALIASES.get(lower, lower)
+def _normalize_hint_type(module_id: str, t: str) -> str:
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.duckdb_.type_render import normalize_type_spelling
+
+    try:
+        return normalize_type_spelling(str(t)).lower()
+    except EnginePluginError as exc:
+        raise IngressError(f"[{module_id}] schema_hint type {str(t)!r}: {exc}") from exc
 
 
 def _validate_schema_hint(
@@ -223,7 +231,7 @@ def _validate_schema_hint(
     hinted fields are OK; only present ones are type-checked).
     """
     actual: dict[str, str] = {
-        name: _normalize_type(str(dtype)) for name, dtype in zip(rel.columns, rel.types, strict=True)
+        name: _normalize_actual_type(str(dtype)) for name, dtype in zip(rel.columns, rel.types, strict=True)
     }
 
     if mode not in ("strict", "additive", "subset"):
@@ -241,7 +249,7 @@ def _validate_schema_hint(
                 f"Available columns: {sorted(actual)}"
             )
         expected_type = hint.get("type")
-        if expected_type and actual[name] != _normalize_type(expected_type):
+        if expected_type and actual[name] != _normalize_hint_type(module_id, expected_type):
             raise IngressError(
                 f"[{module_id}] schema_hint type mismatch on {name!r}: "
                 f"expected {expected_type!r}, actual {actual[name]!r}"

@@ -34,6 +34,7 @@ from aqueduct.errors import AqueductError
 from aqueduct.parser.parser import ParseError, parse
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
 from aqueduct.patch.operations import PatchOperationError, apply_operation
+from aqueduct.patch.provenance import build_healed_by_record
 from aqueduct.redaction import redact as _redact
 from aqueduct.stores.object_store import PatchStore
 
@@ -130,6 +131,65 @@ def _to_ruamel(data: Any) -> Any:
     buf = StringIO()
     _ryaml.dump(data, buf)
     return _ryaml.load(buf.getvalue())
+
+
+def _append_healed_by(patched: Any, record: dict[str, Any] | None) -> Any:
+    """Append one ``healed_by:`` record to a ruamel-loaded Blueprint dict.
+
+    No-op (returns ``patched`` unchanged) when ``record`` is None — a patch
+    with no heal-engine provenance (hand-authored, no ``_aq_meta.engine``)
+    does not get a `healed_by` entry. Ruamel round-trip safe: the record is
+    converted through ``_to_ruamel`` before insertion so block-style
+    formatting/comments on the rest of the document survive.
+    """
+    if record is None:
+        return patched
+    if patched.get("healed_by") is None:
+        patched["healed_by"] = _to_ruamel([])
+    patched["healed_by"].append(_to_ruamel(record))
+    return patched
+
+
+def stamp_validated_engine(blueprint_path: Path, engine: str) -> bool:
+    """Self-clearing provenance stamp (Phase 79): append *engine* to every
+    ``healed_by`` record's ``validated_on`` list on a GREEN run, when it
+    isn't already there.
+
+    Best-effort and MUST NEVER raise — called from the CLI's run-success
+    path; a stamp failure must never fail an otherwise-successful run. A
+    Blueprint with no `healed_by:` block is left untouched entirely (no write
+    at all), never given an empty block.
+
+    Returns True if the file was rewritten (something changed), False
+    otherwise (no provenance records, nothing to add, or an error — check the
+    log for the latter).
+    """
+    try:
+        if not blueprint_path.exists():
+            return False
+        raw = _yaml_load(blueprint_path)
+        healed_by = raw.get("healed_by") if hasattr(raw, "get") else None
+        if not healed_by:
+            return False
+        changed = False
+        for rec in healed_by:
+            validated = rec.get("validated_on")
+            if validated is None:
+                rec["validated_on"] = _to_ruamel([engine])
+                changed = True
+            elif engine not in list(validated):
+                validated.append(engine)
+                changed = True
+        if changed:
+            _yaml_dump(raw, blueprint_path)
+        return changed
+    except Exception:
+        logger.warning(
+            "stamp_validated_engine failed for %s (engine=%s) — provenance "
+            "validated_on not updated; run success is unaffected",
+            blueprint_path, engine, exc_info=True,
+        )
+        return False
 
 
 def apply_patch_to_dict(bp: dict, patch_spec: PatchSpec) -> dict:
@@ -332,8 +392,29 @@ def apply_patch_file(
     if not blueprint_path.exists():
         raise PatchError(f"Blueprint not found: {blueprint_path}")
 
+    # Single timestamp for both the healed_by record (below) and the applied
+    # patch archive (step 7) — one apply, one applied_at.
+    applied_at = datetime.now(tz=UTC).isoformat()
+
     # ── 1. Load and validate PatchSpec ────────────────────────────────────────
     patch_spec = load_patch_spec(patch_path)
+
+    # Raw JSON (pre-validation) carries `_aq_meta` — PATCH_META_KEY is popped
+    # before PatchSpec validation in load_patch_spec, so re-read it here for
+    # the healed_by provenance record (engine/engine_version/run_id the heal
+    # loop stamped — see aqueduct/agent/loop.py). Best-effort: an unreadable
+    # or meta-less patch simply gets no healed_by record (see
+    # build_healed_by_record's docstring — that's correct for a
+    # hand-authored patch, not just a fallback).
+    try:
+        _raw_patch_json = json.loads(patch_path.read_text(encoding="utf-8"))
+    except Exception:
+        _raw_patch_json = {}
+    _patch_meta_raw = (
+        _raw_patch_json.get(PATCH_META_KEY, {})
+        if isinstance(_raw_patch_json, dict) else {}
+    )
+    _patch_meta: dict[str, Any] = _patch_meta_raw if isinstance(_patch_meta_raw, dict) else {}
 
     # ── 2. Load Blueprint YAML (ruamel preserves comments + key order) ───────
     try:
@@ -346,6 +427,20 @@ def apply_patch_file(
 
     # ── 3 & 4. Apply operations on deep copy ──────────────────────────────────
     patched = apply_patch_to_dict(bp_raw, patch_spec)
+
+    # ── 4.5 Heal-patch provenance (Phase 79) — append/extend `healed_by:` ────
+    # BEFORE the post-patch parse verification (next step), so a malformed
+    # HealedByRecordSchema fails the apply atomically like any other
+    # operation, and so `validate_unique_module_ids`/schema checks below see
+    # the final document.
+    _healed_by_record = build_healed_by_record(
+        patch_id=patch_spec.patch_id,
+        operations=patch_spec.operations,
+        meta=_patch_meta,
+        applied_at=applied_at,
+        fallback_run_id=patch_spec.run_id,
+    )
+    patched = _append_healed_by(patched, _healed_by_record)
 
     # ── 5. Re-parse to verify Blueprint validity ──────────────────────────────
     tmp_verify = blueprint_path.with_suffix(".patch_verify.tmp.yml")
@@ -374,12 +469,11 @@ def apply_patch_file(
         raise PatchError(f"Failed to write patched Blueprint: {exc}") from exc
 
     # ── 7. Archive PatchSpec to applied/ (in the PatchStore when given) ───────
-    applied_at = datetime.now(tz=UTC).isoformat()
     filename = Path(pending_key).name if pending_key else patch_path.name
     archive_path = (patches_dir / "applied" / filename)
     applied_key: str | None = None
     try:
-        raw_spec = json.loads(patch_path.read_text(encoding="utf-8"))
+        raw_spec = _raw_patch_json if isinstance(_raw_patch_json, dict) else json.loads(patch_path.read_text(encoding="utf-8"))
         raw_spec["applied_at"] = applied_at
         raw_spec["blueprint_path"] = str(blueprint_path)
         if patch_store is not None:

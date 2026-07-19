@@ -59,7 +59,7 @@ leaves:
   agent.field.base_url: supported
   agent.field.block_on_explain_regression:
     support: unsupported
-    hint: "block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture this stage."
+    hint: "block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented."
   agent.field.cascade: supported
   agent.field.confidence_threshold: supported
   agent.field.deep_loop: supported
@@ -107,29 +107,56 @@ leaves:
   # cast, rename, sort, union (each has a real handler + a DuckDB test) ────
   channel.op.cache:
     support: unsupported
-    hint: "op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented this stage."
-  channel.op.cast: supported
+    hint: "op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented."
+  channel.op.cast:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast
   channel.op.coalesce:
     support: unsupported
     hint: "op=coalesce is a Spark physical-partition-count hint; DuckDB has no partition concept to coalesce. Not applicable."
-  channel.op.deduplicate: supported
-  channel.op.filter: supported
-  channel.op.join: supported
-  channel.op.rename: supported
+  channel.op.deduplicate:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_deduplicate_no_key
+  channel.op.filter:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_filter
+  channel.op.join:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_join
+  channel.op.rename:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_rename
   channel.op.repartition:
     support: unsupported
     hint: "op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable."
-  channel.op.select: supported
-  channel.op.sort: supported
-  channel.op.sql: supported
-  channel.op.union: supported
+  channel.op.select:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_select
+  channel.op.sort:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_sort
+  channel.op.sql:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_sql_transpiled_from_spark_dialect
+  channel.op.union:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_union
 
   # ── Engine config (aqueduct.yml) ─────────────────────────────────────────
   config.agent.api_key: supported
   config.agent.base_url: supported
   config.agent.block_on_explain_regression:
     support: unsupported
-    hint: "relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent this stage."
+    hint: "relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented."
   config.agent.budget.max_reprompts: supported
   config.agent.budget.max_seconds: supported
   config.agent.budget.max_tokens_total: supported
@@ -191,19 +218,19 @@ leaves:
     hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
   config.lineage.openlineage_namespace:
     support: ignored_with_warning
-    hint: "the DuckDB executor emits no OpenLineage events this stage; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    hint: "the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.lineage.openlineage_url:
     support: ignored_with_warning
-    hint: "the DuckDB executor emits no OpenLineage events this stage; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    hint: "the DuckDB executor does not emit OpenLineage events; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.metrics.use_observe:
     support: unsupported
     hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally."
   config.probes.default_sample_fraction:
     support: ignored_with_warning
-    hint: "Probe (module.type.Probe) is unsupported on DuckDB this stage, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.probes.max_sample_rows:
     support: ignored_with_warning
-    hint: "Probe (module.type.Probe) is unsupported on DuckDB this stage, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
   config.secrets.provider: supported
   config.secrets.region: supported
   config.secrets.resolver: supported
@@ -219,6 +246,7 @@ leaves:
   config.stores.depots: supported
   config.stores.observability.backend: supported
   config.stores.observability.path: supported
+  config.warnings.strict: supported
   config.warnings.suppress: supported
   config.webhooks.on_ci_patch.backoff_seconds: supported
   config.webhooks.on_ci_patch.headers: supported
@@ -277,13 +305,27 @@ leaves:
   egress.mode.append:
     support: supported
     hint: "Implemented as a NON-ATOMIC read-existing + UNION ALL BY NAME + rewrite (DuckDB's COPY ... TO has no native append). A crash mid-rewrite can lose the prior file, and two concurrent appenders race — acceptable for single-process local batch, not a substitute for a transactional sink."
-  egress.mode.error: supported
-  egress.mode.errorifexists: supported
-  egress.mode.ignore: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_append_to_existing_target_unions_rows
+  egress.mode.error:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_error_mode_existing_target_raises
+  egress.mode.errorifexists:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_errorifexists_mode_existing_target_raises
+  egress.mode.ignore:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_ignore_mode_existing_target_skips_write
   egress.mode.merge:
     support: unsupported
-    hint: "mode=merge (upsert) requires a target table format with a transaction log (Delta); not implemented for DuckDB this stage."
-  egress.mode.overwrite: supported
+    hint: "mode=merge (upsert) requires a target table format with a transaction log (Delta). Not implemented for DuckDB."
+  egress.mode.overwrite:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
 
   # ── DEFERRED (Stage B candidates) — provisionally unsupported. DuckDB can
   # implement each of these; they were deliberately left out of Stage A scope
@@ -291,28 +333,31 @@ leaves:
   # per leaf once a later stage picks them up. ──────────────────────────────
   egress.mode.overwrite_partitions:
     support: unsupported
-    hint: "DuckDB can do this via COPY ... TO with PARTITION_BY plus pruning the target partition directories before write; deferred to a later stage, not implemented in Stage A."
+    hint: "Requires COPY ... TO with PARTITION_BY plus pruning the target partition directories before write. Not implemented."
   egress.on_new_columns.alert:
     support: unsupported
-    hint: "DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
   egress.on_new_columns.allow:
     support: unsupported
-    hint: "DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
   egress.on_new_columns.fail:
     support: unsupported
-    hint: "DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
   egress.format.delta:
     support: unsupported
-    hint: "DuckDB can do this via a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB itself has no writer for); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   egress.format.depot:
     support: unsupported
-    hint: "DuckDB can do this via the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
 
   # ── Feature flags ─────────────────────────────────────────────────────────
   feature.broadcast_junction:
     support: unsupported
     hint: "broadcast_junction names a Spark distributed-join optimization; DuckDB is single-process, so there is nothing to broadcast. junction.mode.broadcast (fan-out to identical branches) is unaffected and supported."
-  feature.checkpoint: supported
+  feature.checkpoint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_feature_checkpoint_driven_through_execute
   feature.custom_datasource:
     support: unsupported
     hint: "Custom Python DataSource is a pyspark>=4.0 API — Spark-only."
@@ -324,27 +369,69 @@ leaves:
     hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module; DuckDB has no stage-fusion concept to work around — module metrics are already collected per module."
   feature.python_udf:
     support: unsupported
-    hint: "DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented/tested this stage — declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics."
-  feature.spillway: supported
+    hint: "DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented or tested: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics."
+  feature.spillway:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_feature_spillway_driven_through_execute
+  feature.table_addressing:
+    support: unsupported
+    hint: "DuckDB Ingress/Egress require format:+path: — there is no catalog to resolve a bare table: name against. Use format:+path: instead of table: addressing on this engine."
 
   # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
   # for the grouping rationale; same "one-line flip later" intent. ─────────
   feature.delta_time_travel:
     support: unsupported
-    hint: "DuckDB can do this via a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp). Not implemented."
   feature.delta_write:
     support: unsupported
-    hint: "DuckDB can do this via a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB itself has no writer for); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
   feature.parallel_mode:
     support: unsupported
-    hint: "DuckDB can do this via a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries); deferred to a later stage, not implemented in Stage A. The executor runs the topological order serially today."
+    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries). Not implemented: the executor runs the topological order serially today."
 
   # ── Funnel modes — Stage A scope: union_all, union, coalesce, zip (each
   # has a real handler + a DuckDB test) ────────────────────────────────────
-  funnel.mode.coalesce: supported
-  funnel.mode.union: supported
-  funnel.mode.union_all: supported
-  funnel.mode.zip: supported
+  funnel.mode.coalesce:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_coalesce_folds_overlapping_columns
+  funnel.mode.union:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_union_dedupes
+  funnel.mode.union_all:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_union_all
+  funnel.mode.zip:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_zip_row_aligned_join
+
+  # ── Self-heal provenance (Phase 79) — compiler-consumed metadata only, no
+  # engine executes this block, so it is trivially supported everywhere ────
+  healed_by.field.applied_at:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.classification:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine_version:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.patch_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.run_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.validated_on:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
 
   # ── Hooks / webhooks — fire off ExecutionResult, engine-independent ─────
   hook_entry.field.blueprint: supported
@@ -360,7 +447,10 @@ leaves:
 
   # ── Ingress formats — Stage A scope: csv (parquet/json are ungated,
   # always available via read_parquet/read_json) ──────────────────────────
-  ingress.format.csv: supported
+  ingress.format.csv:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_csv
   ingress.format.custom:
     support: unsupported
     hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
@@ -372,18 +462,27 @@ leaves:
   # for the grouping rationale; same "one-line flip later" intent. ─────────
   ingress.format.delta:
     support: unsupported
-    hint: "DuckDB can do this via a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented."
   ingress.format.depot:
     support: unsupported
-    hint: "DuckDB can do this via the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
   ingress.format.jdbc:
     support: unsupported
-    hint: "DuckDB can do this via the postgres scanner extension (ATTACH ... (TYPE POSTGRES) — the same wire protocol jdbc: postgres:// targets); deferred to a later stage, not implemented in Stage A."
+    hint: "Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented."
 
   # ── Junction modes — all three are pure filters, all supported ──────────
-  junction.mode.broadcast: supported
-  junction.mode.conditional: supported
-  junction.mode.partition: supported
+  junction.mode.broadcast:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_broadcast
+  junction.mode.conditional:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_conditional
+  junction.mode.partition:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_partition
 
   # ── Module fields — generic Blueprint authoring surface ─────────────────
   module.field.attach_to: supported
@@ -404,19 +503,40 @@ leaves:
   module.field.type: supported
 
   # ── Module types ──────────────────────────────────────────────────────────
-  module.type.Arcade: supported
+  module.type.Arcade:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_arcade_compiles_and_runs_on_duckdb
   module.type.Assert:
     support: unsupported
-    hint: "Assert (row-quality rules + quarantine) is not implemented in DuckDB Stage A — planned for a later stage. Not in the Stage A Handlers scope (Ingress/Channel/Junction/Funnel/Egress only)."
-  module.type.Channel: supported
-  module.type.Egress: supported
-  module.type.Funnel: supported
-  module.type.Ingress: supported
-  module.type.Junction: supported
+    hint: "Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+  module.type.Channel:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Egress:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Funnel:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_funnel_driven_through_execute
+  module.type.Ingress:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Junction:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
   module.type.Probe:
     support: unsupported
-    hint: "Probe (signal sampling for Regulator gates) is not implemented in DuckDB Stage A — planned for a later stage. Not in the Stage A Handlers scope (Ingress/Channel/Junction/Funnel/Egress only)."
-  module.type.Regulator: supported
+    hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+  module.type.Regulator:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_regulator_driven_through_execute_gate_open
 
   # ── Retry / backoff — generic control flow, identical on any engine ─────
   module_retry.field.backoff: supported
@@ -446,3 +566,97 @@ leaves:
   udf.field.path: supported
   udf.field.return_type: supported
   warnings.field.suppress: supported
+
+  # ── Arrow type-hub constructors (Phase 80 work packages 2 & 3) ────────────
+  # One leaf per hub type CONSTRUCTOR (aqueduct/typehub.py), verified
+  # EMPIRICALLY against a real DuckDB connection (CAST through DuckDB's own
+  # SQL type system), not copied from spark/capabilities.yml — same
+  # leaf-by-leaf-against-a-real-test discipline as the rest of this file.
+  # DuckDB natively represents all sixteen hub constructors 1:1 (TINYINT,
+  # BLOB for binary, TIMESTAMPTZ for timestamp_tz, native ARRAY/MAP/STRUCT,
+  # DECIMAL(p,s), ...) so every constructor is honestly `supported`. The raw
+  # Blueprint type string now (work package 3) reaches
+  # `duckdb_/type_render.py::normalize_type_spelling` — parsed through the
+  # hub and rendered to DuckDB's real native DDL (`array<int>` -> `INTEGER[]`,
+  # `timestamp_tz` -> `TIMESTAMPTZ`, ...) before the CAST — so a Blueprint
+  # author writing the HUB spelling verbatim (not DuckDB's own native DDL)
+  # now works too; see `test_channel_cast_hub_vocabulary_spellings` below for
+  # the hub-spelling proof (the `tests:` links on each leaf below still point
+  # at the native-DDL cases, which prove the ENGINE's own capability
+  # independent of the mapping layer). `type.native.duckdb`
+  # ("duckdb:<spelling>") is DuckDB's own native escape hatch — proven with
+  # HUGEINT, a real DuckDB type outside the hub vocabulary — so `supported`;
+  # `type.native.spark` names a different engine's native type system
+  # DuckDB's SQL parser cannot interpret, so honestly `unsupported` (the
+  # native namespace is GOVERNED per engine, not a blanket exemption).
+  type.array:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.bigint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.binary:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.boolean:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.date:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.decimal:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.double:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.float:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.int:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.map:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.native.duckdb:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_native_namespace_duckdb
+  type.native.spark:
+    support: unsupported
+    hint: "'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch."
+  type.smallint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.string:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.struct:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.timestamp_ntz:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.timestamp_tz:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.tinyint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors

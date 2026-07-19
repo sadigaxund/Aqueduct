@@ -187,7 +187,8 @@ def heal(
             """
             SELECT run_id, blueprint_id, failed_module, error_message,
                    stack_trace, manifest_json, provenance_json,
-                   CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
+                   CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR),
+                   engine
             FROM failure_contexts WHERE run_id = ?
             """,
             [run_id],
@@ -205,6 +206,7 @@ def heal(
     (
         fc_run_id, blueprint_id, failed_module, error_message,
         stack_trace, manifest_json_raw, provenance_json_raw, started_at, finished_at,
+        recorded_engine,
     ) = fc_row
 
     # Phase 39/53 — materialize blob-externalised columns transparently.
@@ -238,6 +240,10 @@ def heal(
         provenance_json=_prov_str or None,
         started_at=started_at,
         finished_at=finished_at,
+        # Phase 78 — prefer the engine persisted on the original failure (post
+        # migration); fall back to this heal's configured engine for rows
+        # recorded before the `engine` column existed.
+        engine=recorded_engine or resolved_engine,
     )
 
     # Extract guardrails and allow_defer from the persisted manifest so
@@ -310,6 +316,7 @@ def heal(
             patch_store=None,
             base_dir=_toolbox_manifest.base_dir,
             spark_session=None,
+            engine=resolved_engine,
             config_path=config_path,
             store_dir=store_dir,
         )

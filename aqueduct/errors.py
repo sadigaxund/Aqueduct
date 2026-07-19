@@ -21,6 +21,22 @@ class CompileError(AqueductError):
     """Raised for any compilation failure."""
 
 
+class TypeSpellingError(ParseError):
+    """Raised when a Blueprint type string cannot be parsed by the hub type
+    vocabulary (``aqueduct/typehub.py``, Phase 80).
+
+    A ``ParseError`` subclass: a type spelling is a small self-contained
+    grammar nested inside a Blueprint value (``schema_hint``, ``cast``
+    columns, UDF ``return_type``), so a spelling that vocabulary cannot
+    parse is semantically a parse failure even when the surrounding
+    validation happens to run during ``compile()`` — every ``except
+    ParseError:`` caller keeps working unchanged. Distinct from a bare
+    ``ValueError`` so callers that need to react specifically (e.g. suggest
+    the ``<engine>:<spelling>`` native-namespace escape hatch) can catch it
+    by type instead of parsing the message.
+    """
+
+
 class UnknownEngineError(CompileError):
     """Raised when ``deployment.engine`` names an engine with no registered
     capability declaration (Phase 78).

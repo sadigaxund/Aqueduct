@@ -38,7 +38,11 @@ CREATE TABLE IF NOT EXISTS failure_contexts (
     root_exception    JSON,
     sql_state         VARCHAR,
     object_name       VARCHAR,
-    suggested_columns JSON
+    suggested_columns JSON,
+    -- Phase 78 — execution engine this failure occurred on ("spark",
+    -- "duckdb", ...). Stamped by Surveyor.record() from its required
+    -- `engine` constructor arg.
+    engine            VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS healing_outcomes (
@@ -62,7 +66,9 @@ CREATE TABLE IF NOT EXISTS healing_outcomes (
     failure_signature_coarse VARCHAR,
     -- Phase 46: 0-based cascade tier index of the model that produced the
     -- patch; NULL outside multi-model cascade (or when no LLM was involved).
-    model_cascade_position INTEGER
+    model_cascade_position INTEGER,
+    -- Phase 78 — execution engine this heal targeted ("spark", "duckdb", ...).
+    engine       VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS patch_simulation (
@@ -166,7 +172,9 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
     -- reprompt sequence WITHIN one link, so this is a distinct axis, not a
     -- reuse of an existing column — see AGENTS.md's schema-evolution rule
     -- below for why a new column (not a repurposed one) is correct here.
-    chain_link            INTEGER
+    chain_link            INTEGER,
+    -- Phase 78 — execution engine this attempt targeted ("spark", "duckdb", ...).
+    engine                VARCHAR
 );
 """
 
@@ -179,4 +187,15 @@ CREATE TABLE IF NOT EXISTS heal_attempts (
 _HEAL_ATTEMPTS_MIGRATIONS: tuple[str, ...] = (
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS tool_calls_json VARCHAR",
     "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS chain_link INTEGER",
+    "ALTER TABLE heal_attempts ADD COLUMN IF NOT EXISTS engine VARCHAR",
+)
+
+# Phase 78 — `engine` column migrations for the two other pre-existing tables
+# that gained it (see the schema-evolution rule above: CREATE TABLE IF NOT
+# EXISTS never touches an existing table).
+_FAILURE_CONTEXTS_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE failure_contexts ADD COLUMN IF NOT EXISTS engine VARCHAR",
+)
+_HEALING_OUTCOMES_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE healing_outcomes ADD COLUMN IF NOT EXISTS engine VARCHAR",
 )

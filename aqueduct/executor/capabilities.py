@@ -194,6 +194,18 @@ class Capability:
     requires: dict[str, str] | None = None
     # Shown in the compile error / warning — what to do instead.
     hint: str | None = None
+    # Pytest node id(s) (or bare file paths, for a whole-file link) proving a
+    # `supported` EXECUTION leaf (aqueduct/executor/capability_leaves.py::
+    # execution_leaves()) is actually exercised on THIS engine. Shape-only
+    # validated here (non-empty list of non-empty strings) — registration must
+    # not depend on pytest being importable/collectable. Presence + resolution
+    # against the real test tree is enforced by
+    # tests/test_capabilities/test_verdict_test_links.py, not here: this
+    # dataclass has no opinion on WHICH leaves require it, only that a
+    # declared value has the right shape. `config.*` leaves and non-`supported`
+    # rows may carry `tests:` too (or omit it) — shape validation applies
+    # uniformly, the presence requirement does not.
+    tests: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.requires:
@@ -202,6 +214,17 @@ class Capability:
                     raise ValueError(
                         f"Capability.requires[{dep!r}] = {spec!r} is not a "
                         "well-formed version specifier"
+                    )
+        if self.tests is not None:
+            if not isinstance(self.tests, list) or not self.tests:
+                raise ValueError(
+                    f"Capability.tests = {self.tests!r} must be a non-empty list of "
+                    "pytest node ids (or bare file paths) if present at all"
+                )
+            for t in self.tests:
+                if not isinstance(t, str) or not t.strip():
+                    raise ValueError(
+                        f"Capability.tests contains a non-string or empty entry: {t!r}"
                     )
 
 
@@ -255,7 +278,10 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
 
     Row shorthand: a bare string is the verdict (``channel.op.filter:
     supported``). A mapping carries the full ``Capability`` (``support:`` plus
-    optional ``requires:`` / ``hint:``).
+    optional ``requires:`` / ``hint:`` / ``tests:`` — a list of pytest node ids
+    or bare file paths proving a `supported` EXECUTION leaf is actually
+    exercised on this engine; see ``tests/test_capabilities/
+    test_verdict_test_links.py`` for the presence + resolution enforcement).
     """
     import yaml
 
@@ -324,8 +350,9 @@ def load_declaration(path: Path | str, leaf_ids: frozenset[str]) -> EngineCapabi
                 support=support,
                 requires=row.get("requires"),
                 hint=row.get("hint"),
+                tests=row.get("tests"),
             )
-        except ValueError as exc:  # malformed `requires` specifier
+        except ValueError as exc:  # malformed `requires` specifier or `tests` shape
             raise CapabilityDeclarationError(
                 f"capability declaration {p}: leaf {leaf_id!r}: {exc}",
                 engine=str(engine),

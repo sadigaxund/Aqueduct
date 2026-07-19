@@ -83,6 +83,62 @@ def test_read_ingress_schema_hint_mismatch(duckdb_con, tmp_path):
         read_ingress(module, duckdb_con)
 
 
+# ── Phase 80 work package 3: schema_hint now understands the hub vocabulary ─
+#
+# `schema_hint` field types used to be normalised through `_TYPE_ALIASES`
+# (deleted, 9-entry scalar-only dict) — a HUB spelling like `array<int>` or
+# `timestamp_ntz` never matched it and never matched DuckDB's own
+# `str(dtype)` representation either, so it always raised "type mismatch"
+# regardless of whether the live column actually had that type. Both sides
+# now render through the same hub-aware `_normalize_type`.
+def test_read_ingress_schema_hint_hub_array_matches(duckdb_con, tmp_path):
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT [1,2,3] AS a")
+    module = _module(
+        "ing", "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"a": "array<int>"}},
+    )
+    rel = read_ingress(module, duckdb_con)
+    assert rel.fetchall() == [([1, 2, 3],)]
+
+
+def test_read_ingress_schema_hint_hub_decimal_matches(duckdb_con, tmp_path):
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST(1.5 AS DECIMAL(10,2)) AS a")
+    module = _module(
+        "ing", "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"a": "decimal(10,2)"}},
+    )
+    rel = read_ingress(module, duckdb_con)  # no IngressError
+    # The hint passed the mismatch check AND the live column is genuinely
+    # DECIMAL(10,2) — not merely "didn't raise" (a hint check that always
+    # passed would look identical without this).
+    assert str(rel.types[rel.columns.index("a")]) == "DECIMAL(10,2)"
+    assert rel.fetchall() == [(1.5,)]
+
+
+def test_read_ingress_schema_hint_hub_timestamp_ntz_matches(duckdb_con, tmp_path):
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT CAST('2020-01-01' AS TIMESTAMP) AS a")
+    module = _module(
+        "ing", "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"a": "timestamp_ntz"}},
+    )
+    rel = read_ingress(module, duckdb_con)  # no IngressError
+    assert str(rel.types[rel.columns.index("a")]) == "TIMESTAMP"
+    import datetime
+    assert rel.fetchall() == [(datetime.datetime(2020, 1, 1),)]
+
+
+def test_read_ingress_schema_hint_hub_array_mismatch_still_raises(duckdb_con, tmp_path):
+    """A genuine mismatch (int column, string-array hint) must still raise —
+    hub-aware normalization must not make the check permissive."""
+    path = _write_parquet(duckdb_con, tmp_path, "src", "SELECT [1,2,3] AS a")
+    module = _module(
+        "ing", "Ingress",
+        {"format": "parquet", "path": path, "schema_hint": {"a": "array<string>"}},
+    )
+    with pytest.raises(IngressError, match="type mismatch"):
+        read_ingress(module, duckdb_con)
+
+
 # ── Channel ──────────────────────────────────────────────────────────────
 
 def test_channel_filter(duckdb_con):
@@ -155,6 +211,193 @@ def test_channel_cast(duckdb_con):
     out = execute_channel(module, {"up": rel}, duckdb_con)
     assert out.columns == ["a", "b"]
     assert out.fetchall() == [(1, "x")]
+
+
+# ── Phase 80 work package 2: type-leaf verdict->test links ────────────────
+#
+# Each case exercises the DuckDB engine's own cast capability behind one
+# `type.<constructor>` capability leaf (capability_leaves.py::type_leaves()),
+# through the real `channel.op.cast` handler (`_execute_cast` in
+# duckdb_/channel.py) — a real cast through the engine, not a raw duckdb.sql
+# smoke check. Target spellings here are DuckDB's OWN native DDL, written
+# directly — proving the "spelling the hub doesn't recognize falls through to
+# DuckDB's own parser raw" fallback (`normalize_type_spelling`'s
+# TypeSpellingError branch, `aqueduct/executor/duckdb_/type_render.py`). The
+# HUB-vocabulary spellings (`array<int>`, `decimal(10,2)`, `timestamp_ntz`,
+# ...) are the separate `_HUB_VOCABULARY_CAST_CASES` block below — Phase 80
+# work package 3 is what makes THOSE work end-to-end (they used to reach
+# DuckDB's parser unmodified and fail; see typehub.py's module docstring for
+# the `array<int>` example).
+_HUB_TYPE_CAST_CASES = [
+    ("type.boolean", "SELECT true AS a", "BOOLEAN"),
+    ("type.tinyint", "SELECT 1 AS a", "TINYINT"),
+    ("type.smallint", "SELECT 1 AS a", "SMALLINT"),
+    ("type.int", "SELECT 1 AS a", "INTEGER"),
+    ("type.bigint", "SELECT 1 AS a", "BIGINT"),
+    ("type.float", "SELECT 1.0 AS a", "FLOAT"),
+    ("type.double", "SELECT 1.0 AS a", "DOUBLE"),
+    ("type.string", "SELECT 1 AS a", "VARCHAR"),
+    ("type.binary", "SELECT 'a' AS a", "BLOB"),
+    ("type.date", "SELECT '2020-01-01' AS a", "DATE"),
+    ("type.decimal", "SELECT 1.5 AS a", "DECIMAL(10,2)"),
+    ("type.timestamp_tz", "SELECT '2020-01-01' AS a", "TIMESTAMPTZ"),
+    ("type.timestamp_ntz", "SELECT '2020-01-01' AS a", "TIMESTAMP"),
+    ("type.array", "SELECT [1,2,3] AS a", "INTEGER[]"),
+    ("type.map", "SELECT MAP([1],[2]) AS a", "MAP(INTEGER,INTEGER)"),
+    ("type.struct", "SELECT {'x':1} AS a", "STRUCT(x INTEGER)"),
+]
+
+
+# DuckDB's own `str(DuckDBPyType)` rendering for a couple of these diverges
+# textually from the CAST target spelling we wrote (same type, different
+# self-description) — map the exceptions here rather than asserting a
+# coincidental string match.
+_DUCKDB_TYPE_STR_OVERRIDES = {
+    "TIMESTAMPTZ": "TIMESTAMP WITH TIME ZONE",
+    "MAP(INTEGER,INTEGER)": "MAP(INTEGER, INTEGER)",
+    # Bare "TIMESTAMP" (the type.timestamp_ntz row's target spelling here) is
+    # itself hub-recognized as the AMBIGUOUS bare-timestamp spelling
+    # (typehub.py's ambiguous_type_spelling warning) rather than falling
+    # through raw to DuckDB's parser — it resolves to timestamp_tz today
+    # (deprecation warning: becomes a hard parse error next release), so the
+    # real cast target is TIMESTAMPTZ, not a naive TIMESTAMP column.
+    "TIMESTAMP": "TIMESTAMP WITH TIME ZONE",
+}
+
+
+@pytest.mark.parametrize("leaf,source_sql,target_type", _HUB_TYPE_CAST_CASES, ids=[c[0] for c in _HUB_TYPE_CAST_CASES])
+def test_channel_cast_hub_type_constructors(duckdb_con, leaf, source_sql, target_type):
+    rel = duckdb_con.sql(source_sql)
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": target_type}})
+    out = execute_channel(module, {"up": rel}, duckdb_con)
+    out.fetchall()  # force real execution, not just relation-graph construction
+    expected = _DUCKDB_TYPE_STR_OVERRIDES.get(target_type, target_type)
+    assert str(out.types[out.columns.index("a")]) == expected
+
+
+def test_channel_cast_native_namespace_duckdb(duckdb_con):
+    """`type.native.duckdb` — the `duckdb:<spelling>` escape hatch is a real
+    DuckDB-only type the hub vocabulary deliberately does not model
+    (``HUGEINT``, a 128-bit integer with no Spark/Arrow equivalent in this
+    vocabulary — see typehub.py's NativeType docstring example); proves the
+    escape hatch is not merely accepted at parse time but a real, executable
+    cast target on the engine it names."""
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": "HUGEINT"}})
+    out = execute_channel(module, {"up": rel}, duckdb_con)
+    assert out.fetchall() == [(1,)]
+
+
+# ── Phase 80 work package 3: hub vocabulary now WORKS end-to-end on DuckDB ──
+#
+# These are the exact "silently mishandled" cases work package 2's own test
+# docstring called out: a HUB spelling (not DuckDB's native DDL) used as an
+# op=cast target. Before this package, `array<int>` reached DuckDB's SQL
+# parser completely unmodified and failed (DuckDB wants `INTEGER[]`) despite
+# `type.array` already being declared `supported` — a declaration/behavior
+# mismatch. `duckdb_/channel.py::_normalize_cast_type` now parses the
+# spelling through the hub and renders it via
+# `aqueduct.executor.duckdb_.type_render.render_duckdb_type` before the cast.
+_HUB_VOCABULARY_CAST_CASES = [
+    ("type.boolean", "SELECT true AS a", "boolean"),
+    ("type.bigint", "SELECT 1 AS a", "bigint"),
+    ("type.string", "SELECT 1 AS a", "string"),
+    ("type.binary", "SELECT 'a' AS a", "binary"),
+    ("type.decimal", "SELECT 1.5 AS a", "decimal(10,2)"),
+    ("type.timestamp_tz", "SELECT '2020-01-01' AS a", "timestamp_tz"),
+    ("type.timestamp_ntz", "SELECT '2020-01-01' AS a", "timestamp_ntz"),
+    ("type.array", "SELECT [1,2,3] AS a", "array<int>"),
+    ("type.map", "SELECT MAP([1],[2]) AS a", "map<string,int>"),
+    ("type.struct", "SELECT {'x':1} AS a", "struct<x:int>"),
+    ("type.array_nested", "SELECT [MAP([1],[2])] AS a", "array<map<string,int>>"),
+]
+
+
+# Expected `str(DuckDBPyType)` for the resulting column after casting through
+# each hub-vocabulary spelling — i.e. what render_duckdb_type (type_render.py)
+# is documented to produce for that hub construct. Proves the hub spelling
+# didn't just parse without error but resolved to the SAME native type the
+# equivalent DuckDB-native-DDL case (_HUB_TYPE_CAST_CASES) produces.
+_HUB_VOCABULARY_EXPECTED_TYPE_STR = {
+    "boolean": "BOOLEAN",
+    "bigint": "BIGINT",
+    "string": "VARCHAR",
+    "binary": "BLOB",
+    "decimal(10,2)": "DECIMAL(10,2)",
+    "timestamp_tz": "TIMESTAMP WITH TIME ZONE",
+    "timestamp_ntz": "TIMESTAMP",
+    "array<int>": "INTEGER[]",
+    "map<string,int>": "MAP(VARCHAR, INTEGER)",
+    "struct<x:int>": "STRUCT(x INTEGER)",
+    "array<map<string,int>>": "MAP(VARCHAR, INTEGER)[]",
+}
+
+
+@pytest.mark.parametrize(
+    "leaf,source_sql,target_type", _HUB_VOCABULARY_CAST_CASES, ids=[c[0] for c in _HUB_VOCABULARY_CAST_CASES]
+)
+def test_channel_cast_hub_vocabulary_spellings(duckdb_con, leaf, source_sql, target_type):
+    rel = duckdb_con.sql(source_sql)
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": target_type}})
+    out = execute_channel(module, {"up": rel}, duckdb_con)
+    out.fetchall()  # force real execution — proves the hub spelling is a real, valid CAST target
+    assert str(out.types[out.columns.index("a")]) == _HUB_VOCABULARY_EXPECTED_TYPE_STR[target_type]
+
+
+# ── Phase 80 work package 3: old _CAST_TYPE_ALIASES spellings still work ────
+#
+# `_CAST_TYPE_ALIASES` (the deleted 9-entry dict) mapped a small set of
+# Spark-vocabulary aliases to DuckDB DDL. All nine are hub-recognized
+# spellings too, so `render_native_type` reproduces the exact same mapping —
+# this is the alias-dict-deletion regression the package's own report must
+# demonstrate.
+# target spelling -> the exact DuckDB DDL the deleted 9-entry
+# `_CAST_TYPE_ALIASES` dict used to map it to (the regression this test
+# guards against reproducing the mapping via render_native_type instead).
+_DELETED_ALIAS_DICT_CASES = [
+    ("string", "SELECT 1 AS a", "VARCHAR"),
+    ("long", "SELECT 1 AS a", "BIGINT"),
+    ("int", "SELECT 1 AS a", "INTEGER"),
+    ("integer", "SELECT 1 AS a", "INTEGER"),
+    ("short", "SELECT 1 AS a", "SMALLINT"),
+    ("byte", "SELECT 1 AS a", "TINYINT"),
+    ("bool", "SELECT 1 AS a", "BOOLEAN"),
+    ("double", "SELECT 1.0 AS a", "DOUBLE"),
+    ("float", "SELECT 1.0 AS a", "FLOAT"),
+]
+
+
+@pytest.mark.parametrize(
+    "target_type,source_sql,expected_type_str", _DELETED_ALIAS_DICT_CASES, ids=[c[0] for c in _DELETED_ALIAS_DICT_CASES]
+)
+def test_channel_cast_deleted_alias_dict_spellings_still_work(duckdb_con, target_type, source_sql, expected_type_str):
+    rel = duckdb_con.sql(source_sql)
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": target_type}})
+    out = execute_channel(module, {"up": rel}, duckdb_con)
+    out.fetchall()
+    assert str(out.types[out.columns.index("a")]) == expected_type_str
+
+
+def test_channel_cast_explicit_native_namespace_duckdb_passthrough(duckdb_con):
+    """The EXPLICIT `duckdb:<spelling>` native-namespace syntax (distinct from
+    the bare-native-DDL fallback `test_channel_cast_native_namespace_duckdb`
+    above exercises) renders through `render_native_type`'s NativeType
+    same-engine branch: `.spelling` verbatim, unmapped."""
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": "duckdb:HUGEINT"}})
+    out = execute_channel(module, {"up": rel}, duckdb_con)
+    assert out.fetchall() == [(1,)]
+
+
+def test_channel_cast_foreign_native_namespace_is_a_defensive_error(duckdb_con):
+    """A `spark:<spelling>` cast target reaching the DuckDB engine directly
+    (an ungated call — the real compile-time `type.native.spark` gate on the
+    duckdb engine is `unsupported`, see capabilities.yml) must fail loudly,
+    not silently forward Spark's native spelling to DuckDB's parser."""
+    rel = duckdb_con.sql("SELECT 1 AS a")
+    module = _module("ch", "Channel", {"op": "cast", "columns": {"a": "spark:variant"}})
+    with pytest.raises(ChannelError, match="DIFFERENT engine"):
+        execute_channel(module, {"up": rel}, duckdb_con)
 
 
 def test_channel_rename(duckdb_con):

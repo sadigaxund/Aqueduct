@@ -31,7 +31,7 @@ def _failure_ctx() -> FailureContext:
         }),
         started_at="2026-01-01T00:00:00Z", finished_at="2026-01-01T00:00:01Z",
         blueprint_source_yaml="id: bp1\nmodules: []\n",
-    )
+     engine="spark",)
 
 
 def _toolbox(fc: FailureContext) -> ToolBox:

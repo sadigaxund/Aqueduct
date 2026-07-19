@@ -275,6 +275,7 @@ def run_sandbox_gate(
     blueprint_path: Any,
     patch_id: str,
     failed_module: str | None,
+    engine: str,
     sample_rows: int = 1000,
     cli_overrides: dict[str, str] | None = None,
     profile: str | None = None,
@@ -282,6 +283,7 @@ def run_sandbox_gate(
     observability_store: Any = None,
     explain_capture: dict[str, dict] | None = None,
     sandbox_master_url: str | None = None,
+    warnings_suppress: Iterable[str] | None = None,
 ) -> SandboxGateResult:
     """Compile and replay the patched Blueprint with a row limit + Egress skipped.
 
@@ -292,13 +294,33 @@ def run_sandbox_gate(
       3. If `sample_rows > 0`, wraps every Ingress module with a synthetic
          `op: limit` Channel downstream so the rest of the DAG sees at most
          `sample_rows` rows. `sample_rows == 0` means "no limit".
-      4. Runs the modified Manifest through the existing executor — the
-         executor sees a real SparkSession but no Egress writes happen.
+      4. Runs the modified Manifest through the TARGET ENGINE's own
+         ``ExecutorProtocol`` (``aqueduct.executor.protocol.get_protocol``) —
+         the engine's own session factory builds the sandbox session and its
+         own ``execute()`` runs the replay; no Egress writes happen.
+
+    ``engine`` is REQUIRED (no default) — mirrors the ``Surveyor`` decision
+    (``aqueduct/surveyor/surveyor.py``): every construction site must resolve
+    and pass the real target engine rather than silently falling back to
+    Spark, which is exactly the bug this signature closes (Phase 79). Callers
+    resolve it the same way ``Surveyor``/``FailureContext`` do —
+    ``cfg.deployment.engine`` / ``manifest.spark_config.get("deployment_engine")``.
+
+    ``spark_session``, if given, is used as-is regardless of engine (the
+    caller already built it — e.g. the live session a heal loop is running
+    against); named ``spark_session`` for backward compatibility with
+    existing callers/tests predating multi-engine support, same precedent as
+    ``aqueduct.agent.toolbox.ToolBox.spark_session``. When omitted, this gate
+    builds and owns its own sandbox session via the target engine's
+    ``ExecutorProtocol.session_factory()`` and tears it down afterwards
+    through ``session_closer()``.
 
     Status:
       `pass`  manifest compiled and executed without raising
       `fail`  parse/compile error or executor surfaced a module failure
-      `skip`  Spark unavailable (no session and no `make_spark_session` import)
+      `skip`  the target engine's dependencies/session are unavailable (no
+              session passed and the engine's own session factory raised —
+              the ``skip`` detail names the ACTUAL target engine, not Spark)
     """
     t0 = time.monotonic()
     egress_targets: list[dict[str, Any]] = []
@@ -308,12 +330,22 @@ def run_sandbox_gate(
 
         from aqueduct.compiler.compiler import CompileError
         from aqueduct.compiler.compiler import compile as compiler_compile
-        from aqueduct.executor import ExecuteError, get_executor
+        from aqueduct.errors import AqueductError
+        from aqueduct.executor.protocol import SessionSpec, call_execute, get_protocol
         from aqueduct.parser.parser import ParseError, parse_dict
     except Exception as exc:  # pragma: no cover
         return SandboxGateResult(
             status="skip",
             detail=f"sandbox dependencies missing: {exc}",
+            duration_ms=int((time.monotonic() - t0) * 1000),
+        )
+
+    try:
+        protocol = get_protocol(engine)
+    except Exception as exc:
+        return SandboxGateResult(
+            status="skip",
+            detail=f"sandbox could not resolve engine {engine!r}: {exc}",
             duration_ms=int((time.monotonic() - t0) * 1000),
         )
 
@@ -342,7 +374,7 @@ def run_sandbox_gate(
             )
 
         try:
-            manifest = compiler_compile(bp, blueprint_path=_bp_orig)
+            manifest = compiler_compile(bp, blueprint_path=_bp_orig, engine=engine)
         except CompileError as exc:
             return SandboxGateResult(
                 status="fail",
@@ -355,83 +387,105 @@ def run_sandbox_gate(
         # present) by calling `.limit(N)` after `.load()` — see `ingress.py`.
         sandboxed_manifest, egress_targets = build_sandbox_manifest(manifest, sample_rows)
 
-        # ── Spark session ──────────────────────────────────────────────────────
-        if spark_session is None:
+        # ── Engine session ────────────────────────────────────────────────────
+        # Built THROUGH THE PROTOCOL REGISTRY, not a hardcoded `make_spark_session`
+        # — the same seam `aqueduct/cli/run.py`'s real run path uses (Phase 78).
+        # A DuckDB target gets a real DuckDB sandbox session here instead of
+        # either crashing against a Spark session or a hardcoded "Spark
+        # unavailable" skip that blames the wrong engine.
+        session = spark_session
+        _owns_session = False
+        if session is None:
+            _owns_session = True
             master = sandbox_master_url or "local[*]"
             if sandbox_master_url:
-                logger.debug("Sandbox gate: connecting to Spark master %r", sandbox_master_url)
+                logger.debug("Sandbox gate: connecting engine %r to master %r", engine, sandbox_master_url)
             try:
-                from aqueduct.executor.spark.session import make_spark_session
-                spark_session = make_spark_session(
-                    f"aqueduct.sandbox.{patch_id}",
-                    sandboxed_manifest.spark_config,
-                    master_url=master,
-                    quiet=True,
+                session = protocol.session_factory()(
+                    SessionSpec(
+                        blueprint_id=f"aqueduct.sandbox.{patch_id}",
+                        engine_config=sandboxed_manifest.spark_config,
+                        master_url=master,
+                        quiet=True,
+                        quiet_startup=True,
+                    )
                 )
             except Exception as exc:
                 return SandboxGateResult(
                     status="skip",
-                    detail=f"sandbox could not start Spark: {exc}",
+                    detail=f"sandbox could not start engine {engine!r}: {exc}",
                     egress_targets=egress_targets,
                     duration_ms=int((time.monotonic() - t0) * 1000),
                 )
 
         # ── Run the executor ───────────────────────────────────────────────────
         try:
-            execute = get_executor(sandboxed_manifest.spark_config.get("deployment_engine", "spark"))
-        except Exception:
-            from aqueduct.executor import execute as execute  # noqa: F401
-        try:
-            # 1.1.0 fix — run the WHOLE patched DAG, not from `failed_module`
-            # onwards. Skipping upstream Ingress/Channels left frame_store
-            # empty for the failed module's inputs ("produced no DataFrame"
-            # false-fail). sample_rows wrapping makes the full replay cheap
-            # enough that the prior optimisation isn't worth the false
-            # negatives.
-            result = execute(  # type: ignore[operator]
-                sandboxed_manifest,
-                spark_session,
-                run_id=f"sandbox-{patch_id}",
-                store_dir=None,
-                surveyor=None,
-                observability_store=observability_store,
-                explain_capture=explain_capture,
-            )
-        except ExecuteError as exc:
-            return SandboxGateResult(
-                status="fail",
-                detail=f"sandbox execution raised: {exc}",
-                sample_rows=sample_rows if sample_rows > 0 else None,
-                egress_targets=egress_targets,
-                duration_ms=int((time.monotonic() - t0) * 1000),
-            )
+            try:
+                # 1.1.0 fix — run the WHOLE patched DAG, not from `failed_module`
+                # onwards. Skipping upstream Ingress/Channels left frame_store
+                # empty for the failed module's inputs ("produced no DataFrame"
+                # false-fail). sample_rows wrapping makes the full replay cheap
+                # enough that the prior optimisation isn't worth the false
+                # negatives.
+                #
+                # observability_store/explain_capture are Spark-flavoured
+                # optional capabilities (`OPTIONAL_EXECUTE_KWARGS`,
+                # `aqueduct/executor/protocol.py`) — routed through
+                # `call_execute()` so an engine that can't honour them (e.g.
+                # DuckDB Stage A) gets a suppressible `engine_kwarg_ignored`
+                # warning instead of a TypeError or a silent drop.
+                result = call_execute(
+                    engine,
+                    sandboxed_manifest,
+                    session,
+                    run_id=f"sandbox-{patch_id}",
+                    store_dir=None,
+                    surveyor=None,
+                    observability_store=observability_store,
+                    explain_capture=explain_capture,
+                    suppress=warnings_suppress,
+                )
+            except AqueductError as exc:
+                return SandboxGateResult(
+                    status="fail",
+                    detail=f"sandbox execution raised: {exc}",
+                    sample_rows=sample_rows if sample_rows > 0 else None,
+                    egress_targets=egress_targets,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                )
 
-        if result.status != "success":
-            failing = next(
-                (r for r in result.module_results if r.status == "error"),
-                None,
-            )
+            if result.status != "success":
+                failing = next(
+                    (r for r in result.module_results if r.status == "error"),
+                    None,
+                )
+                return SandboxGateResult(
+                    status="fail",
+                    detail=(
+                        f"sandbox run ended with status={result.status!r}"
+                        + (f"; first error in {failing.module_id!r}: {failing.error}" if failing else "")
+                    ),
+                    sample_rows=sample_rows if sample_rows > 0 else None,
+                    egress_targets=egress_targets,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                )
+
             return SandboxGateResult(
-                status="fail",
+                status="pass",
                 detail=(
-                    f"sandbox run ended with status={result.status!r}"
-                    + (f"; first error in {failing.module_id!r}: {failing.error}" if failing else "")
+                    f"sandbox replay succeeded against {sample_rows or '∞'} "
+                    f"row(s) per Ingress; {len(egress_targets)} Egress module(s) skipped"
                 ),
                 sample_rows=sample_rows if sample_rows > 0 else None,
                 egress_targets=egress_targets,
                 duration_ms=int((time.monotonic() - t0) * 1000),
             )
-
-        return SandboxGateResult(
-            status="pass",
-            detail=(
-                f"sandbox replay succeeded against {sample_rows or '∞'} "
-                f"row(s) per Ingress; {len(egress_targets)} Egress module(s) skipped"
-            ),
-            sample_rows=sample_rows if sample_rows > 0 else None,
-            egress_targets=egress_targets,
-            duration_ms=int((time.monotonic() - t0) * 1000),
-        )
+        finally:
+            if _owns_session and session is not None:
+                try:
+                    protocol.session_closer()(session)
+                except Exception:
+                    pass  # best-effort teardown of a sandbox-owned session
     finally:
         # No tempfile to unlink; parse_dict() consumes the
         # patched Blueprint directly. Block retained for parity with previous

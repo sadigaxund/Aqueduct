@@ -30,7 +30,7 @@ def manifest():
 
 def test_surveyor_lifecycle_start(manifest, tmp_path):
     store_dir = tmp_path / "store"
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     
     run_id = "run-123"
     surveyor.start(run_id)
@@ -50,7 +50,7 @@ def test_surveyor_lifecycle_start(manifest, tmp_path):
 
 
 def test_surveyor_record_before_start_raises(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     result = ExecutionResult(blueprint_id="p", run_id="r", status="success", module_results=())
     
     with pytest.raises(RuntimeError, match=r"Surveyor.start\(\) must be called before record\(\)"):
@@ -58,7 +58,7 @@ def test_surveyor_record_before_start_raises(manifest, tmp_path):
 
 
 def test_surveyor_record_success(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "run-success"
     surveyor.start(run_id)
     
@@ -82,7 +82,7 @@ def test_surveyor_record_success(manifest, tmp_path):
 
 
 def test_surveyor_record_failure(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "run-fail"
     surveyor.start(run_id)
     
@@ -123,7 +123,7 @@ def test_surveyor_record_failure(manifest, tmp_path):
 
 def test_surveyor_orchestration_webhook_firing(manifest, tmp_path):
     url = "http://webhook.test"
-    surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_url=url)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_url=url, engine="spark")
     run_id = "run-webhook"
     surveyor.start(run_id)
     
@@ -146,14 +146,14 @@ def test_surveyor_orchestration_webhook_firing(manifest, tmp_path):
 
 
 def test_surveyor_stop_idempotent(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("r1")
     assert surveyor.stop() is None
     assert surveyor.stop() is None  # second stop is an idempotent no-op
 
 
 def test_surveyor_multi_run_persistence(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     
     # Run 1
     surveyor.start("run-1")
@@ -173,7 +173,7 @@ def test_surveyor_multi_run_persistence(manifest, tmp_path):
 
 
 def test_surveyor_get_probe_signal_no_db(manifest, tmp_path):
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     res = surveyor.get_probe_signal("p1")
     assert res == []
 
@@ -193,7 +193,7 @@ def test_surveyor_get_probe_signal_with_db(manifest, tmp_path):
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p2', 's1', json.dumps({"a":3}), '2025-01-03T00:00:00Z'])
     conn.close()
     
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     res = surveyor.get_probe_signal("p1")
     assert len(res) == 2
     assert res[0]["signal_type"] == "s2"
@@ -215,7 +215,7 @@ def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
     conn.execute("INSERT INTO probe_signals VALUES (?, ?, ?, ?, ?)", ['r1', 'p1', 's2', json.dumps({"a":2}), '2025-01-02T00:00:00Z'])
     conn.close()
     
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     res = surveyor.get_probe_signal("p1", signal_type="s1")
     assert len(res) == 1
     assert res[0]["signal_type"] == "s1"
@@ -226,13 +226,13 @@ def test_surveyor_get_probe_signal_filtered(manifest, tmp_path):
 def test_surveyor_regulator_no_start(tmp_path):
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     assert surveyor.evaluate_regulator("reg1") is True
 
 def test_surveyor_regulator_no_signal_port_edge(tmp_path):
     from aqueduct.compiler.models import Manifest
     manifest = Manifest(blueprint_id="p", modules=(), edges=(), context={}, spark_config={})
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -245,7 +245,7 @@ def test_surveyor_regulator_no_signals_db(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -264,7 +264,7 @@ def test_surveyor_regulator_no_rows(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -284,7 +284,7 @@ def test_surveyor_regulator_no_passed_key(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -304,7 +304,7 @@ def test_surveyor_regulator_passed_none(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -324,7 +324,7 @@ def test_surveyor_regulator_passed_false(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is False
 
@@ -344,7 +344,7 @@ def test_surveyor_regulator_passed_true(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -365,7 +365,7 @@ def test_surveyor_regulator_uses_newest_row(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     assert surveyor.evaluate_regulator("reg1") is True
 
@@ -380,7 +380,7 @@ def test_surveyor_regulator_duckdb_exception(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
 
     # Corrupt the DB after start so evaluate_regulator hits the exception
@@ -408,7 +408,7 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
         edges=(Edge(from_id="probe1", to_id="reg1", port="signal"),),
         context={}, spark_config={}
     )
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run1")
     # Should be False because override takes priority
     assert surveyor.evaluate_regulator("reg1") is False
@@ -419,7 +419,7 @@ def test_surveyor_regulator_respects_overrides(tmp_path):
 def test_error_type_propagates_to_failure_context(manifest, tmp_path):
     """error_type on AssertError → ModuleResult.error_type → FailureContext.error_type."""
     store_dir = tmp_path / "store_et"
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     run_id = "run-et"
     surveyor.start(run_id)
 
@@ -441,7 +441,7 @@ def test_error_type_propagates_to_failure_context(manifest, tmp_path):
 def test_error_type_none_for_infra_errors(manifest, tmp_path):
     """Rule without error_type → FailureContext.error_type is None."""
     store_dir = tmp_path / "store_none"
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     run_id = "run-none"
     surveyor.start(run_id)
 
@@ -462,7 +462,7 @@ def test_error_type_none_for_infra_errors(manifest, tmp_path):
 def test_multiple_rules_first_failing_error_type(manifest, tmp_path):
     """Multiple rules with different error_type → first failing rule's type in FailureContext."""
     store_dir = tmp_path / "store_multi"
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     run_id = "run-multi"
     surveyor.start(run_id)
 

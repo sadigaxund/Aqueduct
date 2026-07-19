@@ -30,11 +30,14 @@ from aqueduct.executor.protocol import DeferRules, PromptRules
 # assembled at RUNTIME (only when `allow_defer` is on), not inside the template
 # constant — which is exactly why three Spark-flavored strings survived the
 # first pass at this split. Generic categories (upstream schema changes,
-# checkpoint corruption, object-store consistency, cluster config) stay in the
-# agent scaffold; only what is Spark's own goes here.
+# checkpoint corruption, object-store consistency) stay in the agent scaffold;
+# only what is Spark's own goes here — including "cluster config", which is a
+# Spark CONCEPT (a single-process engine has no cluster to configure), not a
+# generic infra example, so it lives in infra_examples rather than the scaffold.
 _SPARK_DEFER = DeferRules(
-    # Spark-only: a single-node engine has no Hive metastore to lock.
-    infra_examples="Hive metastore locks",
+    # Spark-only: a single-node engine has no Hive metastore to lock, and
+    # "cluster config" only means something for a multi-node engine.
+    infra_examples="Hive metastore locks, cluster config",
     # Spark's UDF registry accepts python/scala/java; another engine's does not.
     udf_languages="Python/Scala",
     # "Spark internals" names an engine — a whole bullet that is Spark's alone.

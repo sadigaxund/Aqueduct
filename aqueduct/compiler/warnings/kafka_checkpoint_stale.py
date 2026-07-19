@@ -15,7 +15,15 @@ from aqueduct.parser.models import ModuleType
 RULE_ID = "kafka_checkpoint_stale"
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # Spark-physical: the "micro-batch" model is Spark Structured Streaming.
+    # DuckDB has no streaming ingress at all (kafka format is `unsupported`
+    # in duckdb_/capabilities.yml), so a blueprint that would trip this rule
+    # already fails the capability gate before compile() reaches warnings —
+    # gated here too as defense in depth / for future engines with a
+    # different (non-micro-batch) Kafka story.
+    if engine != "spark":
+        return []
     out: list[str] = []
     by_id = {m.id: m for m in manifest.modules}
 

@@ -1043,6 +1043,20 @@ class WarningsConfig(BaseModel):
             "Aqueduct warnings."
         ),
     )
+    # Phase 79 — the escalation counterpart to `suppress`: rule_ids listed
+    # here are promoted from warning to a hard CompileError instead of being
+    # printed. Default empty = no behaviour change for anyone. Introduced for
+    # `cross_engine_heal` (a DuckDB-shaped healed patch compiling for Spark,
+    # or vice versa) but is a general rule_id set — any future compile
+    # warning can opt a deployment into hard-failing on it.
+    strict: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of `rule_id` strings to promote from warning to a hard "
+            "CompileError. Default empty (warn-only, current behaviour). "
+            "Symmetric with `suppress` — same rule_id vocabulary."
+        ),
+    )
 
 
 class LineageConfig(BaseModel):

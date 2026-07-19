@@ -31,6 +31,16 @@ same as compiler warning ``rule_id``s):
   feature.<name>                        — hand-curated engine feature flags
                                            (NOT schema-derivable — see
                                            FEATURE_FLAGS docstring below)
+  type.<constructor>                    — one per hub type CONSTRUCTOR
+                                           (Phase 80 work package 2 — see
+                                           ``aqueduct/typehub.py``), never per
+                                           instantiation: ``type.array`` covers
+                                           every ``array<T>``, ``type.decimal``
+                                           covers every ``decimal(p,s)``.
+  type.native.<engine>                  — the ``<engine>:<spelling>`` native
+                                           escape hatch, one leaf per
+                                           REGISTERED engine (governed, not
+                                           exempt — see below).
 
 Derivation sources, by leaf category:
   - module.type.*, module.field.*, and every <block>.field.* leaf are derived
@@ -58,6 +68,20 @@ Derivation sources, by leaf category:
   - feature.* is hand-curated (documented in FEATURE_FLAGS below) — engine
     feature flags aren't declared anywhere in the schema; they're behavioral
     capabilities (java_udf support, Delta time travel, …).
+  - type.<constructor> is derived from ``aqueduct.typehub.constructor_names()``
+    — the hub's own constructor enumeration (one leaf per CONSTRUCTOR, never
+    per instance: ``array<int>`` and ``array<string>`` are both
+    ``type.array``). Never hand-listed here — that would let the leaf set and
+    the hub vocabulary drift, exactly the failure mode this framework exists
+    to prevent.
+  - type.native.<engine> is derived from the SAME engine-discovery path the
+    closure test/tooling already use (``capability_tooling.discover_declarations()``
+    + its ``_engine_name()`` reader of each declaration's ``engine:`` field),
+    never a hand-listed engine name list — a third engine registering a
+    ``capabilities.yml`` automatically gets its own ``type.native.<engine>``
+    leaf (and every OTHER engine's declaration must now say whether it
+    accepts that engine's native escape hatch, keeping the native namespace
+    GOVERNED rather than a silent hole).
 
 This module must stay importable without ``pyspark`` — it is read by the
 compile-time capability gate (``aqueduct/compiler/capability_check.py``,
@@ -81,6 +105,7 @@ from aqueduct.parser.schema import (
     CascadeTierSchema,
     EdgeSchema,
     GuardrailsSchema,
+    HealedByRecordSchema,
     HookEntrySchema,
     HooksSchema,
     ModuleRetrySchema,
@@ -111,6 +136,7 @@ FEATURE_FLAGS: frozenset[str] = frozenset({
     "custom_datasource",
     "checkpoint",
     "parallel_mode",
+    "table_addressing",
 })
 
 # Nested schema blocks walked for their own field-name leaves. Each entry is
@@ -128,6 +154,7 @@ _SCHEMA_BLOCKS: tuple[tuple[str, type[BaseModel]], ...] = (
     ("warnings", WarningsSchema),
     ("hooks", HooksSchema),
     ("hook_entry", HookEntrySchema),
+    ("healed_by", HealedByRecordSchema),
 )
 
 
@@ -174,6 +201,35 @@ def _feature_leaves() -> set[str]:
     return {f"feature.{name}" for name in FEATURE_FLAGS}
 
 
+def _type_leaves() -> set[str]:
+    from aqueduct.typehub import constructor_names
+
+    return {f"type.{name}" for name in constructor_names()}
+
+
+def _type_native_leaves() -> set[str]:
+    # Lazy import: capability_tooling.py imports THIS module's all_leaves /
+    # execution_leaves at module level, so a module-level import here would
+    # be circular — same pattern as capability_check.py::leaves_for_module's
+    # own lazy import of this module, deferred to call time (well after both
+    # modules have finished loading). Engine names are resolved through the
+    # exact same discovery path the closure test/tooling already use, never
+    # a hand-listed engine name — see module docstring.
+    from aqueduct.executor.capability_tooling import _engine_name, discover_declarations
+
+    return {f"type.native.{_engine_name(p)}" for p in discover_declarations()}
+
+
+def type_leaves() -> frozenset[str]:
+    """Every ``type.*`` leaf: one per hub type constructor plus one
+    ``type.native.<engine>`` per registered engine. See module docstring.
+    """
+    leaves: set[str] = set()
+    leaves |= _type_leaves()
+    leaves |= _type_native_leaves()
+    return frozenset(leaves)
+
+
 def all_leaves() -> frozenset[str]:
     """Return the full, deterministic set of canonical capability leaf ids.
 
@@ -190,6 +246,47 @@ def all_leaves() -> frozenset[str]:
     leaves |= _junction_leaves()
     leaves |= _funnel_leaves()
     leaves |= _feature_leaves()
+    leaves |= type_leaves()
+    return frozenset(leaves)
+
+
+def execution_leaves() -> frozenset[str]:
+    """The EXECUTION-leaf subset of ``all_leaves()`` — leaves with an actual
+    per-engine runtime dispatch path: ``module.type.*``, ``channel.op.*``,
+    ``ingress.format.*``, ``egress.format.*`` / ``egress.mode.*`` /
+    ``egress.on_new_columns.*``, ``junction.mode.*``, ``funnel.mode.*``,
+    ``feature.*``, and ``type.*`` (a type constructor / native escape hatch
+    is a real per-engine runtime dispatch point — DuckDB genuinely cannot
+    execute a cast to a type it has no native representation for — so it
+    carries the same verdict->test link obligation as any other execution
+    leaf).
+
+    Deliberately EXCLUDES ``module.field.*`` and every ``<block>.field.*``
+    leaf (``agent.field.*``, ``retry_policy.field.*``, ``edge.field.*``,
+    ``udf.field.*``, …) — those are Blueprint-authoring schema fields with no
+    engine-specific execution behavior to exercise (core orchestration
+    handles them identically regardless of engine; see the "ENGINE-INVARIANT
+    leaves" note in each engine's ``capabilities.yml`` header, which already
+    draws this exact line). Also excludes ``config.*`` (a wholly separate
+    leaf category from ``config_leaves.py``, warn-only governance, never
+    execution).
+
+    Composed from the SAME per-category walker functions ``all_leaves()``
+    unions — not a hand-listed set of leaf-id strings — so this stays in
+    lockstep with the grammar walker by construction. Consumed by
+    ``tests/test_capabilities/test_verdict_test_links.py`` (a `supported`
+    leaf in this set must carry a `tests:` link on every engine) and by
+    ``aqueduct/executor/capability_tooling.py``'s ``check()`` reporting.
+    """
+    leaves: set[str] = set()
+    leaves |= _module_type_leaves()
+    leaves |= _channel_op_leaves()
+    leaves |= _egress_leaves()
+    leaves |= _ingress_leaves()
+    leaves |= _junction_leaves()
+    leaves |= _funnel_leaves()
+    leaves |= _feature_leaves()
+    leaves |= type_leaves()
     return frozenset(leaves)
 
 
@@ -198,4 +295,6 @@ __all__ = [
     "FEATURE_FLAGS",
     "INGRESS_FORMATS",
     "all_leaves",
+    "execution_leaves",
+    "type_leaves",
 ]

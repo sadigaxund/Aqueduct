@@ -67,7 +67,7 @@ def _mock_run(mock_get_executor, mock_gen_patch, mock_surveyor_cls):
         blueprint_id="test_bp", stack_trace="", manifest_json="{}",
         started_at="2026-05-11T00:00:00Z", finished_at="2026-05-11T00:00:00Z",
         blueprint_source_yaml="id: test_bp", doctor_hints=[],
-    )
+     engine="spark",)
     inst.observability = None
     inst.patch_store.return_value = None
     mock_surveyor_cls.return_value = inst

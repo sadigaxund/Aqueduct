@@ -57,7 +57,24 @@ _MAX_BLUEPRINT_CHARS = 20_000
 # Hard row cap for sample_rows — never negotiable via the `n` argument.
 _MAX_SAMPLE_ROWS = 20
 
-_UNAVAILABLE_NO_SESSION = "no Spark session available in this heal context"
+def _unavailable_no_session_reason(engine: str) -> str:
+    """The "no live session" degrade reason, per engine.
+
+    Kept containing the literal substring "no Spark session" when
+    ``engine == "spark"`` for backward compatibility with the pre-existing
+    default (the ToolBox's ``engine`` field defaults to ``"spark"``, so every
+    caller that never threaded an engine through keeps seeing the exact same
+    text). Other engines get their own name spelled out rather than falling
+    back to Spark's wording.
+    """
+    label = "Spark" if engine == "spark" else engine
+    return f"no {label} session available in this heal context"
+
+
+# Back-compat constant — the spark-flavored default, still exported/used by
+# the two module-not-found/not-Ingress-independent guards below that fire
+# before an engine-specific session check would apply.
+_UNAVAILABLE_NO_SESSION = _unavailable_no_session_reason("spark")
 
 
 def _own_tool_declarations() -> list[dict[str, Any]]:
@@ -128,10 +145,21 @@ class ToolBox:
         base_dir: The Blueprint's base directory (path anchoring for any
             future tool that needs it — unused by the v1 tool set, which
             resolves everything through ``manifest``/``failure_ctx``).
-        spark_session: Live SparkSession, or None. Session-bound tools
+        spark_session: Live engine session handle (a ``SparkSession``, a
+            ``duckdb`` connection, ...), or None. Session-bound tools
             (``get_source_schema``, ``sample_rows``) return a structured
             ``{"available": False, "reason": ...}`` result instead of
-            raising when this is None.
+            raising when this is None. Named ``spark_session`` for backward
+            compatibility with existing callers/tests predating multi-engine
+            support — it now holds whichever engine's session the ``engine``
+            field below names, not necessarily a ``SparkSession``.
+        engine: The engine this heal is running on (``"spark"``, ``"duckdb"``,
+            ...). Resolves ``get_source_schema``/``sample_rows`` through
+            ``aqueduct.executor.protocol.get_protocol(engine)`` instead of a
+            hardcoded Spark import, so a DuckDB run's diagnostic tools read
+            through DuckDB, not Spark. Defaults to ``"spark"`` — the
+            pre-existing behavior for every caller built before this field
+            existed.
         config_path: Forwarded to registry tools whose ``params_schema``
             accepts it, so ``list_runs``/``run_detail``/etc. resolve the
             SAME ``aqueduct.yml`` the heal itself is running under.
@@ -145,6 +173,7 @@ class ToolBox:
     patch_store: Any = None
     base_dir: str = ""
     spark_session: Any = None
+    engine: str = "spark"
     config_path: str | None = None
     store_dir: str | None = None
 
@@ -241,7 +270,7 @@ class ToolBox:
         if not module_id:
             return {"available": False, "reason": "module_id is required"}
         if self.spark_session is None:
-            return {"available": False, "reason": _UNAVAILABLE_NO_SESSION}
+            return {"available": False, "reason": _unavailable_no_session_reason(self.engine)}
         module = self._find_module(module_id)
         if module is None:
             return {"available": False, "reason": f"unknown module_id {module_id!r}"}
@@ -249,18 +278,28 @@ class ToolBox:
 
         if getattr(module, "type", None) != ModuleType.Ingress:
             return {"available": False, "reason": f"{module_id!r} is not an Ingress module"}
-        # Lazy pyspark import — the agent package top level stays pyspark-free
-        # (only fires when a live spark_session was supplied).
-        from aqueduct.executor.spark.ingress import read_source_schema
+        # Resolve the reader through the engine-agnostic protocol seam
+        # (aqueduct/executor/protocol.py) instead of importing Spark's reader
+        # by name — a heal on a non-Spark engine must read the source schema
+        # through THAT engine, not Spark. No pyspark/duckdb import here: the
+        # protocol registration itself defers those to the resolved
+        # read_source_schema callable's own call-time import.
+        from aqueduct.executor.protocol import get_protocol
 
-        schema = read_source_schema(module, self.spark_session)
+        reader = get_protocol(self.engine).read_source_schema
+        if reader is None:
+            return {
+                "available": False,
+                "reason": f"engine {self.engine!r} does not support get_source_schema",
+            }
+        schema = reader(module, self.spark_session)
         return {"available": True, "module_id": module_id, "schema": schema}
 
     def _sample_rows(self, module_id: str, n: Any) -> dict[str, Any]:
         if not module_id:
             return {"available": False, "reason": "module_id is required"}
         if self.spark_session is None:
-            return {"available": False, "reason": _UNAVAILABLE_NO_SESSION}
+            return {"available": False, "reason": _unavailable_no_session_reason(self.engine)}
         try:
             n_int = int(n)
         except (TypeError, ValueError):
@@ -280,19 +319,25 @@ class ToolBox:
                     "transform output"
                 ),
             }
-        # Lazy pyspark import — same governance as the executor Probe's
-        # sample_rows signal: bounded via limit(n).collect() so this is
-        # exempt from the block_full_actions gate (a LIMIT push-down never
-        # scans the full dataset, unlike row_count_estimate/null_rates'
-        # fraction-of-whole sampling — see executor/spark/probe.py::_sample_rows).
-        from aqueduct.executor.spark.ingress import read_ingress
+        # Resolve the sampler through the engine-agnostic protocol seam —
+        # same rationale as _get_source_schema above. Bounded via a
+        # pushed-down LIMIT (n_int is already hard-capped above) so this is
+        # exempt from the block_full_actions gate on every engine that
+        # implements it as a LIMIT push-down (see executor/spark/probe.py's
+        # sample_rows signal for the same reasoning on Spark).
+        from aqueduct.executor.protocol import get_protocol
 
+        sampler = get_protocol(self.engine).sample_source_rows
+        if sampler is None:
+            return {
+                "available": False,
+                "reason": f"engine {self.engine!r} does not support sample_rows",
+            }
         _base_dir = self.base_dir or getattr(self.manifest, "base_dir", None)
-        df = read_ingress(module, self.spark_session, base_dir=_base_dir)
-        rows = df.limit(n_int).collect()
+        rows = sampler(module, self.spark_session, n_int, _base_dir)
         return {
             "available": True,
             "module_id": module_id,
             "n": n_int,
-            "rows": [row.asDict(recursive=True) for row in rows],
+            "rows": rows,
         }

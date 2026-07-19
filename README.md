@@ -297,6 +297,7 @@ Aqueduct sits where a Spark transformation engine and an autonomous repair loop 
 - **[Observability Guide](docs/observability_guide.md)**: schemas + diagnostic query cookbook
 - **[Production Guide](docs/production_guide.md)**: cluster deployment, security, Delta operations
 - **[Compatibility Matrix](docs/compatibility.md)**: supported Python × Spark versions, pinning recipe
+- **[Extending Aqueduct](docs/extending.md)**: how to add an execution engine (`ExecutorProtocol`, capability declarations, entry points)
 - **[Roadmap](docs/roadmap.md)**: deferred features and future plans
 - **[Gallery](gallery/)**: real working examples
 

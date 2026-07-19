@@ -26,8 +26,11 @@ from typing import Any
 import yaml
 
 from aqueduct.compiler.capability_check import (
+    RULE_ID_CROSS_ENGINE_HEAL,
     RULE_ID_IGNORED,
     check_capabilities,
+    check_cross_engine_heal,
+    format_cross_engine_heal_warning,
     format_ignored_warning,
     format_unsupported_error,
 )
@@ -41,6 +44,7 @@ from aqueduct.compiler.provenance import (
     build_config_provenance,
 )
 from aqueduct.compiler.runtime import AqFunctions, resolve_tier1
+from aqueduct.compiler.type_surfaces import module_type_spellings, udf_return_type_spellings
 from aqueduct.compiler.wirer import (
     WireError,
     compile_away_regulators,
@@ -48,11 +52,12 @@ from aqueduct.compiler.wirer import (
     validate_probes,
     validate_spillway_edges,
 )
-from aqueduct.errors import CompileError
+from aqueduct.errors import CompileError, TypeSpellingError
 from aqueduct.executor.capabilities import Support
 from aqueduct.executor.path_keys import CLOUD_SCHEMES, PATHLESS_INGRESS_FORMATS
 from aqueduct.parser.models import Blueprint, Edge, Module, ModuleType
 from aqueduct.parser.resolver import _CTX_RE, _sub_ctx  # Tier 0 re-pass after Tier 1
+from aqueduct.typehub import parse_type
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +101,7 @@ def compile(  # noqa: A001
     deployment_target: str | None = None,
     warnings_suppress: set[str] | None = None,
     warnings_silence_all: bool = False,
+    warnings_strict: set[str] | None = None,
     engine: str = "spark",
 ) -> Manifest:
     """Compile a parsed Blueprint into a fully-resolved Manifest.
@@ -111,6 +117,11 @@ def compile(  # noqa: A001
                         "spark", matching ``aqueduct.executor.get_executor``'s
                         default and today's only supported engine
                         (``aqueduct.config.EngineConfig.engine``).
+        warnings_strict: rule_ids to promote from warning to a hard
+                        CompileError (Phase 79). None (default) falls back to
+                        the process-global ``aqueduct.warnings._DEFAULT_STRICT``
+                        set by ``warnings.strict`` in aqueduct.yml — same
+                        resolution pattern as ``warnings_suppress``.
 
     Returns:
         A frozen Manifest ready for the Executor.
@@ -585,6 +596,39 @@ def compile(  # noqa: A001
                 "the maintenance block."
             )
 
+    # ── 8h. Type-spelling validation (Arrow type-hub vocabulary, Phase 80) ────
+    # Work package 1 of 4: routes every inventoried type-string surface
+    # (Ingress schema_hint, Channel op=cast columns, UDF return_type) through
+    # aqueduct.typehub.parse_type for VALIDATION + canonicalization only. The
+    # ORIGINAL string still reaches the executor unchanged (no engine mapping,
+    # no runtime behavior change — later work packages). A spelling the hub
+    # cannot parse at all is a hard CompileError (previously: silently passed
+    # through to whatever the target engine's own parser made of it at
+    # runtime). Bare `timestamp` is a deprecation-window WARNING
+    # (ambiguous_type_spelling, see typehub.py), not an error, so no existing
+    # Blueprint using it breaks this release. Disabled modules are skipped —
+    # same convention as sections 7-8 above, since a disabled module's config
+    # never reaches an engine.
+    # Surface extraction (WHERE the type strings live) is shared with the
+    # Phase 80 work-package-2 capability gate (section 9 below) via
+    # ``aqueduct.compiler.type_surfaces`` — see that module's docstring for
+    # why: duplicating the columns/schema_hint shape-parsing in both places
+    # is exactly the drift risk this framework exists to prevent. This pass
+    # only VALIDATES each spelling; the gate separately parses the same
+    # spellings into capability leaves.
+    def _check_type_spelling(where: str, spelling: Any) -> None:
+        try:
+            parse_type(str(spelling), suppress=_supp)
+        except TypeSpellingError as exc:
+            raise CompileError(f"{where}: {exc}") from exc
+
+    for m in modules:
+        for where, spelling in module_type_spellings(m):
+            _check_type_spelling(where, spelling)
+
+    for where, spelling in udf_return_type_spellings(blueprint.udf_registry):
+        _check_type_spelling(where, spelling)
+
     prov_map = ProvenanceMap(
         blueprint_id=blueprint.id,
         blueprint_path=str(blueprint_path.resolve()) if blueprint_path else "",
@@ -637,6 +681,25 @@ def compile(  # noqa: A001
             if _p.support == Support.IGNORED_WITH_WARNING:
                 _emit_cap(RULE_ID_IGNORED, format_ignored_warning(_p, engine), suppress=_supp)
 
+    # ── 9.5. Cross-engine heal-patch provenance gate (Phase 79) ──────────────
+    # `blueprint.healed_by` (not the Manifest — this is provenance METADATA,
+    # deliberately excluded from Manifest assembly so it can never perturb
+    # `manifest.to_dict()`'s hash — see the manifest-hash-invariance test).
+    # `engine_key_ignored`-style suppressible WARNING by default
+    # (`cross_engine_heal`); `warnings.strict` (aqueduct.yml) promotes it to a
+    # hard CompileError — see aqueduct/warnings.py::_DEFAULT_STRICT.
+    from aqueduct.warnings import _DEFAULT_STRICT
+    _strict = set(warnings_strict) if warnings_strict is not None else set(_DEFAULT_STRICT)
+    _cross_engine_problems = check_cross_engine_heal(blueprint, engine)
+    if _cross_engine_problems:
+        if RULE_ID_CROSS_ENGINE_HEAL in _strict:
+            _msgs = "; ".join(format_cross_engine_heal_warning(p) for p in _cross_engine_problems)
+            raise CompileError(f"Cross-engine heal-patch gate failed (warnings.strict): {_msgs}")
+        if not warnings_silence_all:
+            from aqueduct.warnings import emit as _emit_xh
+            for _p in _cross_engine_problems:
+                _emit_xh(RULE_ID_CROSS_ENGINE_HEAL, format_cross_engine_heal_warning(_p), suppress=_supp)
+
     # ── Phase 30a tier 1 — extended Spark warnings (modular registry) ─────────
     # `_supp` (section 7) already carries engine-level ∪ per-Blueprint suppress.
     if not warnings_silence_all:
@@ -650,7 +713,7 @@ def compile(  # noqa: A001
                     manifest,
                     modules=tuple(m for m in manifest.modules if m.enabled),
                 )
-            for _rid, _msg in _run_compile_warnings(_warn_manifest, suppress=_supp):
+            for _rid, _msg in _run_compile_warnings(_warn_manifest, suppress=_supp, engine=engine):
                 _emit(_rid, _msg, suppress=_supp)
         except Exception:
             pass  # warnings must never block compilation

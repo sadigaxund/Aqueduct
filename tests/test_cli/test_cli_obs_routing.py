@@ -124,7 +124,7 @@ def test_heal_command_per_pipeline_routing(tmp_path):
         spark_config={}
     )
     
-    surveyor = Surveyor(manifest, store_dir=p1_dir)
+    surveyor = Surveyor(manifest, store_dir=p1_dir, engine="spark")
     surveyor.start("run-fail-1")
     
     now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()

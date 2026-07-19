@@ -17,6 +17,8 @@ The reproducible lanes install under a lock; the canary does not. Every job in `
 
 Not every module-config key / Channel op / write mode a Blueprint can express is guaranteed to run on every version of a dependency. `aqueduct doctor` (`aqueduct/doctor/checks_io.py::check_capabilities`) walks a compiled blueprint's used capabilities and checks each one's declared version requirement (e.g. `format: custom` needs `pyspark>=4.0`) against what's actually installed, reporting `fail`/`skip`/`ok` per capability. This is a runtime check, distinct from the compile-time capability gate (`aqueduct/compiler/capability_check.py`) that blocks a capability the engine does not support at all, see `docs/specs.md` §10.9 for the full contract.
 
+The matrix below also carries one `type.<constructor>` row per hub type constructor and one `type.native.<engine>` row per registered engine's native-namespace escape hatch — see `docs/specs.md` §9 for the type vocabulary itself and §10.9 for how it is gated.
+
 Each engine declares a verdict for every capability leaf in a YAML data file shipped with it (`aqueduct/executor/spark/capabilities.yml`). That file is the source of truth, so the matrix below is generated from it with `aqueduct dev capabilities docs` rather than hand-maintained.
 
 <!-- ENGINE_MATRIX_START -->
@@ -26,8 +28,8 @@ Each engine declares a verdict for every capability leaf in a YAML data file shi
 
 | Engine | Leaves declared | Supported | Version-gated | Ignored with warning | Unsupported |
 |---|---|---|---|---|---|
-| `duckdb` | 261 | 218 | 0 | 6 | 37 |
-| `spark` | 261 | 261 | 7 | 0 | 0 |
+| `duckdb` | 288 | 243 | 0 | 6 | 39 |
+| `spark` | 288 | 287 | 7 | 0 | 1 |
 
 ### Conditional and refused capabilities
 
@@ -35,11 +37,11 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 
 | Engine | Capability leaf | Verdict | Requires | Notes |
 |---|---|---|---|---|
-| `duckdb` | `agent.field.block_on_explain_regression` | unsupported | — | block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture this stage. |
-| `duckdb` | `channel.op.cache` | unsupported | — | op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented this stage. |
+| `duckdb` | `agent.field.block_on_explain_regression` | unsupported | — | block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented. |
+| `duckdb` | `channel.op.cache` | unsupported | — | op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented. |
 | `duckdb` | `channel.op.coalesce` | unsupported | — | op=coalesce is a Spark physical-partition-count hint; DuckDB has no partition concept to coalesce. Not applicable. |
 | `duckdb` | `channel.op.repartition` | unsupported | — | op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable. |
-| `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent this stage. |
+| `duckdb` | `config.agent.block_on_explain_regression` | unsupported | — | relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented. |
 | `duckdb` | `config.agent.sandbox_master_url` | unsupported | — | sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local). |
 | `duckdb` | `config.deployment.databricks.cluster_id` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.libraries` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
@@ -47,37 +49,39 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `duckdb` | `config.deployment.databricks.new_cluster` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.databricks.workspace_url` | unsupported | — | single-node engine — schedule the container on one node. Databricks is a Spark deployment target. |
 | `duckdb` | `config.deployment.master_url` | ignored_with_warning | — | DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.lineage.openlineage_namespace` | ignored_with_warning | — | the DuckDB executor emits no OpenLineage events this stage; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.lineage.openlineage_url` | ignored_with_warning | — | the DuckDB executor emits no OpenLineage events this stage; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
+| `duckdb` | `config.lineage.openlineage_namespace` | ignored_with_warning | — | the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
+| `duckdb` | `config.lineage.openlineage_url` | ignored_with_warning | — | the DuckDB executor does not emit OpenLineage events; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.metrics.use_observe` | unsupported | — | use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally. |
-| `duckdb` | `config.probes.default_sample_fraction` | ignored_with_warning | — | Probe (module.type.Probe) is unsupported on DuckDB this stage, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
-| `duckdb` | `config.probes.max_sample_rows` | ignored_with_warning | — | Probe (module.type.Probe) is unsupported on DuckDB this stage, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
+| `duckdb` | `config.probes.default_sample_fraction` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
+| `duckdb` | `config.probes.max_sample_rows` | ignored_with_warning | — | Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `config.spark_config` | ignored_with_warning | — | spark_config has no meaning for the DuckDB engine (it configures a SparkSession that does not exist here); ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines. |
 | `duckdb` | `egress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
-| `duckdb` | `egress.format.delta` | unsupported | — | DuckDB can do this via a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB itself has no writer for); deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `egress.format.depot` | unsupported | — | DuckDB can do this via the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly); deferred to a later stage, not implemented in Stage A. |
+| `duckdb` | `egress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented. |
+| `duckdb` | `egress.format.depot` | unsupported | — | Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented. |
 | `duckdb` | `egress.format.hudi` | unsupported | — | Hudi is not implemented for the DuckDB engine. |
 | `duckdb` | `egress.format.iceberg` | unsupported | — | Iceberg is not implemented for the DuckDB engine. |
-| `duckdb` | `egress.mode.merge` | unsupported | — | mode=merge (upsert) requires a target table format with a transaction log (Delta); not implemented for DuckDB this stage. |
-| `duckdb` | `egress.mode.overwrite_partitions` | unsupported | — | DuckDB can do this via COPY ... TO with PARTITION_BY plus pruning the target partition directories before write; deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `egress.on_new_columns.alert` | unsupported | — | DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `egress.on_new_columns.allow` | unsupported | — | DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `egress.on_new_columns.fail` | unsupported | — | DuckDB can do this via a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write; deferred to a later stage, not implemented in Stage A. |
+| `duckdb` | `egress.mode.merge` | unsupported | — | mode=merge (upsert) requires a target table format with a transaction log (Delta). Not implemented for DuckDB. |
+| `duckdb` | `egress.mode.overwrite_partitions` | unsupported | — | Requires COPY ... TO with PARTITION_BY plus pruning the target partition directories before write. Not implemented. |
+| `duckdb` | `egress.on_new_columns.alert` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
+| `duckdb` | `egress.on_new_columns.allow` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
+| `duckdb` | `egress.on_new_columns.fail` | unsupported | — | Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented. |
 | `duckdb` | `feature.broadcast_junction` | unsupported | — | broadcast_junction names a Spark distributed-join optimization; DuckDB is single-process, so there is nothing to broadcast. junction.mode.broadcast (fan-out to identical branches) is unaffected and supported. |
 | `duckdb` | `feature.custom_datasource` | unsupported | — | Custom Python DataSource is a pyspark>=4.0 API — Spark-only. |
-| `duckdb` | `feature.delta_time_travel` | unsupported | — | DuckDB can do this via a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp); deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `feature.delta_write` | unsupported | — | DuckDB can do this via a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB itself has no writer for); deferred to a later stage, not implemented in Stage A. |
+| `duckdb` | `feature.delta_time_travel` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp). Not implemented. |
+| `duckdb` | `feature.delta_write` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented. |
 | `duckdb` | `feature.java_udf` | unsupported | — | lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB. |
 | `duckdb` | `feature.metrics_boundary` | unsupported | — | metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module; DuckDB has no stage-fusion concept to work around — module metrics are already collected per module. |
-| `duckdb` | `feature.parallel_mode` | unsupported | — | DuckDB can do this via a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries); deferred to a later stage, not implemented in Stage A. The executor runs the topological order serially today. |
-| `duckdb` | `feature.python_udf` | unsupported | — | DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented/tested this stage — declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics. |
+| `duckdb` | `feature.parallel_mode` | unsupported | — | Requires a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries). Not implemented: the executor runs the topological order serially today. |
+| `duckdb` | `feature.python_udf` | unsupported | — | DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented or tested: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics. |
+| `duckdb` | `feature.table_addressing` | unsupported | — | DuckDB Ingress/Egress require format:+path: — there is no catalog to resolve a bare table: name against. Use format:+path: instead of table: addressing on this engine. |
 | `duckdb` | `ingress.format.custom` | unsupported | — | format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB. |
-| `duckdb` | `ingress.format.delta` | unsupported | — | DuckDB can do this via a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log); deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `ingress.format.depot` | unsupported | — | DuckDB can do this via the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly); deferred to a later stage, not implemented in Stage A. |
-| `duckdb` | `ingress.format.jdbc` | unsupported | — | DuckDB can do this via the postgres scanner extension (ATTACH ... (TYPE POSTGRES) — the same wire protocol jdbc: postgres:// targets); deferred to a later stage, not implemented in Stage A. |
+| `duckdb` | `ingress.format.delta` | unsupported | — | Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented. |
+| `duckdb` | `ingress.format.depot` | unsupported | — | Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented. |
+| `duckdb` | `ingress.format.jdbc` | unsupported | — | Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented. |
 | `duckdb` | `ingress.format.kafka` | unsupported | — | Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine. |
-| `duckdb` | `module.type.Assert` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented in DuckDB Stage A — planned for a later stage. Not in the Stage A Handlers scope (Ingress/Channel/Junction/Funnel/Egress only). |
-| `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented in DuckDB Stage A — planned for a later stage. Not in the Stage A Handlers scope (Ingress/Channel/Junction/Funnel/Egress only). |
+| `duckdb` | `module.type.Assert` | unsupported | — | Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
+| `duckdb` | `module.type.Probe` | unsupported | — | Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only. |
+| `duckdb` | `type.native.spark` | unsupported | — | 'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch. |
 | `spark` | `egress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
 | `spark` | `egress.format.delta` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
 | `spark` | `feature.custom_datasource` | supported | `pyspark>=4.0` | Custom Python DataSource requires pyspark>=4.0. See docs/compatibility.md. |
@@ -85,6 +89,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 | `spark` | `feature.delta_write` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
 | `spark` | `ingress.format.custom` | supported | `pyspark>=4.0` | format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md. |
 | `spark` | `ingress.format.delta` | supported | `delta-spark>=4.0` | Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md. |
+| `spark` | `type.native.duckdb` | unsupported | — | 'duckdb:<spelling>' names a type in DuckDB's native type system, which Spark's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'spark:<spelling>' for a Spark-native escape hatch. |
 <!-- ENGINE_MATRIX_END -->
 
 <!-- COMPAT_RESULTS_START -->

@@ -771,6 +771,13 @@ agent:
 # # nuclear option — silence every Aqueduct warning:
 # warnings:
 #   suppress: ["*"]
+#
+# `warnings.strict` is the opposite direction: promote listed rule_ids from
+# warning to a hard CompileError. Default empty (no behaviour change). E.g.
+# to fail the build on an unvalidated cross-engine self-heal:
+# warnings:
+#   strict:
+#     - cross_engine_heal
 
 # ── Danger settings ───────────────────────────────────────────────────────────
 # All default to false (safe production mode). Set to true only when needed.

@@ -111,7 +111,7 @@ class TestDefaultBudget:
 
 def _sig(tag: str = "default") -> "ErrorSignature":
     from aqueduct.agent.signature import make_signature
-    return make_signature("err", "root", f"message {tag}")
+    return make_signature("err", "root", f"message {tag}", engine="spark")
 
 
 class TestBudgetTracker:

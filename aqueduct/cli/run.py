@@ -858,6 +858,7 @@ def _setup_surveyor(
     surveyor = _Surveyor(
         manifest,
         store_dir=resolved_store_dir,
+        engine=engine,
         webhook_config=resolved_webhook,
         blueprint_path=_P(blueprint_str),
         patches_dir=patches_dir,
@@ -1472,22 +1473,33 @@ def run(
                     pass  # iteration registration is best-effort; never let persistence block execution
             execute_exc: ExecuteError | None = None
             try:
-                result = execute(
-                    manifest, session,
-                    run_id=iteration_run_id,
-                    store_dir=resolved_store_dir,
-                    checkpoint_root=checkpoint_root_abs,
-                    surveyor=surveyor,
-                    depot=depot,
-                    resume_run_id=resume_run_id if patch_count == 0 else None,
-                    from_module=from_module,
-                    to_module=to_module,
-                    block_full_actions=not cfg.danger.allow_full_probe_actions,
-                    parallel=parallel,
-                    use_observe=cfg.metrics.use_observe,
-                    observability_store=bundle.observability,
-                    sampling=probe_sampling,
+                # Filter Spark-flavoured optional capability kwargs the target
+                # engine can't honour (warns under engine_kwarg_ignored instead
+                # of a TypeError/silent drop — Phase 79) while still calling
+                # THIS process's already-resolved `execute` (get_executor(engine)
+                # from _load_engine_config), not a freshly re-resolved one.
+                from aqueduct.executor.protocol import filter_execute_kwargs
+
+                _exec_kwargs = filter_execute_kwargs(
+                    engine,
+                    dict(
+                        run_id=iteration_run_id,
+                        store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor,
+                        depot=depot,
+                        resume_run_id=resume_run_id if patch_count == 0 else None,
+                        from_module=from_module,
+                        to_module=to_module,
+                        block_full_actions=not cfg.danger.allow_full_probe_actions,
+                        parallel=parallel,
+                        use_observe=cfg.metrics.use_observe,
+                        observability_store=bundle.observability,
+                        sampling=probe_sampling,
+                    ),
+                    suppress=cfg.warnings.suppress,
                 )
+                result = execute(manifest, session, **_exec_kwargs)
             except ExecuteError as exc:
                 execute_exc = exc
                 result = ExecutionResult(
@@ -1640,8 +1652,10 @@ def run(
                                 failed_module=failure_ctx.failed_module,
                                 iteration_run_id=iteration_run_id,
                                 blueprint_id=manifest.blueprint_id,
+                                engine=engine,
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                                 sandbox_master_url=resolved_sandbox_master_url,
+                                warnings_suppress=cfg.warnings.suppress,
                             )
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
@@ -1894,8 +1908,10 @@ def run(
                             failed_module=_vc_failed_module,
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
+                            engine=engine,
                             sandbox_mode=_vc_sandbox_mode,
                             sandbox_master_url=resolved_sandbox_master_url,
+                            warnings_suppress=cfg.warnings.suppress,
                         )
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
@@ -1930,7 +1946,8 @@ def run(
                     obs_store=_obs_store,
                     patch_store=_patch_store,
                     base_dir=manifest.base_dir,
-                    spark_session=session if engine == "spark" else None,
+                    spark_session=session,
+                    engine=engine,
                     config_path=config_path,
                     store_dir=store_dir,
                 )
@@ -2014,7 +2031,8 @@ def run(
                             manifest=manifest, failure_ctx=link_failure_ctx,
                             obs_store=_obs_store, patch_store=_patch_store,
                             base_dir=manifest.base_dir,
-                            spark_session=session if engine == "spark" else None,
+                            spark_session=session,
+                            engine=engine,
                             config_path=config_path, store_dir=store_dir,
                         )
                     return _prog_generate_patch(
@@ -2473,8 +2491,10 @@ def run(
                         failed_module=failure_ctx.failed_module,
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
+                        engine=engine,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
+                        warnings_suppress=cfg.warnings.suppress,
                     )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
@@ -2715,6 +2735,16 @@ def run(
             if patch_rejected_by_gate:
                 sys.exit(exit_codes.VALIDATION_GATE)
             sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+        # ── Self-heal provenance: green run stamps validated_on (Phase 79) ────────
+        # Best-effort — `stamp_validated_engine` never raises (it logs its own
+        # failures internally) and never affects the run's outcome or exit
+        # code. No-op when the Blueprint carries no `healed_by:` block at all.
+        try:
+            from aqueduct.patch.apply import stamp_validated_engine
+            stamp_validated_engine(Path(blueprint), engine)
+        except Exception:
+            pass  # provenance stamping must never affect a successful run
 
         # ── on_success webhook ────────────────────────────────────────────────────
         if cfg.webhooks.on_success:

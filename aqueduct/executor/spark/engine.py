@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 import aqueduct.executor.spark.capabilities  # noqa: F401
 from aqueduct.executor.protocol import ExecutorProtocol, SessionSpec, register_protocol
 from aqueduct.executor.spark.prompt_rules import SPARK_PROMPT_RULES
+from aqueduct.executor.spark.type_render import render_spark_type
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
@@ -120,6 +121,40 @@ def _close_session(session: Any) -> None:
     session.stop()
 
 
+def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
+    """``ExecutorProtocol.read_source_schema`` for Spark — lazy ``pyspark`` import.
+
+    Thin pass-through to ``aqueduct.executor.spark.ingress.read_source_schema``
+    — a refactor (naming the existing reader as the engine's contribution
+    through this seam), not new behavior. Previously the healing agent's
+    ToolBox (``aqueduct/agent/toolbox.py``) imported this function by name
+    directly, so a heal on a non-Spark engine still read source schemas
+    through Spark; routing it through the protocol closes that coupling.
+    """
+    from aqueduct.executor.spark.ingress import read_source_schema
+
+    return read_source_schema(module, session)
+
+
+def _sample_source_rows(
+    module: Any, session: Any, n: int = 10, base_dir: str | None = None,
+) -> list[dict[str, Any]]:
+    """``ExecutorProtocol.sample_source_rows`` for Spark — lazy ``pyspark`` import.
+
+    Same bounded-sample contract the ToolBox's ``sample_rows`` tool used to
+    implement inline against ``read_ingress`` directly (``limit(n).collect()``
+    — a LIMIT push-down, never a full scan, so this is exempt from the
+    ``block_full_actions`` gate the same way ``executor/spark/probe.py``'s
+    ``sample_rows`` signal is). Moved here so the ToolBox no longer imports
+    ``aqueduct.executor.spark.ingress`` by name.
+    """
+    from aqueduct.executor.spark.ingress import read_ingress
+
+    df = read_ingress(module, session, base_dir=base_dir)
+    rows = df.limit(int(n)).collect()
+    return [row.asDict(recursive=True) for row in rows]
+
+
 SPARK = ExecutorProtocol(
     engine="spark",
     execute=_execute,
@@ -127,6 +162,14 @@ SPARK = ExecutorProtocol(
     prompt_rules=SPARK_PROMPT_RULES,
     make_session=_make_session,
     close_session=_close_session,
+    read_source_schema=_read_source_schema,
+    sample_source_rows=_sample_source_rows,
+    render_type=render_spark_type,
+    # execute_kwargs=None (the default) — Spark's real execute() has a
+    # parameter for every OPTIONAL_EXECUTE_KWARGS name
+    # (aqueduct/executor/protocol.py), so call_execute() applies no
+    # filtering/warning here; every kwarg a caller passes goes straight
+    # through to the real function.
 )
 register_protocol(SPARK)
 

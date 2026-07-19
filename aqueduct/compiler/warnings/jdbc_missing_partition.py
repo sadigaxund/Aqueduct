@@ -16,7 +16,15 @@ from aqueduct.parser.models import ModuleType
 RULE_ID = "jdbc_missing_partition"
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # Spark-physical: partitionColumn/lowerBound/upperBound/predicates are
+    # Spark's own JDBC-source read-parallelism options — "single executor
+    # connection" describes Spark's distributed read path. DuckDB's JDBC
+    # (postgres scanner) story is unimplemented today (see
+    # duckdb_/capabilities.yml ingress.format.jdbc: unsupported) and would
+    # need its own parallelism advice, not this one — gated off, not reworded.
+    if engine != "spark":
+        return []
     out: list[str] = []
     for m in manifest.modules:
         if m.type != ModuleType.Ingress:

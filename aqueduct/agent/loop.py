@@ -49,6 +49,7 @@ from aqueduct.agent.signature import (
     from_validation_error,
 )
 from aqueduct.patch.grammar import PATCH_META_KEY, PatchSpec
+from aqueduct.patch.provenance import detect_engine_version
 from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.models import FailureContext
 from aqueduct.utils import utcnow_iso
@@ -81,7 +82,11 @@ logger = logging.getLogger(__name__)
 #       gains a "Tools available" addendum on any turn where tool-use is
 #       offered (`prompts._TOOLS_SECTION`). Oneshot-mode heals (the default)
 #       never render it — their prompt is byte-identical to 1.6.
-PROMPT_VERSION = "1.7"
+# 1.8 — Phase 78: DuckDB engine's PromptRules pack gains a DuckDB-worded
+#       PREDICTED_SCHEMA_DRIFT rule bullet, changing DuckDB's composed
+#       healing system prompt. Spark's composed prompt is byte-identical to
+#       1.7 — the version constant is global, so Spark is relabeled too.
+PROMPT_VERSION = "1.8"
 
 
 @dataclass
@@ -241,6 +246,7 @@ def _record_patch_index(
             ops=[op.op for op in patch_spec.operations],
             source=source,
             prompt_version=PROMPT_VERSION,
+            engine=failure_ctx.engine,
         )
         with obs_store.connect() as cur:
             _ix.ensure_schema(cur)
@@ -287,6 +293,12 @@ def stage_patch_for_human(
         "failed_module": failure_ctx.failed_module,
         "staged_at": _utcnow(),
         "prompt_version": PROMPT_VERSION,
+        # Phase 79 — heal-patch provenance: the engine this heal targeted
+        # (required on FailureContext) + a best-effort installed version.
+        # Consumed by `aqueduct patch apply` to stamp the blueprint's
+        # `healed_by:` block — see aqueduct/patch/apply.py.
+        "engine": failure_ctx.engine,
+        "engine_version": detect_engine_version(failure_ctx.engine),
         # Full dict (not just hash): coaching renders error_class/where/message
         # as the few-shot "failure" half without re-reading failure_contexts.
         "failure_signature": sig_exact.to_dict(),
@@ -370,6 +382,9 @@ def archive_patch(
         "applied_at": _utcnow(),
         "approval_mode": mode,
         "prompt_version": PROMPT_VERSION,
+        # Phase 79 — see stage_patch_for_human above.
+        "engine": failure_ctx.engine,
+        "engine_version": detect_engine_version(failure_ctx.engine),
         "failure_signature": sig_exact.to_dict(),
         "failure_signature_coarse": sig_coarse.hash,
     }
@@ -603,7 +618,7 @@ def generate_agent_patch(
                     deadline, attempt_num, budget.max_reprompts, exc,
                 )
                 reprompt_errors.append(f"Budget seconds exceeded: {exc}")
-                sig = from_exception(exc, where="provider")
+                sig = from_exception(exc, where="provider", engine=failure_ctx.engine)
                 rec = _record(
                     sig,
                     tokens_in=0, tokens_out=0, latency_ms=latency_ms,
@@ -631,7 +646,7 @@ def generate_agent_patch(
                 attempt_num, budget.max_reprompts, exc, hint,
             )
             reprompt_errors.append(f"API error: {exc}")
-            sig = from_exception(exc, where="provider")
+            sig = from_exception(exc, where="provider", engine=failure_ctx.engine)
             rec = _record(
                 sig,
                 tokens_in=0, tokens_out=0, latency_ms=latency_ms,
@@ -673,11 +688,11 @@ def generate_agent_patch(
                 attempt_num, budget.max_reprompts, friendly,
             )
             if isinstance(parse_exc, ValidationError):
-                sig = from_validation_error(parse_exc)
+                sig = from_validation_error(parse_exc, engine=failure_ctx.engine)
             elif isinstance(parse_exc, json.JSONDecodeError):
-                sig = from_json_decode_error(parse_exc)
+                sig = from_json_decode_error(parse_exc, engine=failure_ctx.engine)
             else:
-                sig = from_exception(parse_exc, where="parse")
+                sig = from_exception(parse_exc, where="parse", engine=failure_ctx.engine)
 
             rec = _record(
                 sig,
@@ -739,7 +754,7 @@ def generate_agent_patch(
                     attempt_num, budget.max_reprompts,
                 )
                 sig = from_apply_error(
-                    "defer_rejected", friendly, where="loop",
+                    "defer_rejected", friendly, where="loop", engine=failure_ctx.engine,
                 )
                 rec = _record(
                     sig,
@@ -799,6 +814,7 @@ def generate_agent_patch(
                 reprompt_errors.append(f"Validation rejected: {vfeedback}")
                 sig = from_apply_error(
                     "validation_rejected", vfeedback or "(no detail)", where="validate",
+                    engine=failure_ctx.engine,
                 )
                 rec = _record(
                     sig,
@@ -857,6 +873,7 @@ def generate_agent_patch(
                 err_class or "apply_error",
                 err_msg or "(no message)",
                 where=err_where,
+                engine=failure_ctx.engine,
             )
             friendly = (
                 f"Your PatchSpec parsed but was rejected by the apply gate "

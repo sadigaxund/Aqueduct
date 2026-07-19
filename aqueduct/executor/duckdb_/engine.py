@@ -26,22 +26,29 @@ from typing import TYPE_CHECKING, Any
 # Side effect: registers "duckdb" into aqueduct.executor.capabilities.CAPABILITY_REGISTRY.
 import aqueduct.executor.duckdb_.capabilities  # noqa: F401
 from aqueduct.executor.duckdb_.prompt_rules import DUCKDB_PROMPT_RULES
+from aqueduct.executor.duckdb_.type_render import render_duckdb_type
 from aqueduct.executor.protocol import ExecutorProtocol, SessionSpec, register_protocol
 
 if TYPE_CHECKING:
     from aqueduct.executor.models import ExecutionResult
 
 # Execution kwargs the DuckDB engine's `execute()` genuinely accepts. The
-# shared run path (`aqueduct/cli/run.py`) calls the protocol's `execute` with a
-# superset that also carries Spark-only run options — `parallel`, `use_observe`,
-# `sampling`, `observability_store`, `explain_capture`. Those are the "clearly
-# optional capabilities an engine may ignore" half of the ExecutorProtocol
-# contract: DuckDB does not implement them (see capabilities.yml —
-# `feature.parallel_mode`, `config.metrics.use_observe`, Probe sampling, and the
-# Spark explain-gate are all UNSUPPORTED/unimplemented this stage), so the
-# adapter DROPS them here rather than forwarding them into
-# `duckdb_.executor.execute`, whose signature never mentions them. The engine's
-# real execute() is therefore never handed an option it cannot honour.
+# shared run path (`aqueduct/cli/run.py`) calls through
+# `aqueduct.executor.protocol.call_execute()` with a superset that also
+# carries Spark-only run options — `parallel`, `use_observe`, `sampling`,
+# `observability_store`, `explain_capture`. Those are the "clearly optional
+# capabilities an engine may ignore" half of the ExecutorProtocol contract
+# (`OPTIONAL_EXECUTE_KWARGS` in `protocol.py`): DuckDB does not implement them
+# (see capabilities.yml — `feature.parallel_mode`, `config.metrics.use_observe`,
+# Probe sampling, and the Spark explain-gate are all UNSUPPORTED/unimplemented
+# this stage). This set is handed to `ExecutorProtocol.execute_kwargs` below,
+# so `call_execute()` drops anything outside it BEFORE calling `_execute` —
+# emitting one suppressible `engine_kwarg_ignored` warning per dropped kwarg
+# (Phase 79) instead of the prior silent drop. `_execute`'s own filter
+# (immediately below) is kept as a defensive backstop for any caller that
+# still reaches the protocol's `execute` directly instead of through
+# `call_execute()`; it stays silent there deliberately — `call_execute()` is
+# the seam responsible for user-facing signal, not this fallback.
 _DUCKDB_EXECUTE_KWARGS: frozenset[str] = frozenset({
     "run_id", "store_dir", "checkpoint_root", "surveyor", "depot",
     "resume_run_id", "from_module", "to_module", "block_full_actions",
@@ -102,6 +109,33 @@ def _close_session(session: Any) -> None:
     session.close()
 
 
+def _read_source_schema(module: Any, session: Any) -> dict[str, str]:
+    """``ExecutorProtocol.read_source_schema`` for DuckDB.
+
+    Delegates to ``aqueduct.executor.duckdb_.schema_reader.read_source_schema``
+    — this is the seam that lets the healing agent's ``get_source_schema``
+    tool (``aqueduct/agent/toolbox.py``) read a DuckDB run's source schema
+    without going through Spark. Lazy import kept for consistency with the
+    sibling wrappers in this module.
+    """
+    from aqueduct.executor.duckdb_.schema_reader import read_source_schema
+
+    return read_source_schema(module, session)
+
+
+def _sample_source_rows(
+    module: Any, session: Any, n: int = 10, base_dir: str | None = None,
+) -> list[dict[str, Any]]:
+    """``ExecutorProtocol.sample_source_rows`` for DuckDB.
+
+    Delegates to ``aqueduct.executor.duckdb_.schema_reader.sample_source_rows``
+    — bounded via a pushed-down ``LIMIT``, never a full scan.
+    """
+    from aqueduct.executor.duckdb_.schema_reader import sample_source_rows
+
+    return sample_source_rows(module, session, n=n, base_dir=base_dir)
+
+
 DUCKDB = ExecutorProtocol(
     engine="duckdb",
     execute=_execute,
@@ -109,6 +143,10 @@ DUCKDB = ExecutorProtocol(
     prompt_rules=DUCKDB_PROMPT_RULES,
     make_session=_make_session,
     close_session=_close_session,
+    read_source_schema=_read_source_schema,
+    sample_source_rows=_sample_source_rows,
+    render_type=render_duckdb_type,
+    execute_kwargs=_DUCKDB_EXECUTE_KWARGS,
 )
 register_protocol(DUCKDB)
 

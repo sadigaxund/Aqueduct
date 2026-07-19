@@ -437,7 +437,7 @@ edges: []
                 context={}, modules=(), edges=(), spark_config={},
             ),
             tmp_path / "heal_cli",
-        )
+         engine="spark",)
         s.start("run1")
 
         from aqueduct.executor.models import ExecutionResult, ModuleResult

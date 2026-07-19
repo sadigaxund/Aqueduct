@@ -31,6 +31,7 @@ def _failure_ctx(**overrides) -> FailureContext:
         manifest_json="{}",
         started_at="2026-01-01T00:00:00Z",
         finished_at="2026-01-01T00:01:00Z",
+        engine="spark",
     )
     base.update(overrides)
     return FailureContext(**base)

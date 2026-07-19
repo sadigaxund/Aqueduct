@@ -28,6 +28,7 @@ icons) belongs to the CLI layer, so every function here returns values.
 
 from __future__ import annotations
 
+import ast
 import importlib.metadata
 import importlib.util
 from dataclasses import dataclass, field
@@ -36,7 +37,7 @@ from pathlib import Path
 import yaml
 
 from aqueduct.executor.capabilities import AQ_ENGINES_ENTRYPOINT_GROUP, Support
-from aqueduct.executor.capability_leaves import all_leaves
+from aqueduct.executor.capability_leaves import all_leaves, execution_leaves
 from aqueduct.executor.config_leaves import all_config_leaves
 
 UNDECLARED = Support.UNDECLARED.value
@@ -44,6 +45,83 @@ DECLARATION_FILENAME = "capabilities.yml"
 
 MATRIX_START = "<!-- ENGINE_MATRIX_START -->"
 MATRIX_END = "<!-- ENGINE_MATRIX_END -->"
+
+# Repo root — three parents up from aqueduct/executor/capability_tooling.py.
+# Used to resolve a `tests:` entry's repo-relative file path against disk.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ── verdict -> test-id linking ─────────────────────────────────────────────
+#
+# A `supported` EXECUTION leaf (capability_leaves.execution_leaves()) must
+# name >=1 pytest id proving it is actually exercised on that engine
+# (Phase 79). Resolution is a STATIC check — parse the target file with `ast`
+# and look for a matching `def test_*` / `class Test*` — rather than shelling
+# out to a full pytest collection, so `aqueduct dev capabilities check` stays
+# fast and dependency-light. The stricter authoritative gate is the pytest
+# closure test (test_verdict_test_links.py), which uses this SAME resolver so
+# the two never drift apart.
+
+
+def _pytest_names(file_path: Path) -> tuple[frozenset[str], dict[str, frozenset[str]]]:
+    """Return (module-level test function/class names, {class: {method names}}),
+    using pytest's default collection convention (`test_*` functions, `Test*`
+    classes with `test_*` methods). Raises SyntaxError on an unparseable file.
+    """
+    tree = ast.parse(file_path.read_text(encoding="utf-8"))
+    funcs: set[str] = set()
+    classes: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
+            "test_"
+        ):
+            funcs.add(node.name)
+        elif isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
+            methods = {
+                n.name
+                for n in node.body
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and n.name.startswith("test_")
+            }
+            classes[node.name] = methods
+    return frozenset(funcs), {k: frozenset(v) for k, v in classes.items()}
+
+
+def resolve_test_id(test_id: str, repo_root: Path | None = None) -> tuple[bool, str]:
+    """Resolve one declared `tests:` entry against the real test tree.
+
+    A bare file path (no ``::``) is a whole-file link — valid iff the file
+    exists (the whole file is taken to exercise the leaf). A ``::name`` or
+    ``::Class::method`` node id additionally requires the named function/
+    class (or class + method) to actually be defined there, using pytest's
+    default `test_*`/`Test*` naming convention — so an id pointing at
+    something pytest would never collect is correctly reported unresolved.
+
+    Returns ``(True, "")`` on success, ``(False, reason)`` otherwise.
+    """
+    root = repo_root or _REPO_ROOT
+    parts = test_id.split("::")
+    file_part = parts[0]
+    file_path = root / file_part
+    if not file_path.is_file():
+        return False, f"file not found: {file_part}"
+    if len(parts) == 1:
+        return True, ""  # whole-file link
+    try:
+        funcs, classes = _pytest_names(file_path)
+    except SyntaxError as exc:
+        return False, f"{file_part} has a syntax error: {exc}"
+    if len(parts) == 2:
+        name = parts[1]
+        if name in funcs or name in classes:
+            return True, ""
+        return False, f"{name!r} is not a collectible test function/class in {file_part}"
+    if len(parts) == 3:
+        cls, meth = parts[1], parts[2]
+        if cls in classes and meth in classes[cls]:
+            return True, ""
+        return False, f"{cls}::{meth} is not a collectible test method in {file_part}"
+    return False, f"unrecognized node id shape: {test_id!r}"
 
 
 def governed_leaves() -> frozenset[str]:
@@ -114,12 +192,31 @@ def verdict_of(row: object) -> str:
     return ""
 
 
+def tests_of(row: object) -> list[str]:
+    if isinstance(row, dict):
+        val = row.get("tests")
+        if isinstance(val, list):
+            return [str(v) for v in val]
+    return []
+
+
 # ── check ─────────────────────────────────────────────────────────────────────
 
 
 @dataclass(frozen=True)
 class DeclarationReport:
-    """What one engine's declaration is missing, orphaning, or ducking."""
+    """What one engine's declaration is missing, orphaning, or ducking.
+
+    ``missing_test_links`` / ``dangling_test_links`` are REPORTED but do not
+    affect ``ok`` — they are informational findings from `check`/`sync`
+    (Phase 79). The build-breaking enforcement of "a `supported` EXECUTION
+    leaf must carry a resolvable test id" lives in the pytest closure test
+    (``tests/test_capabilities/test_verdict_test_links.py``), not here, so
+    that a still-unbacked verdict fails LOUDLY in CI without also flipping
+    this dev-tooling command's exit code (which existing callers key off of
+    for the leaf-completeness/orphan checks this class already reported
+    before Phase 79).
+    """
 
     path: Path
     engine: str
@@ -127,6 +224,8 @@ class DeclarationReport:
     missing: list[str] = field(default_factory=list)
     undeclared: list[str] = field(default_factory=list)
     orphaned: list[str] = field(default_factory=list)
+    missing_test_links: list[str] = field(default_factory=list)
+    dangling_test_links: list[tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -142,11 +241,30 @@ def _engine_name(path: Path) -> str:
 
 
 def check(paths: list[Path] | None = None) -> list[DeclarationReport]:
-    """Report drift for every discovered declaration. Writes nothing."""
+    """Report drift for every discovered declaration. Writes nothing.
+
+    Also reports (Phase 79) verdict-test-link gaps for EXECUTION leaves
+    (``capability_leaves.execution_leaves()``): a ``supported`` row with no
+    ``tests:`` entry is ``missing_test_links``; a declared ``tests:`` id that
+    does not resolve against the real test tree (``resolve_test_id``) is
+    ``dangling_test_links``. Both are informational — see ``DeclarationReport``
+    docstring for why they do not flip ``.ok``.
+    """
     leaves = governed_leaves()
+    exec_leaves = execution_leaves()
     reports: list[DeclarationReport] = []
     for path in paths if paths is not None else discover_declarations():
         rows = load_rows(path)
+        missing_test_links: list[str] = []
+        dangling_test_links: list[tuple[str, str, str]] = []
+        for leaf, row in rows.items():
+            declared_tests = tests_of(row)
+            if leaf in exec_leaves and verdict_of(row) == "supported" and not declared_tests:
+                missing_test_links.append(leaf)
+            for test_id in declared_tests:
+                ok, reason = resolve_test_id(test_id)
+                if not ok:
+                    dangling_test_links.append((leaf, test_id, reason))
         reports.append(
             DeclarationReport(
                 path=path,
@@ -155,6 +273,8 @@ def check(paths: list[Path] | None = None) -> list[DeclarationReport]:
                 missing=sorted(leaves - set(rows)),
                 undeclared=sorted(k for k, v in rows.items() if verdict_of(v) == UNDECLARED),
                 orphaned=sorted(set(rows) - leaves),
+                missing_test_links=sorted(missing_test_links),
+                dangling_test_links=sorted(dangling_test_links),
             )
         )
     return reports

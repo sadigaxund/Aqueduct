@@ -56,6 +56,10 @@ class PendingHit:
     patch_id: str
     staged_at: str | None
     source: str  # "llm" | "replay"
+    # Phase 78 — the engine the pending patch was staged for. The signature
+    # already scopes the match by engine (folded into the hash), so this is
+    # for auditability, not filtering.
+    engine: str = ""
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,7 @@ class ReplayCandidate:
     object_key: str
     patch_id: str
     payload: dict  # full patch JSON incl. operations — feed to PatchSpec.model_validate after stripping _aq_meta
+    engine: str = ""  # Phase 78 — auditability, see PendingHit.engine
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,7 @@ class CoachingExample:
     rationale: str
     ops: list[str] = field(default_factory=list)
     tier: int = 4  # 1 exact sig, 2 coarse sig, 3 same error class, 4 chronological fill
+    engine: str = ""  # Phase 78 — auditability, see PendingHit.engine
 
 
 # ── Lookups ───────────────────────────────────────────────────────────────
@@ -100,6 +106,7 @@ def find_pending(obs_store: ObservabilityStore | None, sig_hash: str) -> Pending
         patch_id=str(row.get("patch_id") or ""),
         staged_at=row.get("created_at"),
         source=str(row.get("source") or "llm"),
+        engine=str(row.get("engine") or ""),
     )
 
 
@@ -133,7 +140,12 @@ def find_replay_candidate(
         return None
     if not isinstance(payload, dict):
         return None
-    return ReplayCandidate(object_key=object_key, patch_id=str(row.get("patch_id") or ""), payload=payload)
+    return ReplayCandidate(
+        object_key=object_key,
+        patch_id=str(row.get("patch_id") or ""),
+        payload=payload,
+        engine=str(row.get("engine") or ""),
+    )
 
 
 def find_coaching_examples(
@@ -168,5 +180,6 @@ def find_coaching_examples(
             rationale=str(d.get("rationale") or ""),
             ops=list(ops) if isinstance(ops, list) else [],
             tier=int(d.get("_tier") or 4),
+            engine=str(d.get("engine") or ""),
         ))
     return out

@@ -23,7 +23,9 @@ _COUNT_COL = re.compile(
 )
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # SQL semantics (COUNT(col) skips NULLs) are true on any engine — no gate.
+    del engine
     out: list[str] = []
     for m in manifest.modules:
         if m.type != ModuleType.Channel:

@@ -32,6 +32,7 @@ def _fctx(**overrides):
         manifest_json="{}",
         started_at="2020-01-01T00:00:00Z",
         finished_at="2020-01-01T00:00:00Z",
+        engine="spark",
     )
     base.update(overrides)
     return FailureContext(**base)

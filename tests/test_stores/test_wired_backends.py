@@ -132,7 +132,7 @@ def test_execute_persists_into_postgres(spark, tmp_path):
     )
 
     bundle = StoreBundle(observability=obs_store, depot=depot_store)
-    surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle, engine="spark")
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
     try:

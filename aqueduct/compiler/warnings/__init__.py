@@ -31,7 +31,7 @@ from . import (
     spillway_port_mismatch,
 )
 
-CheckFn = Callable[[Any], list[str]]
+CheckFn = Callable[[Any, str], list[str]]
 
 # Stable per-rule registry. The `id` field is the user-facing key for
 # `warnings.suppress` in aqueduct.yml — never rename without a deprecation note.
@@ -46,11 +46,20 @@ RULES: list[tuple[str, CheckFn]] = [
 ]
 
 
-def run_all(manifest: Any, suppress: set[str] | None = None) -> list[tuple[str, str]]:
+def run_all(
+    manifest: Any, suppress: set[str] | None = None, engine: str = "spark"
+) -> list[tuple[str, str]]:
     """Run every rule, return `[(rule_id, message), ...]`.
 
     Suppressed rules are skipped entirely (not even invoked). Per-rule
     exceptions are swallowed — diagnostics never block compilation.
+
+    ``engine`` is threaded uniformly into every rule's `check(manifest,
+    engine)` call (Phase 78 duckdb-engine work) so a rule whose advice is
+    physical to one engine (Spark task partitions, JDBC read parallelism,
+    Kafka micro-batches, driver-side custom-probe cost) can gate its own
+    emission instead of firing nonsensical advice on another engine.
+    Engine-agnostic rules simply ignore the argument.
     """
     suppress = suppress or set()
     out: list[tuple[str, str]] = []
@@ -58,7 +67,7 @@ def run_all(manifest: Any, suppress: set[str] | None = None) -> list[tuple[str, 
         if rule_id in suppress:
             continue
         try:
-            for msg in rule(manifest) or []:
+            for msg in rule(manifest, engine) or []:
                 out.append((rule_id, msg))
         except Exception:
             continue

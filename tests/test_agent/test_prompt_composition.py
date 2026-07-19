@@ -56,7 +56,9 @@ def test_spark_pack_matches_pre_split_text():
     assert "${ctx.*}" in SPARK_PROMPT_RULES.rules
     assert "${{ctx.*}}" not in SPARK_PROMPT_RULES.rules
     # The defer slice — the fragment the template-only guard missed.
-    assert SPARK_PROMPT_RULES.defer.infra_examples == "Hive metastore locks"
+    # "cluster config" lives here (not the scaffold): it is a Spark CONCEPT
+    # (meaningless for a single-process engine), not a generic infra example.
+    assert SPARK_PROMPT_RULES.defer.infra_examples == "Hive metastore locks, cluster config"
     assert SPARK_PROMPT_RULES.defer.udf_languages == "Python/Scala"
     assert SPARK_PROMPT_RULES.defer.extra_bullets == (
         "- **Error class has no module-config knob**: the failure is in Spark "
@@ -137,6 +139,33 @@ _ENGINE_TOKENS = (
     "Hive",
     "Scala",
     "metastore",
+    # Spark CONCEPTS, not just the engine's name — added after "cluster
+    # config" (a Spark-only notion: a single-process engine has no cluster)
+    # leaked through the scaffold as plain English that the name-only list
+    # above could not catch. Each entry below was checked against the
+    # engine-independent scaffold (aqueduct/agent/prompts.py) and the fake
+    # engine's own pack for false positives before landing here.
+    "cluster",  # 0 hits in the scaffold; Spark-only notion (multi-node deployment).
+    "shuffle",  # 0 hits in the scaffold; Spark's data-redistribution stage.
+    "broadcast join",  # phrase, not bare "broadcast" (which could appear in generic prose).
+    "YARN",  # Spark's (optional) cluster resource manager.
+    "driver memory",  # phrase, not bare "driver" (JDBC "driver" is legitimate generic vocabulary).
+    # Rejected as too ambiguous to assert on (see test module docstring / task notes):
+    #   - "executor"/"executors": Aqueduct's OWN architecture layer is named
+    #     Executor (Parser -> Compiler -> Executor -> Surveyor) and
+    #     ExecutorProtocol/get_executor are engine-agnostic core names: this
+    #     token fires 9+ times in the scaffold itself with zero relation to
+    #     Spark's executor processes. A guard that always fails is worse than
+    #     no guard.
+    #   - "partition"/"partition count": generic data-partitioning is real
+    #     grammar on every engine (e.g. Egress `overwrite_partitions`), and
+    #     DuckDB's own pack legitimately says "repartition" (to explain the op
+    #     is UNSUPPORTED there). Only "partition-count-as-a-Spark-tuning-knob"
+    #     is the Spark concept, and there is no substring that captures that
+    #     without also matching the legitimate generic usage.
+    #   - "spark.sql.*"/"driver" (bare)/"broadcast" (bare): redundant with
+    #     "Spark" (already covers `spark.sql.*`) or too generic standalone
+    #     (see the phrase versions above instead).
 )
 
 
@@ -231,8 +260,13 @@ def test_engine_pack_is_what_gets_composed_in(tmp_path: Path, monkeypatch):
     assert prompt.startswith("You are an expert Fake blueprint repair agent.")
     assert "fake error code + hint" in prompt
     assert "- a fake-engine-only rule about COPY TO." in prompt
-    # The engine's defer slice is composed in too.
-    assert "fake lock contention, cluster config" in prompt
+    # The engine's defer slice is composed in too. "cluster config" is NOT
+    # appended here — it is a Spark-only concept that lives in Spark's own
+    # infra_examples value, not a scaffold-injected suffix every engine gets
+    # (that was the bug: the scaffold used to hardcode ", cluster config"
+    # after infra_examples for every engine, including this fake one).
+    assert "fake lock contention" in prompt
+    assert "cluster config" not in prompt
     assert "PatchSpec cannot modify Python UDF code." in prompt
     # The generic scaffold is still there, unchanged.
     assert "## PatchSpec Schema" in prompt

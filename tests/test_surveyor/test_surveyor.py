@@ -27,7 +27,7 @@ def test_surveyor_record_fires_webhook():
     
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config, engine="spark")
         surveyor.start("run-123")
         
         result = ExecutionResult(
@@ -62,7 +62,7 @@ def test_surveyor_record_no_webhook_on_success():
     
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, webhook_config=config, engine="spark")
         surveyor.start("run-123")
         
         result = ExecutionResult(
@@ -108,7 +108,7 @@ class TestEvaluateRegulatorSignalOverride:
         )
         conn.close()
 
-        s = Surveyor(manifest, store_dir=store)
+        s = Surveyor(manifest, store_dir=store, engine="spark")
         s.start("run-x")
         assert s.evaluate_regulator("reg1") is False
 
@@ -117,7 +117,7 @@ class TestEvaluateRegulatorSignalOverride:
         manifest = self._make_manifest()
         store = tmp_path / "signals"
         store.mkdir()
-        s = Surveyor(manifest, store_dir=store)
+        s = Surveyor(manifest, store_dir=store, engine="spark")
         s.start("run-x")
         assert s.evaluate_regulator("reg1") is True
 
@@ -133,7 +133,7 @@ class TestSurveyorBlueprintSourceYaml:
         bp_path.write_text("id: my_blueprint\nname: Test", encoding="utf-8")
 
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
-        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=bp_path, engine="spark")
         surveyor.start("r1")
 
         result = ExecutionResult(
@@ -154,7 +154,7 @@ class TestSurveyorBlueprintSourceYaml:
         from aqueduct.executor.models import ExecutionResult, ModuleResult
 
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
-        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, blueprint_path=None, engine="spark")
         surveyor.start("r1")
 
         result = ExecutionResult(
@@ -180,7 +180,7 @@ class TestSurveyorStores:
         depot = DuckDBDepotStore(tmp_path / "depot.db")
         bundle = StoreBundle(observability=obs, depot=depot)
         
-        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle, engine="spark")
         assert surveyor._observability is obs
 
     def test_surveyor_default_store(self, tmp_path):
@@ -190,7 +190,7 @@ class TestSurveyorStores:
         
         manifest = Manifest(blueprint_id="b1", name="test", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={})
         
-        surveyor = Surveyor(manifest, store_dir=tmp_path)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         surveyor.start("r1")
         assert isinstance(surveyor._observability, DuckDBObservabilityStore)
 
@@ -199,7 +199,7 @@ class TestSurveyorSpendCap:
         from aqueduct.surveyor.surveyor import Surveyor
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
-        s = Surveyor(manifest, store_dir=tmp_path)
+        s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         s.start("r1")
         assert s.count_recent_heal_attempts() == 0
 
@@ -207,7 +207,7 @@ class TestSurveyorSpendCap:
         from aqueduct.surveyor.surveyor import Surveyor
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
-        s = Surveyor(manifest, store_dir=tmp_path)
+        s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         s.start("r1")
         
         s.record_healing_outcome(
@@ -222,7 +222,7 @@ class TestSurveyorSpendCap:
         import datetime as _dt
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
-        s = Surveyor(manifest, store_dir=tmp_path)
+        s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         s.start("r1")
         
         # Manually insert an old row
@@ -240,7 +240,7 @@ class TestSurveyorSpendCap:
         from aqueduct.surveyor.surveyor import Surveyor
         manifest = MagicMock()
         manifest.blueprint_id = "test-bp"
-        s = Surveyor(manifest, store_dir=tmp_path)
+        s = Surveyor(manifest, store_dir=tmp_path, engine="spark")
         # Not calling start() so connection will fail/not exist
         assert s.count_recent_heal_attempts() == 0
 
@@ -256,10 +256,10 @@ class TestRecordHealAttempt:
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
             tmp_path,
-        )
+         engine="spark",)
         s.start("run1")
         
-        sig = make_signature("e", "w", "msg")
+        sig = make_signature("e", "w", "msg", engine="spark")
         rec = AttemptRecord(
             attempt_num=1, signature=sig, tokens_in=10, tokens_out=20,
             latency_ms=100, gate_that_rejected="schema", escalated=True,
@@ -284,7 +284,7 @@ class TestRecordHealAttempt:
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
             tmp_path,
-        )
+         engine="spark",)
         s.start("run1")
 
         rec = AttemptRecord(attempt_num=2, signature=None)
@@ -304,7 +304,7 @@ class TestRecordHealAttempt:
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
             tmp_path,
-        )
+         engine="spark",)
         s.start("run1")
         
         rec = AttemptRecord(attempt_num=1, signature=None)
@@ -322,7 +322,7 @@ class TestRecordHealAttempt:
         s = Surveyor(
             Manifest(blueprint_id="bp1", name="name", context={}, modules=(), edges=(), spark_config={}),
             tmp_path,
-        )
+         engine="spark",)
         s.start("run1")
         
         rec = AttemptRecord(attempt_num=1, signature=None)
@@ -506,7 +506,7 @@ class TestPhase35SurveyorMigration:
     def test_fresh_db_includes_new_columns(self, tmp_path):
         from aqueduct.surveyor.surveyor import Surveyor
         from aqueduct.compiler.models import Manifest
-        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={}), tmp_path)
+        s = Surveyor(Manifest(blueprint_id="bp1", name="name", description="", aqueduct_version="1.0", context={}, modules=(), edges=(), spark_config={}), tmp_path, engine="spark")
         s.start("run1")
         
         with s._observability.connect() as cur:
@@ -596,7 +596,7 @@ class TestPhase35SurveyorMigrationFresh:
             Manifest(blueprint_id="bp1", name="n", context={},
                      modules=(), edges=(), spark_config={}),
             tmp_path,
-        )
+         engine="spark",)
         s.start("run1")
         with s._observability.connect() as cur:
             cols = {row[0] for row in cur.execute(
@@ -616,7 +616,7 @@ def _make_surveyor(tmp_path):
         Manifest(blueprint_id="bp_rec", name="n", context={},
                  modules=(), edges=(), spark_config={}),
         tmp_path,
-    )
+     engine="spark",)
     return s
 
 

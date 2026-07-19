@@ -28,7 +28,7 @@ def test_three_iterations_produce_three_rows_linked_by_parent_run_id(tmp_path):
         spark_config={},
     )
 
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     outer = "outer-run"
     surveyor.start(outer)
 

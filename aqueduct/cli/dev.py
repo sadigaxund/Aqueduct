@@ -62,15 +62,28 @@ def capabilities_check() -> None:
     for r in reports:
         if r.ok:
             style.success(f"{_fmt_path(r.path)} — {r.total} leaves, all declared")
-            continue
-        bad = True
-        style.error(_fmt_path(r.path))
-        for leaf in r.missing:
-            click.echo(f"    MISSING     {leaf}  (no verdict declared)")
-        for leaf in r.undeclared:
-            click.echo(f"    UNDECLARED  {leaf}  (needs a real verdict)")
-        for leaf in r.orphaned:
-            click.echo(f"    ORPHANED    {leaf}  (not a real leaf — renamed/removed?)")
+        else:
+            bad = True
+            style.error(_fmt_path(r.path))
+            for leaf in r.missing:
+                click.echo(f"    MISSING     {leaf}  (no verdict declared)")
+            for leaf in r.undeclared:
+                click.echo(f"    UNDECLARED  {leaf}  (needs a real verdict)")
+            for leaf in r.orphaned:
+                click.echo(f"    ORPHANED    {leaf}  (not a real leaf — renamed/removed?)")
+
+        # Verdict-test links (Phase 79) — reported, but NOT part of `.ok`/exit
+        # code: the build-breaking gate for these lives in the pytest closure
+        # test (tests/test_capabilities/test_verdict_test_links.py), which can
+        # legitimately stay red on a genuinely unbacked verdict without this
+        # dev-tooling command (used for the leaf-completeness CI gate) also
+        # going red for the same reason.
+        if r.missing_test_links or r.dangling_test_links:
+            style.warn(f"{_fmt_path(r.path)} — verdict-test links incomplete:")
+            for leaf in r.missing_test_links:
+                click.echo(f"    NO TEST     {leaf}  (supported execution leaf has no tests: id)")
+            for leaf, test_id, reason in r.dangling_test_links:
+                click.echo(f"    DANGLING    {leaf} -> {test_id}  ({reason})")
 
     if bad:
         click.echo(

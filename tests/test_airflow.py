@@ -694,7 +694,7 @@ def test_airflow_trigger_end_to_end_flow(
             manifest_json='{"id": "test_bp", "modules": [{"id": "src", "type": "Ingress"}]}',
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:00:01Z",
-        )
+         engine="spark",)
 
     # 1. Write blueprint and config
     bp = tmp_path / "bp.yml"

@@ -19,7 +19,18 @@ from aqueduct.parser.models import ModuleType
 RULE_ID = "custom_probe_driver_code"
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # HALF-true: the underlying risk (a custom callable materializing the
+    # full dataset) is not Spark-exclusive, but this rule's wording is —
+    # "runs on the driver" and ".collect()/.count()" are Spark's process
+    # topology and action API. DuckDB is single-process (no driver/executor
+    # split), and today Probe is `module.type.Probe: unsupported` on DuckDB
+    # (duckdb_/capabilities.yml) so this can't fire there yet regardless.
+    # Gated on Spark for now rather than inventing DuckDB-flavored wording
+    # this rule was never verified against — see PR notes for a human
+    # follow-up once DuckDB grows a Probe implementation.
+    if engine != "spark":
+        return []
     out: list[str] = []
     for m in manifest.modules:
         if m.type != ModuleType.Probe:

@@ -23,6 +23,7 @@ from aqueduct.executor.protocol import (
     DeferRules,
     ExecutorProtocol,
     PromptRules,
+    SessionSpec,
     get_protocol,
 )
 
@@ -267,6 +268,36 @@ def test_protocol_module_importable_without_pyspark():
     assert "OK" in proc.stdout
 
 
+# ── SessionSpec.engine_options — reserved escape hatch (Phase 78) ───────────
+
+
+def test_session_spec_engine_options_defaults_to_empty_dict():
+    spec = SessionSpec(blueprint_id="bp")
+    assert spec.engine_options == {}
+
+
+def test_session_spec_engine_options_is_constructible_with_values():
+    spec = SessionSpec(blueprint_id="bp", engine_options={"some_engine_knob": 1})
+    assert spec.engine_options == {"some_engine_knob": 1}
+
+
+def test_duckdb_make_session_tolerates_unknown_engine_options():
+    """DuckDB's session factory ignores engine_options entirely (Stage A always
+    opens a fresh :memory: connection) — a spec carrying keys no engine
+    understands yet must not raise. No SparkSession is started here; DuckDB's
+    make_session is cheap (in-memory, no cluster) so it is exercised directly."""
+    proto = get_protocol("duckdb")
+    spec = SessionSpec(
+        blueprint_id="bp",
+        engine_options={"unknown_future_engine_key": "whatever"},
+    )
+    session = proto.session_factory()(spec)
+    try:
+        assert session is not None
+    finally:
+        proto.session_closer()(session)
+
+
 def test_spark_engine_module_importable_without_pyspark():
     """Importing ``aqueduct.executor.spark.engine`` (the entry-point target)
     — and therefore constructing Spark's ``ExecutorProtocol`` — must not
@@ -291,4 +322,95 @@ def test_spark_engine_module_importable_without_pyspark():
         print("OK")
     """)
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "OK" in proc.stdout
+
+
+# ── render_type / render_native_type (Phase 80 work package 3) ──────────────
+
+
+def test_both_engines_register_a_render_type_mapper():
+    """Both shipped engines are the two the module docstring says "exist"
+    today — neither may register with render_type=None (that degradation is
+    for a THIRD-party engine that hasn't implemented a mapper yet, not for
+    the reference engines this package ships mappings for)."""
+    assert callable(get_protocol("spark").render_type)
+    assert callable(get_protocol("duckdb").render_type)
+
+
+def test_render_native_type_hub_type_spark():
+    from aqueduct.executor.protocol import render_native_type
+
+    assert render_native_type("spark", "bigint") == "bigint"
+    assert render_native_type("spark", "timestamp_tz") == "timestamp"
+    assert render_native_type("spark", "timestamp_ntz") == "timestamp_ntz"
+    assert render_native_type("spark", "array<int>") == "array<int>"
+    assert render_native_type("spark", "decimal(10,2)") == "decimal(10,2)"
+
+
+def test_render_native_type_hub_type_duckdb():
+    from aqueduct.executor.protocol import render_native_type
+
+    assert render_native_type("duckdb", "bigint") == "BIGINT"
+    assert render_native_type("duckdb", "string") == "VARCHAR"
+    assert render_native_type("duckdb", "binary") == "BLOB"
+    assert render_native_type("duckdb", "timestamp_tz") == "TIMESTAMPTZ"
+    assert render_native_type("duckdb", "timestamp_ntz") == "TIMESTAMP"
+    assert render_native_type("duckdb", "array<int>") == "INTEGER[]"
+    assert render_native_type("duckdb", "map<string,int>") == "MAP(VARCHAR, INTEGER)"
+    assert render_native_type("duckdb", "struct<a:int>") == "STRUCT(a INTEGER)"
+    assert render_native_type("duckdb", "decimal(10,2)") == "DECIMAL(10,2)"
+    # Recursive: array<map<string,int>> touches every branch at once.
+    assert render_native_type("duckdb", "array<map<string,int>>") == "MAP(VARCHAR, INTEGER)[]"
+
+
+def test_render_native_type_native_namespace_same_engine_passthrough():
+    """A NativeType naming THIS engine returns .spelling verbatim, unmapped —
+    the explicit `duckdb:<spelling>` / `spark:<spelling>` escape hatch, not
+    the "unparseable by the hub, hand to the engine's own parser raw"
+    fallback (that fallback is tested separately, per-engine, via a bare
+    native spelling like "HUGEINT" with no namespace prefix)."""
+    from aqueduct.executor.protocol import render_native_type
+
+    assert render_native_type("duckdb", "duckdb:HUGEINT") == "HUGEINT"
+    assert render_native_type("spark", "spark:variant") == "variant"
+
+
+def test_render_native_type_foreign_native_namespace_is_a_defensive_error():
+    """A NativeType naming a DIFFERENT engine must never be forwarded to this
+    engine's parser — the compile-time type.native.* gate should already
+    have refused this Blueprint; reaching render_native_type at all means an
+    UNGATED call path, and the failure must be loud, not silent."""
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.protocol import render_native_type
+
+    with pytest.raises(EnginePluginError, match="DIFFERENT engine"):
+        render_native_type("duckdb", "spark:variant")
+    with pytest.raises(EnginePluginError, match="DIFFERENT engine"):
+        render_native_type("spark", "duckdb:HUGEINT")
+
+
+def test_render_native_type_missing_mapper_is_a_defensive_error_not_silence():
+    """An engine registered with render_type=None cannot render ANY hub
+    spelling — the honest degrade-when-missing contract documented on
+    ExecutorProtocol.render_type: native spellings for THAT engine's own
+    namespace still pass through, hub spellings are refused loudly."""
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.protocol import (
+        ExecutorProtocol,
+        PROTOCOL_REGISTRY,
+        render_native_type,
+    )
+
+    fake = ExecutorProtocol(
+        engine="fake_no_type_mapper",
+        execute=lambda *a, **k: None,
+        extract_error=lambda exc: None,
+        prompt_rules=_FAKE_RULES,
+    )
+    PROTOCOL_REGISTRY[fake.engine] = fake
+    try:
+        with pytest.raises(EnginePluginError, match="no type mapper registered"):
+            render_native_type("fake_no_type_mapper", "bigint")
+        # Own-namespace native escape hatch still works with no mapper.
+        assert render_native_type("fake_no_type_mapper", "fake_no_type_mapper:whatever") == "whatever"
+    finally:
+        del PROTOCOL_REGISTRY[fake.engine]

@@ -31,19 +31,87 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from aqueduct.compiler.type_surfaces import module_type_spellings, udf_return_type_spellings
 from aqueduct.executor.capabilities import Capability, EngineCapabilities, Support, get_capabilities
 
 RULE_ID_IGNORED = "engine_key_ignored"
+RULE_ID_CROSS_ENGINE_HEAL = "cross_engine_heal"
 
 
 @dataclass(frozen=True)
 class CapabilityProblem:
-    """One capability-gate finding for one module."""
+    """One capability-gate finding for one module.
+
+    ``spelling`` is populated only for ``type.*`` leaves (Phase 80 work
+    package 2) — the exact raw type string (``"duckdb:HUGEINT"``,
+    ``"array<map<string,int>>"``) that triggered the leaf, so the
+    CompileError can name the offending spelling, not just the constructor
+    leaf id. Empty for every other leaf category (module.type.*,
+    channel.op.*, ... already name themselves precisely via the leaf id).
+    """
 
     module_id: str
     leaf_id: str
     support: Support
     capability: Capability
+    spelling: str = ""
+
+
+def _type_leaves_for_hub_type(t: Any) -> list[str]:
+    """Recursively map one parsed hub type (or ``NativeType``) to the
+    ``type.*`` capability leaves it uses — one leaf per CONSTRUCTOR at every
+    nesting level, so ``array<map<string,int>>`` yields
+    ``["type.array", "type.map", "type.string", "type.int"]``.
+    """
+    from aqueduct.typehub import Array, Decimal, Map, NativeType, Struct, render
+
+    if isinstance(t, NativeType):
+        return [f"type.native.{t.engine}"]
+    if isinstance(t, Array):
+        return ["type.array", *_type_leaves_for_hub_type(t.element)]
+    if isinstance(t, Map):
+        return [
+            "type.map",
+            *_type_leaves_for_hub_type(t.key),
+            *_type_leaves_for_hub_type(t.value),
+        ]
+    if isinstance(t, Struct):
+        leaves = ["type.struct"]
+        for f in t.fields:
+            leaves.extend(_type_leaves_for_hub_type(f.type))
+        return leaves
+    if isinstance(t, Decimal):
+        return ["type.decimal"]
+    return [f"type.{render(t)}"]
+
+
+def _type_leaves_for_spelling(spelling: str) -> list[str]:
+    """Parse one raw type spelling and return the ``type.*`` leaves it uses.
+
+    Re-parses rather than reusing a value threaded from compiler step 8h —
+    see ``aqueduct/compiler/type_surfaces.py``'s docstring for why the
+    surface EXTRACTION (where the spellings live) is shared while the parse
+    call is not: 8h has already validated every spelling reaching this point
+    parses cleanly (a bad spelling is a hard CompileError raised in 8h,
+    before section 9's gate ever runs), so this call cannot legitimately
+    fail — the try/except is defense in depth, not an expected path. Doing
+    the parse here keeps the gate's only input `module.config` /
+    `udf_registry` (the SAME data the Manifest already carries verbatim, see
+    typehub.py's module docstring), with no new Manifest field, no
+    serialization footprint growth, and no risk of a cached type-usage value
+    silently going stale relative to the config it was derived from.
+    """
+    from aqueduct.typehub import AMBIGUOUS_TYPE_SPELLING_RULE_ID, TypeSpellingError, parse_type
+
+    try:
+        # Suppress ambiguous_type_spelling here — step 8h already surfaced
+        # that warning once (with the compile's real suppress set) for user
+        # visibility; re-parsing the same spelling for leaf derivation must
+        # not emit it a second time.
+        hub_type = parse_type(spelling, suppress={AMBIGUOUS_TYPE_SPELLING_RULE_ID})
+    except TypeSpellingError:
+        return []
+    return _type_leaves_for_hub_type(hub_type)
 
 
 def leaves_for_module(module: Any) -> list[str]:
@@ -62,10 +130,16 @@ def leaves_for_module(module: Any) -> list[str]:
         the curated formats: the parts of the grammar an engine can plausibly
         refuse per-configuration.
 
-    ``feature.*`` leaves are NOT per-module (a Python UDF is declared once in
-    the manifest's ``udf_registry`` and referenced from SQL, not owned by one
-    module), so they are derived at the manifest level by
+    Most ``feature.*`` leaves are NOT per-module (a Python UDF is declared
+    once in the manifest's ``udf_registry`` and referenced from SQL, not owned
+    by one module), so they are derived at the manifest level by
     ``feature_leaves_for_manifest`` and checked in ``check_capabilities``.
+    ``feature.table_addressing`` is the exception: catalog ``table:``
+    addressing IS owned by one Ingress/Egress module (the ``table`` config
+    key lives on that module, same as ``format``/``path``), so it is emitted
+    here rather than at manifest scope — that gives the CompileError the
+    actual module id for free, matching how ``ingress.format.*`` /
+    ``egress.format.*`` are detected from the same module's ``cfg``.
     """
     # Lazy import: capability_leaves.py pulls in aqueduct.executor.spark.egress
     # (for its op/mode/format constants), which imports aqueduct.models, which
@@ -107,10 +181,14 @@ def leaves_for_module(module: Any) -> list[str]:
         # has no verdict to check and must not be gated.
         if fmt in EGRESS_FORMATS:
             leaves.append(f"egress.format.{fmt}")
+        if cfg.get("table"):
+            leaves.append("feature.table_addressing")
     elif mtype == "Ingress":
         fmt = cfg.get("format")
         if fmt in INGRESS_FORMATS:
             leaves.append(f"ingress.format.{fmt}")
+        if cfg.get("table"):
+            leaves.append("feature.table_addressing")
     elif mtype == "Junction":
         mode = cfg.get("mode")
         if mode:
@@ -119,6 +197,15 @@ def leaves_for_module(module: Any) -> list[str]:
         mode = cfg.get("mode")
         if mode:
             leaves.append(f"funnel.mode.{mode}")
+
+    # type.* — Phase 80 work package 2: every hub type constructor / native
+    # escape hatch this module's cast columns / schema_hint fields actually
+    # use. Surface extraction is shared with compiler step 8h (which already
+    # validated every spelling here parses) via type_surfaces.py; see
+    # _type_leaves_for_spelling's docstring for why the parse itself is not
+    # also shared.
+    for _where, spelling in module_type_spellings(module):
+        leaves.extend(_type_leaves_for_spelling(spelling))
 
     return leaves
 
@@ -169,6 +256,24 @@ def feature_leaves_for_manifest(manifest: Any) -> list[tuple[str, str]]:
     return pairs
 
 
+def type_leaves_for_manifest(manifest: Any) -> list[tuple[str, str, str]]:
+    """Derive the ``type.*`` leaves a compiled Manifest's UDF ``return_type``
+    entries use — manifest-scoped like ``feature_leaves_for_manifest`` (a UDF
+    is declared once in ``udf_registry``, not owned by one module).
+
+    Returns ``(leaf_id, source_label, spelling)`` triples: ``source_label``
+    names the UDF (for the CompileError's module/source attribution) and
+    ``spelling`` is the exact raw return_type string that produced the leaf
+    (for the CompileError's "offending spelling" attribution — see
+    ``CapabilityProblem.spelling``).
+    """
+    out: list[tuple[str, str, str]] = []
+    for where, spelling in udf_return_type_spellings(getattr(manifest, "udf_registry", ())):
+        for leaf in _type_leaves_for_spelling(spelling):
+            out.append((leaf, where, spelling))
+    return out
+
+
 def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityProblem]:
     """Return every capability problem (UNSUPPORTED or IGNORED_WITH_WARNING).
 
@@ -193,6 +298,14 @@ def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityP
     for module in getattr(manifest, "modules", ()):
         if not getattr(module, "enabled", True):
             continue  # disabled modules never run — nothing to gate
+        # leaf -> the exact raw spelling that produced it (type.* leaves
+        # only), so a problem on this module can name the offending
+        # spelling, not just the constructor leaf id. First producer wins —
+        # good enough for attribution when the same leaf is used twice.
+        spelling_by_leaf: dict[str, str] = {}
+        for _where, spelling in module_type_spellings(module):
+            for leaf in _type_leaves_for_spelling(spelling):
+                spelling_by_leaf.setdefault(leaf, spelling)
         for leaf_id in leaves_for_module(module):
             cap = caps.verdict(leaf_id)
             if cap.support in (Support.UNSUPPORTED, Support.IGNORED_WITH_WARNING):
@@ -202,6 +315,7 @@ def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityP
                         leaf_id=leaf_id,
                         support=cap.support,
                         capability=cap,
+                        spelling=spelling_by_leaf.get(leaf_id, ""),
                     )
                 )
 
@@ -219,20 +333,99 @@ def check_capabilities(manifest: Any, engine: str = "spark") -> list[CapabilityP
                     capability=cap,
                 )
             )
+
+    # Manifest-scoped type.* leaves (UDF return_type — not owned by one
+    # module, same reasoning as feature_leaves_for_manifest above).
+    for leaf_id, source_label, spelling in type_leaves_for_manifest(manifest):
+        cap = caps.verdict(leaf_id)
+        if cap.support in (Support.UNSUPPORTED, Support.IGNORED_WITH_WARNING):
+            problems.append(
+                CapabilityProblem(
+                    module_id=source_label,
+                    leaf_id=leaf_id,
+                    support=cap.support,
+                    capability=cap,
+                    spelling=spelling,
+                )
+            )
     return problems
 
 
 def format_unsupported_error(problem: CapabilityProblem, engine: str) -> str:
     hint = f" {problem.capability.hint}" if problem.capability.hint else ""
+    spelling = f" (spelling: {problem.spelling!r})" if problem.spelling else ""
     return (
-        f"Module {problem.module_id!r} uses {problem.leaf_id!r}, which engine "
+        f"Module {problem.module_id!r} uses {problem.leaf_id!r}{spelling}, which engine "
         f"{engine!r} does not support.{hint}"
     )
 
 
 def format_ignored_warning(problem: CapabilityProblem, engine: str) -> str:
     hint = f" {problem.capability.hint}" if problem.capability.hint else ""
+    spelling = f" (spelling: {problem.spelling!r})" if problem.spelling else ""
     return (
-        f"Module {problem.module_id!r} uses {problem.leaf_id!r}, which engine "
+        f"Module {problem.module_id!r} uses {problem.leaf_id!r}{spelling}, which engine "
         f"{engine!r} ignores (accepted but has no effect).{hint}"
+    )
+
+
+# ── Cross-engine heal-patch provenance gate (Phase 79) ──────────────────────
+#
+# Separate from the leaf-verdict gate above: this checks the Blueprint's
+# `healed_by:` provenance block (see `parser/schema.py::HealedByRecordSchema`,
+# machine-written by `aqueduct patch apply` — `aqueduct/patch/apply.py`)
+# against the engine THIS compile targets, not against per-leaf capability
+# verdicts. A patch healed on engine X, classified `engine_shaped` (its
+# operations could carry X's SQL dialect / cast syntax / format options —
+# see `aqueduct/patch/provenance.py`), compiling for a different engine Y
+# that hasn't green-run-validated it since, is a real trustworthiness gap:
+# the healing feature would otherwise silently manufacture a production
+# defect. `dialect_neutral`-only records (retry/timeout/structural patches)
+# never trigger this — they carry no dialect content to be wrong about.
+
+@dataclass(frozen=True)
+class CrossEngineHealProblem:
+    """One `healed_by` record whose engine-shaped provenance doesn't match
+    (or hasn't been validated against) the compile's target engine."""
+
+    patch_id: str
+    origin_engine: str
+    target_engine: str
+
+
+def check_cross_engine_heal(blueprint: Any, engine: str) -> list[CrossEngineHealProblem]:
+    """Return every `healed_by` record that is engine-shaped, from a
+    different engine than *engine*, and not yet validated on *engine*.
+
+    Pure and side-effect-free — does not raise, does not emit warnings; the
+    caller (``compiler.compile()``) decides warn vs strict-escalate.
+    """
+    problems: list[CrossEngineHealProblem] = []
+    for rec in getattr(blueprint, "healed_by", ()) or ():
+        if getattr(rec, "classification", None) != "engine_shaped":
+            continue
+        origin = getattr(rec, "engine", None)
+        if not origin or origin == engine:
+            continue
+        if engine in (getattr(rec, "validated_on", ()) or ()):
+            continue
+        problems.append(
+            CrossEngineHealProblem(
+                patch_id=getattr(rec, "patch_id", "") or "",
+                origin_engine=origin,
+                target_engine=engine,
+            )
+        )
+    return problems
+
+
+def format_cross_engine_heal_warning(problem: CrossEngineHealProblem) -> str:
+    return (
+        f"Patch {problem.patch_id!r} was healed on engine "
+        f"{problem.origin_engine!r} with engine-shaped changes (SQL/dialect/"
+        f"format content that may not be valid on another engine) but this "
+        f"Blueprint is compiling for {problem.target_engine!r}, which has not "
+        f"validated it with a green run since. Review the patch before "
+        f"deploying to {problem.target_engine!r}, or run it there to clear "
+        f"this warning."
     )

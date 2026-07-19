@@ -52,24 +52,27 @@ SINGLE_INPUT_OPS: frozenset[str] = frozenset(
 MULTI_INPUT_OPS: frozenset[str] = frozenset({"union"})
 ALL_OPS: frozenset[str] = SQL_OPS | SINGLE_INPUT_OPS | MULTI_INPUT_OPS
 
-# Spark type-name aliases -> DuckDB type names, for op=cast. Lets a Blueprint
-# authored once against Spark's `cast` type vocabulary run unmodified on DuckDB
-# (DuckDB accepts most names verbatim; only a few Spark spellings differ).
-_CAST_TYPE_ALIASES: dict[str, str] = {
-    "string": "VARCHAR",
-    "long": "BIGINT",
-    "int": "INTEGER",
-    "integer": "INTEGER",
-    "short": "SMALLINT",
-    "byte": "TINYINT",
-    "bool": "BOOLEAN",
-    "double": "DOUBLE",
-    "float": "FLOAT",
-}
-
-
 def _normalize_cast_type(t: str) -> str:
-    return _CAST_TYPE_ALIASES.get(str(t).strip().lower(), str(t))
+    """Render a Channel ``op: cast`` column type through the Arrow type hub
+    (Phase 80 work package 3) to DuckDB's own CAST spelling.
+
+    Replaces the old ``_CAST_TYPE_ALIASES`` 9-entry scalar dict — that dict
+    never touched composite types at all, so ``array<int>`` reached DuckDB's
+    parser raw and failed (DuckDB wants ``INTEGER[]``); see
+    ``aqueduct.executor.duckdb_.type_render`` for the full mapping table.
+    ``duckdb_/type_render.normalize_type_spelling`` preserves the old dict's
+    raw-passthrough fallback for a spelling the hub does not recognize at all
+    (DuckDB's own native DDL written directly — ``BLOB``, ``STRUCT(x
+    INTEGER)``, ...), so every spelling this dict or DuckDB's own parser used
+    to accept still works.
+    """
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.duckdb_.type_render import normalize_type_spelling
+
+    try:
+        return normalize_type_spelling(t)
+    except EnginePluginError as exc:
+        raise ChannelError(f"invalid cast type {str(t)!r}: {exc}") from exc
 
 
 class ChannelError(AqueductError):

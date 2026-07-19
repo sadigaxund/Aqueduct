@@ -27,6 +27,7 @@ from aqueduct.parser.models import (
     ContextRegistry,
     Edge,
     GuardrailsConfig,
+    HealedByRecord,
     HookEntry,
     Hooks,
     Module,
@@ -46,6 +47,20 @@ def _hook_entry(h) -> HookEntry:
                 when_error=tuple(h.when_error), in_process=h.in_process,
             )
     raise ParseError("hook entry has no action")  # unreachable — schema enforces exactly-one
+
+
+def _healed_by_entry(r) -> HealedByRecord:
+    """HealedByRecordSchema → HealedByRecord, verbatim (machine-written data,
+    no Tier 0/1 resolution — see HealedByRecord docstring)."""
+    return HealedByRecord(
+        patch_id=r.patch_id,
+        engine=r.engine,
+        engine_version=r.engine_version,
+        run_id=r.run_id,
+        classification=r.classification,
+        applied_at=r.applied_at,
+        validated_on=tuple(r.validated_on),
+    )
 
 
 def _build_cascade(raw: list | None, ctx_map: dict | None = None) -> tuple | None:
@@ -425,5 +440,6 @@ def parse_dict(
             on_patch_pending=tuple(_hook_entry(h) for h in validated.hooks.on_patch_pending),
             on_healed=tuple(_hook_entry(h) for h in validated.hooks.on_healed),
         ),
+        healed_by=tuple(_healed_by_entry(r) for r in validated.healed_by),
         base_dir=str(_bp_dir),
     )

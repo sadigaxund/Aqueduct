@@ -713,7 +713,7 @@ def _build_system_prompt(
             "\n\n### When to defer to a human\n"
             "Use `defer_to_human` when NO PatchSpec operation can fix the root cause:\n"
             "- **Infrastructure failures**: checkpoint corruption, S3 consistency, "
-            f"{_defer.infra_examples}, cluster config — these are not Blueprint-level fixes.\n"
+            f"{_defer.infra_examples} — these are not Blueprint-level fixes.\n"
             "- **Upstream schema changes** requiring human judgment: ambiguous column "
             "renames, new required columns with unclear defaults.\n"
             f"- **UDF body bugs**: PatchSpec cannot modify {_defer.udf_languages} UDF code.\n"

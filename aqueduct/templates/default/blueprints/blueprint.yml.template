@@ -174,6 +174,16 @@ spark_config:
 # checkpoint: false
 
 
+# ── Self-heal provenance (machine-written, do not hand-author) ─────────────────
+#
+# `aqueduct patch apply` appends a `healed_by:` record here for every applied
+# self-heal patch (engine, classification, applied_at, validated_on — see
+# docs/specs.md §8.14). It never affects the compiled Manifest and does not
+# need to be edited by hand; if you see it in a Blueprint, leave it alone.
+
+# healed_by: [...]
+
+
 # ── LLM self-healing policy ───────────────────────────────────────────────────
 #
 # Per-blueprint. Connection defaults (provider, model) come from aqueduct.yml.
@@ -390,6 +400,13 @@ modules: []
   #     path: "s3a://bucket/orders/date=${ctx.today}/"
   #     partition_filters: "event_date >= '${ctx.start_date}'"   # manual predicate pushdown hint
   #     options: {}                 # forwarded verbatim to df.read.options()
+  #     # Types are Aqueduct's own portable hub vocabulary (boolean/int/bigint/
+  #     # string/decimal(p,s)/timestamp_tz/timestamp_ntz/array<T>/map<K,V>/
+  #     # struct<...>/...), not raw engine DDL — see docs/specs.md §9. Bare
+  #     # `timestamp` is deprecated (ambiguous instant-vs-naive); write
+  #     # timestamp_tz/timestamp_ntz. Use `<engine>:<spelling>` (e.g.
+  #     # duckdb:HUGEINT) only for an engine-native type with no hub equivalent
+  #     # — it compiles only on that engine.
   #     schema_hint: {id: long, val: integer}  # flat form — checks presence + type
       
   #     schema_hint:                # strict mode (default) — all hinted columns must exist + match type
@@ -694,7 +711,7 @@ udf_registry: []
   #   lang: python
   #   module: udfs.parse_phone       # dotted module path relative to project root
   #   entry: parse_phone             # callable name within the module; defaults to id
-  #   return_type: string            # Spark DDL type string (omit if function uses @udf decorator)
+  #   return_type: string            # portable hub type spelling (omit if function uses @udf decorator); see docs/specs.md §9
   #   deterministic: true
 
   # Parameterized (context-aware) Python UDF — `entry` is a factory

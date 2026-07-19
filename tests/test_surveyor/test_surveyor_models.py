@@ -50,7 +50,7 @@ def test_failure_context_frozen():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z"
-    )
+    , engine="spark")
     with pytest.raises(FrozenInstanceError):
         ctx.error_message = "hacked"  # type: ignore[misc]
 
@@ -65,7 +65,7 @@ def test_failure_context_to_dict():
         manifest_json='{"id": "p1"}',
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z"
-    )
+    , engine="spark")
     d = ctx.to_dict()
     assert d["run_id"] == "r1"
     assert d["failed_module"] == "m1"
@@ -83,7 +83,7 @@ def test_failure_context_to_json():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z"
-    )
+    , engine="spark")
     js = ctx.to_json()
     data = json.loads(js)
     assert data["run_id"] == "r1"
@@ -102,7 +102,7 @@ def test_failure_context_to_dict_includes_doctor_hints():
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
         doctor_hints=("warn: bad path", "fail: missing schema"),
-    )
+     engine="spark",)
     d = ctx.to_dict()
     assert "doctor_hints" in d
     assert d["doctor_hints"] == ["warn: bad path", "fail: missing schema"]
@@ -119,7 +119,7 @@ def test_failure_context_doctor_hints_empty_by_default():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-    )
+     engine="spark",)
     assert ctx.doctor_hints == ()
     d = ctx.to_dict()
     assert d["doctor_hints"] == []
@@ -136,7 +136,7 @@ def test_failure_context_phase35_defaults():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-    )
+     engine="spark",)
     assert ctx.error_class is None
     assert ctx.root_exception is None
     assert ctx.sql_state is None
@@ -155,7 +155,7 @@ def test_failure_context_phase35_frozen():
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
-    )
+     engine="spark",)
     with pytest.raises(FrozenInstanceError):
         ctx.error_class = "X"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
@@ -178,7 +178,7 @@ def test_failure_context_phase35_to_dict():
         sql_state="42000",
         suggested_columns=("a", "b"),
         object_name="c",
-    )
+     engine="spark",)
     d = ctx.to_dict()
     assert d["error_class"] == "UNRESOLVED_COLUMN"
     assert d["root_exception"] == {"type": "AnalysisException", "message": "msg"}
@@ -212,7 +212,7 @@ def test_record_healing_outcome_persists_failure_signature(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-fs-1")
 
     surveyor.record_healing_outcome(
@@ -241,7 +241,7 @@ def test_record_healing_outcome_defaults_resolution_llm(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs2"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-dflt-1")
 
     surveyor.record_healing_outcome(
@@ -265,7 +265,7 @@ def test_successful_patch_ids_returns_matching_patches(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs3"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-sp-1")
 
     surveyor.record_healing_outcome(
@@ -291,7 +291,7 @@ def test_successful_patch_ids_empty_on_store_error(tmp_path):
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
-    surveyor = Surveyor(manifest, store_dir=tmp_path / "missing")
+    surveyor = Surveyor(manifest, store_dir=tmp_path / "missing", engine="spark")
     # start() never called → _observability is None
     ids = surveyor.successful_patch_ids()
     assert ids == set()
@@ -323,7 +323,7 @@ def test_record_healing_outcome_persists_model_cascade_position(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs_cp"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-cp-1")
 
     surveyor.record_healing_outcome(
@@ -353,7 +353,7 @@ def test_record_healing_outcome_defaults_model_cascade_position_none(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs_cp_dflt"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-cp-dflt-1")
 
     surveyor.record_healing_outcome(
@@ -382,7 +382,7 @@ def test_record_healing_outcome_persists_cascade_model(tmp_path):
     manifest = Manifest(blueprint_id="bp1", context={}, modules=(), edges=(), spark_config={})
     store_dir = tmp_path / "obs_cp"
     store_dir.mkdir()
-    surveyor = Surveyor(manifest, store_dir=store_dir)
+    surveyor = Surveyor(manifest, store_dir=store_dir, engine="spark")
     surveyor.start("run-tm-1")
 
     surveyor.record_healing_outcome(

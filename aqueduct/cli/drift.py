@@ -231,6 +231,7 @@ def _heal_drift(
 
     failure_ctx = build_synthetic_failure_context(
         blueprint_id, module_id, result, manifest_json,
+        engine=cfg.deployment.engine,
         blueprint_source_yaml=blueprint_source_yaml,
     )
     budget = resolve_budget(getattr(eng, "budget", None), max_reprompts=eng.max_reprompts)

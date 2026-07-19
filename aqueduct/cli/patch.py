@@ -229,10 +229,12 @@ def patch_preview(
             blueprint_path=_Path(blueprint_path),
             patch_id=spec.patch_id,
             failed_module=failed_module,
+            engine=cfg.deployment.engine,
             sample_rows=int(sample_rows),
             observability_store=bundle.observability,
             explain_capture=explain_after,
             sandbox_master_url=cfg.agent.sandbox_master_url,
+            warnings_suppress=cfg.warnings.suppress,
         )
         # Explain gate — baseline read directly from the observability store.
         try:
@@ -243,7 +245,10 @@ def patch_preview(
             from aqueduct.compiler.compiler import compile as _compile
             _bp = _parse(blueprint_path)
             _mf = _compile(_bp, blueprint_path=_Path(blueprint_path))
-            _surv = Surveyor(manifest=_mf, store_dir=cfg.store_dir, stores=bundle)
+            _surv = Surveyor(
+                manifest=_mf, store_dir=cfg.store_dir, stores=bundle,
+                engine=cfg.deployment.engine,
+            )
             _baseline = _surv.latest_explain_snapshots(blueprint_id=_mf.blueprint_id)
         except Exception:
             _baseline = {}

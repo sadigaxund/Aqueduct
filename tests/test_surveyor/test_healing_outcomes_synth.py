@@ -37,7 +37,7 @@ def manifest():
 
 def test_non_aggressive_healing_outcome_has_null_parent_run_id(manifest, tmp_path):
     """A single-patch (non-aggressive) healing outcome leaves `parent_run_id` NULL."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("solo-run")
 
     surveyor.record_healing_outcome(
@@ -66,7 +66,7 @@ def test_non_aggressive_healing_outcome_has_null_parent_run_id(manifest, tmp_pat
 
 def test_aggressive_healing_outcome_carries_parent_run_id(manifest, tmp_path):
     """Aggressive-mode healing rows carry `parent_run_id=<outer>`."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("outer-r")
 
     surveyor.record_healing_outcome(
@@ -103,7 +103,7 @@ def test_cli_synthesises_healing_outcomes_on_patch_none(manifest, tmp_path):
     round-trip cleanly. (The CLI's synthesis loop calls
     `surveyor.record_healing_outcome` once per attempt_record.)
     """
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("none-run")
 
     # Simulate the CLI's synthesis branch — two rejected attempts, no patch.

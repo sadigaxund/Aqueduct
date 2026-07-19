@@ -47,6 +47,15 @@ _AQ_PREFIX = "[aqueduct:"
 _SUPPRESS_ALL = "*"
 _DEFAULT_SUPPRESS: set[str] = set()
 
+# Process-global fallback strict set (Phase 79) — the escalation counterpart
+# to _DEFAULT_SUPPRESS. Populated once at CLI startup from
+# `config.warnings.strict`. A rule_id present here is promoted from a warning
+# to a hard error by the CALLER (emit() itself never raises — see its
+# docstring; escalation decisions stay with the specific gate, e.g.
+# `aqueduct/compiler/capability_check.py::check_cross_engine_heal`, which
+# reads this set the same way compiler.py reads _DEFAULT_SUPPRESS).
+_DEFAULT_STRICT: set[str] = set()
+
 
 def set_default_suppress(suppress: Iterable[str] | None) -> None:
     """CLI startup hook — install the process-wide suppress defaults.
@@ -58,6 +67,16 @@ def set_default_suppress(suppress: Iterable[str] | None) -> None:
     """
     global _DEFAULT_SUPPRESS
     _DEFAULT_SUPPRESS = set(suppress or ())
+
+
+def set_default_strict(strict: Iterable[str] | None) -> None:
+    """CLI startup hook — install the process-wide strict-escalation defaults.
+
+    `strict` is a set of rule_ids to promote to hard errors. Idempotent.
+    Library callers pass `warnings_strict=` explicitly to `compile()` instead.
+    """
+    global _DEFAULT_STRICT
+    _DEFAULT_STRICT = set(strict or ())
 
 
 def emit(rule_id: str, message: str, *, suppress: Iterable[str] | None = None) -> None:

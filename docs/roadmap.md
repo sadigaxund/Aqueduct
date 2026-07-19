@@ -96,6 +96,20 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 
 ---
 
+## Type hub: long-tail constructors
+
+The hub type vocabulary (`aqueduct/typehub.py`, see `docs/specs.md` §9) deliberately ships a subset of Arrow's full taxonomy. The following constructors are not in the hub yet:
+
+- **Unsigned integers** (`uint8`/`uint16`/`uint32`/`uint64`). Neither shipped engine's native type system distinguishes signed from unsigned integers the way Arrow does; adding these constructors without a real semantic difference on either engine would be vocabulary for its own sake.
+- **Unions.** No authoring surface in the current Blueprint grammar needs a tagged/dense union column; deferred until one does.
+- **Dictionary / run-end encoding.** These are storage encodings, not value types — orthogonal to what the hub vocabulary states about a column's meaning. Revisit if a Parquet/Arrow-native encoding hint becomes a real authoring need.
+- **`string_view`.** Arrow's newer variable-length string representation; the hub's plain `string` already covers the value semantics both engines need, and neither engine's own DDL distinguishes the two.
+- **Interval.** Verified out, not simply unscheduled: Spark alone has two interval families (year-month vs. day-time), DuckDB has a third with different internal representation, and Parquet's interval physical type truncates to millisecond precision against Arrow's microsecond default — a real semantic loss, not a spelling difference. Only escape-hatch native spellings (`spark:interval day to second`, `duckdb:INTERVAL`) are available until a design settles on canonical hub semantics for this constructor.
+
+**Status:** Deferred. Native namespace escape hatches (`<engine>:<spelling>`) cover all five today.
+
+---
+
 ## Iceberg / Hudi table formats
 
 Ingress and Egress currently support Parquet, Delta Lake, CSV, JSON, and JDBC. Apache Iceberg and Apache Hudi are planned as additional table formats, both fit the existing `format:` config surface without schema changes.

@@ -76,7 +76,7 @@ def test_surveyor_record_falls_back_to_first_failed_modules_exception(tmp_path):
         spark_config={},
     )
 
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("r-exc")
 
     class _ChannelError(Exception):

@@ -125,6 +125,52 @@ class TestUdfRegistration:
                 mock_spark,
             )
 
+    def test_return_type_hub_timestamp_tz_renders_to_spark_instant_type(self):
+        """Phase 80 work package 3: UDF ``return_type`` now routes through
+        the Arrow type hub before reaching ``spark.udf.register`` —
+        ``timestamp_tz`` (not itself valid Spark DDL) renders to Spark's
+        real instant-type spelling, ``timestamp``."""
+        from aqueduct.executor.spark.udf import register_udfs
+
+        mock_spark = MagicMock()
+        register_udfs(
+            ({"id": "loads", "lang": "python", "module": "json", "return_type": "timestamp_tz"},),
+            mock_spark,
+        )
+        mock_spark.udf.register.assert_called_once_with("loads", json.loads, "timestamp")
+
+    def test_return_type_deleted_alias_dict_spellings_still_work(self):
+        """Old alias-dict spellings (not hub canonical names) still resolve
+        identically through render_native_type's raw-passthrough fallback —
+        "long" isn't a Spark DDL word, hub renders it to "bigint"."""
+        from aqueduct.executor.spark.udf import register_udfs
+
+        mock_spark = MagicMock()
+        register_udfs(
+            ({"id": "loads", "lang": "python", "module": "json", "return_type": "long"},),
+            mock_spark,
+        )
+        mock_spark.udf.register.assert_called_once_with("loads", json.loads, "bigint")
+
+    def test_return_type_java_udf_hub_array_renders(self, tmp_path):
+        """UDF return_type routes through the hub for java/scala too
+        (`_register_java_udf`'s `_parse_datatype_string` call site)."""
+        from pyspark.sql.types import ArrayType, IntegerType
+
+        from aqueduct.executor.spark.udf import register_udfs
+
+        jar = tmp_path / "geo.jar"
+        jar.write_bytes(b"")
+        mock_spark = MagicMock()
+        register_udfs(
+            ({"id": "geo", "lang": "java", "jar": str(jar),
+              "entry": "com.example.GeoUDF", "return_type": "array<int>"},),
+            mock_spark,
+        )
+        mock_spark.udf.registerJavaFunction.assert_called_once_with(
+            "geo", "com.example.GeoUDF", ArrayType(IntegerType())
+        )
+
     def test_resolves_via_base_dir_without_sys_path(self, tmp_path):
         """Manifest.base_dir resolves a sibling my_udfs.py next to the
         blueprint — no sys.path mutation needed."""

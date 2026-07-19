@@ -158,9 +158,10 @@ def test_run_patch_gates_inline_off(tmp_path):
             failed_module="m1",
             iteration_run_id="r1",
             blueprint_id="b1",
+            engine="spark",
             sandbox_mode="off"
         )
-    
+
     assert g3.status == "skip"
     assert "sandbox_mode=off" in g3.detail
     assert passed is True
@@ -193,6 +194,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             failed_module="m1",
             iteration_run_id="r1",
             blueprint_id="b1",
+            engine="spark",
             sandbox_mode="preflight",
             sample_rows=100
         )
@@ -201,10 +203,12 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             blueprint_path=blueprint_path,
             patch_id="p-test",
             failed_module="m1",
+            engine="spark",
             sample_rows=0,
             observability_store=mock_bundle.observability,
             explain_capture={},
-            sandbox_master_url=None
+            sandbox_master_url=None,
+            warnings_suppress=None,
         )
 
         # Test sample -> forwards 100
@@ -217,6 +221,7 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             failed_module="m1",
             iteration_run_id="r1",
             blueprint_id="b1",
+            engine="spark",
             sandbox_mode="sample",
             sample_rows=100
         )
@@ -225,10 +230,12 @@ def test_run_patch_gates_inline_preflight_and_sample(mock_run_sandbox, tmp_path)
             blueprint_path=blueprint_path,
             patch_id="p-test",
             failed_module="m1",
+            engine="spark",
             sample_rows=100,
             observability_store=mock_bundle.observability,
             explain_capture={},
-            sandbox_master_url=None
+            sandbox_master_url=None,
+            warnings_suppress=None,
         )
 
 

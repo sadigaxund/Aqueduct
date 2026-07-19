@@ -25,6 +25,7 @@ def _make_ctx(**kwargs) -> FailureContext:
         manifest_json="{}",
         started_at="2024-01-01T00:00:00Z",
         finished_at="2024-01-01T00:01:00Z",
+        engine="spark",
     )
     defaults.update(kwargs)
     return FailureContext(**defaults)
@@ -212,7 +213,7 @@ def test_surveyor_no_provenance_map_sets_provenance_json_none(tmp_path):
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = _make_manifest(provenance_map=None)
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("r1")
     ctx = surveyor.record(_make_execution_result())
     assert ctx is not None
@@ -246,7 +247,7 @@ def test_surveyor_with_provenance_map_sets_provenance_json(tmp_path):
         context={},
     )
     manifest = _make_manifest(provenance_map=pmap)
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("r1")
     ctx = surveyor.record(_make_execution_result())
     assert ctx is not None
@@ -285,7 +286,7 @@ def test_surveyor_provenance_slice_contains_only_failed_module_and_context(tmp_p
         context={"ctx.key": ValueProvenance(source_type="literal", resolved_value="v")},
     )
     manifest = _make_manifest(provenance_map=pmap)
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("r1")
     ctx = surveyor.record(_make_execution_result(failed_module="m1"))
     assert ctx is not None

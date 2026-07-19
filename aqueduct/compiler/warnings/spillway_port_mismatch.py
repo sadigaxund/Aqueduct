@@ -23,7 +23,9 @@ from aqueduct.parser.models import ModuleType
 RULE_ID = "spillway_port_mismatch"
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # Pure config/edge-wiring check — no engine-physical claim, no gate.
+    del engine
     out: list[str] = []
     for m in manifest.modules:
         if m.type != ModuleType.Channel:
