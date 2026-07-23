@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aqueduct-core"
-version = "2.0.4"
+version = "2.0.5"
 description = "Agentic Spark — declarative, self-healing Apache Spark blueprints."
 readme = "README.md"
 authors = [
