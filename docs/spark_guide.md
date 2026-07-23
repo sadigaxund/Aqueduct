@@ -51,7 +51,7 @@ warnings are **not suppressible**.
 
 | Rule id | Flags | Detail |
 |---|---|---|
-| `ambiguous_type_spelling` | Bare `timestamp` in a `schema_hint`/`cast`/`return_type` type string is ambiguous (instant vs. naive) — engine-agnostic, not Spark-specific | [ambiguous-type-spelling](#ambiguous-type-spelling) |
+| ~~`ambiguous_type_spelling`~~ | Escalated to a **compile error** (bare `timestamp` in a `schema_hint`/`cast`/`return_type` type string means a different value per engine — instant vs. naive); no deprecation window, no longer suppressible — engine-agnostic, not Spark-specific | [ambiguous-type-spelling](#ambiguous-type-spelling) |
 | `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1`: retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
 | ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure, OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
 | `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
@@ -200,19 +200,18 @@ vs. a one-time small-file problem).
 
 #### `ambiguous-type-spelling`
 
-**Triggered when:** a type string (Ingress `schema_hint`, Channel `op: cast` columns,
-UDF `return_type`) spells a column type as bare `timestamp` — engine-agnostic, fires
+**Now a compile ERROR** (was warning `ambiguous_type_spelling`, no deprecation
+window): a type string (Ingress `schema_hint`, Channel `op: cast` columns, UDF
+`return_type`) spells a column type as bare `timestamp` — engine-agnostic, fires
 at compile time regardless of `deployment.engine`.
 
 `timestamp` means an INSTANT on Spark (normalized against the session time zone) and
 a NAIVE wall-clock value with no zone on DuckDB — the same Blueprint, unmodified,
-resolves to a different value on each engine. Aqueduct's internal type vocabulary
-(`aqueduct/typehub.py`) spells the two meanings out explicitly: `timestamp_tz` for an
-instant, `timestamp_ntz` for a naive value.
-
-**Current behavior (deprecation window):** the Blueprint still compiles, and
-`timestamp` still resolves to `timestamp_tz` (today's Spark behavior) so nothing
-changes at runtime this release. This becomes a hard parse error in a future release.
+would resolve to a different value on each engine. Aqueduct's internal type
+vocabulary (`aqueduct/typehub.py`) spells the two meanings out explicitly:
+`timestamp_tz` for an instant, `timestamp_ntz` for a naive value. There is no safe
+default to silently fall back on, so this raises unconditionally — it cannot be
+suppressed via `warnings.suppress` or `--suppress-warning`.
 
 **Fix:** Write `timestamp_tz` or `timestamp_ntz` explicitly, or, if the Blueprint
 targets one engine only, the engine-native spelling (`spark:timestamp`).

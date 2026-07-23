@@ -104,10 +104,11 @@ def _type_leaves_for_spelling(spelling: str) -> list[str]:
     from aqueduct.typehub import AMBIGUOUS_TYPE_SPELLING_RULE_ID, TypeSpellingError, parse_type
 
     try:
-        # Suppress ambiguous_type_spelling here — step 8h already surfaced
-        # that warning once (with the compile's real suppress set) for user
-        # visibility; re-parsing the same spelling for leaf derivation must
-        # not emit it a second time.
+        # `ambiguous_type_spelling` (bare `timestamp`) is a hard
+        # TypeSpellingError now, not a warning — step 8h already rejects it
+        # before this gate ever runs, so the suppress set below is inert
+        # today. Kept (rather than dropped) because a spelling reaching this
+        # point is guaranteed valid, and passing the rule id costs nothing.
         hub_type = parse_type(spelling, suppress={AMBIGUOUS_TYPE_SPELLING_RULE_ID})
     except TypeSpellingError:
         return []

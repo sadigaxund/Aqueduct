@@ -1,7 +1,8 @@
 """aqueduct/typehub.py — hub type vocabulary (Phase 80, work package 1 of 4).
 
 Parse / canonicalize / reject / native-namespace / round-trip coverage, plus
-the bare-`timestamp` deprecation-window warning and its suppression.
+bare-`timestamp` — a hard compile-time rejection, no deprecation window (user
+decision 2026-07-23).
 """
 
 from __future__ import annotations
@@ -178,20 +179,23 @@ def test_non_string_spelling_rejected():
         parse_type(123)  # type: ignore[arg-type]
 
 
-# ── Bare `timestamp` — ambiguous, deprecation-window warning ────────────────
+# ── Bare `timestamp` — ambiguous, hard compile-time rejection ───────────────
+# No deprecation window (user decision 2026-07-23): Spark's `timestamp` is an
+# INSTANT, DuckDB's `TIMESTAMP` is NAIVE wall-clock — there is no safe default
+# to silently fall back on, so this raises unconditionally.
 
-def test_bare_timestamp_parses_to_timestamp_tz_with_warning():
-    with warnings.catch_warnings(record=True) as caught:
-        result = parse_type("timestamp")
-    assert result == TimestampTz()
-    assert any(AMBIGUOUS_TYPE_SPELLING_RULE_ID in str(w.message) for w in caught)
+def test_bare_timestamp_raises_type_spelling_error():
+    with pytest.raises(TypeSpellingError, match="timestamp_tz"):
+        parse_type("timestamp")
+    with pytest.raises(TypeSpellingError, match="timestamp_ntz"):
+        parse_type("timestamp")
 
 
-def test_bare_timestamp_warning_suppressible():
-    with warnings.catch_warnings(record=True) as caught:
-        result = parse_type("timestamp", suppress={AMBIGUOUS_TYPE_SPELLING_RULE_ID})
-    assert result == TimestampTz()
-    assert not any(AMBIGUOUS_TYPE_SPELLING_RULE_ID in str(w.message) for w in caught)
+def test_bare_timestamp_not_suppressible():
+    """There is no warning left to suppress — passing the (now-inert) rule
+    id must not resurrect the old parse-with-warning behavior."""
+    with pytest.raises(TypeSpellingError, match="timestamp_tz|timestamp_ntz"):
+        parse_type("timestamp", suppress={AMBIGUOUS_TYPE_SPELLING_RULE_ID})
 
 
 def test_timestamp_tz_and_ntz_do_not_warn():

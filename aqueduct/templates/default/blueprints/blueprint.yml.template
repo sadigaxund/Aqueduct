@@ -403,10 +403,10 @@ modules: []
   #     # Types are Aqueduct's own portable hub vocabulary (boolean/int/bigint/
   #     # string/decimal(p,s)/timestamp_tz/timestamp_ntz/array<T>/map<K,V>/
   #     # struct<...>/...), not raw engine DDL — see docs/specs.md §9. Bare
-  #     # `timestamp` is deprecated (ambiguous instant-vs-naive); write
-  #     # timestamp_tz/timestamp_ntz. Use `<engine>:<spelling>` (e.g.
-  #     # duckdb:HUGEINT) only for an engine-native type with no hub equivalent
-  #     # — it compiles only on that engine.
+  #     # `timestamp` is REJECTED at compile time (ambiguous instant-vs-naive
+  #     # across engines) — write timestamp_tz/timestamp_ntz explicitly. Use
+  #     # `<engine>:<spelling>` (e.g. duckdb:HUGEINT) only for an engine-native
+  #     # type with no hub equivalent — it compiles only on that engine.
   #     schema_hint: {id: long, val: integer}  # flat form — checks presence + type
       
   #     schema_hint:                # strict mode (default) — all hinted columns must exist + match type

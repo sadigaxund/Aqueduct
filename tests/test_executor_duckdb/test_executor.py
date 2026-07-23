@@ -252,16 +252,22 @@ _HUB_TYPE_CAST_CASES = [
 # textually from the CAST target spelling we wrote (same type, different
 # self-description) — map the exceptions here rather than asserting a
 # coincidental string match.
+#
+# Bare "TIMESTAMP" (the type.timestamp_ntz row's target spelling here) used
+# to be hub-recognized as the ambiguous bare-timestamp spelling and silently
+# resolved to timestamp_tz (a real bug: the row's own leaf name promises
+# timestamp_NTZ but the live column came back TIMESTAMPTZ — see git history
+# for the now-removed override this entry used to carry). Bare `timestamp`
+# is a hard TypeSpellingError now (no deprecation window), which
+# `normalize_type_spelling`'s TypeSpellingError-catches-and-falls-back-raw
+# path (`aqueduct/executor/duckdb_/type_render.py`) turns into exactly the
+# "hand this DuckDB-native DDL to DuckDB's own parser, unmodified" case every
+# OTHER row in `_HUB_TYPE_CAST_CASES` already exercises — so "TIMESTAMP"
+# needs no override: it now correctly produces a genuine naive TIMESTAMP
+# column, matching the leaf it is meant to test.
 _DUCKDB_TYPE_STR_OVERRIDES = {
     "TIMESTAMPTZ": "TIMESTAMP WITH TIME ZONE",
     "MAP(INTEGER,INTEGER)": "MAP(INTEGER, INTEGER)",
-    # Bare "TIMESTAMP" (the type.timestamp_ntz row's target spelling here) is
-    # itself hub-recognized as the AMBIGUOUS bare-timestamp spelling
-    # (typehub.py's ambiguous_type_spelling warning) rather than falling
-    # through raw to DuckDB's parser — it resolves to timestamp_tz today
-    # (deprecation warning: becomes a hard parse error next release), so the
-    # real cast target is TIMESTAMPTZ, not a naive TIMESTAMP column.
-    "TIMESTAMP": "TIMESTAMP WITH TIME ZONE",
 }
 
 

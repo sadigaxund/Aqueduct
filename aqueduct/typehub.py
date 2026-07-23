@@ -52,9 +52,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from aqueduct.errors import TypeSpellingError
-from aqueduct.warnings import emit as _emit
 
-# ── Rule id (user-facing warning contract — see docs/spark_guide.md) ──────────
+# ── Rule id — RETIRED as a warning (kept only because callers/docs/tests still
+# reference the constant). Bare `timestamp` now hard-errors (TypeSpellingError,
+# see `_parse_one` below); nothing in this module emits this rule id anymore.
 
 AMBIGUOUS_TYPE_SPELLING_RULE_ID = "ambiguous_type_spelling"
 
@@ -371,25 +372,18 @@ def _parse_one(spelling: str, *, suppress: Iterable[str] | None) -> "HubType | N
 
     if lower == "timestamp":
         # THE ambiguous spelling this package exists to flag: an instant on
-        # Spark, a naive wall-clock value on DuckDB. Deprecation window:
-        # parse succeeds (canonicalizes to the legacy Spark-compatible
-        # meaning, timestamp_tz, so behavior does not change this release)
-        # but emits a suppressible warning. FUTURE: this branch becomes
-        # `raise TypeSpellingError(...)` in the next release — do not
-        # remove the warning without flipping this to a hard error.
-        _emit(
-            AMBIGUOUS_TYPE_SPELLING_RULE_ID,
+        # Spark, a naive wall-clock value on DuckDB. No deprecation window —
+        # this is a hard compile-time error (user decision 2026-07-23): a
+        # bare `timestamp` silently means a different value per engine, so
+        # there is no safe default to fall back on.
+        raise TypeSpellingError(
             "Bare 'timestamp' is ambiguous: it means an INSTANT "
             "(timestamp_tz — Spark's `timestamp`) on one engine and a NAIVE "
             "wall-clock value (timestamp_ntz — DuckDB's `TIMESTAMP`) on "
             "another. Write `timestamp_tz` or `timestamp_ntz` explicitly, or "
             "name the engine-native spelling directly (e.g. `spark:timestamp`) "
-            "if you intend one engine only. Resolves to timestamp_tz (today's "
-            "Spark behavior) for now — this becomes a parse ERROR in the next "
-            "release.",
-            suppress=suppress,
+            "if you intend one engine only."
         )
-        return TimestampTz()
 
     cls = _SCALAR_ALIASES.get(lower)
     if cls is not None:
@@ -404,21 +398,23 @@ def parse_type(spelling: str, *, suppress: Iterable[str] | None = None) -> "HubT
 
     Familiar unambiguous spellings canonicalize silently (``long`` and
     ``bigint`` both parse to ``BigInt()``). ``timestamp`` (bare) is the one
-    SEMANTICALLY ambiguous spelling accepted this release — it parses but
-    emits a suppressible ``ambiguous_type_spelling`` warning (routed through
-    ``aqueduct.warnings.emit``; pass ``suppress`` to plug into a caller's own
-    resolved suppress set, e.g. a compile pass's Blueprint + engine union).
-    Any other unknown BARE spelling is a ``TypeSpellingError``. A namespaced
-    spelling (``spark:...`` / ``duckdb:...`` / ``<engine>:...``) always
-    parses to a ``NativeType`` passthrough marker, validated for shape only.
+    SEMANTICALLY ambiguous spelling — Spark's `timestamp` is an instant,
+    DuckDB's `TIMESTAMP` is a naive wall-clock value — and is a hard
+    ``TypeSpellingError`` (no deprecation window; there is no safe default
+    to silently fall back on). Any other unknown BARE spelling is likewise a
+    ``TypeSpellingError``. A namespaced spelling (``spark:...`` /
+    ``duckdb:...`` / ``<engine>:...``) always parses to a ``NativeType``
+    passthrough marker, validated for shape only.
 
     Args:
         spelling: The raw type string as written in a Blueprint (e.g.
             ``"bigint"``, ``"array<int>"``, ``"decimal(10,2)"``,
             ``"duckdb:HUGEINT"``).
-        suppress: Rule ids to silence for the ``ambiguous_type_spelling``
-            warning path (forwarded to ``aqueduct.warnings.emit`` verbatim).
-            ``None`` falls back to the process-global suppress default.
+        suppress: Rule ids forwarded to any future ``aqueduct.warnings.emit``
+            call this module makes; currently unused (no warning is emitted
+            here today) but kept so callers can pass their resolved compile
+            suppress set without conditional logic. ``None`` falls back to
+            the process-global suppress default.
 
     Returns:
         A ``HubType`` instance, or a ``NativeType`` for a namespaced
@@ -426,7 +422,8 @@ def parse_type(spelling: str, *, suppress: Iterable[str] | None = None) -> "HubT
 
     Raises:
         TypeSpellingError: ``spelling`` is empty, not a string, or does not
-            match any hub constructor / native-namespace shape.
+            match any hub constructor / native-namespace shape (including
+            bare ``timestamp``).
     """
     if not isinstance(spelling, str):
         raise TypeSpellingError(

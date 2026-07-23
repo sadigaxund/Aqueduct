@@ -17,7 +17,6 @@ from aqueduct import AqueductWarning
 from aqueduct.compiler.compiler import compile as compiler_compile
 from aqueduct.errors import CompileError
 from aqueduct.parser.parser import parse
-from aqueduct.typehub import AMBIGUOUS_TYPE_SPELLING_RULE_ID
 
 pytestmark = pytest.mark.unit
 
@@ -264,7 +263,11 @@ edges:
 
 # ── Bare `timestamp` — deprecation-window warning, not an error ─────────────
 
-def test_bare_timestamp_in_schema_hint_warns_not_errors(tmp_path):
+def test_bare_timestamp_in_schema_hint_is_a_hard_compile_error(tmp_path):
+    """Bare `timestamp` has no deprecation window (user decision 2026-07-23):
+    it is a hard CompileError (wrapping typehub's TypeSpellingError), not a
+    suppressible warning.
+    """
     yaml_str = """
 aqueduct: "1.0"
 id: test
@@ -288,12 +291,15 @@ edges:
   - from: m1
     to: e1
 """
-    with warnings.catch_warnings(record=True) as caught:
-        _compile_yaml(yaml_str, tmp_path)  # must not raise
-    assert any(AMBIGUOUS_TYPE_SPELLING_RULE_ID in str(w.message) for w in caught)
+    with pytest.raises(CompileError, match="timestamp_tz|timestamp_ntz"):
+        _compile_yaml(yaml_str, tmp_path)
 
 
-def test_bare_timestamp_suppressible_via_blueprint_warnings_block(tmp_path):
+def test_bare_timestamp_not_suppressible_via_blueprint_warnings_block(tmp_path):
+    """The Blueprint-level `warnings.suppress` block only silences WARNINGS —
+    bare `timestamp` is a hard error now, so it must still raise even when
+    the (now-inert) rule id is listed there.
+    """
     yaml_str = """
 aqueduct: "1.0"
 id: test
@@ -319,12 +325,13 @@ edges:
   - from: m1
     to: e1
 """
-    with warnings.catch_warnings(record=True) as caught:
+    with pytest.raises(CompileError, match="timestamp_tz|timestamp_ntz"):
         _compile_yaml(yaml_str, tmp_path)
-    assert not any(AMBIGUOUS_TYPE_SPELLING_RULE_ID in str(w.message) for w in caught)
 
 
-def test_bare_timestamp_suppressible_via_engine_level_suppress(tmp_path):
+def test_bare_timestamp_not_suppressible_via_engine_level_suppress(tmp_path):
+    """Same as above for the engine-level (CLI/config) suppress path — a
+    hard compile error cannot be suppressed away by either mechanism."""
     yaml_str = """
 aqueduct: "1.0"
 id: test
@@ -348,9 +355,8 @@ edges:
   - from: m1
     to: e1
 """
-    with warnings.catch_warnings(record=True) as caught:
+    with pytest.raises(CompileError, match="timestamp_tz|timestamp_ntz"):
         _compile_yaml(yaml_str, tmp_path, warnings_suppress={"ambiguous_type_spelling"})
-    assert not any(AMBIGUOUS_TYPE_SPELLING_RULE_ID in str(w.message) for w in caught)
 
 
 # ── Disabled modules are skipped (same convention as sections 7-8) ──────────

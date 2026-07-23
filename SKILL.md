@@ -334,7 +334,7 @@ Every column-type string is Aqueduct's own hub vocabulary (Arrow-borrowed semant
 
 Composites: `array<T>`, `map<K,V>`, `struct<name:type,...>` (nest freely: `array<map<string,int>>`). Familiar aliases canonicalize silently (`long`→`bigint`, `integer`→`int`, `varchar`/`char`→`string`).
 
-**Bare `timestamp` is deprecated — write `timestamp_tz` (instant) or `timestamp_ntz` (naive wall-clock) explicitly.** It still parses this release (as `timestamp_tz`, with a suppressible `ambiguous_type_spelling` warning) but becomes a hard parse error next release — Spark's `timestamp` is an instant, DuckDB's `TIMESTAMP` is naive, so the bare spelling means a different value per engine.
+**Bare `timestamp` is REJECTED at compile time — write `timestamp_tz` (instant) or `timestamp_ntz` (naive wall-clock) explicitly.** There is no deprecation window and no suppress: Spark's `timestamp` is an instant, DuckDB's `TIMESTAMP` is naive, so the bare spelling means a different value per engine — it never parses.
 
 **Native escape hatch:** `<engine>:<spelling>` (e.g. `duckdb:HUGEINT`, `spark:interval day to second`) names a type in one engine's own vocabulary directly, for spellings the hub has no equivalent for. It is capability-gated per engine — `duckdb:HUGEINT` in a Blueprint compiled for `spark` is a compile-time error, not a runtime crash. Prefer a portable hub spelling whenever one exists; reach for the native hatch only when the Blueprint is intentionally single-engine.
 

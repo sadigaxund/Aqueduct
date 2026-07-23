@@ -604,9 +604,10 @@ def compile(  # noqa: A001
     # no runtime behavior change — later work packages). A spelling the hub
     # cannot parse at all is a hard CompileError (previously: silently passed
     # through to whatever the target engine's own parser made of it at
-    # runtime). Bare `timestamp` is a deprecation-window WARNING
-    # (ambiguous_type_spelling, see typehub.py), not an error, so no existing
-    # Blueprint using it breaks this release. Disabled modules are skipped —
+    # runtime). Bare `timestamp` is one such spelling: it is a hard
+    # CompileError (TypeSpellingError, see typehub.py) with no deprecation
+    # window — write `timestamp_tz` or `timestamp_ntz` explicitly. Disabled
+    # modules are skipped —
     # same convention as sections 7-8 above, since a disabled module's config
     # never reaches an engine.
     # Surface extraction (WHERE the type strings live) is shared with the

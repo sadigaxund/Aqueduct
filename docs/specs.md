@@ -1,6 +1,6 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.31: Reference Document**
+**Version 2.32: Reference Document**
 
 *Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
@@ -1470,7 +1470,7 @@ The hub draws a hard line between two kinds of "this spelling could mean more th
 
 Misapplying this rule in either direction breaks the hub's contract: silently resolving `timestamp` (a semantic ambiguity) reintroduces exactly the bug the hub exists to prevent, and refusing `decimal` with no precision/scale as if it were semantically ambiguous (a representational default, not a real one) would make ordinary Spark-style DDL fail for no reason.
 
-**The bare-`timestamp` deprecation window.** This release, bare `timestamp` still parses — it canonicalizes to `timestamp_tz` (today's Spark behavior, so no Blueprint's runtime behavior changes) — but emits a suppressible warning under rule id `ambiguous_type_spelling` (see `docs/spark_guide.md`). The warning names both explicit spellings and the single-engine native escape hatch. In the next release this becomes a hard `TypeSpellingError` at parse time: there will be no silent default left to fall back on.
+**Bare `timestamp` is REJECTED at compile time.** There is no deprecation window: bare `timestamp` never parses. It raises a `TypeSpellingError` (surfaced as a compile-time `CompileError` at whichever surface used it — `schema_hint`, `cast`, or `return_type`) naming both explicit spellings and the single-engine native escape hatch. Write `timestamp_tz` or `timestamp_ntz` explicitly, or a native spelling (`spark:timestamp`) if the Blueprint intentionally targets one engine only. There is no suppress mechanism for this — it is not a warning.
 
 **The native namespace: an explicit, capability-gated escape hatch.** `<engine>:<spelling>` (e.g. `duckdb:HUGEINT`, `spark:interval day to second`) names a type in one engine's own vocabulary directly, bypassing the hub entirely. It is not validated for meaning, only for shape (non-empty engine token, non-empty spelling) — whatever that engine's own runtime parser accepts, it accepts. This is governed by the capability framework (`type.native.<engine>`, §10.9), not exempt from it: writing `duckdb:HUGEINT` into a Blueprint compiled for `spark` is a compile-time `CompileError` naming the spelling, because `type.native.duckdb` is `unsupported` on the Spark engine. Docs and templates **recommend the portable hub spellings** for anything that has one; the native hatch exists for spellings the hub genuinely has no equivalent for (DuckDB's `HUGEINT`, Spark's `interval`/`variant`), and using it is an explicit, honest statement that this Blueprint is written for one engine.
 
@@ -1688,7 +1688,7 @@ A verdict answers "does this engine run this leaf". Some differences are not of 
 
 - **DuckDB `mode: append` is not atomic.** It reads the existing file, appends with `UNION ALL BY NAME`, and rewrites the target. A failure part-way through can leave the target damaged. Spark's `append` adds files to a directory and does not rewrite what is there.
 - **DuckDB materialises some Channel ops eagerly.** `sql`, `join`, `deduplicate` with a key, and every Funnel mode write into a uniquely named temp table at once instead of staying lazy. DuckDB's `register()` binds a name in a mutable catalog rather than capturing a value, and module ids are reused as registration aliases across a run, so a relation left unevaluated could resolve against the wrong binding later.
-- **Bare `timestamp` remains a live authoring hazard during the deprecation window** (§9.2): it still parses (to `timestamp_tz`) with a suppressible warning rather than a hard error this release, so an author who suppresses `ambiguous_type_spelling` globally can still ship a Blueprint whose zone semantics differ by engine intent, not compile-time accident.
+- **Bare `timestamp` is a hard compile-time rejection, not a warning** (§9.2): there is no deprecation window and no suppress mechanism — an author must write `timestamp_tz` or `timestamp_ntz` explicitly, so a Blueprint's zone semantics can never differ across engines by silent accident.
 
 ### The engine and the healing loop
 
