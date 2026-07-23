@@ -72,10 +72,19 @@ def project(tmp_path, monkeypatch):
         monkeypatch.setitem(sys.modules, "aqueduct.executor.spark", parent)
     else:
         parent = sys.modules["aqueduct.executor.spark"]
-    monkeypatch.setattr(parent, "session", session_stub, raising=False)
-    monkeypatch.setattr(parent, "ingress", ingress_stub, raising=False)
+    # Seed sys.modules BEFORE the setattr calls below: monkeypatch.setattr's
+    # save-original step does a plain getattr(parent, "ingress"), which
+    # triggers this package's PEP 562 __getattr__("ingress") ->
+    # importlib.import_module("aqueduct.executor.spark.ingress"). With the
+    # stub already cached in sys.modules, that import returns the stub
+    # instead of importing the real submodule (`from pyspark.sql import
+    # SparkSession` at module level) — the fix for the pyspark-less
+    # ModuleNotFoundError this fixture used to raise when ordered the other
+    # way round.
     monkeypatch.setitem(sys.modules, "aqueduct.executor.spark.session", session_stub)
     monkeypatch.setitem(sys.modules, "aqueduct.executor.spark.ingress", ingress_stub)
+    monkeypatch.setattr(parent, "session", session_stub, raising=False)
+    monkeypatch.setattr(parent, "ingress", ingress_stub, raising=False)
 
     return tmp_path, store, schema_holder
 
