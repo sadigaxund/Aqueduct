@@ -414,3 +414,20 @@ def test_render_native_type_missing_mapper_is_a_defensive_error_not_silence():
         assert render_native_type("fake_no_type_mapper", "fake_no_type_mapper:whatever") == "whatever"
     finally:
         del PROTOCOL_REGISTRY[fake.engine]
+
+
+# ── Unstable-API marker (Phase 79 item 8) ────────────────────────────────────
+#
+# ExecutorProtocol is deliberately not marketed as a stable public contract
+# until it has survived a real third-party external engine (docs/extending.md
+# carries the prose warning). This asserts the same fact is discoverable from
+# SOURCE — a class-level sentinel plus a docstring warning — not just docs.
+
+
+def test_executor_protocol_carries_unstable_marker():
+    assert ExecutorProtocol._aq_stability == "unstable"
+
+
+def test_executor_protocol_docstring_warns_unstable():
+    assert ExecutorProtocol.__doc__ is not None
+    assert "unstable" in ExecutorProtocol.__doc__.lower()

@@ -301,3 +301,41 @@ def test_unknown_engine_prompt_build_raises_unknown_engine_error(tmp_path: Path)
 
     with pytest.raises(UnknownEngineError):
         _build_system_prompt(tmp_path, engine="bogus-engine")
+
+
+# ── DuckDB out-of-memory / capacity defer rule (Phase 79 item 6) ────────────
+#
+# DuckDB is single-node — it fails by running OUT OF MEMORY, a failure class
+# Spark's prompt pack has no idiom for. Without a defer rule the healer reads
+# an OOM as a code defect and patches in circles. Both the always-shown
+# `rules` bullet (allow_defer off) and the defer section (allow_defer on)
+# must classify it as non-patchable.
+
+
+def test_composed_duckdb_prompt_classifies_oom_as_defer_not_patchable(tmp_path: Path):
+    prompt = _build_system_prompt(
+        tmp_path,
+        allow_defer=True,
+        coaching=False,
+        obs_store=None,
+        engine="duckdb",
+    )
+    assert "Out of Memory" in prompt
+    assert "memory_limit" in prompt
+    assert "capacity limit of the machine, not a bug in the Blueprint" in prompt
+    assert "do NOT propose repeated config-value edits chasing this error" in prompt
+
+
+def test_composed_duckdb_prompt_oom_rule_present_without_defer(tmp_path: Path):
+    """The `rules` bullet (always rendered) must also warn against chasing an
+    OOM with config edits even when `allow_defer` is off."""
+    prompt = _build_system_prompt(
+        tmp_path,
+        allow_defer=False,
+        coaching=False,
+        obs_store=None,
+        engine="duckdb",
+    )
+    assert "Out of Memory" in prompt
+    assert "memory_limit" in prompt
+    assert "capacity limit of the machine, not a Blueprint defect" in prompt

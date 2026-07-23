@@ -76,7 +76,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from aqueduct.errors import EnginePluginError, UnknownEngineError
 
@@ -281,6 +281,20 @@ class PromptRules:
 class ExecutorProtocol:
     """One engine's execution contract.
 
+    **Unstable API.** ``ExecutorProtocol`` is NOT part of Aqueduct's public,
+    version-guaranteed contract yet. It has survived exactly one second engine
+    (DuckDB) and was reshaped more than once while that engine was being built
+    (``engine_options`` added to ``SessionSpec`` mid-build, ``DeferRules``
+    split out of ``PromptRules``, the required/optional field split tuned
+    against what DuckDB actually needed). Aqueduct does not market "bring your
+    own engine" as supported until this shape has survived a real THIRD-PARTY
+    external engine, not just the two shipped here — expect fields/signatures
+    to change without a major-version bump in the meantime. See
+    ``docs/extending.md``'s "Stability warning" section (kept in sync with
+    this docstring) and watch ``CHANGELOG.md`` for changes to this module. The
+    ``_aq_stability`` class attribute below is a programmatically-checkable
+    marker for the same fact — see ``tests/test_capabilities/test_executor_protocol.py``.
+
     Attributes:
         engine: Engine name (matches the ``aqueduct.engines`` entry-point
             name and ``deployment.engine`` values, e.g. ``"spark"``).
@@ -366,6 +380,10 @@ class ExecutorProtocol:
     is a user of this seam, and the error-taxonomy rule applies to every
     user-reachable path.
     """
+
+    # Programmatically-detectable stability marker (ClassVar — not a dataclass
+    # field/constructor arg). See the "Unstable API" docstring paragraph above.
+    _aq_stability: ClassVar[str] = "unstable"
 
     engine: str
     execute: Callable[..., ExecutionResult]

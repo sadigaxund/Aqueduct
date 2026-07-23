@@ -30,6 +30,11 @@ watch `CHANGELOG.md` for changes to `aqueduct/executor/protocol.py` and
 `aqueduct/executor/capabilities.py`. The mechanics below are honest about
 what exists, not a promise about what will keep working.
 
+This is stated in code too: `ExecutorProtocol` carries a programmatically
+detectable marker, `ExecutorProtocol._aq_stability == "unstable"`, kept in
+sync with this section — so a reader who reaches for the source sees the same
+warning without having to find this guide.
+
 ## What an engine is in Aqueduct
 
 An engine is a Python module that, as an import side effect, registers two

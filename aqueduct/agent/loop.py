@@ -86,7 +86,15 @@ logger = logging.getLogger(__name__)
 #       PREDICTED_SCHEMA_DRIFT rule bullet, changing DuckDB's composed
 #       healing system prompt. Spark's composed prompt is byte-identical to
 #       1.7 — the version constant is global, so Spark is relabeled too.
-PROMPT_VERSION = "1.8"
+# 1.9 — Phase 79 item 6: DuckDB's PromptRules pack gains an out-of-memory /
+#       capacity-exhaustion defer rule (an "Out of Memory" / `memory_limit`
+#       exceeded / buffer-allocator failure is a single-node scale-cliff, not
+#       a patchable blueprint defect) — a new `rules` bullet plus an expanded
+#       `defer.infra_examples` and a new `defer.extra_bullets` entry, changing
+#       DuckDB's composed healing system prompt. Spark's composed prompt is
+#       byte-identical to 1.8 — the version constant is global, so Spark is
+#       relabeled too.
+PROMPT_VERSION = "1.9"
 
 
 @dataclass

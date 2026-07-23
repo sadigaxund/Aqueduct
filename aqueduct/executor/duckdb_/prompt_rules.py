@@ -33,8 +33,19 @@ from aqueduct.executor.protocol import DeferRules, PromptRules
 _DUCKDB_DEFER = DeferRules(
     # DuckDB is single-process and embedded — it has no cluster/metastore to
     # lock, but it DOES have a single-writer constraint on a persistent
-    # database file, which is its own infrastructure failure mode.
-    infra_examples="a concurrent writer already holding the DuckDB database file lock",
+    # database file, which is its own infrastructure failure mode. It also
+    # fails by running OUT OF MEMORY rather than spilling across a cluster
+    # (Spark's prompt pack has no idiom for this because a distributed engine
+    # degrades differently) — a capacity/scale-cliff situation, not a
+    # blueprint defect, so it belongs in the same "not Blueprint-level fixes"
+    # bucket as the lock-contention example.
+    infra_examples=(
+        "a concurrent writer already holding the DuckDB database file lock, or "
+        "the process running Out of Memory / exceeding `memory_limit` (buffer "
+        "allocator allocation failure) on a query that simply does not fit in "
+        "this single node's RAM — a capacity limit of the machine, not a bug in "
+        "the Blueprint"
+    ),
     # DuckDB Python UDFs are unsupported this stage (Stage A capability
     # table); `lang: java` is Spark-only. Naming a UDF language here would
     # be misleading before either is actually implemented/tested.
@@ -42,6 +53,14 @@ _DUCKDB_DEFER = DeferRules(
     extra_bullets=(
         "- **Error class has no module-config knob**: the failure is in "
         "DuckDB's own query planner/optimizer, not Blueprint fields.\n"
+        "- **Out-of-memory / capacity exhaustion**: an error mentioning "
+        "\"Out of Memory\", `memory_limit`, or a buffer/allocator allocation "
+        "failure means DuckDB (single-node, embedded — no cluster to scale "
+        "out to) ran out of RAM for this query, not that a Blueprint field is "
+        "wrong. Do NOT propose repeated config-value edits chasing this error "
+        "— no PatchSpec op changes how much memory the machine has. Defer to "
+        "a human to resize the node, reduce the working set, or split the "
+        "pipeline.\n"
     ),
 )
 
@@ -57,7 +76,8 @@ DUCKDB_PROMPT_RULES = PromptRules(
         "- If `error_class` is `PREDICTED_SCHEMA_DRIFT`, the upstream SOURCE physically changed (a column was added, dropped, or renamed) — the format/header rule above does NOT apply. Do NOT change the Ingress `format`, `header`, or `options`; the provenance shows these are intentional authored values, and a real source change is not fixed by reinterpreting the file. Instead update the downstream Channel SQL / `schema_hint` to match the new column set, or make NO change if a dropped column is genuinely gone and unused.\n"
         "- `schema_hint type mismatch on 'X': expected 'A', actual 'B'` — read this literally: `expected` is the schema_hint value ALREADY declared in the Blueprint for field X (re-proposing it is a no-op, not a fix); `actual` is the type DuckDB inferred from the real data. The fix is `set_module_config_key` (or the appropriate provenance-driven op) changing the schema_hint for X to `actual` — NOT re-setting it to `expected`. If `actual` is clearly wrong for the field's domain, this is a genuine data problem outside Blueprint control — defer to a human if deferral is permitted, otherwise state that in `root_cause` and make no change.\n"
         "- A Binder Error's 'Did you mean \"col\"?' suggestion names the closest real column by edit distance, not necessarily the semantically correct one — check the Blueprint's declared schema_hint / upstream Channel `select` list before trusting the suggestion verbatim.\n"
-        "- DuckDB's `COPY ... TO` Egress write has no native append mode (`egress.mode.append` is UNSUPPORTED on this engine) — never propose a patch that sets `mode: append` for a DuckDB Egress; only `overwrite`, `error`, `errorifexists`, and `ignore` are valid write modes here."
+        "- DuckDB's `COPY ... TO` Egress write has no native append mode (`egress.mode.append` is UNSUPPORTED on this engine) — never propose a patch that sets `mode: append` for a DuckDB Egress; only `overwrite`, `error`, `errorifexists`, and `ignore` are valid write modes here.\n"
+        "- An error mentioning \"Out of Memory\", `memory_limit`, or a buffer/allocator allocation failure is DuckDB (single-node, embedded) running out of RAM for this query — a capacity limit of the machine, not a Blueprint defect. No PatchSpec op changes how much memory the machine has: do NOT propose repeated config-value edits chasing this error. Defer to a human if deferral is permitted, otherwise state that in `root_cause` and make no change."
     ),
     defer=_DUCKDB_DEFER,
 )
