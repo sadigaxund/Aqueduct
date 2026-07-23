@@ -12,6 +12,7 @@ work a finite, self-updating list instead of surprise slivers.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from click.testing import CliRunner
@@ -47,7 +48,13 @@ _DDL = [
 _CONF_TABLES = ("run_records", "module_metrics", "column_lineage",
                  "healing_outcomes", "probe_signals")
 
-_TS = "2026-06-20T00:00:00+00:00"
+# `report --trend` (aqueduct/cli/observability.py) defaults its lookback
+# window to `now() - 30 days` when `--since` isn't passed. A fixed calendar
+# date here would silently age out of that window as real time passes —
+# exactly what broke `test_report_trend[postgres]` in CI once "today" moved
+# past 2026-07-20 (30 days after the previously hardcoded 2026-06-20). Anchor
+# to "now" instead so this fixture never rots.
+_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 
 @pytest.fixture(
