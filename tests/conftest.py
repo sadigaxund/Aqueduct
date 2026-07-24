@@ -65,7 +65,7 @@ def _scala_suffix() -> str:
 # Default library version per Spark minor line (HEAD-checked before use). A
 # missing entry / failed check just drops that datasource → clean skip.
 _HUDI_VER = {"3.4": "0.15.0", "3.5": "1.0.2", "4.0": "1.2.0", "4.1": "1.2.0"}
-_ICEBERG_VER = {"3.3": "1.11.0", "3.4": "1.11.0", "3.5": "1.11.0", "4.0": "1.11.0"}
+_ICEBERG_VER = {"3.3": "1.11.0", "3.4": "1.11.0", "3.5": "1.11.0", "4.0": "1.11.0", "4.1": "1.11.0"}
 
 
 def _coord_resolvable(coord: str) -> bool:

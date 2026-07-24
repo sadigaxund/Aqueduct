@@ -726,7 +726,6 @@ def test_execute_regulator_no_main_edge(spark: SparkSession):
 
 # ── UDF Integration ──────────────────────────────────────────────────────────
 
-@pytest.mark.skip(reason="cloudpickle + coverage causes infinite recursion during PySpark UDF serialization")
 def test_execute_udf_integration(spark: SparkSession, tmp_path, monkeypatch):
     import sys
     monkeypatch.syspath_prepend(str(tmp_path))
