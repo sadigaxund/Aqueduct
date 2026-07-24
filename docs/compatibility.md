@@ -99,7 +99,7 @@ Every leaf that is not unconditionally supported. A version-gated leaf runs only
 |---|---|---|---|---|---|---|
 | LTS | 3.11 | 4.1.2 | 4.1.0 | 17.10 | 17 | ✅ |
 | Latest | 3.13 | 4.1.2 | 4.2.0 | 18.4 | 21 | ✅ |
-| Legacy | 3.12 | 3.5.8 | 3.3.0 | 17.10 | 17 | ✅ |
+| Legacy | 3.12 | 3.5.8 | 3.3.0 | 17.10 | 17 | ❌ 1 failure(s) |
 <!-- COMPAT_RESULTS_END -->
 
 ## Python × Spark
