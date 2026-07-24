@@ -208,7 +208,7 @@ class TestOpenAICompatToolUse:
 
         assert text == '{"patch_id": "fix-3"}'
         assert tool_state.supported is False
-        assert any("agent_tools_unsupported" in r.message for r in caplog.records)
+        assert any("agent_tools_unsupported" in r.getMessage() for r in caplog.records)
         # Second POST must not carry "tools".
         second_kwargs = mock_client.post.call_args_list[1][1]
         assert "tools" not in second_kwargs["json"]

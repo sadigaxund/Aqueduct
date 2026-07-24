@@ -35,8 +35,8 @@ def test_metrics_boundary_skips_on_rdd_failure_without_raising(caplog):
         result = _apply_metrics_boundary(df, {"metrics_boundary": True}, "m1")
     # Transform result flows through unchanged — no exception propagated.
     assert result is df
-    assert any("runtime_metrics_boundary_skipped" in rec.message for rec in caplog.records)
-    assert any("m1" in rec.message for rec in caplog.records)
+    assert any("runtime_metrics_boundary_skipped" in rec.getMessage() for rec in caplog.records)
+    assert any("m1" in rec.getMessage() for rec in caplog.records)
 
 
 def test_metrics_boundary_noop_when_disabled():

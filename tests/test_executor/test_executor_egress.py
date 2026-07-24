@@ -466,7 +466,7 @@ def test_on_new_columns_alert_logs_and_writes(spark: SparkSession, tmp_path, cap
     with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
         write_egress(df, module)  # must NOT raise — alert absorbs, it doesn't block
 
-    assert any("on_new_columns=alert" in rec.message and "extra" in rec.message for rec in caplog.records)
+    assert any("on_new_columns=alert" in rec.getMessage() and "extra" in rec.getMessage() for rec in caplog.records)
     # New column absorbed via mergeSchema — write proceeded
     written = spark.read.option("mergeSchema", "true").parquet(path)
     assert written.count() == 2
