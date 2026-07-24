@@ -395,12 +395,23 @@ jobs:
           print("compatibility.md updated")
           PYEOF
 
-      - name: Commit results
+      - name: Verify the committed matrix is current
+        # CI must NEVER write to `main`. This step used to `git commit && git
+        # push` the regenerated table, which silently desynced every clone (you
+        # push, get rejected, and have to pull a commit you did not make) and —
+        # because a tag-based release reads `origin/main` — could land between
+        # `git push main` and `git push <tag>`, breaking the release's
+        # main-guard ancestry check.
+        #
+        # A stale matrix is now a RED BUILD you fix locally. Same contract the
+        # capability tables already use (`aqueduct dev capabilities check`): the
+        # generated file is committed to the repo, and CI only verifies it still
+        # matches what the code derives.
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "github-actions@github.com"
-          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}
-          git add docs/compatibility.md
-          git diff --staged --quiet || \
-            git commit -m "docs: update compatibility matrix [skip ci]" && \
-            git push
+          if ! git diff --quiet -- docs/compatibility.md; then
+            echo "::error::docs/compatibility.md is out of date. Regenerate it locally and commit the result:"
+            echo "::error::    aqueduct dev capabilities docs"
+            git --no-pager diff -- docs/compatibility.md
+            exit 1
+          fi
+          echo "compatibility matrix is up to date"

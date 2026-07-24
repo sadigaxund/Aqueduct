@@ -6,13 +6,20 @@ name: Release
 #   git tag 1.2.3 && git push origin 1.2.3
 #
 # Pipeline (only the tagged commit on `main`):
-#   main-guard → full test suite → build → publish to TestPyPI (automatic) →
-#   publish to PyPI (MANUAL approval gate) → create the GitHub Release.
+#   main-guard → full test suite → build → publish to TestPyPI → publish to
+#   PyPI → create the GitHub Release. EVERY step is automatic.
 #
-# TestPyPI is automatic (a throwaway index — safe to re-run). The real PyPI
-# upload is irreversible and idempotent, so it sits behind a manual approval:
-# the `pypi` GitHub Environment must have a required reviewer, which pauses the
-# job until a maintainer clicks "Approve" in the Actions UI.
+# There is deliberately NO manual approval gate (decision 2026-07-24): pushing
+# the tag IS the human checkpoint. Once a bare semver tag lands on a commit
+# that is on `main` and the full suite passes, publication proceeds unattended.
+# Know the consequence: a PyPI upload is IRREVERSIBLE — a version number can
+# never be reused, and yanking does not free it. The decision to ship is made
+# when you type `git tag`, not afterwards.
+#
+# (Earlier revisions of this comment claimed a required-reviewer gate on the
+# `pypi` environment. That protection rule was never configured, so the text
+# described a checkpoint that did not exist — corrected here rather than left
+# to mislead the next reader.)
 #
 # ONE-TIME SETUP:
 #   1. PyPI Trusted Publishing — on
@@ -20,8 +27,12 @@ name: Release
 #      GitHub publisher → owner: sadigaxund, repo: aqueduct, workflow:
 #      release.yml, environment: pypi. Repeat on https://test.pypi.org with
 #      environment: testpypi. No API token is ever stored in the repo.
-#   2. Manual gate — repo Settings → Environments → `pypi` → add yourself as a
-#      Required reviewer. (Leave `testpypi` with no protection.)
+#   2. No environment protection is configured, by design — publication is
+#      unattended. If you ever want a human pause, add a Required reviewer to
+#      the `pypi` environment (repo Settings → Environments); no workflow change
+#      is needed. Do NOT remove `environment: pypi` from the publish job to
+#      "simplify" it — PyPI Trusted Publishing is bound to that environment
+#      name, and dropping it breaks the OIDC upload.
 
 on:
   push:
