@@ -514,7 +514,11 @@ leaves:
   # sixteen are honestly `supported` on Spark, the reference engine. The
   # native-namespace pair below is the governed escape hatch: `type.native.spark`
   # ("spark:<spelling>") is Spark's own type system, so it is `supported`
-  # (proven by `variant`, a real Spark 4.0+ type outside the hub vocabulary);
+  # (proven primarily by `interval day to second`, a real Spark-only DDL type
+  # outside the hub vocabulary that has worked since the ANSI interval types
+  # landed in Spark 3.2 — so the leaf itself needs no `requires:` version
+  # floor; a second, version-gated test additionally proves `variant`, Spark
+  # 4.0+ only, on engines new enough to have it);
   # `type.native.duckdb` ("duckdb:<spelling>") names a DIFFERENT engine's
   # native type system that Spark's own SQL parser cannot interpret, so it is
   # honestly `unsupported` on Spark — the native namespace is GOVERNED per
@@ -566,6 +570,7 @@ leaves:
     support: supported
     tests:
       - tests/test_executor/test_executor_channel.py::test_cast_native_namespace_spark
+      - tests/test_executor/test_executor_channel.py::test_cast_native_namespace_spark_variant
   type.smallint:
     support: supported
     tests:

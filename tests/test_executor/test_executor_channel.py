@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import pytest
 pytestmark = [pytest.mark.spark, pytest.mark.integration]
+import pyspark
 from pyspark.sql import SparkSession
 
 from aqueduct.executor.spark.channel import ChannelError, execute_channel
 from aqueduct.parser.models import Module
+
+# Derived from the running interpreter's own pyspark, never a hardcoded CI
+# matrix value — same precedent as tests/conftest.py::_spark_line().
+_PYSPARK_MAJOR = int(pyspark.__version__.split(".")[0])
 
 
 def test_channel_unsupported_op(spark: SparkSession):
@@ -360,10 +365,33 @@ def test_cast_hub_type_array_map_struct(spark: SparkSession):
 
 
 def test_cast_native_namespace_spark(spark: SparkSession):
-    """`type.native.spark` — the `spark:<spelling>` escape hatch is a real
-    Spark-only type the hub vocabulary deliberately does not model
-    (`variant`, Spark 4.0+); proves the escape hatch is not merely accepted
-    at parse time but actually a real CAST target on the engine it names."""
+    """`type.native.spark` — an unknown-to-the-hub Spark-only DDL spelling
+    (`interval day to second`, a real ANSI interval type with no hub
+    equivalent) reaches Spark's own parser raw via
+    `normalize_type_spelling`'s TypeSpellingError-catches-and-falls-back-raw
+    branch (`aqueduct.executor.spark.type_render`); proves the escape hatch
+    is not merely accepted at parse time but actually a real CAST target on
+    the engine it names. Deliberately NOT `variant` (Spark 4.0+ only, see
+    `test_cast_native_namespace_spark_variant` below) — this spelling has
+    been valid Spark DDL since the ANSI interval types (Spark 3.2+), so this
+    test proves the escape hatch on every Spark version this repo supports,
+    including the Legacy compat lane (3.5.8)."""
+    df = spark.createDataFrame([("1 02:03:04",)], ["n"])
+    mod = Module(id="ch", type="Channel", label="C",
+                 config={"op": "cast", "columns": {"n": "interval day to second"}})
+    result = execute_channel(mod, {"up": df}, spark)
+    assert result.schema["n"] is not None
+
+
+@pytest.mark.skipif(_PYSPARK_MAJOR < 4, reason="VARIANT is a Spark 4.0+ type (absent on 3.5.x)")
+def test_cast_native_namespace_spark_variant(spark: SparkSession):
+    """`type.native.spark` — same escape hatch as
+    `test_cast_native_namespace_spark` above, exercised with `variant`
+    itself (Spark 4.0+). Kept as its own test, version-gated at runtime off
+    the INSTALLED `pyspark.__version__` (never a hardcoded CI matrix value —
+    same precedent as `tests/conftest.py`), so the general native-namespace
+    proof above still runs — and still proves the capability — on the
+    Legacy (pyspark 3.5.8) compat lane where this one skips."""
     df = spark.createDataFrame([('{"a":1}',)], ["n"])
     mod = Module(id="ch", type="Channel", label="C", config={"op": "cast", "columns": {"n": "variant"}})
     result = execute_channel(mod, {"up": df}, spark)
