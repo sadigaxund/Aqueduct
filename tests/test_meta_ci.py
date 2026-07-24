@@ -84,3 +84,24 @@ def test_canary_lane_stays_unpinned_on_purpose():
     steps = yaml.dump(snippets)
     assert "PIP_CONSTRAINT" not in steps
     assert snippets.get("continue-on-error") is True  # early warning, never a blocker
+
+
+def test_snippets_lts_lane_is_pinned_and_blocking():
+    """The mirror image of the canary invariant above: `snippets-lts` is the
+    PROMISE-lane counterpart to the `snippets` canary — it exists to hold
+    gallery/** to a version combo Aqueduct actually supports, so it must be
+    pinned (a promise lane cannot go red because of what PyPI published this
+    morning) AND blocking (an honest red on a broken snippet is the point of
+    this lane; continue-on-error would silently defeat it, same as it would
+    on any `compat` combo)."""
+    wf = _workflow("version-matrix.yml")
+    lts = wf["jobs"]["snippets-lts"]
+    constraint = (lts.get("env") or {}).get("PIP_CONSTRAINT", "")
+    assert "requirements/compat-py" in constraint, (
+        "snippets-lts must install under a per-interpreter environment lock, "
+        "same as the compat job's promise lanes"
+    )
+    assert lts.get("continue-on-error") is not True, (
+        "snippets-lts is a PROMISE lane — continue-on-error would make a "
+        "broken snippet silently non-blocking, defeating its purpose"
+    )

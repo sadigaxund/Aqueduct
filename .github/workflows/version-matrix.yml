@@ -23,6 +23,16 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # Same key as test-suite.yml's python-3.11/ci-py311.txt jobs on purpose:
+      # identical dependency tree, so sharing one cache entry is correct, not
+      # a collision.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -62,6 +72,53 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # NO caching on this job, deliberately (not even a pip download cache).
+      # This lane's whole purpose is resolving fresh every run to catch a
+      # breaking upstream release as an early warning — see the job comment
+      # above and `tests/test_meta_ci.py::test_canary_lane_stays_unpinned_on_purpose`.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - run: pip install -e ".[dev,spark,llm]"
+      - run: bash scripts/run_snippets.sh
+
+  # BLOCKING snippet lane (Phase 78) — the PROMISE-lane counterpart to the
+  # `snippets` canary above, same split as `compat` vs. that canary.
+  # `gallery/**` is a documented, user-facing surface, but until this job
+  # existed, nothing MECHANICALLY held it to a version combo Aqueduct actually
+  # PROMISES (docs/compatibility.md) — the canary above only ever produces a
+  # non-blocking red annotation. This job runs the exact same snippet suite
+  # against exactly the LTS combo (python 3.11 / pyspark 4.1.2 / delta 4.1.0 —
+  # the `compat` job's `matrix.include` row named `LTS`; chosen because it is
+  # the explicitly-named LTS/promise target, not a guess), under the SAME
+  # per-interpreter environment lock the `compat` job uses for that row
+  # ($PIP_CONSTRAINT -> requirements/compat-py3.11.txt). It is BLOCKING: no
+  # continue-on-error, so a broken snippet on the LTS combo fails the
+  # workflow, the same way a `compat` test failure does.
+  #
+  # DO NOT fold this into the `snippets` canary above or give that job a
+  # PIP_CONSTRAINT — the two serve opposite purposes (fresh/non-blocking vs.
+  # pinned/blocking) and `tests/test_meta_ci.py` enforces the split for both.
+  snippets-lts:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    env:
+      PIP_CONSTRAINT: ${{ github.workspace }}/requirements/compat-py3.11.txt
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # Safe to cache (unlike the canary above): this lane is pinned, so the
+      # resolved dependency set is deterministic for a given lock-file hash.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-LTS-py3.11-${{ hashFiles('pyproject.toml', 'requirements/compat-py3.11.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-LTS-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -121,6 +178,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       # One lock per interpreter; see the PROMISE LANES comment above.
       PIP_CONSTRAINT: ${{ github.workspace }}/requirements/compat-py${{ matrix.python }}.txt
@@ -129,10 +195,29 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
+          cache: 'pip'
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/compat-py${{ matrix.python }}.txt
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: ${{ matrix.java }}
+
+      # Hudi/Iceberg bundles (tests/conftest.py::_LAKEHOUSE_COORDS) are Maven
+      # artifacts Ivy pulls at first SparkSession creation, one combo at a
+      # time below — slow, and otherwise re-downloaded every run. Keyed per
+      # combo (each pins its own pyspark line) + the coordinate-selection
+      # logic itself, so a version bump or a _HUDI_VER/_ICEBERG_VER edit
+      # invalidates it.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2
+            ~/.m2
+          key: ivy2-${{ runner.os }}-${{ matrix.combo }}-pyspark${{ matrix.pyspark }}-${{ hashFiles('tests/conftest.py') }}
+          restore-keys: |
+            ivy2-${{ runner.os }}-${{ matrix.combo }}-pyspark${{ matrix.pyspark }}-
 
       - name: Install dependencies
         run: |
@@ -147,6 +232,7 @@ jobs:
         id: tests
         env:
           AQ_PG_DSN: "postgresql://aq:aq@localhost:5432/aq_test"
+          AQ_REDIS_URL: "redis://localhost:6379/15"
           AQ_SPARK_MASTER: "local[1]"
           # Provision Hudi/Iceberg jars from Maven coords derived off the
           # matrix pyspark version; per-datasource self-skip when no build

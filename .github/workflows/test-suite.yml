@@ -136,6 +136,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: |
           set +e
@@ -153,6 +165,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -170,6 +194,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -187,6 +223,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -204,6 +252,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -221,6 +281,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -238,6 +310,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -259,6 +343,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,tui]"
       - run: |
           set +e
@@ -276,6 +372,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis,postgres]"
       - run: |
           set +e
@@ -293,6 +401,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,llm,redis]"
       - run: |
           set +e
@@ -310,6 +430,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev]"
       # Every capability leaf must carry an explicit per-engine verdict. This
       # fails if a new schema/config key landed without one (run
@@ -331,6 +463,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,mcp,llm]"
       - run: |
           set +e
@@ -353,10 +497,31 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env;
+      # see the identical comment on the other jobs in this file.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ matrix.python-version }}-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+      # Hudi/Iceberg bundles (tests/conftest.py::_LAKEHOUSE_COORDS) are Maven
+      # artifacts pulled by Ivy at first SparkSession creation — slow, and
+      # otherwise re-downloaded every run. Keyed on the pinned pyspark version
+      # (ci-py311.txt) + the coordinate-selection logic itself, so a version
+      # bump or a _HUDI_VER/_ICEBERG_VER edit invalidates it.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ivy2
+            ~/.m2
+          key: ivy2-${{ runner.os }}-py3.11-${{ hashFiles('requirements/ci-py311.txt', 'tests/conftest.py') }}
+          restore-keys: |
+            ivy2-${{ runner.os }}-py3.11-
       - run: pip install -e ".[dev,spark,llm,redis]"
       # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
       # derived from the installed pyspark version); tests self-skip for any
@@ -389,6 +554,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -436,6 +613,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -478,6 +667,18 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
       - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
