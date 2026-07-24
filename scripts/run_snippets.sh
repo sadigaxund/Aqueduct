@@ -131,7 +131,7 @@ export TMPDIR="$PIP_TMPDIR"
 _pip_ok() { "$VENV/bin/python" -c "import pandas, pyarrow, rich, pyspark" 2>/dev/null; }
 
 if [[ ! -d "$VENV" ]] || ! _pip_ok; then
-    [[ -d "$VENV" ]] && echo -e "${YELLOW}Venv incomplete — reinstalling...${RESET}"
+    [[ -d "$VENV" ]] && echo -e "${YELLOW}Venv version mismatch — recreating...${RESET}"
     [[ ! -d "$VENV" ]] && echo -e "${CYAN}Creating Python 3.12 venv (first run only)...${RESET}"
     python3.12 -m venv "$VENV"
     # shellcheck source=/dev/null
