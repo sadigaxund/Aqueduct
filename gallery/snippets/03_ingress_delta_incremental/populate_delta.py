@@ -26,7 +26,28 @@ if major >= 4:
 else:
     DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.1.0"
 
+def _write_delta_env():
+    """Persist the just-derived Delta<->Spark package coordinate to a `.env`
+    file beside this script (same dir as aqueduct.yml/blueprint.yml).
+
+    `aqueduct run` is a SEPARATE process/SparkSession from this one — it
+    cannot see the DELTA_PACKAGE computed above unless it's handed over some
+    other way. Aqueduct's CLI already auto-loads a project `.env` file from
+    the blueprint's own directory before resolving `${VAR:-default}` in
+    aqueduct.yml (see `_resolve_and_load_env` / `_load_env_file` in
+    `aqueduct/cli/__init__.py`), so writing it here is enough for
+    `aqueduct.yml`'s `spark.jars.packages: "${DELTA_PACKAGE:-...}"` to pick up
+    the SAME jar this script just used — instead of aqueduct.yml's fallback
+    default, which cannot be correct for every pyspark version at once (see
+    the fallback's own comment). `.env` is git-ignored repo-wide.
+    """
+    with open(".env", "w") as f:
+        f.write(f"DELTA_PACKAGE={DELTA_PACKAGE}\n")
+
+
 def main():
+    _write_delta_env()
+
     target_dir = "data/input"
     if os.path.exists(target_dir):
         shutil.rmtree(target_dir)

@@ -4,18 +4,11 @@ Demonstrates how to use Delta Lake's **Time Travel** and **Versioning** features
 
 ## Requirements
 
-- **Delta Lake JAR** matching your PySpark version. The `aqueduct.yml` defaults to Spark 4.0.x.
-  If you have a different version, set env vars:
-
-  ```bash
-  # Spark 4.1.x
-  DELTA_SPARK_VER=4.1 aqueduct run blueprint.yml
-
-  # Future Spark 4.2+
-  DELTA_SPARK_VER=4.2 DELTA_VER=4.3.0 aqueduct run blueprint.yml
-  ```
-
-  `populate_delta.py` auto-detects your Spark version, so just run it directly.
+- **Delta Lake JAR** matching your PySpark version. `populate_delta.py`
+  auto-detects your Spark version and writes the matching coordinate to a
+  `.env` file next to `aqueduct.yml`, which `aqueduct run` picks up
+  automatically — just run `populate_delta.py` before `aqueduct run`, no
+  manual env vars needed.
 
 ## Setup
 

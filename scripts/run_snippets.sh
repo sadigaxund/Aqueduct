@@ -284,12 +284,25 @@ echo -e "Done — ${GREEN}${PASS_COUNT} passed${RESET}  ${RED}${FAIL_COUNT} fail
 
 # Extract the root-cause error line(s) from a log — shows the actual exception
 # message, not the Java stack trace bottom.
+#
+# Checked in priority order:
+#   1. Aqueduct's own `✗ <module> — <msg>` / `✗ blueprint failed` lines (the
+#      CLI's `cli/style.py::error()` output, plain-text since a log file is
+#      never a TTY) — this is the ROOT CAUSE for an `aqueduct-run` step
+#      failure, even when the underlying py4j/Spark exception it wraps is
+#      truncated to something generic like "source not found or unreadable"
+#      (a Delta jar/pyspark version mismatch showed up exactly this way —
+#      see gallery/snippets/03_ingress_delta_incremental's fix history).
+#   2. Py4J/pyspark exception markers, for a failure that reaches this log
+#      un-wrapped by Aqueduct (e.g. a populate*.py script's own traceback —
+#      the "populate-<script>" label already tells you the failure is
+#      upstream of aqueduct-run, not the downstream symptom).
+#   3. Fallback: last non-empty lines.
 extract_error_summary() {
     local log="$1" max_lines="${2:-5}"
     if [[ ! -f "$log" ]]; then return; fi
-    # Look for Py4J/pyspark exception messages, "Error:" headers, or "Caused by:"
     local found
-    found=$(grep -E '(pyspark\.sql\.utils|py4j\.protocol|Py4JJavaError|Caused by:|Exception:|^Error: |^ERROR |SparkException|AnalysisException|StreamingQueryException)' "$log" | head -3 || true)
+    found=$(grep -E '(^✗ |Traceback \(most recent call last\)|pyspark\.sql\.utils|py4j\.protocol|Py4JJavaError|Caused by:|Exception:|^Error: |^ERROR |SparkException|AnalysisException|StreamingQueryException)' "$log" | head -5 || true)
     if [[ -n "$found" ]]; then
         echo "$found"
     else

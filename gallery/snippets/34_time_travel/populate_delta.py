@@ -23,6 +23,15 @@ if major >= 4:
 else:
     DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.1.0"
 
+# Persist the derived coordinate to a `.env` file beside this script (same
+# dir as aqueduct.yml/blueprint.yml) so the SEPARATE `aqueduct run` process
+# resolves the SAME jar via Aqueduct's project-.env auto-discovery
+# (`_resolve_and_load_env` in `aqueduct/cli/__init__.py`) instead of
+# aqueduct.yml's `${DELTA_SPARK_VER:-4.0}` fallback, which cannot be correct
+# for every pyspark version at once. `.env` is git-ignored repo-wide.
+with open(".env", "w") as f:
+    f.write(f"DELTA_PACKAGE={DELTA_PACKAGE}\n")
+
 spark = SparkSession.builder \
     .appName("time_travel_setup") \
     .master("local[*]") \

@@ -16,6 +16,9 @@ release and are marked **BREAKING**.
 
 ## [Unreleased]
 
+### Fixed
+- **`03_ingress_delta_incremental` and `34_time_travel` gallery snippets silently broke on pyspark 4.1.x.** Both snippets' `aqueduct.yml` hardcoded `spark.jars.packages` to the Delta 4.0.x artifact (`delta-spark_4.0_2.13`) by default, while `populate_delta.py` already derived the CORRECT artifact (`delta-spark_4.1_2.13` on pyspark 4.1) for its own populate-only SparkSession — so the actual `aqueduct run` step loaded a Delta jar built against a different Spark minor line and failed with `NoSuchMethodError` inside Delta's `DataSource` init, surfacing as a misleading `source not found or unreadable` ingress error. `populate_delta.py` now writes the coordinate it derived to a `.env` file beside `aqueduct.yml` (git-ignored), which `aqueduct run`'s existing project-`.env` auto-discovery picks up, so both scripts agree on the same jar without the user setting anything manually.
+
 ## [2.0.5] — 2026-07-23
 
 ### Added

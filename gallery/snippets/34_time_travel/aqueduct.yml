@@ -10,7 +10,13 @@ deployment:
   master_url: "local[*]"
 
 spark_config:
-  spark.jars.packages: "io.delta:delta-spark_${DELTA_SPARK_VER:-4.0}_2.13:${DELTA_VER:-4.2.0}"
+  # DELTA_PACKAGE is written to a `.env` file (git-ignored) by
+  # populate_delta.py, derived from the ACTUALLY installed pyspark version —
+  # never hardcode a Spark line here, a fixed default silently breaks on any
+  # other pyspark version (see populate_delta.py's own derivation). The
+  # fallback below only fires if you run `aqueduct run` without ever having
+  # run populate_delta.py in this directory.
+  spark.jars.packages: "${DELTA_PACKAGE:-io.delta:delta-spark_4.1_2.13:4.2.0}"
   spark.sql.extensions: "io.delta.sql.DeltaSparkSessionExtension"
   spark.sql.catalog.spark_catalog: "org.apache.spark.sql.delta.catalog.DeltaCatalog"
 
