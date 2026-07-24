@@ -236,7 +236,8 @@ jobs:
           AQ_SPARK_MASTER: "local[1]"
           # Provision Hudi/Iceberg jars from Maven coords derived off the
           # matrix pyspark version; per-datasource self-skip when no build
-          # exists for that Spark line (Iceberg has no Spark 4.1 runtime).
+          # exists for that Spark line (e.g. Hudi has no published build for
+          # Spark 3.3 — see tests/conftest.py's _HUDI_VER/_ICEBERG_VER tables).
           AQ_LAKEHOUSE: "1"
         run: |
           mkdir -p ${{ env.RESULTS_DIR }}
@@ -244,9 +245,10 @@ jobs:
           set +e
           pytest \
             tests/test_executor/ \
+            tests/test_executor_duckdb/ \
             tests/test_compiler/test_blueprints.py \
             tests/test_stores/ \
-            -m "spark" \
+            -m "spark or duckdb" \
             --tb=short \
             --no-cov \
             -q \

@@ -13,10 +13,13 @@ Two properties, and both are load-bearing in OPPOSITE directions:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 import yaml
+
+from aqueduct.executor.capabilities import CAPABILITY_REGISTRY, load_engines
 
 pytestmark = pytest.mark.unit
 
@@ -105,3 +108,65 @@ def test_snippets_lts_lane_is_pinned_and_blocking():
         "snippets-lts is a PROMISE lane — continue-on-error would make a "
         "broken snippet silently non-blocking, defeating its purpose"
     )
+
+
+def _compat_run_tests_script() -> str:
+    """The `compat` job's ``Run tests`` step's shell script (its pytest invocation)."""
+    steps = _workflow("version-matrix.yml")["jobs"]["compat"]["steps"]
+    for step in steps:
+        if step.get("name") == "Run tests":
+            return step["run"]
+    raise AssertionError(
+        "version-matrix.yml's `compat` job has no step named 'Run tests' — "
+        "did it get renamed? Update this test's step-name lookup."
+    )
+
+
+def test_compat_lane_covers_every_registered_engine():
+    """A shipped engine with ZERO compat-matrix coverage is exactly the gap this
+    test exists to close — DuckDB registered an `aqueduct.engines` entry point,
+    shipped a full `capabilities.yml`, and an `ExecutorProtocol`, and STILL had
+    no coverage in `version-matrix.yml`'s `compat` job, because that job's test
+    selection was two hardcoded engine names (a path list + `-m "spark"`) that
+    nothing kept in sync with the engine registry.
+
+    The engine list is resolved from the REGISTRY — ``load_engines()`` /
+    ``CAPABILITY_REGISTRY``, the exact seam ``aqueduct.executor.capabilities.
+    get_capabilities()`` uses on the real compile path — never a hardcoded name
+    list here. A third engine registered tomorrow is covered by this guard with
+    no edit to this test.
+
+    Mechanism: pytest marker name == engine name. This is not a convention this
+    test invents — ``pyproject.toml``'s ``[tool.pytest.ini_options] markers``
+    already documents ``spark`` as "Tests that require a SparkSession" and
+    ``duckdb`` as "Tests that require the DuckDB execution engine", and
+    ``tests/conftest.py::pytest_collection_modifyitems`` auto-applies exactly
+    one of them per test from its fixtures. So "does the compat job's `-m`
+    marker expression name this engine" is a direct, mechanical check — no
+    heuristic path-matching that a differently-organized test directory could
+    quietly defeat.
+    """
+    load_engines()
+    engines = sorted(CAPABILITY_REGISTRY)
+    assert engines, (
+        "no engines registered via the `aqueduct.engines` entry-point group — "
+        "a stale editable install? (see NO_ENGINES_HINT in capabilities.py)"
+    )
+
+    run_script = _compat_run_tests_script()
+    m = re.search(r'-m\s+"([^"]+)"', run_script)
+    assert m, (
+        "compat job's pytest invocation has no `-m \"...\"` marker expression "
+        "to check engine coverage against"
+    )
+    marker_expr = m.group(1)
+
+    for engine in engines:
+        assert re.search(rf"\b{re.escape(engine)}\b", marker_expr), (
+            f"engine {engine!r} is registered (aqueduct.engines entry point) but "
+            f"the compat job's marker expression ({marker_expr!r}) does not "
+            f"select @pytest.mark.{engine} tests. Extend version-matrix.yml's "
+            "`compat` job (its test path list and `-m` marker expression) so "
+            f"the {engine!r} engine is actually exercised by the compatibility "
+            "matrix — see AGENTS.md's 'Adding an engine' playbook, step 4."
+        )
