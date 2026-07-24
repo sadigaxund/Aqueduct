@@ -72,7 +72,7 @@ def test_surveyor_upserts_duckdb(tmp_path):
         inputs_fingerprint={},
         modules=(), edges=()
     )
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = uuid.uuid4().hex
     
     # 1. First run records 'running'
@@ -119,7 +119,7 @@ def test_surveyor_upserts_postgres():
         location_label = "dummy"
     
     bundle = StoreBundle(observability=obs_store, depot=DummyDepot())
-    surveyor = Surveyor(manifest, store_dir=Path("/tmp"), stores=bundle)
+    surveyor = Surveyor(manifest, store_dir=Path("/tmp"), stores=bundle, engine="spark")
     run_id = uuid.uuid4().hex
     
     try:
@@ -196,7 +196,7 @@ def test_phase33_matrix_postgres_redis(spark, tmp_path):
     try:
         # Patch get_stores to return our bundle
         bundle = StoreBundle(observability=obs_store, depot=depot_store)
-        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle)
+        surveyor = Surveyor(manifest, store_dir=tmp_path, stores=bundle, engine="spark")
         run_id = f"run_{uuid.uuid4().hex[:8]}"
         
         surveyor.start(run_id)

@@ -61,6 +61,7 @@ class AqFunctions:
         blueprint_path: str | Path | None = None,
         deployment_env: str | None = None,
         deployment_target: str | None = None,
+        deployment_engine: str | None = None,
         base_dir: str | None = None,
     ) -> None:
         self._run_id = run_id or str(uuid.uuid4())
@@ -84,6 +85,12 @@ class AqFunctions:
         self._blueprint_path = Path(blueprint_path) if blueprint_path else None
         self._deployment_env = deployment_env
         self._deployment_target = deployment_target
+        # The execution engine this Manifest is being compiled FOR (compile()'s
+        # `engine` argument, i.e. `deployment.engine` in aqueduct.yml). Always
+        # set on the real compile path, so unlike env/target it needs no
+        # `_require` guard — a blueprint can put it in an output path or a tag
+        # without a "not configured" failure mode.
+        self._deployment_engine = deployment_engine
 
     def _base_date(self) -> date:
         return self._execution_date if self._execution_date is not None else date.today()
@@ -199,6 +206,9 @@ class AqFunctions:
     def deployment_target(self) -> str:
         return self._require("deployment.target", self._deployment_target)
 
+    def deployment_engine(self) -> str:
+        return self._require("deployment.engine", self._deployment_engine)
+
     def engine_version(self) -> str:
         from aqueduct import __version__
         return __version__
@@ -226,6 +236,7 @@ _DISPATCH: dict[str, str] = {
     "aq.blueprint.dir": "blueprint_dir",
     "aq.deployment.env": "deployment_env",
     "aq.deployment.target": "deployment_target",
+    "aq.deployment.engine": "deployment_engine",
     "aq.version": "engine_version",
 }
 

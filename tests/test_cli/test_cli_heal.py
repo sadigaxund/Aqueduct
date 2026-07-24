@@ -10,7 +10,7 @@ pytestmark = pytest.mark.integration
 
 @pytest.fixture
 def mock_fc_row():
-    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, provenance_json, started_at, finished_at
+    # run_id, blueprint_id, failed_module, error_message, stack_trace, manifest_json, provenance_json, started_at, finished_at, engine
     return (
         "test_run",
         "test_bp",
@@ -20,7 +20,8 @@ def mock_fc_row():
         '{"id": "test_bp", "modules": [{"id": "m1", "type": "Ingress"}]}',
         None,  # provenance_json
         "2023-01-01T00:00:00Z",
-        "2023-01-01T00:01:00Z"
+        "2023-01-01T00:01:00Z",
+        "spark",  # engine
     )
 
 @pytest.fixture

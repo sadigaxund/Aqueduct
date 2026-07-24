@@ -18,7 +18,13 @@ RULE_ID = "file_format_no_repartition"
 _PROBLEM_FORMATS = {"parquet", "json", "csv"}
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # Spark-physical: "one file per task partition" is Spark's shuffle-
+    # partition behaviour. DuckDB has no task partitions and writes output
+    # files under its own (very different) rules — this advice is nonsensical
+    # there, so the rule is gated off entirely rather than reworded.
+    if engine != "spark":
+        return []
     out: list[str] = []
     for m in manifest.modules:
         if m.type != ModuleType.Egress:

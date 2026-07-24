@@ -118,7 +118,7 @@ def _make_failure_context(run_id: str) -> FailureContext:
         manifest_json='{"id": "test_bp", "modules": [{"id": "src", "type": "Ingress"}]}',
         started_at="2026-01-01T00:00:00Z",
         finished_at="2026-01-01T00:00:01Z",
-    )
+     engine="spark",)
 
 
 # ── tests ─────────────────────────────────────────────────────────────────────

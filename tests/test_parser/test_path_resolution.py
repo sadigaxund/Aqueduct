@@ -1,7 +1,8 @@
+
 import pytest
-from pathlib import Path
-from aqueduct.parser.parser import parse, parse_dict
+
 from aqueduct.config import load_config
+from aqueduct.parser.parser import parse, parse_dict
 
 pytestmark = pytest.mark.unit
 
@@ -256,12 +257,45 @@ def test_parse_dict_anchors_only_registered_keys_per_type(tmp_path):
 def test_fs_path_marker_visible_on_store_fields():
     """RelationalStoreConfig.path and KVStoreConfig.path must carry the FsPath
     marker so the schema-driven walker in config.py picks them up."""
-    from aqueduct.config import RelationalStoreConfig, KVStoreConfig
+    from aqueduct.config import KVStoreConfig, RelationalStoreConfig
     from aqueduct.parser.fs_path import field_is_fs_path
     for cls in (RelationalStoreConfig, KVStoreConfig):
         field_info = cls.model_fields["path"]
         meta = tuple(field_info.metadata)
         assert field_is_fs_path(meta, field_info.annotation) is not None, f"{cls.__name__}.path missing FsPath()"
+
+
+def test_fs_path_marker_seen_through_optional_on_this_interpreter():
+    """``field_is_fs_path`` detects the marker inside an OPTIONAL annotated path
+    field (e.g. ``RelationalStoreConfig.path: Annotated[str, FsPath()] | None``)
+    on the running interpreter — a version-invariance floor.
+
+    Note on the (fixed, defensive-only) union-origin handling: unlike the
+    capability-leaf walker — where ``AgentBudgetConfig | None`` builds a plain
+    ``types.UnionType`` on Python 3.11-3.13 and genuinely under-derived — an
+    ``Annotated[...] | None`` normalizes to ``typing.Optional[Annotated[...]]``
+    (origin ``typing.Union``) on EVERY version, because ``Annotated.__or__``
+    normalizes. So the pre-fix ``origin is Union`` check already handled every
+    real optional annotated path field correctly; the ``types.UnionType`` branch
+    added in ``fs_path.py`` for consistency with the walker is inert for FsPath
+    detection (no Annotated union ever reaches it). This test guards the
+    behaviour that actually matters — optional annotated path fields stay
+    detectable — rather than a cross-version failure that (for this seam) does
+    not occur.
+    """
+    from typing import Annotated, get_args, get_origin
+
+    from aqueduct.config import RelationalStoreConfig
+    from aqueduct.parser.fs_path import FsPath, field_is_fs_path
+
+    fi = RelationalStoreConfig.model_fields["path"]
+    ann = fi.annotation
+    # It really is optional (a union with NoneType), and still detected.
+    assert type(None) in get_args(ann) or get_origin(ann) is not None
+    assert isinstance(field_is_fs_path(tuple(fi.metadata), ann), FsPath)
+
+    # Required annotated field — regression floor.
+    assert isinstance(field_is_fs_path((), Annotated[str, FsPath()]), FsPath)
 
 
 def test_config_anchors_store_paths_via_fs_path_walker(tmp_path):

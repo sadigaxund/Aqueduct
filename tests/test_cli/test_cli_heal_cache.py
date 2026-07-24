@@ -123,11 +123,19 @@ def test_replay_hit_auto_mode_zero_llm(tmp_path):
     first_result = _run_err()
     ok_result = _run_ok()
 
+    from aqueduct.patch.preview import SandboxGateResult
+
     with patch("aqueduct.executor.get_executor") as mock_get_exec:
         mock_get_exec.return_value = _make_executor([first_result, ok_result, ok_result])
         with patch("aqueduct.agent.memory.find_pending", return_value=None):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
-                res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+                # The replay-gate path (Phase 79) runs run_sandbox_gate through
+                # the TARGET ENGINE's own ExecutorProtocol, not the mocked
+                # get_executor() above — mock it directly so this unit test
+                # never starts a real Spark session.
+                with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                    mock_sandbox.return_value = SandboxGateResult(status="pass", detail="ok")
+                    res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
     assert res.exit_code == 0
 
@@ -162,8 +170,16 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
+    from aqueduct.patch.preview import SandboxGateResult
+
     with patch("aqueduct.executor.get_executor") as mock_get_exec:
-        mock_get_exec.return_value = _make_executor([_run_err(), _run_err(), _run_ok()])
+        # Only two get_executor-routed execute() calls happen now: the
+        # initial failing run, then the post-LLM-patch re-run. The replay
+        # candidate's sandbox validation run no longer consumes from this
+        # sequence — it's mocked directly via run_sandbox_gate below
+        # (Phase 79: the sandbox gate runs through the target engine's own
+        # ExecutorProtocol, not this generic get_executor mock).
+        mock_get_exec.return_value = _make_executor([_run_err(), _run_ok()])
         with patch("aqueduct.agent.memory.find_pending", return_value=None):
             with patch("aqueduct.agent.memory.find_replay_candidate", return_value=mock_candidate):
                 with patch("aqueduct.agent.generate_agent_patch") as mock_gap:
@@ -171,7 +187,16 @@ def test_replay_gate_fail_falls_through_to_llm(tmp_path):
                     mock_gap.return_value = AgentPatchResult(
                         patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
-                    res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+                    # The replay-gate path (Phase 79) runs run_sandbox_gate
+                    # through the TARGET ENGINE's own ExecutorProtocol, not the
+                    # mocked get_executor() above — mock it directly to force
+                    # the FAIL this test needs (driving the fall-through) and
+                    # to never start a real Spark session.
+                    with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                        mock_sandbox.return_value = SandboxGateResult(
+                            status="fail", detail="replay candidate no longer applies",
+                        )
+                        res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
     assert "falling through to Agent" in res.output
     assert mock_gap.called
@@ -229,6 +254,8 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
+    from aqueduct.patch.preview import SandboxGateResult
+
     with patch("aqueduct.executor.get_executor") as mock_get_exec:
         mock_get_exec.return_value = _make_executor([_run_err(), _run_ok()])
         with patch("aqueduct.agent.memory.find_pending") as mock_fp:
@@ -238,7 +265,12 @@ def test_memory_replay_false_skips_pending_replay_lookups(tmp_path):
                     mock_gap.return_value = AgentPatchResult(
                         patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
-                    res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+                    # See test_llm_heal_stamps_resolution_and_signature above —
+                    # the inline sandbox gate must be mocked too, or it starts
+                    # (and stops) the REAL shared SparkSession (ISSUE-026).
+                    with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                        mock_sandbox.return_value = SandboxGateResult(status="pass", detail="ok")
+                        res = runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
     assert mock_fp.call_count == 0
     assert mock_frc.call_count == 0
@@ -348,6 +380,8 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
 
     os.environ["ANTHROPIC_API_KEY"] = "test-key"
 
+    from aqueduct.patch.preview import SandboxGateResult
+
     with patch("aqueduct.executor.get_executor") as mock_get_exec:
         mock_get_exec.return_value = _make_executor([_run_err(), _run_ok()])
         with patch("aqueduct.agent.memory.find_pending", return_value=None):
@@ -357,7 +391,21 @@ def test_llm_heal_stamps_resolution_and_signature(tmp_path):
                     mock_gap.return_value = AgentPatchResult(
                         patch=spec, attempts=1, stop_reason=StopReason.SOLVED,
                     )
-                    runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
+                    # The inline patch-gates path (Phase 79) runs
+                    # run_sandbox_gate through the TARGET ENGINE's own
+                    # ExecutorProtocol, not the mocked get_executor() above —
+                    # mock it directly so this unit test never starts (and,
+                    # believing it owns a throwaway sandbox session, stops)
+                    # the REAL shared SparkSession (ISSUE-026): under pytest
+                    # `session_factory()` always returns the process-wide
+                    # SparkContext via getOrCreate(), so an unmocked sandbox
+                    # gate's teardown kills the session-scoped `spark` fixture
+                    # for every later test. Same pattern as
+                    # test_replay_hit_auto_mode_zero_llm /
+                    # test_replay_gate_fail_falls_through_to_llm above.
+                    with patch("aqueduct.patch.preview.run_sandbox_gate") as mock_sandbox:
+                        mock_sandbox.return_value = SandboxGateResult(status="pass", detail="ok")
+                        runner.invoke(cli, ["run", str(bp_path), "--config", str(cfg_path)])
 
     # Check healing_outcomes in observability DB
     import duckdb

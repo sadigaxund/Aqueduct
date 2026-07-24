@@ -62,6 +62,13 @@ class FailureContext:
     sql_state: str | None = None              # Spark getSqlState() when available
     suggested_columns: tuple[str, ...] = field(default_factory=tuple)  # extracted "did you mean" suggestions
     object_name: str | None = None            # offending column/table/relation name from messageParameters
+    # The execution engine this failure occurred on (e.g. "spark", "duckdb").
+    # Stamped by Surveyor.record() from its required `engine` constructor arg
+    # (see Surveyor.__init__). Required and keyword-only — every construction
+    # site must state its engine explicitly. There is no default: a silently
+    # inherited "spark" default is exactly the bug this field exists to kill
+    # (a DuckDB run would otherwise be mislabelled/mis-signatured as Spark).
+    engine: str = field(kw_only=True)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,6 +89,7 @@ class FailureContext:
             "sql_state": self.sql_state,
             "suggested_columns": list(self.suggested_columns),
             "object_name": self.object_name,
+            "engine": self.engine,
         }
 
     def to_json(self) -> str:

@@ -2,7 +2,7 @@
 
 Lifecycle (called from CLI):
 
-    surveyor = Surveyor(manifest, store_dir=Path(".aqueduct"), webhook_url=...)
+    surveyor = Surveyor(manifest, store_dir=Path(".aqueduct"), engine="spark", webhook_url=...)
     surveyor.start(run_id)          # create DB tables, record run start
     result = execute(manifest, spark, run_id=run_id)
     failure_ctx = surveyor.record(result)   # persist result, fire webhook if failed
@@ -31,8 +31,10 @@ from aqueduct.redaction import redact as _redact
 from aqueduct.surveyor.ddl import (
     _DDL,
     _EXPLAIN_SNAPSHOT_DDL,
+    _FAILURE_CONTEXTS_MIGRATIONS,
     _HEAL_ATTEMPTS_DDL,
     _HEAL_ATTEMPTS_MIGRATIONS,
+    _HEALING_OUTCOMES_MIGRATIONS,
     _SIGNAL_OVERRIDES_DDL,
 )
 from aqueduct.surveyor.error_extraction import (  # noqa: F401  (re-exported for callers/tests)
@@ -100,6 +102,8 @@ class Surveyor:
         self,
         manifest: Manifest,
         store_dir: Path,
+        *,
+        engine: str,
         webhook_url: str | None = None,
         webhook_config: WebhookEndpointConfig | None = None,  # type: ignore[name-defined]  # noqa: F821
         blueprint_path: Path | None = None,
@@ -111,6 +115,13 @@ class Surveyor:
         """Initialise the Surveyor.
 
         Args:
+            engine: The execution engine this run targets ("spark", "duckdb",
+                ...). REQUIRED, no default — a default of "spark" would
+                silently reintroduce the bug where every engine's structured
+                error extraction resolved through Spark's Py4J-hardcoded
+                extractor regardless of what actually executed the run (see
+                `ExecutorProtocol.extract_error` / `get_protocol`). Every
+                construction site must resolve and pass its real engine.
             stores: Optional pre-built `StoreBundle`. When None (the typical
                 CLI path), the bundle is constructed lazily on `start()` from
                 a default DuckDB layout under `store_dir`. The `stores=`
@@ -120,6 +131,7 @@ class Surveyor:
         from aqueduct.config import WebhookEndpointConfig
         self._manifest = manifest
         self._store_dir = store_dir
+        self._engine = engine
         if webhook_config is not None:
             self._webhook_config: WebhookEndpointConfig | None = webhook_config
         elif webhook_url is not None:
@@ -207,6 +219,10 @@ class Surveyor:
             # CREATE TABLE IF NOT EXISTS never adds columns to an existing
             # table (see the schema-evolution rule in ddl.py).
             for _migration in _HEAL_ATTEMPTS_MIGRATIONS:
+                cur.execute(_migration)
+            for _migration in _FAILURE_CONTEXTS_MIGRATIONS:
+                cur.execute(_migration)
+            for _migration in _HEALING_OUTCOMES_MIGRATIONS:
                 cur.execute(_migration)
             # Phase 53 — patch index (relational truth for the object-store patch
             # lifecycle). Created here so the heal cache can query it instead of
@@ -330,7 +346,13 @@ class Surveyor:
                     live_exc = _mr.exception
                     break
         stack_trace: str | None = None
-        structured = _extract_structured_error(live_exc)
+        # Phase 78 — resolve the engine's own ExecutorProtocol.extract_error
+        # instead of always calling the Spark/Py4J-hardcoded extractor. Lazy
+        # import to avoid a module-load cycle (surveyor <-> executor.protocol
+        # <-> executor.capabilities); see AGENTS.md's documented lazy-import
+        # exceptions for the precedent (surveyor's own pyspark import above).
+        from aqueduct.executor.protocol import get_protocol as _get_protocol
+        structured = _get_protocol(self._engine).extract_error(live_exc)
         if live_exc is not None:
             stack_trace = "".join(traceback.format_exception(type(live_exc), live_exc, live_exc.__traceback__))
 
@@ -395,6 +417,7 @@ class Surveyor:
             sql_state=(structured or {}).get("sql_state"),
             suggested_columns=tuple((structured or {}).get("suggested_columns") or ()),
             object_name=(structured or {}).get("object_name"),
+            engine=self._engine,
         )
 
         with self._observability.connect() as cur:
@@ -403,8 +426,9 @@ class Surveyor:
                 INSERT INTO failure_contexts
                     (run_id, blueprint_id, failed_module, error_message,
                      stack_trace, manifest_json, provenance_json, started_at, finished_at,
-                     error_class, root_exception, sql_state, suggested_columns, object_name)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     error_class, root_exception, sql_state, suggested_columns, object_name,
+                     engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (run_id) DO UPDATE SET
                     blueprint_id      = EXCLUDED.blueprint_id,
                     failed_module     = EXCLUDED.failed_module,
@@ -418,7 +442,8 @@ class Surveyor:
                     root_exception    = EXCLUDED.root_exception,
                     sql_state         = EXCLUDED.sql_state,
                     suggested_columns = EXCLUDED.suggested_columns,
-                    object_name       = EXCLUDED.object_name
+                    object_name       = EXCLUDED.object_name,
+                    engine            = EXCLUDED.engine
                 """,
                 [
                     ctx.run_id,
@@ -437,6 +462,7 @@ class Surveyor:
                     ctx.sql_state,
                     json.dumps(list(ctx.suggested_columns)) if ctx.suggested_columns else None,
                     ctx.object_name,
+                    ctx.engine,
                 ],
             )
 
@@ -498,6 +524,10 @@ class Surveyor:
         pipeline failure this heal addressed; ``resolution`` says how it was
         resolved — ``"llm"`` fresh agent patch, ``"cached"`` pending-patch
         reuse, ``"replayed"`` zero-token replay of an archived patch.
+
+        Phase 78: ``engine`` is stamped from this Surveyor's own required
+        constructor arg — the caller never needs to pass it separately, since
+        one Surveyor instance always targets one engine for its lifetime.
         """
         if self._observability is None:
             return
@@ -512,8 +542,9 @@ class Surveyor:
                 INSERT INTO healing_outcomes
                 (id, run_id, parent_run_id, failed_module, failure_category, model, patch_id,
                  confidence, patch_applied, run_success_after_patch, applied_at, prompt_version,
-                 failure_signature, failure_signature_coarse, resolution, model_cascade_position)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 failure_signature, failure_signature_coarse, resolution, model_cascade_position,
+                 engine)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     str(_uuid.uuid4()),
@@ -522,6 +553,7 @@ class Surveyor:
                     _dt.datetime.now(_dt.UTC).isoformat(),
                     prompt_version,
                     failure_signature, failure_signature_coarse, resolution, model_cascade_position,
+                    self._engine,
                 ],
             )
 
@@ -600,8 +632,8 @@ class Surveyor:
                     (id, run_id, attempt_num, error_class, where_field,
                      normalized_message, signature_hash, tokens_in, tokens_out,
                      latency_ms, gate_that_rejected, escalated, stop_reason,
-                     prompt_version, recorded_at, tool_calls_json, chain_link)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_version, recorded_at, tool_calls_json, chain_link, engine)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         str(_uuid.uuid4()),
@@ -621,6 +653,10 @@ class Surveyor:
                         _dt.datetime.now(_dt.UTC).isoformat(),
                         tool_calls_json,
                         chain_link,
+                        # Phase 78 — prefer the signature's own engine (it was
+                        # hashed with one), falling back to this Surveyor's
+                        # engine for signature-less rows (e.g. a clean apply).
+                        (sig.engine if sig else None) or self._engine,
                     ],
                 )
         except Exception:

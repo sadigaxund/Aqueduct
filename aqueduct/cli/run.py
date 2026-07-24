@@ -113,6 +113,7 @@ def compile(
             compiler_compile, bp, blueprint_path=Path(blueprint), execution_date=execution_date,
             deployment_env=getattr(_dep, "env", None),
             deployment_target=getattr(_dep, "target", None),
+            engine=getattr(_dep, "engine", None) or "spark",
         )
     except CompileError as exc:
         click.echo(f"✗ {exc}", err=True)
@@ -327,8 +328,10 @@ def _load_engine_config(
     # 2.0: the duckdb observability path is a routing DIRECTORY only (config
     # load rejects `.db`-suffixed paths) — per-blueprint files always live at
     # `<base>/<blueprint_id>/observability.db`. `--store-dir` bypasses routing.
+    from aqueduct.config import DEFAULT_OBS_ROUTING_ROOT
+
     _using_default_obs_path = False
-    _obs_routing_base = ".aqueduct/observability"
+    _obs_routing_base = DEFAULT_OBS_ROUTING_ROOT
     if store_dir_abs:
         resolved_store_dir = store_dir_abs
     else:
@@ -374,10 +377,17 @@ def _load_engine_config(
     # `⚠ danger` block doesn't interleave the dim `· env/overrides/secrets ·` lines.
 
     # ── Executor resolve ──────────────────────────────────────────────────────
+    # Phase 78 Step 2: get_executor() resolves through the aqueduct.engines
+    # registry (ExecutorProtocol) and raises UnknownEngineError (an
+    # AqueductError) for an unregistered engine — kept alongside
+    # NotImplementedError/ValueError so any pre-registration-seam caller that
+    # still raises those (or a future engine that does) reports the same
+    # clean CONFIG_ERROR exit instead of an unhandled crash.
     try:
+        from aqueduct.errors import AqueductError
         from aqueduct.executor import get_executor
         execute = get_executor(engine)
-    except (NotImplementedError, ValueError) as exc:
+    except (NotImplementedError, ValueError, AqueductError) as exc:
         _err(f"engine error: {exc}")
         _sys.exit(exit_codes.CONFIG_ERROR)
 
@@ -513,6 +523,7 @@ def _do_compile(
             secrets_resolver=cfg.secrets.resolver,
             deployment_env=getattr(cfg.deployment, "env", None),
             deployment_target=getattr(cfg.deployment, "target", None),
+            engine=getattr(cfg.deployment, "engine", "spark"),
             _verbose=verbose,
             _defer=True,  # emit after the run header (tier-2 blueprint warnings)
         )
@@ -847,6 +858,7 @@ def _setup_surveyor(
     surveyor = _Surveyor(
         manifest,
         store_dir=resolved_store_dir,
+        engine=engine,
         webhook_config=resolved_webhook,
         blueprint_path=_P(blueprint_str),
         patches_dir=patches_dir,
@@ -860,15 +872,28 @@ def _setup_surveyor(
     _patch_store = surveyor.patch_store()
 
     # ── Engine session ────────────────────────────────────────────────────────────
+    # Built THROUGH THE PROTOCOL REGISTRY, not a per-engine branch. The old
+    # `if engine == "spark": make_spark_session() else: raise NotImplementedError`
+    # meant the CLI could never reach any engine but Spark regardless of which
+    # handlers existed; `get_protocol(engine).make_session(SessionSpec(...))`
+    # dispatches by contract. An engine registered without a session factory
+    # raises a clean EnginePluginError (naming the engine) via session_factory(),
+    # the AqueductError replacement for the bare NotImplementedError.
+    from aqueduct.executor.protocol import SessionSpec, get_protocol
     merged_spark_config = {**cfg.spark_config, **manifest.spark_config}
-    if engine == "spark":
-        from aqueduct.executor.spark.session import make_spark_session
-        session = make_spark_session(manifest.blueprint_id, merged_spark_config, master_url=master_url, quiet_startup=not verbose)
-    else:
-        raise NotImplementedError(f"Session creation for engine {engine!r} not implemented")
+    _protocol = get_protocol(engine)
+    session = _protocol.session_factory()(
+        SessionSpec(
+            blueprint_id=manifest.blueprint_id,
+            engine_config=merged_spark_config,
+            master_url=master_url,
+            quiet_startup=not verbose,
+        )
+    )
 
     import atexit
-    atexit.register(session.stop)
+    _close_session = _protocol.session_closer()
+    atexit.register(lambda: _close_session(session))
 
     return _SurveyorSetupResult(
         resolved_store_dir=resolved_store_dir,
@@ -1309,7 +1334,7 @@ def run(
                 run_id=iter_run_id, status=hook_status,
                 blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=ctx, session=session,
+                failure_ctx=ctx, session=session, engine=engine,
             )
 
         def _render_module_summary(_result) -> None:
@@ -1448,22 +1473,33 @@ def run(
                     pass  # iteration registration is best-effort; never let persistence block execution
             execute_exc: ExecuteError | None = None
             try:
-                result = execute(
-                    manifest, session,
-                    run_id=iteration_run_id,
-                    store_dir=resolved_store_dir,
-                    checkpoint_root=checkpoint_root_abs,
-                    surveyor=surveyor,
-                    depot=depot,
-                    resume_run_id=resume_run_id if patch_count == 0 else None,
-                    from_module=from_module,
-                    to_module=to_module,
-                    block_full_actions=not cfg.danger.allow_full_probe_actions,
-                    parallel=parallel,
-                    use_observe=cfg.metrics.use_observe,
-                    observability_store=bundle.observability,
-                    sampling=probe_sampling,
+                # Filter Spark-flavoured optional capability kwargs the target
+                # engine can't honour (warns under engine_kwarg_ignored instead
+                # of a TypeError/silent drop — Phase 79) while still calling
+                # THIS process's already-resolved `execute` (get_executor(engine)
+                # from _load_engine_config), not a freshly re-resolved one.
+                from aqueduct.executor.protocol import filter_execute_kwargs
+
+                _exec_kwargs = filter_execute_kwargs(
+                    engine,
+                    dict(
+                        run_id=iteration_run_id,
+                        store_dir=resolved_store_dir,
+                        checkpoint_root=checkpoint_root_abs,
+                        surveyor=surveyor,
+                        depot=depot,
+                        resume_run_id=resume_run_id if patch_count == 0 else None,
+                        from_module=from_module,
+                        to_module=to_module,
+                        block_full_actions=not cfg.danger.allow_full_probe_actions,
+                        parallel=parallel,
+                        use_observe=cfg.metrics.use_observe,
+                        observability_store=bundle.observability,
+                        sampling=probe_sampling,
+                    ),
+                    suppress=cfg.warnings.suppress,
                 )
+                result = execute(manifest, session, **_exec_kwargs)
             except ExecuteError as exc:
                 execute_exc = exc
                 result = ExecutionResult(
@@ -1616,8 +1652,10 @@ def run(
                                 failed_module=failure_ctx.failed_module,
                                 iteration_run_id=iteration_run_id,
                                 blueprint_id=manifest.blueprint_id,
+                                engine=engine,
                                 sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                                 sandbox_master_url=resolved_sandbox_master_url,
+                                warnings_suppress=cfg.warnings.suppress,
                             )
                             if _rg3 is not None and not _rg3_passed:
                                 _replay_ok = False
@@ -1870,8 +1908,10 @@ def run(
                             failed_module=_vc_failed_module,
                             iteration_run_id=_vc_rid,
                             blueprint_id=_vc_bid,
+                            engine=engine,
                             sandbox_mode=_vc_sandbox_mode,
                             sandbox_master_url=resolved_sandbox_master_url,
+                            warnings_suppress=cfg.warnings.suppress,
                         )
                         failures: list[str] = []
                         if _g2 is not None and _g2.status == "fail":
@@ -1906,7 +1946,8 @@ def run(
                     obs_store=_obs_store,
                     patch_store=_patch_store,
                     base_dir=manifest.base_dir,
-                    spark_session=session if engine == "spark" else None,
+                    spark_session=session,
+                    engine=engine,
                     config_path=config_path,
                     store_dir=store_dir,
                 )
@@ -1990,7 +2031,8 @@ def run(
                             manifest=manifest, failure_ctx=link_failure_ctx,
                             obs_store=_obs_store, patch_store=_patch_store,
                             base_dir=manifest.base_dir,
-                            spark_session=session if engine == "spark" else None,
+                            spark_session=session,
+                            engine=engine,
                             config_path=config_path, store_dir=store_dir,
                         )
                     return _prog_generate_patch(
@@ -1998,6 +2040,7 @@ def run(
                             failure_ctx=link_failure_ctx,
                             model=resolved_agent_model,
                             patches_dir=patches_dir,
+                            engine=engine,
                             provider=resolved_agent_provider,
                             base_url=resolved_agent_base_url,
                             api_key=resolved_agent_api_key,
@@ -2148,6 +2191,7 @@ def run(
                     tiers=list(_cascade_tiers),
                     failure_ctx=failure_ctx,
                     patches_dir=patches_dir,
+                    engine=engine,
                     provider=resolved_agent_provider,
                     base_url=resolved_agent_base_url,
                     api_key=resolved_agent_api_key,
@@ -2181,6 +2225,7 @@ def run(
                         failure_ctx=failure_ctx,
                         model=resolved_agent_model,
                         patches_dir=patches_dir,
+                        engine=engine,
                         provider=resolved_agent_provider,
                         base_url=resolved_agent_base_url,
                         api_key=resolved_agent_api_key,
@@ -2446,8 +2491,10 @@ def run(
                         failed_module=failure_ctx.failed_module,
                         iteration_run_id=iteration_run_id,
                         blueprint_id=manifest.blueprint_id,
+                        engine=engine,
                         sandbox_mode=manifest.agent.sandbox_mode if manifest.agent else "sample",
                         sandbox_master_url=resolved_sandbox_master_url,
+                        warnings_suppress=cfg.warnings.suppress,
                     )
                 _block_on_g4 = (
                     manifest.agent.block_on_explain_regression
@@ -2676,7 +2723,7 @@ def run(
                 run_id=run_id, status="failure",
                 blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
                 allow_command_hooks=cfg.danger.allow_command_hooks,
-                failure_ctx=failure_ctx, session=session,
+                failure_ctx=failure_ctx, session=session, engine=engine,
             )
             # Distinguish the three non-success terminal states for downstream
             # orchestrators (Airflow operator, CI runners):
@@ -2688,6 +2735,16 @@ def run(
             if patch_rejected_by_gate:
                 sys.exit(exit_codes.VALIDATION_GATE)
             sys.exit(exit_codes.DATA_OR_RUNTIME)
+
+        # ── Self-heal provenance: green run stamps validated_on (Phase 79) ────────
+        # Best-effort — `stamp_validated_engine` never raises (it logs its own
+        # failures internally) and never affects the run's outcome or exit
+        # code. No-op when the Blueprint carries no `healed_by:` block at all.
+        try:
+            from aqueduct.patch.apply import stamp_validated_engine
+            stamp_validated_engine(Path(blueprint), engine)
+        except Exception:
+            pass  # provenance stamping must never affect a successful run
 
         # ── on_success webhook ────────────────────────────────────────────────────
         if cfg.webhooks.on_success:
@@ -2719,7 +2776,7 @@ def run(
             run_id=run_id, status=result.status,
             blueprint_id=manifest.blueprint_id, blueprint_path=blueprint,
             allow_command_hooks=cfg.danger.allow_command_hooks,
-            session=session,
+            session=session, engine=engine,
         ):
             _style_success("run complete")
     finally:

@@ -29,19 +29,21 @@ class IngressError(AqueductError):
     """Raised when an Ingress module fails to read."""
 
 
-# Maps user-friendly type aliases to Spark simpleString() equivalents.
-_TYPE_ALIASES: dict[str, str] = {
-    "long": "bigint",
-    "integer": "int",
-    "bool": "boolean",
-    "short": "smallint",
-    "byte": "tinyint",
-}
+# schema_hint field types are rendered through the Arrow type hub (Phase 80
+# work package 3) to Spark's own simpleString()-comparable spelling before
+# comparison — replaces the old ``_TYPE_ALIASES`` 5-entry dict. Both sides of
+# the comparison (the live df.schema type and the hint's expected type) go
+# through the SAME normalization, lower-cased, so a spelling neither dict nor
+# hub recognises (a Spark-only construct) still compares consistently via the
+# raw-passthrough fallback (see ``spark.type_render.normalize_type_spelling``).
+def _normalize_type(module_id: str, t: str) -> str:
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.spark.type_render import normalize_type_spelling
 
-
-def _normalize_type(t: str) -> str:
-    lower = t.lower()
-    return _TYPE_ALIASES.get(lower, lower)
+    try:
+        return normalize_type_spelling(str(t)).lower()
+    except EnginePluginError as exc:
+        raise IngressError(f"[{module_id}] schema_hint type {str(t)!r}: {exc}") from exc
 
 
 def read_ingress(module: Module, spark: SparkSession, base_dir: str | None = None) -> DataFrame:
@@ -339,7 +341,7 @@ def _validate_schema_hint(
                     f"Available columns: {sorted(actual)}"
                 )
             expected_type = hint.get("type")
-            if expected_type and actual[name] != _normalize_type(expected_type):
+            if expected_type and actual[name] != _normalize_type(module_id, expected_type):
                 raise IngressError(
                     f"[{module_id}] schema_hint type mismatch on {name!r}: "
                     f"expected {expected_type!r}, actual {actual[name]!r}"
@@ -356,7 +358,7 @@ def _validate_schema_hint(
                     f"Available columns: {sorted(actual)}"
                 )
             expected_type = hint.get("type")
-            if expected_type and actual[name] != _normalize_type(expected_type):
+            if expected_type and actual[name] != _normalize_type(module_id, expected_type):
                 raise IngressError(
                     f"[{module_id}] schema_hint type mismatch on {name!r}: "
                     f"expected {expected_type!r}, actual {actual[name]!r}"
@@ -368,7 +370,7 @@ def _validate_schema_hint(
             if not name or name not in actual:
                 continue  # missing is OK in subset mode
             expected_type = hint.get("type")
-            if expected_type and actual[name] != _normalize_type(expected_type):
+            if expected_type and actual[name] != _normalize_type(module_id, expected_type):
                 raise IngressError(
                     f"[{module_id}] schema_hint type mismatch on {name!r}: "
                     f"expected {expected_type!r}, actual {actual[name]!r}"

@@ -194,6 +194,10 @@ def _build_failure_ctx(scenario: AqScenario) -> tuple[Any, Any, Any]:  # (Failur
         sql_state=structured.get("sql_state"),
         suggested_columns=tuple(str(c) for c in sug),
         object_name=structured.get("object_name"),
+        # Scenario benchmarks simulate a Spark run (no `.aqscenario.yml` field
+        # carries an engine yet); explicit rather than an inherited default so
+        # this reads as a deliberate choice, not the bug this field prevents.
+        engine="spark",
     )
     return ctx, bp, manifest
 
@@ -644,6 +648,7 @@ def run_scenario(
             manifest=scenario_manifest,
             failure_ctx=failure_ctx,
             spark_session=None,  # scenarios never start Spark
+            engine=failure_ctx.engine,
         )
 
     # Call LLM through the unified Phase 34 loop.

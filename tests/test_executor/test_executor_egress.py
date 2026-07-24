@@ -84,6 +84,144 @@ def test_egress_mode_overwrite(spark: SparkSession, tmp_path):
     
     assert spark.read.parquet(path).count() == 10
 
+
+def test_egress_mode_error_raises_on_existing_target(spark: SparkSession, tmp_path):
+    """mode=error (default): writing to an already-populated path raises."""
+    path = str(tmp_path / "err.parquet")
+    spark.range(3).write.parquet(path)
+
+    df = spark.range(5)
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "mode": "error",
+    })
+    with pytest.raises(EgressError, match="write failed"):
+        write_egress(df, module)
+    # Original data untouched
+    assert spark.read.parquet(path).count() == 3
+
+
+def test_egress_mode_error_writes_fresh_target(spark: SparkSession, tmp_path):
+    """mode=error on a target that does not yet exist writes normally."""
+    path = str(tmp_path / "err_fresh.parquet")
+    df = spark.range(4)
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "mode": "error",
+    })
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 4
+
+
+def test_egress_mode_errorifexists_raises_on_existing_target(spark: SparkSession, tmp_path):
+    """mode=errorifexists behaves identically to error — Spark alias."""
+    path = str(tmp_path / "eie.parquet")
+    spark.range(2).write.parquet(path)
+
+    df = spark.range(1)
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "mode": "errorifexists",
+    })
+    with pytest.raises(EgressError, match="write failed"):
+        write_egress(df, module)
+    assert spark.read.parquet(path).count() == 2
+
+
+def test_egress_mode_ignore_is_silent_noop_on_existing_target(spark: SparkSession, tmp_path):
+    """mode=ignore: an already-populated target is left untouched, no error."""
+    path = str(tmp_path / "ign.parquet")
+    spark.range(3).write.parquet(path)
+
+    df = spark.range(99)  # would overwrite/append if any other mode were used
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "mode": "ignore",
+    })
+    write_egress(df, module)  # must not raise
+    # Original 3 rows survive untouched — proves the write was skipped
+    assert spark.read.parquet(path).count() == 3
+
+
+def test_egress_mode_ignore_writes_fresh_target(spark: SparkSession, tmp_path):
+    """mode=ignore on a target that does not yet exist writes normally."""
+    path = str(tmp_path / "ign_fresh.parquet")
+    df = spark.range(6)
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "mode": "ignore",
+    })
+    write_egress(df, module)
+    assert spark.read.parquet(path).count() == 6
+
+
+def test_egress_format_custom_dispatches_to_registered_datasource(spark: SparkSession, tmp_path, monkeypatch):
+    """format: custom + class: imports and registers a real Spark 4.0+ Python
+    DataSource (exercised for real, not mocked), then reaches the registered
+    class's own name() and the configured write mode via DataFrameWriter.
+
+    This is a DISPATCH-LEVEL proof, not a full data round trip: the final
+    DataFrameWriter.save() actually executing a Python DataSource write
+    requires pyarrow for worker serialization, which is not installed in
+    this environment, so .save() is stubbed to a recorder. Import,
+    registration, and format/mode wiring up to the save() call are all real.
+    """
+    pytest.importorskip("pyspark.sql.datasource", reason="requires Spark 4.0+")
+
+    (tmp_path / "custom_egress_ds.py").write_text(
+        "from pyspark.sql.datasource import DataSource, DataSourceWriter, WriterCommitMessage\n\n"
+        "class _Writer(DataSourceWriter):\n"
+        "    def __init__(self, options):\n"
+        "        self.options = options\n"
+        "    def write(self, iterator):\n"
+        "        return WriterCommitMessage()\n\n"
+        "class CustomEgressDS(DataSource):\n"
+        "    @classmethod\n"
+        "    def name(cls):\n"
+        "        return 'aq_test_custom_egress'\n"
+        "    def schema(self):\n"
+        "        return 'id bigint'\n"
+        "    def writer(self, schema, overwrite):\n"
+        "        return _Writer(self.options)\n"
+    )
+
+    import aqueduct.executor.spark.custom_source as custom_source_mod
+    real_register = custom_source_mod.register_custom_source
+    calls: list[tuple[str, str]] = []
+
+    def spy_register(spark_, class_path, base_dir=None):
+        name = real_register(spark_, class_path, base_dir)
+        calls.append((class_path, name))
+        return name
+
+    monkeypatch.setattr(custom_source_mod, "register_custom_source", spy_register)
+
+    from pyspark.sql.readwriter import DataFrameWriter
+    captured: dict = {}
+
+    def fake_save(self, path=None):
+        captured["called"] = True
+        captured["path"] = path
+
+    monkeypatch.setattr(DataFrameWriter, "save", fake_save)
+
+    df = spark.range(3)
+    module = Module(id="m1", type="Egress", label="M1", config={
+        "format": "custom",
+        "class": "custom_egress_ds.CustomEgressDS",
+        "mode": "overwrite",
+    })
+    write_egress(df, module, base_dir=str(tmp_path))
+
+    assert calls == [("custom_egress_ds.CustomEgressDS", "aq_test_custom_egress")]
+    assert captured.get("called") is True
+
+
 class MockDepot:
     def __init__(self):
         self.puts = {}
@@ -312,6 +450,27 @@ def test_on_new_columns_allow_writes(spark: SparkSession, tmp_path):
                     config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "allow"})
     write_egress(df, module)
     assert spark.read.parquet(path).count() == 2
+
+
+def test_on_new_columns_alert_logs_and_writes(spark: SparkSession, tmp_path, caplog):
+    """on_new_columns=alert: logs a warning naming the drifted column(s) and
+    still absorbs them (mergeSchema), unlike fail which raises."""
+    import logging
+
+    path = str(tmp_path / "t")
+    _seed_target(spark, path)
+    df = spark.createDataFrame([(2, "b", "x")], ["id", "v", "extra"])
+    module = Module(id="m1", type="Egress", label="M1",
+                    config={"format": "parquet", "path": path, "mode": "append", "on_new_columns": "alert"})
+
+    with caplog.at_level(logging.WARNING, logger="aqueduct.executor.spark.egress"):
+        write_egress(df, module)  # must NOT raise — alert absorbs, it doesn't block
+
+    assert any("on_new_columns=alert" in rec.message and "extra" in rec.message for rec in caplog.records)
+    # New column absorbed via mergeSchema — write proceeded
+    written = spark.read.option("mergeSchema", "true").parquet(path)
+    assert written.count() == 2
+    assert "extra" in written.columns
 
 
 def test_on_new_columns_fail_noop_on_first_write(spark: SparkSession, tmp_path):

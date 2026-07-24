@@ -37,6 +37,16 @@ from aqueduct.parser.schema import CascadeTierSchema
 
 DEFAULT_OBS_DB_FILENAME: str = "observability.db"
 
+# The default observability ROUTING directory (not a `.db` file — config load
+# rejects `.db`-suffixed `stores.observability.path` values; per-blueprint
+# files always live at `<this>/<blueprint_id>/observability.db`). Single
+# source of truth for the three call sites that previously each hardcoded
+# this literal independently: `aqueduct/cli/run.py` (`_obs_routing_base`),
+# `aqueduct/stores/queries.py` (`_DEFAULT_OBS_ROOT`), and
+# `aqueduct/stores/read.py` (`_OBS_ROUTING_ROOT`). Pure DRY — no behavior
+# change; the value is unchanged.
+DEFAULT_OBS_ROUTING_ROOT: str = ".aqueduct/observability"
+
 # Matches any RFC3986-shaped URI scheme prefix (s3://, s3a://, gs://, hdfs://,
 # abfss://, postgresql://, ...). Used to reject remote URIs on LOCAL-PATH-ONLY
 # config fields (e.g. `checkpoint_root`) with an actionable error instead of
@@ -98,9 +108,13 @@ class DatabricksDeployConfig(BaseModel):
 class DeploymentConfig(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    engine: Literal["spark", "flink"] = Field(
+    engine: str = Field(
         default="spark",
-        description="Execution engine.  Currently supported: spark.  Planned: flink.",
+        description=(
+            "Execution engine. Validated against the engines registered "
+            "through the aqueduct.engines entry-point group (see "
+            "docs/specs.md §10.9) — today just spark."
+        ),
     )
     target: Literal[
         "local", "standalone", "yarn", "kubernetes", "databricks", "emr", "dataproc"
@@ -119,17 +133,55 @@ class DeploymentConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_target_master_url(self) -> DeploymentConfig:
-        """Enforce target ↔ master_url consistency for in-cluster Spark targets.
+        """Validate ``engine`` and enforce target ↔ master_url consistency.
+
+        ``engine`` is checked against the engines actually registered through
+        the ``aqueduct.engines`` entry-point group (Phase 78 Step 1,
+        ``aqueduct/executor/capabilities.py::load_engines``) rather than a
+        fixed ``Literal`` — a new engine (e.g. DuckDB) becomes valid the
+        moment it ships its entry point, with no edit here. An unregistered
+        name (a typo, or an engine whose extra isn't installed) is a
+        ``ConfigError`` naming the registered engines, not a bare pydantic
+        ``ValidationError``.
+
+        The EMPTY-registry state gets its own message. Engine validation is
+        fail-closed, so a stale install (one whose dist-info predates the
+        entry-point declaration) would otherwise hard-fail every
+        ``aqueduct.yml`` load with an alarming, misleading "Registered
+        engines: []". That is a packaging problem, not a config problem, and
+        says so: reinstall.
 
         Remote-submit targets (databricks / emr / dataproc) are rejected with
-        a forward pointer to Phase 64.
+        a forward pointer to Phase 64. Target/master_url consistency is only
+        meaningful for the spark engine today.
         """
-        if self.engine != "spark":
-            if self.engine == "flink":
+        from aqueduct.executor.capabilities import (
+            CAPABILITY_REGISTRY,
+            NO_ENGINES_HINT,
+            load_engines,
+        )
+
+        # EnginePluginError (a broken third-party engine plugin) and
+        # CapabilityDeclarationError (an engine's capabilities.yml is
+        # incomplete/invalid) are both AqueductErrors and deliberately
+        # propagate as-is — each names its own culprit (the failing entry
+        # point / the undeclared leaves) and carries its own fix, which is
+        # more actionable than anything this layer could add. They are
+        # distinguished by TYPE, never by message text.
+        load_engines()
+        if self.engine not in CAPABILITY_REGISTRY:
+            registered = sorted(CAPABILITY_REGISTRY)
+            if not registered:
                 raise ConfigError(
-                    "engine: flink is not yet supported (see docs/roadmap.md). "
-                    "Use engine: spark."
+                    f"cannot validate deployment.engine={self.engine!r}: {NO_ENGINES_HINT}"
                 )
+            raise ConfigError(
+                f"deployment.engine={self.engine!r} is not a registered engine. "
+                f"Registered engines: {registered}. Install the "
+                "matching extra (e.g. aqueduct-core[spark]) or fix the typo."
+            )
+
+        if self.engine != "spark":
             return self
 
         target = self.target
@@ -991,6 +1043,20 @@ class WarningsConfig(BaseModel):
             "Aqueduct warnings."
         ),
     )
+    # Phase 79 — the escalation counterpart to `suppress`: rule_ids listed
+    # here are promoted from warning to a hard CompileError instead of being
+    # printed. Default empty = no behaviour change for anyone. Introduced for
+    # `cross_engine_heal` (a DuckDB-shaped healed patch compiling for Spark,
+    # or vice versa) but is a general rule_id set — any future compile
+    # warning can opt a deployment into hard-failing on it.
+    strict: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of `rule_id` strings to promote from warning to a hard "
+            "CompileError. Default empty (warn-only, current behaviour). "
+            "Symmetric with `suppress` — same rule_id vocabulary."
+        ),
+    )
 
 
 class LineageConfig(BaseModel):
@@ -1145,6 +1211,73 @@ def _validate_store_backends(stores_cfg: StoresConfig) -> None:
                     f"requires the {root_pkg!r} package, which is not installed.\n"
                     f"Install it with:  {install_hint}"
                 )
+
+
+def _warn_ignored_config_keys(cfg: AqueductConfig) -> None:
+    """Config-leaf governance (Phase 78 Step 3) — warn on keys the target
+    engine ignores.
+
+    Runs at CONFIG RESOLUTION, once ``cfg.deployment.engine`` is known and
+    already validated as a registered engine (``DeploymentConfig.
+    _validate_target_master_url``, above). Walks only the leaves the user
+    EXPLICITLY set (``config_leaves.explicitly_set_config_leaves`` —
+    untouched defaults never warn) and emits the SAME suppressible
+    ``engine_key_ignored`` rule id the compile-time blueprint gate uses
+    (``aqueduct/compiler/capability_check.py``), through the same
+    ``aqueduct.warnings.emit`` machinery.
+
+    Deliberately WARN, never ERROR — unlike the blueprint gate, where
+    UNSUPPORTED is a hard CompileError. A config key that means nothing on
+    the current engine must not break loading ``aqueduct.yml``: the same
+    file has to stay valid across engines (a user's test overrides, or one
+    shared config used by multiple deployment profiles, must not hard-fail
+    just because one engine ignores one key). Both non-SUPPORTED verdicts
+    (``IGNORED_WITH_WARNING`` and ``UNSUPPORTED``) are treated the same way
+    here — a config leaf has no compile-time "this can never work" state,
+    only "this engine does nothing with it".
+
+    "Warn, never error" governs the VERDICT, not the machinery: an ignored key
+    warns instead of raising, but a genuine bug in this code path (an
+    AttributeError from a walker change, say) must still surface. Only
+    ``UnknownEngineError`` is swallowed, and only because it is already
+    impossible here — ``DeploymentConfig`` validated ``deployment.engine``
+    against the same registry before this runs, so the sole way to reach it is
+    a registry mutated between validation and here (a test double). A blanket
+    ``except Exception`` would hide real defects in ``get_capabilities()`` and
+    the leaf walkers behind a silently-absent warning, which is the same class
+    of silent no-op this whole gate exists to eliminate.
+
+    Lazy imports (not module-level) to avoid a circular import: ``aqueduct.
+    executor.config_leaves`` imports ``aqueduct.config`` at module scope to
+    introspect ``AqueductConfig``, so this module cannot import it back at
+    module scope. Same precedent as ``DeploymentConfig.
+    _validate_target_master_url``'s lazy ``aqueduct.executor.capabilities``
+    import.
+    """
+    from aqueduct.compiler.capability_check import RULE_ID_IGNORED
+    from aqueduct.errors import UnknownEngineError
+    from aqueduct.executor.capabilities import Support, get_capabilities
+    from aqueduct.executor.config_leaves import explicitly_set_config_leaves
+    from aqueduct.warnings import emit as _emit
+
+    try:
+        caps = get_capabilities(cfg.deployment.engine)
+    except UnknownEngineError:
+        return  # unreachable via load_config() — see docstring
+
+    suppress = set(cfg.warnings.suppress)
+    for leaf_id in sorted(explicitly_set_config_leaves(cfg)):
+        cap = caps.verdict(leaf_id)
+        if cap.support == Support.SUPPORTED:
+            continue
+        hint = f" {cap.hint}" if cap.hint else ""
+        _emit(
+            RULE_ID_IGNORED,
+            f"aqueduct.yml sets {leaf_id!r}, which engine "
+            f"{cfg.deployment.engine!r} ignores (accepted but has no "
+            f"effect).{hint}",
+            suppress=suppress,
+        )
 
 
 def _validate_secrets_backend(secrets_cfg: SecretsConfig) -> None:
@@ -1367,6 +1500,7 @@ def load_config(path: Path | None = None) -> AqueductConfig:
     # case (no secrets) at one YAML parse and one validation.
     if not _AQ_SECRET_RE.search(pass1_text):
         _validate_store_backends(cfg_pass1.stores)
+        _warn_ignored_config_keys(cfg_pass1)
         return cfg_pass1
 
     pass2_text, missing_secrets = _expand_secrets(pass1_text, cfg_pass1.secrets, base_dir=str(_cfg_dir))
@@ -1395,4 +1529,5 @@ def load_config(path: Path | None = None) -> AqueductConfig:
             raise ConfigError(_format_config_error(resolved, exc)) from exc
 
     _validate_store_backends(cfg.stores)
+    _warn_ignored_config_keys(cfg)
     return cfg

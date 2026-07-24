@@ -24,7 +24,7 @@ def manifest():
 
 def test_aggressive_iteration_recording(manifest, tmp_path):
     """Verify aggressive heal records multiple iterations with correct parent_run_id relationship."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     
     outer_run_id = "outer-run"
     surveyor.start(outer_run_id)
@@ -62,7 +62,7 @@ def test_aggressive_iteration_recording(manifest, tmp_path):
 
 def test_surveyor_record_on_conflict(manifest, tmp_path):
     """Verify record() uses ON CONFLICT DO UPDATE to update the status/finished_at cleanly."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "conflict-run"
     surveyor.start(run_id)
     
@@ -84,7 +84,7 @@ def test_surveyor_record_on_conflict(manifest, tmp_path):
 
 def test_cross_iteration_join(manifest, tmp_path):
     """Verify that COALESCE(parent_run_id, run_id) returns all iterations of a heal."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     outer_run_id = "outer-run"
     surveyor.start(outer_run_id)
     
@@ -107,7 +107,7 @@ def test_cross_iteration_join(manifest, tmp_path):
 
 def test_heal_attempts_no_duplicate_on_stop_reason(manifest, tmp_path):
     """Verify heal_attempts uses update_heal_attempt_stop_reason to modify the row in-place."""
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-attempts")
     
     # 1. Record an attempt (initially no stop_reason)
@@ -121,6 +121,7 @@ def test_heal_attempts_no_duplicate_on_stop_reason(manifest, tmp_path):
     mock_record.signature = MagicMock(error_class="ErrClass", hash="h1")
     mock_record.signature.where = "src"
     mock_record.signature.normalized_message = "normalized msg"
+    mock_record.signature.engine = "spark"
     
     surveyor.record_heal_attempt(run_id="run-attempts", attempt_record=mock_record, stop_reason=None)
     
@@ -170,7 +171,7 @@ def test_heal_attempts_column_migration_on_existing_db(manifest, tmp_path):
     )
     conn.close()
 
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-migration")
 
     mock_record = MagicMock()
@@ -183,6 +184,7 @@ def test_heal_attempts_column_migration_on_existing_db(manifest, tmp_path):
     mock_record.signature = MagicMock(error_class="ErrClass", hash="h1")
     mock_record.signature.where = "src"
     mock_record.signature.normalized_message = "normalized msg"
+    mock_record.signature.engine = "spark"
     mock_record._aq_tool_calls = [{"name": "get_source_schema", "duration_ms": 5}]
 
     surveyor.record_heal_attempt(run_id="run-migration", attempt_record=mock_record, stop_reason=None)
@@ -232,7 +234,7 @@ def test_heal_attempts_chain_link_column_migration_on_existing_db(manifest, tmp_
     )
     conn.close()
 
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-chain-migration")
 
     mock_record = MagicMock()
@@ -245,6 +247,7 @@ def test_heal_attempts_chain_link_column_migration_on_existing_db(manifest, tmp_
     mock_record.signature = MagicMock(error_class="ErrClass", hash="h1")
     mock_record.signature.where = "src"
     mock_record.signature.normalized_message = "normalized msg"
+    mock_record.signature.engine = "spark"
     mock_record._aq_tool_calls = []
     mock_record.chain_link = 2
 

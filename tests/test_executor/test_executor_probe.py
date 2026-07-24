@@ -196,7 +196,7 @@ def test_evaluate_regulator_passed(tmp_path):
     manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run_1")
     
     assert surveyor.evaluate_regulator("r1") is True
@@ -216,7 +216,7 @@ def test_evaluate_regulator_failed(tmp_path):
     manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run_1")
     
     assert surveyor.evaluate_regulator("r1") is False
@@ -231,7 +231,7 @@ def test_evaluate_regulator_no_signal_defaults_open(tmp_path):
     manifest.blueprint_id = "test_bp"
     manifest.edges = [MagicMock(from_id="p1", to_id="r1", port="signal")]
     
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run_1")
     
     # No signal with 'passed' key -> defaults to True
@@ -262,7 +262,7 @@ def test_regulator_timeout_opens_mid_poll(spark, tmp_path):
         spark_config={},
     )
     
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "run_poll_success"
     surveyor.start(run_id)
     
@@ -334,7 +334,7 @@ def test_regulator_timeout_reaches_limit_aborts(spark, tmp_path):
         spark_config={},
     )
     
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "run_poll_abort"
     surveyor.start(run_id)
     
@@ -409,7 +409,7 @@ def test_parallel_multi_tree_probe_integration(spark, tmp_path):
         spark_config={},
     )
 
-    surveyor = Surveyor(manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest, store_dir=tmp_path, engine="spark")
     run_id = "run_parallel_multi_tree"
     surveyor.start(run_id)
 

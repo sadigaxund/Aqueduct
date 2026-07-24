@@ -352,7 +352,7 @@ def test_surveyor_fresh_db_has_prompt_version(tmp_path):
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = _make_manifest()
-    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-fresh")
     surveyor.stop()
 
@@ -378,11 +378,11 @@ def test_surveyor_migration_idempotent(tmp_path):
 
     manifest = _make_manifest()
     # First start
-    s1 = Surveyor(manifest=manifest, store_dir=tmp_path)
+    s1 = Surveyor(manifest=manifest, store_dir=tmp_path, engine="spark")
     s1.start("run-first")
     s1.stop()
     # Second start — must not raise
-    s2 = Surveyor(manifest=manifest, store_dir=tmp_path)
+    s2 = Surveyor(manifest=manifest, store_dir=tmp_path, engine="spark")
     s2.start("run-second")
     s2.stop()
 
@@ -402,7 +402,7 @@ def test_record_healing_outcome_default_prompt_version(tmp_path):
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = _make_manifest()
-    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-abc")
 
     surveyor.record_healing_outcome(
@@ -434,7 +434,7 @@ def test_record_healing_outcome_explicit_prompt_version(tmp_path):
     from aqueduct.surveyor.surveyor import Surveyor
 
     manifest = _make_manifest()
-    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path)
+    surveyor = Surveyor(manifest=manifest, store_dir=tmp_path, engine="spark")
     surveyor.start("run-xyz")
 
     surveyor.record_healing_outcome(

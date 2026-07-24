@@ -24,6 +24,7 @@ def build_synthetic_failure_context(
     module_id: str,
     drift: DriftResult,
     manifest_json: str,
+    engine: str,
     blueprint_source_yaml: str | None = None,
 ) -> FailureContext:
     """Construct an in-memory FailureContext describing a predicted drift failure.
@@ -36,6 +37,11 @@ def build_synthetic_failure_context(
     healing prompt's source section shows that e.g. ``header: true`` is an
     authored literal — without it the LLM may mistake a real source change for a
     misconfigured Ingress and "fix" the format/header (ISSUE-037).
+
+    ``engine`` must be the deployment's actual execution engine (e.g.
+    ``cfg.deployment.engine``) — the caller MUST NOT let this default to
+    "spark", since the whole point of stamping engine on FailureContext is to
+    stop DuckDB deployments from being mislabelled as Spark.
     """
     now = datetime.now(tz=UTC).isoformat()
     breaking = drift.breaking
@@ -59,4 +65,5 @@ def build_synthetic_failure_context(
         object_name=object_name,
         suggested_columns=drift.added_columns,
         blueprint_source_yaml=blueprint_source_yaml,
+        engine=engine,
     )

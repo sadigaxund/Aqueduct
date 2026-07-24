@@ -43,12 +43,24 @@ CREATE TABLE IF NOT EXISTS patch_index (
     source             VARCHAR,                 -- llm | replay
     prompt_version     VARCHAR,
     created_at         VARCHAR NOT NULL,
-    updated_at         VARCHAR NOT NULL
+    updated_at         VARCHAR NOT NULL,
+    -- Phase 78 — execution engine this patch was healed against ("spark",
+    -- "duckdb", ...). The signature already scopes lookups by engine (it's
+    -- folded into the hash — see agent/signature.py), so this column exists
+    -- for auditability ("show me all duckdb heals"), not for lookup filtering.
+    engine             VARCHAR
 );
 CREATE INDEX IF NOT EXISTS idx_patch_index_sig ON patch_index (signature, status);
 CREATE INDEX IF NOT EXISTS idx_patch_index_sig_created
     ON patch_index (signature, status, created_at);
 """
+
+# Schema-evolution rule (see aqueduct/surveyor/ddl.py's comment for the full
+# rationale): CREATE TABLE IF NOT EXISTS never adds columns to an existing
+# table, so a new column needs an idempotent ALTER migration too.
+PATCH_INDEX_MIGRATIONS: tuple[str, ...] = (
+    "ALTER TABLE patch_index ADD COLUMN IF NOT EXISTS engine VARCHAR",
+)
 
 
 def _now() -> str:
@@ -73,11 +85,16 @@ class PatchIndexRow:
     ops: list[str] = field(default_factory=list)
     source: str = "llm"
     prompt_version: str = ""
+    engine: str = ""
 
 
 def ensure_schema(cur: RelationalCursor) -> None:
     """Create the ``patch_index`` table + index if absent (idempotent)."""
     cur.execute(PATCH_INDEX_DDL)
+    # In-place column migration for pre-existing databases — see the
+    # schema-evolution rule above.
+    for _migration in PATCH_INDEX_MIGRATIONS:
+        cur.execute(_migration)
 
 
 def upsert(cur: RelationalCursor, row: PatchIndexRow) -> None:
@@ -92,8 +109,8 @@ def upsert(cur: RelationalCursor, row: PatchIndexRow) -> None:
         INSERT INTO patch_index
             (patch_id, blueprint_id, run_id, status, object_key, signature,
              signature_coarse, error_class, where_field, normalized_message,
-             rationale, ops, source, prompt_version, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             rationale, ops, source, prompt_version, created_at, updated_at, engine)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (patch_id) DO UPDATE SET
             status             = EXCLUDED.status,
             object_key         = EXCLUDED.object_key,
@@ -106,13 +123,14 @@ def upsert(cur: RelationalCursor, row: PatchIndexRow) -> None:
             ops                = EXCLUDED.ops,
             source             = EXCLUDED.source,
             prompt_version     = EXCLUDED.prompt_version,
-            updated_at         = EXCLUDED.updated_at
+            updated_at         = EXCLUDED.updated_at,
+            engine             = EXCLUDED.engine
         """,
         [
             row.patch_id, row.blueprint_id, row.run_id, row.status, row.object_key,
             row.signature, row.signature_coarse, row.error_class, row.where_field,
             row.normalized_message, row.rationale, _json.dumps(list(row.ops)),
-            row.source, row.prompt_version, now, now,
+            row.source, row.prompt_version, now, now, row.engine,
         ],
     )
 
@@ -153,6 +171,7 @@ _SELECT_COLS = [
     "patch_id", "blueprint_id", "run_id", "status", "object_key", "signature",
     "signature_coarse", "error_class", "where_field", "normalized_message",
     "rationale", "ops", "source", "prompt_version", "created_at", "updated_at",
+    "engine",
 ]
 _SELECT = ", ".join(_SELECT_COLS)
 

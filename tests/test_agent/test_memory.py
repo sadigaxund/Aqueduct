@@ -21,28 +21,14 @@ pytestmark = pytest.mark.unit
 
 
 def _make_store(db_path: Path) -> DuckDBObservabilityStore:
+    from aqueduct.patch.index import ensure_schema
+
     s = DuckDBObservabilityStore(db_path)
+    # Real schema (incl. migrations, e.g. the Phase 78 `engine` column) —
+    # single source of truth instead of a hand-duplicated CREATE TABLE that
+    # silently drifts from aqueduct/patch/index.py's DDL.
     with s.connect() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS patch_index (
-                patch_id           VARCHAR PRIMARY KEY,
-                blueprint_id       VARCHAR,
-                run_id             VARCHAR,
-                status             VARCHAR NOT NULL,
-                object_key         VARCHAR NOT NULL,
-                signature          VARCHAR,
-                signature_coarse   VARCHAR,
-                error_class        VARCHAR,
-                where_field        VARCHAR,
-                normalized_message VARCHAR,
-                rationale          VARCHAR,
-                ops                JSON,
-                source             VARCHAR,
-                prompt_version     VARCHAR,
-                created_at         VARCHAR NOT NULL,
-                updated_at         VARCHAR NOT NULL
-            )
-        """)
+        ensure_schema(cur)
     return s
 
 
@@ -53,6 +39,7 @@ def _stamp(store, **kw):
         signature="abc123", signature_coarse="abc12345",
         error_class="E1", where_field="m1", normalized_message="boom",
         rationale="fix", ops='[{"op": "set_module_config_key"}]',
+        engine="spark",
     )
     defaults.update(kw)
     now = "2025-01-01T00:00:00"
@@ -62,14 +49,14 @@ def _stamp(store, **kw):
             "(patch_id, object_key, blueprint_id, status, source, "
             " signature, signature_coarse, "
             " error_class, where_field, normalized_message, rationale, ops, "
-            " created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " created_at, updated_at, engine) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             [defaults.get(k, "") for k in (
                 "patch_id", "object_key", "blueprint_id", "status", "source",
                 "signature", "signature_coarse",
                 "error_class", "where_field", "normalized_message",
                 "rationale", "ops",
-            )] + [defaults.get("created_at", now), now],
+            )] + [defaults.get("created_at", now), now, defaults.get("engine", "spark")],
         )
 
 

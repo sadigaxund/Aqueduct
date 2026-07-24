@@ -144,6 +144,9 @@ def heal(
     resolved_timeout = eng.timeout
     resolved_max_reprompts = eng.max_reprompts
     resolved_engine_prompt_context = eng.prompt_context
+    # Phase 78 Step 2 — the execution engine this heal targets; selects the
+    # engine's PromptRules pack composed into the healing system prompt.
+    resolved_engine = getattr(cfg.deployment, "engine", "spark") or "spark"
     # Phase 75 — `aqueduct heal` has no Blueprint-level agent: block to merge
     # (it works from the observability store's failure_contexts, not a live
     # Blueprint parse), so mode/tool-use resolve from the engine default only.
@@ -184,7 +187,8 @@ def heal(
             """
             SELECT run_id, blueprint_id, failed_module, error_message,
                    stack_trace, manifest_json, provenance_json,
-                   CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR)
+                   CAST(started_at AS VARCHAR), CAST(finished_at AS VARCHAR),
+                   engine
             FROM failure_contexts WHERE run_id = ?
             """,
             [run_id],
@@ -202,6 +206,7 @@ def heal(
     (
         fc_run_id, blueprint_id, failed_module, error_message,
         stack_trace, manifest_json_raw, provenance_json_raw, started_at, finished_at,
+        recorded_engine,
     ) = fc_row
 
     # Phase 39/53 — materialize blob-externalised columns transparently.
@@ -235,6 +240,10 @@ def heal(
         provenance_json=_prov_str or None,
         started_at=started_at,
         finished_at=finished_at,
+        # Phase 78 — prefer the engine persisted on the original failure (post
+        # migration); fall back to this heal's configured engine for rows
+        # recorded before the `engine` column existed.
+        engine=recorded_engine or resolved_engine,
     )
 
     # Extract guardrails and allow_defer from the persisted manifest so
@@ -252,7 +261,10 @@ def heal(
         _guardrails_for_prompt = None
 
     if print_prompt:
-        prompt = build_prompt(failure_ctx, patches_path, resolved_engine_prompt_context, guardrails=_guardrails_for_prompt)
+        prompt = build_prompt(
+            failure_ctx, patches_path, resolved_engine_prompt_context,
+            guardrails=_guardrails_for_prompt, engine=resolved_engine,
+        )
         _print_prompt(prompt, print_prompt)
         return
 
@@ -304,6 +316,7 @@ def heal(
             patch_store=None,
             base_dir=_toolbox_manifest.base_dir,
             spark_session=None,
+            engine=resolved_engine,
             config_path=config_path,
             store_dir=store_dir,
         )
@@ -331,6 +344,7 @@ def heal(
             failure_ctx=failure_ctx,
             model=resolved_model,
             patches_dir=patches_path,
+            engine=resolved_engine,
             provider=resolved_provider or "anthropic",
             base_url=resolved_base_url,
             api_key=resolved_api_key,

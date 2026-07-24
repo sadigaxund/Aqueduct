@@ -113,6 +113,7 @@ plain `UPDATE` and silently dropped iterations 1..N).
 | `sql_state`         | VARCHAR             | ANSI SQLSTATE from `PySparkException.getSqlState()` |
 | `suggested_columns` | JSON                | Parsed list of backtick-quoted suggestions from Spark's "Did you mean …?" segment |
 | `object_name`       | VARCHAR             | Offending column / table / object |
+| `engine`            | VARCHAR             | Execution engine the failure occurred on (`spark` \| `duckdb`). Stamped by `Surveyor.record()` from its required `engine` constructor arg |
 
 The structured fields populate from `_extract_structured_error()`:
 best-effort, lazy-imported. When extraction returned None the row carries
@@ -142,8 +143,9 @@ One row per LLM turn inside the unified reprompt loop, finer-grained than
 | `recorded_at`       | VARCHAR NOT NULL    | ISO-8601 |
 | `tool_calls_json`   | VARCHAR             | Agentic mode only (`agent.mode: agentic`): JSON array of `{name, args_summary, duration_ms, result_preview}` for every tool call made during this attempt; NULL/absent in oneshot mode |
 | `chain_link`        | INTEGER             | Progressive healing only (`agent.progressive: true`): 1-based link index within the chain this attempt belongs to; NULL for a normal (non-progressive) heal attempt. Orthogonal to `attempt_num`, which still counts reprompts *within* one link |
+| `engine`            | VARCHAR             | Execution engine this attempt targeted (`spark` \| `duckdb`) |
 
-Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed.
+Columns added to `heal_attempts` after a release are migrated in place: Surveyor init runs idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` statements (see `_HEAL_ATTEMPTS_MIGRATIONS` in `aqueduct/surveyor/ddl.py`, which also carries `tool_calls_json`, `chain_link`, and `engine`) right after the `CREATE TABLE IF NOT EXISTS`, so a pre-upgrade observability database gains new columns on the next run, no manual migration needed. `failure_contexts` and `healing_outcomes` gained `engine` the same way, via `_FAILURE_CONTEXTS_MIGRATIONS` and `_HEALING_OUTCOMES_MIGRATIONS` in the same file; `patch_index` gained it via `PATCH_INDEX_MIGRATIONS` in `aqueduct/patch/index.py`.
 
 `stop_reason` vocabulary: `solved`, `exhausted_attempts`,
 `budget_seconds_exceeded`, `budget_tokens_exceeded`, `stuck_signature`,
@@ -176,6 +178,7 @@ without calling the LLM at all.
 | `failure_signature_coarse`| VARCHAR | coarse signature hash (error class + module, no message), enables per-signature-family analytics (which families are solved by which cascade tier) without joining `patch_index` |
 | `resolution`              | VARCHAR | `llm` (fresh agent patch), `cached` (pending-patch reuse, zero tokens), `replayed` (archived patch re-validated through gates, zero tokens). NULL on legacy rows, treat as `llm` (`COALESCE(resolution,'llm')`) |
 | `model_cascade_position`  | INTEGER | 0-based cascade tier index of the producing model. NULL outside cascade or when no LLM ran. `model` records the producing tier's model (previously the top-level `agent.model` even under cascade) |
+| `engine`                  | VARCHAR | Execution engine this heal targeted (`spark` \| `duckdb`) |
 
 Zero-token heal coverage: `aqueduct runs --heal-coverage` aggregates
 `resolution` counts across discovered observability DBs.
@@ -203,7 +206,10 @@ metadata (`signature`, `signature_coarse`, `error_class`, `where_field`,
 pending-reuse, coaching retrieval, and prompt history **without reading a body**
 , only zero-token replay fetches the body. Backend-blind: the same SQL serves
 local-disk, s3, gcs, and adls patch stores, replacing the former `os.scandir`
-over the `patches/` directory.
+over the `patches/` directory. `engine` (VARCHAR) records the execution engine
+this patch was healed against (`spark` \| `duckdb`); the signature already
+scopes lookups by engine (it is folded into the hash), so this column is for
+auditability, not for lookup filtering.
 
 #### `signal_overrides`
 
@@ -502,6 +508,23 @@ fixed the pipeline.
 **What you learn** `stop_reason='solved'` means a parseable PatchSpec was
 returned, **not** that the patched pipeline succeeded.
 **What to do next** Cross-check `run_success_after_patch` for the truth.
+
+**When** comparing heal outcomes across execution engines, for example after
+adding DuckDB support alongside Spark.
+**What you learn** Whether one engine is producing more failures, more
+rejected attempts, or a lower success rate than the other.
+**What to do next** If `duckdb` shows a materially lower
+`run_success_after_patch` rate, check `failure_category` and
+`gate_that_rejected` for that engine specifically before assuming the model
+itself regressed.
+
+```sql
+SELECT engine,
+       COUNT(*) AS heals,
+       SUM(CASE WHEN run_success_after_patch THEN 1 ELSE 0 END) AS succeeded
+FROM healing_outcomes
+GROUP BY engine;
+```
 
 **When** a heal ran with `agent.progressive: true` and you want to see how
 many links the chain walked and which modules it diagnosed, in order.

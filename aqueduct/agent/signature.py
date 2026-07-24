@@ -93,6 +93,13 @@ class ErrorSignature:
     where: str
     normalized_message: str
     hash: str
+    # The execution engine this failure occurred on (e.g. "spark", "duckdb").
+    # Folded into `hash` by make_signature() — a shared-core failure (a plain
+    # FileNotFoundError, say) must NOT hash identically across engines, or a
+    # patch cached from a Spark run could be replayed into a DuckDB run whose
+    # PatchSpec grammar assumptions don't hold. Required, not optional: an
+    # unlabeled signature is a silent cross-engine collision waiting to happen.
+    engine: str = "unknown"
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, ErrorSignature) and self.hash == other.hash
@@ -106,20 +113,25 @@ class ErrorSignature:
             "where": self.where,
             "normalized_message": self.normalized_message,
             "hash": self.hash,
+            "engine": self.engine,
         }
 
 
-def make_signature(error_class: str, where: str, message: str) -> ErrorSignature:
-    """Build a signature from already-extracted parts."""
+def make_signature(error_class: str, where: str, message: str, *, engine: str) -> ErrorSignature:
+    """Build a signature from already-extracted parts.
+
+    ``engine`` is required and folded into the hash — see ``ErrorSignature.engine``.
+    """
     ec = (error_class or "unknown").strip() or "unknown"
     w = (where or "<root>").strip() or "<root>"
     msg = _normalize_message(message)
-    payload = json.dumps([ec, w, msg], sort_keys=True, ensure_ascii=False)
+    eng = (engine or "unknown").strip() or "unknown"
+    payload = json.dumps([ec, w, msg, eng], sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
-    return ErrorSignature(error_class=ec, where=w, normalized_message=msg, hash=digest)
+    return ErrorSignature(error_class=ec, where=w, normalized_message=msg, hash=digest, engine=eng)
 
 
-def from_validation_error(exc: Any) -> ErrorSignature:
+def from_validation_error(exc: Any, *, engine: str) -> ErrorSignature:
     """Pydantic ``ValidationError`` → signature based on the first error.
 
     Using the first error keeps the signature stable across reprompts where
@@ -132,31 +144,33 @@ def from_validation_error(exc: Any) -> ErrorSignature:
     except TypeError:  # older pydantic shim
         errors = exc.errors()
     if not errors:
-        return make_signature("validation_error", "<root>", str(exc))
+        return make_signature("validation_error", "<root>", str(exc), engine=engine)
     first = errors[0]
     where = _loc_to_where(tuple(first.get("loc", ())))
     etype = str(first.get("type") or "validation_error")
     msg = str(first.get("msg") or "")
-    return make_signature(etype, where, msg)
+    return make_signature(etype, where, msg, engine=engine)
 
 
-def from_json_decode_error(exc: Any) -> ErrorSignature:
+def from_json_decode_error(exc: Any, *, engine: str) -> ErrorSignature:
     """JSON parse failure → signature (column/line normalized out)."""
-    return make_signature("json_decode_error", "<root>", str(getattr(exc, "msg", exc)))
+    return make_signature("json_decode_error", "<root>", str(getattr(exc, "msg", exc)), engine=engine)
 
 
-def from_exception(exc: BaseException, where: str | None = None) -> ErrorSignature:
+def from_exception(exc: BaseException, where: str | None = None, *, engine: str) -> ErrorSignature:
     """Generic fallback for anything not handled by a more specific helper."""
-    return make_signature(type(exc).__name__, where or "<root>", str(exc))
+    return make_signature(type(exc).__name__, where or "<root>", str(exc), engine=engine)
 
 
 def from_apply_error(
     error_class: str,
     message: str,
     where: str | None = None,
+    *,
+    engine: str,
 ) -> ErrorSignature:
     """Apply-time gate rejection (guardrail, lineage, explain, sandbox)."""
-    return make_signature(error_class, where or "<root>", message)
+    return make_signature(error_class, where or "<root>", message, engine=engine)
 
 
 def from_failure_context(ctx: Any) -> tuple[ErrorSignature, ErrorSignature]:
@@ -173,6 +187,11 @@ def from_failure_context(ctx: Any) -> tuple[ErrorSignature, ErrorSignature]:
     Assert label (``error_type``) → innermost throwable type
     (``root_exception["type"]``) → ``"unknown"``. Message prefers the
     innermost throwable's message over the full ``error_message`` blob.
+
+    The engine is read off ``ctx.engine`` (stamped by ``Surveyor`` on every
+    ``FailureContext`` it builds — see ``Surveyor.__init__``'s required
+    ``engine`` param) so callers holding a ``FailureContext`` never need to
+    thread the engine through separately.
     """
     _root = getattr(ctx, "root_exception", None)
     if not isinstance(_root, dict):
@@ -185,10 +204,11 @@ def from_failure_context(ctx: Any) -> tuple[ErrorSignature, ErrorSignature]:
     )
     message = _root.get("message") or getattr(ctx, "error_message", "") or ""
     where = getattr(ctx, "failed_module", None) or "<root>"
+    engine = getattr(ctx, "engine", None) or "unknown"
     # str() coercion: duck-typed contexts (tests pass mocks) must never
     # break signature hashing — real FailureContext fields are already str.
-    exact = make_signature(str(error_class), str(where), str(message))
-    coarse = make_signature(str(error_class), "<any>", str(message))
+    exact = make_signature(str(error_class), str(where), str(message), engine=str(engine))
+    coarse = make_signature(str(error_class), "<any>", str(message), engine=str(engine))
     return exact, coarse
 
 
@@ -196,10 +216,12 @@ def from_text(
     text: str,
     error_class: str = "reprompt",
     where: str | None = None,
+    *,
+    engine: str,
 ) -> ErrorSignature:
     """Last-resort: signature from a plain text reprompt string.
 
     Use when you only have the friendly bullet-formatted output from
     ``_format_reprompt_error`` (no live exception object).
     """
-    return make_signature(error_class, where or "<root>", text)
+    return make_signature(error_class, where or "<root>", text, engine=engine)

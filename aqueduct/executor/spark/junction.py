@@ -44,6 +44,11 @@ if TYPE_CHECKING:
 from aqueduct.errors import AqueductError
 from aqueduct.models import Module
 
+# Named so the capability-leaf walker (aqueduct/executor/capability_leaves.py)
+# can derive `junction.mode.*` leaves without importing pyspark — this module
+# carries no module-level pyspark import (only a TYPE_CHECKING one).
+VALID_MODES: frozenset[str] = frozenset({"conditional", "broadcast", "partition"})
+
 
 class JunctionError(AqueductError):
     """Raised when a Junction module cannot be executed."""

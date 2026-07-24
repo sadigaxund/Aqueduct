@@ -42,7 +42,11 @@ def test_prompt_version_bumped_for_schema_hint_rule():
     # This rule change touches _SYSTEM_PROMPT_TEMPLATE body, so per the
     # PROMPT_VERSION bump policy (AGENTS.md) it must be reflected here.
     # Phase 75 bumped 1.6 -> 1.7 for the agentic-mode tools addendum.
-    assert PROMPT_VERSION == "1.7"
+    # Phase 78 bumped 1.7 -> 1.8 for the DuckDB pack's PREDICTED_SCHEMA_DRIFT
+    # rule bullet (Spark's composed prompt is unchanged; version is global).
+    # Phase 79 item 6 bumped 1.8 -> 1.9 for the DuckDB pack's out-of-memory /
+    # capacity-exhaustion defer rule (Spark's composed prompt is unchanged).
+    assert PROMPT_VERSION == "1.9"
 
 
 def test_schema_hint_rule_never_leaks_defer_op_token(tmp_path: Path):

@@ -26,7 +26,10 @@ _NONDETERMINISTIC_FNS = re.compile(
 )
 
 
-def check(manifest: Any) -> list[str]:
+def check(manifest: Any, engine: str = "spark") -> list[str]:
+    # Per-branch re-evaluation of a nondeterministic function is a property
+    # of fan-out over ANY lazy query engine — no gate.
+    del engine
     out: list[str] = []
     consumer_counts: dict[str, int] = {}
     for e in manifest.edges:

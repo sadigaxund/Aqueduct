@@ -96,6 +96,20 @@ A Channel module wrapping a model inference call (MLflow, SageMaker, Vertex AI e
 
 ---
 
+## Type hub: long-tail constructors
+
+The hub type vocabulary (`aqueduct/typehub.py`, see `docs/specs.md` §9) deliberately ships a subset of Arrow's full taxonomy. The following constructors are not in the hub yet:
+
+- **Unsigned integers** (`uint8`/`uint16`/`uint32`/`uint64`). Neither shipped engine's native type system distinguishes signed from unsigned integers the way Arrow does; adding these constructors without a real semantic difference on either engine would be vocabulary for its own sake.
+- **Unions.** No authoring surface in the current Blueprint grammar needs a tagged/dense union column; deferred until one does.
+- **Dictionary / run-end encoding.** These are storage encodings, not value types — orthogonal to what the hub vocabulary states about a column's meaning. Revisit if a Parquet/Arrow-native encoding hint becomes a real authoring need.
+- **`string_view`.** Arrow's newer variable-length string representation; the hub's plain `string` already covers the value semantics both engines need, and neither engine's own DDL distinguishes the two.
+- **Interval / duration — design SETTLED (2026-07-23), not verified out.** Superseding the earlier "verified out" call. Measured against real engines: Spark writes `interval day to second` to Parquet as an INT64 microsecond count (lossless); DuckDB writes the 12-byte interval physical type (millisecond, truncating); a cross-engine read of Spark's file yields a bare INT64; an explicit integer of microseconds round-trips exactly on both. The portable, lossless representation is therefore integer-backed: a hub `duration(unit)` constructor (`unit` ∈ `ms`/`us`/`ns`, precision declared like `decimal(p,s)`) plus a separate `interval_ym` for calendar month/year intervals. In-engine the value stays a native interval (so timestamp arithmetic works); on disk / across a boundary it is an int64 count plus Aqueduct-carried "duration in unit X" metadata, each engine's `render_type` wrapping int→interval on read. A gate fires only on an explicit downcast to a coarser unit than the data holds. Native spellings (`spark:interval day to second`, `duckdb:INTERVAL`) remain an escape hatch, never a portability fix. The metadata carrier across a Parquet boundary is the same mechanism as cross-engine-handoff type fidelity, so this constructor is built alongside that work, not before.
+
+**Status:** Deferred. Native namespace escape hatches (`<engine>:<spelling>`) cover the four remaining constructors above today; the `interval`/`duration` design is settled and built alongside cross-engine handoff.
+
+---
+
 ## Iceberg / Hudi table formats
 
 Ingress and Egress currently support Parquet, Delta Lake, CSV, JSON, and JDBC. Apache Iceberg and Apache Hudi are planned as additional table formats, both fit the existing `format:` config surface without schema changes.
@@ -114,9 +128,9 @@ The multi-model cascade tags every in-memory `AttemptRecord` with its 0-based ti
 
 ## Flink execution engine
 
-The `executor/__init__.py` factory has a `flink` stub that raises `NotImplementedError`. Flink support is not actively planned, the engine is designed for Spark batch pipelines.
+The engine portfolio is Spark and DuckDB. `deployment.engine` is validated against the engines actually registered through the `aqueduct.engines` entry-point group (`aqueduct/executor/capabilities.py`), so `engine: flink` fails at config-load with a `ConfigError` listing the registered engines rather than a special-cased stub.
 
-**Status:** Deferred indefinitely.
+**Status:** Out of scope. A Flink engine would be a separate project taken up on demand, not a planned addition.
 
 ---
 

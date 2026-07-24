@@ -282,6 +282,22 @@ done
 # ---------------------------------------------------------------------------
 echo -e "Done — ${GREEN}${PASS_COUNT} passed${RESET}  ${RED}${FAIL_COUNT} failed${RESET}  ${YELLOW}${SKIP_COUNT} skipped${RESET}"
 
+# Extract the root-cause error line(s) from a log — shows the actual exception
+# message, not the Java stack trace bottom.
+extract_error_summary() {
+    local log="$1" max_lines="${2:-5}"
+    if [[ ! -f "$log" ]]; then return; fi
+    # Look for Py4J/pyspark exception messages, "Error:" headers, or "Caused by:"
+    local found
+    found=$(grep -E '(pyspark\.sql\.utils|py4j\.protocol|Py4JJavaError|Caused by:|Exception:|^Error: |^ERROR |SparkException|AnalysisException|StreamingQueryException)' "$log" | head -3 || true)
+    if [[ -n "$found" ]]; then
+        echo "$found"
+    else
+        # Fallback: last non-empty lines
+        grep -v '^$' "$log" | tail -"$max_lines"
+    fi
+}
+
 if (( ${#FAILURES[@]} > 0 )); then
     echo ""
     echo -e "${RED}${BOLD}=== FAILURES ===${RESET}"
@@ -292,7 +308,7 @@ if (( ${#FAILURES[@]} > 0 )); then
         echo ""
         echo -e "  ${RED}FAILED${RESET} $snippet / $step"
         if [[ -f "$log" ]]; then
-            cat "$log" | sed 's/^/    /'
+            extract_error_summary "$log" 5 | sed 's/^/    /'
         fi
     done
     echo ""
@@ -312,7 +328,7 @@ if [[ "$IN_CI" == "true" && -n "${GITHUB_STEP_SUMMARY:-}" && ${#FAILURES[@]} -gt
             echo ""
             echo '```'
             if [[ -f "$log" ]]; then
-                cat "$log"
+                extract_error_summary "$log" 20
             fi
             echo '```'
             echo "</details>"

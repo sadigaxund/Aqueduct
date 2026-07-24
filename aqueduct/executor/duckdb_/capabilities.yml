@@ -1,0 +1,662 @@
+# DuckDB engine capability declaration — DATA, not code (Phase 78 Stage A,
+# honesty rework at checkpoint 3b).
+#
+# One explicit row per capability leaf, earned leaf by leaf against a real
+# handler + test — NOT copied from spark/capabilities.yml. See that file's
+# header for the shape (`support:` plus optional `requires:` / `hint:`).
+#
+# Verdicts: supported | unsupported | ignored_with_warning | undeclared
+#
+# A `supported` verdict answers one question: "if a Blueprint uses this leaf
+# on engine=duckdb, what happens?" Two honest senses of `supported`, both
+# requiring proof, not a guess:
+#   - EXECUTION leaves (channel.op.*, ingress.format.*, egress.format.*,
+#     egress.mode.*, egress.on_new_columns.*, junction.mode.*, funnel.mode.*,
+#     module.type.*, feature.*): `supported` only with a real handler AND a
+#     test exercising it on DuckDB.
+#   - ENGINE-INVARIANT leaves (agent.*, config.agent.*, config.webhooks.*,
+#     hooks.*, retry_policy.*, backoff.*, edge.*, udf.field.*,
+#     module.field.*, warnings.*, most config.*): `supported` because core
+#     orchestration handles them identically regardless of engine and the
+#     executor never touches them — proven by end-to-end tests, not assumed.
+#
+# STAGE A scope (see AGENTS.md maintenance playbook + the Phase 78 brief):
+#   Ingress:  read_parquet / read_csv / read_json only.
+#   Channel:  sql + join (sqlglot spark->duckdb transpile), filter, select,
+#             deduplicate, cast, rename, sort, union — each has a real
+#             handler and a DuckDB test. repartition/coalesce/cache are
+#             Spark physical-partitioning/distributed-cache hints with no
+#             DuckDB equivalent — honestly UNSUPPORTED, not silently faked.
+#   Junction: all three modes (conditional/broadcast/partition) are pure
+#             filters over a single-node relation — cheap, implemented.
+#   Funnel:   union_all / union (SQL UNION [ALL]) and coalesce / zip
+#             (row-aligned joins keyed on a synthetic row id) — all four
+#             have a real handler and a DuckDB test.
+#   Egress:   COPY ... TO parquet/csv. overwrite/error/errorifexists/ignore
+#             are native COPY modes; append is a non-atomic read-existing +
+#             UNION ALL BY NAME + rewrite workaround (see the leaf's hint).
+#   UDFs:     lang: java is Spark-only (unsupported). DuckDB Python UDFs are
+#             vectorized and semantically different from Spark's row UDFs —
+#             not implemented/tested this stage, so unsupported honestly
+#             rather than silently wrong.
+#   Iceberg / Hudi / Kafka / custom DataSource / Databricks deployment: all
+#   Spark-specific, not applicable to DuckDB at all.
+#   Delta / JDBC / Depot ingress+egress, egress.mode.overwrite_partitions,
+#   egress.on_new_columns.*, feature.{delta_write,delta_time_travel,
+#   parallel_mode}: DEFERRED — implementable on DuckDB (delta-rs / postgres
+#   scanner / httpfs / etc, see each leaf's hint) but deliberately left out
+#   of Stage A scope. Grouped in their own comment blocks below so the
+#   verdict flip is a one-line edit per leaf once a later stage picks one up.
+
+engine: duckdb
+
+leaves:
+  # ── Healing-agent config (engine-independent — the agent layer doesn't
+  # touch engine internals; DuckDB honors the same knobs Spark does) ───────
+  agent.field.allow_defer: supported
+  agent.field.api_key: supported
+  agent.field.approval_mode: supported
+  agent.field.base_url: supported
+  agent.field.block_on_explain_regression:
+    support: unsupported
+    hint: "block_on_explain_regression relies on Spark's explain()-plan snapshot gate (aqueduct.patch.explain_gate); DuckDB has no equivalent plan-snapshot capture implemented."
+  agent.field.cascade: supported
+  agent.field.confidence_threshold: supported
+  agent.field.deep_loop: supported
+  agent.field.guardrails: supported
+  agent.field.max_chain: supported
+  agent.field.max_heal_attempts_per_hour: supported
+  agent.field.max_patches: supported
+  agent.field.max_reprompts: supported
+  agent.field.max_tool_calls: supported
+  agent.field.mode: supported
+  agent.field.model: supported
+  agent.field.on_heal_failure: supported
+  agent.field.on_pending_patches: supported
+  agent.field.patch_validation: supported
+  agent.field.progressive: supported
+  agent.field.prompt_context: supported
+  agent.field.provider: supported
+  agent.field.provider_options: supported
+  agent.field.regression_artifact: supported
+  agent.field.sandbox_mode: supported
+  agent.field.supports_tools: supported
+  agent.field.timeout: supported
+  agent_cascade_tier.field.allow_defer: supported
+  agent_cascade_tier.field.api_key: supported
+  agent_cascade_tier.field.base_url: supported
+  agent_cascade_tier.field.deep_loop: supported
+  agent_cascade_tier.field.max_reprompts: supported
+  agent_cascade_tier.field.max_seconds: supported
+  agent_cascade_tier.field.max_tokens: supported
+  agent_cascade_tier.field.model: supported
+  agent_cascade_tier.field.provider: supported
+  agent_cascade_tier.field.provider_options: supported
+  agent_cascade_tier.field.supports_tools: supported
+  agent_cascade_tier.field.timeout: supported
+  agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.forbidden_ops: supported
+  agent_guardrails.field.heal_on_errors: supported
+  agent_guardrails.field.never_heal_errors: supported
+  backoff.field.base_seconds: supported
+  backoff.field.jitter: supported
+  backoff.field.max_seconds: supported
+  backoff.field.strategy: supported
+
+  # ── Channel ops — Stage A scope: sql, join, filter, select, deduplicate,
+  # cast, rename, sort, union (each has a real handler + a DuckDB test) ────
+  channel.op.cache:
+    support: unsupported
+    hint: "op=cache maps to Spark's distributed persist(StorageLevel); DuckDB is single-process with no distributed cache tier to spill to. Not implemented."
+  channel.op.cast:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast
+  channel.op.coalesce:
+    support: unsupported
+    hint: "op=coalesce is a Spark physical-partition-count hint; DuckDB has no partition concept to coalesce. Not applicable."
+  channel.op.deduplicate:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_deduplicate_no_key
+  channel.op.filter:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_filter
+  channel.op.join:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_join
+  channel.op.rename:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_rename
+  channel.op.repartition:
+    support: unsupported
+    hint: "op=repartition is a Spark physical-partition-count hint; DuckDB has no partition concept to repartition. Not applicable."
+  channel.op.select:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_select
+  channel.op.sort:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_sort
+  channel.op.sql:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_sql_transpiled_from_spark_dialect
+  channel.op.union:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_union
+
+  # ── Engine config (aqueduct.yml) ─────────────────────────────────────────
+  config.agent.api_key: supported
+  config.agent.base_url: supported
+  config.agent.block_on_explain_regression:
+    support: unsupported
+    hint: "relies on the Spark explain()-plan snapshot gate; no DuckDB equivalent implemented."
+  config.agent.budget.max_reprompts: supported
+  config.agent.budget.max_seconds: supported
+  config.agent.budget.max_tokens_total: supported
+  config.agent.budget.progress_stalled_window: supported
+  config.agent.budget.same_error_consecutive: supported
+  config.agent.budget.same_signature_overall: supported
+  config.agent.cascade: supported
+  config.agent.ci_webhook_url: supported
+  config.agent.max_chain: supported
+  config.agent.max_heal_attempts_per_hour: supported
+  config.agent.max_reprompts: supported
+  config.agent.max_tool_calls: supported
+  config.agent.memory.coaching: supported
+  config.agent.memory.replay: supported
+  config.agent.mode: supported
+  config.agent.model: supported
+  config.agent.patch_validation: supported
+  config.agent.progressive: supported
+  config.agent.prompt_context: supported
+  config.agent.provider: supported
+  config.agent.provider_options: supported
+  config.agent.regression_artifact: supported
+  config.agent.retry.backoff_seconds: supported
+  config.agent.retry.max_retries: supported
+  config.agent.sandbox_master_url:
+    support: unsupported
+    hint: "sandbox_master_url pins a Spark master URL for the patch-preview sandbox session; DuckDB has no cluster master to pin (single-process, always local)."
+  config.agent.supports_tools: supported
+  config.agent.timeout: supported
+  config.aqueduct_config: supported
+  config.checkpoint_root: supported
+  config.danger.allow_command_hooks: supported
+  config.danger.allow_full_preflight: supported
+  config.danger.allow_full_probe_actions: supported
+  config.danger.allow_multi_patch: supported
+  config.danger.allow_skip_sandbox: supported
+  config.deployment.databricks.cluster_id:
+    support: unsupported
+    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
+  config.deployment.databricks.libraries:
+    support: unsupported
+    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
+  config.deployment.databricks.max_concurrent_runs:
+    support: unsupported
+    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
+  config.deployment.databricks.new_cluster:
+    support: unsupported
+    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
+  config.deployment.databricks.workspace_url:
+    support: unsupported
+    hint: "single-node engine — schedule the container on one node. Databricks is a Spark deployment target."
+  config.deployment.engine: supported
+  config.deployment.env: supported
+  config.deployment.master_url:
+    support: ignored_with_warning
+    hint: "DuckDB is single-process and has no cluster master to submit to; master_url is ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.deployment.target:
+    support: supported
+    hint: "DuckDB is a single-node engine — only target=local is meaningful. Remote-submit / cluster targets (databricks, emr, dataproc, yarn, kubernetes, standalone) have no DuckDB execution path; use the spark engine for those."
+  config.lineage.openlineage_namespace:
+    support: ignored_with_warning
+    hint: "the DuckDB executor does not emit OpenLineage events; the namespace key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.lineage.openlineage_url:
+    support: ignored_with_warning
+    hint: "the DuckDB executor does not emit OpenLineage events; the URL key is accepted but inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.metrics.use_observe:
+    support: unsupported
+    hint: "use_observe toggles Spark's Observation API (a SparkListener-driven zero-cost row-count mechanism); DuckDB has no equivalent listener hook. Module metrics are collected directly from relation execution instead, unconditionally."
+  config.probes.default_sample_fraction:
+    support: ignored_with_warning
+    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-fraction knob it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.probes.max_sample_rows:
+    support: ignored_with_warning
+    hint: "Probe (module.type.Probe) is not implemented on DuckDB, so the sample-row cap it would configure is inert. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.secrets.provider: supported
+  config.secrets.region: supported
+  config.secrets.resolver: supported
+  config.spark_config:
+    support: ignored_with_warning
+    hint: "spark_config has no meaning for the DuckDB engine (it configures a SparkSession that does not exist here); ignored. Kept as a valid key so the same aqueduct.yml works unmodified on both engines."
+  config.stores.benchmark.backend: supported
+  config.stores.benchmark.gate_on_regression: supported
+  config.stores.benchmark.path: supported
+  config.stores.benchmark.persist: supported
+  config.stores.blob.backend: supported
+  config.stores.blob.path: supported
+  config.stores.depots: supported
+  config.stores.observability.backend: supported
+  config.stores.observability.path: supported
+  config.warnings.strict: supported
+  config.warnings.suppress: supported
+  config.webhooks.on_ci_patch.backoff_seconds: supported
+  config.webhooks.on_ci_patch.headers: supported
+  config.webhooks.on_ci_patch.health_probe: supported
+  config.webhooks.on_ci_patch.max_retries: supported
+  config.webhooks.on_ci_patch.method: supported
+  config.webhooks.on_ci_patch.payload: supported
+  config.webhooks.on_ci_patch.secret: supported
+  config.webhooks.on_ci_patch.timeout: supported
+  config.webhooks.on_ci_patch.url: supported
+  config.webhooks.on_failure.backoff_seconds: supported
+  config.webhooks.on_failure.headers: supported
+  config.webhooks.on_failure.health_probe: supported
+  config.webhooks.on_failure.max_retries: supported
+  config.webhooks.on_failure.method: supported
+  config.webhooks.on_failure.payload: supported
+  config.webhooks.on_failure.secret: supported
+  config.webhooks.on_failure.timeout: supported
+  config.webhooks.on_failure.url: supported
+  config.webhooks.on_patch_pending.backoff_seconds: supported
+  config.webhooks.on_patch_pending.headers: supported
+  config.webhooks.on_patch_pending.health_probe: supported
+  config.webhooks.on_patch_pending.max_retries: supported
+  config.webhooks.on_patch_pending.method: supported
+  config.webhooks.on_patch_pending.payload: supported
+  config.webhooks.on_patch_pending.secret: supported
+  config.webhooks.on_patch_pending.timeout: supported
+  config.webhooks.on_patch_pending.url: supported
+  config.webhooks.on_success.backoff_seconds: supported
+  config.webhooks.on_success.headers: supported
+  config.webhooks.on_success.health_probe: supported
+  config.webhooks.on_success.max_retries: supported
+  config.webhooks.on_success.method: supported
+  config.webhooks.on_success.payload: supported
+  config.webhooks.on_success.secret: supported
+  config.webhooks.on_success.timeout: supported
+  config.webhooks.on_success.url: supported
+
+  # ── Edges / spillway routing — pure filters, engine-independent ─────────
+  edge.field.error_types: supported
+  edge.field.from_id: supported
+  edge.field.port: supported
+  edge.field.to: supported
+
+  # ── Egress formats/modes — Stage A scope: parquet/csv (ungated formats)
+  # via COPY ... TO; only write modes COPY can express natively ───────────
+  egress.format.custom:
+    support: unsupported
+    hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+  egress.format.hudi:
+    support: unsupported
+    hint: "Hudi is not implemented for the DuckDB engine."
+  egress.format.iceberg:
+    support: unsupported
+    hint: "Iceberg is not implemented for the DuckDB engine."
+  egress.mode.append:
+    support: supported
+    hint: "Implemented as a NON-ATOMIC read-existing + UNION ALL BY NAME + rewrite (DuckDB's COPY ... TO has no native append). A crash mid-rewrite can lose the prior file, and two concurrent appenders race — acceptable for single-process local batch, not a substitute for a transactional sink."
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_append_to_existing_target_unions_rows
+  egress.mode.error:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_error_mode_existing_target_raises
+  egress.mode.errorifexists:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_errorifexists_mode_existing_target_raises
+  egress.mode.ignore:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_ignore_mode_existing_target_skips_write
+  egress.mode.merge:
+    support: unsupported
+    hint: "mode=merge (upsert) requires a target table format with a transaction log (Delta). Not implemented for DuckDB."
+  egress.mode.overwrite:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_write_egress_parquet_overwrite
+
+  # ── DEFERRED (Stage B candidates) — provisionally unsupported. DuckDB can
+  # implement each of these; they were deliberately left out of Stage A scope
+  # rather than rushed. Grouped here so the verdict flip is a one-line edit
+  # per leaf once a later stage picks them up. ──────────────────────────────
+  egress.mode.overwrite_partitions:
+    support: unsupported
+    hint: "Requires COPY ... TO with PARTITION_BY plus pruning the target partition directories before write. Not implemented."
+  egress.on_new_columns.alert:
+    support: unsupported
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
+  egress.on_new_columns.allow:
+    support: unsupported
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
+  egress.on_new_columns.fail:
+    support: unsupported
+    hint: "Requires a schema diff against the existing file's columns (read_parquet/read_csv schema introspection) before write. Not implemented."
+  egress.format.delta:
+    support: unsupported
+    hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
+  egress.format.depot:
+    support: unsupported
+    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
+
+  # ── Feature flags ─────────────────────────────────────────────────────────
+  feature.broadcast_junction:
+    support: unsupported
+    hint: "broadcast_junction names a Spark distributed-join optimization; DuckDB is single-process, so there is nothing to broadcast. junction.mode.broadcast (fan-out to identical branches) is unaffected and supported."
+  feature.checkpoint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_feature_checkpoint_driven_through_execute
+  feature.custom_datasource:
+    support: unsupported
+    hint: "Custom Python DataSource is a pyspark>=4.0 API — Spark-only."
+  feature.java_udf:
+    support: unsupported
+    hint: "lang: java UDFs require a JVM UDF registry (Spark-only). Not applicable to DuckDB."
+  feature.metrics_boundary:
+    support: unsupported
+    hint: "metrics_boundary works around Spark's stage-fusion by forcing a shuffle boundary so SparkListener attributes metrics per module; DuckDB has no stage-fusion concept to work around — module metrics are already collected per module."
+  feature.python_udf:
+    support: unsupported
+    hint: "DuckDB Python UDFs are vectorized (operate on Arrow batches) and semantically different from Spark's row-at-a-time UDFs. Not implemented or tested: declaring it 'supported' without a real handler would silently produce wrong results on the first UDF that assumes row semantics."
+  feature.spillway:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_feature_spillway_driven_through_execute
+  feature.table_addressing:
+    support: unsupported
+    hint: "DuckDB Ingress/Egress require format:+path: — there is no catalog to resolve a bare table: name against. Use format:+path: instead of table: addressing on this engine."
+
+  # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
+  # for the grouping rationale; same "one-line flip later" intent. ─────────
+  feature.delta_time_travel:
+    support: unsupported
+    hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log at a given version/timestamp). Not implemented."
+  feature.delta_write:
+    support: unsupported
+    hint: "Requires a delta-rs bridge (the deltalake Python package writes a Delta log DuckDB has no writer for). Not implemented."
+  feature.parallel_mode:
+    support: unsupported
+    hint: "Requires a Python ThreadPoolExecutor over independent DAG subtrees (a DuckDB connection is thread-safe for concurrent read queries). Not implemented: the executor runs the topological order serially today."
+
+  # ── Funnel modes — Stage A scope: union_all, union, coalesce, zip (each
+  # has a real handler + a DuckDB test) ────────────────────────────────────
+  funnel.mode.coalesce:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_coalesce_folds_overlapping_columns
+  funnel.mode.union:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_union_dedupes
+  funnel.mode.union_all:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_union_all
+  funnel.mode.zip:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_funnel_zip_row_aligned_join
+
+  # ── Self-heal provenance (Phase 79) — compiler-consumed metadata only, no
+  # engine executes this block, so it is trivially supported everywhere ────
+  healed_by.field.applied_at:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.classification:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine_version:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.patch_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.run_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.validated_on:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+
+  # ── Hooks / webhooks — fire off ExecutionResult, engine-independent ─────
+  hook_entry.field.blueprint: supported
+  hook_entry.field.command: supported
+  hook_entry.field.in_process: supported
+  hook_entry.field.timeout: supported
+  hook_entry.field.webhook: supported
+  hook_entry.field.when_error: supported
+  hooks.field.on_failure: supported
+  hooks.field.on_healed: supported
+  hooks.field.on_patch_pending: supported
+  hooks.field.on_success: supported
+
+  # ── Ingress formats — Stage A scope: csv (parquet/json are ungated,
+  # always available via read_parquet/read_json) ──────────────────────────
+  ingress.format.csv:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_read_ingress_csv
+  ingress.format.custom:
+    support: unsupported
+    hint: "format: custom is the pyspark>=4.0 Python DataSource registry — Spark-only. Not applicable to DuckDB."
+  ingress.format.kafka:
+    support: unsupported
+    hint: "Kafka streaming ingress has no DuckDB equivalent — DuckDB is a batch, single-process engine."
+
+  # ── DEFERRED (Stage B candidates) — see the Egress deferred block above
+  # for the grouping rationale; same "one-line flip later" intent. ─────────
+  ingress.format.delta:
+    support: unsupported
+    hint: "Requires a delta-rs bridge (the deltalake Python package can read a Delta table's transaction log). Not implemented."
+  ingress.format.depot:
+    support: unsupported
+    hint: "Requires the httpfs extension (Depot's blob-store backends are S3/GCS/Azure, which httpfs can address directly). Not implemented."
+  ingress.format.jdbc:
+    support: unsupported
+    hint: "Requires the postgres scanner extension (ATTACH ... (TYPE POSTGRES), the same wire protocol jdbc: postgres:// targets). Not implemented."
+
+  # ── Junction modes — all three are pure filters, all supported ──────────
+  junction.mode.broadcast:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_broadcast
+  junction.mode.conditional:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_conditional
+  junction.mode.partition:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_junction_partition
+
+  # ── Module fields — generic Blueprint authoring surface ─────────────────
+  module.field.attach_to: supported
+  module.field.checkpoint: supported
+  module.field.config: supported
+  module.field.context_override: supported
+  module.field.depends_on: supported
+  module.field.description: supported
+  module.field.enabled: supported
+  module.field.id: supported
+  module.field.label: supported
+  module.field.on_failure: supported
+  module.field.on_failure_webhook: supported
+  module.field.ref: supported
+  module.field.retry: supported
+  module.field.spillway: supported
+  module.field.tags: supported
+  module.field.type: supported
+
+  # ── Module types ──────────────────────────────────────────────────────────
+  module.type.Arcade:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_arcade_compiles_and_runs_on_duckdb
+  module.type.Assert:
+    support: unsupported
+    hint: "Assert (row-quality rules + quarantine) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+  module.type.Channel:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Egress:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Funnel:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_funnel_driven_through_execute
+  module.type.Ingress:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_full_pipeline_ingress_channel_egress
+  module.type.Junction:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_junction_driven_through_execute
+  module.type.Probe:
+    support: unsupported
+    hint: "Probe (signal sampling for Regulator gates) is not implemented on DuckDB. The DuckDB handlers cover Ingress/Channel/Junction/Funnel/Egress only."
+  module.type.Regulator:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_module_type_regulator_driven_through_execute_gate_open
+
+  # ── Retry / backoff — generic control flow, identical on any engine ─────
+  module_retry.field.backoff: supported
+  module_retry.field.deadline_seconds: supported
+  module_retry.field.max_attempts: supported
+  module_retry.field.non_transient_errors: supported
+  module_retry.field.on_exhaustion: supported
+  module_retry.field.transient_errors: supported
+  retry_policy.field.backoff: supported
+  retry_policy.field.deadline_seconds: supported
+  retry_policy.field.max_attempts: supported
+  retry_policy.field.non_transient_errors: supported
+  retry_policy.field.on_exhaustion: supported
+  retry_policy.field.transient_errors: supported
+
+  # ── UDF authoring fields — schema-level, always valid to write; the
+  # language gate is feature.python_udf / feature.java_udf above ──────────
+  udf.field.class_name: supported
+  udf.field.deterministic: supported
+  udf.field.entry: supported
+  udf.field.id: supported
+  udf.field.jar: supported
+  udf.field.label: supported
+  udf.field.lang: supported
+  udf.field.module: supported
+  udf.field.params: supported
+  udf.field.path: supported
+  udf.field.return_type: supported
+  warnings.field.suppress: supported
+
+  # ── Arrow type-hub constructors (Phase 80 work packages 2 & 3) ────────────
+  # One leaf per hub type CONSTRUCTOR (aqueduct/typehub.py), verified
+  # EMPIRICALLY against a real DuckDB connection (CAST through DuckDB's own
+  # SQL type system), not copied from spark/capabilities.yml — same
+  # leaf-by-leaf-against-a-real-test discipline as the rest of this file.
+  # DuckDB natively represents all sixteen hub constructors 1:1 (TINYINT,
+  # BLOB for binary, TIMESTAMPTZ for timestamp_tz, native ARRAY/MAP/STRUCT,
+  # DECIMAL(p,s), ...) so every constructor is honestly `supported`. The raw
+  # Blueprint type string now (work package 3) reaches
+  # `duckdb_/type_render.py::normalize_type_spelling` — parsed through the
+  # hub and rendered to DuckDB's real native DDL (`array<int>` -> `INTEGER[]`,
+  # `timestamp_tz` -> `TIMESTAMPTZ`, ...) before the CAST — so a Blueprint
+  # author writing the HUB spelling verbatim (not DuckDB's own native DDL)
+  # now works too; see `test_channel_cast_hub_vocabulary_spellings` below for
+  # the hub-spelling proof (the `tests:` links on each leaf below still point
+  # at the native-DDL cases, which prove the ENGINE's own capability
+  # independent of the mapping layer). `type.native.duckdb`
+  # ("duckdb:<spelling>") is DuckDB's own native escape hatch — proven with
+  # HUGEINT, a real DuckDB type outside the hub vocabulary — so `supported`;
+  # `type.native.spark` names a different engine's native type system
+  # DuckDB's SQL parser cannot interpret, so honestly `unsupported` (the
+  # native namespace is GOVERNED per engine, not a blanket exemption).
+  type.array:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.bigint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.binary:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.boolean:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.date:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.decimal:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.double:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.float:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.int:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.map:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.native.duckdb:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_native_namespace_duckdb
+  type.native.spark:
+    support: unsupported
+    hint: "'spark:<spelling>' names a type in Spark's native type system, which DuckDB's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'duckdb:<spelling>' for a DuckDB-native escape hatch."
+  type.smallint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.string:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.struct:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.timestamp_ntz:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.timestamp_tz:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors
+  type.tinyint:
+    support: supported
+    tests:
+      - tests/test_executor_duckdb/test_executor.py::test_channel_cast_hub_type_constructors

@@ -23,13 +23,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aqueduct.config import DEFAULT_OBS_DB_FILENAME
+from aqueduct.config import DEFAULT_OBS_DB_FILENAME, DEFAULT_OBS_ROUTING_ROOT
 
 if TYPE_CHECKING:
     from aqueduct.config import AqueductConfig
     from aqueduct.stores.base import ObservabilityStore
 
-_OBS_ROUTING_ROOT = ".aqueduct/observability"
+_OBS_ROUTING_ROOT = DEFAULT_OBS_ROUTING_ROOT
 
 
 def _is_default_obs_path(path: str | None) -> bool:

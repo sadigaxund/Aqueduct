@@ -276,6 +276,24 @@ def register_udfs(
         logger.info("Registered UDF %r (%s)", udf_id, lang)
 
 
+def _render_udf_return_type(udf_id: str, return_type_str: str) -> str:
+    """Render a UDF ``return_type`` spelling through the Arrow type hub
+    (Phase 80 work package 3) to Spark's own DDL spelling, before it reaches
+    ``_parse_datatype_string`` (java/scala) or ``spark.udf.register``
+    (python). Same seam and same raw-passthrough fallback as Channel
+    ``op: cast`` (``aqueduct.executor.spark.channel._normalize_cast_type``) —
+    a class-name-shaped return type like ``"StringType()"`` the hub does not
+    recognize still passes through unmodified to Spark's own parser.
+    """
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.spark.type_render import normalize_type_spelling
+
+    try:
+        return normalize_type_spelling(return_type_str)
+    except EnginePluginError as exc:
+        raise UDFError(f"UDF {udf_id!r}: return_type {return_type_str!r}: {exc}") from exc
+
+
 def _register_java_udf(
     udf_id: str,
     entry: dict[str, Any],
@@ -314,7 +332,10 @@ def _register_java_udf(
         raise UDFError(f"UDF {udf_id!r}: failed to add JAR {jar_abs!r}: {exc}") from exc
 
     try:
-        return_type = _parse_datatype_string(return_type_str) if return_type_str else None
+        rendered_return_type = (
+            _render_udf_return_type(udf_id, return_type_str) if return_type_str else None
+        )
+        return_type = _parse_datatype_string(rendered_return_type) if rendered_return_type else None
         if return_type is not None:
             spark.udf.registerJavaFunction(udf_id, class_name, return_type)
         else:
@@ -368,7 +389,8 @@ def _register_python_udf(
 ) -> None:
     module_path: str | None = entry.get("module")
     entry_name: str | None = entry.get("entry") or udf_id
-    return_type: str | None = entry.get("return_type", "string")
+    return_type_str: str | None = entry.get("return_type", "string")
+    return_type = _render_udf_return_type(udf_id, return_type_str) if return_type_str else None
 
     if not module_path:
         raise UDFError(f"UDF {udf_id!r}: 'module' is required for python UDFs")

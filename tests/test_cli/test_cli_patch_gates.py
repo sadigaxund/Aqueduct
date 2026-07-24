@@ -41,9 +41,10 @@ edges: []
             surveyor=mock_surveyor,
             failed_module="m1",
             iteration_run_id="r1",
-            blueprint_id="b1"
+            blueprint_id="b1",
+            engine="spark",
         )
-    
+
     assert g2 is not None
     assert g3 is not None
     assert g4 is not None
@@ -82,9 +83,10 @@ def test_run_patch_gates_inline_handles_explain_failure(spark, tmp_path):
             surveyor=mock_surveyor,
             failed_module="m1",
             iteration_run_id="r1",
-            blueprint_id="b1"
+            blueprint_id="b1",
+            engine="spark",
         )
-    
+
     assert g4 is None
     assert g2 is not None
     assert g3 is not None

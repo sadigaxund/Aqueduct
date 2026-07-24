@@ -212,7 +212,7 @@ def test_observability_redaction_surveyor(tmp_path):
     surveyor = Surveyor(
         manifest=manifest,
         store_dir=tmp_path,
-    )
+     engine="spark",)
 
     run_id = "run-123"
     surveyor.start(run_id)
@@ -285,7 +285,7 @@ def test_patch_sidecar_redaction(tmp_path):
         manifest_json="{}",
         started_at="2026-05-23T12:00:00Z",
         finished_at="2026-05-23T12:00:05Z",
-    )
+     engine="spark",)
 
     stage_patch_for_human(spec, tmp_path / "patches", failure_ctx)
 

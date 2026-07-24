@@ -110,6 +110,12 @@ the chain statically). Engine-level `webhooks:` in aqueduct.yml stays
 separate — ops-owned alerting that fires regardless of blueprint hooks. On an
 Arcade sub-blueprint, `hooks:` is ignored — only the top-level blueprint's fire.
 
+**`healed_by:`** — machine-written only, never hand-authored. `aqueduct patch
+apply` appends one provenance record per applied self-heal patch (engine,
+classification, applied_at, validated_on). Purely compiler-consumed metadata
+— no engine executes it, and it never affects the compiled Manifest. See
+docs/specs.md §8.14 for the cross-engine heal-patch gate it feeds.
+
 **Linear-edge sugar:** omit `edges:` entirely and the compiler chains modules in
 declaration order — BUT only if every module is single-in/single-out (Ingress,
 Channel, Egress, Assert). The moment you use a Junction (fan-out), Funnel
@@ -294,7 +300,7 @@ Ports: `main` (default DataFrame), `spillway` (error rows — from Channel/Asser
 
 ## Context Registry (3 tiers)
 - **Tier 0 static** `${ctx.ns.key}` — substituted at parse time. Define under `context:`. Override order: CLI `--ctx k=v` > `AQUEDUCT_CTX_*` env > `context_profiles` (`--profile`) > `context:` defaults. Env interpolation: `${ENV_VAR:-default}`.
-- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/name()/dir()/path()`, `@aq.deployment.env()/target()`, `@aq.version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
+- **Tier 1 runtime** `@aq.fn(...)` — resolved pre-job on the driver: `@aq.date.today()/yesterday()/offset(base,days)/month_start()/format(s,p)`, `@aq.run.id()/timestamp()/prev_run_id()`, `@aq.env('K')`, `@aq.secret('K')`, `@aq.depot.get('k')` (or `@aq.depot.<name>.get('k')` for a named mount), `@aq.blueprint.id()/name()/dir()/path()`, `@aq.deployment.env()/target()/engine()`, `@aq.version()`. Use `@aq.blueprint.dir()` (not cwd) as the pipeline-relative path anchor.
 - **Tier 2 UDFs** — distributed column functions (below).
 
 `context_profiles:` promote envs: `dev: { tables.orders_raw: "s3://dev/..." }`.
@@ -318,6 +324,27 @@ udf_registry:
     return_type: STRING
 ```
 Reference UDFs in a Channel via `udfs: [clean_phone]` and call them in SQL. **Bodies are never inline** — always a module/jar pointer (so the healing LLM never sees code). Python `module:` resolves against a sibling `.py` file next to the blueprint before falling back to a normal import/PYTHONPATH lookup — same rule applies to Assert `custom` `fn:`, Probe `custom` `module:`, and `format: custom` DataSource `class:`.
+
+## Type spellings (Ingress `schema_hint`, Channel `op: cast`, UDF `return_type`)
+Every column-type string is Aqueduct's own hub vocabulary (Arrow-borrowed semantics), not a raw engine DDL string — validated at compile time, not runtime.
+
+| `boolean` | `tinyint` | `smallint` | `int` | `bigint` | `float` | `double` |
+|---|---|---|---|---|---|---|
+| `string` | `binary` | `date` | `decimal(p,s)` | `timestamp_tz` | `timestamp_ntz` | |
+
+Composites: `array<T>`, `map<K,V>`, `struct<name:type,...>` (nest freely: `array<map<string,int>>`). Familiar aliases canonicalize silently (`long`→`bigint`, `integer`→`int`, `varchar`/`char`→`string`).
+
+**Bare `timestamp` is REJECTED at compile time — write `timestamp_tz` (instant) or `timestamp_ntz` (naive wall-clock) explicitly.** There is no deprecation window and no suppress: Spark's `timestamp` is an instant, DuckDB's `TIMESTAMP` is naive, so the bare spelling means a different value per engine — it never parses.
+
+**Native escape hatch:** `<engine>:<spelling>` (e.g. `duckdb:HUGEINT`, `spark:interval day to second`) names a type in one engine's own vocabulary directly, for spellings the hub has no equivalent for. It is capability-gated per engine — `duckdb:HUGEINT` in a Blueprint compiled for `spark` is a compile-time error, not a runtime crash. Prefer a portable hub spelling whenever one exists; reach for the native hatch only when the Blueprint is intentionally single-engine.
+
+```yaml
+schema_hint: { order_id: bigint, amount: "decimal(18,2)", placed_at: timestamp_tz }
+# ...
+- id: cast_amount
+  type: Channel
+  config: { op: cast, columns: { amount: "decimal(18,2)", tags: "array<string>" } }
+```
 
 ## Macros (compile-time text dedup)
 ```yaml

@@ -153,7 +153,7 @@ def _lakehouse_session_conf() -> dict:
 # living backlog. Known bugs use `@pytest.mark.xfail(strict=True, reason=...)`
 # instead, which fails the moment the bug is fixed (see pyproject xfail_strict).
 
-_LAYER_OR_CAP = {"unit", "integration", "e2e", "spark", "agent", "airflow", "todo"}
+_LAYER_OR_CAP = {"unit", "integration", "e2e", "spark", "duckdb", "agent", "airflow", "todo"}
 
 
 def pytest_collection_modifyitems(config, items):
@@ -166,11 +166,17 @@ def pytest_collection_modifyitems(config, items):
         # 2. Default-layer marker: every test gets exactly one layer without
         # editing 1788 files. A test that declares no layer/capability marker
         # and doesn't pull the real Spark session is, by definition, a `unit`.
-        # Tests using the `spark` fixture are treated as `spark` (integration).
+        # Tests using the `spark` fixture are treated as `spark` (integration);
+        # tests using the `duckdb_con` fixture (the DuckDB engine's connection
+        # fixture, tests/test_executor_duckdb/conftest.py) are treated as
+        # `duckdb` the same way.
         existing = {m.name for m in item.iter_markers()}
         if not (existing & _LAYER_OR_CAP):
-            if "spark" in getattr(item, "fixturenames", ()):  # type: ignore[arg-type]
+            fixturenames = getattr(item, "fixturenames", ())  # type: ignore[arg-type]
+            if "spark" in fixturenames:
                 item.add_marker(pytest.mark.spark)
+            elif "duckdb_con" in fixturenames:
+                item.add_marker(pytest.mark.duckdb)
             else:
                 item.add_marker(pytest.mark.unit)
 

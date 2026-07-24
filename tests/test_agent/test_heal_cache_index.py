@@ -33,7 +33,7 @@ def env(tmp_path):
         error_message="AnalysisException: col x missing", stack_trace="",
         manifest_json="{}", started_at="2026-06-16T00:00:00+00:00",
         finished_at="2026-06-16T00:00:01+00:00", error_class="AnalysisException",
-    )
+     engine="spark",)
     return tmp_path, obs, ps, fc
 
 

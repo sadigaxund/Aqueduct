@@ -422,6 +422,38 @@ class HooksSchema(BaseModel):
         return self
 
 
+class HealedByRecordSchema(BaseModel):
+    """One self-heal provenance record (heal-patch cross-engine gate).
+
+    MACHINE-WRITTEN ONLY — ``aqueduct patch apply`` appends one of these per
+    applied patch; Blueprint authors never hand-write this block. It travels
+    with the Blueprint artifact (never a sidecar) so a compiled-for-engine-X
+    Blueprint that carries an ``engine_shaped`` patch from engine Y can be
+    flagged at compile time before it ships a dialect mismatch to production
+    (see ``aqueduct/compiler/capability_check.py::check_cross_engine_heal``
+    and ``docs/specs.md`` §8). Purely compiler-consumed metadata — no engine
+    reads or executes this block at runtime.
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    patch_id: str
+    # The execution engine the healing LLM call targeted (from the failing
+    # run's FailureContext.engine — required, no default; see
+    # aqueduct/surveyor/models.py).
+    engine: str
+    # Best-effort, nullable — the installed engine package version at heal
+    # time (e.g. duckdb.__version__), when cheaply available.
+    engine_version: str | None = None
+    run_id: str | None = None
+    # Max over the patch's operations — see aqueduct/patch/provenance.py.
+    classification: Literal["dialect_neutral", "engine_shaped"]
+    applied_at: str
+    # Engines this patch has been GREEN-run-validated on since application.
+    # Appended to (never replaces) by the self-clearing stamp on a successful
+    # run — see aqueduct/patch/apply.py::stamp_validated_engine.
+    validated_on: list[str] = Field(default_factory=list)
+
+
 class BlueprintSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -442,6 +474,9 @@ class BlueprintSchema(BaseModel):
     checkpoint: bool = False
     warnings: WarningsSchema = Field(default_factory=WarningsSchema)
     hooks: HooksSchema = Field(default_factory=HooksSchema)
+    # Self-heal provenance (see HealedByRecordSchema docstring) — machine
+    # written by `aqueduct patch apply`, never hand-authored.
+    healed_by: list[HealedByRecordSchema] = Field(default_factory=list)
 
     @field_validator("aqueduct")
     @classmethod

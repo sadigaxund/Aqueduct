@@ -17,11 +17,11 @@ def _ensure_warnings_caught():
     yield
 
 
-def _compile_yaml(yaml_str: str, tmp_path: Path):
+def _compile_yaml(yaml_str: str, tmp_path: Path, engine: str = "spark"):
     bp_path = tmp_path / "test.yml"
     bp_path.write_text(yaml_str)
     bp = parse(str(bp_path))
-    return compiler_compile(bp, blueprint_path=bp_path)
+    return compiler_compile(bp, blueprint_path=bp_path, engine=engine)
 
 
 class TestCompilerWarnings:

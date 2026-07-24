@@ -40,6 +40,7 @@ from aqueduct.doctor.checks_io import (
     check_agent,
     check_aqscenario,
     check_aqtest,
+    check_capabilities,
     check_config,
     check_depot,
     check_observability,
@@ -57,6 +58,7 @@ __all__ = [
     "check_aqtest",
     "check_blueprint_sources",
     "check_blueprint_sources_from_manifest",
+    "check_capabilities",
     "check_cascade_tiers",
     "check_cloudpickle_compat",
     "check_java",
@@ -1354,6 +1356,7 @@ def run_doctor(
         results.append(check_storage(cfg.spark_config, spark_ok=False, skipped=True))
         if blueprint_path is not None:
             results.extend(check_blueprint_sources(blueprint_path))
+            results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
         if aqtest_path is not None:
             results.extend(check_aqtest(aqtest_path))
         if aqscenario_path is not None:
@@ -1373,6 +1376,7 @@ def run_doctor(
         results.extend(check_blueprint_sources(
             blueprint_path, preflight=preflight and spark_result.status != "fail",
         ))
+        results.extend(check_capabilities(blueprint_path, engine=cfg.deployment.engine))
     if aqtest_path is not None:
         results.extend(check_aqtest(aqtest_path))
     if aqscenario_path is not None:

@@ -79,6 +79,7 @@ def _failure_ctx(**kwargs) -> FailureContext:
         manifest_json=json.dumps({"blueprint_id": "test.pipe"}),
         started_at="2024-01-01T00:00:00+00:00",
         finished_at="2024-01-01T00:01:00+00:00",
+        engine="spark",
     )
     defaults.update(kwargs)
     return FailureContext(**defaults)
@@ -755,7 +756,7 @@ class TestSurveyorLlmIntegration:
         from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = self._make_manifest_with_approval("auto")
-        surveyor = Surveyor(manifest, store_dir=tmp_path / "store")
+        surveyor = Surveyor(manifest, store_dir=tmp_path / "store", engine="spark")
         surveyor.start("run-001")
 
         result = ExecutionResult(
@@ -775,7 +776,7 @@ class TestSurveyorLlmIntegration:
         from aqueduct.surveyor.surveyor import Surveyor
 
         manifest = self._make_manifest_with_approval("auto")
-        surveyor = Surveyor(manifest, store_dir=tmp_path / "store")
+        surveyor = Surveyor(manifest, store_dir=tmp_path / "store", engine="spark")
         surveyor.start("run-002")
 
         result = ExecutionResult(
@@ -807,7 +808,7 @@ class TestLlmHelpers:
                     run_id=row[0], blueprint_id=row[1], failed_module=row[2],
                     error_message=row[3], stack_trace=row[4], manifest_json=row[5],
                     provenance_json=row[6], started_at=row[7], finished_at=row[8]
-                )
+                , engine="spark")
             finally: conn.close()
 
         store = tmp_path / "obs"
@@ -957,7 +958,7 @@ class TestFailureContextBlueprintSourceYaml:
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:01:00Z",
             blueprint_source_yaml="id: test"
-        )
+        , engine="spark")
         assert ctx.blueprint_source_yaml == "id: test"
         assert ctx.to_dict()["blueprint_source_yaml"] == "id: test"
     def test_llm_user_prompt_includes_blueprint_source_yaml(self):
@@ -973,7 +974,7 @@ class TestFailureContextBlueprintSourceYaml:
             started_at="2026-01-01T00:00:00Z",
             finished_at="2026-01-01T00:01:00Z",
             blueprint_source_yaml="id: my_blueprint\nname: Test"
-        )
+        , engine="spark")
         prompt = _build_user_prompt(ctx, patches_dir=Path("/tmp/patches"))
         assert "## Original Blueprint YAML" in prompt
         assert "id: my_blueprint" in prompt
@@ -1031,7 +1032,8 @@ class TestLoadPreviousPatches:
                     source             VARCHAR,
                     prompt_version     VARCHAR,
                     created_at         VARCHAR NOT NULL,
-                    updated_at         VARCHAR NOT NULL
+                    updated_at         VARCHAR NOT NULL,
+                    engine             VARCHAR
                 )
             """)
         return s
@@ -1293,7 +1295,7 @@ class TestConfidenceLogging:
             error_message="err", stack_trace=None, manifest_json="{}",
             started_at="2020-01-01T00:00:00Z",
             finished_at="2020-01-01T00:00:00Z",
-        )
+         engine="spark",)
 
         # Mock the LLM call to return a valid patch with confidence=None
         raw_patch = json.dumps({
@@ -1386,7 +1388,7 @@ class TestBlobExternalisationIntegration:
 
         store_dir = tmp_path / "blob_test_a"
 
-        surveyor = Surveyor(self._minimal_manifest(), store_dir=store_dir)
+        surveyor = Surveyor(self._minimal_manifest(), store_dir=store_dir, engine="spark")
         surveyor.start("run-blob-1")
 
         result = ExecutionResult(
@@ -1421,7 +1423,7 @@ class TestBlobExternalisationIntegration:
 
         store_dir = tmp_path / "obs5"
 
-        surveyor = Surveyor(self._minimal_manifest(bp_id="bp-json", name="json-test"), store_dir=store_dir)
+        surveyor = Surveyor(self._minimal_manifest(bp_id="bp-json", name="json-test"), store_dir=store_dir, engine="spark")
         surveyor.start("run-json-1")
 
         result = ExecutionResult(

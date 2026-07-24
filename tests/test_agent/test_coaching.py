@@ -16,28 +16,13 @@ pytestmark = pytest.mark.unit
 
 def _make_obs_store(db_path: Path):
     from aqueduct.stores.duckdb_ import DuckDBObservabilityStore
+    from aqueduct.patch.index import ensure_schema
     s = DuckDBObservabilityStore(db_path)
+    # Real schema (incl. migrations, e.g. the Phase 78 `engine` column) —
+    # single source of truth instead of a hand-duplicated CREATE TABLE that
+    # silently drifts from aqueduct/patch/index.py's DDL.
     with s.connect() as cur:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS patch_index (
-                patch_id           VARCHAR PRIMARY KEY,
-                blueprint_id       VARCHAR,
-                run_id             VARCHAR,
-                status             VARCHAR NOT NULL,
-                object_key         VARCHAR NOT NULL,
-                signature          VARCHAR,
-                signature_coarse   VARCHAR,
-                error_class        VARCHAR,
-                where_field        VARCHAR,
-                normalized_message VARCHAR,
-                rationale          VARCHAR,
-                ops                JSON,
-                source             VARCHAR,
-                prompt_version     VARCHAR,
-                created_at         VARCHAR NOT NULL,
-                updated_at         VARCHAR NOT NULL
-            )
-        """)
+        ensure_schema(cur)
     return s
 
 
@@ -81,7 +66,7 @@ class TestBuildCoachingSection:
             error_message="err", stack_trace="", manifest_json="{}",
             started_at="2020-01-01", finished_at="2020-01-01",
             error_class="UNRESOLVED_COLUMN",
-        )
+         engine="spark",)
         obs_store = _make_obs_store(tmp_path / "obs.db")
         result = _build_coaching_section(ctx, obs_store)
         assert result == ""
@@ -94,7 +79,7 @@ class TestBuildCoachingSection:
             error_message="column not found", stack_trace="", manifest_json="{}",
             started_at="2020-01-01", finished_at="2020-01-01",
             error_class="UNRESOLVED_COLUMN",
-        )
+         engine="spark",)
         exact, _ = from_failure_context(ctx)
         obs_store = _make_obs_store(tmp_path / "obs.db")
         _stamp_applied(obs_store, "fix-1", exact.hash)
@@ -150,7 +135,7 @@ class TestBuildPromptCoaching:
             error_message="err", stack_trace="",
             manifest_json='{"id": "b1", "modules": [], "edges": []}',
             started_at="2020-01-01", finished_at="2020-01-01",
-        )
+         engine="spark",)
         result = build_prompt(ctx, tmp_path, coaching=True, obs_store=None)
         assert "system" in result
         assert "user" in result
@@ -162,7 +147,7 @@ class TestBuildPromptCoaching:
             error_message="err", stack_trace="",
             manifest_json='{"id": "b1", "modules": [], "edges": []}',
             started_at="2020-01-01", finished_at="2020-01-01",
-        )
+         engine="spark",)
         result = build_prompt(ctx, tmp_path, coaching=False, obs_store=None)
         assert "system" in result
         assert "user" in result

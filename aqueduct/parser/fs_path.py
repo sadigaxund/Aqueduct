@@ -42,9 +42,19 @@ def field_is_fs_path(metadata: tuple, annotation: type | None = None) -> FsPath 
     Handles ``Optional[Annotated[str, FsPath()]]`` where pydantic strips
     metadata from the union.
     """
+    import types
     from typing import Union
     from typing import get_args as _ga
     from typing import get_origin as _go
+
+    # Both spellings of a union origin. A PEP 604 annotation (`X | None`, which is
+    # how the optional path fields are actually declared, e.g.
+    # `Annotated[str, FsPath()] | None`) reports origin `types.UnionType` on
+    # Python 3.11-3.13 and only unifies to `typing.Union` on 3.14+. Matching only
+    # `typing.Union` silently skipped path-metadata detection for every OPTIONAL
+    # annotated path field on 3.11-3.13 — the same cross-version divergence the
+    # capability-leaf walker had (see aqueduct/executor/config_leaves.py).
+    _union_origins = (Union, types.UnionType)
 
     # Check metadata first (direct Annotated[...])
     for m in metadata:
@@ -56,7 +66,7 @@ def field_is_fs_path(metadata: tuple, annotation: type | None = None) -> FsPath 
     # Check annotation — handles `Annotated[str, FsPath()] | None` et al.
     if annotation is not None:
         origin = _go(annotation)
-        if origin is Union:
+        if origin in _union_origins:
             for arg in _ga(annotation):
                 sub_origin = _go(arg)
                 if sub_origin is not None:

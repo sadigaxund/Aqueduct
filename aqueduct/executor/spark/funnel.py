@@ -51,6 +51,11 @@ if TYPE_CHECKING:
 from aqueduct.errors import AqueductError
 from aqueduct.models import Module
 
+# Named so the capability-leaf walker (aqueduct/executor/capability_leaves.py)
+# can derive `funnel.mode.*` leaves without importing pyspark — this module
+# carries no module-level pyspark import (only a TYPE_CHECKING one).
+VALID_MODES: frozenset[str] = frozenset({"union_all", "union", "coalesce", "zip"})
+
 
 class FunnelError(AqueductError):
     """Raised when a Funnel module cannot be executed."""

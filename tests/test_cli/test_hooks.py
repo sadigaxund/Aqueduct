@@ -371,3 +371,81 @@ class TestValidateHookCycle:
         assert result.exit_code == 0
         data = _json.loads(result.output)
         assert any(f.get("hook_warnings") for f in data["files"])
+
+
+class TestInProcessHookEngine:
+    """Regression: `_run_in_process_blueprint_hook` used to hardcode
+    `get_executor("spark")` regardless of the parent run's actual engine —
+    an `in_process: true` chained blueprint would always execute on Spark
+    even when the parent (and its live `session`) was DuckDB, crashing with
+    an AttributeError the first time it touched the DuckDB connection as if
+    it were a SparkSession. Caught by gallery snippet 42_hooks_lifecycle
+    under a duckdb-engine census run (Phase 78 checkpoint 3b)."""
+
+    def test_in_process_hook_compiles_and_executes_through_parent_engine(self, tmp_path, monkeypatch):
+        from unittest.mock import MagicMock
+
+        from aqueduct.cli import hooks as hooks_mod
+
+        target = tmp_path / "target.yml"
+        target.write_text(
+            "aqueduct: '1.0'\nid: target\nname: Target\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = tmp_path / "a.yml"
+        bp.write_text("aqueduct: '1.0'\nid: a\nname: A\nmodules: []\nedges: []\n")
+
+        seen_engines: list[str] = []
+
+        def fake_get_executor(engine):
+            seen_engines.append(engine)
+            fn = MagicMock()
+            fn.return_value = MagicMock(status="success")
+            return fn
+
+        import aqueduct.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "get_executor", fake_get_executor)
+
+        hooks_mod.run_hooks(
+            (HookEntry("blueprint", str(target), in_process=True),), "on_success",
+            run_id="r1", status="success", blueprint_id="a", blueprint_path=str(bp),
+            allow_command_hooks=False, session=object(), engine="duckdb",
+        )
+        assert seen_engines == ["duckdb"], (
+            f"in_process hook must compile+execute through the PARENT's engine "
+            f"('duckdb'), not a hardcoded default; got {seen_engines}"
+        )
+
+    def test_run_hooks_default_engine_is_spark_for_backward_compat(self, tmp_path, monkeypatch):
+        """Callers that don't pass `engine=` (none should exist outside this
+        module, but the default matters for any future/third-party caller)
+        keep today's Spark behavior."""
+        from unittest.mock import MagicMock
+
+        from aqueduct.cli import hooks as hooks_mod
+
+        target = tmp_path / "target.yml"
+        target.write_text(
+            "aqueduct: '1.0'\nid: target\nname: Target\nmodules: []\nedges: []\n",
+            encoding="utf-8",
+        )
+        bp = tmp_path / "a.yml"
+        bp.write_text("aqueduct: '1.0'\nid: a\nname: A\nmodules: []\nedges: []\n")
+
+        seen_engines: list[str] = []
+
+        def fake_get_executor(engine):
+            seen_engines.append(engine)
+            fn = MagicMock()
+            fn.return_value = MagicMock(status="success")
+            return fn
+
+        import aqueduct.executor as executor_mod
+        monkeypatch.setattr(executor_mod, "get_executor", fake_get_executor)
+
+        hooks_mod.run_hooks(
+            (HookEntry("blueprint", str(target), in_process=True),), "on_success",
+            run_id="r1", status="success", blueprint_id="a", blueprint_path=str(bp),
+            allow_command_hooks=False, session=object(),
+        )
+        assert seen_engines == ["spark"]

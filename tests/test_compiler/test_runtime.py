@@ -187,6 +187,7 @@ class TestAqMeta:
             blueprint_id="my_bp", blueprint_name="My BP",
             blueprint_path="/proj/blueprints/my_bp.yml",
             deployment_env="cluster", deployment_target="databricks",
+            deployment_engine="spark",
         )
         assert resolve_tier1_str("@aq.blueprint.id()", reg) == "my_bp"
         assert resolve_tier1_str("@aq.blueprint.name()", reg) == "My BP"
@@ -194,7 +195,46 @@ class TestAqMeta:
         assert resolve_tier1_str("@aq.blueprint.dir()", reg) == "/proj/blueprints"
         assert resolve_tier1_str("@aq.deployment.env()", reg) == "cluster"
         assert resolve_tier1_str("@aq.deployment.target()", reg) == "databricks"
+        assert resolve_tier1_str("@aq.deployment.engine()", reg) == "spark"
         assert resolve_tier1_str("@aq.version()", reg)  # non-empty
+
+    def test_engine_comes_from_the_compile_target_not_a_config_guess(self):
+        """`@aq.deployment.engine()` resolves to the engine compile() was asked for,
+        so the same Blueprint can stamp the engine into an output path or tag when
+        it runs on more than one engine."""
+        from aqueduct.compiler.compiler import compile as compile_bp
+        from aqueduct.parser.parser import parse_dict
+
+        bp = parse_dict(
+            {
+                "aqueduct": "1.0",
+                "id": "engine_stamp",
+                "name": "Engine stamp",
+                "modules": [
+                    {
+                        "id": "src",
+                        "label": "src",
+                        "type": "Ingress",
+                        "config": {"format": "parquet", "path": "in.parquet"},
+                    },
+                    {
+                        "id": "out",
+                        "label": "out",
+                        "type": "Egress",
+                        "config": {
+                            "format": "parquet",
+                            "path": "out/@aq.deployment.engine()/data.parquet",
+                            "mode": "overwrite",
+                        },
+                    },
+                ],
+                "edges": [{"from": "src", "to": "out"}],
+            },
+            base_dir=".",
+        )
+        manifest = compile_bp(bp, engine="spark")
+        egress = next(m for m in manifest.modules if m.id == "out")
+        assert egress.config["path"].endswith("out/spark/data.parquet")
 
     def test_meta_in_path_expression(self):
         reg = AqFunctions(blueprint_id="sales", blueprint_path="/p/sales.yml")

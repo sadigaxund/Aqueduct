@@ -1,8 +1,11 @@
-# Aqueduct Spark Guide
+# Aqueduct Spark Engine Guide
 
-Single reference for Spark behavior in Aqueduct, covers both blueprint authoring
-(compiler warnings, cost model) and internal implementation rules (contributor rules,
-pitfalls, transformation reference).
+Single reference for the **Spark engine's** behavior in Aqueduct, covers both
+blueprint authoring (compiler warnings, cost model) and internal implementation
+rules (contributor rules, pitfalls, transformation reference) for that engine
+specifically. Aqueduct supports multiple executor engines; see
+[the engine capability matrix](compatibility.md) for what each engine supports
+and how they differ.
 
 **Contents:**
 [Compiler Warnings](#compiler-warnings) ·
@@ -48,6 +51,7 @@ warnings are **not suppressible**.
 
 | Rule id | Flags | Detail |
 |---|---|---|
+| ~~`ambiguous_type_spelling`~~ | Escalated to a **compile error** (bare `timestamp` in a `schema_hint`/`cast`/`return_type` type string means a different value per engine — instant vs. naive); no deprecation window, no longer suppressible — engine-agnostic, not Spark-specific | [ambiguous-type-spelling](#ambiguous-type-spelling) |
 | `delivery_append_retry_dupes` | `mode: append` with `max_attempts > 1`: retries may produce duplicate rows | [delivery-append-retry-dupes](#delivery-append-retry-dupes) |
 | ~~`maintenance_optimize_non_delta`~~ | Escalated to a **compile error** (deterministic runtime failure, OPTIMIZE is Delta-only); no longer suppressible | [maintenance-optimize-non-delta](#maintenance-optimize-non-delta) |
 | `perf_delta_append_no_partition` | `mode: append` without `partition_by`/repartition accumulates small files | [append-no-partition](#append-no-partition) |
@@ -191,6 +195,26 @@ metadata overhead, Hive metastore thrash).
 (append, overwrite, etc.) and all problematic formats (parquet, json, csv). This warning
 is narrower: only `append` mode: because the severity is higher (compounding over time
 vs. a one-time small-file problem).
+
+---
+
+#### `ambiguous-type-spelling`
+
+**Now a compile ERROR** (was warning `ambiguous_type_spelling`, no deprecation
+window): a type string (Ingress `schema_hint`, Channel `op: cast` columns, UDF
+`return_type`) spells a column type as bare `timestamp` — engine-agnostic, fires
+at compile time regardless of `deployment.engine`.
+
+`timestamp` means an INSTANT on Spark (normalized against the session time zone) and
+a NAIVE wall-clock value with no zone on DuckDB — the same Blueprint, unmodified,
+would resolve to a different value on each engine. Aqueduct's internal type
+vocabulary (`aqueduct/typehub.py`) spells the two meanings out explicitly:
+`timestamp_tz` for an instant, `timestamp_ntz` for a naive value. There is no safe
+default to silently fall back on, so this raises unconditionally — it cannot be
+suppressed via `warnings.suppress` or `--suppress-warning`.
+
+**Fix:** Write `timestamp_tz` or `timestamp_ntz` explicitly, or, if the Blueprint
+targets one engine only, the engine-native spelling (`spark:timestamp`).
 
 ---
 

@@ -41,6 +41,9 @@ if TYPE_CHECKING:
     from pyspark.sql import Column, DataFrame
 
 from aqueduct.errors import AqueductError
+from aqueduct.executor.channel_ops import ALL_OPS as _ALL_OPS
+from aqueduct.executor.channel_ops import MULTI_INPUT_OPS as _MULTI_INPUT_OPS
+from aqueduct.executor.channel_ops import SQL_OPS as _SQL_OPS
 from aqueduct.models import Module
 
 logger = logging.getLogger(__name__)
@@ -50,14 +53,6 @@ _SINGLE_INPUT_ALIAS = "__input__"
 _VALID_JOIN_TYPES = frozenset(
     {"inner", "left", "right", "full", "semi", "anti", "cross"}
 )
-
-_SQL_OPS = frozenset({"sql", "join"})
-_SINGLE_INPUT_OPS = frozenset(
-    {"deduplicate", "filter", "select", "rename", "cast", "sort", "repartition", "coalesce", "cache"}
-)
-_MULTI_INPUT_OPS = frozenset({"union"})
-
-_ALL_OPS = _SQL_OPS | _SINGLE_INPUT_OPS | _MULTI_INPUT_OPS
 
 
 class ChannelError(AqueductError):
@@ -227,13 +222,38 @@ def _execute_cast(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:
 
     result = df
     for col_name, col_type in mapping.items():
+        rendered_type = _normalize_cast_type(module_id, col_name, col_type)
         try:
-            result = result.withColumn(col_name, F.col(col_name).cast(col_type))
+            result = result.withColumn(col_name, F.col(col_name).cast(rendered_type))
         except Exception as exc:
             raise ChannelError(
                 f"[{module_id}] op=cast failed for column {col_name!r} → {col_type!r}: {exc}"
             ) from exc
     return result
+
+
+def _normalize_cast_type(module_id: str, col_name: str, t: str) -> str:
+    """Render a Channel ``op: cast`` column type through the Arrow type hub
+    (Phase 80 work package 3) to Spark's own DDL spelling before handing it
+    to ``F.col(...).cast(...)``.
+
+    Previously this value reached Spark's own DDL parser completely raw —
+    that happens to work for most hub spellings (Spark's DDL already matches
+    the hub's own canonical scalar/composite syntax character-for-character,
+    see ``spark.type_render``'s module docstring) but silently produces the
+    WRONG cast for ``timestamp_tz``, which is not itself valid Spark DDL
+    (Spark spells the instant type plain ``timestamp``). See
+    ``aqueduct.executor.spark.type_render.normalize_type_spelling`` for the
+    raw-passthrough fallback that keeps every previously-working Spark-only
+    spelling (``interval day to second``, ``variant``, ...) unchanged.
+    """
+    from aqueduct.errors import EnginePluginError
+    from aqueduct.executor.spark.type_render import normalize_type_spelling
+
+    try:
+        return normalize_type_spelling(t)
+    except EnginePluginError as exc:
+        raise ChannelError(f"[{module_id}] op=cast column {col_name!r}: {exc}") from exc
 
 
 def _execute_sort(module_id: str, df: DataFrame, cfg: dict) -> DataFrame:

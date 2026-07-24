@@ -58,7 +58,7 @@ def test_doctor_warn_adds_hints_before_agent(
         finished_at="2026-05-11T00:00:00Z",
         blueprint_source_yaml="id: test_bp",
         doctor_hints=[]
-    )
+    , engine="spark")
     mock_surveyor_cls.return_value = mock_surveyor_instance
     # Prevent MagicMock from poisoning find_pending/find_replay_candidate
     mock_surveyor_instance.observability = None
@@ -113,7 +113,7 @@ def test_doctor_exception_swallowed_hints_empty(
         finished_at="2026-05-11T00:00:00Z",
         blueprint_source_yaml="id: test_bp",
         doctor_hints=[]
-    )
+    , engine="spark")
     mock_surveyor_cls.return_value = mock_surveyor_instance
     mock_surveyor_instance.observability = None
     mock_surveyor_instance.patch_store.return_value = None

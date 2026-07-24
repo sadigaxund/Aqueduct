@@ -6,6 +6,26 @@
 pip install -e ".[dev]"
 ```
 
+## Dependency lock (CI and dev environments)
+
+Two tiers, doing different jobs:
+
+- `pyproject.toml` keeps version **ranges**. Aqueduct is a published library, so exact pins there would make it uninstallable next to your own stack. Do not pin it.
+- `requirements/*.txt` are committed pip **constraints** files that pin the CI/dev environment. A constraints file adds nothing to an install: it fixes the version of whatever the ranges resolve to, so a lane installs the same tree today and in six months. CI applies them through `PIP_CONSTRAINT`, and you can do the same locally:
+
+```bash
+PIP_CONSTRAINT=requirements/ci-py311.txt pip install -e ".[dev,spark]"
+```
+
+Regenerate after changing a dependency range in `pyproject.toml`:
+
+```bash
+bash scripts/lock.sh          # needs uv: pipx install uv
+git diff requirements/        # review what moved, then commit
+```
+
+One lane is deliberately not locked: the `snippets` canary in `.github/workflows/version-matrix.yml` resolves fresh on every run, so it goes red first when an upstream release breaks something. Setting `PIP_CONSTRAINT` there would remove the only lane watching upstream. See `docs/compatibility.md`.
+
 ## Requirements
 
 - Python 3.11+

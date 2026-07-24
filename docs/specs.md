@@ -1,8 +1,8 @@
 # Aqueduct: Blueprint & Engine Reference
 
-**Version 2.15: Reference Document**
+**Version 2.32: Reference Document**
 
-*Self-healing LLM-integrated pipelines for Apache Spark*
+*Self-healing LLM-integrated data pipelines*
 *Declarative · Observable · Autonomous · Self-healing*
 
 Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Probe · Regulator · Spillway · Arcade · Surveyor
@@ -14,7 +14,7 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 > - **[Production Guide](production_guide.md)**: Cluster deployment, security, Delta operations
 > - **[Roadmap](roadmap.md)**: Deferred features and future plans
 
-**Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Spark Integration](#10-deployment--spark-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
+**Contents:** [1. Introduction](#1-introduction) · [2. Naming Glossary](#2-naming-glossary) · [3. System Architecture](#3-system-architecture) · [4. Blueprint Format](#4-blueprint-format) · [5. Context Registry](#5-context-registry) · [6. Observability, Probes & Flow Report](#6-observability-probes--flow-report) · [7. Lineage](#7-lineage) · [8. Self-Healing & LLM Agent Loop](#8-self-healing--llm-agent-loop) · [9. Type System](#9-type-system) · [10. Deployment & Engine Integration](#10-deployment--engine-integration) · [11. Engine Scope & Boundaries](#11-engine-scope--boundaries)
 
 ---
 
@@ -22,11 +22,15 @@ Blueprint · Module · Ingress · Channel · Egress · Junction · Funnel · Pro
 
 ## **1.1 Purpose of this document**
 
-This document is the complete system design and implementation reference for Aqueduct, an intelligent, declarative Spark pipeline engine with integrated LLM-driven self-healing. It covers every component, design decision, data contract, configuration schema, and runtime behaviour.
+This document is the complete system design and implementation reference for Aqueduct, a declarative data-pipeline engine with integrated LLM-driven self-healing. It covers every component, design decision, data contract, configuration schema, and runtime behaviour.
+
+A parenthesised version such as `(2.8)` after a heading or a field name marks the Aqueduct release in which that behaviour first shipped. It is a compatibility note for readers on an older version, not part of the feature's name.
 
 ## **1.2 What Aqueduct is**
 
-Aqueduct is a control plane for Apache Spark. It does not replace Spark, it wraps it. Engineers and LLM agents author pipelines as YAML Blueprint files. Aqueduct parses, validates, compiles, plans, and executes those Blueprints as Spark jobs, monitoring them continuously and autonomously patching failures when they occur.
+Aqueduct is a control plane for a data-processing engine. It does not replace the engine, it wraps it. Engineers and LLM agents author pipelines as YAML Blueprint files. Aqueduct parses, validates, compiles, plans, and executes those Blueprints on the engine named by `deployment.engine`, monitoring them continuously and autonomously patching failures when they occur.
+
+Two engines ship today: Apache Spark (the reference engine, distributed) and DuckDB (single-node, in-process). The Blueprint grammar is the same on both. The engines are not interchangeable, and Aqueduct does not pretend otherwise: each engine declares exactly which parts of the grammar it runs, and the compiler refuses a Blueprint that asks its target engine for something the engine has not declared. §10.9 describes that contract.
 
 The name is deliberate: a Roman aqueduct is precision-engineered infrastructure for carrying flow reliably across vast distances, planned on actual blueprints (forma), and built to strict tolerances. Aqueduct the software carries data flow with the same philosophy, structured, observable, and resilient.
 
@@ -48,7 +52,7 @@ These principles govern every design decision in the system. When two requiremen
 | **P4: Static resolution first** | Any value that can be resolved at parse time must be. Runtime resolution is explicit, opt-in, and visually distinct in Blueprint syntax. |
 | **P5: Patch grammar over codegen** | The LLM agent operates within a structured Patch grammar, not free-form code generation. Every patch is schema-valid, auditable, and reversible. |
 | **P6: Passive-by-default gates** | Flow control constructs (Regulators, Spillways) do not exist in the execution path unless explicitly wired. Unwired gates compile away entirely. |
-| **P7: Pure Spark type system** | Aqueduct owns no type system. All types are Spark DDL strings. Semantic constraints are annotations, not types. |
+| **P7: Adopt Arrow, invent nothing** | Aqueduct invents no types of its own. It adopts Apache Arrow's type model as the interchange vocabulary — a deliberately chosen subset, not a mirror — and each engine declares how it maps to and from it. Semantic constraints are annotations, not types. See §9. |
 | **P8: Provenance-aware LLM context** | Every value the LLM reasons about is backed by a compile-time provenance index. The agent never receives raw Blueprint YAML to reverse-engineer, it receives resolved values tagged with their origin. |
 
 ---
@@ -687,6 +691,7 @@ Two rules to keep in mind:
 | `@aq.blueprint.path()` | Absolute path of the Blueprint file. |
 | `@aq.deployment.env()` | `deployment.env` (e.g. `dev` / `cluster` / `cloud`), branch paths/behaviour by environment. |
 | `@aq.deployment.target()` | `deployment.target` (e.g. `local` / `databricks`). |
+| `@aq.deployment.engine()` | The execution engine this Manifest is compiled for (`deployment.engine`, e.g. `spark`): stamp it into an output path or a tag when the same Blueprint runs on more than one engine. |
 | `@aq.version()` | The Aqueduct engine version: useful for stamping outputs. |
 
 > `@aq.blueprint.* / @aq.deployment.*` exposes **pipeline identity + deployment context** known at compile time. Note what is **deliberately absent**: `cwd` / user / host, those differ across laptop ↔ CI ↔ Spark driver ↔ cluster, so they would make a Blueprint non-reproducible. Use `@aq.blueprint.dir()` as the stable anchor instead.
@@ -774,7 +779,7 @@ udf_registry:
 | :- | :- | :- |
 | `id` | all | UDF name as referenced in `udfs:` lists and SQL. Required. |
 | `lang` | all | `python` (default), `java`, or `scala`. |
-| `return_type` | all | Spark DDL type string (default `string`). |
+| `return_type` | all | Hub type spelling (§9) — Aqueduct's own portable vocabulary, not raw engine DDL (default `string`). |
 | `module` | python | Importable module path. Required for python. |
 | `entry` | python | Function name in `module` (defaults to `id`). With `params`, treated as a factory `entry(**params) -> callable`. |
 | `params` | python | Optional keyword map passed to the `entry` factory. Values resolve `${ctx.*}`/`${ENV}` and `@aq.*` (incl. `@aq.secret()`) at compile time. |
@@ -1336,6 +1341,70 @@ one write, not N. `human`/`ci` modes stage exactly ONE combined patch
 (with each link's rationale folded into the staged patch's `rationale`
 field) instead of cycling through N separate pending-patch reviews.
 
+## **8.14 Heal-patch cross-engine provenance**
+
+The healing system prompt is engine-flavored by design (§8's composed-prompt
+rule: each engine registers its own `PromptRules` pack). A patch generated
+while healing a DuckDB run can therefore carry DuckDB-dialect SQL, cast
+syntax, or format options; if the same Blueprint is later compiled for
+Spark, that content may be wrong there. Without provenance, healing could
+silently manufacture a production defect on a different engine than the one
+it was validated against.
+
+**The `healed_by:` block.** `aqueduct patch apply` (and the `agent.
+approval: auto` direct-write path) appends one record per applied patch to a
+top-level `healed_by:` list on the Blueprint YAML, machine-written via the
+same ruamel round-trip machinery as every other patch operation — Blueprint
+authors never hand-write it:
+
+```yaml
+healed_by:
+  - patch_id: fix-yellow-taxi-path
+    engine: duckdb
+    engine_version: "1.5.4"   # nullable — best-effort, from the installed package
+    run_id: run_20240412_143022_a3f9
+    classification: engine_shaped   # dialect_neutral | engine_shaped
+    applied_at: "2026-07-18T00:00:00Z"
+    validated_on: []          # engines a GREEN run has validated this patch on since
+```
+
+The block is compiler-consumed metadata only: no engine executes it, and it
+is excluded from `Manifest` assembly entirely, so it never perturbs a
+compiled Manifest's content or checkpoint hash.
+
+**Classification.** Every PatchSpec op (§8.5) is classified once, in
+`aqueduct/patch/provenance.py`, as `dialect_neutral` (retry/timeout,
+structural rewiring, resource/config numerics, schema hints — safe to carry
+across engines unmodified) or `engine_shaped` (can introduce SQL text, cast
+syntax, or format/session config). `set_module_config_key` is
+field-sensitive: classified by whether the config key it touches is
+dialect-bearing (`query`, `sql`, `format`, `mode`, `options.*`, …) or not
+(`path`, retry counts, …). A patch's overall classification is the max over
+its operations — one `engine_shaped` op makes the whole patch
+`engine_shaped`.
+
+**Compile-time gate.** For every `healed_by` record whose `classification`
+is `engine_shaped`, whose `engine` differs from the compile's target engine,
+and whose `validated_on` does not yet include the target engine, `compile()`
+emits a suppressible warning (rule_id `cross_engine_heal`) naming the patch,
+its origin engine, and the target engine. `dialect_neutral`-only records
+never warn — they carry no dialect content to be wrong about. This is a
+warning, not an unconditional error: healing's value is a shippable
+Blueprint, and a human/CI reviewer decides whether to ship anyway.
+
+**Strict escalation.** `warnings.strict` (`aqueduct.yml`, a list of
+`rule_id`s, default empty) promotes listed rules from warning to a hard
+`CompileError` — the same rule_id vocabulary as `warnings.suppress`, in the
+opposite direction. Setting `warnings.strict: [cross_engine_heal]` makes an
+unvalidated cross-engine heal fail the build.
+
+**Self-clearing.** A GREEN run on engine X (the CLI `run` command's success
+path) appends X to every `healed_by` record's `validated_on` list, when the
+block exists and X is not already present — a Blueprint with no `healed_by:`
+block is never touched. The stamp is best-effort: a write failure is logged
+and never fails an otherwise-successful run (`aqueduct/patch/apply.py::
+stamp_validated_engine`).
+
 **Sandbox requirement.** Progressive healing refuses to run with
 `agent.sandbox_mode: off`: a `ConfigError` at heal-start with an
 actionable message. Each link's advancement test depends on validating a
@@ -1361,30 +1430,59 @@ been reconciled; see `docs/roadmap.md`.
 
 # **9. Type system**
 
-## **9.1 Principle: Aqueduct owns no types**
+## **9.1 Aqueduct invents no types — it adopts Arrow's**
 
-All column types throughout Aqueduct: in `schema_hint` declarations, UDF `return_type` fields, column assertions, and the Flow Report, use Spark DDL type strings verbatim. Aqueduct does not define its own type system and does not wrap or alias Spark types.
+Wherever a Blueprint names a column type — Ingress `schema_hint`, Channel `op: cast`, UDF `return_type` — it writes a spelling from Aqueduct's own type vocabulary (`aqueduct/typehub.py`, "the hub"), not a raw engine-native string. The hub is not invented: it borrows Apache Arrow's type semantics for the constructors it defines, because Arrow already solved the one distinction that matters most here (an instant vs. a naive wall-clock value, below). It is deliberately a **subset** of Arrow's full taxonomy, not a mirror — no unions, no dictionary or run-end encoding, no fixed-size lists — just the constructors both a distributed engine (Spark) and a single-node columnar engine (DuckDB) can implement. There is no `pyarrow` dependency anywhere in this: the hub borrows Arrow's semantics, not Arrow's code.
 
-This guarantees complete compatibility and eliminates any translation layer between Aqueduct's type references and what Spark executes.
+Every hub type is a value type describing comparison and storage semantics, never an engine spelling:
 
-## **9.2 Accepted aliases**
+| Constructor | Canonical spelling | Semantics (Arrow-borrowed) |
+| :- | :- | :- |
+| Boolean | `boolean` | True/false. Arrow `bool`. |
+| Tiny int | `tinyint` | 8-bit signed, -128..127. Arrow `int8`. |
+| Small int | `smallint` | 16-bit signed. Arrow `int16`. |
+| Int | `int` | 32-bit signed. Arrow `int32`. |
+| Big int | `bigint` | 64-bit signed. Arrow `int64`. |
+| Float | `float` | 32-bit IEEE-754. Arrow `float32`. |
+| Double | `double` | 64-bit IEEE-754. Arrow `float64`. |
+| String | `string` | Variable-length UTF-8, unbounded. Arrow `string`/utf8. |
+| Binary | `binary` | Variable-length raw bytes, no encoding implied. Arrow `binary`. |
+| Date | `date` | Calendar date, no time-of-day, no zone. Arrow `date32`. |
+| Decimal | `decimal(p,s)` | Fixed-point, `p` total digits, `s` after the point — exact arithmetic, no binary-float rounding. Arrow `decimal128`. |
+| **Timestamp (tz)** | `timestamp_tz` | An **INSTANT** — a UTC point independent of any wall clock. Arrow `timestamp[us, tz=UTC]`. |
+| **Timestamp (ntz)** | `timestamp_ntz` | A **NAIVE** wall-clock value with no zone attached. Arrow `timestamp[us]` (no tz). |
+| Array | `array<T>` | Ordered, variable-length list, one element type. Arrow `list<T>`. |
+| Map | `map<K,V>` | Unordered association, one key/value type pair. Arrow `map<K,V>`. |
+| Struct | `struct<name:type,...>` | Ordered, fixed set of named, independently-typed fields. Arrow `struct<...>`. |
 
-For `schema_hint` and assertions, common aliases are normalized:
+`timestamp_tz` / `timestamp_ntz` is the load-bearing pair the whole hub exists to make explicit. Two `timestamp_tz` values from different source zones compare and sort correctly against each other, because both are already normalized to the same instant line. Two `timestamp_ntz` values compare as plain numbers — there is no instant they correspond to without an externally supplied zone. This is exactly the distinction Arrow's own type system already draws, which is why the hub borrows it rather than inventing a third scheme.
 
-| Alias | Canonical |
-| :- | :- |
-| `STRING` | `string` |
-| `LONG` | `bigint` |
-| `INTEGER` | `int` |
-| `BOOL` | `boolean` |
-| `SHORT` | `smallint` |
-| `BYTE` | `tinyint` |
-| `FLOAT` | `float` |
-| `DOUBLE` | `double` |
+A small set of familiar unambiguous aliases canonicalize silently at parse time (`long` → `bigint`, `integer` → `int`, `varchar`/`char` → `string`, `short` → `smallint`, `byte` → `tinyint`, `bool` → `boolean`). `decimal` with no precision/scale defaults to `decimal(10,0)`, matching Spark's own DDL default — a well-defined default, not an ambiguity.
+
+Four surfaces carry a type spelling: Ingress `schema_hint`, Channel `op: cast`'s type map, UDF `return_type`, and Flow Report / lineage's reported column types (rendered in hub spellings). `parser/schema.py` still types these fields as plain strings — the grammar itself is unchanged — but `aqueduct/compiler/compiler.py` now parses every one of them through `typehub.parse_type()` at compile time, so an unrecognized spelling is a compile-time `TypeSpellingError` naming the nearest valid spellings, not a runtime parser crash three layers down.
+
+## **9.2 Two kinds of ambiguity, two different rules**
+
+The hub draws a hard line between two kinds of "this spelling could mean more than one thing", because the correct response is opposite for each:
+
+- **Semantic ambiguity → reject at parse time, naming the alternatives.** A spelling is semantically ambiguous when the *value it describes* differs across engines — bare `timestamp` is the only one the hub currently defines this way. Spark's `timestamp` is an instant; DuckDB's `TIMESTAMP` is naive. The same Blueprint, unmodified, would silently mean a different value depending on which engine ran it. That is not a spelling problem the hub can quietly resolve — it is a genuine ambiguity in what the author meant, so the hub refuses to guess in silence and asks the author to say `timestamp_tz` or `timestamp_ntz` (or a native spelling naming one engine on purpose).
+- **Representational ambiguity → canonicalize silently.** A spelling is representational when several familiar strings name the *same* value type — `long` and `bigint` are both a 64-bit signed integer everywhere; there is no engine on which they diverge. These fold to one canonical spelling with no warning, because there was never a real choice being hidden.
+
+Misapplying this rule in either direction breaks the hub's contract: silently resolving `timestamp` (a semantic ambiguity) reintroduces exactly the bug the hub exists to prevent, and refusing `decimal` with no precision/scale as if it were semantically ambiguous (a representational default, not a real one) would make ordinary Spark-style DDL fail for no reason.
+
+**Bare `timestamp` is REJECTED at compile time.** There is no deprecation window: bare `timestamp` never parses. It raises a `TypeSpellingError` (surfaced as a compile-time `CompileError` at whichever surface used it — `schema_hint`, `cast`, or `return_type`) naming both explicit spellings and the single-engine native escape hatch. Write `timestamp_tz` or `timestamp_ntz` explicitly, or a native spelling (`spark:timestamp`) if the Blueprint intentionally targets one engine only. There is no suppress mechanism for this — it is not a warning.
+
+**The native namespace: an explicit, capability-gated escape hatch.** `<engine>:<spelling>` (e.g. `duckdb:HUGEINT`, `spark:interval day to second`) names a type in one engine's own vocabulary directly, bypassing the hub entirely. It is not validated for meaning, only for shape (non-empty engine token, non-empty spelling) — whatever that engine's own runtime parser accepts, it accepts. This is governed by the capability framework (`type.native.<engine>`, §10.9), not exempt from it: writing `duckdb:HUGEINT` into a Blueprint compiled for `spark` is a compile-time `CompileError` naming the spelling, because `type.native.duckdb` is `unsupported` on the Spark engine. Docs and templates **recommend the portable hub spellings** for anything that has one; the native hatch exists for spellings the hub genuinely has no equivalent for (DuckDB's `HUGEINT`, Spark's `interval`/`variant`), and using it is an explicit, honest statement that this Blueprint is written for one engine.
+
+## **9.3 The hub is a superset — it surfaces divergence, it does not hide it**
+
+Every constructor in the table above is now a capability leaf (`type.<constructor>`, one per registered engine, plus `type.native.<engine>` for the escape hatch — see §10.9), checked recursively against every inventoried type surface at compile time. `channel.op.cast` being `supported` says an engine implements a cast operation; `type.array` being `supported` on that same engine says it can additionally cast to a composite spelling. Both engines shipped today declare all sixteen constructors `supported`, each backed by a real runtime mapping (`ExecutorProtocol.render_type`, §10.9) from the hub's canonical spelling to that engine's own native DDL — `array<int>` renders to DuckDB's `INTEGER[]`, `timestamp_tz` renders to Spark's plain `timestamp`. A hub spelling used against an engine with no verdict for that constructor, or no `render_type` mapper at all, is refused at the seam it would otherwise reach a parser through — never silently forwarded to a parser that was never going to understand it.
+
+Read this plainly rather than as a portability guarantee: the hub does not make two engines equivalent, and it is not trying to. What it changes is the FAILURE MODE. Before the hub, an engine mismatch on a type — Spark's `timestamp` vs. DuckDB's `TIMESTAMP`, a composite spelling DuckDB's alias table didn't know — reached that engine's own parser raw and failed there, if it failed at all, as an engine stack trace with no Aqueduct context, or (worse, `timestamp`) didn't fail and just silently meant something different. The hub is a **superset** of what any one engine natively spells, chosen so that divergence between engines becomes a **visible refusal** — a `CompileError` or a named compiler warning, at the surface where the Blueprint is read — rather than a value that quietly means something else three layers downstream. That is a strictly honest trade, not a simplification: a Blueprint that only uses portable hub spellings on constructors every target engine declares `supported` runs the same way everywhere; one that reaches for a native escape hatch or a still-ambiguous bare spelling is now told so at compile time instead of finding out at 2am from a wrong row count.
 
 ---
 
-# **10. Deployment & Spark integration**
+# **10. Deployment & engine integration**
 
 ## **10.1 Engine configuration file**
 
@@ -1394,7 +1492,7 @@ The canonical field reference with descriptions and defaults lives in the `aqued
 
 | Block | Owns |
 | :- | :- |
-| `deployment` | Engine selection (`spark`), cluster target, master URL |
+| `deployment` | Engine selection (`engine: spark` or `engine: duckdb`), cluster target, master URL |
 | `stores` | Backend selection for observability, depot, blob, and benchmark (DuckDB / Postgres / Redis / local / s3 / gcs / adls) |
 | `probes` | Default probe signal limits |
 | `danger` | Safety-gate overrides |
@@ -1520,21 +1618,187 @@ Self‑healing is **disabled** on all remote‑submit targets, ``aqueduct run``
 skips the healing loop and ignores ``agent.approval``. Patches must be
 authored and applied locally before the next run.
 
+## **10.9 Engines and the capability framework**
+
+The Blueprint grammar (module types, Channel ops, Egress write modes, feature flags) is engine-agnostic by design. `deployment.engine` selects which engine runs a compiled Manifest. No engine is required to implement the whole grammar, and a leaf an engine does implement may still need a minimum dependency version. The capability framework makes both facts explicit and enforced, so a Blueprint that asks an engine for something it cannot do fails at compile time with a specific message instead of at runtime with an engine stack trace.
+
+### Engines that ship today
+
+| Engine | What it is | Install | Entry point |
+| :- | :- | :- | :- |
+| `spark` | The reference engine. Distributed, cluster or local. Implements the full grammar. | `aqueduct-core[spark]` | `aqueduct.executor.spark.engine` |
+| `duckdb` | Single-node, in-process. Implements a declared subset. | `aqueduct-core[duckdb]` | `aqueduct.executor.duckdb_.engine` |
+
+The two are not interchangeable, and Aqueduct does not present them as such. A Blueprint that compiles for both engines is one whose leaves both engines have declared `supported`. That is a property the compiler checks per Blueprint, not a property of the product.
+
+The DuckDB engine currently reads `parquet`, `csv`, and `json`; runs Channel `sql`, `join`, `filter`, `select`, `deduplicate`, `cast`, `rename`, `sort`, and `union`; runs every Junction mode and every Funnel mode; and writes `parquet` and `csv`. Channel `sql` and `join` are authored in Spark SQL and transpiled to DuckDB SQL with `sqlglot`. Assert, Probe, and Python and Java UDFs are declared `unsupported` rather than silently accepted. The per-leaf verdicts are published as a generated matrix (see below) rather than restated here.
+
+### How an engine registers
+
+An engine registers itself through the `aqueduct.engines` setuptools entry-point group (`pyproject.toml`'s `[project.entry-points."aqueduct.engines"]` table maps an engine name to a module, e.g. `spark = "aqueduct.executor.spark.engine"`). Importing that module registers the engine's capability declaration as a side effect. `aqueduct/executor/capabilities.py::load_engines()` resolves and imports every entry point in the group exactly once per process, and `get_capabilities()` calls it before looking an engine up. Core never imports an engine's package by name: a new engine (e.g. DuckDB) ships its own entry point and needs no edit to `aqueduct/compiler/`, `aqueduct/config.py`, or any other core module to become a valid `deployment.engine` value. `deployment.engine` is validated against the set of registered engines at config-load time, not a fixed list of literals.
+
+### Failing closed
+
+`get_capabilities()` raises `UnknownEngineError` (an `AqueductError`, subclassing `CompileError`) for an engine with no registered capability declaration: an unknown name, a typo, or an engine whose package/extra is not installed. The message names the engine and lists what is registered. The compile-time gate and the doctor capability check both let this propagate rather than degrading to an empty result: a misconfigured or unregistered engine is a loud, actionable failure, never a silently-skipped gate. Callers that must tell an unregistered engine apart from an ordinary compile failure do it by exception type, not by matching on the message.
+
+Two adjacent failure modes get their own diagnosis:
+
+- **No engines registered at all.** An empty registry means aqueduct's own entry points are invisible to `importlib.metadata`, in practice a stale install whose metadata predates the entry-point declaration. Since engine validation is fail-closed, that state would otherwise hard-fail every `aqueduct.yml` load with a misleading "Registered engines: []". The error says what it actually is: reinstall the package.
+- **A broken engine plugin.** An `aqueduct.engines` entry point that fails to import raises `EnginePluginError` (an `AqueductError`) naming the entry point, its target, and the underlying cause. A half-installed third-party engine surfaces as a clean Aqueduct error, not as a raw `ImportError` out of config loading. The plugin is broken or half-present, so the message ends in reinstall advice.
+- **An incomplete or invalid declaration.** A `capabilities.yml` with a leaf that has no row, a row still on `undeclared`, a row naming a leaf that does not exist, an illegal verdict, or a malformed version specifier raises `CapabilityDeclarationError` (an `AqueductError`). This is a dev-time build failure, typically a developer who has just added a schema key that every engine now owes a verdict for, so reinstalling the package fixes nothing. The message names the offending leaves (also carried on the exception as `.leaves`) and gives the fix that works: run `aqueduct dev capabilities sync`, then declare a verdict per engine. These two states are distinguished by exception type, never by matching message text.
+
+### Verdicts
+
+A verdict answers one question: if a Blueprint uses this leaf on this engine, what happens? Every engine declares one of four for every leaf.
+
+| Verdict | Meaning | Effect |
+| :- | :- | :- |
+| `supported` | The engine runs this leaf. May carry a `requires` version constraint, for example `format: custom` needs `pyspark>=4.0`. | Compiles. |
+| `unsupported` | The engine cannot run this leaf. | Blueprint leaf: `CompileError`. Config leaf: warning. |
+| `ignored_with_warning` | The engine accepts the leaf and it has no effect. | Suppressible warning under `engine_key_ignored`. |
+| `undeclared` | Nobody has decided yet. | Build failure at engine registration. |
+
+`undeclared` is a sentinel rather than a verdict, and it is deliberately distinct from `unsupported`. "We have not decided" and "we decided the engine cannot do it" are different states, and a framework that conflates them cannot tell an honest refusal from an oversight. It is what the sync tool writes for a newly discovered leaf, and the build stays red until a human replaces it.
+
+An engine earns `supported` rather than assuming it. For a leaf the engine executes (a Channel op, a format, a write mode, a module type, a feature flag) that means a real handler plus a test exercising it on that engine. For a leaf the engine never touches, where core orchestration behaves identically whichever engine is selected (the `agent:` block, webhooks, hooks, retry policy), it means an end-to-end test proving that on this engine, rather than an assumption that it must be so.
+
+### Declarations are data, one explicit row per leaf
+
+Each engine ships a YAML capability declaration alongside its package (`aqueduct/executor/spark/capabilities.yml`, `aqueduct/executor/duckdb_/capabilities.yml`) carrying one row for every capability leaf: a verdict, plus the optional `requires` constraint and `hint` text. Both files currently hold 261 rows: 160 Blueprint-grammar leaves and 101 engine-config leaves.
+
+There is no default-verdict sweep. An engine states which leaves it supports, one row at a time, and never "everything, by assumption". A third-party engine author ships reviewable data rather than Python.
+
+`load_declaration()` hard-validates the file at registration and raises `CapabilityDeclarationError` on: a row for a leaf that does not exist (a typo or a stale rename), an illegal verdict string, a malformed version specifier, a leaf with **no row at all**, or a row still parked on `undeclared`. An engine cannot register half-declared.
+
+### Where the per-engine differences are published
+
+There is one place to look up what an engine does with a given leaf: the engine matrix in `docs/compatibility.md`. It is generated from the same YAML declarations the compiler enforces, by `aqueduct dev capabilities docs`. Reading a verdict there and reading the gate's behaviour are the same act, so the published matrix cannot drift from the enforced one.
+
+This document therefore describes the grammar once, engine-neutrally, and does not annotate each feature with per-engine footnotes. When you need to know whether your target engine runs a feature, the matrix answers it, including the `hint` explaining why an `unsupported` leaf is unsupported and whether that is permanent or not yet built.
+
+### Type leaves
+
+The hub type vocabulary (§9.1's `aqueduct.typehub`) is itself governed by the capability framework. One `type.<constructor>` leaf exists per hub type constructor — `type.boolean`, `type.array`, `type.decimal`, `type.timestamp_tz`, and so on, derived from the hub's own constructor enumeration rather than hand-listed — plus one `type.native.<engine>` leaf per registered engine for that engine's `<engine>:<spelling>` escape hatch. The native namespace is governed, not exempt: `type.native.spark` is `supported` on Spark and `unsupported` on DuckDB, and `type.native.duckdb` the reverse, so writing a DuckDB-only spelling into a Blueprint compiled for Spark is a compile-time error naming the offending spelling, not a runtime parser crash on the wrong engine. The gate walks every inventoried type surface (Channel `cast` columns, Ingress `schema_hint` fields, UDF `return_type`) recursively, so a composite spelling like `array<map<string,int>>` checks `type.array`, `type.map`, `type.string`, and `type.int` individually — the leaf-verdict question ("does the engine implement this constructor at all").
+
+`ExecutorProtocol.render_type` (below) and `aqueduct.executor.protocol.render_native_type()` close the runtime half: they map a compiled spelling to each engine's own native type-system spelling at cast/schema_hint/UDF-return_type execution time, so a `supported` `type.*` leaf is backed by a real, working runtime path on both shipped engines — a composite spelling like `array<int>` renders to DuckDB's own `INTEGER[]` before the cast reaches DuckDB's parser. See §9.3 for the vocabulary's honest framing: a superset that surfaces engine divergence as a compile-time refusal rather than hiding it.
+
+### Engine notes: differences a verdict cannot express
+
+A verdict answers "does this engine run this leaf". Some differences are not of that shape: the engine runs the leaf, and the result differs in a way a reader needs to know. Those are listed here because there is nowhere in the data model to put them.
+
+- **DuckDB `mode: append` is not atomic.** It reads the existing file, appends with `UNION ALL BY NAME`, and rewrites the target. A failure part-way through can leave the target damaged. Spark's `append` adds files to a directory and does not rewrite what is there.
+- **DuckDB materialises some Channel ops eagerly.** `sql`, `join`, `deduplicate` with a key, and every Funnel mode write into a uniquely named temp table at once instead of staying lazy. DuckDB's `register()` binds a name in a mutable catalog rather than capturing a value, and module ids are reused as registration aliases across a run, so a relation left unevaluated could resolve against the wrong binding later.
+- **Bare `timestamp` is a hard compile-time rejection, not a warning** (§9.2): there is no deprecation window and no suppress mechanism — an author must write `timestamp_tz` or `timestamp_ntz` explicitly, so a Blueprint's zone semantics can never differ across engines by silent accident.
+
+### The engine and the healing loop
+
+Self-healing is engine-aware in two respects and engine-neutral in the rest. The engine supplies the healing prompt's persona and rules through `ExecutorProtocol.prompt_rules`, so an LLM diagnosing a DuckDB failure is told about DuckDB rather than about Spark. The engine also declares how its own exceptions map to `FailureContext` fields, through `ExecutorProtocol.extract_error`. Everything downstream of the prompt (the PatchSpec grammar, the apply gates, the budget, the patch lifecycle) is shared, because a patch is a Blueprint edit rather than engine-specific code.
+
+Two consequences are worth stating plainly. A Blueprint patched after a failure on one engine carries no record of which engine produced the patch: if you heal on one engine and deploy on another, the patch travels with the Blueprint and gets no check beyond the ordinary compile gate. And the error signature that backs budget accounting and the heal cache (§8.5) is computed from the error class, location, and message, so it does not distinguish two engines that fail the same way.
+
+### The compile gate
+
+`aqueduct/compiler/capability_check.py` runs as the last step of `compile()` (see §3, the compiler pipeline). A module using an `unsupported` leaf fails compilation with a `CompileError` naming the module, the leaf, the engine, and the capability's hint. A module using an `ignored_with_warning` leaf gets a suppressible warning under rule_id `engine_key_ignored`, following the same `warnings.suppress` mechanism as every other compiler warning (see §4.2). A `requires` version constraint does not fail compilation: compile time has no way to know which dependency versions are installed in the environment that will run the job.
+
+The gate checks three kinds of leaf:
+
+1. `module.type.<Type>`, the module kind, emitted for every module. An engine that does not run a whole module type (DuckDB does not run `Assert` or `Probe`) fails compilation cleanly instead of crashing mid-run.
+2. The per-module config-dispatch leaves: Channel op, Egress mode, format and on-new-columns policy, Ingress format, Junction and Funnel fan mode.
+3. The `feature.*` leaves the compiled Manifest actually exercises, derived from real Manifest fields rather than a hardcoded list. `feature.python_udf` and `feature.java_udf` come from each `udf_registry` entry's `lang`, so a Blueprint that declares no UDF exercises no UDF feature.
+
+On an engine that declares every leaf `supported`, all three kinds are a no-op and the gate stays silent.
+
+### The version check
+
+`aqueduct doctor` validates the constraint the compile gate cannot. `aqueduct/doctor/checks_io.py::check_capabilities` walks a compiled Blueprint's used capabilities and, for each one carrying a `requires` constraint, compares the installed dependency version (via `importlib.metadata`) against the declared specifier, reporting `ok`, `fail`, or `skip` (dependency not installed) per capability. `docs/compatibility.md` lists the version constraints each engine currently declares.
+
+### How the leaf set stays honest
+
+The canonical leaf set is derived rather than hand-maintained. Module types and pydantic schema fields come from `aqueduct/parser/schema.py` introspection; Channel ops, Egress modes, and Junction and Funnel fan modes come from named constants sitting next to their dispatch code; a small hand-curated set covers cross-cutting feature flags and the few formats with a dedicated code path (`aqueduct/executor/capability_leaves.py`). Every `aqueduct.yml` key comes from `AqueductConfig` introspection (`aqueduct/executor/config_leaves.py`).
+
+The closure test (`tests/test_capabilities/test_closure.py`) compares that derived set against each engine's YAML read straight from disk, and fails the build if a derived leaf has no row, if a row is still `undeclared`, or if a row names a leaf that no longer exists.
+
+Reading the YAML from disk rather than from the loaded registry is what makes the test meaningful. The walker is code and the declaration is data, and the test is only worth running if the two are independent sources that can actually disagree. A test that compares the registry against the walker its own table was generated from cannot fail, whatever the table says.
+
+### Verdict-to-test linking
+
+"`supported` requires a test" (see Verdicts, above) was policy rather than mechanism until every `supported` **EXECUTION** row — the leaves `aqueduct/executor/capability_leaves.py::execution_leaves()` derives (`module.type.*`, `channel.op.*`, `ingress.format.*`, `egress.format.*`/`.mode.*`/`.on_new_columns.*`, `junction.mode.*`, `funnel.mode.*`, `feature.*`) — gained an optional `tests:` key: a list of pytest node ids (`tests/test_executor_duckdb/test_executor.py::test_channel_filter`) or bare file paths where a whole file exercises the leaf. `config.*` leaves and the schema-authoring leaves (`module.field.*`, every `<block>.field.*`) are out of scope — they are warn-only or engine-invariant, with no per-engine runtime dispatch to exercise, so requiring a test id there would be busywork; `execution_leaves()` derives the in-scope set from the same per-category walkers `all_leaves()` unions, so the boundary is code, not a hand-maintained list.
+
+`tests/test_capabilities/test_verdict_test_links.py` enforces two things per engine, reading each declaration from disk the same independent-sources way `test_closure.py` does: every `supported` EXECUTION row names at least one test id, and every declared id resolves against the real test tree (the file exists; a `::name`/`::Class::method` node id names something pytest would actually collect). A row failing either check is a genuine gap, not a formatting error — the fix is to link a real test or leave the leaf unbacked and let the build say so loudly, never to invent an id or quietly downgrade the verdict. `aqueduct dev capabilities check` also reports missing/dangling test links (informational; it does not gate this command's exit code, which stays keyed to leaf completeness) so the same signal is visible outside pytest. `sync`/`scaffold` never touch an existing row's bytes, so a `tests:` block survives a sync unchanged; a freshly scaffolded leaf gets a bare `undeclared` string with no `tests:` key at all.
+
+### Adding a leaf: the workflow
+
+1. Add a field to `parser/schema.py` or `config.py`, or a Channel op, write mode, fan mode, or feature flag.
+2. The build breaks. Engine registration raises `CapabilityDeclarationError`, and the closure test names the offending leaf.
+3. Run `aqueduct dev capabilities sync`, which appends the new leaf to every engine's YAML as `undeclared`. The build stays red, because `undeclared` is not a verdict.
+4. A human replaces each `undeclared` with a real verdict for that engine.
+5. The build passes.
+
+`aqueduct dev capabilities check` reports drift without writing, which is what CI runs. `aqueduct dev capabilities docs` regenerates the engine matrix in `docs/compatibility.md` from the declarations.
+
+The four commands live in the installed package (`aqueduct/executor/capability_tooling.py`, exposed through `aqueduct/cli/dev.py`), not in the repository's `scripts/` directory, which is not in the wheel. An engine registers only once all 261 of its leaves carry a verdict, so an author who cannot generate the table cannot ship an engine: hand-writing 261 rows does not scale. `scripts/capabilities.py` is a thin wrapper that forwards to the same code, so there is exactly one implementation.
+
+### Starting a new engine
+
+An engine author needs nothing but `pip install aqueduct-core`. `aqueduct dev capabilities scaffold --engine <name>` writes a complete `capabilities.yml` with every leaf present and every verdict set to `undeclared`, so the author is walked through the entire grammar and config surface one leaf at a time and the engine will not register until each row is a real decision. The scaffold is generated from the walkers, so it cannot go stale the way a checked-in template would.
+
+Do not copy an existing engine's declaration. Cloning Spark's table hands a new engine 261 `supported` rows, which is a silent claim to implement the whole grammar and precisely the blindness the framework exists to prevent. Read it as a reference.
+
+### `ExecutorProtocol`: the execution contract
+
+A capability declaration says what an engine supports. `ExecutorProtocol` (`aqueduct/executor/protocol.py`) says how core talks to it. Every engine registers exactly one `ExecutorProtocol` instance, alongside its `EngineCapabilities`, as an import side effect of its `aqueduct.engines` entry-point module. The contract has three required members and an optional session-lifecycle pair.
+
+**`execute`**: `(manifest, session, ...) -> ExecutionResult`. A compiled `Manifest` and an engine session handle in, a frozen `ExecutionResult` out. The common run options (`run_id`, `store_dir`, `checkpoint_root`, `surveyor`, `depot`, `resume_run_id`, `from_module`, `to_module`, `block_full_actions`, `warnings_*`) are the uniform part every engine accepts. A second group — `OPTIONAL_EXECUTE_KWARGS` in `aqueduct/executor/protocol.py`: `parallel`, `use_observe`, `sampling`, `observability_store`, `explain_capture` — is optional: the shared run path passes them to every engine, and `ExecutorProtocol.execute_kwargs` (a `frozenset[str] | None`, `None` meaning "consumes everything") names which of them the engine's real `execute()` accepts. Every caller that might pass one of these — `aqueduct/cli/run.py`, the patch sandbox gate (`aqueduct/patch/preview.py::run_sandbox_gate`) — routes through `call_execute()`/`filter_execute_kwargs()` (same module), which drops anything outside the target engine's allowlist and emits one suppressible `engine_kwarg_ignored` warning per dropped kwarg (see "Config-leaf governance", below) instead of forwarding an option the real `execute()` would raise on, or dropping it with no signal at all. An engine's real `execute()` therefore never receives an option it cannot honour, and the caller is told when that happened.
+
+**`extract_error`**: an engine exception (or `None`) mapped to a `FailureContext` field dict (`error_class`, `root_exception`, `sql_state`, `suggested_columns`, `object_name`). Required, so an engine cannot register without a way to turn its own failures into the structured root-cause block the healing LLM reads.
+
+**`prompt_rules`**: a `PromptRules` pack, the engine-specific half of the healing system prompt. It carries `persona` (the prompt's opening line), `root_cause_note` (what the engine's structured root-cause block contains, the prose counterpart of `extract_error`'s output), `rules` (the engine's error idioms, its advice, its API and config references), and `defer` (a `DeferRules`: the engine's slice of the defer-to-human section, naming the infrastructure it can actually fail on and the languages its UDFs are written in). All are required except `DeferRules.extra_bullets`, where "this engine has no extra defer category" is a complete answer.
+
+**`make_session` / `close_session`**: `(SessionSpec) -> session` and `(session) -> None`, how an engine builds the handle `execute` runs against and tears it down. `SessionSpec` is the engine-agnostic construction request (`blueprint_id`, `engine_config`, `master_url`, `quiet`, `quiet_startup`, `engine_options`), the union of what registered engines need; an engine reads the fields it understands, so a single-node engine ignores `master_url`. `engine_options` is an opaque per-engine bag reserved for session needs the named fields don't cover — unpopulated by core, read only by an engine that understands its keys. Both members are optional at registration, because a compile-only engine or a test double has no session. The run path resolves them through `session_factory()` and `session_closer()`, which raise `EnginePluginError` naming the engine if a runnable engine reached the CLI without a factory.
+
+**`render_type`**: `(HubType | NativeType) -> str`, one parsed hub type (§9.2's `aqueduct.typehub`) rendered to the engine's own native type-system spelling. Optional at registration, the same optionality class as `make_session`/the diagnostic readers below, not the required class — a third-party engine can register without a complete type mapper. The degrade contract is narrow and explicit rather than a silent fallback: an engine with no `render_type` still runs a Blueprint using only its own native escape-hatch spellings (`"<engine>:<spelling>"`, rendered as `.spelling` verbatim — no mapping needed) and any spelling its own runtime parser accepts raw, but a hub spelling (`bigint`, `array<int>`, …) against it is refused, not silently forwarded to a parser that cannot read it. `aqueduct.executor.protocol.render_native_type(engine, spelling)` is the one seam every engine's cast / schema_hint / UDF-return-type runtime consumption routes through: it parses `spelling` via `typehub.parse_type`, unwraps a same-engine `NativeType` verbatim, raises `EnginePluginError` for a foreign-engine `NativeType` (defensive — the compile-time `type.native.*` gate should already have refused it on any gated path) or for a hub type with no `render_type` registered, and otherwise calls the engine's `render_type`. Both shipped engines register a mapper: Spark's (`aqueduct/executor/spark/type_render.py`) is mostly identity, since the hub's canonical spellings already match Spark DDL character-for-character, except the timestamp pair (`timestamp_tz` renders to Spark's plain `timestamp`, `timestamp_ntz` to Spark's own `timestamp_ntz`); DuckDB's (`aqueduct/executor/duckdb_/type_render.py`) renders every constructor to DuckDB's own SQL spelling, including the composite constructors (`array<T>` → `T[]`, `map<K,V>` → `MAP(K, V)`, `struct<name:type,...>` → `STRUCT(name TYPE, ...)`, recursively). Both mappers are pure string logic — no `pyspark`/`duckdb` import — so neither needs the lazy-import discipline `execute` does.
+
+### The healing prompt is composed
+
+The healing system prompt is composed, not monolithic. The engine-independent scaffold (the PatchSpec schema, the op-selection table, the provenance rules, the output contract, the generic defer categories, the coaching and history sections) lives in the agent layer and holds no engine-specific text. At prompt-build time the agent pulls the target engine's `PromptRules` pack through this registry and renders it into the scaffold's engine slots. The agent layer imports no engine specifics, and the engine layer imports nothing from the agent layer. A new engine therefore ships its own healing persona and rules with its executor: it cannot inherit another engine's advice by accident, and it cannot register with none at all.
+
+The scaffold is not one string. Parts of the prompt, including the defer-to-human section, are assembled at request time and only appear under certain settings. The guard against engine text leaking across therefore composes the whole prompt for a non-Spark engine, across every combination of those settings, and checks that no Spark vocabulary survives. Scanning the template constants alone would miss every fragment built around them.
+
+Both requirements are enforced structurally rather than by convention. `ExecutorProtocol.__post_init__` raises `EnginePluginError` at construction time if `execute`, `extract_error`, or the `PromptRules` pack is missing or incomplete. `get_executor(engine)` (`aqueduct/executor/__init__.py`) and `get_protocol(engine)` (`aqueduct/executor/protocol.py`) resolve through the same `load_engines()`-backed registry that `get_capabilities()` uses, and raise the same `UnknownEngineError` for an unregistered engine. Every failure on this seam is an `AqueductError`, never a bare builtin.
+
+Constructing an engine's protocol object never imports the engine's own heavy dependencies. For Spark, only calling `execute(...)` imports `pyspark`.
+
+### Config-leaf governance
+
+Everything above governs the Blueprint grammar. `aqueduct.yml`, the engine config, has its own leaf set: every `AqueductConfig` pydantic field, derived the same way (`aqueduct/executor/config_leaves.py::all_config_leaves()` walks the real `aqueduct/config.py` models rather than a hand-written list) and namespaced `config.*`, giving leaf ids like `config.deployment.master_url`, `config.stores.observability.backend`, and `config.agent.sandbox_master_url`. A field typed as a list or dict of sub-models (`stores.depots`, `agent.cascade`) is one atomic leaf rather than one per dynamic key. These leaves fold into the same closure test as the grammar leaves, so a registered engine must carry an explicit verdict for the union of both sets.
+
+The gate exists because a key that means nothing on the selected engine, `deployment.master_url` on a single-node engine for instance, was otherwise a silent no-op: accepted, validated, then ignored with no signal. At config-resolution time the gate checks every leaf the user explicitly set (pydantic's `model_fields_set`, at each nesting level, so untouched defaults never warn) against the target engine's verdict.
+
+Config-leaf verdicts always warn and never error. That asymmetry with the Blueprint gate is deliberate. A Blueprint is written for one pipeline on one engine, so an `unsupported` leaf there is a `CompileError`. An `aqueduct.yml` is not: the same file is expected to stay valid across engines, deployment profiles, and test overrides, and hard-failing config load over one inert key would make that impossible. So a config leaf resolving to anything other than `supported` emits one suppressible `engine_key_ignored` warning, using the same rule id and suppression machinery as the compile-time gate, and loading proceeds. `aqueduct/config.py::load_config()` runs the check once `deployment.engine` is validated, immediately before returning the resolved `AqueductConfig`.
+
+One limit is worth knowing: the rule covers keys that are inert on an engine, not keys that mean something different on one. A key that changes results rather than being ignored is not something a warning can describe.
+
+### `engine_kwarg_ignored`: the sibling rule for `execute()` kwargs
+
+`engine_key_ignored` covers Blueprint/`aqueduct.yml` **keys**. `execute()` **kwargs** — the optional run-option arguments a caller passes to `ExecutorProtocol.execute` (`parallel`, `use_observe`, `sampling`, `observability_store`, `explain_capture` — `OPTIONAL_EXECUTE_KWARGS` in `aqueduct/executor/protocol.py`) — are a different surface with the same failure mode: a kwarg meaningful to one engine and meaningless to another. `engine_kwarg_ignored` is its own rule id, using the identical `aqueduct.warnings.emit` suppression machinery (`warnings.suppress` in `aqueduct.yml`, or `--suppress-warning` on the CLI), so it composes with every other warning rule the same way.
+
+`call_execute(engine, ...)` / `filter_execute_kwargs(engine, kwargs, ...)` (`aqueduct/executor/protocol.py`) are the single mechanism: they look up the target engine's `ExecutorProtocol.execute_kwargs` allowlist, drop any `OPTIONAL_EXECUTE_KWARGS` name outside it, and emit one `engine_kwarg_ignored` warning per dropped kwarg naming both the kwarg and the engine. An engine that declares `execute_kwargs=None` (Spark today — its real `execute()` has a parameter for every name in `OPTIONAL_EXECUTE_KWARGS`) gets no filtering at all. Every caller that might pass one of these kwargs routes through this seam — `aqueduct/cli/run.py`'s run loop and the patch sandbox gate (`aqueduct/patch/preview.py::run_sandbox_gate`, which also resolves its target engine's own `ExecutorProtocol` for its session and `execute()` rather than hardcoding Spark) — so a kwarg the target engine cannot honour is never silently dropped and never raises `TypeError` out of a mismatched signature.
+
 ---
 
 # **11. Engine scope & boundaries**
 
 ## **11.1 What Aqueduct is**
 
-- A **batch processing engine** for Apache Spark. Every pipeline run is finite.
-- A **declarative control plane**. Engineers describe *what* the pipeline does, not *how* Spark executes it.
+- A **batch processing control plane**. Every pipeline run is finite.
+- A **declarative layer over an execution engine**. Engineers describe *what* the pipeline does, not *how* the engine executes it.
 - An **LLM-integrated operations tool**. Self-healing, patch lifecycle, and FailureContext are core.
 
 ## **11.2 What Aqueduct is not**
 
 | Out of scope | Recommended alternative |
 | :- | :- |
-| **Streaming (Spark Structured Streaming, Kafka)** | Deferred. Requires continuous process lifecycle management. |
+| **Streaming (Structured Streaming, Kafka)** | Deferred. Requires continuous process lifecycle management. |
 | **Native ML training pipelines** | MLflow Pipelines, Vertex AI, or Kubeflow. |
 | **Visual graph editor / UI** | The Blueprint YAML is always the source of truth. |
 | **Multi-pipeline orchestration (native)** | Use Airflow, Prefect, or cron to trigger `aqueduct run`. |

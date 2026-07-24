@@ -1,0 +1,592 @@
+# Spark engine capability declaration — DATA, not code.
+#
+# One explicit row per capability leaf. There is NO default-verdict sweep:
+# a leaf with no row here (or one left at `undeclared`) is a BUILD FAILURE at
+# engine registration (aqueduct/executor/capabilities.py::load_declaration).
+# That is what makes the closure guarantee real: this file (data) and the leaf
+# walker (code) are two INDEPENDENT sources, so they can actually disagree.
+#
+# Workflow: add a schema/config key -> build breaks -> run
+#   aqueduct dev capabilities sync
+# which appends the new leaf here as `undeclared` -> a human replaces that with
+# a real verdict for this engine.
+#
+# Verdicts: supported | unsupported | ignored_with_warning | undeclared
+# A bare string is the verdict. A mapping carries `support:` plus optional
+# `requires:` (dependency version constraints, checked by `aqueduct doctor`)
+# and `hint:` (actionable text shown to the user when the leaf is refused).
+
+engine: spark
+
+leaves:
+  agent.field.allow_defer: supported
+  agent.field.api_key: supported
+  agent.field.approval_mode: supported
+  agent.field.base_url: supported
+  agent.field.block_on_explain_regression: supported
+  agent.field.cascade: supported
+  agent.field.confidence_threshold: supported
+  agent.field.deep_loop: supported
+  agent.field.guardrails: supported
+  agent.field.max_chain: supported
+  agent.field.max_heal_attempts_per_hour: supported
+  agent.field.max_patches: supported
+  agent.field.max_reprompts: supported
+  agent.field.max_tool_calls: supported
+  agent.field.mode: supported
+  agent.field.model: supported
+  agent.field.on_heal_failure: supported
+  agent.field.on_pending_patches: supported
+  agent.field.patch_validation: supported
+  agent.field.progressive: supported
+  agent.field.prompt_context: supported
+  agent.field.provider: supported
+  agent.field.provider_options: supported
+  agent.field.regression_artifact: supported
+  agent.field.sandbox_mode: supported
+  agent.field.supports_tools: supported
+  agent.field.timeout: supported
+  agent_cascade_tier.field.allow_defer: supported
+  agent_cascade_tier.field.api_key: supported
+  agent_cascade_tier.field.base_url: supported
+  agent_cascade_tier.field.deep_loop: supported
+  agent_cascade_tier.field.max_reprompts: supported
+  agent_cascade_tier.field.max_seconds: supported
+  agent_cascade_tier.field.max_tokens: supported
+  agent_cascade_tier.field.model: supported
+  agent_cascade_tier.field.provider: supported
+  agent_cascade_tier.field.provider_options: supported
+  agent_cascade_tier.field.supports_tools: supported
+  agent_cascade_tier.field.timeout: supported
+  agent_guardrails.field.allowed_paths: supported
+  agent_guardrails.field.forbidden_ops: supported
+  agent_guardrails.field.heal_on_errors: supported
+  agent_guardrails.field.never_heal_errors: supported
+  backoff.field.base_seconds: supported
+  backoff.field.jitter: supported
+  backoff.field.max_seconds: supported
+  backoff.field.strategy: supported
+  channel.op.cache:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cache_default_storage_level
+  channel.op.cast:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_dict_form
+  channel.op.coalesce:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_coalesce_reduces_partitions
+  channel.op.deduplicate:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_deduplicate_key_only
+  channel.op.filter:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_filter_valid_condition
+  channel.op.join:
+    support: supported
+    tests:
+      - tests/test_executor/test_join.py::TestJoinOperation::test_join_end_to_end
+  channel.op.rename:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_rename_dict_form
+  channel.op.repartition:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_repartition_num_only
+  channel.op.select:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_select_list_of_columns
+  channel.op.sort:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_sort_string_order_by
+  channel.op.sql:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_channel_temp_view_registration
+  channel.op.union:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_union_two_upstreams
+  config.agent.api_key: supported
+  config.agent.base_url: supported
+  config.agent.block_on_explain_regression: supported
+  config.agent.budget.max_reprompts: supported
+  config.agent.budget.max_seconds: supported
+  config.agent.budget.max_tokens_total: supported
+  config.agent.budget.progress_stalled_window: supported
+  config.agent.budget.same_error_consecutive: supported
+  config.agent.budget.same_signature_overall: supported
+  config.agent.cascade: supported
+  config.agent.ci_webhook_url: supported
+  config.agent.max_chain: supported
+  config.agent.max_heal_attempts_per_hour: supported
+  config.agent.max_reprompts: supported
+  config.agent.max_tool_calls: supported
+  config.agent.memory.coaching: supported
+  config.agent.memory.replay: supported
+  config.agent.mode: supported
+  config.agent.model: supported
+  config.agent.patch_validation: supported
+  config.agent.progressive: supported
+  config.agent.prompt_context: supported
+  config.agent.provider: supported
+  config.agent.provider_options: supported
+  config.agent.regression_artifact: supported
+  config.agent.retry.backoff_seconds: supported
+  config.agent.retry.max_retries: supported
+  config.agent.sandbox_master_url: supported
+  config.agent.supports_tools: supported
+  config.agent.timeout: supported
+  config.aqueduct_config: supported
+  config.checkpoint_root: supported
+  config.danger.allow_command_hooks: supported
+  config.danger.allow_full_preflight: supported
+  config.danger.allow_full_probe_actions: supported
+  config.danger.allow_multi_patch: supported
+  config.danger.allow_skip_sandbox: supported
+  config.deployment.databricks.cluster_id: supported
+  config.deployment.databricks.libraries: supported
+  config.deployment.databricks.max_concurrent_runs: supported
+  config.deployment.databricks.new_cluster: supported
+  config.deployment.databricks.workspace_url: supported
+  config.deployment.engine: supported
+  config.deployment.env: supported
+  config.deployment.master_url: supported
+  config.deployment.target: supported
+  config.lineage.openlineage_namespace: supported
+  config.lineage.openlineage_url: supported
+  config.metrics.use_observe: supported
+  config.probes.default_sample_fraction: supported
+  config.probes.max_sample_rows: supported
+  config.secrets.provider: supported
+  config.secrets.region: supported
+  config.secrets.resolver: supported
+  config.spark_config: supported
+  config.stores.benchmark.backend: supported
+  config.stores.benchmark.gate_on_regression: supported
+  config.stores.benchmark.path: supported
+  config.stores.benchmark.persist: supported
+  config.stores.blob.backend: supported
+  config.stores.blob.path: supported
+  config.stores.depots: supported
+  config.stores.observability.backend: supported
+  config.stores.observability.path: supported
+  config.warnings.strict: supported
+  config.warnings.suppress: supported
+  config.webhooks.on_ci_patch.backoff_seconds: supported
+  config.webhooks.on_ci_patch.headers: supported
+  config.webhooks.on_ci_patch.health_probe: supported
+  config.webhooks.on_ci_patch.max_retries: supported
+  config.webhooks.on_ci_patch.method: supported
+  config.webhooks.on_ci_patch.payload: supported
+  config.webhooks.on_ci_patch.secret: supported
+  config.webhooks.on_ci_patch.timeout: supported
+  config.webhooks.on_ci_patch.url: supported
+  config.webhooks.on_failure.backoff_seconds: supported
+  config.webhooks.on_failure.headers: supported
+  config.webhooks.on_failure.health_probe: supported
+  config.webhooks.on_failure.max_retries: supported
+  config.webhooks.on_failure.method: supported
+  config.webhooks.on_failure.payload: supported
+  config.webhooks.on_failure.secret: supported
+  config.webhooks.on_failure.timeout: supported
+  config.webhooks.on_failure.url: supported
+  config.webhooks.on_patch_pending.backoff_seconds: supported
+  config.webhooks.on_patch_pending.headers: supported
+  config.webhooks.on_patch_pending.health_probe: supported
+  config.webhooks.on_patch_pending.max_retries: supported
+  config.webhooks.on_patch_pending.method: supported
+  config.webhooks.on_patch_pending.payload: supported
+  config.webhooks.on_patch_pending.secret: supported
+  config.webhooks.on_patch_pending.timeout: supported
+  config.webhooks.on_patch_pending.url: supported
+  config.webhooks.on_success.backoff_seconds: supported
+  config.webhooks.on_success.headers: supported
+  config.webhooks.on_success.health_probe: supported
+  config.webhooks.on_success.max_retries: supported
+  config.webhooks.on_success.method: supported
+  config.webhooks.on_success.payload: supported
+  config.webhooks.on_success.secret: supported
+  config.webhooks.on_success.timeout: supported
+  config.webhooks.on_success.url: supported
+  edge.field.error_types: supported
+  edge.field.from_id: supported
+  edge.field.port: supported
+  edge.field.to: supported
+  egress.format.custom:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_custom_dispatches_to_registered_datasource
+  egress.format.delta:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_write_merge_sql_backticks_and_keys
+  egress.format.depot:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_format_depot_value
+  egress.format.hudi:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_lakehouse.py::test_hudi_roundtrip_with_maintenance
+  egress.format.iceberg:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_lakehouse.py::test_iceberg_roundtrip_with_maintenance
+  egress.mode.append:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_on_new_columns_allow_writes
+  egress.mode.error:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_error_raises_on_existing_target
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_error_writes_fresh_target
+  egress.mode.errorifexists:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_errorifexists_raises_on_existing_target
+  egress.mode.ignore:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_ignore_is_silent_noop_on_existing_target
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_ignore_writes_fresh_target
+  egress.mode.merge:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_write_merge_sql_backticks_and_keys
+  egress.mode.overwrite:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_mode_overwrite
+  egress.mode.overwrite_partitions:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_overwrite_partitions_dynamic
+  egress.on_new_columns.alert:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_on_new_columns_alert_logs_and_writes
+  egress.on_new_columns.allow:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_on_new_columns_allow_writes
+  egress.on_new_columns.fail:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_on_new_columns_fail_raises
+  feature.broadcast_junction:
+    support: supported
+    tests:
+      - tests/test_executor/test_junction.py::test_broadcast
+  feature.checkpoint:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_checkpoint_blueprint_level_writes_parquet_and_marker
+  feature.custom_datasource:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "Custom Python DataSource requires pyspark>=4.0. See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_custom_source.py::test_import_valid_subclass
+  feature.delta_time_travel:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_time_travel_version_sets_option
+  feature.delta_write:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_write_merge_sql_backticks_and_keys
+  feature.java_udf:
+    support: supported
+    tests:
+      - tests/test_executor/test_udf.py::TestUdfRegistration::test_java_udf_registers_via_session_add_jar
+  feature.metrics_boundary:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_metrics_boundary_true_sql_op
+  feature.parallel_mode:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_parallel.py::test_execute_parallel_independent_success
+  feature.python_udf:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_udf_integration
+  feature.spillway:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_spillway_edge_and_condition
+  feature.table_addressing:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_egress.py::test_egress_table_overwrite
+  funnel.mode.coalesce:
+    support: supported
+    tests:
+      - tests/test_executor/test_funnel.py::test_coalesce_row_aligned
+  funnel.mode.union:
+    support: supported
+    tests:
+      - tests/test_executor/test_funnel.py::test_union
+  funnel.mode.union_all:
+    support: supported
+    tests:
+      - tests/test_executor/test_funnel.py::test_union_all_strict
+  funnel.mode.zip:
+    support: supported
+    tests:
+      - tests/test_executor/test_funnel.py::test_zip_row_aligned
+  healed_by.field.applied_at:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.classification:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.engine_version:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.patch_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.run_id:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  healed_by.field.validated_on:
+    support: supported
+    hint: Compiler-consumed provenance metadata — no engine executes it.
+  hook_entry.field.blueprint: supported
+  hook_entry.field.command: supported
+  hook_entry.field.in_process: supported
+  hook_entry.field.timeout: supported
+  hook_entry.field.webhook: supported
+  hook_entry.field.when_error: supported
+  hooks.field.on_failure: supported
+  hooks.field.on_healed: supported
+  hooks.field.on_patch_pending: supported
+  hooks.field.on_success: supported
+  ingress.format.csv:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_csv_defaults
+  ingress.format.custom:
+    support: supported
+    requires:
+      pyspark: ">=4.0"
+    hint: "format: custom requires pyspark>=4.0 (the spark.dataSource registry). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_format_custom_real_read
+  ingress.format.delta:
+    support: supported
+    requires:
+      delta-spark: ">=4.0"
+    hint: "Delta Lake features require the delta-spark package (aqueduct-core[spark] extra). See docs/compatibility.md."
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_time_travel_version_sets_option
+  ingress.format.depot:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_pathless_formats_no_error
+  ingress.format.jdbc:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_jdbc_with_path
+  ingress.format.kafka:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_ingress.py::test_ingress_pathless_formats_no_error
+  junction.mode.broadcast:
+    support: supported
+    tests:
+      - tests/test_executor/test_junction.py::test_broadcast
+  junction.mode.conditional:
+    support: supported
+    tests:
+      - tests/test_executor/test_junction.py::test_conditional_explicit_and_else
+  junction.mode.partition:
+    support: supported
+    tests:
+      - tests/test_executor/test_junction.py::test_partition_explicit_value
+  module.field.attach_to: supported
+  module.field.checkpoint: supported
+  module.field.config: supported
+  module.field.context_override: supported
+  module.field.depends_on: supported
+  module.field.description: supported
+  module.field.enabled: supported
+  module.field.id: supported
+  module.field.label: supported
+  module.field.on_failure: supported
+  module.field.on_failure_webhook: supported
+  module.field.ref: supported
+  module.field.retry: supported
+  module.field.spillway: supported
+  module.field.tags: supported
+  module.field.type: supported
+  module.type.Arcade:
+    support: supported
+    tests:
+      - tests/test_compiler/test_expander.py::TestArcadeExpansion::test_arcade_replaced_by_sub_modules
+  module.type.Assert:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_assert_end_to_end_abort
+  module.type.Channel:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_channel_linear
+  module.type.Egress:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_success
+  module.type.Funnel:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_funnel_union_all
+  module.type.Ingress:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_success
+  module.type.Junction:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_junction_conditional
+  module.type.Probe:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_probe_appended_last
+  module.type.Regulator:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_orchestration.py::test_execute_regulator_open_gate_no_surveyor
+  module_retry.field.backoff: supported
+  module_retry.field.deadline_seconds: supported
+  module_retry.field.max_attempts: supported
+  module_retry.field.non_transient_errors: supported
+  module_retry.field.on_exhaustion: supported
+  module_retry.field.transient_errors: supported
+  retry_policy.field.backoff: supported
+  retry_policy.field.deadline_seconds: supported
+  retry_policy.field.max_attempts: supported
+  retry_policy.field.non_transient_errors: supported
+  retry_policy.field.on_exhaustion: supported
+  retry_policy.field.transient_errors: supported
+  udf.field.class_name: supported
+  udf.field.deterministic: supported
+  udf.field.entry: supported
+  udf.field.id: supported
+  udf.field.jar: supported
+  udf.field.label: supported
+  udf.field.lang: supported
+  udf.field.module: supported
+  udf.field.params: supported
+  udf.field.path: supported
+  udf.field.return_type: supported
+  warnings.field.suppress: supported
+
+  # ── Arrow type-hub constructors (Phase 80 work package 2) ─────────────────
+  # One leaf per hub type CONSTRUCTOR (aqueduct/typehub.py), not per
+  # instantiation — `type.array` covers every `array<T>`. Every constructor
+  # is a real Spark DDL cast target (see the test cases linked below) so all
+  # sixteen are honestly `supported` on Spark, the reference engine. The
+  # native-namespace pair below is the governed escape hatch: `type.native.spark`
+  # ("spark:<spelling>") is Spark's own type system, so it is `supported`
+  # (proven by `variant`, a real Spark 4.0+ type outside the hub vocabulary);
+  # `type.native.duckdb` ("duckdb:<spelling>") names a DIFFERENT engine's
+  # native type system that Spark's own SQL parser cannot interpret, so it is
+  # honestly `unsupported` on Spark — the native namespace is GOVERNED per
+  # engine, not a blanket exemption.
+  type.array:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_array_map_struct
+  type.bigint:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.binary:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.boolean:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.date:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.decimal:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.double:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.float:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.int:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.map:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_array_map_struct
+  type.native.duckdb:
+    support: unsupported
+    hint: "'duckdb:<spelling>' names a type in DuckDB's native type system, which Spark's SQL parser does not understand. Use the hub vocabulary (bigint, array<T>, ...) or 'spark:<spelling>' for a Spark-native escape hatch."
+  type.native.spark:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_native_namespace_spark
+  type.smallint:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.string:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.struct:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_array_map_struct
+  type.timestamp_ntz:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.timestamp_tz:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors
+  type.tinyint:
+    support: supported
+    tests:
+      - tests/test_executor/test_executor_channel.py::test_cast_hub_type_constructors

@@ -254,6 +254,7 @@ class TestGenerateAgentPatch:
             run_id="run1", blueprint_id="bp1", failed_module="m1",
             error_message="msg", stack_trace="", manifest_json="{}",
             started_at="2020-01-01T00:00:00Z", finished_at="2020-01-01T00:00:00Z",
+            engine="spark",
         )
 
     def test_single_attempt_success(self, mock_call, fctx, tmp_path):
@@ -787,6 +788,7 @@ def _make_fctx(**overrides):
         manifest_json="{}",
         started_at="2020-01-01T00:00:00Z",
         finished_at="2020-01-01T00:00:00Z",
+        engine="spark",
     )
     base.update(overrides)
     return FailureContext(**base)

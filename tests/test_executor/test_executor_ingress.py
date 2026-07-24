@@ -123,6 +123,39 @@ def test_ingress_missing_format(spark: SparkSession):
         read_ingress(module, spark)
 
 
+def test_ingress_format_custom_real_read(spark: SparkSession, tmp_path):
+    """format: custom + class: imports + registers a real Spark 4.0+ Python
+    DataSource, then reads through it by its own name(). This is a genuine
+    round trip through spark.read.format(name).load() — schema and column
+    metadata come straight from the live registered reader (metadata access
+    on a custom-DataSource DataFrame is not a Spark action, so it needs no
+    pyarrow in this environment)."""
+    pytest.importorskip("pyspark.sql.datasource", reason="requires Spark 4.0+")
+
+    (tmp_path / "custom_ingress_ds.py").write_text(
+        "from pyspark.sql.datasource import DataSource, DataSourceReader\n\n"
+        "class _Reader(DataSourceReader):\n"
+        "    def read(self, partition):\n"
+        "        yield (1, 'a')\n"
+        "        yield (2, 'b')\n\n"
+        "class CustomIngressDS(DataSource):\n"
+        "    @classmethod\n"
+        "    def name(cls):\n"
+        "        return 'aq_test_custom_ingress'\n"
+        "    def schema(self):\n"
+        "        return 'id int, val string'\n"
+        "    def reader(self, schema):\n"
+        "        return _Reader()\n"
+    )
+    module = Module(id="m1", type="Ingress", label="M1", config={
+        "format": "custom",
+        "class": "custom_ingress_ds.CustomIngressDS",
+    })
+    df = read_ingress(module, spark, base_dir=str(tmp_path))
+    assert df.columns == ["id", "val"]
+    assert [f.dataType.simpleString() for f in df.schema.fields] == ["int", "string"]
+
+
 # ── schema_hint flat dict form ────────────────────────────────────────────────
 
 def test_schema_hint_flat_dict_pass(spark: SparkSession, tmp_path):
@@ -287,6 +320,44 @@ def test_type_not_in_alias_map_lowercased(spark: SparkSession, tmp_path):
     })
     df = read_ingress(module, spark)
     assert dict(df.dtypes)["v"] == "double"
+
+
+# ── Phase 80 work package 3: schema_hint now understands the hub vocabulary ─
+#
+# The old ``_TYPE_ALIASES`` (deleted, 5-entry dict: long/integer/bool/short/
+# byte) never mapped ``timestamp_tz``/``timestamp_ntz`` at all — a
+# ``timestamp_tz`` hint used to compare literally against Spark's
+# ``simpleString()`` (which is ``"timestamp"``, never "timestamp_tz") and
+# always mismatch. It now renders through the hub
+# (``aqueduct.executor.spark.type_render``) to Spark's real DDL spelling
+# before comparison.
+def test_schema_hint_hub_timestamp_tz_matches_spark_instant_type(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "data.parquet")
+    df_src = spark.createDataFrame([("2020-01-01",)], ["ts"])
+    df_cast = df_src.selectExpr("CAST(ts AS TIMESTAMP) AS ts")  # Spark's instant type
+    df_cast.write.parquet(path)
+
+    module = Module(id="m1", type="Ingress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "schema_hint": [{"name": "ts", "type": "timestamp_tz"}],
+    })
+    df = read_ingress(module, spark)
+    assert dict(df.dtypes)["ts"] == "timestamp"
+
+
+def test_schema_hint_hub_array_matches(spark: SparkSession, tmp_path):
+    path = str(tmp_path / "data.parquet")
+    df_src = spark.range(1).selectExpr("array(1, 2, 3) AS arr")
+    df_src.write.parquet(path)
+
+    module = Module(id="m1", type="Ingress", label="M1", config={
+        "format": "parquet",
+        "path": path,
+        "schema_hint": [{"name": "arr", "type": "array<int>"}],
+    })
+    df = read_ingress(module, spark)
+    assert dict(df.dtypes)["arr"] == "array<int>"
 
 
 # ── partition_filters ─────────────────────────────────────────────────────────

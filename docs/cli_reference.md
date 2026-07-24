@@ -363,6 +363,22 @@ The target backend is read from `aqueduct.yml` (`stores.*`), set it to `postgres
 
 ---
 
+## 7. Engine authoring (`aqueduct dev`)
+
+Tools for writing an execution engine. An engine registers through the `aqueduct.engines` entry-point group and cannot register until its `capabilities.yml` gives an explicit verdict for every capability leaf (261 today). These commands generate and maintain that file. See [specs.md §10.9](specs.md).
+
+| Command | Description |
+|---------|-------------|
+| `aqueduct dev capabilities scaffold --engine <name> [--out PATH] [--force]` | Write a complete `capabilities.yml` for a new engine, every leaf present with verdict `undeclared`. Default output: the engine's package directory under `aqueduct/executor/`. Refuses to overwrite without `--force`. |
+| `aqueduct dev capabilities sync` | Append every newly-derived leaf to each engine's `capabilities.yml` as `undeclared`. Never invents a verdict, never deletes a row: an orphaned row is reported for review. |
+| `aqueduct dev capabilities check` | Report drift (missing / `undeclared` / orphaned rows) without writing. Exit `1` if any engine is incomplete. This is the CI gate. |
+| `aqueduct dev capabilities docs [--out docs/compatibility.md]` | Regenerate the engine capability matrix between the `ENGINE_MATRIX_START` / `ENGINE_MATRIX_END` markers from the declarations. |
+| `aqueduct dev scaffold <kind> [--name N] [--module M] [--out DIR] [--force]` | Generate an extension stub for one seam: `probe` (custom Probe signal), `assert` (custom Assert rule), `udf` (python UDF), `datasource` (Python DataSource, Spark 4.0+), `secrets` (custom resolver). Writes the `.py` stub and prints the config snippet that points at it. Stubs are generated from the live contracts (schema models, Assert enums, the installed pyspark DataSource, the resolver's annotated type), so they cannot drift from what the loader expects. |
+
+The build stays red while any row is `undeclared`: it is a sentinel ("nobody has decided yet"), not a verdict, and registration raises `CapabilityDeclarationError` naming the leaves. Read Spark's `capabilities.yml` as a reference; copying it hands a new engine 261 `supported` rows, a claim to implement the whole grammar.
+
+---
+
 ## Exit codes
 
 | Code | Name | Meaning |

@@ -22,7 +22,8 @@ aqueduct_config: "1.0"
 # ── Deployment ────────────────────────────────────────────────────────────────
 
 deployment:
-  # engine: execution engine. Currently supported: spark.
+  # engine: execution engine. Validated against the engines registered
+  # through the aqueduct.engines entry-point group — currently: spark.
   engine: spark
 
   # target: deployment target. Validated against master_url at config-load;
@@ -770,6 +771,13 @@ agent:
 # # nuclear option — silence every Aqueduct warning:
 # warnings:
 #   suppress: ["*"]
+#
+# `warnings.strict` is the opposite direction: promote listed rule_ids from
+# warning to a hard CompileError. Default empty (no behaviour change). E.g.
+# to fail the build on an unvalidated cross-engine self-heal:
+# warnings:
+#   strict:
+#     - cross_engine_heal
 
 # ── Danger settings ───────────────────────────────────────────────────────────
 # All default to false (safe production mode). Set to true only when needed.

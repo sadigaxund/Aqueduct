@@ -15,12 +15,16 @@ Entry types (parser guarantees exactly one per entry):
                       belongs in ONE blueprint via Arcades / --parallel /
                       `enabled:`). `in_process: true` opts into parsing +
                       compiling + executing the target in THIS process,
-                      reusing the live SparkSession (session reuse — no
+                      reusing the live engine session (session reuse — no
                       self-healing loop for the chained target; falls back
                       to the subprocess path when the target's
                       `spark_config` is non-empty, since merging two
                       Blueprints' Spark configs into one live session isn't
-                      generally safe).
+                      generally safe). The target is compiled and executed
+                      through the PARENT's engine (whatever `session`
+                      belongs to) — its own `deployment.engine` is not
+                      consulted, matching the parent session is the point of
+                      reuse.
   webhook: <url|map>  Fire-and-forget POST via the same endpoint model as
                       the engine-level `webhooks:` block (payload templating
                       included) — `aqueduct.surveyor.webhook.fire_webhook`.
@@ -144,6 +148,7 @@ def run_hooks(
     allow_command_hooks: bool,
     failure_ctx: Any | None = None,
     session: Any | None = None,
+    engine: str = "spark",
     _chain: list[str] | None = None,
 ) -> bool:
     """Execute one event's hook entries sequentially.
@@ -152,10 +157,17 @@ def run_hooks(
         failure_ctx: The run's FailureContext, when the event carries one
             (on_failure / on_patch_pending / on_healed) — feeds `when_error`
             matching. None for on_success (no failure context to filter on).
-        session: Live SparkSession, when the caller has one available —
-            enables `in_process: true` blueprint entries. None falls back to
-            the subprocess path for every blueprint entry regardless of
-            `in_process`.
+        session: Live engine session (SparkSession / DuckDB connection / …),
+            when the caller has one available — enables `in_process: true`
+            blueprint entries. None falls back to the subprocess path for
+            every blueprint entry regardless of `in_process`.
+        engine: The engine `session` belongs to (default "spark" for
+            backward-compatible callers that don't pass one explicitly). An
+            in-process chained blueprint is compiled and executed through
+            THIS engine — a chained blueprint's own `deployment.engine` (in
+            its `aqueduct.yml`) is not consulted, same as `spark_config` is
+            not merged: matching the parent session is the whole point of
+            reusing it in-process.
         _chain: Internal — explicit ancestor chain for recursive in-process
             calls (the env-var chain is process-scoped and doesn't see
             in-process calls). None reads the env var as before.
@@ -221,7 +233,7 @@ def run_hooks(
             if h.in_process and session is not None:
                 handled = _run_in_process_blueprint_hook(
                     target=target, label=f"in-process {h.value}", session=session,
-                    chain=chain, bp_path=bp_path, warn=_warn, ok=_ok,
+                    engine=engine, chain=chain, bp_path=bp_path, warn=_warn, ok=_ok,
                     allow_command_hooks=allow_command_hooks,
                 )
                 if handled:
@@ -285,6 +297,7 @@ def _run_in_process_blueprint_hook(
     warn: Any,
     ok: Any,
     allow_command_hooks: bool,
+    engine: str = "spark",
 ) -> bool:
     """Parse + compile + execute `target` in this process, reusing `session`.
 
@@ -326,12 +339,12 @@ def _run_in_process_blueprint_hook(
     from aqueduct.executor.models import ExecutionStatus
 
     try:
-        t_manifest = _compiler_compile(t_bp, blueprint_path=target)
+        t_manifest = _compiler_compile(t_bp, blueprint_path=target, engine=engine)
     except Exception as exc:  # noqa: BLE001 — compile errors are reported as hook failures, not raised
         warn(f"[hook_failed] {label} — compile error: {exc}")
         return True
 
-    execute_fn = get_executor("spark")
+    execute_fn = get_executor(engine)
     t_run_id = str(uuid.uuid4())
     t0 = time.monotonic()
     try:

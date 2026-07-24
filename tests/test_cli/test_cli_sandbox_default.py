@@ -77,6 +77,7 @@ def test_sandbox_mode_sample_forwards_default_1000_rows(mock_run_sandbox, tmp_pa
             failed_module="m1",
             iteration_run_id="r1",
             blueprint_id="b1",
+            engine="spark",
             # both defaults — sandbox_mode=sample, sample_rows=1000
         )
 

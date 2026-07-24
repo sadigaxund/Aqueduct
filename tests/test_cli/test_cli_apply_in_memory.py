@@ -83,7 +83,7 @@ def test_stage_failed_patch_shows_actual_filename(tmp_path):
         run_id="run1", blueprint_id="bp1", failed_module=None,
         error_message="msg", stack_trace="", manifest_json="{}",
         started_at="2020-01-01T00:00:00Z", finished_at="2020-01-01T00:00:00Z",
-    )
+     engine="spark",)
 
     class FakeClick:
         echo = MagicMock()

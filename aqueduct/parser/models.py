@@ -258,6 +258,19 @@ class Hooks:
 
 
 @dataclass(frozen=True)
+class HealedByRecord:
+    """One self-heal provenance record — parsed mirror of
+    ``parser.schema.HealedByRecordSchema``. See that model's docstring."""
+    patch_id: str
+    engine: str
+    classification: str
+    applied_at: str
+    engine_version: str | None = None
+    run_id: str | None = None
+    validated_on: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Blueprint:
     aqueduct_version: str
     id: str
@@ -284,6 +297,10 @@ class Blueprint:
     # Lifecycle hooks (`hooks:` block). For an Arcade sub-Blueprint this is
     # parsed but ignored — only the top-level Blueprint's hooks fire.
     hooks: Hooks = field(default_factory=Hooks)
+    # Self-heal provenance (`healed_by:` block) — machine-written by
+    # `aqueduct patch apply`, read by the compile-time cross-engine-heal gate
+    # (`aqueduct/compiler/capability_check.py`). Never hand-authored.
+    healed_by: tuple[HealedByRecord, ...] = ()
     # Absolute directory the Blueprint YAML was loaded from ("" when parsed
     # from a dict with no file). Threaded into the Manifest so executor-side
     # user-code imports (custom Assert fn:, Probe module:+entry:, python

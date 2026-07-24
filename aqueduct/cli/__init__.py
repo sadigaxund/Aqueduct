@@ -28,9 +28,10 @@ def _apply_warnings_from_cfg(cfg) -> None:
     engine-level `warnings.suppress` from aqueduct.yml is honoured alongside
     any `--suppress-warning` flags the user passed. Use `*` to silence all.
     """
-    from aqueduct.warnings import _DEFAULT_SUPPRESS, set_default_suppress
+    from aqueduct.warnings import _DEFAULT_SUPPRESS, set_default_strict, set_default_suppress
     merged = set(_DEFAULT_SUPPRESS) | set(getattr(cfg.warnings, "suppress", []) or [])
     set_default_suppress(suppress=merged)
+    set_default_strict(getattr(cfg.warnings, "strict", []) or [])
 
 
 
@@ -346,15 +347,34 @@ def _write_patch_to_blueprint(patch, blueprint_path: Path, patches_dir: Path, fa
     """Write patch permanently to Blueprint, re-parse, re-compile. Returns new Manifest or None."""
     try:
         import os as _os
+        from datetime import datetime
 
         from aqueduct.agent import archive_patch
         from aqueduct.compiler.compiler import CompileError
         from aqueduct.compiler.compiler import compile as compiler_compile
         from aqueduct.parser.parser import ParseError, parse
-        from aqueduct.patch.apply import _yaml_dump, _yaml_load, apply_patch_to_dict
+        from aqueduct.patch.apply import _append_healed_by, _yaml_dump, _yaml_load, apply_patch_to_dict
+        from aqueduct.patch.provenance import build_healed_by_record, detect_engine_version
 
         bp_raw = _yaml_load(blueprint_path)
         patched = apply_patch_to_dict(bp_raw, patch)
+
+        # Heal-patch provenance (Phase 79) — this is the auto-mode (agent.
+        # approval_mode: auto) direct-write path, so there is no on-disk
+        # patch JSON with `_aq_meta` to re-read (unlike `apply_patch_file`).
+        # Build the equivalent meta straight from the live FailureContext —
+        # `.engine` is required on it (see aqueduct/surveyor/models.py).
+        _applied_at = datetime.now(tz=UTC).isoformat()
+        _meta = {
+            "engine": getattr(failure_ctx, "engine", None),
+            "engine_version": detect_engine_version(getattr(failure_ctx, "engine", "")),
+            "run_id": getattr(failure_ctx, "run_id", None),
+        }
+        _healed_by_record = build_healed_by_record(
+            patch_id=patch.patch_id, operations=patch.operations,
+            meta=_meta, applied_at=_applied_at, fallback_run_id=patch.run_id,
+        )
+        patched = _append_healed_by(patched, _healed_by_record)
 
         # Backup original
         backup_dir = patches_dir / "backups"
@@ -390,17 +410,25 @@ def _run_patch_gates_inline(  # noqa: F811
     failed_module,
     iteration_run_id: str,
     blueprint_id: str,
+    engine: str,
     sample_rows: int = 1000,
     sandbox_mode: str = "sample",
     sandbox_master_url: str | None = None,
+    warnings_suppress=None,
 ):
     """Phase 29a/b — run the lineage, sandbox, and explain gates inline.
 
     Returns (lineage_res, sandbox_res, explain_res, gates_passed).
-    gates_passed is True when the sandbox gate passes (or is skipped —
-    Spark unavailable / no patch impact) AND the explain gate does not
-    hard-block (explain is warn-only by default; only blocks when
-    `agent.block_on_explain_regression` is True).
+    gates_passed is True when the sandbox gate passes (or is skipped — the
+    target engine's dependencies are unavailable / no patch impact) AND the
+    explain gate does not hard-block (explain is warn-only by default; only
+    blocks when `agent.block_on_explain_regression` is True).
+
+    ``engine`` is REQUIRED — passed straight through to
+    ``run_sandbox_gate(engine=...)`` (Phase 79) so the sandbox replay runs
+    against the SAME engine the patch's own pipeline targets, never a
+    hardcoded Spark session. Every caller already has ``engine`` resolved
+    (``aqueduct/cli/run.py``'s ``engine = cfg.deployment.engine``).
     """
     from aqueduct.patch.apply import _yaml_load, apply_patch_to_dict
     from aqueduct.patch.explain_gate import run_explain_gate
@@ -446,10 +474,12 @@ def _run_patch_gates_inline(  # noqa: F811
             blueprint_path=blueprint_path,
             patch_id=patch.patch_id,
             failed_module=failed_module,
+            engine=engine,
             sample_rows=_sample_for_call,
             observability_store=bundle.observability,
             explain_capture=explain_after,
             sandbox_master_url=sandbox_master_url,
+            warnings_suppress=warnings_suppress,
         )
     try:
         surveyor.record_patch_simulation(
@@ -989,6 +1019,15 @@ if __name__ == "__main__":
 # ── extracted command families (registered + re-exported) ──────────────────────
 from .benchmark import benchmark, benchmark_diff_cmd, benchmark_stats_cmd  # noqa: E402,F401
 from .blueprint import blueprint_group, blueprint_history_cmd  # noqa: E402,F401
+from .dev import (  # noqa: E402,F401
+    capabilities_check,
+    capabilities_docs,
+    capabilities_scaffold,
+    capabilities_sync,
+    dev_capabilities,
+    dev_group,
+    dev_scaffold,
+)
 from .diagnostics import doctor, lint_cmd, schema, validate  # noqa: E402,F401
 from .drift import drift  # noqa: E402,F401
 from .heal import heal  # noqa: E402,F401

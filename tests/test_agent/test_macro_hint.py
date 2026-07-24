@@ -22,7 +22,7 @@ def test_user_prompt_includes_replace_macro_hint(tmp_path: Path):
         started_at="2026-01-01T00:00:00Z",
         finished_at="2026-01-01T00:01:00Z",
         blueprint_source_yaml=yaml,
-    )
+     engine="spark",)
     patches_dir = tmp_path / "patches"
     patches_dir.mkdir()
     user_prompt = build_prompt(fc, patches_dir)["user"]

@@ -31,6 +31,7 @@ def test_run_sandbox_gate_forwards_explain_capture(spark, tmp_path):
         blueprint_path=tmp_path / "original.yml",
         patch_id="p1",
         failed_module=None,
+        engine="spark",
         spark_session=spark,
         explain_capture=capture
     )
@@ -64,6 +65,7 @@ def test_run_sandbox_gate_without_explain_capture(spark, tmp_path):
         blueprint_path=tmp_path / "original.yml",
         patch_id="p2",
         failed_module=None,
+        engine="spark",
         spark_session=spark,
         explain_capture=None
     )

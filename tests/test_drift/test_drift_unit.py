@@ -57,13 +57,16 @@ def test_schemachange_breaking_property():
 
 def test_synthetic_fc_surfaces_rename_candidates():
     r = diff_schemas({"amount": "double", "id": "int"}, {"amount_usd": "double", "id": "int"})
-    fc = build_synthetic_failure_context("bp.x", "load", r, "{}")
+    fc = build_synthetic_failure_context("bp.x", "load", r, "{}", engine="duckdb")
     assert fc.error_class == PREDICTED_DRIFT_ERROR_CLASS
     assert fc.failed_module == "load"
     assert fc.object_name == "amount"           # the missing column
     assert fc.suggested_columns == ("amount_usd",)  # rename candidate for the agent
     assert fc.run_id.startswith("drift-")
     assert "Predicted schema drift" in fc.error_message
+    # the predicted context must carry the deployment's real engine, not a
+    # silently-inherited "spark" default (that was the exact bug this task fixes)
+    assert fc.engine == "duckdb"
 
 
 # ── store baseline round-trip ───────────────────────────────────────────────
@@ -114,6 +117,7 @@ def test_heal_drift_stages_to_configured_backend(monkeypatch, tmp_path):
     cfg = SimpleNamespace(
         agent=eng,
         stores=SimpleNamespace(blob=SimpleNamespace(backend="s3", path="s3://bucket/prefix")),
+        deployment=SimpleNamespace(engine="spark"),
     )
 
     pid = D._heal_drift(cfg, "bp", "mod", object(), "{}", tmp_path / "patches")

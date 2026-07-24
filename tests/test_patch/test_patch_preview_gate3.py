@@ -34,10 +34,11 @@ def test_gate3_pass_on_valid_blueprint(spark, sample_data, tmp_path):
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
         failed_module=None,
+        engine="spark",
         sample_rows=5,
         spark_session=spark
     )
-    
+
     assert result.status == "pass"
     assert "sandbox replay succeeded" in result.detail
     assert result.sample_rows == 5
@@ -68,9 +69,10 @@ def test_gate3_fail_on_compile_error(spark, tmp_path):
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
         failed_module=None,
+        engine="spark",
         spark_session=spark
     )
-    
+
     assert result.status == "fail"
     assert "Cycle detected" in result.detail
 
@@ -94,9 +96,10 @@ def test_gate3_fail_on_runtime_error(spark, sample_data, tmp_path):
         blueprint_path=tmp_path / "bp.yml",
         patch_id="p1",
         failed_module=None,
+        engine="spark",
         spark_session=spark
     )
-    
+
     assert result.status == "fail"
     assert "non_existent_table" in result.detail
 
@@ -141,7 +144,7 @@ def test_gate3_sample_rows_zero(spark, sample_data, tmp_path):
     }
     result = run_sandbox_gate(
         bp, blueprint_path=tmp_path / "bp.yml", patch_id="p0",
-        failed_module=None, sample_rows=0, spark_session=spark
+        failed_module=None, engine="spark", sample_rows=0, spark_session=spark
     )
     assert result.status == "pass"
     assert result.sample_rows is None
@@ -164,13 +167,16 @@ def test_gate3_temp_file_unlinked(spark, sample_data, tmp_path):
         
         run_sandbox_gate(
             bp, blueprint_path=tmp_path / "bp.yml", patch_id="ptmp",
-            failed_module=None, spark_session=spark
+            failed_module=None, engine="spark", spark_session=spark
         )
         
     assert not (tmp_path / "mock.yml").exists()
 
 def test_gate3_spark_unavailable_skips(tmp_path):
-    # Mock make_spark_session to raise
+    # Mock make_spark_session (Spark's ExecutorProtocol.make_session) to raise —
+    # the sandbox gate resolves the session THROUGH the protocol registry
+    # (Phase 79), so patching Spark's own session constructor is still the
+    # right seam for a Spark-target skip.
     with patch("aqueduct.executor.spark.session.make_spark_session") as mock_make:
         mock_make.side_effect = Exception("Spark down")
         bp = {
@@ -182,10 +188,11 @@ def test_gate3_spark_unavailable_skips(tmp_path):
         }
         result = run_sandbox_gate(
             bp, blueprint_path=tmp_path / "bp.yml", patch_id="p_skip",
-            failed_module=None, spark_session=None # Force it to call make_spark_session
+            failed_module=None, engine="spark",
+            spark_session=None,  # Force it to call the engine's session factory
         )
         assert result.status == "skip"
-        assert "could not start Spark: Spark down" in result.detail
+        assert "could not start engine 'spark': Spark down" in result.detail
 
 
 def test_ingress_limit_after_filter(spark, sample_data):

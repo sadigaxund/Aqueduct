@@ -244,36 +244,37 @@ edges: []
             "edges": [],
         }
 
+        from types import SimpleNamespace
         from unittest.mock import patch, MagicMock
-        import aqueduct.executor as executor_pkg
 
-        # Seed ExecuteError directly instead of mock.patch-ing it: patch()
-        # getattr()s the original first, which would trigger the package's
-        # lazy __getattr__ → Spark executor import → fails without pyspark.
-        executor_pkg.ExecuteError = Exception
-        try:
-            with patch("aqueduct.executor.get_executor") as mock_get_exec, \
-                 patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
-                 patch("aqueduct.compiler.compiler.compile") as mock_compile:
-                from aqueduct.compiler.models import Manifest
-                real_manifest = Manifest(
-                    blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
-                )
-                mock_compile.return_value = real_manifest
-                mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
-                mock_get_exec.return_value = mock_exec_fn
+        # run_sandbox_gate (Phase 79) resolves the target engine's
+        # ExecutorProtocol via get_protocol() and calls THROUGH it — no
+        # lazy pyspark-importing `aqueduct.executor` __getattr__ path is
+        # touched, so no ExecuteError-seeding workaround is needed anymore.
+        mock_compile = None
+        with patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol, \
+             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
+             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+            from aqueduct.compiler.models import Manifest
+            real_manifest = Manifest(
+                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+            )
+            mock_compile.return_value = real_manifest
+            mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
+            mock_get_protocol.return_value = SimpleNamespace(
+                execute=mock_exec_fn, execute_kwargs=None,
+            )
 
-                from aqueduct.patch.preview import run_sandbox_gate
-                result = run_sandbox_gate(
-                    bp_after,
-                    blueprint_path=bp_file,
-                    patch_id="p1",
-                    failed_module=None,
-                    spark_session=MagicMock(),
-                    sample_rows=0,
-                )
-        finally:
-            del executor_pkg.ExecuteError  # restore lazy resolution
+            from aqueduct.patch.preview import run_sandbox_gate
+            result = run_sandbox_gate(
+                bp_after,
+                blueprint_path=bp_file,
+                patch_id="p1",
+                failed_module=None,
+                engine="spark",
+                spark_session=MagicMock(),
+                sample_rows=0,
+            )
 
         assert result.status == "pass"
         call_kwargs = mock_parse.call_args[1]
@@ -308,34 +309,35 @@ edges:
             "edges": [{"from": "src", "to": "ch1"}],
         }
 
+        from types import SimpleNamespace
         from unittest.mock import patch, MagicMock
-        import aqueduct.executor as executor_pkg
 
-        # Seed ExecuteError directly — see test_sandbox_gate_uses_blueprint_parent_as_base_dir.
-        executor_pkg.ExecuteError = Exception
-        try:
-            with patch("aqueduct.executor.get_executor") as mock_get_exec, \
-                 patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
-                 patch("aqueduct.compiler.compiler.compile") as mock_compile:
-                from aqueduct.compiler.models import Manifest
-                real_manifest = Manifest(
-                    blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
-                )
-                mock_compile.return_value = real_manifest
-                mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
-                mock_get_exec.return_value = mock_exec_fn
+        # run_sandbox_gate (Phase 79) resolves the target engine's
+        # ExecutorProtocol via get_protocol() and calls THROUGH it — see
+        # test_sandbox_gate_uses_blueprint_parent_as_base_dir.
+        with patch("aqueduct.executor.protocol.get_protocol") as mock_get_protocol, \
+             patch("aqueduct.parser.parser.parse_dict") as mock_parse, \
+             patch("aqueduct.compiler.compiler.compile") as mock_compile:
+            from aqueduct.compiler.models import Manifest
+            real_manifest = Manifest(
+                blueprint_id="test.bp", context={}, modules=(), edges=(), spark_config={},
+            )
+            mock_compile.return_value = real_manifest
+            mock_exec_fn = MagicMock(return_value=MagicMock(status="success", module_results=()))
+            mock_get_protocol.return_value = SimpleNamespace(
+                execute=mock_exec_fn, execute_kwargs=None,
+            )
 
-                from aqueduct.patch.preview import run_sandbox_gate
-                result = run_sandbox_gate(
-                    bp_after,
-                    blueprint_path=bp_file,
-                    patch_id="p1",
-                    failed_module="ch1",
-                    spark_session=MagicMock(),
-                    sample_rows=0,
-                )
-        finally:
-            del executor_pkg.ExecuteError  # restore lazy resolution
+            from aqueduct.patch.preview import run_sandbox_gate
+            result = run_sandbox_gate(
+                bp_after,
+                blueprint_path=bp_file,
+                patch_id="p1",
+                failed_module="ch1",
+                engine="spark",
+                spark_session=MagicMock(),
+                sample_rows=0,
+            )
 
         assert result.status == "pass"
         # Verify execute() was called without from_module
