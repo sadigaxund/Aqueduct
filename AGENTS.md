@@ -206,6 +206,12 @@ regenerated `requirements/*.txt`.
    error extractor or with another engine's healing advice.
 3. Declare an `aqueduct.engines` entry point pointing at the module that registers
    both, as an import side effect. Core never imports an engine by name.
+4. Extend the compatibility-matrix coverage: add the engine's tests to
+   `version-matrix.yml`'s `compat` job (test paths + the `-m` marker expression)
+   so it is actually exercised in CI, not just registered. `tests/test_meta_ci.py`
+   resolves the registered engine list from `CAPABILITY_REGISTRY` (never a
+   hardcoded name list) and fails the build if any registered engine isn't
+   covered there.
 
 The two errors you will meet here are different states and must not be conflated:
 `EnginePluginError` = the entry point failed to import (broken/half-installed
@@ -253,6 +259,7 @@ Use this table at coding time, not just at the end of a phase. Whenever you touc
 | Any production / deployment / danger-setting / cluster-config detail | `docs/production_guide.md` |
 | Any Spark compiler-warning, performance, or tuning behaviour | `docs/spark_guide.md` |
 | Any change to `pyproject.toml` version pins or supported Python/Spark range | `docs/compatibility.md` |
+| Adding or registering a new execution engine (`aqueduct.engines` entry point) | `version-matrix.yml`'s `compat` job (test paths + `-m` marker expression) **and** `tests/test_meta_ci.py`, which fails the build if a registered engine isn't covered there |
 | Any newly deferred or aspirational item (NOT a current phase) | `docs/roadmap.md` — never inline "this is deferred" prose into `specs.md` |
 | Any new file under `docs/` | `README.md` References list + this Documentation map |
 | Any new flag, command, or behaviour visible from the CLI | `docs/cli_reference.md` |

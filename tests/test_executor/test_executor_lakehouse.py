@@ -7,7 +7,7 @@ is created. ``tests/conftest.py`` handles that: when ``AQ_LAKEHOUSE`` is set it
 derives the correct ``*-spark<line>_<scala>`` Maven coordinates from the running
 pyspark version and injects them via ``PYSPARK_SUBMIT_ARGS`` at import time
 (HEAD-checked against Maven Central, so a Spark line with no published build —
-e.g. Iceberg on Spark 4.1 — is simply dropped).
+e.g. Hudi on Spark 3.3 — is simply dropped).
 
 These tests are therefore **environment-gated**: ``_require_datasource`` skips
 with a clear message when the format's jar is not on the classpath (jars not

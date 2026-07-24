@@ -33,7 +33,8 @@ os.environ.setdefault("AQ_TESTING", "1")
 # the same code works across the compat matrix: pyspark 3.5 → *-spark3.5_2.12,
 # pyspark 4.1 → *-spark4.1_2.13. Each coord is HEAD-checked against Maven
 # Central first; a build that does not exist for the running Spark line (e.g.
-# Iceberg publishes no Spark 4.1 runtime) is dropped, so its test SKIPs cleanly
+# Hudi has no published build for Spark 3.3, per _HUDI_VER below) is dropped,
+# so its test SKIPs cleanly
 # instead of the whole shared session dying on an unresolvable --packages
 # coordinate. Overrides: AQ_HUDI_COORD / AQ_ICEBERG_COORD (exact Maven coord),
 # AQ_SPARK_SCALA (scala suffix).

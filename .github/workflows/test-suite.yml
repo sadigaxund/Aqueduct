@@ -525,7 +525,7 @@ jobs:
       - run: pip install -e ".[dev,spark,llm,redis]"
       # AQ_LAKEHOUSE lets conftest provision Hudi/Iceberg jars (Maven coords
       # derived from the installed pyspark version); tests self-skip for any
-      # datasource with no build for this Spark line (e.g. Iceberg on 4.1).
+      # datasource with no build for this Spark line (e.g. Hudi on 3.3).
       - run: |
           set +e
           pytest tests/test_executor/ tests/test_compiler/test_blueprints.py -m spark --junitxml=results.xml
