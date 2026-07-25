@@ -123,6 +123,78 @@ def _extract_sql_lineage(
     return rows
 
 
+def _functions_from_parsed_stmt(stmt: Any) -> set[str]:
+    """Every function name a parsed sqlglot statement invokes, lowercased.
+
+    A registered Aqueduct UDF (never a sqlglot-recognized builtin) always
+    parses as ``exp.Anonymous`` — its raw call-site name lives on ``.name``.
+    A recognized builtin (``SUM``, ``UPPER``, ...) parses as its own
+    ``exp.Func`` subclass, whose ``.name`` is empty but ``.sql_name()``
+    returns the canonical spelling; included too so a UDF that happens to
+    share a builtin's name isn't silently dropped by construction.
+    """
+    import sqlglot.expressions as exp
+
+    names: set[str] = set()
+    for fn in stmt.find_all(exp.Func):
+        # sqlglot models binary/unary OPERATORS (AND, OR, NOT, >, +, ...) as
+        # `Func` subclasses too (they share its dispatch machinery), but
+        # they are not `name(args)` call syntax and can never be a UDF
+        # reference — exclude them so "AND"/"OR" don't pollute the name set.
+        if isinstance(fn, (exp.Binary, exp.Unary)):
+            continue
+        name = fn.name if isinstance(fn, exp.Anonymous) else fn.sql_name()
+        if name and name != "ANONYMOUS":
+            names.add(name.lower())
+    return names
+
+
+def referenced_function_names(sql: str) -> set[str] | None:
+    """Every function name referenced anywhere in *sql* (a full statement).
+
+    Returns ``None`` when sqlglot is unavailable or *sql* fails to parse.
+    Callers MUST treat ``None`` as "cannot attribute" (fail closed) — never
+    as "no functions referenced". Used by the Phase 81 per-island capability
+    gate (``aqueduct/compiler/udf_attribution.py``) to attribute a registered
+    UDF to the island(s) whose SQL actually calls it, instead of gating
+    every island against every UDF the Blueprint declares. Reuses the exact
+    same sqlglot parse (``dialect="spark"``) `_extract_sql_lineage` above
+    already runs — a second read of the same parse tree, not a second SQL
+    parser (AGENTS.md: sqlglot is the one SQL parser).
+    """
+    try:
+        import sqlglot
+    except ImportError:
+        return None
+    try:
+        stmt = sqlglot.parse_one(sql, dialect="spark")
+    except Exception as exc:
+        logger.debug("referenced_function_names: sqlglot parse failed: %s", exc)
+        return None
+    return _functions_from_parsed_stmt(stmt)
+
+
+def referenced_function_names_in_expr(expr: str) -> set[str] | None:
+    """Same as `referenced_function_names`, for a bare SQL EXPRESSION
+    fragment rather than a full SELECT statement — a Channel `op: join`/
+    `op: filter` `condition`/`expr`, a `spillway_condition`, a Junction
+    `conditional` branch `condition`, or an Assert `sql`/`sql_row` rule's
+    `expr`. Wraps the fragment in a throwaway `SELECT 1 WHERE (...)` so the
+    SAME sqlglot parser/walk handles it — still one parser, no bespoke
+    fragment grammar bolted on beside it.
+    """
+    try:
+        import sqlglot
+    except ImportError:
+        return None
+    try:
+        stmt = sqlglot.parse_one(f"SELECT 1 WHERE ({expr})", dialect="spark")
+    except Exception as exc:
+        logger.debug("referenced_function_names_in_expr: sqlglot parse failed: %s", exc)
+        return None
+    return _functions_from_parsed_stmt(stmt)
+
+
 def _opaque_row(channel_id: str, upstream_ids: list[str]) -> list[dict[str, str]]:
     return [
         {

@@ -392,12 +392,14 @@ The CLI command lives in `aqueduct/cli/drift.py`.
 | `compiler.py` | Main orchestrator — pipeline: Tier 1 resolution, Arcade expansion, Probe/Spillway validation, Regulator compile-away, engine capability gate (Phase 78), Manifest assembly |
 | `models.py` | `Manifest` frozen dataclass + `to_dict()` serialization |
 | `expander.py` | Arcade → flat namespaced module list, edge rewiring, depth-limited recursion (max 10) |
-| `lineage.py` | `sqlglot`-based column-level lineage extraction (compile-time only, zero Spark actions) |
+| `lineage.py` | `sqlglot`-based column-level lineage extraction (compile-time only, zero Spark actions); also `referenced_function_names`/`referenced_function_names_in_expr` (Phase 81) — the same sqlglot parse, read for function-call names instead of column lineage, backing `udf_attribution.py` |
 | `macros.py` | `{{ macros.name }}` token expansion, parameterized macros, no nesting |
 | `provenance.py` | ValueProvenance, ModuleProvenance, ProvenanceMap — tracks source of every resolved config value |
 | `runtime.py` | `AqFunctions` registry + `_DISPATCH` table — resolves `@aq.*` Tier 1 tokens via `ast.literal_eval` |
 | `wirer.py` | Probe attach_to validation, spillway edge validation, Regulator compile-away bypass logic |
-| `capability_check.py` | Phase 78 — the last compile step: `check_capabilities(manifest, engine)` maps used modules to capability leaves (`leaves_for_module`, reused by the doctor check) and looks up the target `EngineCapabilities` table; `UNSUPPORTED` → `CompileError`, `IGNORED_WITH_WARNING` → suppressible warning (`engine_key_ignored`). Version-gated `SUPPORTED` leaves are NOT checked here (doctor's job) |
+| `islands.py` | Phase 81 Step 1 — per-module `engine:` resolution (`resolve_module_engines`, the four inheritance rules), island + boundary-edge derivation (`derive_islands`/`find_boundary_edges`), and the Probe/Assert colocation + cross-island-spillway validations (`validate_islands`). Pure, pyspark-free, no engine imports by name |
+| `udf_attribution.py` | Phase 81 — `attribute_udfs_to_islands`: maps each `udf_registry` entry to the island(s) whose SQL can actually reference it (via `lineage.py`'s sqlglot helpers), so the per-island capability gate doesn't check a UDF against an island that never calls it. Fail-closed: an unparseable/unscanned SQL-bearing construct keeps its island in every UDF's checked set; a UDF attributed to nothing falls back to every island |
+| `capability_check.py` | Phase 78 — the last compile step: `check_capabilities(manifest, engine)` maps used modules to capability leaves (`leaves_for_module`, reused by the doctor check) and looks up the target `EngineCapabilities` table; `UNSUPPORTED` → `CompileError`, `IGNORED_WITH_WARNING` → suppressible warning (`engine_key_ignored`). Version-gated `SUPPORTED` leaves are NOT checked here (doctor's job). Since Phase 81, `compiler.py` calls this ONCE PER ISLAND (see `islands.py`/`udf_attribution.py`) rather than once for the whole manifest |
 | `warnings/` | Modular compiler warning rules — one file per check, registered in `RULES` list |
 
 ### `aqueduct/parser/` — Blueprint YAML → validated AST

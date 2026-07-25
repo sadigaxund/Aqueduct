@@ -38,6 +38,7 @@ from aqueduct.compiler.expander import ExpandError, expand_arcades
 from aqueduct.compiler.islands import derive_islands, resolve_module_engines, validate_islands
 from aqueduct.compiler.macros import MacroError, resolve_macros_in_config
 from aqueduct.compiler.models import Manifest
+from aqueduct.compiler.udf_attribution import attribute_udfs_to_islands
 from aqueduct.compiler.provenance import (
     ModuleProvenance,
     ProvenanceMap,
@@ -699,19 +700,27 @@ def compile(  # noqa: A001
     #
     # `manifest.udf_registry` (and therefore the manifest-scoped
     # `feature.*`/`type.*` leaves it drives — UDF language, UDF return_type)
-    # is NOT partitioned per island: a UDF is registered once and referenced
-    # from SQL by name, with no static trace from a `udf_registry` entry back
-    # to the specific island(s) that actually call it. So every island's
-    # engine is checked against the FULL udf_registry, not just the UDFs its
-    # own modules reference — deliberately conservative (a Python UDF used
-    # only on the Spark side of a polyglot Blueprint will still be gated
-    # against a DuckDB island present elsewhere) rather than silently correct
-    # by omission. Tightening this to per-island UDF attribution is future
-    # work (it needs SQL-reference tracing, out of Step 1's scope).
+    # IS partitioned per island: `attribute_udfs_to_islands` (Phase 81
+    # follow-up) walks each module's SQL-bearing config (sqlglot, the same
+    # parser column lineage already uses) to find which UDF ids a given
+    # island's Channels/Junction/Assert actually reference, so a Python UDF
+    # used only on a Spark island is never gated against an unrelated
+    # DuckDB island present elsewhere in the same Blueprint. Attribution is
+    # fail-closed: a UDF reference sqlglot cannot parse (or a surface this
+    # walker does not scan at all) keeps that UDF's conservative "check
+    # against every island" behavior — see the module docstring for exactly
+    # which constructs land there.
+    _udf_islands = attribute_udfs_to_islands(modules, manifest.udf_registry, _islands)
     _unsupported_msgs: list[str] = []
     for _isl in _islands:
         _island_modules = tuple(m for m in manifest.modules if m.id in _isl.module_ids)
-        _island_manifest = dataclasses.replace(manifest, modules=_island_modules)
+        _island_udf_registry = tuple(
+            u for u in manifest.udf_registry
+            if isinstance(u, dict) and _isl in _udf_islands.get(u.get("id"), set())
+        )
+        _island_manifest = dataclasses.replace(
+            manifest, modules=_island_modules, udf_registry=_island_udf_registry,
+        )
         _cap_problems = check_capabilities(_island_manifest, engine=_isl.engine)
         _unsupported = [p for p in _cap_problems if p.support == Support.UNSUPPORTED]
         _unsupported_msgs.extend(format_unsupported_error(p, _isl.engine) for p in _unsupported)
