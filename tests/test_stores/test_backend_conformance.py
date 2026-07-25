@@ -53,7 +53,10 @@ _CONF_TABLES = ("run_records", "module_metrics", "column_lineage",
 # date here would silently age out of that window as real time passes —
 # exactly what broke `test_report_trend[postgres]` in CI once "today" moved
 # past 2026-07-20 (30 days after the previously hardcoded 2026-06-20). Anchor
-# to "now" instead so this fixture never rots.
+# to "now" instead so this fixture never rots — the `seed_ts` fixture
+# (tests/conftest.py) is the canonical way to do this; this one stays a
+# module-level constant (computed once, reused by several fixture bodies
+# below) rather than being threaded through as a per-test fixture.
 _TS = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
 
 

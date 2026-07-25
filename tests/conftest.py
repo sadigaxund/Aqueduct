@@ -1,5 +1,7 @@
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 try:
@@ -290,6 +292,87 @@ def restore_cwd():
     original = os.getcwd()
     yield
     os.chdir(original)
+
+
+@pytest.fixture
+def seed_ts():
+    """Seed timestamps for store fixtures. Relative by construction — a literal
+    date silently ages out of any now()-windowed query (report --trend's 30-day
+    default, count_recent_heal_attempts)."""
+    def _ts(**delta):          # seed_ts(hours=-1), seed_ts(days=-2)
+        return (datetime.now(timezone.utc) + timedelta(**delta)).isoformat()
+    return _ts
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _guard_shared_spark_context():
+    """Structural fix for the ISSUE-026 class: no-op BOTH ``SparkContext.stop()``
+    and ``SparkSession.stop()`` for the whole pytest session.
+
+    pyspark's ``SparkContext`` is a process-wide singleton (``getOrCreate``),
+    and this file shares exactly ONE session-scoped instance (the ``spark``
+    fixture below) across the entire suite. ``stop_spark_session``'s
+    ``AQ_TESTING`` guard (``aqueduct/executor/spark/session.py``) protects
+    exactly one call path — CLI commands going through that function. It does
+    NOT protect ``ExecutorProtocol.close_session``
+    (``aqueduct/executor/spark/engine.py``), which performs a RAW
+    ``session.stop()`` by design (it owns teardown for a real ``aqueduct run``
+    where the process exits right after). Phase 79's inline sandbox gate
+    (``_run_patch_gates_inline`` -> ``run_sandbox_gate``) builds a session via
+    ``session_factory()`` believing it owns a throwaway and closes it with the
+    raw ``session_closer()``. Under pytest that "private" session IS the
+    shared fixture, so it dies for every test that runs afterward —
+    ``'NoneType' object has no attribute 'sc'`` — order-dependently, so it's
+    invisible until some CI lane ordering happens to hit it.
+
+    Patching individual call sites keeps missing the next one (two mocks were
+    already added for heal-cache tests; the underlying class of bug wasn't
+    fixed). Product code (``session.py`` / ``engine.py``) is intentionally
+    untouched — this is a test-harness-only guard, restored at session
+    teardown so it can never leak into a non-test import of pyspark.
+
+    **Both primitives are patched, not just the JVM-level one.**
+    ``SparkContext.stop()`` tears down the JVM ``SparkContext`` — patching
+    only that keeps the live JVM context alive, which is enough to stop a
+    *fresh* ``getOrCreate()`` from erroring. But ``SparkSession.stop()`` does
+    more than call ``self._sc.stop()``: it also calls
+    ``jSparkSessionClass.clearDefaultSession()`` /
+    ``.clearActiveSession()`` and sets ``SparkSession._instantiatedSession``,
+    ``SparkSession._activeSession``, and ``SQLContext._instantiatedContext``
+    to ``None``. With only ``SparkContext.stop`` patched, engine.py's raw
+    ``session.stop()`` still runs that global-state teardown — the shared
+    fixture object keeps working (it holds its own `_jsc` reference, never
+    cleared), but any OTHER code path that resolves the session via
+    ``SparkSession.getActiveSession()`` (e.g.
+    ``aqueduct/executor/spark/metrics.py``) would see ``None`` afterward.
+    Neutering both closes that gap; no test in this suite asserts on
+    ``getActiveSession()`` / ``_instantiatedSession`` / ``_activeSession``
+    post-stop (checked), and the existing ``stop_spark_session`` guard tests
+    (``tests/test_executor/test_executor_session.py``) assert against a
+    ``MagicMock``, not the real class, so they are unaffected by this patch.
+
+    Autouse + session-scoped means this activates during the FIRST test's
+    fixture setup (before any test body runs) and is torn down last (LIFO), so
+    it is already active before the ``spark`` fixture — or any inline sandbox
+    gate — ever gets a chance to call ``.stop()``, regardless of which test
+    happens to trigger it first.
+    """
+    try:
+        from pyspark import SparkContext
+        from pyspark.sql import SparkSession
+    except ImportError:
+        yield  # pyspark not installed (base install / `-m "not spark"` lanes) — nothing to guard
+        return
+
+    original_sc_stop = SparkContext.stop
+    original_session_stop = SparkSession.stop
+    SparkContext.stop = lambda self, *a, **kw: None  # type: ignore[method-assign]
+    SparkSession.stop = lambda self, *a, **kw: None  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        SparkContext.stop = original_sc_stop  # type: ignore[method-assign]
+        SparkSession.stop = original_session_stop  # type: ignore[method-assign]
 
 
 @pytest.fixture(scope="session")
