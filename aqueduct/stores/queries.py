@@ -339,6 +339,23 @@ def failure_context(store: Any, run_id: str) -> FailureContext | None:
             if row:
                 row = tuple(row) + (None, None)
         except Exception:
+            # Inner tier of a two-tier fallback: the outer SELECT (above)
+            # targets the current schema (with manifest_json/provenance_json);
+            # this retry targets the pre-migration schema without them. The
+            # EXPECTED case here is "column/table doesn't exist yet" — but the
+            # actual exception type differs per backend (duckdb.BinderException
+            # / duckdb.CatalogException vs. psycopg2's ProgrammingError
+            # subclasses) and this module is deliberately backend-agnostic (see
+            # the module docstring — no duckdb-/psycopg2-specific imports), so
+            # narrowing the catch would mean importing both optional driver
+            # packages just to name their error classes. This also swallows a
+            # genuine connection failure on the retry, which is an accepted
+            # trade-off: `failure_context()` already documents "None if
+            # absent" as a normal outcome (most runs have no failure context
+            # at all), so a best-effort display read degrading to None on any
+            # DB error is consistent with its contract, not a new failure
+            # mode — the caller (report/heal/TUI) just shows no failure
+            # detail instead of crashing over a nice-to-have.
             return None
     if not row:
         return None

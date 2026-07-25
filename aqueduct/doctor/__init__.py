@@ -295,6 +295,12 @@ def check_java() -> CheckResult:
                 f"point JAVA_HOME at a 17 JDK", _ms(t),
             )
     except Exception:
+        # pyspark absent (base install / --skip-spark path) or its version
+        # string doesn't parse as `int.int...` — either way this is a single
+        # ADDITIVE nudge on top of an already-valid `major`/`detail` (computed
+        # above from `java -version`, independent of pyspark). Silently
+        # skipping the nudge and falling through to the plain "ok" result is
+        # strictly better than failing a health check over a cosmetic hint.
         pass
     return CheckResult("java", "ok", detail, _ms(t))
 
