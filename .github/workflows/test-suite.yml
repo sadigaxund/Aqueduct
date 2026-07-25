@@ -46,6 +46,9 @@ jobs:
       tools:     ${{ steps.filter.outputs.tools }}
       mcp:       ${{ steps.filter.outputs.mcp }}
       capabilities: ${{ steps.filter.outputs.capabilities }}
+      duckdb:    ${{ steps.filter.outputs.duckdb }}
+      typehub:   ${{ steps.filter.outputs.typehub }}
+      deploy:    ${{ steps.filter.outputs.deploy }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -118,12 +121,22 @@ jobs:
               - 'aqueduct/executor/config_leaves.py'
               - 'aqueduct/executor/channel_ops.py'
               - 'aqueduct/executor/spark/capabilities.py'
+              - 'aqueduct/executor/duckdb_/capabilities.py'
               - 'aqueduct/cli/dev.py'
               - 'aqueduct/compiler/capability_check.py'
               - 'aqueduct/config.py'
               - 'aqueduct/errors.py'
               - 'aqueduct/doctor/**'
               - 'tests/test_capabilities/**'
+            duckdb:
+              - 'aqueduct/executor/duckdb_/**'
+              - 'tests/test_executor_duckdb/**'
+            typehub:
+              - 'aqueduct/typehub.py'
+              - 'tests/test_typehub/**'
+            deploy:
+              - 'aqueduct/deploy/**'
+              - 'tests/test_deploy/**'
 
   # ── Unit-test layer — fast, no Spark needed ──────────────────────────
 
@@ -481,6 +494,93 @@ jobs:
           pytest tests/test_mcp/ -m "not spark" --junitxml=results.xml
           rc=$?
           python scripts/ci-summary.py results.xml --name "MCP"
+          exit $rc
+
+  duckdb-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.duckdb == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: |
+          set +e
+          pytest tests/test_executor_duckdb/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "DuckDB"
+          exit $rc
+
+  typehub-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.typehub == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: |
+          set +e
+          pytest tests/test_typehub/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "TypeHub"
+          exit $rc
+
+  deploy-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.deploy == 'true' || github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      # Pip's DOWNLOAD cache only (~/.cache/pip) — never the installed env.
+      # A stale/missing entry still re-resolves and re-verifies every
+      # package; this only skips re-downloading wheels pip already has by
+      # exact filename/hash, so it cannot change what version gets installed.
+      # Same key as every other python-3.11 / ci-py311.txt job on purpose —
+      # they share one dependency tree, so they should share one cache entry.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-py3.11-${{ hashFiles('pyproject.toml', 'requirements/ci-py311.txt') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py3.11-
+      - run: pip install -e ".[dev,llm,redis]"
+      - run: |
+          set +e
+          pytest tests/test_deploy/ -m "not spark" --junitxml=results.xml
+          rc=$?
+          python scripts/ci-summary.py results.xml --name "Deploy"
           exit $rc
 
   # ── Spark layer — needs local[1] via setup-java ──────────────────────
