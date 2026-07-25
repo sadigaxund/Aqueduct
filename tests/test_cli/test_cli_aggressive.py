@@ -269,18 +269,18 @@ def test_block_full_actions_propagation(
     mock_exec = MagicMock()
     mock_get_executor.return_value = mock_exec
     
-    from aqueduct.config import AqueductConfig, DangerConfig, DeploymentConfig
+    from aqueduct.config import AqueductConfig, DangerConfig, DeploymentConfig, EngineConfig, SparkEngineConfig
     mock_cfg = AqueductConfig(
         danger=DangerConfig(
             allow_full_probe_actions=False,
             allow_multi_patch=True
         ),
-        deployment=DeploymentConfig(engine="spark", master_url="local[*]"),
+        deployment=DeploymentConfig(engine="spark"),
+        engine=EngineConfig(spark=SparkEngineConfig(master_url="local[*]")),
         stores={
             "observability": {"path": ".aqueduct/obs"},
             "depots": {"default": {"path": ".aqueduct/depot.db"}}
         },
-        spark_config={}
     )
     
     mock_load_config.return_value = mock_cfg
